@@ -95,6 +95,24 @@ const healthMemoryWords = (mem) => {
   };
 };
 
+/* The file-cache trim's state under the memory row (core
+ * /v1/admin/memory `cache_trim`: scripts/linux/cache-trim.py's last run,
+ * every 2 minutes). null when it has never run here (an install the next
+ * update hasn't reached yet): nothing is said. */
+const healthTrimWords = (trim) => {
+  if (!trim || !trim.checked_at) return null;
+  if (!trim.enabled) {
+    return trim.why_enabled === 'operator'
+      ? 'automatic file-cache trimming is turned off on this server'
+      : 'file cache isn’t trimmed here: this server hands it to programs as they need it';
+  }
+  const limit = trim.limit_bytes ? ` above ${healthSize(trim.limit_bytes)}` : '';
+  const last = trim.last_trim;
+  return `file cache is trimmed automatically${limit} · ${last
+    ? `last trimmed ${relTime(last.at)} (freed ${healthSize(last.freed_bytes)})`
+    : 'nothing to trim so far'}`;
+};
+
 /* The container guard's check: from the shared store (components.jsx),
  * the banner's own words. The words follow the reader's tier: a browser
  * with no household credential gets only "something needs an admin's
@@ -227,7 +245,8 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       add({ ...c, tone: 'idle', text: memory.why || 'not available on this system' });
     } else {
       const w = healthMemoryWords(memory);
-      add({ ...c, tone: w.low ? 'warn' : 'ok', text: w.text, memory });
+      add({ ...c, tone: w.low ? 'warn' : 'ok', text: w.text, memory,
+            sub: healthTrimWords(memory.cache_trim) });
     }
   }
 
@@ -529,7 +548,9 @@ const HealthMemoryDetail = ({ mem }) => {
         <p className="health-mem-note" data-mem-note="cache">
           Most of it is file cache: files read lately, kept in memory so they open fast. That’s normal,
           and programs get it back the moment they need it.
-          {wsl && ' Windows gets it back once Domovoi has been idle for a little while.'}
+          {wsl && (mem.cache_trim && mem.cache_trim.enabled
+            ? ` Domovoi hands what is over ${healthSize(mem.cache_trim.limit_bytes || 0)} back to Windows every few minutes.`
+            : ' Windows gets it back once Domovoi has been idle for a little while.')}
         </p>
       )}
       {rows.length > 0 ? (
@@ -565,6 +586,154 @@ const HealthMemoryDetail = ({ mem }) => {
   );
 };
 
+/* "This PC": how much of the PC Domovoi may use, on the Windows install
+ * (core /v1/admin/host-limits, domovoi/host_limits.py; DomovoiHost writes
+ * it into .wslconfig). Shown only where DomovoiHost reports the PC. Each
+ * limit is Automatic (the installer's share) or a slider inside the PC's
+ * real bounds; it applies when Domovoi next restarts its Linux system. */
+const healthLimitsWords = (lim, draft) => {
+  const mem = draft.memory_gb;
+  const notes = [];
+  if (mem != null && mem < lim.warn_below_gb) {
+    notes.push({ key: 'low', tone: 'warn',
+                 text: `Under ${lim.warn_below_gb} GB the AI models, speech recognition and the rooms’ music may not all fit, and Domovoi gets slow.` });
+  }
+  const effective = mem != null ? mem : lim.memory_gb.default;
+  if (effective != null && effective < lim.training_gb) {
+    notes.push({ key: 'training', tone: 'idle',
+                 text: `Training wake words needs ${lim.training_gb} GB.` });
+  }
+  return notes;
+};
+
+const HealthLimitSlider = ({ label, unit, bounds, auto, autoText, value, onAuto, onValue, id }) => (
+  <div className="health-limit" data-limit={id}>
+    <div className="health-limit-head">
+      <span className="health-limit-label">{label}</span>
+      <label className="health-limit-auto">
+        <input type="checkbox" checked={auto} onChange={(e) => onAuto(e.target.checked)}/>
+        {' '}automatic{autoText ? ` (${autoText})` : ''}
+      </label>
+    </div>
+    {!auto && (
+      <div className="config-slider">
+        <div className="config-slider-track">
+          <input type="range" min={bounds.min} max={bounds.max} step={1} value={value}
+                 aria-label={label} aria-valuetext={`${value} ${unit}`}
+                 onChange={(e) => onValue(Number(e.target.value))}/>
+          <div className="config-slider-ends">
+            <span>{bounds.min} {unit}</span>
+            <span>{bounds.max} {unit}</span>
+          </div>
+        </div>
+        <span className="health-limit-value mono">{value} {unit}</span>
+      </div>
+    )}
+  </div>
+);
+
+const HealthLimitsCard = () => {
+  const lim = useApiObject('/api/models/host-limits', HEALTH_QUIET);
+  const d = lim.data;
+  const [draft, setDraft] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+  const [confirm, setConfirm] = React.useState(false);
+  // What this page last saved: DomovoiHost reports it as `chosen` only once
+  // it has read the request (within 30 s), and the core's own copy
+  // (`requested`) until then, so a Restart right after a Save never sends
+  // the old values back.
+  const [sent, setSent] = React.useState(null);
+  if (!d || !d.available) return null;
+  const saved = sent || d.requested || { memory_gb: d.memory_gb.chosen, processors: d.processors.chosen };
+  const cur = draft || saved;
+  const changed = cur.memory_gb !== saved.memory_gb || cur.processors !== saved.processors;
+  const send = async (body, restart) => {
+    setBusy(true); setMsg(null);
+    try {
+      const limits = { memory_gb: body.memory_gb, processors: body.processors };
+      await apiPost('/api/models/host-limits', { ...limits, restart_now: !!restart });
+      setSent(limits); setDraft(null); setConfirm(false);
+      setMsg(restart ? 'Restarting Domovoi so it starts with its new limits · back in a couple of minutes'
+        : 'Saved · it applies when Domovoi next restarts');
+      lim.refresh();
+    } catch (e) {
+      setMsg(`Not saved: ${(e && e.message) || 'the server refused it'}`);
+    } finally { setBusy(false); }
+  };
+  const memDefault = d.memory_gb.default;
+  const running = d.running || {};
+  const notes = healthLimitsWords(d, cur);
+  return (
+    <div data-health-part="pc" data-settings-mark="pc">
+      <Card title="This PC">
+        <div className="health-limits" data-health-limits="card">
+          <p className="health-mem-note">
+            This PC has {d.ram_gb} GB of memory and {d.logical_processors} processor cores. Domovoi
+            may use up to:
+          </p>
+          <HealthLimitSlider id="memory" label="Memory" unit="GB" bounds={d.memory_gb}
+            auto={cur.memory_gb == null} autoText={memDefault != null ? `${memDefault} GB` : ''}
+            value={cur.memory_gb != null ? cur.memory_gb : (memDefault || d.memory_gb.min)}
+            onAuto={(a) => setDraft({ ...cur, memory_gb: a ? null : (memDefault || d.memory_gb.min) })}
+            onValue={(v) => setDraft({ ...cur, memory_gb: v })}/>
+          <HealthLimitSlider id="processors" label="Processor cores" unit="cores" bounds={d.processors}
+            auto={cur.processors == null} autoText={`all ${d.logical_processors}`}
+            value={cur.processors != null ? cur.processors : d.processors.max}
+            onAuto={(a) => setDraft({ ...cur, processors: a ? null : d.processors.max })}
+            onValue={(v) => setDraft({ ...cur, processors: v })}/>
+          {notes.map((n) => (
+            <div key={n.key} className={n.tone === 'warn' ? 'health-mem-missing' : 'health-mem-facts'}
+                 data-limit-note={n.key}>{n.text}</div>
+          ))}
+          <div className="health-mem-facts">
+            The new limits apply when Domovoi next restarts: when this PC restarts, or now with
+            “Restart Domovoi now” (Domovoi is offline for a couple of minutes).
+          </div>
+          {d.pending && (
+            <div className="health-mem-facts" data-limit-state="pending">
+              Domovoi still runs on {running.memory_gb != null ? `${running.memory_gb} GB` : 'its old memory'}
+              {running.processors ? ` and ${running.processors} cores` : ''} until it restarts.
+            </div>
+          )}
+          {d.waiting_for_host && (
+            <div className="health-mem-facts" data-limit-state="waiting">
+              Saved · Domovoi’s Windows side picks it up within a minute.
+            </div>
+          )}
+          {d.request === 'invalid' && (
+            <div className="health-mem-missing" data-limit-state="refused">
+              Domovoi’s Windows side refused the last change{d.request_problem ? `: ${d.request_problem}` : ''}.
+            </div>
+          )}
+          {d.restart === 'failed' && (
+            <div className="health-mem-missing" data-limit-state="restart-failed">
+              The last restart for new limits didn’t finish · Save logs from the tray icon says why.
+            </div>
+          )}
+          {msg && <div className="health-mem-facts" data-limit-state="msg">{msg}</div>}
+          <div className="health-limits-actions">
+            <Button variant="primary" type="button" disabled={!changed || busy} data-limit-action="save"
+                    onClick={() => send(cur, false)}>Save</Button>
+            {(d.pending || changed) && !confirm && (
+              <Button type="button" disabled={busy} data-limit-action="restart"
+                      onClick={() => setConfirm(true)}>Restart Domovoi now</Button>
+            )}
+            {confirm && (
+              <>
+                <Button variant="primary" type="button" disabled={busy} data-limit-action="confirm"
+                        onClick={() => send(cur, true)}>Yes, restart (offline a couple of minutes)</Button>
+                <Button type="button" disabled={busy} data-limit-action="cancel"
+                        onClick={() => setConfirm(false)}>Cancel</Button>
+              </>
+            )}
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
 const HealthRow = ({ c }) => {
   const problem = c.tone === 'err' || c.tone === 'warn';
   const [open, setOpen] = React.useState(false);
@@ -575,6 +744,7 @@ const HealthRow = ({ c }) => {
       <span className="health-text">
         {c.text}
         {c.at && <span className="health-when mono"> · {relTime(c.at)}</span>}
+        {c.sub && <span className="health-row-sub" data-health-sub={c.key}>{c.sub}</span>}
         {problem && c.items && c.items.length > 1 && (
           <span className="health-items">
             {c.items.map((it, i) => (
@@ -734,6 +904,7 @@ const HealthPanel = ({ marks = [] }) => {
           </div>
         );
       })}
+      {admin && <HealthLimitsCard/>}
       {m.toastNode}
     </div>
   );
@@ -744,4 +915,5 @@ const HealthPanel = ({ marks = [] }) => {
 window.DomovoiSettingsSections = window.DomovoiSettingsSections || {};
 window.DomovoiSettingsSections.health = { Panel: HealthPanel };
 
-Object.assign(window, { healthChecks, healthProblems, healthAudience, healthViewer, healthSize, HealthPanel });
+Object.assign(window, { healthChecks, healthProblems, healthAudience, healthViewer, healthSize, healthTrimWords,
+  healthLimitsWords, HealthPanel });

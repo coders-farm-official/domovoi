@@ -346,6 +346,29 @@ async def test_on_windows_the_memory_refusal_is_in_the_pcs_terms(box, pc_gb):
 
 
 @pytest.mark.asyncio
+async def test_with_domovoihosts_report_the_refusal_says_how_to_raise_the_share(box, monkeypatch):
+    """The household sets Domovoi's share of the PC now (domovoi/host_limits.py,
+    2026-11-10): a 64 GB PC whose share was lowered to 16 is told to raise
+    it, not that the PC is too small."""
+    box["state"].update(wsl=True, mem_mib=16 * 1024 - 300)
+    report = {"ram_gb": 64, "logical_processors": 16,
+              "memory_gb": {"min": 8, "max": 60, "default": 32, "chosen": 16, "in_file": 16}}
+    monkeypatch.setattr(wts, "_host_limits_report", lambda: report)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    text = " ".join(req["refusals"])
+    assert "it may use 16 GB of this PC's 64 GB now" in text
+    assert 'Raise "Domovoi may use up to" to 24 GB or more' in text
+    # A PC whose share can't reach 24 GB: the PC is too small, in its own numbers.
+    report = {**report, "ram_gb": 24, "memory_gb": {**report["memory_gb"], "max": 20}}
+    monkeypatch.setattr(wts, "_host_limits_report", lambda: report)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    text = " ".join(req["refusals"])
+    assert "this PC has 24 GB: Domovoi can have at most 20 GB of it" in text
+
+
+@pytest.mark.asyncio
 async def test_on_windows_a_32_gb_pc_is_enough(box):
     box["state"].update(wsl=True, mem_mib=_memory_cap_gb(32) * 1024 - 300)
     with egress.override_policy("always"):

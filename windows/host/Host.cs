@@ -20,6 +20,12 @@
 //   6b. copy the core's journal out to logs\core.log for "Save logs"
 //      (CoreLog.cs, CoreJournal.cs): once ready, every 10 minutes, and on
 //      the helper's request;
+//   6c. the household's hardware limits (HardwareLimits.cs): every 30 s,
+//      read the core's request as the service user, keep a changed choice
+//      and write it into .wslconfig (memory=, processors=), restart the
+//      Linux system once for a new restart id, and tell the Linux side
+//      this PC's RAM, processors and the limits
+//      (/var/lib/domovoi-windows/limits.json, as root);
 //   7. with the start parameter "unregister": unregister the distro, end
 //      this account's own WSL session (wsl --shutdown as domovoi-svc, which
 //      leaves every other account's WSL alone), and stop (the uninstaller's
@@ -65,6 +71,19 @@ namespace Domovoi.Windows.Host
         // failure logged (one host.log line per change, not every 10 min).
         DateTime coreLogNext = DateTime.MinValue;
         string coreLogLastError;
+        // The household's hardware limits (HardwareLimits.cs): when the
+        // request is next read, the report last written (its text without
+        // the time), the last problem logged, when the last restart for
+        // them ran and how it went, and whether this process has read a
+        // request yet (a restart id already there at its first read is
+        // taken as seen, not acted on: this process's own start is what
+        // brought the VM up).
+        DateTime limitsNext = DateTime.MinValue;
+        string limitsLastReport;
+        string limitsLastProblem;
+        DateTime limitsLastRestart = DateTime.MinValue;
+        string limitsRestartState = "none";
+        bool limitsFirstRead = true;
 
         public Host(ManualResetEvent stop)
         {
@@ -221,6 +240,7 @@ namespace Domovoi.Windows.Host
                 }
                 ProcessRequests(ready);
                 if (ready) PeriodicCoreLog();
+                if (ready) ready = PollLimits(job);
                 if (DateTime.UtcNow - lastStatusWrite > TimeSpan.FromSeconds(10)) WriteStatus(true);
                 if (Sleep(1000)) break;
             }
@@ -356,29 +376,162 @@ namespace Domovoi.Windows.Host
 
         bool WriteWslConfig(HostJob job)
         {
+            string error = WriteWslFile(WslText(job));
+            if (error == null) return true;
+            Fail(error, null);
+            return false;
+        }
+
+        // The job's .wslconfig with the household's limits in it (the stored
+        // choice, inside this PC's bounds as they are now); the job's own
+        // text when they can't go in.
+        string WslText(HostJob job)
+        {
+            LimitsChoice c = HardwareLimits.Within(StoredLimits(), CurrentBounds());
+            try { return HardwareLimits.Apply(job.WslConfig, c); }
+            catch (Exception e)
+            {
+                if (!(e is FormatException || e is ArgumentException)) throw;
+                log.Write("the household's limits can't go into this .wslconfig (" + e.Message + "); the installer's values apply");
+                return job.WslConfig;
+            }
+        }
+
+        LimitsChoice StoredLimits() { return LimitsChoice.FromJson(Json.Obj(ReadState(), "limits")); }
+
+        static LimitsBounds CurrentBounds()
+        {
+            return HardwareLimits.Bounds(HardwareLimits.InstalledRamBytes(), Environment.ProcessorCount);
+        }
+
+        // null, or why the file could not be written.
+        string WriteWslFile(string wslText)
+        {
             // This account's own profile, wherever Windows made it (WslConfig.FileIn).
             string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (string.IsNullOrEmpty(profile) || !Directory.Exists(profile))
-            {
-                Fail("the account's profile folder is missing", null);
-                return false;
-            }
+            if (string.IsNullOrEmpty(profile) || !Directory.Exists(profile)) return "the account's profile folder is missing";
             string path = WslConfig.FileIn(profile);
-            string text = job.WslConfig.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            string text = wslText.Replace("\r\n", "\n").Replace("\n", "\r\n");
             try
             {
-                if (File.Exists(path) && File.ReadAllText(path) == text) return true;
+                if (File.Exists(path) && File.ReadAllText(path) == text) return null;
                 bool existed = File.Exists(path);
                 AtomicFile.WriteAllText(path, text);
                 log.Write("wrote " + path + (existed ? " (changed; WSL applies it when this account's VM next starts)" : ""));
-                return true;
+                return null;
             }
             catch (Exception e)
             {
                 if (!(e is IOException || e is UnauthorizedAccessException)) throw;
-                Fail("can't write " + path + ": " + e.Message, null);
-                return false;
+                return "can't write " + path + ": " + e.Message;
             }
+        }
+
+        // -- the household's hardware limits (HardwareLimits.cs) ---------
+
+        // Every HardwareLimits.Every while Domovoi runs: read the core's
+        // request as the service user, keep a changed choice and write it
+        // into .wslconfig, restart for a new restart id, and report to the
+        // Linux side when anything in the report changed. Returns whether
+        // Domovoi is up (false only after a restart that didn't come back).
+        bool PollLimits(HostJob job)
+        {
+            if (DateTime.UtcNow < limitsNext) return true;
+            limitsNext = DateTime.UtcNow + HardwareLimits.Every;
+            // A wsl.exe -d call would start a stopped distro.
+            if (holder == null || SafeExited(holder)) return true;
+            LimitsBounds b = CurrentBounds();
+            WslResult r;
+            try { r = Wsl.Run(HardwareLimits.ReadArgs(Paths.DistroName), HardwareLimits.TimeoutMs, null, HardwareLimits.MaxRequestBytes + 64); }
+            catch (System.ComponentModel.Win32Exception e) { log.Write("can't read the hardware-limits request: " + e.Message); return true; }
+            if (r.TimedOut) return true;
+            // head's exit 1 is "no such file": no request.
+            LimitsRequest req = HardwareLimits.Parse(r.ExitCode == 0 ? r.Stdout : null, b);
+            if (req.State == "invalid")
+            {
+                if (req.Problem != limitsLastProblem) log.Write("the hardware-limits request is refused: " + req.Problem);
+                limitsLastProblem = req.Problem;
+            }
+            else limitsLastProblem = null;
+            if (req.Choice != null && !req.Choice.SameAs(StoredLimits()))
+            {
+                UpdateState("limits", req.Choice.ToJson());
+                log.Write("the household's limits are now " + HardwareLimits.Describe(req.Choice)
+                    + (req.State == "clamped" ? " (moved inside this PC's bounds)" : "")
+                    + "; WSL uses them when Domovoi's Linux system next starts");
+                string error = WriteWslFile(WslText(job));
+                if (error != null) log.Write("the new limits are kept, but " + error);
+            }
+            bool ready = true;
+            if (req.RestartId != null && req.RestartId != Json.Str(ReadState(), "limits_restart_id"))
+            {
+                if (limitsFirstRead)
+                {
+                    UpdateState("limits_restart_id", req.RestartId);
+                }
+                else if (DateTime.UtcNow - limitsLastRestart < HardwareLimits.RestartGap)
+                {
+                    limitsRestartState = "waiting";
+                }
+                else
+                {
+                    // Recorded first: a restart that fails is not tried again.
+                    UpdateState("limits_restart_id", req.RestartId);
+                    limitsLastRestart = DateTime.UtcNow;
+                    ready = RestartForLimits(job);
+                    limitsRestartState = ready ? "done" : "failed";
+                    limitsNext = DateTime.MinValue;
+                }
+            }
+            limitsFirstRead = false;
+            if (ready && holder != null && !SafeExited(holder)) ReportLimits(job, b, req);
+            return ready;
+        }
+
+        void ReportLimits(HostJob job, LimitsBounds b, LimitsRequest req)
+        {
+            LimitsChoice defaults = HardwareLimits.InFile(job.WslConfig);
+            defaults.Processors = null;
+            LimitsChoice chosen = HardwareLimits.Within(StoredLimits(), b);
+            LimitsChoice inFile = HardwareLimits.InFile(WslText(job));
+            string key = HardwareLimits.Report(b, defaults, chosen, inFile, req, limitsRestartState, DateTime.MinValue);
+            if (key == limitsLastReport) return;
+            string text = HardwareLimits.Report(b, defaults, chosen, inFile, req, limitsRestartState, DateTime.UtcNow);
+            byte[] body = new UTF8Encoding(false).GetBytes(text);
+            string sha;
+            using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(body));
+            try
+            {
+                WslResult w = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", HardwareLimits.ReportScript() }, 60000, body, 4096);
+                if (w.ExitCode == 0 && w.Stdout.StartsWith(sha, StringComparison.Ordinal))
+                {
+                    limitsLastReport = key;
+                    log.Write("told the Linux side this PC's hardware and limits (" + Inv.S(b.RamGb) + " GB, " + Inv.S(b.LogicalProcessors)
+                        + " logical processors; " + HardwareLimits.Describe(chosen) + ")");
+                }
+                else log.Write("could not tell the Linux side its hardware limits (exit " + Inv.S(w.ExitCode) + "): " + FirstLine(w.Stderr + w.Stdout));
+            }
+            catch (System.ComponentModel.Win32Exception e) { log.Write("could not tell the Linux side its hardware limits: " + e.Message); }
+        }
+
+        // Domovoi's Linux system restarted so the VM starts again with the
+        // new limits: the units stopped cleanly, the distro terminated, this
+        // account's WSL shut down (the household's own WSL and Docker run
+        // on: ReleaseWsl), then the usual bring-up.
+        bool RestartForLimits(HostJob job)
+        {
+            log.Write("restarting Domovoi's Linux system for its new limits (" + HardwareLimits.Describe(StoredLimits()) + ")");
+            Status("restarting", HostProgress.PhaseRestart, 0, "Restarting Domovoi so it starts with its new limits");
+            WslResult s = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/usr/bin/systemctl", "stop", "domovoi-web", "domovoi-core", "domovoi-db" }, 40000, null, 8192);
+            log.Write("systemctl stop exit " + Inv.S(s.ExitCode) + (s.TimedOut ? " (timed out)" : ""));
+            KillHolder();
+            WslResult t = Wsl.Run(new[] { "--terminate", Paths.DistroName }, 60000, null, 8192);
+            log.Write("wsl --terminate exit " + Inv.S(t.ExitCode) + Trailer(t));
+            ReleaseWsl();
+            holderNext = DateTime.MinValue;
+            holderBackoffSec = 5;
+            lock (statusGate) status.Percent = 0;
+            return BringUp(job);
         }
 
         bool Import(HostJob job)

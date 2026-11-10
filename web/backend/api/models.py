@@ -355,6 +355,33 @@ async def get_memory(request: Request):
     )
 
 
+class HostLimitsBody(BaseModel):
+    memory_gb: int | None = None
+    processors: int | None = None
+    restart_now: bool = False
+
+
+@router.get("/host-limits", dependencies=[Depends(require_admin_read)])
+async def get_host_limits(request: Request):
+    """How much of the PC Domovoi may use (the Windows install; Health's
+    "this PC" card): proxied from the core's admin read
+    ``/v1/admin/host-limits`` (domovoi/host_limits.py)."""
+    return bridge_response(
+        *await get_admin("/v1/admin/host-limits", headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/host-limits", dependencies=[Depends(require_admin_mutation)])
+async def set_host_limits(body: HostLimitsBody, request: Request):
+    """Set "Domovoi may use up to N GB / N processor cores" (null:
+    automatic), optionally restarting Domovoi's Linux system now so it
+    applies: the core writes the request DomovoiHost reads
+    (``POST /v1/admin/host-limits``). An admin mutation at both hops."""
+    return bridge_response(
+        *await post_admin("/v1/admin/host-limits", body.model_dump(), headers=auth_forward_headers(request))
+    )
+
+
 # ─── Delete ──────────────────────────────────────────────────────────────────
 
 

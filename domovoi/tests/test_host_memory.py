@@ -434,6 +434,50 @@ def _gates(app, method, path):
     raise AssertionError(f"{method} {path} not routed")
 
 
+# ─── the file-cache trim's last run (scripts/linux/cache-trim.py) ────────
+
+TRIM_STATUS = {
+    "schema": 1, "checked_at": "2026-11-10T05:02:00Z", "enabled": True, "why_enabled": "wsl",
+    "limit_bytes": 6764573491, "limit_source": "default", "total_bytes": 67645734912,
+    "cache_bytes": 1288490188, "droppable_bytes": 1000000000, "action": "under", "why": "under the limit",
+    "override_problem": None,
+    "last_trim": {"at": "2026-11-10T04:59:00Z", "at_epoch": 1793678340, "before_bytes": 54760833024,
+                  "after_bytes": 1288490188, "freed_bytes": 53472342836},
+}
+
+
+def test_snapshot_carries_the_trims_last_run(proc_root, tmp_path) -> None:
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps(TRIM_STATUS), encoding="utf-8")
+    doc = asyncio.run(host_memory.snapshot(_sources(proc_root, cache_trim_status=status)))
+    assert doc["cache_trim"] == {
+        "enabled": True, "why_enabled": "wsl", "limit_bytes": 6764573491, "action": "under",
+        "checked_at": "2026-11-10T05:02:00Z",
+        "last_trim": {"at": "2026-11-10T04:59:00Z", "freed_bytes": 53472342836},
+    }
+
+
+def test_no_trim_status_is_none(tmp_path) -> None:
+    assert host_memory.read_cache_trim(tmp_path / "missing.json") is None
+
+
+@pytest.mark.parametrize("bad", ["not json", "[]", json.dumps({**TRIM_STATUS, "schema": 2}), "x" * 20000])
+def test_a_trim_status_in_another_shape_is_none(tmp_path, bad) -> None:
+    p = tmp_path / "status.json"
+    p.write_text(bad, encoding="utf-8")
+    assert host_memory.read_cache_trim(p) is None
+
+
+def test_odd_trim_fields_are_dropped_not_shown(tmp_path) -> None:
+    p = tmp_path / "status.json"
+    p.write_text(json.dumps({**TRIM_STATUS, "why_enabled": "<script>", "action": "explode",
+                             "limit_bytes": -5, "checked_at": "yesterday",
+                             "last_trim": {"at": "soon", "freed_bytes": 3}}), encoding="utf-8")
+    t = host_memory.read_cache_trim(p)
+    assert t["why_enabled"] is None and t["action"] is None and t["limit_bytes"] is None
+    assert t["checked_at"] is None and t["last_trim"] is None
+
+
 def test_an_admin_read_at_both_hops() -> None:
     from domovoi.main import app as core_app
     from web.backend.main import app as web_app

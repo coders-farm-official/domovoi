@@ -6566,6 +6566,43 @@ async def admin_memory() -> dict[str, Any]:
     return await host_memory.cached_snapshot()
 
 
+class HostLimitsBody(BaseModel):
+    # None: automatic (the installer's value). Whole numbers only; the
+    # bounds are this PC's, from DomovoiHost's report (domovoi/host_limits.py).
+    memory_gb: int | None = None
+    processors: int | None = None
+    restart_now: bool = False
+
+
+@app.get("/v1/admin/host-limits", dependencies=[Depends(require_admin_read)])
+async def admin_host_limits() -> dict[str, Any]:
+    """How much of the PC Domovoi may use (the Windows install): this PC's
+    RAM and logical processors as DomovoiHost reports them, the bounds,
+    the default, the household's choice, what the VM runs on now and
+    whether a restart is still needed (domovoi/host_limits.py).
+    ``available: false`` anywhere else."""
+    from domovoi import host_limits
+
+    return await asyncio.to_thread(host_limits.status)
+
+
+@app.post("/v1/admin/host-limits", dependencies=[Depends(require_admin_mutation)])
+async def admin_set_host_limits(body: HostLimitsBody) -> dict[str, Any]:
+    """Ask DomovoiHost for a new ceiling: ``memory_gb`` and ``processors``
+    (null: automatic) inside this PC's bounds, and with ``restart_now`` a
+    restart of Domovoi's Linux system so it starts with them (a couple of
+    minutes offline). Applies when the VM next starts; DomovoiHost reads
+    the request within 30 s. 400 outside the bounds or off Windows."""
+    from domovoi import host_limits
+
+    try:
+        return await asyncio.to_thread(
+            host_limits.save, body.memory_gb, body.processors, restart_now=body.restart_now
+        )
+    except host_limits.Refused as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @app.get("/v1/admin/hardware")
 async def admin_hardware() -> dict[str, Any]:
     """Host hardware snapshot for the web Models page's fit badges.

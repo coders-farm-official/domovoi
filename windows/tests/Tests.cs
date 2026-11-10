@@ -653,10 +653,14 @@ static partial class Tests
             Eq(10, WslConfig.MemoryCapGb(16 * gib - gib / 3), "a 16 GB PC");
             Eq(10, WslConfig.MemoryCapGb(23 * gib), "23 GB");
             Eq(16, WslConfig.MemoryCapGb(24 * gib - gib / 4), "24 GB");
-            Eq(24, WslConfig.MemoryCapGb(32 * gib), "32 GB");
-            Eq(56, WslConfig.MemoryCapGb(64 * gib), "64 GB");
-            Eq(64, WslConfig.MemoryCapGb(137242800128L), "this dev box, 128 GB");
+            Eq(20, WslConfig.MemoryCapGb(28 * gib), "28 GB: RAM - 8");
+            Eq(24, WslConfig.MemoryCapGb(32 * gib), "32 GB: training's 24 GB and the standard tier fit");
+            Eq(24, WslConfig.MemoryCapGb(48 * gib), "48 GB");
+            Eq(32, WslConfig.MemoryCapGb(64 * gib), "64 GB: half (was 56)");
+            Eq(32, WslConfig.MemoryCapGb(137242800128L), "a 128 GB PC: 32 (was 64, 2026-11-10)");
+            Eq(32, WslConfig.MemoryCapGb(256 * gib), "256 GB");
         });
+        HardwareLimitsTests();
         Run("wslconfig: the file", delegate
         {
             var o = new WslConfigOptions();
@@ -680,6 +684,128 @@ static partial class Tests
             Throws<ArgumentException>(delegate { WslConfig.Render(o); }, "a newline in a path");
             o.SwapFile = @"C:\x"; o.MemoryGb = 0;
             Throws<ArgumentException>(delegate { WslConfig.Render(o); }, "no memory");
+        });
+    }
+
+    static void HardwareLimitsTests()
+    {
+        const long G = 1024L * 1024 * 1024;
+        LimitsBounds b128 = HardwareLimits.Bounds(137242800128L, 32);
+        Run("limits: this PC's bounds", delegate
+        {
+            Eq(128, b128.RamGb, "RAM label");
+            Eq(8, b128.MemoryMin, "never under 8 GB");
+            Eq(124, b128.MemoryMax, "RAM - 4");
+            Eq(2, b128.ProcessorsMin, "never under 2 cores");
+            Eq(32, b128.ProcessorsMax, "every logical processor");
+            LimitsBounds small = HardwareLimits.Bounds(16 * G - G / 3, 4);
+            Eq(12, small.MemoryMax, "16 GB PC: up to 12");
+            LimitsBounds tiny = HardwareLimits.Bounds(8 * G, 1);
+            Eq(8, tiny.MemoryMax, "an 8 GB PC can't go under the floor either");
+            Eq(1, tiny.ProcessorsMin, "one core: the floor is what there is");
+        });
+        Run("limits: a request", delegate
+        {
+            LimitsRequest r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":24,\"processors\":8,\"restart_id\":null,\"at\":\"2026-11-10T05:00:00Z\"}", b128);
+            Eq("ok", r.State, "ok");
+            Eq(24, r.Choice.MemoryGb.Value, "memory");
+            Eq(8, r.Choice.Processors.Value, "processors");
+            True(r.RestartId == null, "no restart");
+            r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":null,\"processors\":null,\"restart_id\":\"0123456789abcdef0123456789abcdef\"}", b128);
+            Eq("ok", r.State, "automatic");
+            True(!r.Choice.MemoryGb.HasValue && !r.Choice.Processors.HasValue, "both automatic");
+            Eq("0123456789abcdef0123456789abcdef", r.RestartId, "the restart id");
+            Eq("none", HardwareLimits.Parse(null, b128).State, "no file");
+        });
+        Run("limits: numbers outside this PC's bounds are moved inside", delegate
+        {
+            LimitsRequest r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":2,\"processors\":512}", b128);
+            Eq("clamped", r.State, "clamped");
+            Eq(8, r.Choice.MemoryGb.Value, "up to the floor");
+            Eq(32, r.Choice.Processors.Value, "down to the cores there are");
+            r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":4000,\"processors\":0}", b128);
+            Eq(124, r.Choice.MemoryGb.Value, "never past RAM - 4");
+            Eq(2, r.Choice.Processors.Value, "never under 2");
+        });
+        Run("limits: anything else in a request is refused", delegate
+        {
+            string[] bad =
+            {
+                "", "[]", "not json", "{\"v\":2,\"memory_gb\":24}", "{\"memory_gb\":24}",
+                "{\"v\":1,\"memory_gb\":\"24\"}", "{\"v\":1,\"memory_gb\":24.5}", "{\"v\":1,\"processors\":[4]}",
+                "{\"v\":1,\"memory_gb\":24,\"swap\":64}", "{\"v\":1,\"wslconfig\":\"[wsl2]\\nkernel=x\"}",
+                "{\"v\":1,\"restart_id\":\"abc\"}", "{\"v\":1,\"restart_id\":\"0123456789ABCDEF0123456789ABCDEF\"}",
+                "{\"v\":1,\"restart_id\":7}", "{\"v\":1,\"memory_gb\":99999999999}",
+                "{\"v\":1,\"memory_gb\":24}" + new string(' ', 3000),
+            };
+            foreach (string t in bad)
+            {
+                LimitsRequest r = HardwareLimits.Parse(t, b128);
+                Eq("invalid", r.State, "refused: " + (t.Length > 60 ? t.Substring(0, 60) : t));
+                True(r.Choice == null && r.RestartId == null && !string.IsNullOrEmpty(r.Problem), "nothing taken from it");
+            }
+        });
+        Run("limits: into the installer's .wslconfig, nothing else touched", delegate
+        {
+            var o = new WslConfigOptions();
+            o.MemoryGb = 32;
+            o.SwapFile = @"C:\ProgramData\Domovoi\wsl\swap.vhdx";
+            string job = WslConfig.Render(o);
+            Eq(job, HardwareLimits.Apply(job, new LimitsChoice()), "automatic: the installer's text as it is");
+            var c = new LimitsChoice(); c.MemoryGb = 20; c.Processors = 6;
+            string t = HardwareLimits.Apply(job, c);
+            var lines = t.Split('\n').ToList();
+            int m = lines.IndexOf("memory=20GB");
+            True(m > 0, "memory replaced");
+            Eq("processors=6", lines[m + 1], "processors right after it");
+            True(!t.Contains("memory=32GB"), "the old size is gone");
+            Eq(job.Split('\n').Length + 1, lines.Count, "one line more, nothing else");
+            True(t.Contains("autoMemoryReclaim=dropCache") && t.Contains("networkingMode=mirrored"), "the rest stays");
+            // Applying again, or another choice, never stacks lines.
+            var c2 = new LimitsChoice(); c2.Processors = 4;
+            string t2 = HardwareLimits.Apply(t, c2);
+            Eq(1, t2.Split('\n').Count(l => l.StartsWith("processors=")), "one processors= line");
+            True(t2.Contains("memory=20GB"), "an automatic size keeps the text's line");
+            LimitsChoice back = HardwareLimits.InFile(t);
+            Eq(20, back.MemoryGb.Value, "read back: memory");
+            Eq(6, back.Processors.Value, "read back: processors");
+            True(!HardwareLimits.InFile(job).Processors.HasValue, "the installer sets no processors=");
+            Throws<FormatException>(delegate { HardwareLimits.Apply("[general]\nx=1\n", c); }, "no memory= line");
+            var huge = new LimitsChoice(); huge.MemoryGb = 5000;
+            Throws<ArgumentException>(delegate { HardwareLimits.Apply(job, huge); }, "a size no PC has");
+        });
+        Run("limits: a stored choice stays inside the bounds of today", delegate
+        {
+            var c = new LimitsChoice(); c.MemoryGb = 100; c.Processors = 64;
+            LimitsChoice w = HardwareLimits.Within(c, HardwareLimits.Bounds(32 * G, 8));
+            Eq(28, w.MemoryGb.Value, "RAM was taken out: 32 - 4");
+            Eq(8, w.Processors.Value, "8 cores");
+            True(!HardwareLimits.Within(new LimitsChoice(), b128).MemoryGb.HasValue, "automatic stays automatic");
+        });
+        Run("limits: the report and the root script", delegate
+        {
+            var chosen = new LimitsChoice(); chosen.MemoryGb = 24;
+            var defaults = new LimitsChoice(); defaults.MemoryGb = 32;
+            var req = new LimitsRequest(); req.State = "invalid"; req.Problem = "the request has a key it may not have";
+            string t = HardwareLimits.Report(b128, defaults, chosen, chosen, req, "done", new DateTime(2026, 11, 10, 5, 0, 0, DateTimeKind.Utc));
+            var d = Json.ParseObject(t);
+            Eq(1, Json.Int(d, "schema").Value, "schema");
+            Eq(128, Json.Int(d, "ram_gb").Value, "RAM");
+            Eq(32, Json.Int(d, "logical_processors").Value, "cores");
+            var mem = Json.Obj(d, "memory_gb");
+            Eq(8, Json.Int(mem, "min").Value, "min");
+            Eq(124, Json.Int(mem, "max").Value, "max");
+            Eq(32, Json.Int(mem, "default").Value, "default");
+            Eq(24, Json.Int(mem, "chosen").Value, "chosen");
+            True(Json.IsNull(Json.Obj(d, "processors"), "chosen"), "processors automatic");
+            Eq("invalid", Json.Str(d, "request"), "request state");
+            Eq("done", Json.Str(d, "restart"), "restart");
+            Eq("2026-11-10T05:00:00Z", Json.Str(d, "written_at"), "time");
+            True(t.EndsWith("\n") && !t.Contains("\r"), "one LF line");
+            string s = HardwareLimits.ReportScript();
+            True(s.Contains("chown root:root /var/lib/domovoi-windows") && s.Contains("chmod 0644") && s.Contains("sha256sum /var/lib/domovoi-windows/limits.json"), "root's file");
+            string[] a = HardwareLimits.ReadArgs("domovoi");
+            SeqEq(new[] { "-d", "domovoi", "-u", "domovoi", "--cd", "/", "--exec", "/usr/bin/head", "-c", "2049", "/home/domovoi/.domovoi/hardware_limits/request.json" }, a, "read as the service user, bounded");
         });
     }
 
