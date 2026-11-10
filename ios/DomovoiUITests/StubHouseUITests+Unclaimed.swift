@@ -101,9 +101,14 @@ extension StubHouseUITests {
             "the address to open is drawn"
         )
 
+        // `Check again` is waited for, not read once: while the launch's own
+        // read is out the button is labelled `checking…`, so an instant
+        // `exists` can miss it on a slow first frame.
         var missing: [String] = []
+        if !app.buttons[UnclaimedUnderTest.checkAgain].waitForExistence(timeout: 10) {
+            missing.append(UnclaimedUnderTest.checkAgain)
+        }
         for label in [
-            UnclaimedUnderTest.checkAgain,
             UnclaimedUnderTest.openTheDashboard,
             UnclaimedUnderTest.useThisPhonesMedia,
             UnclaimedUnderTest.useADifferentServer,
@@ -177,7 +182,11 @@ extension StubHouseUITests {
         let (app, drawn) = unclaimedLaunch()
         XCTAssertTrue(drawn, "the unclaimed house never got its blocker")
 
+        // The evidence (picture and tree) first: this file's `setUp` stops a
+        // case at its first failed assertion, so a miss below would
+        // otherwise end the case with nothing printed.
         let dashboard = app.buttons[UnclaimedUnderTest.openTheDashboard]
+        evidence(app, "unclaimed-25-ways-out")
         XCTAssertTrue(dashboard.exists && dashboard.isHittable, "open the dashboard is offered")
 
         let local = app.buttons[UnclaimedUnderTest.useThisPhonesMedia]

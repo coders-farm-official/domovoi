@@ -176,15 +176,23 @@ public enum UnclaimedAsk: Equatable, Sendable {
 /// the switch it was asked in**, both captured before the await, and its
 /// answer is written only if both still hold when it lands:
 ///
+///  - the read is **sent to** the captured address, not to whatever the
+///    client's store says when the request is built. Otherwise a store that
+///    went A → B → A before any refresh caught up could send A's read to B
+///    and file B's answer under A, with every check below passing.
 ///  - ``serverIs(_:)`` bumps `epoch` on a switch, so a read from before the
 ///    switch is dropped whole — it neither blocks nor unblocks the new
 ///    server, and it does not touch the new server's `checking`.
 ///  - the address is compared with the **store's** current address as well,
 ///    because ``ShellModel/refresh()`` (which calls ``serverIs(_:)``) runs a
 ///    hop after the picker writes the store, and a read can land in between.
-///  - `seq` stands in for the cancellation: an older read that lands after a
-///    newer one is dropped, so a `false` asked before the owner claimed the
-///    house cannot come back after the `true` asked after.
+///  - `seq` stands in for the cancellation, **only in part**: an older read
+///    that lands after a newer one is dropped, so a `false` asked before the
+///    owner claimed the house cannot come back after the `true` asked after.
+///    But an older read that lands **first** is still applied (Android would
+///    have cancelled it), and it holds `checking…` — and the button off —
+///    until it lands. Both are about the right house; the cost is a stale
+///    answer shown until the newer one arrives, and a button that waits.
 ///
 /// "A read that fails keeps what was known": a nil answer changes nothing
 /// but `checking`.
@@ -215,7 +223,7 @@ public final class UnclaimedServerModel {
     /// effect's restart hands to the next read rather than losing).
     private var buttonSeq: Int?
 
-    private let read: @Sendable () async -> Bool?
+    private let read: @Sendable (String) async -> Bool?
     private let activeServer: @MainActor () -> String
 
     /// Where ``UnclaimedServerStrings/still`` goes: the shell's toast.
@@ -226,13 +234,13 @@ public final class UnclaimedServerModel {
 
     /// - Parameters:
     ///   - server: the address the shell starts on.
-    ///   - read: one status read **of the store's current server**, nil when
-    ///     it failed or did not say. ``read(using:)`` is the real one.
+    ///   - read: one status read **of the address it is handed**, nil when
+    ///     it failed or did not say. ``read(using:server:)`` is the real one.
     ///   - activeServer: the store's current address, read when a read goes
     ///     out and again when it lands.
     public init(
         server: String,
-        read: @Sendable @escaping () async -> Bool?,
+        read: @Sendable @escaping (String) async -> Bool?,
         activeServer: @MainActor @escaping () -> String
     ) {
         self.server = server
@@ -240,9 +248,19 @@ public final class UnclaimedServerModel {
         self.activeServer = activeServer
     }
 
-    /// The real read: the open status route, untracked. Any failure is nil.
-    nonisolated public static func read(using client: DomovoiClient) async -> Bool? {
-        (try? await client.getUntracked(authStatusPath, as: AuthStatusAnswer.self))?.setupComplete
+    /// The real read: the open status route of **`server`**, untracked. Any
+    /// failure is nil — a refusal (whatever its body says), a page that is
+    /// not JSON, nothing answering.
+    ///
+    /// The address is spelt out as an absolute URL, which ``DomovoiClient``
+    /// sends as it is (``DomovoiClient/absolute(_:)``) under the same scope
+    /// rule as every request: the token goes only if `server` is still the
+    /// active server, and the route needs none.
+    nonisolated public static func read(using client: DomovoiClient, server: String) async -> Bool? {
+        var base = server.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        guard base.contains("://") else { return nil }
+        return (try? await client.getUntracked(base + authStatusPath, as: AuthStatusAnswer.self))?.setupComplete
     }
 
     /// Whether a read is out — `checking…` on the button, and the button off.
@@ -282,9 +300,9 @@ public final class UnclaimedServerModel {
         guard unclaimedAsks(serverURL: server, unreachable: unreachable, setupComplete: setupComplete) else {
             return nil
         }
-        // The client sends to the store's address. If the store has moved
-        // ahead of ``serverIs(_:)``, this read would be filed under the wrong
-        // house — and the refresh that is on its way asks the new one anyway.
+        // The store has moved ahead of ``serverIs(_:)``: an answer about this
+        // address would be dropped on landing anyway, and the refresh that is
+        // on its way asks the new one.
         let asked = activeServer()
         guard asked == server else { return nil }
         started += 1
@@ -295,7 +313,7 @@ public final class UnclaimedServerModel {
         let askedIn = epoch
         let read = self.read
         return Task { @MainActor [weak self] in
-            let answer = await read()
+            let answer = await read(asked)
             self?.landed(answer, asked: asked, epoch: askedIn, seq: seq)
         }
     }

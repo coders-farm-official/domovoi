@@ -275,7 +275,106 @@ final class UnclaimedServerTests: XCTestCase {
         XCTAssertFalse(rig.model.blocks)
     }
 
+    /// The read is **sent to** the address it will be filed under. A store
+    /// that moves A → B → A before the shell catches up would otherwise send
+    /// A's read to B, and B's answer would pass every check on landing.
+    func testTheReadIsHandedTheAddressItWasAskedOf() async {
+        let rig = ModelRig(server: server)
+        let fromA = rig.model.ask(.socket, unreachable: false)
+        rig.active.set(other)
+        rig.active.set(server)
+        await rig.answer(oldest: false, fromA)
+        XCTAssertEqual([server], rig.reads.sentTo, "A's read went to A, wherever the store was meanwhile")
+        XCTAssertTrue(rig.model.blocks)
+    }
+
     // MARK: - through the shell, against a stubbed server
+
+    /// The real read goes to the address it is handed, **not** to the
+    /// client's current server: the client below is on B, and the read of A
+    /// reaches A and brings back A's answer.
+    func testTheRealReadGoesToTheAddressItIsHandedNotTheClientsCurrentOne() async {
+        StubURLProtocol.dispatch { request in
+            guard request.url?.path == authStatusPath else { return .json("{}") }
+            let isA = request.url?.host == "10.0.0.42"
+            return .json(#"{"setup_complete": \#(!isA)}"#)
+        }
+        let (shell, store) = shellRig()
+        XCTAssertTrue(store.setServerURL(other))
+        let answer = await UnclaimedServerModel.read(using: shell.container.client, server: server)
+        XCTAssertEqual(false, answer, "A's own answer")
+        let hosts = StubURLProtocol.recorded.filter { $0.url?.path == authStatusPath }.map { $0.url?.host ?? "" }
+        XCTAssertEqual(["10.0.0.42"], hosts, "sent to A, not to the client's current server B")
+        shell.stop()
+    }
+
+    /// A refusal is not an answer, **whatever its body says**, and neither is
+    /// a page that is not JSON — both through the real client, and neither
+    /// blocks the house. The refusal does not raise pairing either: the read
+    /// is untracked.
+    func testShell_ARefusalOrAPageThatIsNotJSONIsNotAnAnswer() async {
+        let html = Shared(false)
+        StubURLProtocol.dispatch { request in
+            guard request.url?.path == authStatusPath else { return .json("{}") }
+            if html.current {
+                return StubURLProtocol.Answer(
+                    status: 200,
+                    headers: ["Content-Type": "text/html"],
+                    body: Data("<html><body>router login</body></html>".utf8)
+                )
+            }
+            return .json(#"{"setup_complete": false, "detail": "no"}"#, status: 401)
+        }
+        let (shell, _) = shellRig()
+
+        let refused = await UnclaimedServerModel.read(using: shell.container.client, server: server)
+        XCTAssertNil(refused, "a 401 carrying setup_complete: false is a refusal, not an answer")
+        await shell.unclaimed.ask(.socket, unreachable: false)?.value
+        XCTAssertNil(shell.unclaimed.setupComplete)
+        XCTAssertFalse(shell.unclaimed.blocks, "a refusal never blocks the house")
+        XCTAssertFalse(shell.container.client.pairingRequired, "an untracked read raises no pairing screen")
+
+        html.set(true)
+        let page = await UnclaimedServerModel.read(using: shell.container.client, server: server)
+        XCTAssertNil(page, "a 200 that is not JSON is not an answer")
+        await shell.unclaimed.ask(.socket, unreachable: false)?.value
+        XCTAssertNil(shell.unclaimed.setupComplete)
+        XCTAssertFalse(shell.unclaimed.blocks, "a page that is not Domovoi never blocks the house")
+        XCTAssertEqual(
+            4,
+            StubURLProtocol.recorded.filter { $0.url?.path == authStatusPath }.count,
+            "all four reads really went out"
+        )
+        shell.stop()
+    }
+
+    /// **The back-in-reach guard.** The reachability loop publishes a
+    /// verdict on every probe while the socket is down
+    /// (``askWhileOnScreen(reach:probe:clock:wait:publish:)``), so "in reach"
+    /// arrives every few seconds for an unpaired phone beside a healthy
+    /// server. Only the change from out of reach to in reach may ask;
+    /// without that, the status would be read every probe, for ever.
+    func testShell_OnlyComingBackIntoReachAsksNotEveryInReachVerdict() async {
+        StubURLProtocol.dispatch { _ in .json(#"{"setup_complete": false}"#) }
+        let (shell, _) = shellRig()
+        let before = shell.unclaimed.readsSent
+
+        shell.verdictArrived(false)
+        shell.verdictArrived(false)
+        shell.verdictArrived(false)
+        XCTAssertEqual(before, shell.unclaimed.readsSent, "in reach, and in reach again: nothing new to ask")
+
+        shell.verdictArrived(true)
+        XCTAssertEqual(before, shell.unclaimed.readsSent, "out of reach: never asked")
+
+        shell.verdictArrived(false)
+        XCTAssertEqual(before + 1, shell.unclaimed.readsSent, "back in reach: asked exactly once")
+
+        shell.verdictArrived(false)
+        XCTAssertEqual(before + 1, shell.unclaimed.readsSent, "and the next probe's verdict asks nothing")
+        await settleUntil { !shell.unclaimed.checking }
+        shell.stop()
+    }
 
     /// The whole path: `ShellModel`, its real client and `/api/auth/status`
     /// on the wire, with A's read **held at the server** while the person
@@ -412,7 +511,7 @@ final class UnclaimedServerTests: XCTestCase {
             let said = Shared<[String]>([])
             let model = UnclaimedServerModel(
                 server: server,
-                read: { await reads.read() },
+                read: { asked in await reads.read(asked) },
                 activeServer: { active.current }
             )
             model.say = { text in said.mutate { $0.append(text) } }
@@ -524,14 +623,19 @@ final class ScriptedReads: @unchecked Sendable {
     private let lock = NSLock()
     private var waiting: [CheckedContinuation<Bool?, Never>] = []
     private var count = 0
+    private var addresses: [String] = []
 
     /// How many reads have reached this "server" in all.
     var started: Int { lock.withLock { count } }
 
-    func read() async -> Bool? {
+    /// The address each read was sent to, in order.
+    var sentTo: [String] { lock.withLock { addresses } }
+
+    func read(_ address: String) async -> Bool? {
         await withCheckedContinuation { continuation in
             lock.withLock {
                 waiting.append(continuation)
+                addresses.append(address)
                 count += 1
             }
         }

@@ -258,12 +258,12 @@ public final class ShellModel {
             wait: wait,
             publish: { verdict in relay.send(verdict) }
         )
-        // Unclaimed server (UnclaimedServer.swift): the status read goes to
-        // the store's current address, and that is also the key its answer is
-        // checked against when it lands.
+        // Unclaimed server (UnclaimedServer.swift): each status read is sent
+        // to the address it was asked of, and its answer is checked against
+        // the store's current address when it lands.
         self.unclaimed = UnclaimedServerModel(
             server: container.store.serverURL,
-            read: { await UnclaimedServerModel.read(using: client) },
+            read: { asked in await UnclaimedServerModel.read(using: client, server: asked) },
             activeServer: { [container] in container.store.serverURL }
         )
         // Every stored property is set, so `self` may be captured from here
@@ -1401,7 +1401,12 @@ public final class ShellModel {
     /// back, which a probe's cadence could thrash — so that rescue is bounded
     /// by ``stateSocketConnectBudgetMs`` and the bound is measured
     /// (`testWakingASocketThatIsStillConnectingDoesNotThrashIt`).
-    private func verdictArrived(_ verdict: Bool) {
+    /// Internal rather than private so `UnclaimedServerTests` can pin the
+    /// back-in-reach guard below: the loop publishes a verdict on **every**
+    /// probe while the socket is down (``askWhileOnScreen``), so without
+    /// `was` an unpaired phone beside an answering server would send a
+    /// status read every probe, for ever.
+    func verdictArrived(_ verdict: Bool) {
         let was = unreachable
         unreachable = verdict
         container.socket.wake()
