@@ -1594,6 +1594,11 @@ listens.
   NVIDIA graphics card, and over an hour on the processor.
 - The steps: **Create** the word, **Record** 15 or more clips on the
   room device itself, press **Train**, then **Push to room**.
+- Each **Record** adds to the clips already there, from any room, until
+  you train; each clip shows the room it came from. **Delete all clips**
+  starts over.
+- A trained word can record more: its row counts the new clips, and
+  **Train again** uses them. The rooms keep the current model until then.
 - A wake word trained at home is for your household only ([why](docs/LICENSES.md#the-wake-word-trainer)).
 
 **Greetings** *(admin)*

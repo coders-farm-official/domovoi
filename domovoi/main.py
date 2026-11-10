@@ -3477,6 +3477,11 @@ async def admin_satellite_upgrade(
 # isn't connected; 502 on a send failure to the Pi.
 
 
+# Held while a Record is checked and armed: one take at a time per word (and
+# per room), even when two rooms press Record together.
+_WAKE_RECORD_LOCK = asyncio.Lock()
+
+
 class _AdminWakeRecordStartBody(BaseModel):
     room_id: str
     wake_word_id: int
@@ -3614,8 +3619,8 @@ async def admin_chat_resync() -> dict[str, Any]:
 
 @app.post(
     "/v1/admin/wake/record/start",
-    # Admin tier: clears the word's clip dir and opens the mic for a
-    # long capture run. The dashboard hop is admin-gated too.
+    # Admin tier: opens the room's mic for a long capture run that adds
+    # clips to the word. The dashboard hop is admin-gated too.
     dependencies=[Depends(require_admin_mutation)],
 )
 async def admin_wake_record_start(
@@ -3624,8 +3629,12 @@ async def admin_wake_record_start(
     """Tell a connected satellite to record positive clips for ``wake_word_id``.
     The Pi suspends its normal wake loop and captures ``wake_word_clip_seconds``
     of audio per clip, framed so the server saves each one to the training set
-    and bumps the clip count. 404 when the room isn't connected or the wake
-    word doesn't exist; 502 on a send failure."""
+    and bumps the clip count. A take APPENDS: the word's earlier clips, from
+    any room, stay, and a trained ('ready') word keeps its model in use while
+    it gathers more. 404 when the room isn't connected or the wake word
+    doesn't exist; 409 while the word trains, while it is already recording
+    (in this room or another), or while this room records another word; 502
+    on a send failure."""
     from domovoi.db.repositories import WakeWordsRepository
 
     target = app.state.active_sessions.get(body.room_id)
@@ -3633,8 +3642,8 @@ async def admin_wake_record_start(
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
         )
-    # Before anything is reset: a device that never declared clip
-    # recording would leave the word's clips wiped and nothing recorded.
+    # Before anything is touched: a device that never declared clip
+    # recording would record nothing.
     _require_declared(target, "wake_clips", "wake-word clip recording")
     # A mic-disabled satellite (mic-less video build) has no capture stack —
     # it would just ignore the recording frames. Refuse up front.
@@ -3650,56 +3659,87 @@ async def admin_wake_record_start(
         raise HTTPException(
             status_code=409, detail=f"room {body.room_id!r} is in a drop-in call"
         )
-    async with session_scope() as s:
-        repo = WakeWordsRepository(s)
-        row = await repo.get(body.wake_word_id)
-        if row is None:
-            raise HTTPException(
-                status_code=404, detail=f"wake word {body.wake_word_id} not found"
-            )
-        # Only a fresh ('recording') or retryable ('failed') word may be
-        # recorded — a 'ready'/'training' word would be clobbered. Each take is
-        # FRESH: reset clip_count to 0 here and clear the on-disk clip dir below
-        # so the file set and the DB count never drift (the desync the review
-        # flagged). A re-record is a clean re-take, not an append.
-        if row["status"] not in ("recording", "failed"):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"wake word {body.wake_word_id} is {row['status']!r}; "
-                    "delete + recreate it to record a new take"
-                ),
-            )
-        await repo.reset_for_recording(body.wake_word_id)
-        await s.execute(
-            text("SELECT pg_notify('wake_words_changed', :p)"),
-            {"p": str(body.wake_word_id)},
-        )
-    # Truncate the slug's clip dir so the fresh take starts at clip_001.wav with
-    # clip_count=0 — file set and count back in lockstep.
-    import shutil
-    clip_dir = Path(settings.wake_clips_dir) / row["slug"]
-    if clip_dir.is_dir():
-        shutil.rmtree(clip_dir, ignore_errors=True)
+    from datetime import timezone as _tz
 
-    # How many clips this take captures before the Pi self-terminates. An explicit
-    # wake_word_record_target_clips wins (set it if you want a specific auto-stop
-    # point); otherwise the take runs until the user clicks Stop, with a giant
-    # safety cap so a forgotten/abandoned session can't record forever. 30-ish was
-    # too small — a hard mic like the XVF3800 wants hundreds of real clips.
-    target_count = settings.wake_word_record_target_clips or 15000
-    try:
-        await target.start_wake_recording(
-            wake_word_id=body.wake_word_id,
-            slug=row["slug"],
-            clip_seconds=settings.wake_word_clip_seconds,
-            target_count=target_count,
-        )
-    except Exception as e:
-        log.warning("admin wake record start to room=%s failed: %s", body.room_id, e)
-        raise HTTPException(
-            status_code=502, detail=f"couldn't reach the room device: {e}"
-        ) from e
+    from domovoi import wake_clip_quality as _wq
+
+    # One take at a time per word, and per room: the check and the arming
+    # happen under one lock so two rooms pressing Record together can't
+    # both pass the check.
+    async with _WAKE_RECORD_LOCK:
+        async with session_scope() as s:
+            repo = WakeWordsRepository(s)
+            row = await repo.get(body.wake_word_id)
+            if row is None:
+                raise HTTPException(
+                    status_code=404, detail=f"wake word {body.wake_word_id} not found"
+                )
+            label = f"“{row['name']}”"
+            # Training stages and reads this word's clips: no new ones now.
+            if row["status"] == "training":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{label} is training. Record more clips when it "
+                        "finishes, or stop the training first."
+                    ),
+                )
+            for other_room, sess in list(app.state.active_sessions.items()):
+                rec = getattr(sess, "wake_recording", None)
+                if rec is not None and rec.wake_word_id == body.wake_word_id:
+                    where = "this room" if other_room == body.room_id else other_room
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"{label} is already recording in {where}. "
+                            f"Stop that take first (Stop with {other_room} picked)."
+                        ),
+                    )
+            busy = getattr(target, "wake_recording", None)
+            if busy is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{body.room_id} is already recording another wake word "
+                        f"({busy.slug}). Stop that take first."
+                    ),
+                )
+            # Takes APPEND (owner, 2026-11): the clips already recorded, from
+            # any room and any earlier take, stay; this take's clips are
+            # numbered after them (StreamSession._save_wake_clip). The count
+            # starts from the files on disk so the two stay in step.
+            clip_dir = Path(settings.wake_clips_dir) / row["slug"]
+            on_disk = len(await asyncio.to_thread(_wq.iter_raw_clips, clip_dir))
+            if await repo.prepare_for_recording(body.wake_word_id, on_disk) is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{label} is training. Record more clips when it finishes.",
+                )
+            await s.execute(
+                text("SELECT pg_notify('wake_words_changed', :p)"),
+                {"p": str(body.wake_word_id)},
+            )
+
+        # How many clips this take captures before the Pi self-terminates. An
+        # explicit wake_word_record_target_clips wins (set it if you want a
+        # specific auto-stop point); otherwise the take runs until the user
+        # clicks Stop, with a giant safety cap so a forgotten/abandoned session
+        # can't record forever. 30-ish was too small — a hard mic like the
+        # XVF3800 wants hundreds of real clips.
+        target_count = settings.wake_word_record_target_clips or 15000
+        try:
+            await target.start_wake_recording(
+                wake_word_id=body.wake_word_id,
+                slug=row["slug"],
+                clip_seconds=settings.wake_word_clip_seconds,
+                target_count=target_count,
+                take_started_at=datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+        except Exception as e:
+            log.warning("admin wake record start to room=%s failed: %s", body.room_id, e)
+            raise HTTPException(
+                status_code=502, detail=f"couldn't reach the room device: {e}"
+            ) from e
     return {
         "recording": True,
         "room_id": body.room_id,

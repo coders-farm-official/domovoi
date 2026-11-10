@@ -129,7 +129,9 @@ on in Settings → Voice → Wake words ([`scripts/wake_word/README.md`](../scri
 A word's row shows the end of the trainer's output when it fails; the whole
 output of its last run is in `~/.domovoi/wake_trainer/logs/<slug>.log` on
 the server. A failed word trains again on the clips it has: press
-**Train** on it again (or record a new take first).
+**Train** on it again (or record more first: each take adds to its clips).
+A trained word keeps recording too, and **Train again** uses the new clips;
+its model stays in use until the new one lands.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -149,7 +151,9 @@ the server. A failed word trains again on the clips it has: press
 | "exited 137", or the log shows a stage that "exited -9" | The kernel stopped the training for running out of memory inside its cap (**Memory for training**, 12 GB) | Raise **Memory for training**, or lower the sample counts |
 | A word fails with "not trained: training was set up for the GPU, and Docker can't reach it now" | Training was set up on the GPU, and this run's GPU check failed (the toolkit removed, Docker not restarted after it, the card gone or its driver broken). It is refused rather than run for over an hour on the CPU under the GPU's time limit | **Restart Domovoi** (it sets the toolkit up again), then **Check the GPU and trainer again**, and **Train**. Or turn training on again and **Use the CPU** |
 | "Stopped: internet access was turned off (Settings > Privacy > Internet)" on the setup card | The internet answer became **No** while the setup was building or downloading; it stopped there | Answer **Sometimes** or **Yes**, then **Try again**: what was downloaded is reused |
-| A word went back to *recording* with "Training stopped from the dashboard." | Someone pressed **Stop training** | **Train** again when you want it: its clips are all there |
+| A word went back to *recording* (or, after a **Train again**, *ready*) with "Training stopped from the dashboard." | Someone pressed **Stop training** | **Train** again when you want it: its clips are all there. A ready word kept its old model |
+| **Record** says "... is already recording in kitchen" | Takes run one at a time per word; another room (or this one) still has a take open | Pick that room and press **Stop**, then **Record** where you want. Clips from both rooms stay in the one set |
+| **Record** says "... is training" | A word records nothing while it trains: the run is reading its clips | Wait for it to finish (or **Stop training**), then record more and **Train again** |
 | A word was training when the server restarted | Working as intended | The training container is removed and the word stays queued; it trains again once the core is back |
 | The log says `backend = CPU` on a box with an NVIDIA GPU | The trainer's own GPU check failed at the start of that run | As for "Docker can't reach the GPU" above; [DOCKER_TRAINER.md](../scripts/wake_word/DOCKER_TRAINER.md#troubleshooting) has the one-line check |
 | Voice is slow while a word trains | A CPU-only server: training takes most of the processor for about 75 minutes a word | Expected, and the dashboard said so before the Train. Lower **CPUs for training** to leave voice more, at the cost of a longer training |

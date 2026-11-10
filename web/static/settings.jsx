@@ -2311,7 +2311,7 @@ const InternetPanel = () => {
 /*
  * Train + manage custom wake words. The lifecycle:
  *   1. Create a wake word (name + the phrase to say) — starts in `recording`.
- *   2. Record positive clips ON a satellite. The server tells the chosen Pi
+ *   2. Record positive clips ON a satellite (each take adds to the last). The server tells the chosen Pi
  *      to suspend its wake loop and stream short clips back; each clip bumps
  *      the live count (pushed over the state bus → `wake_words.changed`).
  *   3. Once enough clips are banked, Train builds an openWakeWord .onnx on
@@ -2337,6 +2337,11 @@ const InternetPanel = () => {
  *   POST   /api/wake-words/{id}/clips/selection    · bulk select {selected, names?, only_verdict?}
  *   POST   /api/wake-words/{id}/clips/reanalyze    · force-recompute quality + trim
  *   DELETE /api/wake-words/{id}/clips/{name}       · drop one clip (+ its analysis artifacts)
+ *   DELETE /api/wake-words/{id}/clips              · drop every clip (confirm names the count)
+ *
+ * Takes APPEND (2026-11): Record adds clips after the existing ones, from any
+ * room, ready words included; each clip card names its room. A ready word
+ * shows "N new clips since the last training" and trains again on them.
  *   POST   /api/wake-words/{id}/score              · offline max-over-clip scores (needs a ready model)
  *   PATCH  /api/wake-words/{id}                    · rename / threshold / set_default
  *   POST   /api/wake-words/{id}/push               · push the ready model to a room {room_id}
@@ -2395,6 +2400,15 @@ const WakeClipCard = ({ c, playing, onPlay, onToggle, onDelete }) => {
                onChange={(e) => onToggle(c, e.target.checked)}/>
         <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>#{idx}</span>
         <Pill tone={tone}>{c.verdict}</Pill>
+        {/* Takes append from any room: say which room recorded this one. */}
+        <span className="room-chip" style={{ fontSize: 11, minWidth: 0, overflow: 'hidden',
+                                             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={c.room
+                ? `recorded in ${c.room}${c.recorded_at ? ` · ${new Date(c.recorded_at).toLocaleString()}` : ''}`
+                  + (c.take_started_at ? ` · take started ${new Date(c.take_started_at).toLocaleString()}` : '')
+                : 'recorded before rooms were kept with clips'}>
+          {c.room || 'room unknown'}
+        </span>
         {typeof c.score === 'number' && (
           <span className="mono" style={{ fontSize: 11, color: c.score >= 0.5 ? 'var(--ok-ink)' : 'var(--err-ink)' }}>
             {c.score.toFixed(2)}
@@ -2426,14 +2440,30 @@ const WakeClipCard = ({ c, playing, onPlay, onToggle, onDelete }) => {
   );
 };
 
+// A clip's room for filtering/sorting ('' = recorded before rooms were kept).
+const _clipRoom = (c) => c.room || '';
+const _clipNum = (c) => parseInt((c.name.match(/(\d+)/) || [])[1] || '0', 10);
+
 // The per-wake-word clip grid: header curation controls (select all/none,
-// deselect poor, re-analyze, score) + a responsive grid of clip cards. One
-// <audio> plays at a time. Refreshes live on `wake_words.changed` (a new clip
-// bumps the count) and after any local mutation.
-const WakeClipGrid = ({ wid, canScore, fire }) => {
+// deselect poor, re-analyze, score, delete all) + a room filter and sort + a
+// responsive grid of clip cards. One <audio> plays at a time. Refreshes live
+// on `wake_words.changed` (a new clip bumps the count) and after any local
+// mutation.
+const WakeClipGrid = ({ wid, wname, canScore, canDeleteAll = true, fire }) => {
   const { data, loading, refresh } = useApiObject(`/api/wake-words/${wid}/clips`,
     { eventTypes: ['wake_words.changed'] });
-  const clips = (data && data.clips) || [];
+  const allClips = (data && data.clips) || [];
+  // Takes append from any room: filter to one room, or sort by room.
+  const [roomFilter, setRoomFilter] = React.useState('*');
+  const [sortBy, setSortBy] = React.useState('number');
+  const clipRooms = React.useMemo(
+    () => Array.from(new Set(allClips.map(_clipRoom))).sort(), [allClips]);
+  const clips = React.useMemo(() => {
+    const shown = roomFilter === '*' ? allClips : allClips.filter((c) => _clipRoom(c) === roomFilter);
+    if (sortBy !== 'room') return shown;
+    return [...shown].sort((a, b) =>
+      _clipRoom(a).localeCompare(_clipRoom(b)) || _clipNum(a) - _clipNum(b));
+  }, [allClips, roomFilter, sortBy]);
   const selectedCount = (data && data.selected_count) || 0;
   const minClips = (data && data.min_clips) || WAKE_MIN_CLIPS;
   const [busy, setBusy] = React.useState(false);
@@ -2483,6 +2513,19 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
     title: `Delete clip ${c.name}?`,
     body: <div>The recording is removed from disk and no longer counts toward training. Record another one on a room to replace it.</div>,
   });
+  // The one way to start over: Record adds to what is there.
+  const delAllConfirm = useDeleteConfirm((n) =>
+    act(() => apiDelete(`/api/wake-words/${wid}/clips`),
+        `deleted ${n} clip${n === 1 ? '' : 's'}`));
+  const delAll = () => {
+    const n = allClips.length;
+    delAllConfirm.request(n, {
+      title: `Delete all ${n} clip${n === 1 ? '' : 's'} of ${wname}? This can't be undone`,
+      body: <div>Every recording of this wake word is removed from disk. A trained model stays, and so
+        do the rooms using it; train again after recording new clips to replace it.</div>,
+      confirmLabel: 'Delete all clips',
+    });
+  };
   const score = () =>
     act(async () => {
       const res = await apiPost(`/api/wake-words/${wid}/score`, {});
@@ -2490,9 +2533,9 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
       if (s) fire(`scored: real recall ${Math.round((s.raw_recall || 0) * 100)}% · silence ${s.silence_score}`);
     });
 
-  if (loading && clips.length === 0)
+  if (loading && allClips.length === 0)
     return <div style={{ padding: 12, fontSize: 12, color: 'var(--fg-muted)' }}>loading clips…</div>;
-  if (clips.length === 0)
+  if (allClips.length === 0)
     return <div style={{ padding: 12, fontSize: 12, color: 'var(--fg-faint)' }}>No clips recorded yet — hit Record on a room.</div>;
 
   return (
@@ -2508,6 +2551,26 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
         <Button variant="ghost" onClick={deselectPoor} disabled={busy}>Deselect poor</Button>
         <Button variant="ghost" icon="refresh-cw" onClick={reanalyze} disabled={busy}>Re-analyze</Button>
         {canScore && <Button variant="secondary" icon="activity" onClick={score} disabled={busy}>Score clips</Button>}
+        <Button variant="ghost" icon="trash-2" onClick={delAll} disabled={busy || !canDeleteAll}
+                title={canDeleteAll ? undefined : 'not while it trains'}>Delete all clips</Button>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>room</span>
+        <select value={roomFilter} onChange={(e) => setRoomFilter(e.target.value)}
+                style={_wakeFieldStyle} aria-label="show clips from room">
+          <option value="*">all rooms ({allClips.length})</option>
+          {clipRooms.map((r) => (
+            <option key={r || '-'} value={r}>
+              {(r || 'room unknown')} ({allClips.filter((c) => _clipRoom(c) === r).length})
+            </option>
+          ))}
+        </select>
+        <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>sort</span>
+        <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+                style={_wakeFieldStyle} aria-label="sort clips">
+          <option value="number">by number</option>
+          <option value="room">by room</option>
+        </select>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
         {clips.map((c) => (
@@ -2516,6 +2579,7 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
         ))}
       </div>
       {delConfirm.node}
+      {delAllConfirm.node}
     </div>
   );
 };
@@ -2560,10 +2624,10 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   React.useEffect(() => () => {
     clearTimeout(flashTimer.current); clearTimeout(capTimer.current);
   }, []);
-  // A take only lives in the `recording` phase; once it trains / fails / goes
-  // ready, drop the active indicators regardless of local state.
+  // Takes append, on a trained (`ready`) word too; only training ends one
+  // (the server refuses to start one then), so drop the active indicators.
   React.useEffect(() => {
-    if (w.status !== 'recording') { setRecActive(false); setCapLive(false); }
+    if (w.status === 'training') { setRecActive(false); setCapLive(false); }
   }, [w.status]);
 
   const saveName = () => {
@@ -2587,10 +2651,13 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   const chosen = rooms.find((r) => r.room_id === roomFor);
   const canRecordHere = satCan(chosen, 'wake_clips');
   const canPushHere = satCan(chosen, 'wake_models');
-  // A failed word trains again on the clips it has (no re-recording).
-  const canTrain = (w.status === 'recording' || w.status === 'failed') && w.clip_count >= minClips;
+  // Every take adds clips. A failed word trains again on the clips it has; a
+  // ready one trains again on all its selected clips, new ones included,
+  // keeping its current model in use until the new one lands.
+  const canTrain = w.status !== 'training' && w.clip_count >= minClips;
+  const retrain = w.status === 'ready';
   const canPush = w.status === 'ready';
-  const capturing = (recActive || capLive) && w.status === 'recording';
+  const capturing = (recActive || capLive) && w.status !== 'training';
   const startRec = () => { setRecActive(true); onRecordStart(w, roomFor); };
   const stopRec = () => { setRecActive(false); setCapLive(false); onRecordStop(w, roomFor); };
 
@@ -2628,8 +2695,16 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
         </div>
       </div>
 
-      {w.status === 'failed' && w.error && (
+      {/* A failed Train again leaves a ready word ready (its model is still
+          in use) with the reason. */}
+      {(w.status === 'failed' || w.status === 'ready') && w.error && (
         <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>{w.error}</div>
+      )}
+
+      {retrain && w.new_clips > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+          {w.new_clips} new clip{w.new_clips === 1 ? '' : 's'} since the last training: Train again to use them
+        </div>
       )}
 
       {/* Live recording banner — prominent while a take is capturing so a long
@@ -2642,7 +2717,7 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
           <span style={{ fontSize: 15, fontWeight: 700,
                          color: bumped ? 'var(--brand-ink)' : 'var(--fg)',
                          transition: 'color .25s ease' }}>
-            {w.clip_count} clip{w.clip_count === 1 ? '' : 's'} captured
+            {w.clip_count} clip{w.clip_count === 1 ? '' : 's'} so far
           </span>
           <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             {w.clip_count >= minClips
@@ -2658,18 +2733,22 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <RoomSelect value={roomFor} onChange={setRoom} rooms={rooms}/>
         <Button variant="secondary" icon="mic"
-                disabled={!haveRooms || w.status !== 'recording' || capturing || !canRecordHere}
-                title={canRecordHere ? undefined : "this room's device doesn't record wake-word clips"}
+                disabled={!haveRooms || w.status === 'training' || capturing || !canRecordHere}
+                title={!canRecordHere ? "this room's device doesn't record wake-word clips"
+                  : w.status === 'training' ? 'not while it trains'
+                  : 'adds clips to the ones already recorded'}
                 onClick={startRec}>Record</Button>
         <Button variant="ghost" icon="square" disabled={!haveRooms}
                 onClick={stopRec}>Stop</Button>
         {/* Training downloads its data the first time: greyed under "No".
             Until training is turned on (the card above) a Train would only
             queue the word, so the button says why it waits. */}
-        <Button variant="primary" icon="cpu" disabled={!canTrain || internetOff || !trainerOn}
+        <Button variant="primary" icon="cpu" disabled={!canTrain || internetOff || !trainerOn || capturing}
                 title={internetOff ? NEEDS_INTERNET_TEXT
-                  : !trainerOn ? 'turn on wake-word training first (above)' : undefined}
-                onClick={() => onTrain(w)}>Train</Button>
+                  : !trainerOn ? 'turn on wake-word training first (above)'
+                  : capturing ? 'stop recording first'
+                  : retrain ? 'train on all selected clips; the current model stays in use until then' : undefined}
+                onClick={() => onTrain(w)}>{retrain ? 'Train again' : 'Train'}</Button>
         {internetOff && <NeedsInternetNote compact/>}
         {w.status === 'training' && onTrainStop && (
           <Button variant="secondary" icon="square" onClick={() => onTrainStop(w)}
@@ -2693,7 +2772,8 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
       {/* Expandable per-clip review: quality, auto-trim, playback, curation */}
       {showClips && (
         <div style={{ borderTop: '1px dashed var(--border-soft)', marginTop: 2 }}>
-          <WakeClipGrid wid={w.id} canScore={w.status === 'ready'} fire={fire}/>
+          <WakeClipGrid wid={w.id} wname={w.name} canScore={w.status === 'ready'}
+                        canDeleteAll={w.status !== 'training'} fire={fire}/>
         </div>
       )}
     </div>

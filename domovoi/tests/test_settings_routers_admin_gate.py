@@ -99,7 +99,8 @@ def test_the_expected_surface_is_what_got_gated() -> None:
     # voices: piper upload, patch, delete (the Edge registration was
     # dropped on 2026-10-12); wake_words gained trainer/enable,
     # trainer/disable (security tier) and {id}/train/stop on 2026-10-13
-    assert counts == {"greetings": 3, "voices": 3, "wake_words": 15}
+    # and DELETE {id}/clips ("Delete all clips") on 2026-11-10.
+    assert counts == {"greetings": 3, "voices": 3, "wake_words": 16}
 
 
 # ─── HTTP: the gate through the real dependency, classifier stubbed ────────

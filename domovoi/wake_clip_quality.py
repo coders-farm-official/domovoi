@@ -15,6 +15,15 @@ and persists both in a hidden ``.analysis/`` subdir alongside the clip:
         clip_001.json              # metrics, verdict, issues, trim, envelope, selected
         clip_001.trimmed.wav       # audit-only, end-aligned to the phrase
       .training/                   # rebuilt at train time from SELECTED raw clips
+      .trained.json                # the last successful training: up to which clip
+
+Takes APPEND (2026-11): a new take, from any room, numbers its clips after
+the highest one there (or after the last trained one, whichever is higher),
+so a set grows across takes until it is trained. Each clip's sidecar keeps
+where it came from (``room``, ``take_started_at``, ``recorded_at``), carried
+across a recompute like a user's selection. ``.trained.json`` records the
+highest clip number the last successful training staged, so "N new clips
+since the last training" is a directory listing, not a read of every sidecar.
 
 The ``.analysis``/``.training`` subdirs are invisible to the trainer's
 top-level ``glob("*.wav")`` and to the web clip list's non-recursive
@@ -35,7 +44,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import shutil
+import time
 import wave
 from pathlib import Path
 from typing import Any
@@ -51,6 +62,10 @@ ENVELOPE_BINS = 48                               # sparkline resolution
 ANALYSIS_VERSION = 1                             # bump to force a recompute
 ANALYSIS_DIRNAME = ".analysis"
 TRAINING_DIRNAME = ".training"
+TRAINED_MARKER = ".trained.json"
+# Where a clip came from, kept in its sidecar across a recompute.
+ORIGIN_KEYS = ("room", "take_started_at", "recorded_at")
+_CLIP_NUM_RE = re.compile(r"^clip_(\d+)\.wav$")
 
 # int16 full scale. A sample within ~1% of it counts as clipped.
 _FULL_SCALE = 32768.0
@@ -308,13 +323,22 @@ def _default_selected(verdict: str) -> bool:
     return verdict != "poor"
 
 
-def ensure_analysis(raw_path: Path, *, force: bool = False) -> dict[str, Any]:
+def _origin_of(record: dict[str, Any]) -> dict[str, Any]:
+    return {k: record[k] for k in ORIGIN_KEYS if record.get(k) is not None}
+
+
+def ensure_analysis(
+    raw_path: Path, *, force: bool = False, origin: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return the analysis dict for ``raw_path``, computing + persisting it
     (sidecar JSON + trimmed WAV) if missing/stale. Idempotent.
 
     Preserves a user-set ``selected`` across recompute — recomputing metrics
-    never silently re-includes a clip the operator deselected.
+    never silently re-includes a clip the operator deselected — and the
+    clip's origin (``room``, ``take_started_at``, ``recorded_at``). A new
+    clip passes its ``origin`` here; a later recompute carries it forward.
     """
+    origin = {k: v for k, v in (origin or {}).items() if k in ORIGIN_KEYS and v is not None}
     raw_path = Path(raw_path)
     sidecar = _sidecar_path(raw_path)
     try:
@@ -335,6 +359,12 @@ def ensure_analysis(raw_path: Path, *, force: bool = False) -> dict[str, Any]:
         and prior.get("source") == sig
     )
     if fresh and (not prior.get("has_trimmed") or trimmed_path(raw_path).is_file()):
+        if origin and any(prior.get(k) != v for k, v in origin.items()):
+            prior.update(origin)
+            try:
+                sidecar.write_text(json.dumps(prior), "utf-8")
+            except OSError as e:
+                log.warning("wake clip: failed to write sidecar %s: %s", sidecar, e)
         return prior
 
     pcm = _read_wav_int16(raw_path)
@@ -368,6 +398,8 @@ def ensure_analysis(raw_path: Path, *, force: bool = False) -> dict[str, Any]:
         "selected": selected,
         "selected_source": selected_source,
         **analysis,
+        **_origin_of(prior),
+        **origin,
     }
     try:
         sidecar.parent.mkdir(parents=True, exist_ok=True)
@@ -406,13 +438,117 @@ def set_score(raw_path: Path, score: float) -> dict[str, Any]:
 # ─── Directory-level helpers ───────────────────────────────────────────────
 
 
+def clip_number(path: Path | str) -> int | None:
+    """The N of ``clip_N.wav`` (any width), or None for another name."""
+    m = _CLIP_NUM_RE.match(Path(path).name)
+    return int(m.group(1)) if m else None
+
+
+def _roster_key(p: Path) -> tuple[int, int, str]:
+    n = clip_number(p)
+    return (0, n, p.name) if n is not None else (1, 0, p.name)
+
+
 def iter_raw_clips(slug_dir: Path) -> list[Path]:
-    """Sorted top-level ``clip_*.wav`` (the raw roster — never the analysis /
-    training subdirs)."""
+    """Top-level ``*.wav`` (the raw roster — never the analysis / training
+    subdirs), in clip-number order: ``clip_1000.wav`` after ``clip_999.wav``,
+    which a plain name sort gets wrong once a set grows past 999. Other
+    names (a hand-copied file) sort after the numbered clips."""
     slug_dir = Path(slug_dir)
     if not slug_dir.is_dir():
         return []
-    return sorted(p for p in slug_dir.glob("*.wav") if p.is_file())
+    return sorted((p for p in slug_dir.glob("*.wav") if p.is_file()), key=_roster_key)
+
+
+def max_clip_number(slug_dir: Path) -> int:
+    """The highest ``clip_N.wav`` number in the raw roster (0 when none)."""
+    return max((clip_number(p) or 0 for p in iter_raw_clips(slug_dir)), default=0)
+
+
+def read_trained(slug_dir: Path) -> dict[str, Any] | None:
+    """The last successful training's marker (``.trained.json``), or None."""
+    try:
+        data = json.loads((Path(slug_dir) / TRAINED_MARKER).read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def record_trained(slug_dir: Path, *, last_clip: int, clips: int) -> None:
+    """A training succeeded on the clips up to ``clip_<last_clip>``: write
+    the marker. Clips numbered above it are "new since the last training"."""
+    slug_dir = Path(slug_dir)
+    marker = {
+        "last_clip": int(last_clip),
+        "clips": int(clips),
+        "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        slug_dir.mkdir(parents=True, exist_ok=True)
+        (slug_dir / TRAINED_MARKER).write_text(json.dumps(marker), "utf-8")
+    except OSError as e:
+        log.warning("wake clip: failed to write the training marker in %s: %s", slug_dir, e)
+
+
+def next_clip_number(slug_dir: Path) -> int:
+    """The number a new take's first clip gets: after the highest clip
+    there, and never at or below the last trained one (so a set emptied by
+    "Delete all clips" and recorded again still reads as new)."""
+    trained = read_trained(slug_dir) or {}
+    try:
+        last_trained = int(trained.get("last_clip") or 0)
+    except (TypeError, ValueError):
+        last_trained = 0
+    return max(max_clip_number(slug_dir), last_trained) + 1
+
+
+def new_since_training(slug_dir: Path, model_path: Path | None = None) -> int:
+    """How many raw clips the last successful training didn't have.
+
+    With the marker: the clips numbered above its ``last_clip``. A word
+    trained before the marker existed has none; then a clip is new when it
+    is newer than the model file. 0 when neither is there (never trained)."""
+    clips = iter_raw_clips(slug_dir)
+    if not clips:
+        return 0
+    trained = read_trained(slug_dir)
+    if trained is not None:
+        try:
+            last = int(trained.get("last_clip") or 0)
+        except (TypeError, ValueError):
+            last = 0
+        return sum(1 for p in clips if (clip_number(p) or 0) > last)
+    if model_path is None:
+        return 0
+    try:
+        model_mtime = Path(model_path).stat().st_mtime_ns
+    except OSError:
+        return 0
+    n = 0
+    for p in clips:
+        try:
+            if p.stat().st_mtime_ns > model_mtime:
+                n += 1
+        except OSError:
+            continue
+    return n
+
+
+def remove_all_clips(slug_dir: Path) -> int:
+    """Delete every raw clip of a word with its analysis and training copy
+    ("Delete all clips"). The training marker stays, so numbering carries on
+    past the trained set. Returns how many raw clips were removed."""
+    slug_dir = Path(slug_dir)
+    removed = 0
+    for clip in iter_raw_clips(slug_dir):
+        try:
+            clip.unlink()
+            removed += 1
+        except OSError as e:
+            log.warning("wake clip: could not delete %s: %s", clip, e)
+    for sub in (ANALYSIS_DIRNAME, TRAINING_DIRNAME):
+        shutil.rmtree(slug_dir / sub, ignore_errors=True)
+    return removed
 
 
 def analyze_dir(slug_dir: Path, *, force: bool = False) -> list[dict[str, Any]]:

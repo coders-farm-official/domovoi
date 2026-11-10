@@ -8,6 +8,11 @@ phrase), record clips on a chosen room, kick off training once enough
 clips are captured, set the default, rename, tune the detection threshold,
 push a trained model to a satellite, and delete.
 
+Takes append (2026-11): each Record adds clips after the ones already
+there, from any room, until the household trains; a trained word can keep
+recording and train again. "Delete all clips" is the explicit way to start
+over.
+
 The load-bearing identifier is the ``slug`` (= ``wake_slug(name)``): the
 served ``<slug>.onnx`` filename, the Pi's effective wake word, the
 openWakeWord prediction-dict key, and the model file stem all equal it.
@@ -81,6 +86,9 @@ class WakeWord(BaseModel):
     source_room_id: str | None = None
     clip_count: int
     error: str | None = None
+    # Clips recorded since the last successful training (0 for a word never
+    # trained): the row says "N new clips since the last training".
+    new_clips: int = 0
 
 
 class WakeWordCreate(BaseModel):
@@ -139,6 +147,12 @@ class WakeClip(BaseModel):
     envelope: list[float]
     trim: dict
     score: float | None = None
+    # Where it came from (null for a clip recorded before 2026-11): the room
+    # that recorded it, when its take started and when it was recorded
+    # (UTC, ISO 8601). Takes append, so one word's clips can span rooms.
+    room: str | None = None
+    take_started_at: str | None = None
+    recorded_at: str | None = None
 
 
 class WakeClipList(BaseModel):
@@ -176,6 +190,9 @@ def _clip_to_model(rec: dict) -> WakeClip:
         envelope=list(rec.get("envelope") or []),
         trim=dict(rec.get("trim") or {}),
         score=rec.get("score"),
+        room=rec.get("room"),
+        take_started_at=rec.get("take_started_at"),
+        recorded_at=rec.get("recorded_at"),
     )
 
 
@@ -218,8 +235,38 @@ async def _notify(s) -> None:
     await s.execute(text("SELECT pg_notify('wake_words_changed', 'web')"))
 
 
-def _to_model(row: dict) -> WakeWord:
+def _new_clips(row: dict) -> int:
+    """Clips recorded since the word's last successful training (0 for a
+    word that has no model). A directory listing, not a sidecar read."""
+    if not row.get("model_ref"):
+        return 0
+    cdir = _guarded_clip_dir(row["slug"])
+    if cdir is None:
+        return 0
+    try:
+        return wq.new_since_training(cdir, _models_dir() / f"{row['slug']}.onnx")
+    except OSError:
+        return 0
+
+
+async def _with_new_clips(rows: list[dict]) -> list[WakeWord]:
+    counts = await asyncio.to_thread(lambda: [_new_clips(r) for r in rows])
+    return [_to_model(r, new_clips=n) for r, n in zip(rows, counts)]
+
+
+async def _resync_clip_count(wake_word_id: int, cdir: Path) -> int:
+    """Set the row's clip_count to the clips on disk (after a delete) and
+    tell the dashboard."""
+    n = len(await asyncio.to_thread(wq.iter_raw_clips, cdir))
+    async with session_scope() as s:
+        await WakeWordsRepository(s).set_clip_count(wake_word_id, n)
+        await _notify(s)
+    return n
+
+
+def _to_model(row: dict, *, new_clips: int = 0) -> WakeWord:
     return WakeWord(
+        new_clips=new_clips,
         id=row["id"],
         name=row["name"],
         slug=row["slug"],
@@ -238,7 +285,7 @@ def _to_model(row: dict) -> WakeWord:
 async def list_wake_words() -> list[WakeWord]:
     async with session_scope() as s:
         rows = await WakeWordsRepository(s).all()
-    return [_to_model(r) for r in rows]
+    return await _with_new_clips(rows)
 
 
 @router.post(
@@ -377,11 +424,14 @@ async def record_stop(wake_word_id: int, body: RoomBody, request: Request):
     dependencies=[Depends(require_admin_mutation)],
 )
 async def train_wake_word(wake_word_id: int) -> WakeWord:
-    """Promote a ``recording`` wake word to ``training`` — picked up by the
-    trainer worker (if enabled). Refuses (409) a row that's missing, past
-    ``recording``, holding fewer than ``wake_word_min_clips`` clips total, or
-    fewer than that many *selected* for training (the trainer consumes only the
-    selected set)."""
+    """Queue a wake word for training — picked up by the trainer worker (if
+    enabled). A ``recording`` or ``failed`` word trains for the first time
+    (or again); a ``ready`` one trains again on every selected clip, the ones
+    recorded since its last training included, and keeps its current model
+    in use until the new one lands. Refuses (409) a row that's missing,
+    already training, holding fewer than ``wake_word_min_clips`` clips total,
+    or fewer than that many *selected* for training (the trainer consumes
+    only the selected set)."""
     min_clips = settings.wake_word_min_clips
     row0 = await _row_or_404(wake_word_id)
     # Gate on SELECTED clips — the curated set is what actually trains.
@@ -401,8 +451,8 @@ async def train_wake_word(wake_word_id: int) -> WakeWord:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"wake word {wake_word_id} can't be trained — it must be in "
-                    f"'recording' or 'failed' with at least {min_clips} clips"
+                    f"wake word {wake_word_id} can't be trained — it is already "
+                    f"training, or has fewer than {min_clips} clips"
                 ),
             )
         row = await repo.get(wake_word_id)
@@ -559,6 +609,34 @@ async def delete_clip(wake_word_id: int, name: str) -> None:
         raise HTTPException(status_code=500, detail=f"could not delete clip: {e}") from e
     # Drop the sidecar + trimmed audit copy alongside it.
     wq.remove_analysis(target)
+    # The row's count follows the files (it gates Train).
+    await _resync_clip_count(wake_word_id, cdir)
+
+
+@router.delete(
+    "/{wake_word_id}/clips",
+    # Same tier as deleting one clip; the dashboard confirms first, naming
+    # the count.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def delete_all_clips(wake_word_id: int) -> dict:
+    """Delete every recorded clip of a wake word (with their analysis and the
+    training copy). The word, its trained model and the rooms using it are
+    untouched; the next take starts numbering after the last trained clip, so
+    the row still counts what is new since that training. 409 while the word
+    trains (the run reads the training copy)."""
+    row = await _row_or_404(wake_word_id)
+    if row["status"] == "training":
+        raise HTTPException(
+            status_code=409,
+            detail=f"“{row['name']}” is training; delete its clips after it finishes",
+        )
+    cdir = _guarded_clip_dir(row["slug"])
+    if cdir is None:
+        raise HTTPException(status_code=404, detail="clips not found")
+    removed = await asyncio.to_thread(wq.remove_all_clips, cdir) if cdir.is_dir() else 0
+    left = await _resync_clip_count(wake_word_id, cdir)
+    return {"deleted": removed, "clip_count": left}
 
 
 @router.patch(

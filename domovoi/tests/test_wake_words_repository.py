@@ -259,8 +259,9 @@ async def test_delete_guards_default(repo):
 @pytest.mark.asyncio
 async def test_a_failed_word_trains_again_on_the_clips_it_has(repo):
     """2026-10-13: a training that timed out, was stopped or ran out of
-    memory is queued again from 'failed' without recording anew; 'ready'
-    still is not."""
+    memory is queued again from 'failed' without recording anew. Since
+    2026-11 a 'ready' word trains again too (Train again on new clips);
+    one already training is not queued twice."""
     wid = await repo.create(name="Retry", slug="retry", phrase="hey retry")
     for _ in range(3):
         await repo.bump_clip_count(wid)
@@ -270,4 +271,5 @@ async def test_a_failed_word_trains_again_on_the_clips_it_has(repo):
     row = await repo.get(wid)
     assert row["status"] == "training" and row["error"] is None
     await repo.mark_ready(wid, "retry")
-    assert await repo.mark_training(wid, 3) is False
+    assert await repo.mark_training(wid, 3) is True
+    assert await repo.mark_training(wid, 3) is False   # already training

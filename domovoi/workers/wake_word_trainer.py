@@ -612,6 +612,14 @@ class WakeWordTrainer(Worker):
         # if nothing is selected / sidecars predate this feature (count 0), fall
         # back to the raw slug dir so a queued word still trains on what's there.
         raw_dir = Path(settings.wake_clips_dir) / slug
+        # The highest clip this run trains on, read BEFORE staging: a clip
+        # that lands after it (a take running on) is numbered above it and
+        # reads as "new since the last training" once this run succeeds.
+        try:
+            staged_upto = await asyncio.to_thread(wake_clip_quality.max_clip_number, raw_dir)
+        except Exception:  # noqa: BLE001 - the marker is best effort
+            staged_upto = 0
+        n_selected = 0
         try:
             staged, n_selected = await asyncio.to_thread(
                 wake_clip_quality.stage_selected_clips, raw_dir
@@ -741,6 +749,15 @@ class WakeWordTrainer(Worker):
             # model_ref is the slug — the served <slug>.onnx, the Pi's
             # effective wake word, and the openWakeWord prediction-dict key all
             # equal it (the load-bearing slug invariant).
+            # Which clips this model has seen: the row's "N new clips since
+            # the last training" counts the ones numbered above it.
+            try:
+                await asyncio.to_thread(
+                    wake_clip_quality.record_trained, raw_dir,
+                    last_clip=staged_upto, clips=n_selected,
+                )
+            except Exception as e:  # noqa: BLE001 - never fails a trained word
+                log.warning("wake-word trainer: no training marker for slug=%s (%s)", slug, e)
             await self._mark_ready(wake_word_id, slug)
             log.info("wake-word trainer: slug=%s trained → %s", slug, out_path)
         else:

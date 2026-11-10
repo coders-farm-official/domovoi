@@ -2129,42 +2129,58 @@ class WakeWordsRepository:
         )
         return int(row.scalar_one())
 
-    async def reset_for_recording(self, wake_word_id: int) -> bool:
-        """Start a FRESH recording take: flip the row back to ``recording``,
-        zero ``clip_count``, and clear any prior error. Returns True if a row
-        changed. The caller pairs this with truncating the on-disk clip dir so
-        the file set and ``clip_count`` start a take in lockstep (each new clip
-        then bumps both together) — without it, a re-record would overwrite
-        ``clip_001.wav`` while ``clip_count`` kept climbing. Gated by the caller
-        to only-``recording``/``failed`` rows so a trained/default word isn't
-        silently demoted."""
+    async def prepare_for_recording(self, wake_word_id: int, clip_count: int) -> str | None:
+        """A take is starting. Takes APPEND (2026-11): the clips already
+        recorded stay, so this only sets ``clip_count`` to the clips on disk
+        (``clip_count``, the file set, then grow together, one clip at a
+        time), clears a prior error, and puts a ``failed`` word back to
+        ``recording``. A ``ready`` word stays ready: its model is still the
+        one in use. Refuses a word that is training (its clips are being
+        staged and trained), atomically. Returns the status, or None when the
+        row is missing or training."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
-                SET status = 'recording', clip_count = 0, error = NULL,
-                    updated_at = NOW()
-                WHERE id = :id
-                RETURNING id
+                SET status = CASE WHEN status = 'failed' THEN 'recording' ELSE status END,
+                    clip_count = :n, error = NULL, updated_at = NOW()
+                WHERE id = :id AND status <> 'training'
+                RETURNING status
                 """
             ),
-            {"id": wake_word_id},
+            {"id": wake_word_id, "n": int(clip_count)},
         )
-        return row.first() is not None
+        r = row.first()
+        return r[0] if r else None
+
+    async def set_clip_count(self, wake_word_id: int, clip_count: int) -> bool:
+        """Set ``clip_count`` to the clips on disk (after a delete)."""
+        row = await self.s.execute(
+            text(
+                """
+                UPDATE wake_words SET clip_count = :n, updated_at = NOW()
+                WHERE id = :id
+                """
+            ),
+            {"id": wake_word_id, "n": max(0, int(clip_count))},
+        )
+        return bool(row.rowcount)
 
     async def mark_training(self, wake_word_id: int, min_clips: int) -> bool:
-        """Promote a ``recording`` row, or a ``failed`` one (training it
-        again on the clips it has: a timeout, a stop, an out-of-memory), to
+        """Promote a ``recording`` row, a ``failed`` one (training it again
+        on the clips it has: a timeout, a stop, an out-of-memory), or a
+        ``ready`` one (Train again, on the clips recorded since plus the
+        old ones; its current model stays in use until the new one lands) to
         ``training`` — only if it still holds enough captured clips
         (``clip_count >= min_clips``). Returns False if the row is missing,
-        training or ready, or has too few clips, so the caller can surface a
+        already training, or has too few clips, so the caller can surface a
         409."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
                 SET status = 'training', error = NULL, updated_at = NOW()
-                WHERE id = :id AND status IN ('recording', 'failed')
+                WHERE id = :id AND status IN ('recording', 'failed', 'ready')
                   AND clip_count >= :min
                 RETURNING id
                 """
@@ -2174,14 +2190,18 @@ class WakeWordsRepository:
         return row.first() is not None
 
     async def mark_stopped(self, wake_word_id: int) -> bool:
-        """Put a ``training`` word back to ``recording`` (the dashboard's
-        Stop): its clips stay, it is not queued again, and its row says it
-        was stopped. False when it wasn't training."""
+        """Put a ``training`` word back (the dashboard's Stop): its clips
+        stay, it is not queued again, and its row says it was stopped. A word
+        that already had a model (Train again) goes back to ``ready`` (that
+        model is still the one in use), any other to ``recording``. False
+        when it wasn't training."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
-                SET status = 'recording', error = 'Training stopped from the dashboard.',
+                SET status = CASE WHEN model_ref IS NOT NULL THEN 'ready'
+                                  ELSE 'recording' END,
+                    error = 'Training stopped from the dashboard.',
                     updated_at = NOW()
                 WHERE id = :id AND status = 'training'
                 RETURNING id
@@ -2225,12 +2245,18 @@ class WakeWordsRepository:
 
     async def mark_failed(self, wake_word_id: int, error: str) -> bool:
         """The trainer errored (or training is unconfigured) — flip to
-        ``failed`` and store the reason. Returns True if a row changed."""
+        ``failed`` and store the reason. Returns True if a row changed.
+
+        A Train again that fails on a word that already had a model goes
+        back to ``ready`` with the reason: the model it had is still on disk
+        and still the one its rooms use, so it can still be pushed."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
-                SET status = 'failed', error = :error, updated_at = NOW()
+                SET status = CASE WHEN status = 'training' AND model_ref IS NOT NULL
+                                  THEN 'ready' ELSE 'failed' END,
+                    error = :error, updated_at = NOW()
                 WHERE id = :id
                 """
             ),
