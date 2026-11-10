@@ -167,11 +167,18 @@ data class SatTurn(
     val audio_ms: Long? = null,
 )
 
+/** A turn left unanswered on purpose: it sounded like background talk
+ *  (web satellites.jsx satTurnIgnored). Not a failure. */
+fun satTurnIgnored(c: SatTurn): Boolean = c.status == "no_answer" && c.no_answer_reason == "overheard"
+
 /** The reply line's words when a turn has no reply to show, else null
  *  (web satellites.jsx SatTurnUnanswered). */
 fun satTurnUnanswered(c: SatTurn): String? = when (c.status ?: "answered") {
     "pending" -> "waiting for an answer…"
     "no_answer", "unheard" -> when (c.no_answer_reason) {
+        // Left unanswered on purpose (2026-11-09): a long capture that
+        // sounded like a TV or people talking among themselves.
+        "overheard" -> "ignored — sounded like background talk"
         "timed_out" -> "no answer — timed out"
         "error" -> "no answer — something went wrong"
         "interrupted" -> "no answer — interrupted"

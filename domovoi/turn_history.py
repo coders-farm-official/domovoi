@@ -56,8 +56,12 @@ ERROR = "error"
 INTERRUPTED = "interrupted"
 RESTARTED = "restarted"
 SPEECH_OFF = "speech_off"
+# Left unanswered on purpose: a long capture that sounded like background
+# talk, not a request (domovoi/overheard.py). The dashboard and the app show
+# it as "ignored", not as a failure.
+OVERHEARD = "overheard"
 
-REASONS = frozenset({TIMED_OUT, ERROR, INTERRUPTED, RESTARTED, SPEECH_OFF})
+REASONS = frozenset({TIMED_OUT, ERROR, INTERRUPTED, RESTARTED, SPEECH_OFF, OVERHEARD})
 
 # A history write never holds a turn longer than this.
 WRITE_TIMEOUT_SEC = 5.0
@@ -96,8 +100,32 @@ async def has_status_columns(s: AsyncSession) -> bool:
 
 def _forget_probe() -> None:
     """Probe again on next use (tests that drop and re-add the columns)."""
-    global _HAS_STATUS
+    global _HAS_STATUS, _HAS_WAKE_SCORE
     _HAS_STATUS = None
+    _HAS_WAKE_SCORE = None
+
+
+# Whether conversation_log has V044's wake_score; probed once, like the
+# V043 columns. Without it the score is simply not kept.
+_HAS_WAKE_SCORE: bool | None = None
+
+
+async def has_wake_score_column(s: AsyncSession) -> bool:
+    global _HAS_WAKE_SCORE
+    if _HAS_WAKE_SCORE is None:
+        row = (
+            await s.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'conversation_log'
+                      AND column_name = 'wake_score'
+                    """
+                )
+            )
+        ).first()
+        _HAS_WAKE_SCORE = row is not None
+    return _HAS_WAKE_SCORE
 
 
 class HistoryEntry:
@@ -158,6 +186,7 @@ async def _open_row(
     trigger: str | None,
     audio_ms: int | None,
     at: datetime,
+    wake_score: float | None = None,
 ) -> int | None:
     from domovoi.db.session import session_scope
 
@@ -165,16 +194,20 @@ async def _open_row(
         async with session_scope() as s:
             if not await has_status_columns(s):
                 return None
+            # The wake's score (V044) when there is one and the column is there.
+            score_col, score_val = "", ""
+            if wake_score is not None and await has_wake_score_column(s):
+                score_col, score_val = ", wake_score", ", :wake_score"
             row = (
                 await s.execute(
                     text(
-                        """
+                        f"""
                         INSERT INTO conversation_log
                             (session_id, room_id, user_text, utterance_trigger,
-                             turn_status, audio_ms, at)
+                             turn_status, audio_ms, at{score_col})
                         VALUES
                             (:session_id, :room_id, :user_text, :trigger,
-                             'pending', :audio_ms, :at)
+                             'pending', :audio_ms, :at{score_val})
                         RETURNING id
                         """
                     ),
@@ -185,6 +218,7 @@ async def _open_row(
                         "trigger": trigger,
                         "audio_ms": audio_ms,
                         "at": at,
+                        **({"wake_score": wake_score} if score_col else {}),
                     },
                 )
             ).first()
@@ -303,6 +337,7 @@ async def record_unheard(
     audio_ms: int | None,
     reason: str,
     at: datetime,
+    wake_score: float | None = None,
 ) -> None:
     """A request speech recognition never made out: a row of its own, no
     text, with when it was made and how long the recording was."""
@@ -312,15 +347,18 @@ async def record_unheard(
         async with session_scope() as s:
             if not await has_status_columns(s):
                 return
+            score_col, score_val = "", ""
+            if wake_score is not None and await has_wake_score_column(s):
+                score_col, score_val = ", wake_score", ", :wake_score"
             await s.execute(
                 text(
-                    """
+                    f"""
                     INSERT INTO conversation_log
                         (session_id, room_id, user_text, utterance_trigger,
-                         turn_status, no_answer_reason, audio_ms, at)
+                         turn_status, no_answer_reason, audio_ms, at{score_col})
                     VALUES
                         (:session_id, :room_id, '', :trigger,
-                         'unheard', :reason, :audio_ms, :at)
+                         'unheard', :reason, :audio_ms, :at{score_val})
                     """
                 ),
                 {
@@ -330,6 +368,7 @@ async def record_unheard(
                     "reason": reason,
                     "audio_ms": audio_ms,
                     "at": at,
+                    **({"wake_score": wake_score} if score_col else {}),
                 },
             )
 

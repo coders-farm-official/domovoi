@@ -148,7 +148,7 @@ def test_every_common_bounded_number_is_a_slider_unless_skipped() -> None:
     sliders = {s.name for _w, s in SLIDERS}
     assert SLIDER_SKIPS.keys() <= bounded, SLIDER_SKIPS.keys() - bounded
     assert sliders == bounded - SLIDER_SKIPS.keys()
-    assert len(sliders) == 23
+    assert len(sliders) == 24
 
 
 @pytest.mark.parametrize("entry", SLIDERS, ids=_id)

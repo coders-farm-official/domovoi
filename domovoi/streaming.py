@@ -75,7 +75,11 @@ Client → Server
                            `satellites.board` on approval and on every hello
                            that carries it. Neither bumps PROTOCOL_VERSION.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
-                            "utt":N,"backlog_ms":N,"wake_ms":N}
+                            "utt":N,"backlog_ms":N,"wake_ms":N,"wake_score":F}
+                           — `wake_score` (optional, 0..1, after a wake word
+                           only): the wake's peak openWakeWord score
+                           (satellite/wake_gate.py), kept on the turn's
+                           history row (conversation_log.wake_score, V044).
                            — `utt` (optional): the satellite's own number for
                            this capture, increasing per connection. Echoed in
                            the capture's hints and its `utterance_end`, so a
@@ -349,7 +353,12 @@ Server → Client
                            `reconnect_timeout_sec`, its on-Pi watchdog rolls
                            back to the tarball.
   text  response_start     {"type":"response_start","text":...,"matched_handler":...,"matched_path":...,"session_id":...,"online":...,"audio_sample_rate":24000}
-  text  response_end       {"type":"response_end","interrupted":bool,"expect_followup":bool,"pi_action":?,"pi_action_arg":?}
+  text  response_end       {"type":"response_end","interrupted":bool,"expect_followup":bool,"pi_action":?,"pi_action_arg":?,"ignored":true?}
+                           — `ignored` (optional, sent only as true, since
+                           2026-11-09): the capture was background talk and
+                           got no answer (domovoi/overheard.py); the
+                           satellite pauses its wake word for [wake]
+                           cooldown_sec. An older satellite ignores it.
                            — `pi_action` (optional) requests a Pi-local
                            side-effect after playback drains: "reassociate_wifi"
                            (WifiHandler), "set_voice" (VoiceHandler, with
@@ -514,7 +523,7 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
-from domovoi import turn_history, turn_watchdog
+from domovoi import overheard, turn_history, turn_watchdog
 from domovoi.turn_watchdog import (
     STAGE_IDENTIFY,
     STAGE_REPLY,
@@ -1631,6 +1640,7 @@ class StreamSession:
         # value, not the live `wake_recording`, so a stop_wake_recording racing
         # the final clip can never route a training clip through STT/route().
         self._utterance_trigger: str | None = None
+        self._wake_score: float | None = None
         # Whether a drop-in call was live at ANY point of the in-flight
         # utterance: set at utterance_start when already in a call, and by
         # _begin_dropin when one starts mid-capture. Read at utterance_end so
@@ -2515,6 +2525,7 @@ class StreamSession:
                 hold_ms=hold_ms,
                 capture_meta=capture_meta,
                 capture_clock=clock,
+                wake_score=self._wake_score,
             )
         )
 
@@ -3205,6 +3216,9 @@ class StreamSession:
             # Latch the trigger now; utterance_end reads it to decide
             # clip-vs-command (immune to wake_recording flipping mid-utterance).
             self._utterance_trigger = ctrl.get("trigger")
+            # The wake word's peak score (satellite/wake_gate.py), kept with
+            # the turn's history row (V044). An older satellite sends none.
+            self._wake_score = overheard.wake_score(ctrl.get("wake_score"))
             self._utterance_in_call = self.dropin_peer is not None
             self._utt_id = ctrl.get("utt")
             self._reset_utterance_tracking(self._utterance_trigger)
@@ -3291,6 +3305,7 @@ class StreamSession:
                     endpoint_silence_ms=endpoint_silence_ms,
                     capture_meta=capture_meta,
                     capture_clock=clock,
+                    wake_score=self._wake_score,
                 )
             )
             return
@@ -4250,6 +4265,7 @@ class StreamSession:
         history: turn_history.HistoryEntry | None,
         audio_ms: int,
         turn_at: datetime,
+        wake_score: float | None = None,
     ) -> None:
         """A stage of this turn ran past its limit (domovoi/turn_watchdog.py):
         one line naming the room and the stage, the stall noted for
@@ -4270,6 +4286,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.TIMED_OUT, at=turn_at,
+                    wake_score=wake_score,
                 ))
         else:
             self._close_history_later(history, turn_history.TIMED_OUT)
@@ -4278,6 +4295,85 @@ class StreamSession:
         timing_write = self._finish_turn_timings(timings, trigger=trigger, response=response)
         if timing_write is not None:
             await asyncio.shield(timing_write)
+
+    async def _screen_overheard(
+        self,
+        transcript: str,
+        *,
+        trigger: str | None,
+        capture_meta: dict[str, Any] | None,
+        audio_seconds: float,
+    ) -> "overheard.Verdict":
+        """What this turn is (domovoi/overheard.py). Reads the session's
+        parked question only for a long capture that may be ignored (a "yes"
+        or a choice's reply at its start is a command too); a session in
+        chat mode is left to the chat (it has an open mic by design)."""
+        exit_reason = (capture_meta or {}).get("end_reason")
+        if not isinstance(exit_reason, str):
+            exit_reason = None
+        if (
+            trigger not in overheard.GUARDED_TRIGGERS
+            or not overheard.is_long(transcript, exit_reason=exit_reason, audio_seconds=audio_seconds)
+        ):
+            return overheard.screen(
+                transcript, trigger=trigger, exit_reason=exit_reason,
+                audio_seconds=audio_seconds, bot_name=settings.bot_name,
+            )
+        pending = None
+        if self.session_id is not None:
+            try:
+                async with session_scope() as s:
+                    ctx_data = await SessionRepository(s).get_context(self.session_id) or {}
+            except Exception as e:  # noqa: BLE001 — screened as if nothing were parked
+                log.warning("stream %s: session context unreadable for the long-capture "
+                            "check: %s", self.room_id, e)
+                ctx_data = {}
+            if ctx_data.get("conversational_mode"):
+                return overheard.Verdict(overheard.ROUTE, transcript)
+            pending = ctx_data.get("pending_confirmation")
+        return overheard.screen(
+            transcript, trigger=trigger, exit_reason=exit_reason,
+            audio_seconds=audio_seconds, pending=pending, bot_name=settings.bot_name,
+        )
+
+    async def _ignore_overheard(
+        self,
+        transcript: str,
+        *,
+        verdict: "overheard.Verdict",
+        trigger: str | None,
+        audio_ms: int,
+        turn_at: datetime,
+        wake_score: float | None,
+    ) -> None:
+        """A long capture that is background talk: no answer, no routing (so
+        no action and no intents_log row, like a blank capture), the history
+        row saying "ignored", and the satellite back to idle at once —
+        ``response_end`` with no ``response_start``, which it takes as the
+        end of the turn (no error ring, no "no answer" clip, the reply
+        deadline satisfied). The music the wake word stopped comes back."""
+        log.info(
+            "stream %s: ignoring a %s capture as background talk (%s; %.1f s%s): %r",
+            self.room_id, trigger, verdict.why, audio_ms / 1000,
+            f", wake score {wake_score:.2f}" if wake_score is not None else "",
+            said(transcript),
+        )
+        entry = turn_history.start_entry(
+            room_id=self.room_id, session_id=self.session_id,
+            user_text=transcript, trigger=trigger,
+            audio_ms=audio_ms, at=turn_at, wake_score=wake_score,
+        )
+        self._close_history_later(entry, turn_history.OVERHEARD)
+        await self._safe_send_text({
+            "type": "response_end",
+            "interrupted": True,
+            "expect_followup": False,
+            # The satellite pauses its wake word for [wake] cooldown_sec
+            # after this turn (satellite/wake_gate.py); an older one
+            # ignores the field.
+            "ignored": True,
+        })
+        await self._resume_music_after_failed_turn(trigger)
 
     async def _resume_music_after_failed_turn(self, trigger: str | None) -> None:
         """The music the wake word stopped comes back, as after any turn
@@ -4329,6 +4425,7 @@ class StreamSession:
         stage: str,
         audio_ms: int,
         turn_at: datetime,
+        wake_score: float | None = None,
     ) -> None:
         """The turn raised: error + response_end, the history entry closed
         ("no answer — something went wrong"; a request that never got a
@@ -4353,6 +4450,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.ERROR, at=turn_at,
+                    wake_score=wake_score,
                 ))
         else:
             self._close_history_later(history, turn_history.ERROR)
@@ -4387,10 +4485,15 @@ class StreamSession:
         hold_ms: int | None = None,
         capture_meta: dict[str, Any] | None = None,
         capture_clock: _CaptureClock | None = None,
+        wake_score: float | None = None,
     ) -> None:
         interrupted = False
         response = None
         transcript = ""
+        # A long capture (domovoi/overheard.py) opens no follow-up mic; a
+        # capped one doesn't reach the tool model.
+        long_capture = False
+        capped_capture = False
         # The turn watchdog (domovoi/turn_watchdog.py; incident 2026-11-09,
         # every room "thinking" for good behind a wedged speech recognition).
         # Speech recognition gets turn_watchdog.stt_cap() of the recording's
@@ -4451,6 +4554,7 @@ class StreamSession:
                             room_id=self.room_id, session_id=self.session_id,
                             trigger=trigger, audio_ms=audio_ms,
                             reason=turn_history.SPEECH_OFF, at=turn_at,
+                            wake_score=wake_score,
                         ))
                     return
                 transcript = await self._clean_transcript(
@@ -4470,6 +4574,35 @@ class StreamSession:
                         ack_before_capture=ack_before_capture, stt_deadline=stt_deadline,
                     )
 
+                # ── Background talk? ─────────────────────────────────────────
+                # A long capture (20 s / 60 words and more) opens no
+                # follow-up. One the satellite cut off at its recording cap
+                # after 20 s is the command at its start, a question put to
+                # the assistant, or background talk that gets no answer at
+                # all (domovoi/overheard.py). One that ended on a pause is
+                # a person's, and is routed as always.
+                verdict = await self._screen_overheard(
+                    transcript, trigger=trigger, capture_meta=capture_meta,
+                    audio_seconds=audio_seconds,
+                )
+                long_capture = verdict.long
+                capped_capture = verdict.capped
+                if verdict.action == overheard.IGNORE:
+                    await self._ignore_overheard(
+                        transcript, verdict=verdict, trigger=trigger,
+                        audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
+                    )
+                    return
+                if verdict.text != transcript:
+                    log.info(
+                        "stream %s: long capture (%s): routing %r of %r",
+                        self.room_id, verdict.why, said(verdict.text), said(transcript),
+                    )
+                    transcript = verdict.text
+                elif verdict.long:
+                    log.info("stream %s: long capture (%s): no follow-up",
+                             self.room_id, verdict.why)
+
                 # ── Respond ──────────────────────────────────────────────────
                 # The history shows what was said from now on, the reply
                 # pending. Written in a task of its own: nothing waits for
@@ -4477,7 +4610,7 @@ class StreamSession:
                 history = turn_history.start_entry(
                     room_id=self.room_id, session_id=self.session_id,
                     user_text=transcript, trigger=trigger,
-                    audio_ms=audio_ms, at=turn_at,
+                    audio_ms=audio_ms, at=turn_at, wake_score=wake_score,
                 )
                 await self._safe_send_text({"type": "transcript", "text": transcript})
 
@@ -4573,6 +4706,12 @@ class StreamSession:
                     history_entry=history,
                     speak_interim=interim.say,
                     stream_qa=True,
+                    # A long capture: no follow-up question, and no handler
+                    # parks one ("did you mean X?"); a capped one: no tool
+                    # model either.
+                    long_capture=long_capture,
+                    capped_capture=capped_capture,
+                    answerable=not long_capture,
                 )
                 intent = Intent(
                     transcript=transcript,
@@ -4672,13 +4811,13 @@ class StreamSession:
                 await self._end_stalled_turn(
                     e.stage, e.limit_s, trigger=trigger, timings=timings,
                     response=response, history=history,
-                    audio_ms=audio_ms, turn_at=turn_at,
+                    audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
                 )
             elif reply_guard.expired():
                 await self._end_stalled_turn(
                     stage, time.perf_counter() - turn_t0, trigger=trigger,
                     timings=timings, response=response,
-                    history=history, audio_ms=audio_ms, turn_at=turn_at,
+                    history=history, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
                 )
             else:
                 # A TimeoutError of somebody else's (a client's own limit):
@@ -4686,14 +4825,14 @@ class StreamSession:
                 await self._fail_turn(
                     e, timings=timings, trigger=trigger, response=response,
                     history=history,
-                    stage=stage, audio_ms=audio_ms, turn_at=turn_at,
+                    stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
                 )
             return
         except Exception as e:
             await self._fail_turn(
                 e, timings=timings, trigger=trigger, response=response,
                 history=history,
-                stage=stage, audio_ms=audio_ms, turn_at=turn_at,
+                stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
             )
             return
         finally:
@@ -4701,6 +4840,14 @@ class StreamSession:
             if guard is not None and guard[1] is reply_guard:
                 self._reply_guard = None
             self._stop_working_beat()
+
+        # A long capture opens no follow-up mic, whatever its reply asked
+        # (domovoi/overheard.py): the TV that kept the capture open would
+        # answer it, and the room would talk to the TV in a loop. Cleared on
+        # the response itself, so the music hold below agrees.
+        if long_capture and response is not None and getattr(response, "expect_followup", False):
+            log.info("stream %s: long capture: not listening for a follow-up", self.room_id)
+            response.expect_followup = False
 
         # A reply that was spoken but whose record failed: the pending row
         # takes what was said rather than staying "waiting for an answer".

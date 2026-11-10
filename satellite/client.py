@@ -64,6 +64,7 @@ from satellite import (
     pc_engine,
     remote_config,
     sound_sync,
+    wake_gate,
     wake_model_sync,
     wifi_adapt,
     wifi_profiles,
@@ -551,6 +552,19 @@ def _effective_wake_threshold(cfg: "Config") -> float:
     return cfg.wake_threshold
 
 
+def _clear_wake_threshold_sidecar(why: str) -> None:
+    """Remove a wake threshold a pushed model left behind
+    (WAKE_THRESHOLD_SIDECAR), so ``[wake] threshold`` is the one in effect
+    after the next start. Best-effort."""
+    try:
+        if WAKE_THRESHOLD_SIDECAR.is_file():
+            old = WAKE_THRESHOLD_SIDECAR.read_text(encoding="utf-8").strip()
+            WAKE_THRESHOLD_SIDECAR.unlink()
+            log.info("wake threshold override %s removed: %s", old or "(empty)", why)
+    except OSError as e:
+        log.warning("could not remove the wake threshold override: %s", e)
+
+
 def _resolve_sound(relpath: str) -> Path:
     """A single clip path — the synced cache copy if present, else bundled."""
     cached = SOUNDS_CACHE_DIR / relpath
@@ -710,6 +724,12 @@ class Config:
     response_deadline_sec: float = RESPONSE_DEADLINE_SEC_DEFAULT
     # [listen] response_backstop_sec: see RESPONSE_BACKSTOP_SEC_DEFAULT.
     response_backstop_sec: float = RESPONSE_BACKSTOP_SEC_DEFAULT
+    # [wake] patience_frames / cooldown_sec: how many 80 ms chunks in a row
+    # the score must be over the threshold, and how long after a turn no
+    # wake counts (satellite/wake_gate.py). Defaulted so a Config built
+    # without them keeps working.
+    wake_patience_frames: int = wake_gate.PATIENCE_DEFAULT
+    wake_cooldown_sec: float = wake_gate.COOLDOWN_SEC_DEFAULT
     # [health]: the telemetry sampler, the last-health sidecar and the
     # self-checks (satellite/health.py). Defaulted so a Config built without
     # the section keeps working; the example config documents each key.
@@ -1057,6 +1077,8 @@ class Config:
                 listen.get("response_backstop_sec"), "response_backstop_sec",
                 RESPONSE_BACKSTOP_SEC_DEFAULT, RESPONSE_BACKSTOP_SEC_MAX,
             ),
+            wake_patience_frames=wake_gate.patience_setting(wake.get("patience_frames")),
+            wake_cooldown_sec=wake_gate.cooldown_setting(wake.get("cooldown_sec")),
             # Health telemetry and self-checks — see [health] in the example
             # config for what each one guards.
             health_enabled=bool(healthc.get("enabled", True)),
@@ -2169,8 +2191,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # Taken once: a wake time is about the capture right after it, never
         # a later one.
         woke, self._woke_at = self._woke_at, None
+        score, self._wake_score = self._wake_score, None
         if trigger == "wake_word" and woke is not None:
             msg["wake_ms"] = max(0, int(round((self._utt_started - woke) * 1000)))
+            # The wake's peak score (satellite/wake_gate.py), kept with the
+            # turn on the core. An older core ignores the field.
+            if score is not None:
+                msg["wake_score"] = round(float(score), 3)
         return self._emit_text(msg)
 
     def _mic_backlog_ms(self) -> int:
@@ -4208,6 +4235,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # The reply deadline ([listen] response_deadline_sec) ends the
             # wait, so it stays below that unless the deadline is off.
             "awaiting_response_s": self._awaiting_response_s(now),
+            # The wake threshold the detector compares scores against, and
+            # the [wake] threshold setting: they differ when a model pushed
+            # from the dashboard left its own threshold behind
+            # (~/.domovoi/wake_threshold), which the Settings tab can't show.
+            **self._health_wake_facts(),
             "ws": "up" if ws_up else "down",
             "ws_down_for_s": down_for,
             "reconnects": self._reconnects,
@@ -4229,6 +4261,22 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "log_ring": {k: v for k, v in LOG_RING.stats().items() if k != "max_bytes"},
             "log_spool": {k: v for k, v in LOG_SPOOL.stats().items() if k != "max_bytes"},
         }
+
+    def _health_wake_facts(self) -> dict[str, Any]:
+        """`wake_threshold` (in effect: what the running detector loaded, or
+        what it would load) and `wake_threshold_setting` ([wake] threshold).
+        Empty when they can't be read."""
+        try:
+            setting = float(self.cfg.wake_threshold)
+            in_effect = getattr(self, "_wake_threshold", None)
+            if in_effect is None:
+                in_effect = _effective_wake_threshold(self.cfg)
+            return {
+                "wake_threshold": round(float(in_effect), 3),
+                "wake_threshold_setting": round(setting, 3),
+            }
+        except Exception:  # noqa: BLE001 — a health sample never fails on this
+            return {}
 
     def _health_link_facts(self) -> dict[str, Any]:
         """The last sample's view of the network, for an offline_diag entry
@@ -4727,6 +4775,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
         return {
             "wake.threshold": c.wake_threshold,
             "wake.ack_mode": c.wake_ack_mode,
+            "wake.patience_frames": c.wake_patience_frames,
+            "wake.cooldown_sec": c.wake_cooldown_sec,
             "barge_in.enabled": c.barge_in,
             "barge_in.min_speech_ms": c.barge_in_min_speech_ms,
             "barge_in.require_wake_word": c.barge_in_require_wake_word,
@@ -4871,6 +4921,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         except OSError as e:
             log.error("set_config: failed to write %s: %s", CONFIG_PATH, e)
             return
+        if "wake.threshold" in changes:
+            # The sensitivity set on the dashboard is the one in effect from
+            # now on: a threshold a pushed wake model left behind would
+            # otherwise keep overriding it while the Settings tab showed the
+            # new value (false wakes, 2026-11-09).
+            _clear_wake_threshold_sidecar("the wake sensitivity was set from the dashboard")
         log.info(
             "set_config: applied %d change(s) to %s (backup at %s); restarting",
             len(changes), CONFIG_PATH, backup,
@@ -5620,6 +5676,19 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # nothing should still be playing; a player that is, is stopped.
         self._stop_ack()
         _reset_wake_model(oww)
+        # Patience and cooldown (satellite/wake_gate.py): the score must stay
+        # up for `patience_frames` chunks in a row and reach the threshold;
+        # and after a turn that went wrong (ignored as background talk, cut
+        # off at the recording cap, an error or no reply) nothing wakes the
+        # room for `cooldown_sec`. After an ordinary turn, no cooldown.
+        gate = wake_gate.WakeGate(
+            self._wake_threshold,
+            getattr(self.cfg, "wake_patience_frames", wake_gate.PATIENCE_DEFAULT),
+            getattr(self.cfg, "wake_cooldown_sec", wake_gate.COOLDOWN_SEC_DEFAULT),
+        )
+        quiet, self._quiet_next_wake = self._quiet_next_wake, False
+        gate.quiet_for(time.monotonic(), None if quiet else 0.0)
+        cooldown_logged = not quiet or gate.cooldown_sec <= 0
         log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
         # openwakeword's predict() requires chunks that are multiples of 80 ms
         # (1280 samples at 16 kHz). Mic frames are 30 ms (480 samples), so we
@@ -5682,17 +5751,44 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     pred = oww.predict(chunk)
                 except Exception as e:
                     log.warning("wake-word predict failed: %s", e)
+                    # A gap in the scores: a run across it is not "in a row".
+                    gate.reset()
                     continue
-                if pred.get(self._wake_word, 0.0) > self._wake_threshold:
-                    woke_at = time.monotonic()
-                    # For the capture's `utterance_start` (`wake_ms`).
+                chunk_at = time.monotonic()
+                fired = gate.feed(pred.get(self._wake_word, 0.0), chunk_at)
+                if not cooldown_logged and not gate.in_cooldown(chunk_at):
+                    cooldown_logged = True
+                    swallowed = gate.take_cooldown_peak()
+                    if swallowed is not None:
+                        log.info(
+                            "wake word ignored in the %.1fs after the last turn "
+                            "(peak score %.3f, threshold %.2f)",
+                            gate.cooldown_sec, swallowed, gate.threshold,
+                        )
+                short = gate.take_short_run()
+                if short is not None:
+                    log.info(
+                        "wake score %.3f for %d chunk(s), %d needed in a row: not a wake",
+                        short[0], short[1], gate.patience,
+                    )
+                if fired:
+                    woke_at = chunk_at
+                    # For the capture's `utterance_start` (`wake_ms`,
+                    # `wake_score`).
                     self._woke_at = woke_at
+                    self._wake_score = gate.last_peak
                     # A turn is open from here until this thread is back at
                     # the top of this method: no music starts in it. Marked
                     # BEFORE the `_stop_music` below, which is what makes the
                     # hold race-free (see `_music_hold_reason`).
                     self._turn_open = True
-                    log.info("wake word detected")
+                    # The peak score, in the log ring: what a false wake from
+                    # the TV scored is the number a threshold is tuned with.
+                    log.info(
+                        "wake word detected (peak score %.3f over %d chunk(s); "
+                        "threshold %.2f, %d in a row needed)",
+                        gate.last_peak or 0.0, gate.last_run, gate.threshold, gate.patience,
+                    )
                     # Network-degraded short-circuit — when the WS is
                     # genuinely down OR the watcher gave up on a
                     # reassociate, the server round-trip will
@@ -5735,6 +5831,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             _reset_wake_model(oww)
                             self._drain_mic()
                             self._turn_open = False
+                            # No server: a turn that went wrong.
+                            gate.quiet_for(time.monotonic())
+                            cooldown_logged = gate.cooldown_sec <= 0
                             continue  # back to listening
                     # Flip the LED to "listening" immediately so the
                     # user gets feedback the moment we detect them —
@@ -6047,6 +6146,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     return False
         if self.shutdown_event.is_set():
             exit_reason = "shutdown"
+        if exit_reason == "max_record_seconds":
+            # Speech that never paused: media, most likely. The next wake
+            # waits out [wake] cooldown_sec (satellite/wake_gate.py).
+            self._quiet_next_wake = True
 
         if self.shutdown_event.is_set() and not speaking:
             return False
@@ -6289,6 +6392,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 waited, getattr(self.cfg, "response_deadline_sec", RESPONSE_DEADLINE_SEC_DEFAULT),
             )
         self._reply_wait_since = None
+        # No reply: the next wake waits out the cooldown.
+        self._quiet_next_wake = True
         self._abandoned_mark = getattr(self, "_response_starts", 0)
         self.stop_playback.set()
         self._drain_playback_q()
@@ -6946,6 +7051,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
             WAKE_SIDECAR.write_text(slug.strip() + "\n", encoding="utf-8")
             if threshold is not None:
                 WAKE_THRESHOLD_SIDECAR.write_text(f"{float(threshold)}\n", encoding="utf-8")
+            else:
+                # A word pushed without a threshold of its own uses the
+                # [wake] setting, not one an earlier word left behind.
+                _clear_wake_threshold_sidecar("the new wake word has no threshold of its own")
             log.info("set_wake_word: switching to %r (restart to apply)", slug)
         except (OSError, ValueError) as e:
             log.warning("set_wake_word: could not persist %r: %s", slug, e)
@@ -7252,6 +7361,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # wake word that opened the latest wake capture fired (its `wake_ms`).
     _utt_started: float | None = None
     _woke_at: float | None = None
+    # Its peak wake score (`wake_score`, satellite/wake_gate.py).
+    _wake_score: float | None = None
+    # The last turn went wrong (ignored as background talk, cut off at the
+    # recording cap, an error, no reply): the next wake waits out
+    # [wake] cooldown_sec (satellite/wake_gate.py). Read once.
+    _quiet_next_wake: bool = False
     # The capture `_stream_capture` is running, by number, while it runs
     # (None between captures). An `end_capture` for any other number is
     # stale — the capture it meant already ended on its own — and must not
@@ -7496,6 +7611,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 )
                 return
             self._note_reply_frame("response_end")
+            if payload.get("ignored"):
+                # The core took the capture for background talk: the next
+                # wake waits out [wake] cooldown_sec (satellite/wake_gate.py).
+                self._quiet_next_wake = True
             # Set expect_followup BEFORE response_done so the mic thread
             # always observes both flags consistently — without this
             # ordering, the mic could wake on response_done, check
@@ -7686,6 +7805,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 log.warning("set_config: no changes in payload; ignoring")
         elif t == "error":
             self._note_reply_frame("error")
+            # A turn that went wrong: the next wake waits out the cooldown.
+            self._quiet_next_wake = True
             # For the offline diagnosis of a session that ends before
             # `ready`: which refusal it was.
             self._last_server_error = str(

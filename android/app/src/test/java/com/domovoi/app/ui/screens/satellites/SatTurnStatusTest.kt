@@ -49,6 +49,16 @@ class SatTurnStatusTest {
         assertEquals("couldn’t make out what was said", satTurnSaid(SatTurn(status = "unheard")))
     }
 
+    @Test fun anOverheardTurnReadsIgnoredNotFailed() {
+        val c = json.decodeFromString(SatTurn.serializer(),
+            """{"id":11,"user_text":"and then the guy says","assistant_text":null,
+               "status":"no_answer","no_answer_reason":"overheard","audio_ms":30000}""")
+        assertTrue(satTurnIgnored(c))
+        assertEquals("ignored — sounded like background talk", satTurnUnanswered(c))
+        assertFalse(satTurnIgnored(SatTurn(status = "no_answer", no_answer_reason = "timed_out")))
+        assertFalse(satTurnIgnored(SatTurn(status = "answered", no_answer_reason = "overheard")))
+    }
+
     @Test fun theListIsReadAgainOnlyWhileATurnIsPending() {
         assertTrue(satAnyPending(listOf(SatTurn(status = "answered"), SatTurn(status = "pending"))))
         assertFalse(satAnyPending(listOf(SatTurn(status = "answered"), SatTurn(status = "no_answer"))))

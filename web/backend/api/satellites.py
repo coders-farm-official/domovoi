@@ -931,11 +931,12 @@ async def list_conversations(
     made the request out (``unheard``, with ``audio_ms``)."""
     async with session_scope() as s:
         with_status = await _has_turn_status(s)
+        with_score = with_status and await _has_wake_score(s)
         extra = (
             ", turn_status, no_answer_reason, audio_ms, "
             "(at < NOW() - make_interval(secs => :stale))"
             if with_status else ""
-        )
+        ) + (", wake_score" if with_score else "")
         rows = await s.execute(
             text(
                 f"""
@@ -954,6 +955,7 @@ async def list_conversations(
         out: list[ConversationTurn] = []
         for r in rows.all():
             status, reason, audio_ms = "answered", None, None
+            score = r[13] if with_score else None
             if with_status:
                 status = r[9] or "answered"
                 reason, audio_ms = r[10], r[11]
@@ -974,6 +976,7 @@ async def list_conversations(
                 status=status,
                 no_answer_reason=reason,
                 audio_ms=int(audio_ms) if audio_ms is not None else None,
+                wake_score=round(float(score), 3) if score is not None else None,
             ))
         return out
 
@@ -986,6 +989,21 @@ PENDING_STALE_SEC = 600
 # Whether conversation_log has V043's columns; probed once per process (a
 # dashboard started before Flyway ran keeps showing the history).
 _HAS_TURN_STATUS: bool | None = None
+
+
+# Whether conversation_log has V044's wake_score; probed once, likewise.
+_HAS_WAKE_SCORE: bool | None = None
+
+
+async def _has_wake_score(s: Any) -> bool:
+    global _HAS_WAKE_SCORE
+    if _HAS_WAKE_SCORE is None:
+        row = (await s.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'conversation_log' AND column_name = 'wake_score'"
+        ))).first()
+        _HAS_WAKE_SCORE = row is not None
+    return _HAS_WAKE_SCORE
 
 
 async def _has_turn_status(s: Any) -> bool:

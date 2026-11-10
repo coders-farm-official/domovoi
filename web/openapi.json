@@ -19117,6 +19117,17 @@
               }
             ],
             "title": "Audio Ms"
+          },
+          "wake_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wake Score"
           }
         },
         "type": "object",
