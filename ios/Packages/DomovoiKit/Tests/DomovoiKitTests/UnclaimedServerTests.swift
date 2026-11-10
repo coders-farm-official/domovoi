@@ -280,21 +280,37 @@ final class UnclaimedServerTests: XCTestCase {
     /// The whole path: `ShellModel`, its real client and `/api/auth/status`
     /// on the wire, with A's read **held at the server** while the person
     /// switches to B. A says `false`, B says `true`: B is never blocked.
+    ///
+    /// **Both houses are held, and released in turn.** A held request holds
+    /// the stub session's loading thread (`startLoading` is synchronous), so
+    /// B's read cannot even start until A is let go — measured on the first
+    /// run of this case, which waited for B before releasing A and saw one
+    /// request on the wire. So A lands first, into a shell that has already
+    /// switched, and B lands after; the assertion between the two is the one
+    /// that can fail.
     func testShell_AnUnclaimedAnswerThatLandsAfterASwitchDoesNotBlockTheNewServer() async {
-        let park = statusPark(heldHost: "10.0.0.42", held: false, others: true)
+        let parks = statusParks(answerA: false, answerB: true)
         let (shell, store) = shellRig()
 
         let pending = shell.unclaimed.ask(.socket, unreachable: false)
         XCTAssertNotNil(pending)
-        await settleUntil { park.arrived.current }
+        await settleUntil { parks.a.arrived.current }
 
         switchTo(other, store: store, shell: shell)
-        await settleUntil { shell.unclaimed.setupComplete == true }
+        XCTAssertTrue(shell.unclaimed.checking, "B's own read is out")
 
-        park.release.set(true)
+        parks.a.release.set(true)
         await pending?.value
-        XCTAssertFalse(park.ranOut.current, "the answer landed; it did not time out")
+        XCTAssertFalse(parks.a.ranOut.current, "A's answer landed; it did not time out")
+        XCTAssertNil(shell.unclaimed.setupComplete, "server A's false is not written under server B")
         XCTAssertFalse(shell.unclaimed.blocks, "server A's false is not about server B")
+        XCTAssertTrue(shell.unclaimed.checking, "and it did not end B's checking…")
+
+        await settleUntil { parks.b.arrived.current }
+        parks.b.release.set(true)
+        await settleUntil { !shell.unclaimed.checking }
+        XCTAssertFalse(parks.b.ranOut.current, "B's answer landed; it did not time out")
+        XCTAssertEqual(true, shell.unclaimed.setupComplete, "B's own answer lands through the same plumbing")
         XCTAssertFalse(unclaimedReplaces(shell.screen, blocks: shell.unclaimed.blocks))
         XCTAssertEqual(
             2,
@@ -305,21 +321,26 @@ final class UnclaimedServerTests: XCTestCase {
     }
 
     /// The other direction: B is unclaimed and says so; A's late `true`
-    /// must not take B's blocker away.
+    /// must not claim B, before B answers or after.
     func testShell_AClaimedAnswerThatLandsAfterASwitchDoesNotUnblockTheNewServer() async {
-        let park = statusPark(heldHost: "10.0.0.42", held: true, others: false)
+        let parks = statusParks(answerA: true, answerB: false)
         let (shell, store) = shellRig()
 
         let pending = shell.unclaimed.ask(.socket, unreachable: false)
-        await settleUntil { park.arrived.current }
+        await settleUntil { parks.a.arrived.current }
 
         switchTo(other, store: store, shell: shell)
-        await settleUntil { shell.unclaimed.blocks }
 
-        park.release.set(true)
+        parks.a.release.set(true)
         await pending?.value
-        XCTAssertFalse(park.ranOut.current, "the answer landed; it did not time out")
-        XCTAssertTrue(shell.unclaimed.blocks, "server A's true does not claim server B")
+        XCTAssertFalse(parks.a.ranOut.current, "A's answer landed; it did not time out")
+        XCTAssertNil(shell.unclaimed.setupComplete, "server A's true does not claim server B")
+
+        await settleUntil { parks.b.arrived.current }
+        parks.b.release.set(true)
+        await settleUntil { !shell.unclaimed.checking }
+        XCTAssertFalse(parks.b.ranOut.current, "B's answer landed; it did not time out")
+        XCTAssertTrue(shell.unclaimed.blocks, "B said false: B is blocked")
         XCTAssertTrue(unclaimedReplaces(shell.screen, blocks: shell.unclaimed.blocks))
         shell.stop()
     }
@@ -459,24 +480,26 @@ final class UnclaimedServerTests: XCTestCase {
         shell.refresh()
     }
 
-    /// `/api/auth/status` held open at one host until released, answering
-    /// `held`; every other host answers `others` at once.
-    private func statusPark(heldHost: String, held: Bool, others: Bool) -> ParkedRequest {
-        let park = ParkedRequest()
-        let heldBody = #"{"setup_complete": \#(held), "authenticated": false}"#
-        let othersBody = #"{"setup_complete": \#(others), "authenticated": false}"#
+    /// `/api/auth/status` held open at each house until that house's park
+    /// is released: A is `10.0.0.42`, B is `10.0.0.77`. Bounded under the
+    /// session's 1 s timeout, as `parkRequest` is.
+    private func statusParks(answerA: Bool, answerB: Bool) -> (a: ParkedRequest, b: ParkedRequest) {
+        let a = ParkedRequest()
+        let b = ParkedRequest()
         StubURLProtocol.dispatch { request in
             guard request.url?.path == authStatusPath else { return .json("{}") }
-            guard request.url?.host == heldHost else { return .json(othersBody) }
+            let isA = request.url?.host == "10.0.0.42"
+            let park = isA ? a : b
+            let body = #"{"setup_complete": \#(isA ? answerA : answerB), "authenticated": false}"#
             park.arrived.set(true)
             for step in 0..<400 {
-                if park.release.current { return .json(heldBody) }
+                if park.release.current { return .json(body) }
                 if step == 399 { park.ranOut.set(true) }
                 Thread.sleep(forTimeInterval: 0.002)
             }
-            return .json(heldBody)
+            return .json(body)
         }
-        return park
+        return (a, b)
     }
 
     private func settleUntil(
