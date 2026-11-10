@@ -148,7 +148,10 @@ Routes, sidebar items (interleaved with core `nav_order` values:
 music=10 … settings=100, and placed in the sidebar's Media or Tools group
 by a page's `nav_group`; `components.jsx` `NAV_GROUPS` and
 `resolveNavTree`), badges, and browser-player source kinds all
-come from the manifest. A `plugins_changed` NOTIFY re-syncs the
+come from the manifest. Beside it the bootstrap reads the household's
+menu layout (**`GET /api/nav-layout`**, open; an admin edits it in
+Settings → System → App layout, `api/nav_layout.py`, V045), which
+`resolveNavTree` applies on top; a save pushes `nav_layout.changed`. A `plugins_changed` NOTIFY re-syncs the
 backend live and shows connected dashboards a "reload to get new
 pages" toast; upgraded plugin *web code* needs a web-process restart
 (Python can't re-import a loaded module safely).

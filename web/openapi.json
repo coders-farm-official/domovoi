@@ -717,6 +717,94 @@
         }
       }
     },
+    "/api/nav-layout": {
+      "get": {
+        "tags": [
+          "nav-layout"
+        ],
+        "summary": "Get Nav Layout",
+        "description": "Open (like the plugin manifest the shell reads beside it): the\nhousehold's menu layout, or ``layout: null`` for the default.",
+        "operationId": "get_nav_layout_api_nav_layout_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Nav Layout Api Nav Layout Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "nav-layout"
+        ],
+        "summary": "Put Nav Layout",
+        "description": "Save the household's menu (admin). 422 with the reason for a\nlayout this server won't keep; nothing is saved then.",
+        "operationId": "put_nav_layout_api_nav_layout_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Body"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Nav Layout Api Nav Layout Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "nav-layout"
+        ],
+        "summary": "Reset Nav Layout",
+        "description": "Back to the default menu (admin).",
+        "operationId": "reset_nav_layout_api_nav_layout_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Reset Nav Layout Api Nav Layout Delete"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/capabilities": {
       "get": {
         "tags": [

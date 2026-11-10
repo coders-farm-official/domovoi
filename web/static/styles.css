@@ -1972,6 +1972,58 @@ a.home-att-row:hover { background: var(--brand-soft); }
 @media (max-width: 760px) {
   .phone-bar-edit .btn-icon { width: 44px; height: 44px; }
 }
+/* Settings → App layout's Menu card (settings.jsx NavLayoutCard): the
+   editor on the left, the live preview at the right; on a phone the
+   preview comes first and the controls grow to 44px targets. */
+.nav-layout-closed { display: flex; gap: 20px; padding: 12px 16px 16px; align-items: flex-start; }
+.nav-layout-closed-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.nav-layout-edit {
+  display: grid; grid-template-columns: minmax(0, 1fr) 232px; gap: 20px;
+  padding: 12px 16px 8px; align-items: start;
+}
+.nav-layout-list { min-width: 0; }
+.nav-layout-row {
+  display: flex; align-items: center; gap: 8px; min-height: 40px;
+  border-top: 1px solid var(--border-soft);
+}
+.nav-layout-row:first-child { border-top: none; }
+.nav-layout-row.fixed { color: var(--fg-muted); }
+.nav-layout-row.head { border-top: 1px solid var(--border); }
+.nav-layout-name { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: break-word; }
+.nav-layout-input { flex: 1; min-width: 0; }
+.nav-layout-group-items { padding-left: 24px; }
+.nav-layout-group-items .nav-layout-row:first-child { border-top: 1px solid var(--border-soft); }
+.nav-layout-note { font-size: 11px; color: var(--fg-subtle); }
+.nav-layout-problem { font-size: 12px; color: var(--err-ink, var(--err)); padding: 2px 0 6px; }
+.nav-layout-actions {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 16px 14px; border-top: 1px solid var(--border-soft);
+}
+.nav-layout-preview { width: 232px; flex-shrink: 0; }
+.nav-layout-preview-box {
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--sunken);
+  padding: 6px; display: flex; flex-direction: column; gap: 1px;
+}
+.nav-layout-preview-row {
+  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px;
+  font-size: 13px; color: var(--fg-muted); border-radius: var(--r-sm);
+}
+.nav-layout-preview-row > .lab { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-layout-preview-row.brand { color: var(--fg); font-weight: 600; }
+.nav-layout-preview-row.head { color: var(--fg); }
+.nav-layout-preview-row.sub { padding-left: 32px; }
+@media (max-width: 760px) {
+  .nav-layout-closed { flex-direction: column; gap: 12px; }
+  .nav-layout-edit { grid-template-columns: minmax(0, 1fr); }
+  .nav-layout-edit .nav-layout-preview { order: -1; }
+  .nav-layout-preview { width: 100%; }
+  .nav-layout-row { flex-wrap: wrap; min-height: 44px; padding: 4px 0; }
+  .nav-layout-row .btn-icon { width: 44px; height: 44px; }
+  .nav-layout-row select, .nav-layout-row input { height: 44px !important; }
+  .nav-layout-row select { max-width: 104px !important; }
+  .nav-layout-row { gap: 4px; }
+  .nav-layout-group-items { padding-left: 12px; }
+}
 
 /* Settings → Models, the Installed list (models.jsx InstalledRow): name and
    chips on one line on a wide screen; on a phone the name gets its own line
