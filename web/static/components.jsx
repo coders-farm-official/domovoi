@@ -2167,6 +2167,46 @@ const _cfgInput = {
   background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)',
 };
 
+// Why a typed number can't be saved, worded as the server words its own
+// refusal (config_schema.coerce_and_validate), or null when it can. The
+// editors hold Save until every edited number passes, so an out-of-range
+// value is never silently capped and never sent. Off-step values are fine:
+// `step` is only how far an arrow press moves the number.
+const configFieldProblem = (f, value) => {
+  if (!f || (f.type !== 'int' && f.type !== 'float')) return null;
+  if (value == null) return null;               // untouched (e.g. not reported)
+  if (value === '' || typeof value !== 'number' || !Number.isFinite(value))
+    return f.type === 'int' ? 'expected a whole number' : 'expected a number';
+  if (f.type === 'int' && !Number.isInteger(value)) return 'expected a whole number';
+  if (f.min != null && value < f.min) return `must be at least ${f.min}`;
+  if (f.max != null && value > f.max) return `must be at most ${f.max}`;
+  return null;
+};
+
+// The edited fields of an editor whose values can't be saved yet.
+const configEditProblems = (fields, edits) => Object.keys(edits).filter((name) => {
+  const f = (fields || []).find((x) => x.name === name);
+  return !!(f && configFieldProblem(f, edits[name]));
+});
+
+// A focused number box changes its value on a mouse wheel in some browsers:
+// scrolling the page over it nudged a setting. Letting go of the focus
+// first leaves the wheel to scroll the page.
+const _cfgBlurOnWheel = (e) => {
+  const el = e.currentTarget;
+  try { if (el && document.activeElement === el) el.blur(); } catch { /* no document */ }
+};
+
+// The step the server sends (config_schema.effective_step); a server too
+// old to send one gets whole steps for ints and a twentieth of the range
+// for decimals — never the browser's 1 across a 0–1 range.
+const _cfgStep = (f) => {
+  if (typeof f.step === 'number' && f.step > 0) return f.step;
+  if (f.type === 'int') return 1;
+  if (f.min != null && f.max != null && f.max > f.min) return (f.max - f.min) / 20;
+  return 'any';
+};
+
 const ConfigField = ({ f, value, onChange, internetOff = false }) => {
   // Under INTERNET_ACCESS=never a field that needs the internet is greyed —
   // never hidden — with "needs internet"; so is each choice that does
@@ -2174,6 +2214,13 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
   const greyed = !!internetOff && !!f.needs_internet;
   const greyChoices = internetOff ? (f.needs_internet_choices || []) : [];
   const greyTitle = greyed ? NEEDS_INTERNET_TEXT : undefined;
+  // A slider only with both ends and words for them (the server sends
+  // `widget` only then too; this guards a hand-made field).
+  const isSlider = f.widget === 'slider' && f.min != null && f.max != null
+    && Array.isArray(f.slider_labels) && f.slider_labels.length === 2;
+  const problem = configFieldProblem(f, value);
+  const problemId = `cfg-${f.name}-problem`;
+  const endsId = `cfg-${f.name}-ends`;
   let input;
   if (f.type === 'bool')
     input = <input type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)}
@@ -2200,11 +2247,48 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
       })}
     </select>;
   }
-  else if (f.type === 'int' || f.type === 'float')
-    input = <input type="number" value={value ?? ''} min={f.min ?? undefined} max={f.max ?? undefined}
-                   step={f.type === 'int' ? 1 : 'any'} disabled={greyed} title={greyTitle}
-                   onChange={e => onChange(e.target.value === '' ? '' : Number(e.target.value))}
-                   style={{ ..._cfgInput, width: 110, textAlign: 'right' }}/>;
+  else if (f.type === 'int' || f.type === 'float') {
+    // Arrows and the spinner move by `step`; typing is free (an off-step
+    // value saves), and an out-of-range one is named under the row.
+    const box = (extra) => (
+      <input type="number" value={value ?? ''} min={f.min ?? undefined} max={f.max ?? undefined}
+             step={_cfgStep(f)} disabled={greyed} title={greyTitle}
+             aria-invalid={problem ? true : undefined} aria-describedby={problem ? problemId : undefined}
+             onWheel={_cfgBlurOnWheel}
+             onChange={e => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+             {...extra}/>
+    );
+    // A slider: min at the left end, max at the right, so a value outside
+    // the range can't be picked; the box beside it still takes a typed one.
+    // No reported value yet: the box alone (an empty box, not a thumb
+    // parked at one end pretending to be the setting).
+    const num = typeof value === 'number' && Number.isFinite(value) ? value : null;
+    if (isSlider && num != null) {
+      const [leftWords, rightWords] = f.slider_labels;
+      const shown = Math.min(f.max, Math.max(f.min, num));
+      const unit = f.unit ? ` ${f.unit}` : '';
+      const valueText = shown <= f.min ? `${shown}${unit}, ${leftWords}`
+        : shown >= f.max ? `${shown}${unit}, ${rightWords}` : `${shown}${unit}`;
+      input = (
+        <div className="config-slider">
+          <div className="config-slider-track">
+            <input type="range" min={f.min} max={f.max} step={_cfgStep(f)} value={shown}
+                   disabled={greyed} title={greyTitle} aria-label={f.label}
+                   aria-valuetext={valueText} aria-describedby={endsId}
+                   onChange={e => onChange(Number(e.target.value))}/>
+            <div className="config-slider-ends" id={endsId}>
+              <span>{leftWords}</span>
+              <span>{rightWords}</span>
+            </div>
+          </div>
+          {box({ 'aria-label': `${f.label}, exact value`, className: 'config-slider-number',
+                 style: { ..._cfgInput, width: 72, textAlign: 'right' } })}
+        </div>
+      );
+    } else {
+      input = box({ 'aria-label': f.label, style: { ..._cfgInput, width: 110, textAlign: 'right' } });
+    }
+  }
   else if (f.write_only) {
     // A write-only secret (the AcoustID key): the server never sends it
     // back, to anyone, so there is nothing to show but whether one is set
@@ -2239,9 +2323,11 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
   return (
     // A write-only row wraps on a narrow screen (its box below the label)
     // rather than squeezing the label under the box.
-    <div data-config-field={f.name}
+    // So does a slider row: the slider takes the width under the label
+    // rather than squeezing it (styles.css .config-field-slider).
+    <div data-config-field={f.name} className={isSlider ? 'config-field-slider' : undefined}
          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderTop: '1px solid var(--border-soft)',
-                  flexWrap: f.write_only ? 'wrap' : undefined }}>
+                  flexWrap: f.write_only || isSlider || problem ? 'wrap' : undefined }}>
       <div style={{ flex: f.write_only ? '1 1 auto' : 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 13, fontWeight: 500 }}>{f.label}</span>
         <span title={f.help} style={{ color: 'var(--fg-subtle)', cursor: 'help', display: 'inline-flex' }}>
@@ -2257,11 +2343,20 @@ const ConfigField = ({ f, value, onChange, internetOff = false }) => {
         )}
         {greyed && <NeedsInternetNote compact/>}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-                    marginLeft: f.write_only ? 'auto' : undefined }}>
+      <div className={isSlider ? 'config-field-control' : undefined}
+           style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                    marginLeft: f.write_only || isSlider ? 'auto' : undefined }}>
         {input}
         {f.unit && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', width: 34 }}>{f.unit}</span>}
       </div>
+      {problem && (
+        <div id={problemId} className="config-field-problem" role="alert"
+             style={{ flexBasis: '100%', textAlign: 'right', fontSize: 12, color: 'var(--err-ink)' }}>
+          {f.min != null && f.max != null
+            ? `${problem} (${f.min}–${f.max}${f.unit ? ` ${f.unit}` : ''}) — fix it to save`
+            : `${problem} — fix it to save`}
+        </div>
+      )}
     </div>
   );
 };

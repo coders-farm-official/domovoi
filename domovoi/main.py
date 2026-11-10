@@ -4017,6 +4017,7 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     shows it as needing an upgrade instead of offering an edit the Pi would
     write to config.toml, restart for, and then ignore. null until the
     satellite has reported."""
+    from domovoi.config_schema import widget_payload
     from domovoi.satellite_config_schema import EDITABLE_FIELDS
 
     target = app.state.active_sessions.get(room_id)
@@ -4035,6 +4036,8 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
             "min": spec.min, "max": spec.max, "choices": spec.choices,
             "choice_labels": spec.choice_labels,
             "unit": spec.unit, "help": spec.help,
+            # step (arrow keys), widget/slider_labels: config_schema.widget_payload.
+            **widget_payload(spec),
             "value": reported.get(spec.name),
             "supported": (spec.name in reported) if reported else None,
         }
@@ -6041,7 +6044,7 @@ async def admin_get_config(
 
     from domovoi import internet_profile
     from domovoi.config import PROFILE_FIELD_NAMES
-    from domovoi.config_schema import EDITABLE_FIELDS, mask_secret
+    from domovoi.config_schema import EDITABLE_FIELDS, mask_secret, widget_payload
 
     wants = (section or "").strip().lower() or None
     if wants not in (None, "common", "advanced"):
@@ -6094,6 +6097,9 @@ async def admin_get_config(
                 "choices": spec.choices,
                 "unit": spec.unit,
                 "help": spec.help,
+                # How far an arrow press moves a number (config_schema
+                # effective_step), and a slider with words for its ends.
+                **widget_payload(spec),
                 "secret": spec.secret,
                 # ``masked`` says the value in this row is the mask, not
                 # the setting — the page renders it read-only rather than

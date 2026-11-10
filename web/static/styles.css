@@ -303,6 +303,30 @@
 /* Browser music player — brand-tinted range inputs (volume, EQ, seek). */
 .main input[type="range"] { accent-color: var(--brand); }
 .eq-slider { accent-color: var(--brand); cursor: pointer; }
+
+/* Config editors (ConfigField, components.jsx): a sensitivity-style
+   setting as a slider, its two ends in words under the track and the exact
+   number beside it. The row wraps, so on a phone the slider takes the full
+   width under the label. */
+.config-field-slider .config-field-control { flex: 1 1 280px; max-width: 420px; min-width: 0; }
+.config-slider { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.config-slider-track { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.config-slider input[type="range"] {
+  width: 100%; margin: 0; height: 24px; accent-color: var(--brand); cursor: pointer;
+}
+.config-slider input[type="range"]:disabled { cursor: not-allowed; }
+.config-slider input[type="range"]:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+.config-slider-ends {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 11px; line-height: 1.3; color: var(--fg-muted);
+}
+.config-slider-ends span:last-child { text-align: right; }
+@media (max-width: 760px) {
+  .config-field-slider .config-field-control { flex-basis: 100%; max-width: none; margin-left: 0 !important; }
+}
 .page {
   max-width: 1280px;
   margin: 0 auto;
