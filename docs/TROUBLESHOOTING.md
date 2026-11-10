@@ -17,6 +17,7 @@ Symptom → cause → fix, grouped by area. Start with [Which logs to check](#wh
 - [The app or dashboard says "too many wrong tokens"](#the-app-or-dashboard-says-too-many-wrong-tokens)
 - [GPU / CUDA issues](#gpu--cuda-issues)
 - [Docker issues](#docker-issues)
+- [The server's memory looks full](#the-servers-memory-looks-full)
 - [Which logs to check](#which-logs-to-check)
 
 ---
@@ -33,6 +34,7 @@ The installer runs the server inside a private Linux (WSL2) that belongs to a hi
 | Setup stopped halfway | Run Setup again: it carries on where it stopped |
 | The setup code expired, or you lost it before claiming the admin account | Run Setup again: it restarts Domovoi, which writes a fresh code, and shows it on its last page |
 | The browser shows an old dashboard, or claiming the admin account says "X-Requested-With header required" | Use **Open Domovoi** on Setup's last page: its address gets past the old dashboard's cached copy |
+| Windows is short of memory while Domovoi runs | Settings → System → Health → **memory** shows what inside Domovoi uses it; see [The server's memory looks full](#the-servers-memory-looks-full) |
 
 More: [When something goes wrong](WINDOWS_HOST.md#when-something-goes-wrong).
 
@@ -360,6 +362,17 @@ Compose commands run from the `domovoi/` directory (where `docker-compose.yml` l
 | "I checked online but couldn't find a clear answer to that" | The search ran and found nothing usable | Rephrase, or ask more specifically; this reply now only comes after a search that really ran |
 | MPD containers won't start after changing `MUSIC_DIR` or Docker Desktop file-sharing | Stale mounts / unshared drive | Share the drive in Docker Desktop settings; remove the `domovoi-mpd-*` containers so the provisioner recreates them with current paths |
 | Chat mode won't start | Letta container not up | Chat mode is off by default; enabling `CHAT_MODE_ENABLED` assumes `docker compose up letta` and the required Ollama models (including the embedding model) are pulled |
+
+## The server's memory looks full
+
+**Where to look:** Settings → System → Health → Server → **memory** (signed in as the admin). The row reads like *using 9.4 GB for programs · 31 GB file cache (handed back when needed)*; **what uses it** opens the breakdown, largest first: each Domovoi service (the server, the dashboard, the updater, Ollama when it runs as a service on that box), each Docker container under a plain name (the music player for a room, the database, the web search helper, a plugin's container, the wake-word trainer; anything else is "other container" with its name), and the few other programs using the most, by name only. A source that couldn't be read in time is left out with a line saying so. The numbers come from the server's `/proc/meminfo`, `systemctl show -p MemoryCurrent`, `docker stats --no-stream` and `/proc/<pid>/status`; a Windows or Mac dev server says *not available on this system*.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| The total looks nearly used up, but Health says most of it is **file cache** | Normal. Linux keeps files it read lately (music, models, the database) in memory that nothing else is using, and hands it to programs the moment they ask | Nothing to do. Only *for programs* is memory programs hold; Health turns amber (*running low*) when less than a tenth is left for programs |
+| **On the Windows installer:** Windows is short of memory (Task Manager shows a big *Memory Compression*, the disk busy with paging) while Domovoi runs | Domovoi's private Linux is a virtual machine. It may use up to the share the installer gave it (your RAM minus 8 GB, at most 64 GB; Health says *Domovoi may use up to about N GB*), and file cache inside it counts as used to Windows. Windows gets that cache back once the VM has been idle for a while (`autoMemoryReclaim=dropCache` in the installer's `.wslconfig`), not while it is busy. Restarting Domovoi doesn't free it: the cache, the containers and the VM stay | Open the breakdown first: a large **wake-word trainer** (a training run in progress) or **other container** is a real user of memory, and so is a large Domovoi service. If programs use little and the cache is large, nothing is wrong inside Domovoi; the VM hands the cache back once it is idle. Domovoi has no button to hand it back sooner yet |
+| A **music player for a room** uses hundreds of MB | MPD's database of the library and its buffer | Normal for a large library. One per room |
+| **Programs** keep growing and Health stays amber | Something really is holding memory | The breakdown's largest line names it. A Domovoi service that grows for days: restart Domovoi (Settings → System → About & updates) and report it with **Save logs for support** |
 
 ## Questions land on the wrong handler
 

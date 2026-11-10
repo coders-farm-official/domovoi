@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-10 — what uses the server's memory
+
+Dashboard and core. Nothing to run.
+
+* **Settings → System → Health → Server → memory** (admin) says how much
+  memory programs use and how much is file cache, e.g. *using 9.4 GB for
+  programs · 31 GB file cache (handed back when needed)*. **what uses it**
+  lists each Domovoi service, each container (the music player for a room,
+  the database, the search helper, a plugin's container, the wake-word
+  trainer) and the largest other programs, largest first. On the Windows
+  installer it also says how much of the PC's memory Domovoi may use, and
+  that Windows gets file cache back once Domovoi is idle
+  ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)).
+  It turns amber only when less than a tenth is left for programs, which
+  also puts it on Home's "needs attention" list.
+
 ## 2026-11-09 — no more rooms stuck "thinking"
 
 When speech recognition on the Domovoi server got stuck, every room sat

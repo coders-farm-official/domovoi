@@ -42,6 +42,28 @@ HOUSEHOLD = {"known": True, "unclaimed": False, "paired": True, "isAdmin": False
 HEALTH_OK = {"status": "ok", "db_reachable": True, "domovoi_reachable": True, "stt": "ready"}
 
 
+KB = 1024
+MB = 1024 * KB
+GB = 1024 * MB
+# The Windows installer's distro, cache-heavy (core /v1/admin/memory).
+MEM_WSL = {
+    "available": True, "host": "wsl", "checked_at": "2026-11-09T10:00:00Z",
+    "total_bytes": 65842876 * KB, "programs_bytes": 11719420 * KB, "cache_bytes": 49587220 * KB,
+    "shared_bytes": 1048576 * KB, "free_bytes": 2345678 * KB, "available_bytes": 54123456 * KB,
+    "swap_total_bytes": 4 * GB, "swap_used_bytes": 1 * GB,
+    "breakdown": [
+        {"kind": "service", "name": "domovoi-core.service", "label": "Domovoi server", "bytes": 2 * GB},
+        {"kind": "container", "name": "domovoi-mpd-kitchen", "label": "music player for kitchen", "bytes": 40 * MB},
+        {"kind": "container", "name": "domovoi-wake-train", "label": "wake-word trainer", "bytes": 9 * GB},
+        {"kind": "container", "name": "someones-own-app", "label": "other container", "bytes": 300 * MB},
+        {"kind": "process", "name": "python3", "label": "python3", "bytes": 700 * MB, "count": 2},
+    ],
+    "missing": [{"source": "processes", "why": "only some processes were looked at in time"}],
+}
+MEM_LINUX_LOW = {**MEM_WSL, "host": "linux", "available_bytes": 3 * GB, "breakdown": [], "missing": []}
+MEM_OFF = {"available": False, "host": "windows", "why": "not available on this system"}
+
+
 def room(rid: str, status: str = "online", **kw) -> dict:
     return {"room_id": rid, "status": status, "sat_type": "voice", "last_connected_at": "2026-10-21T08:00:00Z", **kw}
 
@@ -56,6 +78,7 @@ GREEN = {
     "hardware": {"disk": {"percent": 41}}, "config": {"internet_access": "sometimes"},
     "internet": {"answer": "sometimes", "connectivity": {"online": True, "reason": "connected"}},
     "guard": {"loaded": True, "tier": "household", "data": {"incidents": [], "banner": {"show": False}}},
+    "memory": MEM_WSL,
 }
 BAD = {
     **GREEN,
@@ -71,7 +94,9 @@ BAD = {
 CORE_DOWN = {**GREEN, "health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False}}
 UNREAD = {"viewer": {**ADMIN, "known": False}, "health": None, "rooms": None, "plugins": None, "pluginErrors": {}, "acq": None,
           "approvals": None, "pending": None, "version": None, "hardware": None, "config": None,
-          "internet": None, "guard": {"loaded": False}}
+          "internet": None, "guard": {"loaded": False}, "memory": None}
+MEM_LOW = {**GREEN, "memory": MEM_LINUX_LOW}
+MEM_NA = {**GREEN, "memory": MEM_OFF}
 
 _CHECKS = r"""
   const w = h.global('window');
@@ -117,6 +142,27 @@ _PANEL = r"""
            text: h.text().join(' '), fetched: h.hookCalls };
 """
 
+_MEMORY = r"""
+  h.render(); await h.settle(); h.rerender(); await h.settle(); h.rerender();
+  const cls = (e) => String((e && e.props && e.props.className) || '').split(' ');
+  const row = h.find((e) => cls(e).includes('health-row') && e.props['data-check'] === 'memory');
+  const folded = h.findAll((e) => cls(e).includes('health-mem')).length;
+  const toggle = () => h.find((e) => e.type === 'button' && cls(e).includes('health-mem-toggle'));
+  const before = toggle() ? [toggle().props['aria-expanded'], toggle().text] : null;
+  h.click((e) => e.type === 'button' && cls(e).includes('health-mem-toggle')); await h.settle(); h.rerender();
+  const items = h.findAll((e) => cls(e).includes('health-mem-item'))
+    .map((e) => [e.props['data-kind'], h.findAll((x) => h.ancestors(x).includes(e) && cls(x).includes('health-mem-name'))
+      .map((x) => x.text).join('')]);
+  const text = h.text().join(' ');
+  const notes = h.findAll((e) => e.props && e.props['data-mem-note']).map((e) => e.props['data-mem-note']);
+  const missing = h.findAll((e) => e.props && e.props['data-mem-missing']).map((e) => e.props['data-mem-missing']);
+  const after = toggle() ? toggle().props['aria-expanded'] : null;
+  h.click((e) => e.type === 'button' && cls(e).includes('health-mem-toggle')); await h.settle(); h.rerender();
+  const refolded = h.findAll((e) => cls(e).includes('health-mem')).length;
+  return { tone: row ? row.props['data-tone'] : null, folded, before, after, items, notes, missing, text,
+           refolded, fetched: h.hookCalls };
+"""
+
 API_GREEN = {
     "GET /api/config": {"internet_access": "always", "home_problems_visibility": "everyone"},
     "GET /api/health": HEALTH_OK,
@@ -127,13 +173,15 @@ API_GREEN = {
     "GET /api/config/version": GREEN["version"], "GET /api/models/hardware": {"disk": {"percent": 30}},
     "GET /api/config/internet": GREEN["internet"],
     "GET /api/containers/incidents": {"incidents": [], "banner": {"show": False}},
+    "GET /api/models/memory": MEM_WSL,
 }
 
 SCENARIOS: dict[str, dict] = {
     "checks": {
         "files": [COMPONENTS, HEALTH, HOME], "component": "(window.HomeAttentionRows = HomeAttentionRows, HomePage)",
         "setup": "window.__CASES = " + json.dumps({"green": GREEN, "bad": BAD, "core_down": CORE_DOWN,
-                                                   "unread": UNREAD}) + ";",
+                                                   "unread": UNREAD, "mem_low": MEM_LOW,
+                                                   "mem_na": MEM_NA}) + ";",
         "script": _CHECKS,
     },
     "search": {
@@ -143,6 +191,16 @@ SCENARIOS: dict[str, dict] = {
     "panel_admin": {
         "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
         "api": API_GREEN, "script": _PANEL,
+    },
+    "memory_wsl": {
+        "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
+        "api": API_GREEN, "script": _MEMORY,
+    },
+    "memory_linux_low": {
+        "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
+        "api": {**API_GREEN, "GET /api/models/memory": {**MEM_LINUX_LOW, "breakdown": MEM_WSL["breakdown"][:1],
+                                                        "cache_bytes": 2 * GB}},
+        "script": _MEMORY,
     },
     "panel_household_admins_only": {
         "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
@@ -179,7 +237,7 @@ def _src(name: str) -> str:
 def test_health_shows_every_check_green_or_not(driven) -> None:
     green = driven["checks"]["green"]
     keys = [c["key"] for c in green["checks"]]
-    assert keys == ["claim", "core", "db", "stt", "disk", "version", "update", "restart", "rooms", "offline",
+    assert keys == ["claim", "core", "db", "stt", "disk", "memory", "version", "update", "restart", "rooms", "offline",
                     "waiting", "kiosk", "approvals", "adopt", "plugins", "acq", "internet", "connection",
                     "containers"]
     parts = {c["part"] for c in green["checks"]}
@@ -228,7 +286,52 @@ def test_a_down_core_is_the_only_story_and_the_rest_wait(driven) -> None:
     down = driven["checks"]["core_down"]
     assert [r["key"] for r in down["home"]] == ["core"]
     waiting = [c["key"] for c in down["checks"] if c["text"] == "waiting for the Domovoi server"]
-    assert {"stt", "disk", "rooms", "offline", "plugins", "acq", "internet", "connection"} <= set(waiting)
+    assert {"stt", "disk", "memory", "rooms", "offline", "plugins", "acq", "internet", "connection"} <= set(waiting)
+
+
+# ─── memory ──────────────────────────────────────────────────────────────
+
+
+def test_the_memory_row_says_programs_and_cache_in_plain_words(driven) -> None:
+    by = {c["key"]: c for c in driven["checks"]["green"]["checks"]}
+    assert by["memory"]["part"] == "server" and by["memory"]["scope"] == "admin"
+    assert by["memory"]["tone"] == "ok"
+    assert by["memory"]["text"] == "using 11 GB for programs · 47 GB file cache (handed back when needed)"
+    # Short of memory for programs: amber, on Home too.
+    low = {c["key"]: c for c in driven["checks"]["mem_low"]["checks"]}["memory"]
+    assert low["tone"] == "warn" and low["text"] == "running low · 3.0 GB of 63 GB left for programs"
+    assert ("memory", "warn", "#settings/health/server") in [
+        (r["key"], r["tone"], r["href"]) for r in driven["checks"]["mem_low"]["home"]]
+    na = {c["key"]: c for c in driven["checks"]["mem_na"]["checks"]}["memory"]
+    assert na["tone"] == "idle" and na["text"] == "not available on this system"
+    assert {c["key"]: c for c in driven["checks"]["unread"]["checks"]}["memory"]["text"] == "not checked yet"
+
+
+def test_the_memory_row_unfolds_into_what_uses_it_largest_first(driven) -> None:
+    o = driven["memory_wsl"]
+    assert o["tone"] == "ok" and o["folded"] == 0
+    assert o["before"] == [False, "what uses it"] and o["after"] is True
+    assert o["items"] == [
+        ["container", "wake-word trainer"], ["service", "Domovoi server"], ["process", "python3"],
+        ["container", "other container"], ["container", "music player for kitchen"]]
+    # The honest guidance: the cache is normal; on Windows, given back when idle.
+    assert o["notes"] == ["limit", "cache"]
+    assert "Domovoi may use up to about 63 GB of this PC’s memory" in o["text"]
+    assert "programs get it back the moment they need it" in o["text"]
+    assert "Windows gets it back once Domovoi has been idle" in o["text"]
+    assert "63 GB in all · 2.2 GB unused · 1.0 GB shared · 1.0 GB moved to swap" in o["text"]
+    assert "someones-own-app" in o["text"]                  # an unknown container is named
+    assert "2 running" in o["text"]
+    assert o["missing"] == ["processes"] and "couldn’t check other programs" in o["text"]
+    assert o["refolded"] == 0
+    assert "/api/models/memory" in o["fetched"]
+
+
+def test_no_cache_note_when_programs_use_the_memory(driven) -> None:
+    o = driven["memory_linux_low"]
+    assert o["tone"] == "warn"
+    assert o["notes"] == []                                  # not WSL, not cache-heavy
+    assert o["missing"] == []
 
 
 def test_home_holds_no_rules_of_its_own() -> None:
@@ -260,7 +363,7 @@ def test_a_household_member_in_an_admins_only_house_sees_no_details(driven) -> N
     assert "the admin sees" in o["text"]
     # The admin reads are never made for anyone else.
     for admin_read in ("/api/config/version", "/api/models/hardware", "/api/config/internet",
-                       "/api/satellites/approvals"):
+                       "/api/satellites/approvals", "/api/models/memory"):
         assert admin_read not in o["fetched"], admin_read
 
 
