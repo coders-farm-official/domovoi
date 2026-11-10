@@ -258,6 +258,14 @@ public final class ShellModel {
             wait: wait,
             publish: { verdict in relay.send(verdict) }
         )
+        // Unclaimed server (UnclaimedServer.swift): each status read is sent
+        // to the address it was asked of, and its answer is checked against
+        // the store's current address when it lands.
+        self.unclaimed = UnclaimedServerModel(
+            server: container.store.serverURL,
+            read: { asked in await UnclaimedServerModel.read(using: client, server: asked) },
+            activeServer: { [container] in container.store.serverURL }
+        )
         // Every stored property is set, so `self` may be captured from here
         // on. Both sinks are connected after the fact rather than passed into
         // the initialisers above, because both have to reach back into this
@@ -282,6 +290,8 @@ public final class ShellModel {
         self.selectionSink = container.onServerSelectionChange { [weak self] in
             Task { @MainActor in self?.refresh() }
         }
+        // Unclaimed server: "still not set up" is a toast like any other.
+        unclaimed.say = { [weak self] text in self?.showToast(text) }
         // A launch straight onto a waiting card has to count down too, and
         // the first `.active` is not a return, so `scenePhaseChanged` will
         // not refresh.
@@ -322,6 +332,19 @@ public final class ShellModel {
     }
 
     let verdicts: VerdictRelay
+
+    /// Whether the active server has been claimed (`UnclaimedServer.swift`,
+    /// Android's `AppShell.kt:165-197`). Asked when a server is picked
+    /// (``refresh()``), when the socket comes or goes
+    /// (``socketChanged(connected:sendRegister:)``), when the server comes
+    /// back into reach, on every real return to the screen
+    /// (``scenePhaseChanged(to:sendRegister:)``) and on `Check again`; the
+    /// blocker is drawn by `AppShellView` from
+    /// ``unclaimedReplaces(_:blocks:)``. Its own file carries the rules and
+    /// the per-server keying; each hook here (`init`, ``refresh()``, the
+    /// socket, the verdict, the scene phase) is a line or two marked
+    /// "Unclaimed server", so the shell's own code is unchanged around them.
+    public let unclaimed: UnclaimedServerModel
 
     // MARK: - what is drawn
 
@@ -796,6 +819,7 @@ public final class ShellModel {
             // Why `.inactive` needs none of this: it does not suspend the
             // app, so no callback is missed and `connected` *is* believable.
             // The re-mint earns its cost only against a frozen app.
+            let returning = departed
             if departed {
                 departed = false
                 // Before `refresh()`, because `connected` is **not to be
@@ -817,6 +841,12 @@ public final class ShellModel {
             // address and `wake()` is a no-op on a socket that is not parked.
             if was != .active {
                 refresh()
+            }
+            // Unclaimed server: a real return (Android's `onStart`), after
+            // `refresh()` so the read is of the server the app came back to.
+            // The owner may have just claimed it in a browser.
+            if returning {
+                unclaimed.ask(.foreground, unreachable: unreachable)
             }
         case .inactive, .background:
             // `.inactive` is a step on the way out and also a transient state
@@ -885,6 +915,12 @@ public final class ShellModel {
         // same place: `AppContainer.onServerChange`'s own note says why this
         // is a registry rather than a line in Home.
         container.serverAddressChanged()
+        // Unclaimed server: a newly picked address starts from "not known"
+        // and is asked. An unchanged address is not — this runs once a
+        // second under the token-trouble countdown.
+        if unclaimed.serverIs(inputs.serverURL) {
+            unclaimed.ask(.serverPicked, unreachable: unreachable)
+        }
     }
 
     /// Whether the token-trouble card's countdown is actually being written.
@@ -904,6 +940,10 @@ public final class ShellModel {
     public func socketChanged(connected: Bool, sendRegister: (@MainActor () -> Void)? = nil) {
         self.connected = connected
         updateReachability()
+        // Unclaimed server: the socket coming or going is one of Android's
+        // keys, and this is also the launch read — `watchSocket()` reports
+        // the socket's current value once at startup.
+        unclaimed.ask(.socket, unreachable: unreachable)
         if connected, let sendRegister, registerIfDue(reason: .changed) {
             sendRegister()
         }
@@ -1361,9 +1401,18 @@ public final class ShellModel {
     /// back, which a probe's cadence could thrash — so that rescue is bounded
     /// by ``stateSocketConnectBudgetMs`` and the bound is measured
     /// (`testWakingASocketThatIsStillConnectingDoesNotThrashIt`).
-    private func verdictArrived(_ verdict: Bool) {
+    /// Internal rather than private so `UnclaimedServerTests` can pin the
+    /// back-in-reach guard below: the loop publishes a verdict on **every**
+    /// probe while the socket is down (``askWhileOnScreen``), so without
+    /// `was` an unpaired phone beside an answering server would send a
+    /// status read every probe, for ever.
+    func verdictArrived(_ verdict: Bool) {
+        let was = unreachable
         unreachable = verdict
         container.socket.wake()
+        // Unclaimed server: back in reach is a new chance to ask (Android's
+        // `unreachable` key); a house out of reach is never asked.
+        if was, !verdict { unclaimed.ask(.reachable, unreachable: false) }
     }
 
     /// The network picture changed.
