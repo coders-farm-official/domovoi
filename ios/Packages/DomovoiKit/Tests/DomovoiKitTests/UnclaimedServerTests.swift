@@ -317,7 +317,10 @@ final class UnclaimedServerTests: XCTestCase {
         }
         let (shell, store) = shellRig()
         XCTAssertTrue(store.setServerURL(other))
-        let answer = await UnclaimedServerModel.read(using: shell.container.client, server: server)
+        guard let answer = await readStatus(shell.container.client, server: server, "the real read of A") else {
+            shell.stop()
+            return
+        }
         XCTAssertEqual(false, answer, "A's own answer")
         let hosts = StubURLProtocol.recorded.filter { $0.url?.path == authStatusPath }.map { $0.url?.host ?? "" }
         XCTAssertEqual(["10.0.0.42"], hosts, "sent to A, not to the client's current server B")
@@ -343,17 +346,23 @@ final class UnclaimedServerTests: XCTestCase {
         }
         let (shell, _) = shellRig()
 
-        let refused = await UnclaimedServerModel.read(using: shell.container.client, server: server)
+        guard let refused = await readStatus(shell.container.client, server: server, "the read refused 401") else {
+            shell.stop()
+            return
+        }
         XCTAssertNil(refused, "a 401 carrying setup_complete: false is a refusal, not an answer")
-        await shell.unclaimed.ask(.socket, unreachable: false)?.value
+        await land(shell.unclaimed.ask(.socket, unreachable: false), "the shell's read refused 401")
         XCTAssertNil(shell.unclaimed.setupComplete)
         XCTAssertFalse(shell.unclaimed.blocks, "a refusal never blocks the house")
         XCTAssertFalse(shell.container.client.pairingRequired, "an untracked read raises no pairing screen")
 
         html.set(true)
-        let page = await UnclaimedServerModel.read(using: shell.container.client, server: server)
+        guard let page = await readStatus(shell.container.client, server: server, "the read answered HTML") else {
+            shell.stop()
+            return
+        }
         XCTAssertNil(page, "a 200 that is not JSON is not an answer")
-        await shell.unclaimed.ask(.socket, unreachable: false)?.value
+        await land(shell.unclaimed.ask(.socket, unreachable: false), "the shell's read answered HTML")
         XCTAssertNil(shell.unclaimed.setupComplete)
         XCTAssertFalse(shell.unclaimed.blocks, "a page that is not Domovoi never blocks the house")
         XCTAssertEqual(
@@ -388,7 +397,7 @@ final class UnclaimedServerTests: XCTestCase {
 
         shell.verdictArrived(false)
         XCTAssertEqual(before + 1, shell.unclaimed.readsSent, "and the next probe's verdict asks nothing")
-        await settleUntil { !shell.unclaimed.checking }
+        await settleUntil("every status read out to have landed") { !shell.unclaimed.checking }
         shell.stop()
     }
 
@@ -409,21 +418,21 @@ final class UnclaimedServerTests: XCTestCase {
 
         let pending = shell.unclaimed.ask(.socket, unreachable: false)
         XCTAssertNotNil(pending)
-        await settleUntil { parks.a.arrived.current }
+        await settleUntil("server A's read to reach the stub") { parks.a.arrived.current }
 
         switchTo(other, store: store, shell: shell)
         XCTAssertTrue(shell.unclaimed.checking, "B's own read is out")
 
         parks.a.release.set(true)
-        await pending?.value
+        await land(pending, "server A's held read")
         XCTAssertFalse(parks.a.ranOut.current, "A's answer landed; it did not time out")
         XCTAssertNil(shell.unclaimed.setupComplete, "server A's false is not written under server B")
         XCTAssertFalse(shell.unclaimed.blocks, "server A's false is not about server B")
         XCTAssertTrue(shell.unclaimed.checking, "and it did not end B's checking…")
 
-        await settleUntil { parks.b.arrived.current }
+        await settleUntil("server B's read to reach the stub") { parks.b.arrived.current }
         parks.b.release.set(true)
-        await settleUntil { !shell.unclaimed.checking }
+        await settleUntil("every status read out to have landed") { !shell.unclaimed.checking }
         XCTAssertFalse(parks.b.ranOut.current, "B's answer landed; it did not time out")
         XCTAssertEqual(true, shell.unclaimed.setupComplete, "B's own answer lands through the same plumbing")
         XCTAssertFalse(unclaimedReplaces(shell.screen, blocks: shell.unclaimed.blocks))
@@ -442,18 +451,18 @@ final class UnclaimedServerTests: XCTestCase {
         let (shell, store) = shellRig()
 
         let pending = shell.unclaimed.ask(.socket, unreachable: false)
-        await settleUntil { parks.a.arrived.current }
+        await settleUntil("server A's read to reach the stub") { parks.a.arrived.current }
 
         switchTo(other, store: store, shell: shell)
 
         parks.a.release.set(true)
-        await pending?.value
+        await land(pending, "server A's held read")
         XCTAssertFalse(parks.a.ranOut.current, "A's answer landed; it did not time out")
         XCTAssertNil(shell.unclaimed.setupComplete, "server A's true does not claim server B")
 
-        await settleUntil { parks.b.arrived.current }
+        await settleUntil("server B's read to reach the stub") { parks.b.arrived.current }
         parks.b.release.set(true)
-        await settleUntil { !shell.unclaimed.checking }
+        await settleUntil("every status read out to have landed") { !shell.unclaimed.checking }
         XCTAssertFalse(parks.b.ranOut.current, "B's answer landed; it did not time out")
         XCTAssertTrue(shell.unclaimed.blocks, "B said false: B is blocked")
         XCTAssertTrue(unclaimedReplaces(shell.screen, blocks: shell.unclaimed.blocks))
@@ -470,12 +479,12 @@ final class UnclaimedServerTests: XCTestCase {
 
         shell.socketChanged(connected: true)
         XCTAssertEqual(1, shell.unclaimed.readsSent, "the socket came up (and this is the launch read)")
-        await settleUntil { !shell.unclaimed.checking }
+        await settleUntil("every status read out to have landed") { !shell.unclaimed.checking }
         XCTAssertTrue(shell.unclaimed.blocks)
 
         shell.socketChanged(connected: false)
         XCTAssertEqual(2, shell.unclaimed.readsSent, "the socket went down")
-        await settleUntil { !shell.unclaimed.checking }
+        await settleUntil("every status read out to have landed") { !shell.unclaimed.checking }
 
         shell.refresh()
         XCTAssertEqual(2, shell.unclaimed.readsSent, "the same server: the countdown's refresh asks nothing")
@@ -488,12 +497,12 @@ final class UnclaimedServerTests: XCTestCase {
         shell.scenePhaseChanged(to: .inactive)
         shell.scenePhaseChanged(to: .active)
         XCTAssertEqual(3, shell.unclaimed.readsSent, "back on screen: the owner may have just claimed it")
-        await settleUntil { !shell.unclaimed.checking }
+        await settleUntil("every status read out to have landed") { !shell.unclaimed.checking }
 
         switchTo(other, store: store, shell: shell)
         XCTAssertEqual(4, shell.unclaimed.readsSent, "a new server is asked")
         XCTAssertNil(shell.unclaimed.setupComplete, "and starts from not known, as remember(serverUrl) does")
-        await settleUntil { !shell.unclaimed.checking }
+        await settleUntil("every status read out to have landed") { !shell.unclaimed.checking }
         XCTAssertTrue(shell.unclaimed.blocks)
         shell.stop()
     }
@@ -502,10 +511,10 @@ final class UnclaimedServerTests: XCTestCase {
     func testShell_CheckAgainOnAStillUnclaimedHouseSaysSo() async {
         StubURLProtocol.dispatch { _ in .json(#"{"setup_complete": false}"#) }
         let (shell, _) = shellRig()
-        await shell.unclaimed.ask(.socket, unreachable: false)?.value
+        await land(shell.unclaimed.ask(.socket, unreachable: false), "the socket's read")
         XCTAssertNil(shell.toast, "the socket's read is quiet")
 
-        await shell.unclaimed.checkAgain(unreachable: shell.unreachable)?.value
+        await land(shell.unclaimed.checkAgain(unreachable: shell.unreachable), "Check again's read")
         XCTAssertEqual(UnclaimedServerStrings.still, shell.toast?.text)
         shell.stop()
     }
@@ -537,30 +546,62 @@ final class UnclaimedServerTests: XCTestCase {
             self.model = model
         }
 
-        /// Answer the oldest read still out, then wait for its task.
+        /// Answer the oldest read still out, then wait -- **bounded** -- for
+        /// `task` to land.
+        ///
+        /// Bounded because the test picks which continuation to resume and
+        /// `task` is the read it expects that to be: if they are not the
+        /// same read, `task` never resumes, and an unbounded `await
+        /// task.value` parks the whole suite (a pkgtest run on 2026-11-10
+        /// sat for 20 minutes right after `TrustBookTests`, with this class
+        /// next). A miss now fails the case, says which wait it was, and
+        /// resumes every read still out with nil so nothing is left parked.
         @MainActor
-        func answer(oldest value: Bool?, _ task: Task<Void, Never>?) async {
-            await waitForReads()
-            XCTAssertTrue(reads.answerOldest(value), "there was a read to answer")
-            await task?.value
+        func answer(
+            oldest value: Bool?,
+            _ task: Task<Void, Never>?,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) async {
+            guard await waitForReads(file: file, line: line) else { return }
+            XCTAssertTrue(reads.answerOldest(value), "there was a read to answer", file: file, line: line)
+            await land(task, "the read answered oldest-first (\(String(describing: value)))", file: file, line: line)
         }
 
-        /// Answer the newest read still out, then wait for its task.
+        /// Answer the newest read still out, then wait -- bounded -- for
+        /// `task` to land.
         @MainActor
-        func answer(newest value: Bool?, _ task: Task<Void, Never>?) async {
-            await waitForReads()
-            XCTAssertTrue(reads.answerNewest(value), "there was a read to answer")
-            await task?.value
+        func answer(
+            newest value: Bool?,
+            _ task: Task<Void, Never>?,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) async {
+            guard await waitForReads(file: file, line: line) else { return }
+            XCTAssertTrue(reads.answerNewest(value), "there was a read to answer", file: file, line: line)
+            await land(task, "the read answered newest-first (\(String(describing: value)))", file: file, line: line)
         }
 
-        /// Every task started so far has reached the read. Bounded.
         @MainActor
-        private func waitForReads() async {
-            for _ in 0..<settleYieldLimit {
-                if reads.started >= model.readsSent { return }
-                await Task.yield()
+        private func land(_ task: Task<Void, Never>?, _ what: String, file: StaticString, line: UInt) async {
+            let landed = await finishes(task, within: unclaimedWaitSeconds, what, file: file, line: line)
+            if !landed {
+                // Unstick whatever is still parked, so the case ends rather
+                // than leaving a task suspended on a continuation for ever.
+                reads.drain()
             }
-            XCTFail("a read never reached the server in \(settleYieldLimit) yields")
+        }
+
+        /// Every task started so far has reached the scripted server.
+        /// Bounded by the clock, not by a count of yields.
+        @MainActor
+        private func waitForReads(file: StaticString, line: UInt) async -> Bool {
+            let reached = await settles(within: unclaimedWaitSeconds, file: file, line: line, {
+                "every read the model sent (\(model.readsSent)) to reach the scripted server "
+                    + "(\(reads.started) did)"
+            }) { reads.started >= model.readsSent }
+            if !reached { reads.drain() }
+            return reached
         }
     }
 
@@ -617,17 +658,108 @@ final class UnclaimedServerTests: XCTestCase {
         return (a, b)
     }
 
+    /// Bounded by the clock: a condition that never comes fails the case
+    /// naming `what`, rather than spinning a count of yields that a loaded
+    /// Mac can use up before a 1 s round trip has even answered.
     private func settleUntil(
-        _ done: @MainActor () -> Bool,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ done: @MainActor () -> Bool
+    ) async {
+        _ = await settles(within: unclaimedWaitSeconds, file: file, line: line, { what }, done)
+    }
+
+    /// `task` to its end, bounded; false (and a failure naming `what`) when
+    /// it did not get there.
+    @discardableResult
+    private func land(
+        _ task: Task<Void, Never>?,
+        _ what: String,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) async {
-        for _ in 0..<settleYieldLimit {
-            if done() { return }
-            await Task.yield()
-        }
-        XCTFail("never settled in \(settleYieldLimit) yields", file: file, line: line)
+    ) async -> Bool {
+        await finishes(task, within: unclaimedWaitSeconds, what, file: file, line: line)
     }
+
+    /// One real status read through a real client, bounded. `.some(nil)` is
+    /// "the read answered nil"; `nil` is "it never came back" (and failed).
+    private func readStatus(
+        _ client: DomovoiClient,
+        server: String,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async -> Bool?? {
+        let answer = Shared<Bool??>(nil)
+        let task = Task { @MainActor in
+            answer.set(.some(await UnclaimedServerModel.read(using: client, server: server)))
+        }
+        guard await finishes(task, within: unclaimedWaitSeconds, what, file: file, line: line) else {
+            task.cancel()
+            return nil
+        }
+        return answer.current
+    }
+}
+
+/// How long any one wait in `UnclaimedServerTests` may take before it fails
+/// the case. Every network leg in these rigs is under the stub session's 1 s
+/// timeout and every park is bounded at 0.8 s, so 10 s is only ever reached
+/// by a wait that is never going to end.
+let unclaimedWaitSeconds: Double = 10
+
+/// Wait for `task` to finish, **by the clock**: true when it did, false and
+/// a failure naming `what` when `seconds` passed first. The task itself is
+/// left alone -- cancelling it would not resume a continuation it is parked
+/// on -- and the caller decides how to unstick it.
+@MainActor
+func finishes(
+    _ task: Task<Void, Never>?,
+    within seconds: Double,
+    _ what: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async -> Bool {
+    guard let task else { return true }
+    let done = Shared(false)
+    // A watcher, so the test never awaits `task.value` itself: an `await` on
+    // a task that never ends is the one wait with no way out.
+    let watcher = Task { @MainActor in
+        await task.value
+        done.set(true)
+    }
+    let deadline = Date().addingTimeInterval(seconds)
+    while !done.current {
+        if Date() >= deadline {
+            watcher.cancel()
+            XCTFail("waited \(seconds) s for \(what) to finish, and it never did", file: file, line: line)
+            return false
+        }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return true
+}
+
+/// Poll `done` until it holds, **by the clock**: true when it did, false and
+/// a failure naming what was awaited when `seconds` passed first.
+@MainActor
+func settles(
+    within seconds: Double,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ what: @MainActor () -> String,
+    _ done: @MainActor () -> Bool
+) async -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while !done() {
+        if Date() >= deadline {
+            XCTFail("waited \(seconds) s for \(what()), and it never came", file: file, line: line)
+            return false
+        }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return true
 }
 
 /// Status reads the test answers by hand, oldest or newest first.
@@ -663,6 +795,16 @@ final class ScriptedReads: @unchecked Sendable {
         }
         next?.resume(returning: value)
         return next != nil
+    }
+
+    /// Resume every read still out with nil: how a failed case leaves
+    /// nothing suspended behind it.
+    func drain() {
+        let all: [CheckedContinuation<Bool?, Never>] = lock.withLock {
+            defer { waiting.removeAll() }
+            return waiting
+        }
+        for continuation in all { continuation.resume(returning: nil) }
     }
 
     func answerNewest(_ value: Bool?) -> Bool {
