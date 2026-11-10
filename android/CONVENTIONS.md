@@ -5,7 +5,7 @@ with one deliberate exception: server administration (the dashboard's
 Wake words, Greetings, Models, Internet, Voice history and Advanced
 settings sections) is not mirrored, because the app has no admin session.
 Settings has the dashboard's five groups; the sections about this phone have
-a panel of their own (Rooms, Phones & browsers, Printers & scanners, App
+a panel of their own (Rooms, People, Phones & browsers, Printers & scanners, App
 layout, Voices, Chat, About & updates, Health), and each admin-only section says so
 and opens the dashboard. Do not add admin panels to the app.
 Read these core files before writing a screen:
@@ -64,8 +64,14 @@ Read these core files before writing a screen:
     grid alike, as the web's SHARED_SCREEN_HIDDEN does. The bottom bar is
     the phone's own pick (`ui/shell/PhoneBar.kt`, Settings → App layout),
     filtered the same way, so a saved tab never beats that rule. A screen
-    that became a Settings tab (Satellites) keeps its `Route` as the way a
-    link names it: `settingsTabFor` and the shell open Settings on the tab.
+    that became a Settings tab (Satellites, People) keeps its `Route` as the
+    way a link names it: `settingsTabFor` and the shell open Settings on the
+    tab. The drawer, rail and grid are grouped by one table, `DefaultNav`
+    in `Routes.kt` (Media, Tools), resolved by one function, `navTree`
+    (defaults, plugin pages' groups `PluginNavGroups`, an optional
+    `NavOverride`; one-item-flat and empty-group rules): a new launcher
+    screen goes in `WorkspaceRoutes` and `NavKeys`, and in
+    `DefaultNav.groupOf` (or `PluginNavGroups` for a plugin's) if grouped.
 13. **Plugin-backed screens are capability-gated.** If a screen's endpoints
     come from a plugin router (`/api/plugins/<slug>/...`), declare its
     capability in `Route.requiredCapability()` (`ui/shell/Routes.kt`) and it

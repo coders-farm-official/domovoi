@@ -60,7 +60,9 @@ import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.screens.assistant.AssistantIn64BitAppNote
 import com.domovoi.app.ui.screens.assistant.assistantIn64BitAppOnly
+import com.domovoi.app.net.LocalSharedScreen
 import com.domovoi.app.ui.screens.containers.HealthPanel
+import com.domovoi.app.ui.screens.people.PeopleScreen
 import com.domovoi.app.ui.screens.printing.PrintersPanel
 import com.domovoi.app.ui.screens.satellites.SatellitesScreen
 import com.domovoi.app.ui.shell.LocalSettingsTabRequest
@@ -75,8 +77,10 @@ import com.domovoi.app.update.AboutAppUpdateCard
  * then the section. Back steps out one level.
  *
  * What belongs to this phone lives here: the rooms ([SatellitesScreen]),
- * which server it talks to and who's listening (Phones & browsers), its
- * bar (App layout), how it speaks (Voices), About & updates, and Health.
+ * the household's people ([PeopleScreen], a section since the nav regroup:
+ * hidden on a shared screen, as every launcher hides People there), which
+ * server it talks to and who's listening (Phones & browsers), its bar (App
+ * layout, under System), how it speaks (Voices), About & updates, and Health.
  * What only an admin changes on the server (greetings, wake words, models,
  * the internet answer, voice history, Advanced) needs the dashboard's admin
  * session, which this app does not have: those sections say so and open
@@ -84,13 +88,21 @@ import com.domovoi.app.update.AboutAppUpdateCard
  *
  * [SettingsSection.key] is how a link names a section (ui/shell/PhoneBar.kt
  * LocalOpenSettingsTab; Route.Satellites opens "rooms", Route.Containers
- * "health"); [SettingsSection.aliases] are the tab keys it had before the
- * regroup, so a link from before still lands. [SettingsSection.dashboard]
- * is the dashboard's address for it, in the words every dashboard version
- * understands (an older server has no "advanced", but "configuration").
+ * "health", Route.People "people"); [SettingsSection.aliases] are the tab
+ * keys it had before the regroup, so a link from before still lands, and
+ * [SettingsGroup.aliases] the same for a group (Household was "Rooms &
+ * devices", key "rooms-and-devices", until the nav regroup).
+ * [SettingsSection.dashboard] is the dashboard's address for it, in the
+ * words every dashboard version understands (an older server has no
+ * "advanced", but "configuration").
  */
-internal enum class SettingsGroup(val key: String, val label: String, val icon: ImageVector) {
-    RoomsAndDevices("rooms-and-devices", "Rooms & devices", Icons.Filled.Home),
+internal enum class SettingsGroup(
+    val key: String,
+    val label: String,
+    val icon: ImageVector,
+    val aliases: List<String> = emptyList(),
+) {
+    Household("household", "Household", Icons.Filled.Home, listOf("rooms-and-devices")),
     Voice("voice", "Voice", Icons.Filled.RecordVoiceOver),
     ChatAndAi("chat-and-ai", "Chat & AI", Icons.Filled.AutoAwesome),
     Privacy("privacy", "Privacy", Icons.Filled.Shield),
@@ -107,18 +119,18 @@ internal enum class SettingsSection(
     /** The dashboard's address for a section only the dashboard changes. */
     val dashboard: String? = null,
 ) {
-    Rooms("rooms", "Rooms", SettingsGroup.RoomsAndDevices,
+    Rooms("rooms", "Rooms", SettingsGroup.Household,
         "Each room's device: status, announcements, and each room's details.",
         "satellite satellites pi speaker microphone room announce wifi", listOf("satellites")),
-    PhonesAndBrowsers("phones-and-browsers", "Phones & browsers", SettingsGroup.RoomsAndDevices,
+    People("people", "People", SettingsGroup.Household,
+        "Who lives here: each person's profile, what Domovoi remembers, and their conversations.",
+        "people person family member members household voice profile enrolled memory conversations denylist"),
+    PhonesAndBrowsers("phones-and-browsers", "Phones & browsers", SettingsGroup.Household,
         "Which server this phone talks to, and who's listening. The household's other phones and browsers are on the dashboard.",
         "connection server pair pairing household token phone device identity trust", listOf("connection")),
-    Printers("printers", "Printers & scanners", SettingsGroup.RoomsAndDevices,
+    Printers("printers", "Printers & scanners", SettingsGroup.Household,
         "The printers and scanners your home server prints and scans with.",
         "printer printers print printing scanner scanners scan scanning ink toner paper"),
-    AppLayout("app-layout", "App layout", SettingsGroup.RoomsAndDevices,
-        "The tabs along the bottom of this phone, left to right.",
-        "phone bar tabs bottom bar layout", listOf("phonebar")),
     WakeWords("wake-words", "Wake words", SettingsGroup.Voice,
         "The words that wake Domovoi: train your own, record clips in a room.",
         "wake word hey hello train", dashboard = "wake-words"),
@@ -146,6 +158,9 @@ internal enum class SettingsSection(
     Health("health", "Health", SettingsGroup.System,
         "Every check on your Domovoi this phone can see, green or not.",
         "health status problems check containers incident server database"),
+    AppLayout("app-layout", "App layout", SettingsGroup.System,
+        "The tabs along the bottom of this phone, left to right.",
+        "phone bar tabs bottom bar layout", listOf("phonebar")),
     Advanced("advanced", "Advanced", SettingsGroup.System,
         "The admin account and every setting of the Domovoi server — on the dashboard.",
         "advanced configuration config admin password settings", listOf("server", "configuration"),
@@ -158,7 +173,19 @@ internal enum class SettingsSection(
     }
 }
 
-internal fun sectionsOf(group: SettingsGroup): List<SettingsSection> = SettingsSection.entries.filter { it.group == group }
+/** Sections a shared screen (the kitchen tablet) leaves out: one person's
+ *  things, as ui/shell/Routes.kt SharedScreenHidden leaves People off every
+ *  launcher. Presentational, like the rest of the shared view. */
+internal val SharedScreenHiddenSections: Set<SettingsSection> = setOf(SettingsSection.People)
+
+internal fun SettingsSection.shownOn(shared: Boolean): Boolean = !(shared && this in SharedScreenHiddenSections)
+
+internal fun sectionsOf(group: SettingsGroup, shared: Boolean = false): List<SettingsSection> =
+    SettingsSection.entries.filter { it.group == group && it.shownOn(shared) }
+
+/** The group a key names, by its key or a key it had before. */
+internal fun groupNamed(key: String?): SettingsGroup? =
+    key?.let { k -> SettingsGroup.entries.firstOrNull { it.key == k } ?: SettingsGroup.entries.firstOrNull { k in it.aliases } }
 
 private fun searchWords(text: String): List<String> =
     text.lowercase().replace("'", "").replace("’", "").split(Regex("[^a-z0-9-]+")).filter { it.isNotEmpty() }
@@ -166,13 +193,14 @@ private fun searchWords(text: String): List<String> =
 /**
  * The sections a search finds (the web's settingsSearch): every word typed
  * must start a word of the section's name, group, old names or words; its
- * own name ranks first.
+ * own name ranks first. A shared screen finds none of the sections it hides.
  */
-internal fun searchSettings(query: String): List<SettingsSection> {
+internal fun searchSettings(query: String, shared: Boolean = false): List<SettingsSection> {
     val q = searchWords(query)
     if (q.isEmpty()) return emptyList()
     val phrase = q.joinToString(" ")
     return SettingsSection.entries.mapIndexedNotNull { i, s ->
+        if (!s.shownOn(shared)) return@mapIndexedNotNull null
         val label = searchWords(s.label)
         val all = label + searchWords(s.group.label) + searchWords(s.words) + s.aliases.flatMap(::searchWords)
         if (!q.all { w -> all.any { it.startsWith(w) } }) return@mapIndexedNotNull null
@@ -196,14 +224,20 @@ internal sealed interface SettingsPlace {
 
 /** A place, as the key rememberSaveable keeps: "" for the list of groups,
  *  "group:<key>" for a group (a group's key may be a section's old name:
- *  "voice"), else a section's key. */
-internal fun placeOf(key: String?): SettingsPlace {
+ *  "voice"; an old group key still lands: "group:rooms-and-devices" is
+ *  Household), else a section's key. A section a [shared] screen hides is
+ *  its group instead (a link to People on the kitchen tablet opens
+ *  Household, without People). */
+internal fun placeOf(key: String?, shared: Boolean = false): SettingsPlace {
     if (key.isNullOrEmpty()) return SettingsPlace.Index
     if (key.startsWith(GROUP_PLACE)) {
-        val g = key.removePrefix(GROUP_PLACE)
-        return SettingsGroup.entries.firstOrNull { it.key == g }?.let { SettingsPlace.Group(it) } ?: SettingsPlace.Index
+        return groupNamed(key.removePrefix(GROUP_PLACE))?.let { SettingsPlace.Group(it) } ?: SettingsPlace.Index
     }
-    return SettingsSection.named(key)?.let { SettingsPlace.Section(it) } ?: SettingsPlace.Index
+    // A bare group key ("household", or the old "rooms-and-devices") opens
+    // the group; a section's key or old key wins ("voice" is Voices).
+    val s = SettingsSection.named(key)
+        ?: return groupNamed(key)?.let { SettingsPlace.Group(it) } ?: SettingsPlace.Index
+    return if (s.shownOn(shared)) SettingsPlace.Section(s) else SettingsPlace.Group(s.group)
 }
 
 private const val GROUP_PLACE = "group:"
@@ -225,21 +259,23 @@ internal val SettingsPlace.key: String
 @Composable
 fun SettingsScreen(navigate: (Route) -> Unit) {
     // A section a link asked for (Home's rooms → Rooms, Home's problem rows
-    // → Health, the grid's "edit the bar"): opened on it, and taken, so
-    // coming back later starts as usual.
+    // → Health, the grid's "edit the bar", Route.People → People): opened on
+    // it, and taken, so coming back later starts as usual. A key Settings
+    // does not know leaves it where it is.
+    val shared = LocalSharedScreen.current
     val request = LocalSettingsTabRequest.current
-    var at by rememberSaveable { mutableStateOf(SettingsSection.named(request.tab)?.key ?: "") }
+    var at by rememberSaveable { mutableStateOf(placeOf(request.tab, shared).key) }
     var query by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(request.tab) {
-        SettingsSection.named(request.tab)?.let { at = it.key }
+        placeOf(request.tab, shared).takeIf { it != SettingsPlace.Index }?.let { at = it.key }
         if (request.tab != null) request.take()
     }
-    val place = placeOf(at)
+    val place = placeOf(at, shared)
     BackHandler(enabled = place != SettingsPlace.Index) { at = place.up()?.key ?: "" }
 
     when (place) {
-        SettingsPlace.Index -> SettingsIndex(query, { query = it }, openGroup = { at = SettingsPlace.Group(it).key }) { at = it.key }
-        is SettingsPlace.Group -> SettingsGroupList(place.group, onBack = { at = "" }) { at = it.key }
+        SettingsPlace.Index -> SettingsIndex(query, { query = it }, shared, openGroup = { at = SettingsPlace.Group(it).key }) { at = it.key }
+        is SettingsPlace.Group -> SettingsGroupList(place.group, shared, onBack = { at = "" }) { at = it.key }
         is SettingsPlace.Section -> Column(Modifier.fillMaxSize()) {
             BackRow(place.section.group.label) { at = SettingsPlace.Group(place.section.group).key }
             PageHeader(
@@ -251,6 +287,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
             Column(Modifier.weight(1f)) {
                 when (place.section) {
                     SettingsSection.Rooms -> SatellitesScreen(embedded = true)
+                    SettingsSection.People -> PeopleScreen(embedded = true)
                     SettingsSection.PhonesAndBrowsers -> ConnectionPanel()
                     SettingsSection.Printers -> PrintersPanel()
                     SettingsSection.AppLayout -> PhoneBarPanel()
@@ -310,10 +347,11 @@ private fun ListRow(title: String, sub: String?, icon: ImageVector?, onClick: ()
 private fun SettingsIndex(
     query: String,
     onQuery: (String) -> Unit,
+    shared: Boolean,
     openGroup: (SettingsGroup) -> Unit,
     open: (SettingsSection) -> Unit,
 ) {
-    val hits = searchSettings(query)
+    val hits = searchSettings(query, shared)
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -352,7 +390,7 @@ private fun SettingsIndex(
         } else {
             items(SettingsGroup.entries, key = { it.key }) { g ->
                 DomovoiCard(Modifier.fillMaxWidth(), padding = 0) {
-                    ListRow(g.label, sectionsOf(g).joinToString(" · ") { it.label }, g.icon) { openGroup(g) }
+                    ListRow(g.label, sectionsOf(g, shared).joinToString(" · ") { it.label }, g.icon) { openGroup(g) }
                 }
             }
         }
@@ -361,7 +399,7 @@ private fun SettingsIndex(
 
 /** One group's sections. */
 @Composable
-private fun SettingsGroupList(group: SettingsGroup, onBack: () -> Unit, open: (SettingsSection) -> Unit) {
+private fun SettingsGroupList(group: SettingsGroup, shared: Boolean, onBack: () -> Unit, open: (SettingsSection) -> Unit) {
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 16.dp),
@@ -378,7 +416,7 @@ private fun SettingsGroupList(group: SettingsGroup, onBack: () -> Unit, open: (S
         }
         item(key = "list") {
             DomovoiCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp), padding = 0) {
-                sectionsOf(group).forEachIndexed { i, s ->
+                sectionsOf(group, shared).forEachIndexed { i, s ->
                     if (i > 0) HorizontalDivider(color = Domovoi.colors.borderSoft)
                     ListRow(s.label, s.sub, null) { open(s) }
                 }

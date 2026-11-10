@@ -60,10 +60,12 @@ import com.domovoi.app.ui.theme.Domovoi
 /**
  * People page — household roster + per-person profile / memory / sessions /
  * conversations, mirroring web/static/people.jsx. Two-pane on expanded
- * widths; roster-then-full-screen-detail on compact.
+ * widths; roster-then-full-screen-detail on compact. Since the nav regroup
+ * it is Settings → Household → People, [embedded] under the Settings
+ * header (which names the page), so its own header shrinks to the counts.
  */
 @Composable
-fun PeopleScreen() {
+fun PeopleScreen(embedded: Boolean = false) {
     val peopleState = rememberApi(eventTypes = setOf("people.last_seen.changed")) { app ->
         app.api.get("/api/people").decode<List<Person>>()
     }
@@ -103,7 +105,7 @@ fun PeopleScreen() {
                     )
                 }
                 else -> {
-                    PageHeader("People", sub)
+                    PeopleHeader(embedded, sub)
                     Spacer(Modifier.height(12.dp))
                     RosterPane(
                         state = peopleState,
@@ -119,7 +121,7 @@ fun PeopleScreen() {
                 }
             }
         } else {
-            PageHeader("People", sub)
+            PeopleHeader(embedded, sub)
             Spacer(Modifier.height(12.dp))
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 RosterPane(
@@ -154,6 +156,16 @@ fun PeopleScreen() {
                 }
             }
         }
+    }
+}
+
+/** The page's header; under Settings' own ([embedded]) only the counts. */
+@Composable
+private fun PeopleHeader(embedded: Boolean, sub: String) {
+    if (embedded) {
+        Text(sub, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+    } else {
+        PageHeader("People", sub)
     }
 }
 

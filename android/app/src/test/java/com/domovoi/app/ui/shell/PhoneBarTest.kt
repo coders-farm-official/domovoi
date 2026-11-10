@@ -116,7 +116,9 @@ class PhoneBarTest {
 
     @Test fun everyChoiceIsALauncherScreen() {
         assertEquals(Route.Home, PhoneBar.Choices.first())
-        assertTrue(PhoneBar.Choices.drop(1) == WorkspaceRoutes)
+        // The workspace, then People: a Settings section since the nav
+        // regroup, still a deliberate pick for the bar.
+        assertTrue(PhoneBar.Choices.drop(1) == WorkspaceRoutes + Route.People)
         assertTrue(PhoneBar.Choices.none { it in LauncherlessRoutes })
     }
 

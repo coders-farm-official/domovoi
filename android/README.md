@@ -868,11 +868,13 @@ The app's Settings has the dashboard's five groups and plain names
 (2026-10-21, `SettingsScreen.kt` `SettingsGroup` / `SettingsSection`): a
 search box and the groups, then a group's sections, then the section; Back
 steps out one level. What belongs to the phone has its panel here:
-**Rooms** (the satellites), **Phones & browsers** (which server, theme,
+**Rooms** (the satellites), **People** (the household roster and each
+person's profile; Household holds it since the nav regroup, and a shared
+screen leaves it out), **Phones & browsers** (which server, theme,
 this device's name, "listening as"), **Printers & scanners** (the printers
 and scanners your home server prints and scans with: status, ink, defaults;
 renaming and removing are admin-only, so it says where), **App layout** (the
-bottom bar),
+bottom bar, under System),
 **Voices** (how this phone speaks), **Chat** (Chat & AI: a heads-up
 before shaky results, on this phone), **About & updates** (with the app's
 version, and the developer options it turns on: "On-device assistant",
@@ -967,10 +969,20 @@ never shows its personal screens there). Every other screen, Settings and
 the manual included, is a tile on Home's "everything" grid (whose "edit
 the bar" link opens that editor), and the home tab stays lit while one of
 them is open. Satellites is a tab of Settings, as on the dashboard
-(Settings → Rooms); Home's rooms and problem rows open it there.
+(Settings → Rooms); Home's rooms and problem rows open it there. People is
+too (Settings → Household → People): a link to it, or a bar tab saved with
+it, opens it there.
+The navigation is grouped as the dashboard's sidebar is (`Routes.kt`
+`DefaultNav`, one table; `navTree` is the one resolver, ready for a
+person's own sidebar, `NavOverride`, which nothing edits yet): Chat, then
+**Media** (Music, Podcasts, Audiobooks, Videos, and the radio and image
+plugins' Stations and Images) and **Tools** (News, Calendar, Files). A
+group with one visible screen shows it on its own; a group with none is
+not there. The grid shows the same groups as small headings.
 List→detail screens stack full-screen. Medium gets a navigation rail
-(Home first);
-expanded gets the web's permanent sidebar with badge counts and
+(Home first; flat, in the grouped order, a hairline around each group);
+expanded gets the web's permanent sidebar, its groups opening in place
+(Media open at first, the open ones remembered per phone), with badge counts and
 side-by-side list + detail panes, and Home spreads into the web
 desktop's two columns once its pane is wide enough. The mini player
 docks above the navigation on every size.

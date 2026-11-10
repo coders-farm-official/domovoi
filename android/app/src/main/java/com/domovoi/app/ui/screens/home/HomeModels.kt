@@ -4,8 +4,11 @@ import com.domovoi.app.net.Capabilities
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
 import com.domovoi.app.ui.shell.EverythingRoutes
+import com.domovoi.app.ui.shell.NavEntry
+import com.domovoi.app.ui.shell.NavGroupInfo
 import com.domovoi.app.ui.shell.PhoneBar
 import com.domovoi.app.ui.shell.Route
+import com.domovoi.app.ui.shell.navTree
 import com.domovoi.app.ui.shell.visibleOn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -695,12 +698,37 @@ internal fun hintPhrase(startPhrase: String?): String = startPhrase?.takeIf { it
 /** The "everything" grid: every screen that is not on this phone's bar
  *  ([bar], ui/shell/PhoneBar.kt; the default bar unless given), that this
  *  server's plugins allow, and — on a shared screen — that is not
- *  somebody's own. Satellites is not here: it is a Settings tab. */
+ *  somebody's own. Satellites and People are not here: they are Settings
+ *  sections. */
 internal fun everythingTiles(
     caps: Capabilities,
     shared: Boolean,
     bar: List<Route> = PhoneBar.routes(null, caps, shared),
 ): List<Route> = EverythingRoutes.filter { it !in bar && it.visibleOn(caps, shared) }
+
+/** A run of the grid's tiles: under a group's heading, or (null) under none. */
+internal data class TileRun(val group: NavGroupInfo?, val routes: List<Route>)
+
+/**
+ * The grid's [tiles] under the drawer's group headings ([navTree]): each
+ * group with two or more tiles left gets its heading; a lone tile (its
+ * group's others on the bar) and the top-level ones (Chat, Settings, the
+ * manual) join the heading-less run beside them.
+ */
+internal fun tileRuns(tiles: List<Route>): List<TileRun> {
+    val out = mutableListOf<TileRun>()
+    for (e in navTree(tiles)) {
+        when (e) {
+            is NavEntry.Group -> out += TileRun(e.group, e.routes)
+            is NavEntry.Item -> {
+                val last = out.lastOrNull()
+                if (last != null && last.group == null) out[out.lastIndex] = last.copy(routes = last.routes + e.route)
+                else out += TileRun(null, listOf(e.route))
+            }
+        }
+    }
+    return out
+}
 
 // ─── Stop all ─────────────────────────────────────────────────────────────
 
