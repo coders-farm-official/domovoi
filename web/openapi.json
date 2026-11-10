@@ -8826,7 +8826,7 @@
           "wake-words"
         ],
         "summary": "Train Wake Word",
-        "description": "Promote a ``recording`` wake word to ``training`` \u2014 picked up by the\ntrainer worker (if enabled). Refuses (409) a row that's missing, past\n``recording``, holding fewer than ``wake_word_min_clips`` clips total, or\nfewer than that many *selected* for training (the trainer consumes only the\nselected set).",
+        "description": "Queue a wake word for training \u2014 picked up by the trainer worker (if\nenabled). A ``recording`` or ``failed`` word trains for the first time\n(or again); a ``ready`` one trains again on every selected clip, the ones\nrecorded since its last training included, and keeps its current model\nin use until the new one lands. Refuses (409) a row that's missing,\nalready training, holding fewer than ``wake_word_min_clips`` clips total,\nor fewer than that many *selected* for training (the trainer consumes\nonly the selected set).",
         "operationId": "train_wake_word_api_wake_words__wake_word_id__train_post",
         "parameters": [
           {
@@ -8889,6 +8889,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WakeClipList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Delete All Clips",
+        "description": "Delete every recorded clip of a wake word (with their analysis and the\ntraining copy). The word, its trained model and the rooms using it are\nuntouched; the next take starts numbering after the last trained clip, so\nthe row still counts what is new since that training. 409 while the word\ntrains (the run reads the training copy).",
+        "operationId": "delete_all_clips_api_wake_words__wake_word_id__clips_delete",
+        "parameters": [
+          {
+            "name": "wake_word_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Wake Word Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete All Clips Api Wake Words  Wake Word Id  Clips Delete"
                 }
               }
             }
@@ -26618,6 +26661,39 @@
               }
             ],
             "title": "Score"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room"
+          },
+          "take_started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Take Started At"
+          },
+          "recorded_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At"
           }
         },
         "type": "object",
@@ -26738,6 +26814,11 @@
               }
             ],
             "title": "Error"
+          },
+          "new_clips": {
+            "type": "integer",
+            "title": "New Clips",
+            "default": 0
           }
         },
         "type": "object",

@@ -54,7 +54,9 @@ DRIVE = r"""
   await h.click({ type: 'button', text: 'Cancel' });
   const afterCancel = { calls: h.calls.length, dialog: !!h.find({ text: DIALOG_TITLE }) };
   await h.click(trash);
-  await h.click({ type: 'button', text: 'Delete' });
+  // The dialog's own button: exactly "Delete" (the clip grid also has a
+  // "Delete all clips" button, which a substring match would hit first).
+  await h.click((el) => el.type === 'button' && String(el.text).trim() === 'Delete');
   const afterConfirm = { calls: h.calls.map((c) => `${c.method} ${c.path}`),
                          dialog: !!h.find({ text: DIALOG_TITLE }) };
   return { afterClick, afterCancel, afterConfirm };
@@ -89,6 +91,28 @@ SCENARIOS = {
         "props": {"wid": 7, "canScore": True}, "fnProps": ["fire"],
         "api": {"GET /api/wake-words/7/clips": {"clips": [CLIP], "selected_count": 1, "min_clips": 15}},
         "script": _drive("delete clip", "Delete clip clip_0003.wav?"),
+    },
+    # Takes append (2026-11): starting over is its own button, and its
+    # dialog names the count and the word.
+    "wake_clips_all": {
+        "files": [COMPONENTS, SETTINGS], "component": "WakeClipGrid",
+        "props": {"wid": 7, "wname": "Hey Domovoi", "canScore": False}, "fnProps": ["fire"],
+        "api": {"GET /api/wake-words/7/clips": {"clips": [CLIP, dict(CLIP, name="clip_0004.wav")],
+                                               "selected_count": 2, "min_clips": 15}},
+        "script": r"""
+          h.render(); await h.settle(); h.rerender();
+          const all = (el) => el.type === 'button' && String(el.text).trim() === 'Delete all clips';
+          await h.click(all);
+          const texts = h.text();
+          const before = h.calls.length;
+          await h.click({ type: 'button', text: 'Cancel' });
+          const afterCancel = h.calls.length;
+          await h.click(all);
+          const twins = h.findAll(all);
+          await h.click((el) => el === twins[twins.length - 1]);
+          return { texts, before, afterCancel,
+                   calls: h.calls.map((c) => `${c.method} ${c.path}`) };
+        """,
     },
     "models": {
         "files": [COMPONENTS, "web/static/models.jsx"], "component": "ModelsPanel",
@@ -166,6 +190,14 @@ def test_confirm_sends_the_one_delete(driven, panel):
     r = driven[panel]["afterConfirm"]
     assert r["calls"] == [EXPECTED_DELETE[panel]]
     assert not r["dialog"], f"{panel}: dialog still open after the delete settled"
+
+
+def test_delete_all_clips_confirms_with_the_count_then_sends_one_delete(driven):
+    r = driven["wake_clips_all"]
+    assert "Delete all 2 clips of Hey Domovoi? This can't be undone" in r["texts"], r["texts"]
+    deletes = [c for c in r["calls"] if c.startswith("DELETE")]
+    assert r["before"] == r["afterCancel"]
+    assert deletes == ["DELETE /api/wake-words/7/clips"]
 
 
 def test_dialog_names_the_row_it_is_about(driven):

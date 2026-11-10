@@ -803,6 +803,11 @@ def _is_chat_exit(transcript: str) -> bool:
     )
 
 
+def _utc_iso() -> str:
+    """Now, UTC, to the second (a wake clip's take / recorded time)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 @dataclass
 class WakeRecordingState:
     """Live state of an in-progress wake-word clip-recording session
@@ -821,6 +826,12 @@ class WakeRecordingState:
     clip_seconds: float
     target_count: int
     clips_written: int = 0
+    # Takes APPEND (2026-11): the number the next clip is written under.
+    # 0 = work it out from the folder at the first clip
+    # (wake_clip_quality.next_clip_number: after the highest clip there).
+    next_index: int = 0
+    # When this take was started, kept in each clip's sidecar.
+    take_started_at: str | None = None
 
 
 # ADD-2. How much more than the requested ``max_bytes`` a satellite's
@@ -6785,8 +6796,17 @@ class StreamSession:
                 len(pcm), state.slug,
             )
             return
-        n = state.clips_written + 1
-        clip_path = Path(settings.wake_clips_dir) / state.slug / f"clip_{n:03d}.wav"
+        from domovoi import wake_clip_quality as _wq
+
+        slug_dir = Path(settings.wake_clips_dir) / state.slug
+        # A take APPENDS to the clips already there (any room, any earlier
+        # take): numbered after the highest one, never over an existing file.
+        if state.next_index <= 0:
+            state.next_index = await asyncio.to_thread(_wq.next_clip_number, slug_dir)
+        n = state.next_index
+        while (slug_dir / f"clip_{n:03d}.wav").exists():
+            n += 1
+        clip_path = slug_dir / f"clip_{n:03d}.wav"
         try:
             await asyncio.to_thread(_write_wav_clip, clip_path, pcm)
         except OSError as e:
@@ -6795,14 +6815,19 @@ class StreamSession:
                 state.slug, e,
             )
             return
-        state.clips_written = n
+        state.next_index = n + 1
+        state.clips_written += 1
+        origin = {
+            "room": self.room_id,
+            "take_started_at": state.take_started_at,
+            "recorded_at": _utc_iso(),
+        }
         # Score quality + write an auto-trimmed (end-aligned) audit copy for the
         # just-recorded clip, so the dashboard shows its acoustics the moment it
         # lands. Best-effort — an analysis hiccup must never drop a good clip or
         # break the count; the web list backfills any clip missing a sidecar.
         try:
-            from domovoi.wake_clip_quality import ensure_analysis
-            await asyncio.to_thread(ensure_analysis, clip_path)
+            await asyncio.to_thread(_wq.ensure_analysis, clip_path, origin=origin)
         except Exception as e:
             log.warning(
                 "wake recording: analysis failed for %s: %s", clip_path.name, e
@@ -6825,12 +6850,13 @@ class StreamSession:
                 state.wake_word_id, e,
             )
         log.info(
-            "wake recording: saved %s (%d/%d) for slug=%s room=%s",
-            clip_path.name, n, state.target_count, state.slug, self.room_id,
+            "wake recording: saved %s (%d/%d this take) for slug=%s room=%s",
+            clip_path.name, state.clips_written, state.target_count, state.slug, self.room_id,
         )
 
     async def start_wake_recording(
-        self, *, wake_word_id: int, slug: str, clip_seconds: float, target_count: int
+        self, *, wake_word_id: int, slug: str, clip_seconds: float, target_count: int,
+        take_started_at: str | None = None,
     ) -> None:
         """Begin collecting positive training clips from this satellite
         (dashboard "Record on <room>"). Arms the server-side recording state
@@ -6843,6 +6869,7 @@ class StreamSession:
             slug=slug,
             clip_seconds=clip_seconds,
             target_count=target_count,
+            take_started_at=take_started_at or _utc_iso(),
         )
         await self.ws.send_text(
             json.dumps(

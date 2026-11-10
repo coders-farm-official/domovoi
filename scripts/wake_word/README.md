@@ -107,11 +107,29 @@ On a Linux server or the Windows install, an update that changes
    Vary distance (arm's length, a metre, across the room), tone (calm,
    raised, half-asked) and background (quiet, normal household noise).
    Use the clip-quality scores to deselect bad takes.
+
+   Each **Record** adds to the clips already there: a new take is numbered
+   after them, and takes from different rooms build one set, until you
+   train. One room records a word at a time: pressing Record in a second
+   room while a take runs says which room has it, and a word that is
+   training records nothing until it finishes. Each clip card shows the
+   room that recorded it (the grid filters and sorts by room), and its
+   sidecar in `.analysis/` keeps the room, when its take started and when
+   it was recorded. New clips are selected unless their verdict is poor.
+   **Delete all clips** (it asks first, naming the count) is the way to
+   start over; the trash icon on a clip deletes just that one.
 3. **Train.** The button is greyed with "turn on training above first"
    until section 1 is done. On a CPU-only server it asks first, every
    time: "about N minutes, and voice answers more slowly until it
    finishes". About 20 minutes on the GPU.
 4. **Push to a room.** The satellite downloads the model and wakes on it.
+5. **More clips later.** A trained word can keep recording. Its model
+   stays the one its rooms use; the row says "N new clips since the last
+   training: Train again to use them". **Train again** trains on every
+   selected clip, old and new, and the rooms keep the old model until the
+   new one lands (push it again to rooms that should have it). A Train
+   again that fails or is stopped leaves the word ready, with its old
+   model and the reason on its row.
 
 Three wake words ("Hello Domo", "Hey Domovoi", "Domovoi") are three
 models. A satellite runs one at a time: each room wakes on the one pushed
@@ -123,14 +141,17 @@ A word that fails shows the end of the trainer's output on its row. The
 whole output of the last run of each word is in
 `~/.domovoi/wake_trainer/logs/<slug>.log` on the server. A failed word
 trains again on the clips it has: press **Train** on it again (or **Record**
-a new take first, which replaces its clips). A word whose training was cut off
+more first, which adds to its clips). A word whose training was cut off
 by a restart is not failed: it stays queued and trains again once the core
 is back.
 
-When a word trains again on a different set of clips (a new take, or the
-word deleted and created again under the same name), the trainer
-recomputes its features from them; the synthetic clips it generated before
-are kept and reused.
+When a word trains again on a different set of clips (more clips recorded,
+clips deselected or deleted, or the word deleted and created again under
+the same name), the trainer recomputes its features from them; the
+synthetic clips it generated before are kept and reused. Each training
+copies the selected clips afresh into `<slug>/.training/`, so a grown set
+is a different set (new names, new contents) and its features are computed
+again; the same set trained twice reuses them.
 
 ## 3. Settings
 
@@ -254,9 +275,10 @@ training data with permissive licences throughout.
   predictions on it. A push sets it.
 - **Wakes on "okay", "thanks", or names that sound alike**: too few clips,
   or too few synthetic samples. Raise **Synthetic clips per wake word**
-  (20000+) and the time limit, and train again with a larger, more varied
-  take. A trained word can't take a new recording: delete it and create it
-  again (or create a second word beside it), then record and train.
+  (20000+) and the time limit, record more varied clips (other rooms,
+  distances, voices) and **Train again**. A trained word keeps recording:
+  new clips add to the set and its model stays in use until the new one
+  is trained.
 - **Quieter than `hey_jarvis`**: usually the threshold. Lower it to 0.4 for
   that word.
 - **Works in testing, not on the satellite**: record the clips on that
