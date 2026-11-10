@@ -6547,6 +6547,25 @@ async def admin_internet_search_helper() -> dict[str, Any]:
     return {"scheduled": scheduled, "search_helper": searxng_service.status()}
 
 
+@app.get(
+    "/v1/admin/memory",
+    # Admin READ, like the container guard's status beside it on Health:
+    # which services, containers and programs run on the box (names only,
+    # never a command line) is an operator's business.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_memory() -> dict[str, Any]:
+    """Where the server's memory goes, for Settings → Health's memory row
+    (domovoi/host_memory.py): /proc/meminfo's totals, then each Domovoi
+    unit, each Docker container and the largest other processes. Every
+    source has its own time limit; one that fails is listed in
+    ``missing`` and the rest still answer. ``available: false`` on a host
+    that isn't Linux."""
+    from domovoi import host_memory
+
+    return await host_memory.cached_snapshot()
+
+
 @app.get("/v1/admin/hardware")
 async def admin_hardware() -> dict[str, Any]:
     """Host hardware snapshot for the web Models page's fit badges.

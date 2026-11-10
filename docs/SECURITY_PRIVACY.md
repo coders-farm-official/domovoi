@@ -371,6 +371,17 @@ unpaired browser to pair when one of these is refused and shows the
 history once it has; the Android app sends the token on every request
 anyway.
 
+**Where the server's memory goes is an admin read (2026-11-10).**
+Settings → System → Health's memory row (`GET /api/models/memory`, and the
+core's `GET /v1/admin/memory` behind it) names the services, the Docker
+containers and the largest programs running on the box, so it takes
+`require_admin_read` at both hops, like the container guard's status and
+the disk row beside it: a household member's browser never asks for it.
+Programs are named by the kernel's `comm` only (`/proc/<pid>/comm`, at most
+15 characters); their command lines and environments are never read, since
+an argument can carry a password or a token. Nothing in it changes
+anything on the host.
+
 **So is who is home, and the calendar (2026-10-08).** The `/ws/state`
 push needed a household credential because it carries presence, calendar
 titles and satellite details — but the same state answered any LAN host

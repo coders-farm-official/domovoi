@@ -50,7 +50,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi import ai_features, egress, net_safety, whisper_cache
-from domovoi.admin_auth import require_admin_mutation
+from domovoi.admin_auth import require_admin_mutation, require_admin_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
 from domovoi.config_schema import EDITABLE_FIELDS
@@ -340,6 +340,18 @@ async def get_hardware(request: Request):
     which owns the CUDA context. The denominator for fit badges."""
     return bridge_response(
         *await get_admin("/v1/admin/hardware", headers=auth_forward_headers(request))
+    )
+
+
+@router.get("/memory", dependencies=[Depends(require_admin_read)])
+async def get_memory(request: Request):
+    """Where the server's memory goes (Settings → Health's memory row):
+    totals, file cache, and each Domovoi service, container and the
+    largest other programs by name. Proxied from the core's admin read
+    ``/v1/admin/memory``, which owns the host (domovoi/host_memory.py);
+    an admin read at both hops."""
+    return bridge_response(
+        *await get_admin("/v1/admin/memory", headers=auth_forward_headers(request), timeout=20.0)
     )
 
 

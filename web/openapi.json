@@ -16726,6 +16726,26 @@
         }
       }
     },
+    "/api/models/memory": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Get Memory",
+        "description": "Where the server's memory goes (Settings \u2192 Health's memory row):\ntotals, file cache, and each Domovoi service, container and the\nlargest other programs by name. Proxied from the core's admin read\n``/v1/admin/memory``, which owns the host (domovoi/host_memory.py);\nan admin read at both hops.",
+        "operationId": "get_memory_api_models_memory_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/models/{name}": {
       "delete": {
         "tags": [
