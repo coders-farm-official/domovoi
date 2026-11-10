@@ -138,14 +138,17 @@ class Context(BaseModel):
     # never sends a second turn, so a handler must not park a question
     # ("did you mean X?") for it and should do its best without asking.
     answerable: bool = True
-    # A long capture (domovoi/overheard.py: cut off at the satellite's
-    # recording cap, or 20 s / 50 words and more) routed as the command at
-    # its start or as a question: the tool model is not asked (an action
-    # must come from a fast path said first), and no follow-up question is
+    # A long capture (domovoi/overheard.py: 20 s / 60 words and more, or
+    # cut off at the satellite's recording cap): no follow-up question is
     # offered ("Want me to check that online?", a memory to save). The
     # streaming layer sets it, with ``answerable=False``; False everywhere
     # else.
     long_capture: bool = False
+    # A capture cut off at the recording cap after 20 s (overheard.py),
+    # routed as the command at its start or as a question: the tool model
+    # is not asked — an action must come from a fast path said first, not
+    # from whatever the TV said after it. False everywhere else.
+    capped_capture: bool = False
     # "phone" for a push-to-talk turn from the app's chat mic
     # (domovoi/phone_voice.py); None for a satellite, /v1/intent and the
     # dashboard. A phone is its own device (owner decisions 2026-10-08):

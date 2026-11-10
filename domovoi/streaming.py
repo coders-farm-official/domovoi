@@ -353,7 +353,12 @@ Server → Client
                            `reconnect_timeout_sec`, its on-Pi watchdog rolls
                            back to the tarball.
   text  response_start     {"type":"response_start","text":...,"matched_handler":...,"matched_path":...,"session_id":...,"online":...,"audio_sample_rate":24000}
-  text  response_end       {"type":"response_end","interrupted":bool,"expect_followup":bool,"pi_action":?,"pi_action_arg":?}
+  text  response_end       {"type":"response_end","interrupted":bool,"expect_followup":bool,"pi_action":?,"pi_action_arg":?,"ignored":true?}
+                           — `ignored` (optional, sent only as true, since
+                           2026-11-09): the capture was background talk and
+                           got no answer (domovoi/overheard.py); the
+                           satellite pauses its wake word for [wake]
+                           cooldown_sec. An older satellite ignores it.
                            — `pi_action` (optional) requests a Pi-local
                            side-effect after playback drains: "reassociate_wifi"
                            (WifiHandler), "set_voice" (VoiceHandler, with
@@ -4260,6 +4265,7 @@ class StreamSession:
         history: turn_history.HistoryEntry | None,
         audio_ms: int,
         turn_at: datetime,
+        wake_score: float | None = None,
     ) -> None:
         """A stage of this turn ran past its limit (domovoi/turn_watchdog.py):
         one line naming the room and the stage, the stall noted for
@@ -4280,6 +4286,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.TIMED_OUT, at=turn_at,
+                    wake_score=wake_score,
                 ))
         else:
             self._close_history_later(history, turn_history.TIMED_OUT)
@@ -4361,6 +4368,10 @@ class StreamSession:
             "type": "response_end",
             "interrupted": True,
             "expect_followup": False,
+            # The satellite pauses its wake word for [wake] cooldown_sec
+            # after this turn (satellite/wake_gate.py); an older one
+            # ignores the field.
+            "ignored": True,
         })
         await self._resume_music_after_failed_turn(trigger)
 
@@ -4414,6 +4425,7 @@ class StreamSession:
         stage: str,
         audio_ms: int,
         turn_at: datetime,
+        wake_score: float | None = None,
     ) -> None:
         """The turn raised: error + response_end, the history entry closed
         ("no answer — something went wrong"; a request that never got a
@@ -4438,6 +4450,7 @@ class StreamSession:
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.ERROR, at=turn_at,
+                    wake_score=wake_score,
                 ))
         else:
             self._close_history_later(history, turn_history.ERROR)
@@ -4477,8 +4490,10 @@ class StreamSession:
         interrupted = False
         response = None
         transcript = ""
-        # A long capture (domovoi/overheard.py) opens no follow-up mic.
+        # A long capture (domovoi/overheard.py) opens no follow-up mic; a
+        # capped one doesn't reach the tool model.
         long_capture = False
+        capped_capture = False
         # The turn watchdog (domovoi/turn_watchdog.py; incident 2026-11-09,
         # every room "thinking" for good behind a wedged speech recognition).
         # Speech recognition gets turn_watchdog.stt_cap() of the recording's
@@ -4539,6 +4554,7 @@ class StreamSession:
                             room_id=self.room_id, session_id=self.session_id,
                             trigger=trigger, audio_ms=audio_ms,
                             reason=turn_history.SPEECH_OFF, at=turn_at,
+                            wake_score=wake_score,
                         ))
                     return
                 transcript = await self._clean_transcript(
@@ -4559,15 +4575,18 @@ class StreamSession:
                     )
 
                 # ── Background talk? ─────────────────────────────────────────
-                # A long capture (cut off at the satellite's recording cap,
-                # or 20 s / 50 words and more) is the command at its start,
-                # a question put to the assistant, or background talk that
-                # gets no answer at all (domovoi/overheard.py).
+                # A long capture (20 s / 60 words and more) opens no
+                # follow-up. One the satellite cut off at its recording cap
+                # after 20 s is the command at its start, a question put to
+                # the assistant, or background talk that gets no answer at
+                # all (domovoi/overheard.py). One that ended on a pause is
+                # a person's, and is routed as always.
                 verdict = await self._screen_overheard(
                     transcript, trigger=trigger, capture_meta=capture_meta,
                     audio_seconds=audio_seconds,
                 )
                 long_capture = verdict.long
+                capped_capture = verdict.capped
                 if verdict.action == overheard.IGNORE:
                     await self._ignore_overheard(
                         transcript, verdict=verdict, trigger=trigger,
@@ -4687,9 +4706,11 @@ class StreamSession:
                     history_entry=history,
                     speak_interim=interim.say,
                     stream_qa=True,
-                    # A long capture: no tool model, no follow-up question,
-                    # and no handler parks one ("did you mean X?").
+                    # A long capture: no follow-up question, and no handler
+                    # parks one ("did you mean X?"); a capped one: no tool
+                    # model either.
                     long_capture=long_capture,
+                    capped_capture=capped_capture,
                     answerable=not long_capture,
                 )
                 intent = Intent(
@@ -4790,13 +4811,13 @@ class StreamSession:
                 await self._end_stalled_turn(
                     e.stage, e.limit_s, trigger=trigger, timings=timings,
                     response=response, history=history,
-                    audio_ms=audio_ms, turn_at=turn_at,
+                    audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
                 )
             elif reply_guard.expired():
                 await self._end_stalled_turn(
                     stage, time.perf_counter() - turn_t0, trigger=trigger,
                     timings=timings, response=response,
-                    history=history, audio_ms=audio_ms, turn_at=turn_at,
+                    history=history, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
                 )
             else:
                 # A TimeoutError of somebody else's (a client's own limit):
@@ -4804,14 +4825,14 @@ class StreamSession:
                 await self._fail_turn(
                     e, timings=timings, trigger=trigger, response=response,
                     history=history,
-                    stage=stage, audio_ms=audio_ms, turn_at=turn_at,
+                    stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
                 )
             return
         except Exception as e:
             await self._fail_turn(
                 e, timings=timings, trigger=trigger, response=response,
                 history=history,
-                stage=stage, audio_ms=audio_ms, turn_at=turn_at,
+                stage=stage, audio_ms=audio_ms, turn_at=turn_at, wake_score=wake_score,
             )
             return
         finally:

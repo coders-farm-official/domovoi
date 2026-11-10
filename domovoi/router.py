@@ -809,6 +809,15 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # True), so a degraded handler's offline-capable paths keep running
     # and its `fallback_offline` is genuinely reachable for the rest.
     hit = first_fast_path(transcript)
+    if hit is not None and ctx.capped_capture:
+        from domovoi.overheard import NOT_OVER_THE_TV
+
+        if hit[0].name in NOT_OVER_THE_TV:
+            # Cut off at the cap over a TV: "I'm ...", "remember ..." are the
+            # TV's words, not an enrolment or a memory (domovoi/overheard.py).
+            log.info("capped capture: not taking %s's fast path for %r",
+                     hit[0].name, said(transcript))
+            hit = None
     if hit is not None:
         handler, fp, m = hit
         if offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None:
@@ -895,10 +904,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     # tool model would only answer them itself (thrown away) or reach for
     # a bait tool, and asking it costs a router call either way.
     tool_call = None
-    # A long capture (domovoi/overheard.py) never reaches the tool model:
+    # A capped capture (domovoi/overheard.py) never reaches the tool model:
     # an action must come from a fast path said at its start, not from
-    # whatever the TV said after it.
-    if not answers_without_tools(transcript) and not ctx.long_capture:
+    # whatever the TV said after it. (A long one that ended on a pause does.)
+    if not answers_without_tools(transcript) and not ctx.capped_capture:
         tool_schemas = offered_tool_schemas(transcript)
         tool_client = await _ready_for(ollama_client, ctx, "tool")
         # None: the router model isn't installed — the Q&A model below
