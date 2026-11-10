@@ -3064,6 +3064,41 @@ ollama_served_version() {
   curl -fsS --max-time 5 "$OLLAMA_API/api/version" 2>/dev/null | sed -n 's/.*"version":"\([^"]*\)".*/\1/p'
 }
 
+# Is something other than our own ollama.service holding Ollama's port? On
+# WSL (mirrored networking) the Ollama app on Windows shares 127.0.0.1:11434
+# and can win it when the VM restarts; there is no listener in this VM then.
+# MODE answered: something answered (a clash unless our unit is the
+# listener); silent: nothing answered (a clash only if a listener that is
+# not our unit is there, or the unit's journal says the bind failed).
+# Sets OLLAMA_HOLDER_NAME / OLLAMA_HOLDER_PID when ss names the holder.
+OLLAMA_HOLDER_NAME="" OLLAMA_HOLDER_PID=""
+ollama_other_holder() {
+  local mode=$1 listing line unit_pid
+  OLLAMA_HOLDER_NAME="" OLLAMA_HOLDER_PID=""
+  listing=$(ss -H -ltnp "sport = :11434" 2>/dev/null) || listing=""
+  if [ -n "$listing" ]; then
+    line=$(printf '%s\n' "$listing" | grep 'users:' | head -n 1) || line=""
+    if [ -n "$line" ]; then
+      OLLAMA_HOLDER_NAME=$(printf '%s\n' "$line" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p')
+      OLLAMA_HOLDER_PID=$(printf '%s\n' "$line" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p')
+      unit_pid=$(systemctl show -p MainPID --value ollama.service 2>/dev/null | head -n 1) || unit_pid=""
+      if [ -n "$OLLAMA_HOLDER_PID" ] && [ "$OLLAMA_HOLDER_PID" = "$unit_pid" ]; then return 1; fi
+    fi
+    return 0
+  fi
+  [ "$mode" = answered ] && return 0
+  journalctl -u ollama --no-pager -n 20 2>/dev/null | grep -qi 'address already in use'
+}
+ollama_clash_message() {
+  if [ "$WSL" = 1 ]; then
+    echo "Another Ollama, probably the Ollama app on Windows, is using Domovoi's port 11434. Quit it (and turn off its start-up in Windows Settings > Apps > Startup), then Retry."
+  elif [ -n "$OLLAMA_HOLDER_NAME" ]; then
+    echo "Another program, $OLLAMA_HOLDER_NAME (process ${OLLAMA_HOLDER_PID:-unknown}), is using Domovoi's port 11434. Stop it, then retry."
+  else
+    echo "Another program is using Domovoi's port 11434 (it is not this machine's ollama.service). Stop it, then retry."
+  fi
+}
+
 # fetch_pinned URL DEST SHA256 LABEL: download URL to DEST, resuming a
 # partial file, with progress; DEST exists only if its SHA-256 is the pin.
 fetch_pinned() {
@@ -3138,14 +3173,30 @@ do_ollama() {
   if [ "$changed" = 1 ] || ! systemctl is-active --quiet ollama.service; then
     systemctl restart ollama.service
   fi
+  # Up to 3 minutes (a slow disk, or the Ollama app on Windows letting go of
+  # the port after a VM restart), polling every second.
   v=""
-  for i in $(seq 1 60); do
+  for i in $(seq 1 180); do
     v=$(ollama_served_version) || v=""
     [ -z "$v" ] || break
+    if [ "$i" = 30 ]; then
+      log "Waiting for Ollama to start..."
+      emit progress "Waiting for Ollama to start..."
+    fi
     sleep 1
   done
-  [ -n "$v" ] || die "Ollama did not answer on $OLLAMA_API (journalctl -u ollama)"
-  [ "$v" = "$OLLAMA_VERSION" ] || die "Ollama serves version $v, docs/LINUX_HOST.md pins $OLLAMA_VERSION"
+  if [ -z "$v" ]; then
+    if ! systemctl is-active --quiet ollama.service; then
+      log "ollama.service is not running; the last of its journal:"
+      journalctl -u ollama --no-pager -n 5 2>&1 | sed 's/^/    /' || true
+    fi
+    if ollama_other_holder silent; then die "$(ollama_clash_message)"; fi
+    die "Ollama did not answer on $OLLAMA_API (journalctl -u ollama)"
+  fi
+  if [ "$v" != "$OLLAMA_VERSION" ]; then
+    if ollama_other_holder answered; then die "$(ollama_clash_message)"; fi
+    die "Ollama serves version $v, docs/LINUX_HOST.md pins $OLLAMA_VERSION"
+  fi
   log "Ollama $v on $OLLAMA_API"
   detect_gpus
   v=$OLLAMA_VERSION

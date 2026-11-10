@@ -359,8 +359,18 @@ case $url in
     [ ! -f "$SHIM_STATE/download-fail" ] || { echo "curl: (56) fixture" >&2; exit 56; }
     cp "$src" "$out" ;;
   http://127.0.0.1:11434/api/version)
+    # ollama-foreign-version: another Ollama (the Windows app, on WSL's
+    # mirrored network) answers whether or not our unit runs.
+    if [ -s "$SHIM_STATE/ollama-foreign-version" ]; then
+      echo "{\"version\":\"$(cat "$SHIM_STATE/ollama-foreign-version")\"}"; exit 0
+    fi
+    # ollama-slow-polls: this many asks go unanswered.
+    if [ -s "$SHIM_STATE/ollama-slow-polls" ]; then
+      n=$(cat "$SHIM_STATE/ollama-polls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$SHIM_STATE/ollama-polls"
+      [ "$n" -gt "$(cat "$SHIM_STATE/ollama-slow-polls")" ] || { echo "curl: (7) Failed to connect" >&2; exit 7; }
+    fi
     active ollama.service || { echo "curl: (7) Failed to connect" >&2; exit 7; }
-    echo '{"version":"0.34.4"}' ;;
+    echo "{\"version\":\"$(cat "$SHIM_STATE/ollama-unit-version" 2>/dev/null || echo 0.34.4)\"}" ;;
   http://127.0.0.1:11434/api/tags)
     active ollama.service || exit 7
     printf '{"models":['
@@ -475,6 +485,9 @@ case $cmd in
     done
     exit 3 ;;
   stop) for u in "${units[@]}"; do rm -f "$SHIM_STATE/active/$u"; done ;;
+  show)
+    # Only `show -p MainPID --value UNIT`: the case's mainpid-UNIT, or 0.
+    cat "$SHIM_STATE/mainpid-${units[-1]}" 2>/dev/null || echo 0 ;;
   daemon-reload)
     # A running timer or path unit whose unit file is now a mask has
     # nothing left to trigger: the reload fails it ("Unit to trigger
@@ -758,6 +771,14 @@ echo "sudo $*" >>"$SHIM_STATE/calls.log"
 exit 0
 SH
 
+  # ss: the listeners the case sets (ss-listeners holds ss's own lines).
+  cat >"$bin/ss" <<'SH'
+#!/usr/bin/env bash
+echo "ss $*" >>"$SHIM_STATE/calls.log"
+[ ! -f "$SHIM_STATE/ss-listeners" ] || cat "$SHIM_STATE/ss-listeners"
+exit 0
+SH
+
   # A unit's journal: the case's text, if it set one.
   cat >"$bin/journalctl" <<'SH'
 #!/usr/bin/env bash
@@ -1017,6 +1038,12 @@ run_prov() {
 # No --timezone: on WSL the zone follows Windows (owner decision
 # 2026-10-11), and the option is ignored there with a warning.
 wsl_args=(--internet always)
+# A `sleep 1` that returns at once (a 3-minute wait in no time); any other
+# sleep is the real one.
+no_wait_sleep() {
+  printf '#!/usr/bin/env bash\n[ "$1" = 1 ] || exec %s "$@"\n' "$(command -v sleep)" >"$CASE/bin/sleep"
+  chmod +x "$CASE/bin/sleep"
+}
 
 # gpu_wsl: Windows hands this distro an NVIDIA GPU (/dev/dxg and the
 # driver's libcuda.so.1, as on the dev box's RTX cards).
@@ -1676,6 +1703,80 @@ case_ollama_sha_mismatch_stops() {
   check "no partial download left" eq "$(ls -A "$ROOT/var/cache/domovoi-provision" 2>/dev/null | grep -c .)" 0
   check "no marker" no_marker ollama
   check "nothing unpacked" not_called "tar --zstd"
+  end_case
+}
+
+# Windows' Ollama app shares 127.0.0.1:11434 on WSL (mirrored networking)
+# and answers with its own version; nothing in this VM listens.
+case_ollama_foreign_listener_on_wsl() {
+  new_case ollama_foreign_listener_on_wsl
+  echo 0.40.16 >"$STATE/ollama-foreign-version"
+  run_prov "${wsl_args[@]}"
+  check "exit 1" eq "$RC" 1
+  check "progress format" progress_ok
+  check "ollama failed" eq "$(state_of ollama)" fail
+  check "says whose port it is" said "Another Ollama, probably the Ollama app on Windows, is using Domovoi's port 11434. Quit it (and turn off its start-up in Windows Settings > Apps > Startup), then Retry."
+  check "not the version message" not_said "serves version"
+  end_case
+}
+
+# The same on plain Linux: the other process is named when ss shows one.
+case_ollama_foreign_listener_names_the_process() {
+  new_case ollama_foreign_listener_names_the_process
+  echo 0.40.16 >"$STATE/ollama-foreign-version"
+  echo 'LISTEN 0 4096 127.0.0.1:11434 0.0.0.0:* users:(("ollama",pid=4321,fd=3))' >"$STATE/ss-listeners"
+  echo 99 >"$STATE/mainpid-ollama.service"
+  run_prov --no-wsl --internet always
+  check "exit 1" eq "$RC" 1
+  check "ollama failed" eq "$(state_of ollama)" fail
+  check "names the process" said "Another program, ollama (process 4321), is using Domovoi's port 11434. Stop it, then retry."
+  end_case
+}
+
+# Our own unit is the listener and serves another version: the old message.
+case_ollama_own_unit_wrong_version() {
+  new_case ollama_own_unit_wrong_version
+  echo 0.40.16 >"$STATE/ollama-unit-version"
+  echo 'LISTEN 0 4096 127.0.0.1:11434 0.0.0.0:* users:(("ollama",pid=77,fd=3))' >"$STATE/ss-listeners"
+  echo 77 >"$STATE/mainpid-ollama.service"
+  run_prov "${wsl_args[@]}"
+  check "exit 1" eq "$RC" 1
+  check "ollama failed" eq "$(state_of ollama)" fail
+  check "says the versions" said "Ollama serves version 0.40.16, docs/LINUX_HOST.md pins 0.34.4"
+  check "not the clash message" not_said "Another Ollama"
+  end_case
+}
+
+# 70 unanswered asks (past the old 60-second wait), then it answers: the
+# step passes, with a progress line at 30 s. `sleep 1` is a no-op here.
+case_ollama_slow_start_succeeds() {
+  new_case ollama_slow_start_succeeds
+  echo 70 >"$STATE/ollama-slow-polls"
+  no_wait_sleep
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "ollama done" eq "$(state_of ollama)" done
+  check "said it is waiting" said "Waiting for Ollama to start..."
+  check "the waiting line is a progress line" grep -q '"step":"ollama".*"state":"progress".*Waiting for Ollama to start' "$CASE/progress.jsonl"
+  check "answered on the 71st ask" eq "$(cat "$STATE/ollama-polls")" 71
+  end_case
+}
+
+# Nothing ever answers and our unit is down: the journal's tail is logged,
+# the one-line message is the old one.
+case_ollama_silent_logs_the_journal() {
+  new_case ollama_silent_logs_the_journal
+  echo 100000 >"$STATE/ollama-slow-polls"
+  echo ollama.service >"$STATE/start-activating"   # the unit never gets to active
+  printf 'ollama: boom line\n' >"$STATE/journal"
+  no_wait_sleep
+  run_prov "${wsl_args[@]}"
+  check "exit 1" eq "$RC" 1
+  check "ollama failed" eq "$(state_of ollama)" fail
+  check "asked 180 times" eq "$(cat "$STATE/ollama-polls")" 180
+  check "journal tail asked for" called "journalctl -u ollama --no-pager -n 5"
+  check "journal tail logged" said "ollama: boom line"
+  check "the old one-line message" said "Ollama did not answer on"
   end_case
 }
 
@@ -4503,6 +4604,11 @@ CASES=(
   case_not_root_refuses
   case_dry_run_changes_nothing
   case_full_run_wsl
+  case_ollama_foreign_listener_on_wsl
+  case_ollama_foreign_listener_names_the_process
+  case_ollama_own_unit_wrong_version
+  case_ollama_slow_start_succeeds
+  case_ollama_silent_logs_the_journal
   case_second_run_skips_everything
   case_distro_restart_clears_restart_required
   case_resume_after_failure
