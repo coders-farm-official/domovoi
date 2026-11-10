@@ -104,6 +104,12 @@ extension StubHouseUITests {
         // bar did for whoever folds that line in, and the case does not claim
         // a repaint this branch cannot deliver. The assertions above and below
         // still fail if the write, the order or the rules break.
+        //
+        // **An assertion again since train I015**, which is where the shared
+        // change landed: `ShellModel.phoneBar` reads a tracked revision that
+        // the panel's `afterWrite` bumps (`ShellModel.phoneBarSaved()`), so a
+        // save now redraws the bar. Every train before it printed "does not
+        // carry".
         let tab = app.buttons[SystemSettingsStringsUnderTest.filesTab]
         let repainted = tab.waitForExistence(timeout: 5)
         if !repainted { evidence(app, "systemsettings-layout-no-bar-tab") }
@@ -111,6 +117,11 @@ extension StubHouseUITests {
             "BAR REDRAW: the line reads “\(added)” and the bottom bar "
                 + (repainted ? "carries" : "does not carry")
                 + " a `\(SystemSettingsStringsUnderTest.filesTab)` tab"
+        )
+        XCTAssertTrue(
+            repainted,
+            "the line reads “\(added)” but the bottom bar has no "
+                + "`\(SystemSettingsStringsUnderTest.filesTab)` tab — a save did not redraw the bar"
         )
 
         // Added last, so Files is rightmost; one move left puts it before

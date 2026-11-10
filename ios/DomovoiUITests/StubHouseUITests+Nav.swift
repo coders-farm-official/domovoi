@@ -303,6 +303,14 @@ extension StubHouseUITests {
         XCTAssertTrue(navTap(app, NavUnderTest.addPeople), "App layout offers no People tab")
         let line = systemSettingsBarLine(app)
         XCTAssertTrue(line.hasSuffix("people"), "the bar did not take People: “\(line)”")
+        // The bottom bar itself, redrawn by the save (train I015: the line
+        // said `… · people` and the bar kept four tabs, because a save
+        // invalidated nothing until `ShellModel.phoneBarSaved()`).
+        if !app.buttons["People"].waitForExistence(timeout: 10) {
+            print("=== THE SAVE DID NOT REACH THE BOTTOM BAR — tree follows ===")
+            print(app.debugDescription)
+            XCTFail("the line reads “\(line)” but the bottom bar has no People tab")
+        }
 
         func onPeople(_ how: String) -> Bool {
             let counts = app.staticTexts[NavUnderTest.peopleCounts]

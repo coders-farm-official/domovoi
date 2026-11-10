@@ -111,17 +111,11 @@ struct SystemSettingsLayoutPanel: View {
                 // re-registers them. No call from here can make an untracked
                 // read tracked.
                 //
-                // So this closure is kept where ``ShellModel``'s own sinks
-                // put theirs (`ShellModel.swift:258`, `:264`) and claims
-                // nothing: the edit is saved, this panel tells the truth, and
-                // the tabs follow when the shell is next drawn. The fix is
-                // one line in `ShellModel`, written up as the second
-                // **Needs a shared change** in this item's `DECISIONS.md`;
-                // a reviewer should fold it in and delete this closure.
-                // `testSystemSettings_AppLayoutAddsAndRemovesATab` prints
-                // what the bar did, so the day that line lands the evidence
-                // is already in the log.
-                afterWrite: { [model] in Task { @MainActor in model.refresh() } }
+                // **Folded in (train I015):** ``ShellModel/phoneBar`` now
+                // reads a tracked revision, and this closure bumps it, so the
+                // bottom bar and Home's grid redraw on every save — the
+                // "Needs a shared change" above, landed.
+                afterWrite: { [model] in model.phoneBarSaved() }
             )
         }
         // A paired install is treated as **shared** until the server answers

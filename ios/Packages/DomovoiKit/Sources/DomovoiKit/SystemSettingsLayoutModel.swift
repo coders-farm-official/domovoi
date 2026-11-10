@@ -30,16 +30,11 @@ import Observation
 ///
 ///  - **No editing controls at all when there is no writer.** See
 ///    ``SystemSettingsBarWriter`` and ``canEdit``.
-///  - **Nothing here redraws the bottom bar.** ``ShellModel/phoneBar`` is
-///    computed over a store Observation cannot see
-///    (`ShellModel.swift:444`), so a write invalidates nothing and
-///    `PhoneBarView` (`ShellChromeViews.swift:257`) keeps the old tabs until
-///    the shell is next drawn. The view passes ``afterWrite`` to nudge
-///    Observation through public API, and three trains measured that no such
-///    nudge can reach an untracked read: the real fix is the second
-///    **Needs a shared change** in
-///    `design-notes/ios/overnight/systemsettings/DECISIONS.md`, and the
-///    saved bar is correct meanwhile.
+///  - **The bottom bar is redrawn by ``afterWrite``.** The panel passes
+///    ``ShellModel/phoneBarSaved()``, which bumps the tracked revision
+///    ``ShellModel/phoneBar`` reads, so `PhoneBarView` and Home's grid
+///    follow every save (train I015; before it the store's write
+///    invalidated nothing and the bar kept its old tabs).
 ///  - **No toast.** Android toasts the restored bar (`PhoneBarPanel.kt:105`);
 ///    this app has no toast producer (`ShellModel.swift:23-26`), so the same
 ///    sentence is ``noteAfterDefault``, drawn under the button.
