@@ -626,8 +626,15 @@ extension StubHouseUITests {
             "no `\(PeopleUnderTest.rejectedDisclosure)` disclosure"
         )
         disclosure.tap()
+        // **Scrolled to, not waited for.** The rows behind the disclosure are
+        // a `LazyVStack`, and since the nav regroup People is drawn inside
+        // Settings' page, under its heading — so the disclosure sits at the
+        // viewport's foot and the row it opens is below it, unbuilt. Train
+        // I014's picture shows exactly that: the chevron turned down (the
+        // tap worked) and the row not in the tree. A lazy row is built by
+        // scrolling to it.
         let rejected = app.staticTexts[PeopleUnderTest.rejectedMemory]
-        let shown = rejected.waitForExistence(timeout: 15)
+        let shown = rejected.waitForExistence(timeout: 3) || peopleScroll(app, to: rejected)
         evidence(app, "people-memory-rejected")
         XCTAssertTrue(shown, "opening the disclosure did not reveal the rejected memory")
     }

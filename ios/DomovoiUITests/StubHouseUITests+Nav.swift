@@ -40,34 +40,79 @@ extension StubHouseUITests {
 
     // MARK: - helpers
 
-    /// Flick slowly until `element` is hittable. A tap on one that exists
-    /// and is not hittable throws `Activation point invalid`.
+    /// The part of the page a tap can land on: the tallest scroll view (the
+    /// page's own, not the tab strip's or the keyboard's), less a navigation
+    /// bar sitting on its top edge — ``peopleViewport(_:)``'s measurement.
     @MainActor
-    func navReach(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 12) -> Bool {
+    func navViewport(_ app: XCUIApplication) -> CGRect? {
+        let views = app.scrollViews.allElementsBoundByIndex.map(\.frame)
+        guard let sheet = views.max(by: { $0.height < $1.height }), sheet.height > 120 else { return nil }
+        var top = sheet.minY
+        for bar in app.navigationBars.allElementsBoundByIndex {
+            let frame = bar.frame
+            if frame.minY <= top + 1, frame.maxY > top, frame.maxY < sheet.maxY { top = frame.maxY }
+        }
+        return CGRect(x: sheet.minX, y: top, width: sheet.width, height: sheet.maxY - top)
+    }
+
+    /// Flick slowly until `element` is **wholly** inside the page's viewport.
+    ///
+    /// Not `isHittable`. Train I014 is why: `back to Household` measured
+    /// `{{16, 768.3}, {143, 44}}` against a page whose scroll view ends at
+    /// y = 770 with the phone bar from 774, and XCUITest called it hittable
+    /// and tapped its centre, y = 790 — on the bar. The same happened to
+    /// `back to System` at `{{16, 760}, {117.7, 44}}`. Neither tap did what
+    /// it said, and the next wait failed with no message. A frame inside the
+    /// viewport is a tap that lands on the button.
+    ///
+    /// `inPage: false` is for the phone bar's tabs, which are outside every
+    /// scroll view and are reached by existing.
+    @MainActor
+    func navReach(
+        _ app: XCUIApplication,
+        _ element: XCUIElement,
+        inPage: Bool = true,
+        flicks: Int = 12
+    ) -> Bool {
+        func inside() -> Bool {
+            guard element.exists else { return false }
+            guard inPage else { return element.isHittable }
+            guard let page = navViewport(app) else { return element.isHittable }
+            let frame = element.frame
+            return frame.minY >= page.minY - 0.5 && frame.maxY <= page.maxY + 0.5
+        }
         var done = 0
-        while !(element.exists && element.isHittable), done < flicks {
-            app.swipeUp(velocity: .slow)
+        while !inside(), done < flicks {
+            if inPage, element.exists, let page = navViewport(app), element.frame.minY < page.minY {
+                app.swipeDown(velocity: .slow)
+            } else {
+                app.swipeUp(velocity: .slow)
+            }
             done += 1
         }
-        if !(element.exists && element.isHittable) {
-            print("=== \(element) NOT REACHED after \(done) flicks — tree follows ===")
+        if !inside() {
+            let page = navViewport(app).map { "\($0)" } ?? "none"
+            print(
+                "=== \(element) NOT WHOLLY IN THE PAGE after \(done) flicks "
+                    + "(frame \(element.exists ? "\(element.frame)" : "absent"), page \(page)) — tree follows ==="
+            )
             print(app.debugDescription)
             return false
         }
         return true
     }
 
-    /// Tap a button by its exact label once it is reachable; print the tree
-    /// on a miss.
+    /// Tap a button by its exact label once it is wholly reachable; print
+    /// the tree on a miss.
     @MainActor
-    func navTap(_ app: XCUIApplication, _ label: String, timeout: Double = 20) -> Bool {
+    func navTap(_ app: XCUIApplication, _ label: String, inPage: Bool = true, timeout: Double = 20) -> Bool {
         let button = app.buttons[label]
         guard button.waitForExistence(timeout: timeout) else {
             print("=== NO `\(label)` BUTTON — tree follows ===")
             print(app.debugDescription)
             return false
         }
-        guard navReach(app, button) else { return false }
+        guard navReach(app, button, inPage: inPage) else { return false }
         button.tap()
         return true
     }
@@ -133,13 +178,13 @@ extension StubHouseUITests {
             }
             return tile.frame.minY
         }
-        let podcasts = try XCTUnwrap(top("Podcasts"))
-        let audiobooks = try XCTUnwrap(top("Audiobooks"))
-        let newsTop = try XCTUnwrap(top("News"))
-        let calendar = try XCTUnwrap(top("Calendar"))
-        let files = try XCTUnwrap(top("Files"))
-        let settings = try XCTUnwrap(top("Settings"))
-        let manual = try XCTUnwrap(top("Manual"))
+        let podcasts = try XCTUnwrap(top("Podcasts"), "no `Podcasts` tile on Home's grid")
+        let audiobooks = try XCTUnwrap(top("Audiobooks"), "no `Audiobooks` tile on Home's grid")
+        let newsTop = try XCTUnwrap(top("News"), "no `News` tile on Home's grid")
+        let calendar = try XCTUnwrap(top("Calendar"), "no `Calendar` tile on Home's grid")
+        let files = try XCTUnwrap(top("Files"), "no `Files` tile on Home's grid")
+        let settings = try XCTUnwrap(top("Settings"), "no `Settings` tile on Home's grid")
+        let manual = try XCTUnwrap(top("Manual"), "no `Manual` tile on Home's grid")
         print(
             "NAV GRID media=\(media.frame.minY) podcasts=\(podcasts) audiobooks=\(audiobooks) "
                 + "tools=\(tools.frame.minY) news=\(newsTop) calendar=\(calendar) files=\(files) "
@@ -190,10 +235,10 @@ extension StubHouseUITests {
         }
         XCTAssertFalse(app.buttons["Rooms & devices"].exists, "the index still offers Rooms & devices")
         XCTAssertTrue(navTap(app, NavUnderTest.household), "no Household group on the index")
-        XCTAssertTrue(navHouseholdIsUp(app))
+        XCTAssertTrue(navHouseholdIsUp(app), "tapping Household did not open its four sections")
         evidence(app, "nav-household")
-        XCTAssertTrue(navTap(app, NavUnderTest.allSettings))
-        XCTAssertTrue(navTap(app, NavUnderTest.system))
+        XCTAssertTrue(navTap(app, NavUnderTest.allSettings), "Household's page has no reachable `all settings`")
+        XCTAssertTrue(navTap(app, NavUnderTest.system), "the index has no reachable System group")
         XCTAssertTrue(
             app.buttons[NavUnderTest.appLayout].waitForExistence(timeout: 10),
             "System has no App layout"
@@ -205,7 +250,7 @@ extension StubHouseUITests {
     func testNav_HouseholdAudits() throws {
         let app = launch(push: "Settings", pushDelay: 2)
         XCTAssertTrue(navTap(app, NavUnderTest.household, timeout: 30), "no Household group on the index")
-        XCTAssertTrue(navHouseholdIsUp(app))
+        XCTAssertTrue(navHouseholdIsUp(app), "tapping Household did not open its four sections")
         evidence(app, "nav-household-audit")
         let (floor, rest) = Self.floorAndRest(try auditIssues(app, "nav-household"))
         print("NAV HOUSEHOLD AUDIT floor=\(floor) rest=\(rest.count)")
@@ -247,7 +292,10 @@ extension StubHouseUITests {
             self.navRestoreTheBarInAFreshLaunch()
         }
         let app = launch(push: "Settings", pushDelay: 2)
-        XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
+        XCTAssertTrue(
+            systemSettingsReach(app, group: .system, section: .appLayout),
+            "Settings → System → App layout was not reached"
+        )
         guard systemSettingsSettledBar(app) != nil else {
             evidence(app, "nav-people-tab-never-settled")
             return XCTFail("the bar never settled with chat on it")
@@ -269,25 +317,36 @@ extension StubHouseUITests {
 
         // From inside Settings: the index, where no row is called People, so
         // the only `People` button is the bar's tab.
-        XCTAssertTrue(navTap(app, NavUnderTest.backToSystem))
-        XCTAssertTrue(navTap(app, NavUnderTest.allSettings))
-        XCTAssertTrue(app.buttons[NavUnderTest.household].waitForExistence(timeout: 10))
-        XCTAssertTrue(navTap(app, "People"), "no People tab on the bar")
+        XCTAssertTrue(navTap(app, NavUnderTest.backToSystem), "App layout's `back to System` foot was not reached")
+        XCTAssertTrue(navTap(app, NavUnderTest.allSettings), "System's page has no reachable `all settings`")
+        if !app.buttons[NavUnderTest.household].waitForExistence(timeout: 10) {
+            print("=== NOT ON THE SETTINGS INDEX — tree follows ===")
+            print(app.debugDescription)
+            XCTFail("`all settings` did not reach the index")
+        }
+        XCTAssertTrue(navTap(app, "People", inPage: false), "no People tab on the bar")
         XCTAssertTrue(onPeople("from the Settings index"), "the People tab did not open Settings → People")
         evidence(app, "nav-people-tab-from-settings")
 
         // From Home: a second Settings pushed over Home (the stack is
         // settings, home, settings), opened on People by `.onAppear`.
-        XCTAssertTrue(navTap(app, "Home"))
-        XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20), "the Home tab did not go home")
-        XCTAssertTrue(navTap(app, "People"))
+        XCTAssertTrue(navTap(app, "Home", inPage: false), "no Home tab on the bar")
+        if !houseName(in: app).waitForExistence(timeout: 20) {
+            print("=== HOME NOT REACHED — tree follows ===")
+            print(app.debugDescription)
+            XCTFail("the Home tab did not go home")
+        }
+        XCTAssertTrue(navTap(app, "People", inPage: false), "no People tab on the bar over Home")
         XCTAssertTrue(onPeople("from Home"), "the People tab did not open Settings → People from Home")
         evidence(app, "nav-people-tab-from-home")
 
         // Put the bar back.
-        XCTAssertTrue(navTap(app, NavUnderTest.backToHousehold))
-        XCTAssertTrue(navTap(app, NavUnderTest.allSettings))
-        XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
+        XCTAssertTrue(navTap(app, NavUnderTest.backToHousehold), "People's `back to Household` foot was not reached")
+        XCTAssertTrue(navTap(app, NavUnderTest.allSettings), "Household's page has no reachable `all settings`")
+        XCTAssertTrue(
+            systemSettingsReach(app, group: .system, section: .appLayout),
+            "App layout was not reached again to put the bar back"
+        )
         systemSettingsRestoreTheBar(app)
         restored.done = systemSettingsBarLine(app) == SystemSettingsStringsUnderTest.defaultLine
     }
@@ -316,8 +375,8 @@ extension StubHouseUITests {
             return XCTFail("People never drew")
         }
         XCTAssertTrue(app.staticTexts[NavUnderTest.peopleSectionSub].exists, "not Settings' People section")
-        XCTAssertTrue(navTap(app, NavUnderTest.backToHousehold), "the section has no foot back to Household")
-        XCTAssertTrue(navHouseholdIsUp(app))
+        XCTAssertTrue(navTap(app, NavUnderTest.backToHousehold), "the section's `back to Household` foot was not reached")
+        XCTAssertTrue(navHouseholdIsUp(app), "`back to Household` did not open Household's four sections")
     }
 }
 
