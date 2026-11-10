@@ -24,6 +24,12 @@ namespace Domovoi.Windows.Tray
         public WebFact Web = WebFact.NoAnswer;
         public bool DbReachable, CoreReachable;
         public bool? CoreAlive;     // the web's view, else the core's own /v1/alive
+        // WSL itself (common/WslOutage.cs): null when not looked at. Never
+        // wsl.exe: only reads any user may make.
+        public WslFacts Wsl;
+        // wsl.exe's version when the tray last saw Domovoi up (TrayApp
+        // keeps it); another one now means Windows updated WSL.
+        public string WslVersionWhenUp;
     }
 
     public enum TrayState { Running, Starting, Stopped, Problem }
@@ -49,6 +55,12 @@ namespace Domovoi.Windows.Tray
         {
             if (f.Web == WebFact.Ok)
                 return V(TrayState.Running, "Domovoi is running", null);
+            // WSL went away under Domovoi (incident 2026-11-10: Windows
+            // Update installed a new WSL). DomovoiHost waits for it and
+            // starts Domovoi again; say so instead of "stopped" or "a
+            // problem". A DomovoiHost someone stopped is still "stopped".
+            Verdict wsl = WslVerdict(f, notReadySince, now, grace);
+            if (wsl != null) return wsl;
             switch (f.Service)
             {
                 case ServiceFact.Stopped:
@@ -66,6 +78,24 @@ namespace Domovoi.Windows.Tray
             if (now - notReadySince < grace)
                 return V(TrayState.Starting, "Domovoi is starting or updating", "This can take a few minutes.");
             return V(TrayState.Problem, "Domovoi has a problem", why);
+        }
+
+        static Verdict WslVerdict(Facts f, DateTime notReadySince, DateTime now, TimeSpan grace)
+        {
+            // A stopped host is never "starting again": since DomovoiHost
+            // depends on no service, a WSL update no longer stops it, so a
+            // stopped one was stopped on purpose (or failed, and the SCM
+            // starts it: "stopped" until then is the truth) (review
+            // 2026-11-10).
+            if (f.Wsl == null || f.Service == ServiceFact.NotInstalled || f.Service == ServiceFact.NotChecked
+                || f.Service == ServiceFact.Stopped || f.Service == ServiceFact.Stopping) return null;
+            bool updated = WslOutage.Updated(f.Wsl, f.WslVersionWhenUp);
+            bool down = WslOutage.Gone(f.Wsl);
+            // A new WSL that is back: Domovoi is coming up again, for at
+            // most twice the usual grace, then the usual words.
+            if (!down && !(updated && now - notReadySince < grace + grace)) return null;
+            return V(TrayState.Starting, updated ? WslOutage.UpdatedMessage : WslOutage.StoppedMessage,
+                "Rooms and phones reconnect by themselves once it is back.");
         }
 
         static string Why(Facts f)
@@ -149,6 +179,7 @@ namespace Domovoi.Windows.Tray
                 f.Web = Json.Str(health, "status") == "ok" ? WebFact.Ok : WebFact.Degraded;
             }
             if (f.CoreAlive == null) f.CoreAlive = GetJson(coreUrl + "/v1/alive", 4000) != null;
+            if (f.Web != WebFact.Ok) f.Wsl = WslOutage.Look(Paths.WslExe);
             return f;
         }
 

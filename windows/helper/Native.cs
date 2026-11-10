@@ -121,6 +121,7 @@ namespace Domovoi.Windows.Helper
         public const int SERVICE_NO_CHANGE = -1;
         public const int SERVICE_CONFIG_DESCRIPTION = 1;
         public const int SERVICE_CONFIG_FAILURE_ACTIONS = 2;
+        public const int SERVICE_CONFIG_FAILURE_ACTIONS_FLAG = 4;
         public const int SC_ACTION_RESTART = 1;
         public const int ERROR_SERVICE_DOES_NOT_EXIST = 1060;
         public const int ERROR_SERVICE_EXISTS = 1073;
@@ -138,6 +139,9 @@ namespace Domovoi.Windows.Helper
             public int actionCount;
             public IntPtr actions;
         }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SERVICE_FAILURE_ACTIONS_FLAG { public int failureActionsOnNonCrashFailures; }
 
         [StructLayout(LayoutKind.Sequential)]
         public struct SC_ACTION
@@ -168,6 +172,10 @@ namespace Domovoi.Windows.Helper
         [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "ChangeServiceConfig2W")]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool ChangeServiceFailureActions(IntPtr service, int level, ref SERVICE_FAILURE_ACTIONS info);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "ChangeServiceConfig2W")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ChangeServiceFailureActionsFlag(IntPtr service, int level, ref SERVICE_FAILURE_ACTIONS_FLAG info);
 
         [DllImport("advapi32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]

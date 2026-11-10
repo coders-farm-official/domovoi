@@ -1,5 +1,6 @@
 // DomovoiHost.exe: the Windows service Setup registers to run as the
-// hidden account domovoi-svc (Automatic, depends on WSLService). See
+// hidden account domovoi-svc (Automatic, no service dependency: it waits for
+// WSL itself, common/WslOutage.cs; Windows restarts it if it fails). See
 // Host.cs for what it does and docs/WINDOWS_HOST.md for the whole picture.
 
 using System;
@@ -60,7 +61,13 @@ namespace Domovoi.Windows.Host
             catch (Exception e)
             {
                 host.Info("fatal: " + e);
-                ExitCode = 1064; // ERROR_EXCEPTION_IN_SERVICE
+                // An unregister that failed is recorded in unregister.json
+                // and ends with 0: an error code would make the SCM restart
+                // the host (FailureActionsOnNonCrashFailures), without the
+                // start parameter, as the long-running host, in the middle of
+                // an uninstall (review 2026-11-10).
+                if (unregisterMode) host.UnregisterFailed(e);
+                ExitCode = HostExit.CodeFor(unregisterMode, true);
             }
             if (unregisterMode || !stop.WaitOne(0))
             {

@@ -163,6 +163,72 @@ _MEMORY = r"""
            refolded, fetched: h.hookCalls };
 """
 
+# The file-cache trim's last run (core /v1/admin/memory `cache_trim`,
+# scripts/linux/cache-trim.py), and the Windows install's "this PC" card
+# (core /v1/admin/host-limits), 2026-11-10.
+TRIM_ON = {"enabled": True, "why_enabled": "wsl", "limit_bytes": int(6.3 * GB), "action": "under",
+           "checked_at": "2026-11-10T05:02:00Z",
+           "last_trim": {"at": "2026-11-10T04:59:00Z", "freed_bytes": 22 * GB}}
+MEM_WSL_TRIMMED = {**MEM_WSL, "cache_trim": TRIM_ON}
+LIMITS = {
+    "available": True, "ram_gb": 128, "logical_processors": 32,
+    "memory_gb": {"min": 8, "max": 124, "default": 32, "chosen": None, "in_file": 32},
+    "processors": {"min": 2, "max": 32, "default": 32, "chosen": None, "in_file": None},
+    "running": {"memory_gb": 62.6, "processors": 32}, "pending": True, "waiting_for_host": False,
+    "request": "none", "request_problem": None, "restart": "none", "reported_at": "2026-11-10T05:00:00Z",
+    "warn_below_gb": 16, "training_gb": 24,
+}
+
+_TRIM_WORDS = r"""
+  const w = h.global('window');
+  const at = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+  const GB = 1024 ** 3;
+  return {
+    none: w.healthTrimWords(null),
+    on: w.healthTrimWords({ enabled: true, why_enabled: 'wsl', limit_bytes: 8 * GB, checked_at: at,
+                            last_trim: { at, freed_bytes: 22 * GB } }),
+    nothing: w.healthTrimWords({ enabled: true, why_enabled: 'wsl', limit_bytes: 8 * GB, checked_at: at, last_trim: null }),
+    linux: w.healthTrimWords({ enabled: false, why_enabled: 'not-wsl', checked_at: at }),
+    operator: w.healthTrimWords({ enabled: false, why_enabled: 'operator', checked_at: at }),
+    low: w.healthLimitsWords({ warn_below_gb: 16, training_gb: 24, memory_gb: { default: 32 } }, { memory_gb: 12 })
+      .map((n) => [n.key, n.tone]),
+    auto: w.healthLimitsWords({ warn_below_gb: 16, training_gb: 24, memory_gb: { default: 32 } }, { memory_gb: null })
+      .map((n) => n.key),
+  };
+"""
+
+_MEMORY_SUB = r"""
+  h.render(); await h.settle(); h.rerender(); await h.settle(); h.rerender();
+  const sub = h.find((e) => e.props && e.props['data-health-sub'] === 'memory');
+  h.click((e) => e.type === 'button' && String(e.props.className || '').includes('health-mem-toggle'));
+  await h.settle(); h.rerender();
+  return { sub: sub ? sub.text : null,
+           text: h.text().join(' ') };
+"""
+
+_LIMITS = r"""
+  h.render(); await h.settle(); h.rerender(); await h.settle(); h.rerender();
+  const card = h.find((e) => e.props && e.props['data-health-limits'] === 'card');
+  if (!card) return { card: false, fetched: h.hookCalls };
+  const text0 = h.text().join(' ');
+  const sliders0 = h.findAll((e) => e.type === 'input' && e.props.type === 'range').length;
+  // Memory off automatic: a slider inside the PC's bounds.
+  await h.change((e) => e.type === 'input' && e.props.type === 'checkbox'
+    && h.ancestors(e).some((a) => a.props && a.props['data-limit'] === 'memory'), false);
+  const rangeSel = (e) => e.type === 'input' && e.props.type === 'range';
+  const range = () => h.find(rangeSel);
+  const bounds = range() ? [range().props.min, range().props.max, range().props.value] : null;
+  await h.change(rangeSel, '12');
+  const low = h.findAll((e) => e.props && e.props['data-limit-note']).map((e) => e.props['data-limit-note']);
+  h.click((e) => e.props && e.props['data-limit-action'] === 'save'); await h.settle(); h.rerender();
+  h.click((e) => e.props && e.props['data-limit-action'] === 'restart'); await h.settle(); h.rerender();
+  const confirming = !!h.find((e) => e.props && e.props['data-limit-action'] === 'confirm');
+  h.click((e) => e.props && e.props['data-limit-action'] === 'confirm'); await h.settle(); h.rerender();
+  return { card: true, text0, sliders0, bounds, low, confirming,
+           posts: h.calls.filter((c) => c.method === 'POST').map((c) => [c.path, c.body]),
+           text: h.text().join(' '), fetched: h.hookCalls };
+"""
+
 API_GREEN = {
     "GET /api/config": {"internet_access": "always", "home_problems_visibility": "everyone"},
     "GET /api/health": HEALTH_OK,
@@ -201,6 +267,24 @@ SCENARIOS: dict[str, dict] = {
         "api": {**API_GREEN, "GET /api/models/memory": {**MEM_LINUX_LOW, "breakdown": MEM_WSL["breakdown"][:1],
                                                         "cache_bytes": 2 * GB}},
         "script": _MEMORY,
+    },
+    "trim_words": {
+        "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
+        "script": _TRIM_WORDS,
+    },
+    "memory_trimmed": {
+        "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
+        "api": {**API_GREEN, "GET /api/models/memory": MEM_WSL_TRIMMED}, "script": _MEMORY_SUB,
+    },
+    "limits_card": {
+        "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
+        "api": {**API_GREEN, "GET /api/models/host-limits": LIMITS,
+                "POST /api/models/host-limits": LIMITS}, "script": _LIMITS,
+    },
+    "limits_off_windows": {
+        "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
+        "api": {**API_GREEN, "GET /api/models/host-limits": {"available": False, "why": "x"}},
+        "script": _LIMITS,
     },
     "panel_household_admins_only": {
         "files": [COMPONENTS, CONTAINERS, HEALTH], "component": "HealthPanel",
@@ -332,6 +416,45 @@ def test_no_cache_note_when_programs_use_the_memory(driven) -> None:
     assert o["tone"] == "warn"
     assert o["notes"] == []                                  # not WSL, not cache-heavy
     assert o["missing"] == []
+
+
+def test_the_memory_row_says_whether_the_cache_is_trimmed(driven) -> None:
+    o = driven["trim_words"]
+    assert o["none"] is None                                 # not reached by an update yet: nothing said
+    assert o["on"] == "file cache is trimmed automatically above 8.0 GB · last trimmed 3m ago (freed 22 GB)"
+    assert o["nothing"] == "file cache is trimmed automatically above 8.0 GB · nothing to trim so far"
+    assert o["linux"] == "file cache isn’t trimmed here: this server hands it to programs as they need it"
+    assert o["operator"] == "automatic file-cache trimming is turned off on this server"
+    m = driven["memory_trimmed"]
+    assert m["sub"] and m["sub"].startswith("file cache is trimmed automatically above 6.3 GB · last trimmed")
+    assert "(freed 22 GB)" in m["sub"]
+    # Unfolded, the cache note says Domovoi hands it back itself now.
+    assert "Domovoi hands what is over 6.3 GB back to Windows every few minutes" in m["text"]
+    assert "once Domovoi has been idle" not in m["text"]
+
+
+def test_this_pc_card_sets_the_ceiling_inside_the_pcs_bounds(driven) -> None:
+    o = driven["limits_card"]
+    assert o["card"] is True and "/api/models/host-limits" in o["fetched"]
+    assert "This PC has 128 GB of memory and 32 processor cores" in o["text0"]
+    assert "automatic (32 GB)" in o["text0"] and "automatic (all 32)" in o["text0"]
+    assert o["sliders0"] == 0                                 # both automatic: no slider yet
+    assert o["bounds"] == [8, 124, 32]                        # min, max: the PC's; starts at the default
+    assert "low" in o["low"] and "training" in o["low"]       # 12 GB: warned, and too little to train
+    assert "Domovoi still runs on 62.6 GB" in o["text0"]
+    assert "The new limits apply when Domovoi next restarts" in o["text0"]
+    assert o["confirming"] is True
+    assert o["posts"] == [
+        ["/api/models/host-limits", {"memory_gb": 12, "processors": None, "restart_now": False}],
+        # The restart right after the save sends what was saved, not the
+        # report's old `chosen` (DomovoiHost hasn't read the request yet).
+        ["/api/models/host-limits", {"memory_gb": 12, "processors": None, "restart_now": True}],
+    ]
+
+
+def test_no_this_pc_card_off_the_windows_install(driven) -> None:
+    assert driven["limits_off_windows"]["card"] is False
+    assert driven["panel_admin"]["text"].count("This PC has") == 0
 
 
 def test_home_holds_no_rules_of_its_own() -> None:

@@ -653,10 +653,15 @@ static partial class Tests
             Eq(10, WslConfig.MemoryCapGb(16 * gib - gib / 3), "a 16 GB PC");
             Eq(10, WslConfig.MemoryCapGb(23 * gib), "23 GB");
             Eq(16, WslConfig.MemoryCapGb(24 * gib - gib / 4), "24 GB");
-            Eq(24, WslConfig.MemoryCapGb(32 * gib), "32 GB");
-            Eq(56, WslConfig.MemoryCapGb(64 * gib), "64 GB");
-            Eq(64, WslConfig.MemoryCapGb(137242800128L), "this dev box, 128 GB");
+            Eq(20, WslConfig.MemoryCapGb(28 * gib), "28 GB: RAM - 8");
+            Eq(24, WslConfig.MemoryCapGb(32 * gib), "32 GB: training's 24 GB and the standard tier fit");
+            Eq(24, WslConfig.MemoryCapGb(48 * gib), "48 GB");
+            Eq(32, WslConfig.MemoryCapGb(64 * gib), "64 GB: half (was 56)");
+            Eq(32, WslConfig.MemoryCapGb(137242800128L), "a 128 GB PC: 32 (was 64, 2026-11-10)");
+            Eq(32, WslConfig.MemoryCapGb(256 * gib), "256 GB");
         });
+        HardwareLimitsTests();
+        WslOutageTests();
         Run("wslconfig: the file", delegate
         {
             var o = new WslConfigOptions();
@@ -680,6 +685,299 @@ static partial class Tests
             Throws<ArgumentException>(delegate { WslConfig.Render(o); }, "a newline in a path");
             o.SwapFile = @"C:\x"; o.MemoryGb = 0;
             Throws<ArgumentException>(delegate { WslConfig.Render(o); }, "no memory");
+        });
+    }
+
+    static void WslOutageTests()
+    {
+        Run("wsl outage: wait while an MSI installs, wsl.exe is gone or WSLService stops; never ask wsl.exe then", delegate
+        {
+            var msi = new WslFacts { MsiBusy = true, Service = WslService.Running, Answers = true };
+            True(!WslOutage.MayAsk(msi), "no wsl.exe call during an install (it would start WSLService mid-update)");
+            Eq(WslProbe.Wait, WslOutage.Decide(msi), "an install: wait, even with an answer");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { ExeExists = false, Answers = true }), "no wsl.exe: wait");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { Service = WslService.Stopping, Answers = true }), "WSLService stopping: wait");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { Service = WslService.Running }), "not asked yet: wait");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { Service = WslService.Running, Answers = false }), "no answer: wait");
+            Eq(WslProbe.Recover, WslOutage.Decide(new WslFacts { Service = WslService.Running, Answers = true }), "it answers: bring Domovoi up");
+            // A stopped WSLService starts on demand: wsl.exe may be asked.
+            True(WslOutage.MayAsk(new WslFacts { Service = WslService.Stopped }), "stopped (not updating): ask, which starts it");
+            Eq(WslProbe.Recover, WslOutage.Decide(new WslFacts { Service = WslService.Stopped, Answers = true }), "and it answered");
+        });
+        Run("wsl outage: the backoff between looks", delegate
+        {
+            SeqEq(new[] { "5", "10", "20", "30", "60", "60", "60" },
+                  Enumerable.Range(0, 7).Select(i => Inv.S((int)WslOutage.Delay(i).TotalSeconds)), "5, 10, 20, 30, then every minute");
+            Eq(5, (int)WslOutage.Delay(-3).TotalSeconds, "never negative");
+        });
+        Run("wsl outage: gone or only the distro stopped", delegate
+        {
+            True(!WslOutage.Gone(new WslFacts { Service = WslService.Running, Answers = true }), "WSL answers: only the distro stopped");
+            True(WslOutage.Gone(new WslFacts { Service = WslService.Running, Answers = false }), "no answer");
+            True(WslOutage.Gone(new WslFacts { Service = WslService.Stopped }), "WSLService stopped");
+            True(WslOutage.Gone(new WslFacts { MsiBusy = true, Service = WslService.Running, Answers = true }), "an install");
+            True(WslOutage.Gone(new WslFacts { ExeExists = false }), "no wsl.exe");
+            True(WslOutage.Gone(null), "nothing known");
+        });
+        Run("wsl outage: the words", delegate
+        {
+            Eq("Domovoi stopped: Windows updated WSL, starting again\u2026", WslOutage.Message(new WslFacts { MsiBusy = true }, "2.7.14.0"), "an install");
+            Eq(WslOutage.UpdatedMessage, WslOutage.Message(new WslFacts { Version = "3.0.5.0", Service = WslService.Running }, "2.7.14.0"), "a new version since Domovoi ran");
+            Eq(WslOutage.UpdatedMessage, WslOutage.Message(new WslFacts { ExeExists = false }, "2.7.14.0"), "wsl.exe gone");
+            Eq("Domovoi stopped: WSL stopped, starting again\u2026", WslOutage.Message(new WslFacts { Version = "2.7.14.0", Service = WslService.Stopped }, "2.7.14.0"), "same version");
+            Eq(WslOutage.StoppedMessage, WslOutage.Message(new WslFacts { Version = "3.0.5.0" }, null), "no version known from before");
+        });
+        Run("wsl outage: an MSI that holds Windows Installer for 30 minutes no longer blocks asking", delegate
+        {
+            var clock = new MsiClock();
+            DateTime t0 = new DateTime(2026, 11, 10, 0, 25, 0, DateTimeKind.Utc);
+            Eq(TimeSpan.Zero, clock.For(true, t0), "starts");
+            var f = new WslFacts { MsiBusy = true, Service = WslService.Running, MsiBusyFor = clock.For(true, t0.AddMinutes(29)) };
+            True(!WslOutage.MayAsk(f), "29 minutes: still waits");
+            f.MsiBusyFor = clock.For(true, t0.AddMinutes(30));
+            True(WslOutage.MayAsk(f), "30 minutes: asks anyway");
+            f.Answers = true;
+            Eq(WslProbe.Recover, WslOutage.Decide(f), "and comes back when it answers");
+            Eq(TimeSpan.Zero, clock.For(false, t0.AddMinutes(31)), "not busy: the clock resets");
+            Eq(TimeSpan.Zero, clock.For(true, t0.AddMinutes(32)), "a new install counts afresh");
+        });
+        Run("wsl outage: only a wsl.exe that can't start means WSL went away", delegate
+        {
+            True(WslOutage.IsWslFailure(new System.ComponentModel.Win32Exception(2)), "wsl.exe missing");
+            True(!WslOutage.IsWslFailure(new System.IO.IOException("disk")), "an I/O error is a bug: the host stops, the SCM restarts it");
+            True(!WslOutage.IsWslFailure(new InvalidOperationException("x")), "nor this");
+            True(!WslOutage.IsWslFailure(new NullReferenceException()), "nor this");
+        });
+        Run("recovery: a failed bring-up is tried again unless it was a first install", delegate
+        {
+            True(WslOutage.RetryFailedBringUp(false, false), "after WSL came back, or a limits restart");
+            True(WslOutage.RetryFailedBringUp(true, true), "the service's start, a job already provisioned (every boot)");
+            True(!WslOutage.RetryFailedBringUp(true, false), "a first install: Setup shows why and decides");
+            var r = new Recovery();
+            DateTime t = new DateTime(2026, 11, 10, 1, 0, 0, DateTimeKind.Utc);
+            r.Lost(t, false);
+            True(r.Down && !r.WslTrouble && r.Attempts == 0, "down, WSL fine");
+            True(!r.Due(t.AddSeconds(4)) && r.Due(t.AddSeconds(5)), "first look after 5 s");
+            r.Failed(t.AddSeconds(5)); r.Failed(t.AddSeconds(15)); r.Failed(t.AddSeconds(35));
+            Eq(3, r.Attempts, "three tries");
+            r.Lost(t.AddSeconds(40), true);
+            Eq(3, r.Attempts, "lost again while waiting: the count is kept (no reset to 5 s)");
+            True(r.WslTrouble, "now WSL's trouble");
+            True(!r.Due(t.AddSeconds(41)), "and the next look isn't moved earlier");
+            r.Recovered();
+            True(!r.Down && r.Attempts == 0, "back");
+            r.Lost(t.AddMinutes(5), true);
+            Eq(0, r.Attempts, "a new outage starts afresh");
+            Eq("Domovoi didn't start; trying again\u2026", WslOutage.DownMessage(new WslFacts(), null, false), "the words when WSL is fine");
+        });
+        Run("service: an unregister never ends with an error code (no SCM restart mid-uninstall)", delegate
+        {
+            Eq(0, HostExit.CodeFor(true, true), "unregister failed: 0, recorded in unregister.json");
+            Eq(0, HostExit.CodeFor(true, false), "unregister done: 0");
+            Eq(1064, HostExit.CodeFor(false, true), "the long-running host failed: the SCM restarts it");
+            Eq(0, HostExit.CodeFor(false, false), "stopped: 0");
+            var d = HostExit.UnregisterFailure(new InvalidOperationException("WSL did not answer"), new DateTime(2026, 11, 10, 1, 0, 0, DateTimeKind.Utc));
+            True(Json.Bool(d, "ok") == false, "ok false");
+            True(Json.Str(d, "error").Contains("WSL did not answer"), "the reason, for the uninstaller");
+            True(Json.Str(d, "at").StartsWith("2026-11-10T01:00:00", StringComparison.Ordinal), "when");
+        });
+        Run("service: no dependency on WSLService, restarted on any failure", delegate
+        {
+            Eq("", Domovoi.Windows.Helper.HostService.NoDependencies, "an empty list (\"\" removes dependencies; null keeps them)");
+            SeqEq(new[] { "10000", "30000", "60000" }, Domovoi.Windows.Helper.HostService.RestartDelaysMs.Select(d => Inv.S(d)), "10 s, 30 s, then 60 s repeating");
+            Eq(86400, Domovoi.Windows.Helper.HostService.FailureResetSec, "counted afresh after a day");
+        });
+    }
+
+    static void HardwareLimitsTests()
+    {
+        const long G = 1024L * 1024 * 1024;
+        LimitsBounds b128 = HardwareLimits.Bounds(137242800128L, 32);
+        Run("limits: this PC's bounds", delegate
+        {
+            Eq(128, b128.RamGb, "RAM label");
+            Eq(8, b128.MemoryMin, "never under 8 GB");
+            Eq(124, b128.MemoryMax, "RAM - 4");
+            Eq(2, b128.ProcessorsMin, "never under 2 cores");
+            Eq(32, b128.ProcessorsMax, "every logical processor");
+            LimitsBounds small = HardwareLimits.Bounds(16 * G - G / 3, 4);
+            Eq(12, small.MemoryMax, "16 GB PC: up to 12");
+            LimitsBounds tiny = HardwareLimits.Bounds(8 * G, 1);
+            Eq(8, tiny.MemoryMax, "an 8 GB PC can't go under the floor either");
+            Eq(1, tiny.ProcessorsMin, "one core: the floor is what there is");
+        });
+        Run("limits: a request", delegate
+        {
+            LimitsRequest r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":24,\"processors\":8,\"restart_id\":null,\"at\":\"2026-11-10T05:00:00Z\"}", b128);
+            Eq("ok", r.State, "ok");
+            Eq(24, r.Choice.MemoryGb.Value, "memory");
+            Eq(8, r.Choice.Processors.Value, "processors");
+            True(r.RestartId == null, "no restart");
+            r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":null,\"processors\":null,\"restart_id\":\"0123456789abcdef0123456789abcdef\"}", b128);
+            Eq("ok", r.State, "automatic");
+            True(!r.Choice.MemoryGb.HasValue && !r.Choice.Processors.HasValue, "both automatic");
+            Eq("0123456789abcdef0123456789abcdef", r.RestartId, "the restart id");
+            Eq("none", HardwareLimits.Parse(null, b128).State, "no file");
+        });
+        Run("limits: numbers outside this PC's bounds are moved inside", delegate
+        {
+            LimitsRequest r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":2,\"processors\":512}", b128);
+            Eq("clamped", r.State, "clamped");
+            Eq(8, r.Choice.MemoryGb.Value, "up to the floor");
+            Eq(32, r.Choice.Processors.Value, "down to the cores there are");
+            r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":4000,\"processors\":0}", b128);
+            Eq(124, r.Choice.MemoryGb.Value, "never past RAM - 4");
+            Eq(2, r.Choice.Processors.Value, "never under 2");
+        });
+        Run("limits: anything else in a request is refused", delegate
+        {
+            string[] bad =
+            {
+                "", "[]", "not json", "{\"v\":2,\"memory_gb\":24}", "{\"memory_gb\":24}",
+                "{\"v\":1,\"memory_gb\":\"24\"}", "{\"v\":1,\"memory_gb\":24.5}", "{\"v\":1,\"processors\":[4]}",
+                "{\"v\":1,\"memory_gb\":24,\"swap\":64}", "{\"v\":1,\"wslconfig\":\"[wsl2]\\nkernel=x\"}",
+                "{\"v\":1,\"restart_id\":\"abc\"}", "{\"v\":1,\"restart_id\":\"0123456789ABCDEF0123456789ABCDEF\"}",
+                "{\"v\":1,\"restart_id\":7}", "{\"v\":1,\"memory_gb\":99999999999}",
+                "{\"v\":1,\"memory_gb\":24}" + new string(' ', 3000),
+            };
+            foreach (string t in bad)
+            {
+                LimitsRequest r = HardwareLimits.Parse(t, b128);
+                Eq("invalid", r.State, "refused: " + (t.Length > 60 ? t.Substring(0, 60) : t));
+                True(r.Choice == null && r.RestartId == null && !string.IsNullOrEmpty(r.Problem), "nothing taken from it");
+            }
+        });
+        Run("limits: into the installer's .wslconfig, nothing else touched", delegate
+        {
+            var o = new WslConfigOptions();
+            o.MemoryGb = 32;
+            o.SwapFile = @"C:\ProgramData\Domovoi\wsl\swap.vhdx";
+            string job = WslConfig.Render(o);
+            Eq(job, HardwareLimits.Apply(job, new LimitsChoice()), "automatic: the installer's text as it is");
+            var c = new LimitsChoice(); c.MemoryGb = 20; c.Processors = 6;
+            string t = HardwareLimits.Apply(job, c);
+            var lines = t.Split('\n').ToList();
+            int m = lines.IndexOf("memory=20GB");
+            True(m > 0, "memory replaced");
+            Eq("processors=6", lines[m + 1], "processors right after it");
+            True(!t.Contains("memory=32GB"), "the old size is gone");
+            Eq(job.Split('\n').Length + 1, lines.Count, "one line more, nothing else");
+            True(t.Contains("autoMemoryReclaim=dropCache") && t.Contains("networkingMode=mirrored"), "the rest stays");
+            // Applying again, or another choice, never stacks lines.
+            var c2 = new LimitsChoice(); c2.Processors = 4;
+            string t2 = HardwareLimits.Apply(t, c2);
+            Eq(1, t2.Split('\n').Count(l => l.StartsWith("processors=")), "one processors= line");
+            True(t2.Contains("memory=20GB"), "an automatic size keeps the text's line");
+            LimitsChoice back = HardwareLimits.InFile(t);
+            Eq(20, back.MemoryGb.Value, "read back: memory");
+            Eq(6, back.Processors.Value, "read back: processors");
+            True(!HardwareLimits.InFile(job).Processors.HasValue, "the installer sets no processors=");
+            Throws<FormatException>(delegate { HardwareLimits.Apply("[general]\nx=1\n", c); }, "no memory= line");
+            var huge = new LimitsChoice(); huge.MemoryGb = 5000;
+            Throws<ArgumentException>(delegate { HardwareLimits.Apply(job, huge); }, "a size no PC has");
+        });
+        Run("limits: a stored choice stays inside the bounds of today", delegate
+        {
+            var c = new LimitsChoice(); c.MemoryGb = 100; c.Processors = 64;
+            LimitsChoice w = HardwareLimits.Within(c, HardwareLimits.Bounds(32 * G, 8));
+            Eq(28, w.MemoryGb.Value, "RAM was taken out: 32 - 4");
+            Eq(8, w.Processors.Value, "8 cores");
+            True(!HardwareLimits.Within(new LimitsChoice(), b128).MemoryGb.HasValue, "automatic stays automatic");
+        });
+        Run("limits: the report and the root script", delegate
+        {
+            var chosen = new LimitsChoice(); chosen.MemoryGb = 24;
+            var defaults = new LimitsChoice(); defaults.MemoryGb = 32;
+            var req = new LimitsRequest(); req.State = "invalid"; req.Problem = "the request has a key it may not have";
+            string t = HardwareLimits.Report(b128, defaults, chosen, chosen, req, "done", new DateTime(2026, 11, 10, 5, 0, 0, DateTimeKind.Utc));
+            var d = Json.ParseObject(t);
+            Eq(1, Json.Int(d, "schema").Value, "schema");
+            Eq(128, Json.Int(d, "ram_gb").Value, "RAM");
+            Eq(32, Json.Int(d, "logical_processors").Value, "cores");
+            var mem = Json.Obj(d, "memory_gb");
+            Eq(8, Json.Int(mem, "min").Value, "min");
+            Eq(124, Json.Int(mem, "max").Value, "max");
+            Eq(32, Json.Int(mem, "default").Value, "default");
+            Eq(24, Json.Int(mem, "chosen").Value, "chosen");
+            True(Json.IsNull(Json.Obj(d, "processors"), "chosen"), "processors automatic");
+            Eq("invalid", Json.Str(d, "request"), "request state");
+            Eq("done", Json.Str(d, "restart"), "restart");
+            Eq("2026-11-10T05:00:00Z", Json.Str(d, "written_at"), "time");
+            True(t.EndsWith("\n") && !t.Contains("\r"), "one LF line");
+            string s = HardwareLimits.ReportScript();
+            True(s.Contains("chown root:root /var/lib/domovoi-windows") && s.Contains("chmod 0644") && s.Contains("sha256sum /var/lib/domovoi-windows/limits.json"), "root's file");
+            string[] a = HardwareLimits.ReadArgs("domovoi");
+            SeqEq(new[] { "-d", "domovoi", "-u", "domovoi", "--cd", "/", "--exec", "/usr/bin/timeout", "-s", "KILL", "5",
+                          "/usr/bin/head", "-c", "2049", "/home/domovoi/.domovoi/hardware_limits/request.json" }, a,
+                  "read as the service user, bounded in size and (a FIFO) in time");
+            SeqEq(new[] { "-d", "domovoi", "-u", "root", "--cd", "/", "--exec", "/usr/bin/systemctl", "show", "-p", "ActiveState", "--value", "domovoi-update.service" },
+                  HardwareLimits.UpdateStateArgs("domovoi"), "the update unit's state, read as root");
+        });
+        Run("limits: the maximum counts from what Windows can use", delegate
+        {
+            LimitsBounds b = HardwareLimits.Bounds(137242800128L, 137242800128L - G / 3 - G / 4, 32);
+            Eq(128, b.RamGb, "the label from the installed RAM");
+            Eq(123, b.MemoryMax, "127.x GB usable, whole GB down, less 4");
+            Eq(124, HardwareLimits.Bounds(137242800128L, 0, 32).MemoryMax, "usable unknown: the installed figure");
+            Eq(28, HardwareLimits.Bounds(0, 32 * G, 8).MemoryMax, "installed unknown: the usable one");
+        });
+        Run("limits: the request's time", delegate
+        {
+            LimitsRequest r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":24,\"restart_id\":\"0123456789abcdef0123456789abcdef\",\"at\":\"2026-11-10T05:00:00Z\"}", b128);
+            Eq("2026-11-10T05:00:00Z", r.At, "as written");
+            Eq(new DateTime(2026, 11, 10, 5, 0, 0, DateTimeKind.Utc), r.AtUtc.Value, "as a time");
+            foreach (string bad in new[] { "yesterday", "2026-11-10 05:00:00", "2026-13-40T05:00:00Z", "2026-11-10T05:00:00+02:00" })
+            {
+                LimitsRequest x = HardwareLimits.Parse("{\"v\":1,\"restart_id\":\"0123456789abcdef0123456789abcdef\",\"at\":\"" + bad + "\"}", b128);
+                Eq("invalid", x.State, "refused: " + bad);
+                True(x.RestartId == null, "and no restart from it");
+            }
+            True(HardwareLimits.Parse("{\"v\":1}", b128).AtUtc == null, "none at all: fine, no time");
+            string report = HardwareLimits.Report(b128, new LimitsChoice(), new LimitsChoice(), new LimitsChoice(), r, "none", DateTime.UtcNow);
+            Eq("2026-11-10T05:00:00Z", Json.Str(Json.ParseObject(report), "request_at"), "the report says which request it read");
+        });
+        Run("limits: which restart ids restart Domovoi", delegate
+        {
+            DateTime now = new DateTime(2026, 11, 10, 5, 10, 0, DateTimeKind.Utc);
+            Func<string, LimitsRequest> req = at => HardwareLimits.Parse(
+                "{\"v\":1,\"memory_gb\":24,\"restart_id\":\"0123456789abcdef0123456789abcdef\"" + (at == null ? "" : ",\"at\":\"" + at + "\"") + "}", b128);
+            const string id = "0123456789abcdef0123456789abcdef";
+            DateTime never = DateTime.MinValue;
+            Eq(LimitsRestart.Go, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, "inactive"), "fresh, nothing running");
+            Eq(LimitsRestart.Go, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, "failed"), "an update that failed earlier is not running");
+            foreach (string busy in new[] { "active", "activating", "deactivating", "reloading" })
+                Eq(LimitsRestart.Busy, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, busy), "the update unit " + busy + ": wait");
+            Eq(LimitsRestart.Busy, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, null), "can't tell: wait");
+            Eq(LimitsRestart.None, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), id, true, now, never, "inactive"), "already done");
+            Eq(LimitsRestart.None, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, false, now, never, "inactive"), "host-state.json unreadable: nothing, since the id couldn't be recorded");
+            Eq(LimitsRestart.Stale, HardwareLimits.DecideRestart(req("2026-11-10T04:50:00Z"), null, true, now, never, "inactive"), "older than 15 minutes (written before a reboot)");
+            Eq(LimitsRestart.Stale, HardwareLimits.DecideRestart(req(null), null, true, now, never, "inactive"), "no time");
+            Eq(LimitsRestart.Stale, HardwareLimits.DecideRestart(req("2026-11-10T06:10:00Z"), null, true, now, never, "inactive"), "from the future");
+            Eq(LimitsRestart.TooSoon, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, now.AddMinutes(-5), "inactive"), "one per 10 minutes");
+            Eq(LimitsRestart.None, HardwareLimits.DecideRestart(HardwareLimits.Parse("{\"v\":1}", b128), null, true, now, never, "inactive"), "no id");
+        });
+        Run("host state: read-modify-write never wipes what it can't read", delegate
+        {
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-hoststate-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                string file = System.IO.Path.Combine(dir, "host-state.json");
+                var s = new HostStateStore(file);
+                string why;
+                var one = new Dictionary<string, object>(); one["imported"] = true;
+                True(s.Update(one, DateTime.UtcNow, out why), "a first key, no file yet");
+                var two = new Dictionary<string, object>(); two["limits_restart_id"] = "x";
+                True(s.Update(two, DateTime.UtcNow, out why), "a second key");
+                var d = s.ReadStrict();
+                True(Json.Bool(d, "imported") == true && Json.Str(d, "limits_restart_id") == "x", "both kept");
+                System.IO.File.WriteAllText(file, "{\"imported\": true, \"generation\": 3, ");   // torn
+                True(!s.Update(two, DateTime.UtcNow, out why), "a file that can't be read: the change refused");
+                True(why != null && why.Contains("can't be read"), "and says why");
+                Eq("{\"imported\": true, \"generation\": 3, ", System.IO.File.ReadAllText(file), "the file left as it was");
+                True(s.ReadStrict() == null && s.Read().Count == 0, "strict read: null; plain read: empty");
+            }
+            finally { System.IO.Directory.Delete(dir, true); }
         });
     }
 

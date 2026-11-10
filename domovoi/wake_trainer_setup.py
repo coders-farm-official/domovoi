@@ -330,11 +330,28 @@ def on_wsl() -> bool:
         return False
 
 
+def _host_limits_report() -> dict | None:
+    """DomovoiHost's report of this PC (domovoi/host_limits.py), or None
+    (a Linux box, or a DomovoiHost from before it). Never raises."""
+    try:
+        from domovoi import host_limits
+
+        return host_limits.read_report()
+    except Exception:  # noqa: BLE001 - only the words depend on it
+        return None
+
+
 def pc_memory_gb(distro_mib: int) -> tuple[int | None, str]:
-    """(the PC's memory in GB, as words) behind a WSL distro's MemTotal,
-    by the Windows installer's rule (windows/common/WslConfig.cs
-    MemoryCapGb): a PC under 24 GB gives the distro 10 GB, a larger one
-    its memory minus 8 GB, at most 64."""
+    """(the PC's memory in GB, as words) behind a WSL distro's MemTotal, a
+    guess for a DomovoiHost that doesn't report the PC
+    (domovoi/host_limits.py; with a report the caller uses its figures).
+    It reads the installer's rule (windows/common/WslConfig.cs
+    MemoryCapGb) backwards where that rule is RAM minus 8 GB: the only
+    place a refusal needs it, a distro under 24 GB. A PC under 24 GB gives
+    the distro 10 GB ("less than 24 GB"); 24 to 31 GB gives RAM - 8 (16 to
+    23). Since 2026-11-10 a PC of 32 GB or more gets at least 24 GB
+    (min(RAM - 8, max(24, min(32, RAM / 2)))), which needs no refusal; a
+    distro of 63 GB or more can only be an older install's RAM - 8 cap."""
     gb = distro_mib / 1024
     if gb < 12:
         return None, "less than 24 GB"
@@ -468,7 +485,24 @@ async def requirements(force: bool = False) -> dict[str, Any]:
         refusals.append(f"{info.get('error') or 'Docker is not available'}: training runs "
                         "in a Docker container.")
     if mem_mib is not None and mem_mib < MIN_MEM_MIB:
-        if wsl:
+        limits = _host_limits_report() if wsl else None
+        if limits is not None and limits["memory_gb"]["max"] * 1024 >= MIN_MEM_MIB:
+            # DomovoiHost says what this PC has and how far the household
+            # may raise Domovoi's share (domovoi/host_limits.py).
+            refusals.append(
+                f"Training needs Domovoi to have 24 GB of memory, and it may use "
+                f"{mem_mib / 1024:.0f} GB of this PC's {limits['ram_gb']} GB now. Raise "
+                "\"Domovoi may use up to\" to 24 GB or more (Settings → System → Health → this PC) "
+                "and restart Domovoi, then try again."
+            )
+        elif limits is not None:
+            refusals.append(
+                f"Training needs a PC with about 32 GB of memory or more, and this PC has "
+                f"{limits['ram_gb']} GB: Domovoi can have at most {limits['memory_gb']['max']} GB "
+                "of it, and training needs 24 GB (it uses about 10 GB while the voice pipeline "
+                "keeps running)."
+            )
+        elif wsl:
             _pc, pc_words = pc_memory_gb(mem_mib)
             refusals.append(
                 f"Training needs a PC with about 32 GB of memory or more, and this PC has "

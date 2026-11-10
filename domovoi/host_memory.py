@@ -33,13 +33,20 @@ On the Windows installer's distro, ``MemTotal`` is the VM's size: the
 (windows/common/WslConfig.cs), less what the VM's kernel keeps for itself,
 so it reads a little under that figure (``host: "wsl"`` tells the page to
 say so). The exact figure lives on the Windows side, which the core can't
-read; no host channel passes it in today. A Windows or Mac dev core
+read here (DomovoiHost reports the PC's own figures and the household's
+limit separately: domovoi/host_limits.py). A Windows or Mac dev core
 answers ``available: false``.
+
+``cache_trim`` is what the root-owned file-cache trim found at its last
+run (scripts/linux/cache-trim.py, every 2 minutes; its status file in
+/var/lib/domovoi-cache-trim): whether it is on (inside WSL), its limit, and
+the last trim with what it freed. None where it has never run.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -319,6 +326,7 @@ class Sources:
     guard_labels: Callable[[], dict[str, str]] | None = None
     mpd_prefix: str | None = None
     host_kind: str | None = None
+    cache_trim_status: Path | None = None
 
 
 def _run(exe: str) -> Callable[[list[str], float], tuple[int, str, str]] | None:
@@ -441,7 +449,56 @@ async def snapshot(src: Sources | None = None) -> dict[str, Any]:
         "breakdown": breakdown,
         "missing": missing,
     }
+    try:
+        doc["cache_trim"] = await _bounded(lambda: read_cache_trim(src.cache_trim_status), 3.0)
+    except asyncio.TimeoutError:
+        doc["cache_trim"] = None
     return doc
+
+
+# ─── the file-cache trim (scripts/linux/cache-trim.py) ───────────────────
+
+CACHE_TRIM_STATUS = "/var/lib/domovoi-cache-trim/status.json"
+_TRIM_MAX_BYTES = 16384
+_TRIM_ACTIONS = ("off", "skip", "under", "trim", "failed")
+
+
+def _num(v: Any) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
+def _stamp(v: Any) -> str | None:
+    return v if isinstance(v, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", v) else None
+
+
+def read_cache_trim(path: Path | None = None) -> dict[str, Any] | None:
+    """What the root-owned trim found at its last run (every 2 minutes):
+    ``{enabled, why_enabled, limit_bytes, action, checked_at, last_trim:
+    {at, freed_bytes} | None}``; None when it has never run here (an
+    install the trim hasn't reached yet). Only the fields the Health row
+    shows, each checked; never raises."""
+    p = path or Path(os.environ.get("DOMOVOI_CACHE_TRIM_STATUS") or CACHE_TRIM_STATUS)
+    try:
+        if not p.is_file() or p.stat().st_size > _TRIM_MAX_BYTES:
+            return None
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("schema") != 1:
+        return None
+    last = doc.get("last_trim")
+    trim = None
+    if isinstance(last, dict) and _stamp(last.get("at")) and _num(last.get("freed_bytes")) is not None:
+        trim = {"at": last["at"], "freed_bytes": last["freed_bytes"]}
+    why = doc.get("why_enabled")
+    return {
+        "enabled": doc.get("enabled") is True,
+        "why_enabled": why if why in ("wsl", "not-wsl", "operator") else None,
+        "limit_bytes": _num(doc.get("limit_bytes")),
+        "action": doc.get("action") if doc.get("action") in _TRIM_ACTIONS else None,
+        "checked_at": _stamp(doc.get("checked_at")),
+        "last_trim": trim,
+    }
 
 
 def _guard_labels() -> dict[str, str]:

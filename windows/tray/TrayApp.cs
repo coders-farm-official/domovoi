@@ -25,6 +25,8 @@ namespace Domovoi.Windows.Tray
         readonly Probe probe;
         readonly ReadyClock clock = new ReadyClock();
         readonly Notifier notifier = new Notifier();
+        // wsl.exe's version when Domovoi was last up (Status.WslVerdict).
+        string wslVersionWhenUp;
         Verdict verdict = new Verdict { State = TrayState.Starting, Line = "Domovoi: checking..." };
         TrayState? shownState;
         Icon current;
@@ -97,7 +99,9 @@ namespace Domovoi.Windows.Tray
         void Apply(Facts f)
         {
             DateTime now = DateTime.UtcNow;
+            f.WslVersionWhenUp = wslVersionWhenUp;
             Verdict v = Status.Decide(f, clock.Since(f, now), now, opt.Grace);
+            if (v.Up) wslVersionWhenUp = WslOutage.ExeVersion(Paths.WslExe) ?? wslVersionWhenUp;
             if (v.Line != verdict.Line) log.Write(v.Line + (v.Detail != null ? " (" + v.Detail + ")" : ""));
             verdict = v;
             ShowState();

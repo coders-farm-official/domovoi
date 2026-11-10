@@ -1,6 +1,13 @@
 // DomovoiHost's registration (PLAN 4.6): logs on as .\domovoi-svc,
-// Automatic, depends on WSLService, restarts after 10 s, 30 s and 60 s
-// when it fails. Created through the SCM API so the password goes in as
+// Automatic, depends on no other service, restarts after 10 s, 30 s, then
+// every 60 s when it fails, an exit with an error code included.
+//
+// Until 2026-11-10 it depended on WSLService. When Windows Update installed
+// WSL 3.0.5.0 that night it stopped WSLService, the SCM stopped DomovoiHost
+// with it (a clean stop: no failure action), and nothing started it again
+// when WSL came back. Now stopping WSL leaves the host running, and it
+// waits for WSL itself (common\WslOutage.cs). A repair moves an existing
+// registration over (ChangeServiceConfig with an empty dependency list). Created through the SCM API so the password goes in as
 // an unmanaged buffer (Account.cs), never through sc.exe or PowerShell.
 
 using System;
@@ -17,6 +24,15 @@ namespace Domovoi.Windows.Helper
         public const string Description = "Keeps Domovoi's private Linux system (WSL distro \"domovoi\") running as the hidden account domovoi-svc. Removed by Domovoi's uninstaller.";
 
         public static string Account { get { return ".\\" + Paths.AccountName; } }
+
+        // An empty list (ChangeServiceConfig: "" removes every dependency;
+        // null would leave them as they are).
+        public const string NoDependencies = "";
+
+        // The SCM's restarts: 10 s, 30 s, then 60 s for every later failure
+        // (the last action repeats), counted afresh after a day without one.
+        public static readonly int[] RestartDelaysMs = { 10000, 30000, 60000 };
+        public const int FailureResetSec = 86400;
 
         // Creates the service, or points the existing one at this binary and
         // account with the given password. True when it created it.
@@ -35,17 +51,17 @@ namespace Domovoi.Windows.Helper
                     if (err != Native.ERROR_SERVICE_DOES_NOT_EXIST) throw new Win32Exception(err, "OpenService");
                     svc = Native.CreateServiceW(scm, Paths.ServiceName, Paths.ServiceDisplayName, Native.SERVICE_ALL_ACCESS,
                         Native.SERVICE_WIN32_OWN_PROCESS, Native.SERVICE_AUTO_START, Native.SERVICE_ERROR_NORMAL, bin, null,
-                        IntPtr.Zero, "WSLService\0", Account, pw.Buffer);
+                        IntPtr.Zero, NoDependencies, Account, pw.Buffer);
                     if (svc == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateService");
                     created = true;
-                    say("registered the " + Paths.ServiceName + " service (Automatic, runs as " + Account + ", depends on WSLService)");
+                    say("registered the " + Paths.ServiceName + " service (Automatic, runs as " + Account + ", restarted by Windows if it fails)");
                 }
                 else
                 {
                     if (!Native.ChangeServiceConfigW(svc, Native.SERVICE_WIN32_OWN_PROCESS, Native.SERVICE_AUTO_START, Native.SERVICE_ERROR_NORMAL,
-                        bin, null, IntPtr.Zero, "WSLService\0", Account, pw.Buffer, Paths.ServiceDisplayName))
+                        bin, null, IntPtr.Zero, NoDependencies, Account, pw.Buffer, Paths.ServiceDisplayName))
                         throw new Win32Exception(Marshal.GetLastWin32Error(), "ChangeServiceConfig");
-                    say("updated the " + Paths.ServiceName + " service (binary, account, fresh password, start type)");
+                    say("updated the " + Paths.ServiceName + " service (binary, account, fresh password, start type, no dependency on WSLService)");
                 }
                 try
                 {
@@ -67,7 +83,7 @@ namespace Domovoi.Windows.Helper
 
         static void SetFailureActions(IntPtr svc)
         {
-            int[] delays = { 10000, 30000, 60000 };
+            int[] delays = RestartDelaysMs;
             int size = Marshal.SizeOf(typeof(Native.SC_ACTION));
             IntPtr arr = Marshal.AllocHGlobal(size * delays.Length);
             try
@@ -80,13 +96,19 @@ namespace Domovoi.Windows.Helper
                     Marshal.StructureToPtr(a, new IntPtr(arr.ToInt64() + i * size), false);
                 }
                 var fa = new Native.SERVICE_FAILURE_ACTIONS();
-                fa.resetPeriod = 86400;
+                fa.resetPeriod = FailureResetSec;
                 fa.actionCount = delays.Length;
                 fa.actions = arr;
                 if (!Native.ChangeServiceFailureActions(svc, Native.SERVICE_CONFIG_FAILURE_ACTIONS, ref fa))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "ChangeServiceConfig2 failure actions");
             }
             finally { Marshal.FreeHGlobal(arr); }
+            // Also when the host stops itself with an error code (its worker
+            // failed), not only when the process crashes.
+            var flag = new Native.SERVICE_FAILURE_ACTIONS_FLAG();
+            flag.failureActionsOnNonCrashFailures = 1;
+            if (!Native.ChangeServiceFailureActionsFlag(svc, Native.SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, ref flag))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "ChangeServiceConfig2 failure actions flag");
         }
 
         // Only a fresh password for the existing service (uninstall's

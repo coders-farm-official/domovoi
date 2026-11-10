@@ -162,6 +162,17 @@
 # restarts to read it, once; provision.sh installs the same file.
 # DOMOVOI_MANAGE_JOURNAL=0 leaves the journal alone. Never fatal.
 #
+# Then the file-cache trim (reconcile_cache_trim; docs/LINUX_HOST.md, "The
+# file-cache trim"): the checkout's scripts/linux/cache-trim.py becomes
+# /usr/local/lib/domovoi-cache-trim/cache-trim.py (root's, in a folder only
+# root can write), and units/domovoi-cache-trim.{service,timer} go into
+# /etc/systemd/system; when any of them changed, systemctl daemon-reload and
+# enable --now of the timer. So an install made before the trim existed gets
+# it with its next core update; provision.sh installs the same files. The
+# trim itself decides whether it trims (inside WSL only, unless
+# /etc/domovoi/cache-trim.conf says otherwise). DOMOVOI_MANAGE_CACHE_TRIM=0
+# leaves all of it alone. Never fatal.
+#
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
 #
@@ -296,6 +307,15 @@ MANAGE_JOURNAL=${DOMOVOI_MANAGE_JOURNAL:-1}
 JOURNALD_DROPIN_DIR=${DOMOVOI_JOURNALD_DROPIN_DIR:-/etc/systemd/journald.conf.d}
 JOURNALD_DROPIN=$JOURNALD_DROPIN_DIR/50-domovoi.conf
 JOURNALD_SRC=$SCRIPT_DIR/units/journald-domovoi.conf
+# The file-cache trim (reconcile_cache_trim): the root-owned copy of the
+# script and its two units, under the harness's root in the tests.
+MANAGE_CACHE_TRIM=${DOMOVOI_MANAGE_CACHE_TRIM:-1}
+CACHE_TRIM_SRC=$SCRIPT_DIR/cache-trim.py
+CACHE_TRIM_LIB_DIR=$TEST_ROOT/usr/local/lib/domovoi-cache-trim
+CACHE_TRIM_LIB=$CACHE_TRIM_LIB_DIR/cache-trim.py
+CACHE_TRIM_UNIT_DIR=$TEST_ROOT/etc/systemd/system
+CACHE_TRIM_UNITS=(domovoi-cache-trim.service domovoi-cache-trim.timer)
+CACHE_TRIM_TIMER=domovoi-cache-trim.timer
 
 # The search helper (docs/INTERNET.md): the compose service and the
 # container it runs as. DOMOVOI_MANAGE_SEARXNG=0 (or false/no/off) in
@@ -2660,6 +2680,74 @@ reconcile_journal() {
   return 0
 }
 
+# Install SRC as DEST (mode MODE) when they differ: a temporary file beside
+# DEST, then a rename. Status 0 when it wrote, 1 when there was nothing to
+# do, 2 when it failed.
+install_if_changed() {
+  local src=$1 dest=$2 mode=$3 tmp
+  if [ -f "$dest" ] && [ ! -L "$dest" ] && cmp -s "$src" "$dest"; then return 1; fi
+  tmp=$(mktemp "$(dirname "$dest")/.$(basename "$dest").XXXXXX") || return 2
+  if cp "$src" "$tmp" && chmod "$mode" "$tmp" && mv -f "$tmp" "$dest"; then return 0; fi
+  rm -f "$tmp"
+  return 2
+}
+
+# See the header. A step only when it installed something (ok) or could not
+# (warn); everything already in place is nothing to do.
+reconcile_cache_trim() {
+  local t0 u rc changed=() why=""
+  case "$(printf '%s' "$MANAGE_CACHE_TRIM" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "the file-cache trim left alone (DOMOVOI_MANAGE_CACHE_TRIM=$MANAGE_CACHE_TRIM)"; return 0 ;;
+  esac
+  if [ "$(id -u)" != 0 ] && [ -z "$TEST_ROOT" ]; then log "not root: the file-cache trim left as it is"; return 0; fi
+  if [ ! -f "$CACHE_TRIM_SRC" ]; then log "no $CACHE_TRIM_SRC: the file-cache trim left as it is"; return 0; fi
+  for u in "${CACHE_TRIM_UNITS[@]}"; do
+    if [ ! -f "$SCRIPT_DIR/units/$u" ]; then log "no $SCRIPT_DIR/units/$u: the file-cache trim left as it is"; return 0; fi
+  done
+  t0=$(now_ms)
+  if [ ! -d "$CACHE_TRIM_LIB_DIR" ]; then mkdir -p "$CACHE_TRIM_LIB_DIR" && chmod 0755 "$CACHE_TRIM_LIB_DIR" || true; fi
+  if ! root_dir "$CACHE_TRIM_LIB_DIR"; then
+    why="$CACHE_TRIM_LIB_DIR is not a folder only root can write, so the trim was not put there"
+  else
+    rc=0; install_if_changed "$CACHE_TRIM_SRC" "$CACHE_TRIM_LIB" 0644 || rc=$?
+    case $rc in
+      0) changed+=("$CACHE_TRIM_LIB") ;;
+      2) why="$CACHE_TRIM_LIB could not be written" ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    mkdir -p "$CACHE_TRIM_UNIT_DIR" || true
+    for u in "${CACHE_TRIM_UNITS[@]}"; do
+      rc=0; install_if_changed "$SCRIPT_DIR/units/$u" "$CACHE_TRIM_UNIT_DIR/$u" 0644 || rc=$?
+      case $rc in
+        0) changed+=("$u") ;;
+        2) why="$CACHE_TRIM_UNIT_DIR/$u could not be written"; break ;;
+      esac
+    done
+  fi
+  # The timer enabled whenever it isn't (a box where it was never enabled,
+  # or a disable that wasn't the opt-out), not only when a file changed.
+  local enabled=1
+  if command -v systemctl >/dev/null 2>&1 && ! systemctl is-enabled --quiet "$CACHE_TRIM_TIMER" 2>/dev/null; then
+    enabled=0
+  fi
+  if [ -z "$why" ] && [ "${#changed[@]}" -eq 0 ] && [ "$enabled" = 1 ]; then return 0; fi
+  if [ -z "$why" ] && [ "$enabled" = 0 ] && [ "${#changed[@]}" -eq 0 ]; then changed+=("$CACHE_TRIM_TIMER enabled"); fi
+  if [ -z "$why" ] && command -v systemctl >/dev/null 2>&1; then
+    if ! { systemctl daemon-reload && systemctl enable --now "$CACHE_TRIM_TIMER"; }; then
+      why="the files are in place but $CACHE_TRIM_TIMER could not be enabled"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    add_step cache-trim warn "$t0" "$why; the file cache is not trimmed"
+    log "step cache-trim: $why; not fatal, the run goes on"
+  else
+    add_step cache-trim ok "$t0" "the file-cache trim is installed (${changed[*]}) and runs every 2 minutes"
+    log "step cache-trim: installed ${changed[*]}"
+  fi
+  return 0
+}
+
 migrations_grew() {
   [[ $MIGRATIONS_BEFORE =~ ^[0-9]+$ ]] && [[ $MIGRATIONS_AFTER =~ ^[0-9]+$ ]] \
     && [ "$MIGRATIONS_AFTER" -gt "$MIGRATIONS_BEFORE" ]
@@ -3120,6 +3208,7 @@ main() {
   reconcile_update_unit
   reconcile_core_restart
   reconcile_journal
+  reconcile_cache_trim
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
     plain_restart

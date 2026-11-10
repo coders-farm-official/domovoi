@@ -16834,6 +16834,64 @@
         }
       }
     },
+    "/api/models/host-limits": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Get Host Limits",
+        "description": "How much of the PC Domovoi may use (the Windows install; Health's\n\"this PC\" card): proxied from the core's admin read\n``/v1/admin/host-limits`` (domovoi/host_limits.py).",
+        "operationId": "get_host_limits_api_models_host_limits_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Set Host Limits",
+        "description": "Set \"Domovoi may use up to N GB / N processor cores\" (null:\nautomatic), optionally restarting Domovoi's Linux system now so it\napplies: the core writes the request DomovoiHost reads\n(``POST /v1/admin/host-limits``). An admin mutation at both hops.",
+        "operationId": "set_host_limits_api_models_host_limits_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostLimitsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/models/{name}": {
       "delete": {
         "tags": [
@@ -20484,6 +20542,39 @@
           "domovoi_reachable"
         ],
         "title": "HealthResponse"
+      },
+      "HostLimitsBody": {
+        "properties": {
+          "memory_gb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Gb"
+          },
+          "processors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processors"
+          },
+          "restart_now": {
+            "type": "boolean",
+            "title": "Restart Now",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "HostLimitsBody"
       },
       "ImportRequest": {
         "properties": {

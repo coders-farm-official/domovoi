@@ -40,7 +40,7 @@ house's other PCs with no internet needed.
 | | Supported | Notes |
 |---|---|---|
 | Windows | 11 22H2 or later (build 22621+), Home or Pro, x64 | Not Windows 10, not Arm64: mirrored networking and the Hyper-V firewall need 22H2. |
-| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). Above 24 GB the cap is the PC's memory minus 8 GB, at most 64 GB; file cache inside counts as used to Windows until the distro has been idle a while. Settings → System → Health → **memory** shows what uses it ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)). |
+| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). Above 24 GB the cap is half the PC's memory, between 24 and 32 GB, and never more than the PC's memory minus 8 GB (since 2026-11-10; before, the memory minus 8 GB up to 64 GB). You can change it, and cap the processor cores too: [How much of this PC Domovoi may use](#how-much-of-this-pc-domovoi-may-use). File cache inside counts as used to Windows; Domovoi hands what is over a few GB back every 2 minutes. Settings → System → Health → **memory** shows what uses it ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)). |
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
@@ -232,7 +232,7 @@ signature, before it runs it.
 | Its sign-in screen entry: DWORD `domovoi-svc = 0` in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList` (Setup makes the `SpecialAccounts` and `UserList` keys if they are missing). | The value is deleted; the keys too if Setup made them and they are empty. |
 | Account rights through LSA: `SeServiceLogonRight`, and `SeDenyInteractiveLogonRight`, `SeDenyRemoteInteractiveLogonRight`, `SeDenyNetworkLogonRight`. Run `DomovoiSetup.exe /nodenylogon=1` to leave the three deny rights out, on a first install or over an existing one (it takes back ones granted before). | Every right of the account's SID is removed, with its entry in the policy. |
 | Its profile, made by Windows when the service first signs in: `C:\Users\domovoi-svc`, or `C:\Users\domovoi-svc.<PC name>` if a folder of that name is already there (the service writes its `.wslconfig` into whichever it is, and the uninstaller finds it by the account's SID); it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. This comes after the account is deleted; if Windows still holds the profile then, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself. It touches only that profile, only once its account is gone, and if it can't tell (or the profile is in use) it waits for the next boot. |
-| Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on `WSLService`, restarts after 10, 30 and 60 s on failure), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
+| Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on no other service: it waits for WSL itself, see *Windows updated WSL* under [When something goes wrong](#when-something-goes-wrong); restarted by Windows after any failure, after 10 s, 30 s, then every 60 s), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
 | WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
@@ -472,10 +472,13 @@ PC needs for it:
   isn't installed then. More:
   [LINUX_HOST.md, Wake-word training](LINUX_HOST.md#wake-word-training).
 - **Memory.** Training needs the distro to see 24 GB, the line where it
-  gets the standard models. The distro gets the PC's memory minus 8 GB,
-  so that means a PC with about 32 GB or more; below that the card says
+  gets the standard models. By default the distro gets half the PC's
+  memory, between 24 and 32 GB (never more than the memory minus 8 GB), so
+  that means a PC with about 32 GB or more; below that the card says
   training can't be turned on here, in the PC's terms ("this PC has about
-  24 GB").
+  24 GB"). If you lowered Domovoi's share under 24 GB
+  ([How much of this PC Domovoi may use](#how-much-of-this-pc-domovoi-may-use)),
+  the card says to raise it.
 - **Disk and download.** About 22 GB downloaded, once, and about 32 GB
   more disk the first time (the trainer and its training data), then
   about 0.5 GB per wake word, in the distro's disk
@@ -508,6 +511,63 @@ processor. Without an NVIDIA card, training
 runs on the processor: about 75 minutes a word on 8 cores, and voice
 answers more slowly while it runs. The card says so and asks before
 turning training on and again before each **Train**.
+
+## How much of this PC Domovoi may use
+
+Domovoi's Linux side is a virtual machine, and its size is the hidden
+account's `.wslconfig` (`memory=`, `processors=`), which WSL reads when
+that VM starts. Settings → System → Health → **This PC** (signed in as the
+admin) shows this PC's memory and processor cores and sets the ceiling:
+
+| | Automatic (the default) | Range | Notes |
+|---|---|---|---|
+| **Memory** | The installer's share: 10 GB on a PC under 24 GB; above that half the PC's memory, between 24 and 32 GB, never more than the memory minus 8 GB (24 GB PC: 16, 32 GB: 24, 64 GB and up: 32) | 8 GB to the PC's memory minus 4 GB | A warning under 16 GB: the AI models, speech recognition and the rooms' music may not all fit. Wake-word training needs 24 GB. |
+| **Processor cores** | All of them (WSL's default) | 2 to all of the PC's logical processors | Fewer cores leave more of the PC to games and work, and make answers and transcription slower. |
+
+**When it applies.** The VM reads `.wslconfig` only when it starts, so a
+new limit applies when Domovoi's Linux system next starts: after Windows
+restarts, or at once with **Restart Domovoi now** on the card (Domovoi is
+offline for a couple of minutes; the rooms reconnect by themselves). The
+card says when Domovoi still runs on the old size. **Restart Domovoi now**
+is refused while an update or a Restart of Domovoi runs, and DomovoiHost
+checks again itself: a restart for new limits waits until the update has
+finished (the card says so), so it never cuts an update off. A restart
+asked for more than 15 minutes before DomovoiHost read it (Windows
+restarted in between, say) is not done: the VM already starts with the
+new size. The dashboard's other
+**Restart Domovoi** restarts the services inside the VM and doesn't apply
+it.
+
+**Why 32 GB at most by default (2026-11-10).** Domovoi's programs use
+between 5 and 10 GB, the AI models up to 9 GB more, and wake-word training 24 GB
+while it runs. Before, the installer gave a big PC its memory minus 8 GB,
+up to 64 GB: on a 128 GB PC the VM held 51 GB of file cache next to 5 GB
+of programs, and Windows compressed and paged around it (WSL hands cache
+back only once the VM idles, which a house assistant rarely does). Domovoi
+now trims that cache itself ([LINUX_HOST.md, The file-cache
+trim](LINUX_HOST.md#the-file-cache-trim)), and the default share is
+smaller. A household that wants more raises it on the card.
+
+**How it reaches the PC.** The dashboard can't write a Windows file, and
+nothing inside the distro can either. The core writes the admin's choice
+to `~/.domovoi/hardware_limits/request.json` in the distro; DomovoiHost
+reads it every 30 seconds, as the distro's service user, checks it (two
+whole numbers or automatic, inside this PC's bounds) and writes
+`.wslconfig`. It reports the PC's memory, cores and the limits back to
+`/var/lib/domovoi-windows/limits.json` as root, which is what the card
+shows. [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-file-cache-trim-and-the-windows-ceiling)
+says why this is safe.
+
+**Which build.** The card, the request channel and the new default come
+with **DomovoiHost from a Windows Setup built on 2026-11-10 or later**: run
+the newest `DomovoiSetup.exe` to repair an older install (the tray's
+**Update Domovoi** does when a release carries it). A repair also writes
+the new default share into `.wslconfig`, unless you set your own on the
+card. Until then the card isn't shown. The file-cache trim needs no new
+Setup: it comes with the next Domovoi update.
+
+**A Linux server** has no such ceiling in Domovoi: its programs share the
+machine with nothing Domovoi manages, and the card isn't shown there.
 
 ## The trust boundary on a shared PC
 
@@ -557,6 +617,30 @@ you share them.
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
   half-finished setup too.
+- **Windows updated WSL** (the icon says *Domovoi stopped: Windows updated
+  WSL, starting again…*; or *WSL stopped, starting again…*): Windows
+  Update installs new WSL versions by itself, and the install stops every
+  WSL virtual machine and WSL's own service. Nothing to do: DomovoiHost
+  keeps running, waits for WSL, and starts Domovoi's Linux system again
+  (the `.wslconfig`, the distro, the health check), usually within a minute
+  or two of the install finishing; rooms and phones reconnect by
+  themselves. While an install runs it doesn't touch `wsl.exe` at all (it
+  sees Windows Installer's busy flag), then looks again after 5, 10, 20, 30
+  seconds and every minute after (after 30 minutes of Windows Installer
+  being busy it asks WSL anyway: another product's install can hold it that
+  long); `host.log` says *Domovoi is down* and *WSL answers*. The same wait
+  covers a start that fails for another reason (at boot, or after a restart
+  for new limits): DomovoiHost keeps trying, on the same backoff, and the
+  icon says *Domovoi didn't start; trying again…* (a first install that
+  fails still waits for Setup, which shows why). On 2026-11-10 at 00:25 the update to WSL 3.0.5.0 left
+  Domovoi down until someone noticed: until then DomovoiHost depended on
+  WSLService, so Windows stopped it along with WSL and never started it
+  again. Since the Windows Setup built that day it depends on no other
+  service, and Windows restarts it after any failure (10 s, 30 s, then
+  every minute, an exit with an error code included). An older install
+  gets this when you run the newer Setup over it (a repair). Until then,
+  after a WSL update: **Restart Domovoi** in the icon's menu, or
+  `Restart-Service DomovoiHost` from an administrator PowerShell.
 - **Pull says `index.lock`: File exists** (Settings > System > About & updates, on a
   build from before the fix below): an earlier update was cut off (a
   Windows restart or shutdown in the middle of one, say) and git left its

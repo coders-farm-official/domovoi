@@ -127,8 +127,9 @@ build_origin() {
   # The real manifest, with the Whisper pin swapped for the fake model's.
   sed "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
     "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$o/scripts/linux/provision-manifest.conf"
-  cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" \
-    "$o/scripts/linux/units/"
+  cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO"/scripts/linux/units/*.timer \
+    "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" "$o/scripts/linux/units/"
+  cp "$REAL_REPO/scripts/linux/cache-trim.py" "$o/scripts/linux/cache-trim.py"
   # The real helpers: provision.sh runs them from the checkout, under the
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
@@ -2148,6 +2149,47 @@ case_journal_kept_on_disk() {
   check "an edited drop-in: units ran again" eq "$(state_of units)" done
   check "and put it back" cmp -s "$f" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
   check "and restarted journald" called "systemctl restart systemd-journald.service"
+  end_case
+}
+
+# The file-cache trim (2026-11-10): the units step installs root's copy of
+# the script and its service and timer, and enables the timer, once; an
+# edited copy is put back; DOMOVOI_MANAGE_CACHE_TRIM=0 leaves it alone.
+case_cache_trim_installed() {
+  new_case cache_trim_installed
+  local lib=$ROOT/usr/local/lib/domovoi-cache-trim/cache-trim.py
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the script is the commit's" cmp -s "$lib" "$REAL_REPO/scripts/linux/cache-trim.py"
+  check "the service unit" cmp -s "$ROOT/etc/systemd/system/domovoi-cache-trim.service" "$REAL_REPO/scripts/linux/units/domovoi-cache-trim.service"
+  check "the timer unit" cmp -s "$ROOT/etc/systemd/system/domovoi-cache-trim.timer" "$REAL_REPO/scripts/linux/units/domovoi-cache-trim.timer"
+  check "the timer enabled" called "systemctl enable --now domovoi-cache-trim.timer"
+  check "said so" said "installed the file-cache trim"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run: units skipped" eq "$(state_of units)" skip
+  printf 'print("edited")\n' >"$lib"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "an edited copy: units ran again" eq "$(state_of units)" done
+  check "and put it back" cmp -s "$lib" "$REAL_REPO/scripts/linux/cache-trim.py"
+  # The files in place but the timer disabled: enabled again (review
+  # 2026-11-10), not left off until a file changes.
+  rm -f "$STATE/enabled/domovoi-cache-trim.timer"
+  : >"$STATE/calls.log"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "a disabled timer: units ran again" eq "$(state_of units)" done
+  check "and enabled it" called "systemctl enable --now domovoi-cache-trim.timer"
+  end_case
+}
+
+case_cache_trim_opt_out() {
+  new_case cache_trim_opt_out
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_MANAGE_CACHE_TRIM=0\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "no script" absent "$ROOT/usr/local/lib/domovoi-cache-trim/cache-trim.py"
+  check "no timer" not_called "domovoi-cache-trim.timer"
+  check "says why" said "the file-cache trim left as it is (DOMOVOI_MANAGE_CACHE_TRIM in /etc/default/domovoi-update)"
   end_case
 }
 
@@ -4550,6 +4592,8 @@ CASES=(
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
   case_journal_kept_on_disk
+  case_cache_trim_installed
+  case_cache_trim_opt_out
   case_starts_do_not_block_on_ready
   case_a_unit_that_fails_after_a_no_block_start_stops_the_wait
   case_the_database_failing_after_a_no_block_start_stops_the_wait

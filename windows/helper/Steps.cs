@@ -557,7 +557,7 @@ namespace Domovoi.Windows.Helper
             o.Kv("change", "grant it SeServiceLogonRight and deny it interactive, remote-desktop and network sign-in (LSA account rights)");
             o.Kv("change", "write Setup's install record HKLM\\" + Paths.RecordKey);
             o.Kv("change", "create " + Paths.ProgramData + " (SYSTEM and Administrators; " + Paths.AccountName + " where it needs it)");
-            o.Kv("change", "register the " + Paths.ServiceName + " service (Automatic, runs as " + HostService.Account + ", depends on WSLService)");
+            o.Kv("change", "register the " + Paths.ServiceName + " service (Automatic, runs as " + HostService.Account + ", restarted by Windows if it fails; no dependency on WSLService)");
             o.Kv("change", "create the media folders under " + MediaPaths.DefaultRoot + " (unless chosen otherwise) and allow " + Paths.AccountName + " to read and write them");
             if (lan != null && lan.Private)
                 o.Kv("change", "add six Hyper-V firewall rules for WSL (every WSL VM on this PC), inbound TCP from " + lan.Subnet + ": 6369, 6370, 8050-8099, 8096, 7676, 9467");

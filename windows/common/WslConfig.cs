@@ -25,12 +25,21 @@ namespace Domovoi.Windows
 
     public static class WslConfig
     {
-        // The VM's memory cap, from the PC's installed RAM. PLAN 4.6 gives
-        // 10 GB for the 16 GB floor (S5 decides 10 vs 12). Above the floor
-        // PLAN names no value; this build takes RAM minus 8 GB, at most 64
-        // GB (WSL's own default is half the RAM), at least 16 GB. provision.sh
-        // picks the standard model tier when the VM sees at least 22,528 MiB
-        // (PLAN 4.9), so that happens from about 32 GB of RAM up. [S5]
+        // The VM's memory cap, from the PC's installed RAM: the default the
+        // household can change in the dashboard (HardwareLimits.cs). PLAN 4.6
+        // gives 10 GB for the 16 GB floor (S5 decides 10 vs 12). Above it,
+        // until 2026-11-10, RAM minus 8 GB up to 64 GB: on a 128 GB PC a
+        // 64 GB VM whose programs used 5 GB filled the rest with file cache,
+        // and Windows compressed and paged around it. Now
+        //
+        //     min(RAM - 8, max(24, min(32, RAM / 2)))
+        //
+        // 24 GB PC: 16; 32 GB: 24 (as before: the standard model tier, which
+        // provision.sh picks from 22,528 MiB, PLAN 4.9, and wake-word
+        // training's 24 GB both fit); 48 GB: 24; 64 GB: 32; 128 GB: 32.
+        // Programs use about 5-10 GB, the AI models up to 9 more, training
+        // 24 while it runs; above 32 GB a bigger VM mostly holds cache. A
+        // household that wants more sets it in the dashboard. [S5]
         public static int MemoryCapGb(long totalRamBytes)
         {
             double gb = totalRamBytes / (1024.0 * 1024.0 * 1024.0);
@@ -38,9 +47,9 @@ namespace Domovoi.Windows
             // some): a "16 GB" PC shows 15.7. 23.5 counts as the 24 GB step.
             int labelled = (int)Math.Round(gb);
             if (labelled < 24) return 10;
-            int cap = labelled - 8;
-            if (cap > 64) cap = 64;
-            if (cap < 16) cap = 16;
+            int cap = Math.Min(32, labelled / 2);
+            if (cap < 24) cap = 24;
+            if (cap > labelled - 8) cap = labelled - 8;
             return cap;
         }
 

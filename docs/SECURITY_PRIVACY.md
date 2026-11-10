@@ -2157,6 +2157,81 @@ admin reviews them (docs/CONTAINER_GUARD.md). Migration V024
 | **Who acts** | Acknowledging a failure and clearing a tamper incident are admin mutations (Bearer), recorded with the admin's source address and an optional note. A household device can do neither, nor can the Android app (it holds no admin credential). |
 | **What it stores** | Container names, image references and IDs, exit codes and timestamps — nothing about a person. Resolved incidents are kept 90 days, then pruned; open incidents and cleared findings still accepted are kept until they end. |
 
+## The file-cache trim and the Windows ceiling
+
+Two features added on 2026-11-10 cross a privilege line, so here is what
+each one trusts.
+
+**The file-cache trim** ([LINUX_HOST.md](LINUX_HOST.md#the-file-cache-trim))
+is a new root unit: `domovoi-cache-trim.service`, started every 2 minutes by
+its timer.
+
+- **What runs as root** is `/usr/local/lib/domovoi-cache-trim/cache-trim.py`,
+  root's copy in a folder only root can write. `provision.sh` and the update
+  unit copy it from the verified copy of the commit (never the checkout the
+  service user can edit), as they do every other root-run file; the update
+  refuses a folder others can write. The unit runs it as `python3 -I -S`
+  (no environment, no site-packages, no current folder on the import path),
+  standard library only, under `ProtectSystem=strict`, `ProtectHome`,
+  `NoNewPrivileges` and a private `/tmp`.
+- **What it does** is fixed: the bytes over its limit, with `swappiness=0`,
+  into the root cgroup's `memory.reclaim`, or, where the kernel can't take
+  that (and after a reclaim that let swap grow), `sync` then `1` into
+  `/proc/sys/vm/drop_caches` (clean page cache only: nothing a program holds,
+  no data written or lost), at most once per interval, never while an update
+  or restart runs. That is why the unit leaves `/sys/fs/cgroup` writable (no
+  `ProtectControlGroups=`). It reads `/proc`, asks systemd whether
+  `domovoi-update.service` runs, and writes its own status file.
+- **What it takes from outside** is one number and one word, from
+  `/etc/domovoi/cache-trim.conf`, and only while root owns that file and its
+  folder and nobody else can write either; never through a link, never a
+  FIFO, at most 1 KiB, two keys (`enabled=auto|on|off`, `limit_gb=1..1024`).
+  Anything else and the whole file is ignored. **The core has no way to
+  change it**: there is no dashboard setting and no file the service user
+  can write that the trim reads (owner decision 2026-11-10: the defaults are
+  meant to need none). Nothing it reads reaches a shell.
+- **What it tells the core** is `/var/lib/domovoi-cache-trim/status.json`
+  (root's, 0644): the cache size, the limit and the last trim. Numbers only;
+  the core checks each field before Health shows it.
+
+**The Windows ceiling** ("Domovoi may use up to N GB / N processor cores",
+[WINDOWS_HOST.md](WINDOWS_HOST.md#how-much-of-this-pc-domovoi-may-use)) is a
+new channel from the core to DomovoiHost, which runs on Windows as the
+hidden `domovoi-svc` account and writes that account's `.wslconfig`.
+
+- **Who can ask**: an admin (`POST /v1/admin/host-limits`, the admin tier at
+  both hops; reads are admin reads). The core checks the numbers against the
+  PC's bounds and writes `~/.domovoi/hardware_limits/request.json` (0600):
+  `{"v": 1, "memory_gb": N|null, "processors": N|null, "restart_id":
+  32 hex|null, "at": "YYYY-MM-DDTHH:MM:SSZ"}` (`at`: when it was written;
+  DomovoiHost reports which request it has read by it, and acts on no
+  restart id older than 15 minutes).
+- **How DomovoiHost reads it**: every 30 s, as the distro's **service
+  user** (`wsl.exe -u domovoi --exec /usr/bin/head -c 2049 <path>`), so a
+  link there can't make it read anything that user couldn't, and it never
+  reads more than 2 KiB. Interop and automount stay off: nothing in the
+  distro can reach a Windows file or program.
+- **What it takes from it**: only data. Any key besides those, a number
+  that isn't a whole number, an id that isn't 32 lowercase hex digits, or a
+  file over 2 KiB, and the request is refused (logged; the last choice
+  stays). The numbers are clamped into this PC's own bounds (memory 8 GB to
+  RAM − 4 GB, processors 2 to all), then written as `memory=<N>GB` and
+  `processors=<N>` in `[wsl2]` of the installer's own `.wslconfig` text,
+  replacing those two lines and nothing else. Nothing from the request
+  reaches a shell, a path, a command line or another key of `.wslconfig`.
+- **The restart**: a new restart id makes DomovoiHost restart Domovoi's
+  Linux system once (`wsl --shutdown` as `domovoi-svc`, which ends that
+  account's WSL only, never the household's own distros or Docker), at most
+  once per 10 minutes. A compromised core could already stop Domovoi, so
+  this adds no new harm; the gap keeps a looping caller from keeping the
+  house offline.
+- **What DomovoiHost tells the core**: `/var/lib/domovoi-windows/limits.json`,
+  written as root on `wsl.exe`'s stdin (as `side.json` is), believed by the
+  core only while root owns it and its folder alone: the PC's RAM and
+  processor count, the bounds, the default and the choice. That is the one
+  new fact about the Windows PC the Linux side learns, and only an admin
+  reads it.
+
 ## Printers and scanners
 
 Domovoi prints to network printers (IPP Everywhere, AirPrint, Mopria) and

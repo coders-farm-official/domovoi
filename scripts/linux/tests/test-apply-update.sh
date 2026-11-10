@@ -110,6 +110,13 @@ if [ "${1-}" = show ]; then
   case "$*" in *"-p RestartUSec "*) cat "$SHIM_STATE/show-restartusec" 2>/dev/null || echo 100ms ;; esac
   exit 0
 fi
+# Every unit is enabled unless disabled-<unit> says otherwise; enable
+# clears it.
+if [ "${1-}" = is-enabled ]; then
+  if [ -f "$SHIM_STATE/disabled-${!#}" ]; then exit 1; fi
+  exit 0
+fi
+if [ "${1-}" = enable ]; then rm -f "$SHIM_STATE/disabled-${!#}"; fi
 # stop-hangs lists units whose stop never finishes by itself: only a
 # SIGKILL (`systemctl kill`) ends it, and not even that for a unit also in
 # kill-fails.
@@ -809,6 +816,9 @@ run_update() {
   # Off unless a case asks (the added-packages cases): every other case
   # would otherwise ask this machine's own dpkg-query and apt-get.
   gpu_env+=(DOMOVOI_MANAGE_PACKAGES="${MANAGE_PACKAGES:-0}")
+  # Off unless a case asks (the cache_trim_* cases), so every other case's
+  # step list stays as it is.
+  gpu_env+=(DOMOVOI_MANAGE_CACHE_TRIM="${MANAGE_CACHE_TRIM:-0}")
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   # The script as the update verifier runs it (scripts/linux/update-verifier.sh):
@@ -834,7 +844,7 @@ run_update() {
     -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
     -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
     -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE \
-    -u DOMOVOI_MANAGE_JOURNAL -u DOMOVOI_MANAGE_PACKAGES PATH="$path" \
+    -u DOMOVOI_MANAGE_JOURNAL -u DOMOVOI_MANAGE_PACKAGES -u DOMOVOI_MANAGE_CACHE_TRIM PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
@@ -1553,6 +1563,84 @@ case_journal_restart_failure_is_a_warn() {
   check "a warn step" step_is journal warn
   check "that says when it takes effect" grep -qF "at the next boot" "$RESULT"
   check "the drop-in is in place for that boot" test -f "$CASE/journald/50-domovoi.conf"
+  end_case
+}
+
+# The file-cache trim (2026-11-10): an install from before it gets the
+# root-owned script and its units with the next update, and the timer is
+# enabled once; a second run has nothing to do; an edited copy is put back.
+case_cache_trim_installed_once() {
+  new_case cache_trim_installed_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local lib=$OSROOT/usr/local/lib/domovoi-cache-trim/cache-trim.py units=$OSROOT/etc/systemd/system
+  MANAGE_CACHE_TRIM=1 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the script is the commit's" cmp -s "$lib" "$HERE/../cache-trim.py"
+  check "not executable, not writable by others" eq "$(stat -c %a "$lib")" 644
+  check "its folder 0755" eq "$(stat -c %a "$(dirname "$lib")")" 755
+  check "the service unit" cmp -s "$units/domovoi-cache-trim.service" "$HERE/../units/domovoi-cache-trim.service"
+  check "the timer unit" cmp -s "$units/domovoi-cache-trim.timer" "$HERE/../units/domovoi-cache-trim.timer"
+  check "the unit runs the root-owned copy" grep -qx 'ExecStart=/usr/bin/python3 -I -S /usr/local/lib/domovoi-cache-trim/cache-trim.py' "$units/domovoi-cache-trim.service"
+  check "daemon-reload" called "systemctl daemon-reload"
+  check "the timer enabled and started" called "systemctl enable --now domovoi-cache-trim.timer"
+  check "an ok step" step_is cache-trim ok
+  check "where it sits" eq "$(step_names)" "signature cache-trim stop-services start-services health searxng"
+  : >"$STATE/calls.log"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "second run ok" eq "$(field status)" '"ok"'
+  check "no second enable" not_called "enable --now domovoi-cache-trim.timer"
+  check "no step the second time" eq "$(step_names)" "signature stop-services start-services health searxng"
+  printf 'print("edited")\n' >"$lib"
+  : >"$STATE/calls.log"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "an edited copy is put back" cmp -s "$lib" "$HERE/../cache-trim.py"
+  check "and the timer enabled again" called "systemctl enable --now domovoi-cache-trim.timer"
+  # Files as they should be, but the timer not enabled (review 2026-11-10):
+  # enabled all the same.
+  : >"$STATE/disabled-domovoi-cache-trim.timer"
+  : >"$STATE/calls.log"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "a disabled timer is enabled" called "systemctl enable --now domovoi-cache-trim.timer"
+  check "an ok step that says so" grep -qF "domovoi-cache-trim.timer enabled" "$RESULT"
+  : >"$STATE/calls.log"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "then left alone" not_called "enable --now domovoi-cache-trim.timer"
+  end_case
+}
+
+case_cache_trim_enable_failure_is_a_warn() {
+  new_case cache_trim_enable_failure_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "enable --now domovoi-cache-trim.timer" >"$STATE/fail-systemctl"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "the restart still ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is cache-trim warn
+  check "that says so" grep -qF "could not be enabled" "$RESULT"
+  end_case
+}
+
+# A folder others can write is never where root's copy goes.
+case_cache_trim_refuses_a_folder_others_can_write() {
+  new_case cache_trim_refuses_a_folder_others_can_write
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local dir=$OSROOT/usr/local/lib/domovoi-cache-trim
+  mkdir -p "$dir" && chmod 0777 "$dir"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "the restart still ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is cache-trim warn
+  check "nothing put there" test ! -e "$dir/cache-trim.py"
+  check "the timer not enabled" not_called "enable --now domovoi-cache-trim.timer"
+  end_case
+}
+
+case_cache_trim_opt_out() {
+  new_case cache_trim_opt_out
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  MANAGE_CACHE_TRIM=0 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no script" test ! -e "$OSROOT/usr/local/lib/domovoi-cache-trim/cache-trim.py"
+  check "no timer" not_called "domovoi-cache-trim"
+  check "said why" said "the file-cache trim left alone (DOMOVOI_MANAGE_CACHE_TRIM=0)"
   end_case
 }
 
@@ -5100,6 +5188,10 @@ CASES=(
   case_journal_a_changed_drop_in_is_replaced
   case_journal_restart_failure_is_a_warn
   case_journal_opt_out
+  case_cache_trim_installed_once
+  case_cache_trim_enable_failure_is_a_warn
+  case_cache_trim_refuses_a_folder_others_can_write
+  case_cache_trim_opt_out
   case_noop_without_any_history
   case_noop_restart_migrates_a_database_behind_the_checkout
   case_noop_restart_brings_postgres_back
