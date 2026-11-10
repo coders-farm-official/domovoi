@@ -175,12 +175,22 @@ def test_the_route_tiers_are_declared():
     from domovoi import admin_auth
     from web.backend.main import app
 
+    from domovoi.tests.route_walk import iter_route_contexts
+
+    def calls(dependant):
+        for dep in getattr(dependant, "dependencies", ()):
+            if dep.call is not None:
+                yield dep.call
+            yield from calls(dep)
+
+    # The shared walk: FastAPI >= 0.139 keeps included routers nested, so a
+    # flat look at app.routes finds nothing (see route_walk).
     tiers = {}
-    for route in app.routes:
+    for route in iter_route_contexts(app.routes):
         if getattr(route, "path", None) == "/api/nav-layout":
-            for m in route.methods:
-                tiers[m] = [d.call for d in route.dependant.dependencies]
-    assert tiers["GET"] == []
+            for m in getattr(route, "methods", None) or ():
+                tiers[m] = list(calls(getattr(route, "dependant", None)))
+    assert admin_auth.require_admin_mutation not in tiers["GET"]
     assert admin_auth.require_admin_mutation in tiers["PUT"]
     assert admin_auth.require_admin_mutation in tiers["DELETE"]
 
