@@ -671,6 +671,27 @@ household device token instead of a caller's credential.
 | `POST /api/plugins/{slug}/uninstall` | Admin, fail-closed (core) | `{"data": "keep"\|"purge"}` | Proxy. |
 | `POST /api/plugins/{slug}/upgrade` | Admin, fail-closed (core) | zip or `{"github_url", "force"?}` | Proxy. |
 
+#### The household's web menu (Settings → System → App layout → Menu)
+
+`web/backend/api/nav_layout.py`, stored in `household_settings` (V045, key
+`nav_layout`). The sidebar's default (Home · Chat · Media ▸ · Tools ▸ ·
+Plugins) needs no row; an admin's layout applies to every browser that opens
+this Domovoi's dashboard (sidebar, Home's "everything" grid, the phone
+strip's rows). The Android app keeps its own layout and doesn't read it.
+Shared-screen and AI-off hiding still apply on top in the browser.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/nav-layout` | Open (like the manifest, which the shell reads beside it before anyone signs in) | — | `{layout, updated_at, limits}`. `layout` is `null` for the default, else `{version: 1, groups: [{id, label, items: [route]}], top: [route], order: [route \| "group:<id>"]}`; `limits` holds `max_groups`, `max_group_items`, `max_top`, `label_max`, `max_bytes`. A stored layout that no longer validates reads as `null`. |
+| `PUT /api/nav-layout` | **Admin (Bearer)**, pre-setup grace; the cookie alone is `403` | the layout | Save it (the answer is the GET's shape). `422` with the reason, and nothing saved, for: a body over 8 KB; more than 12 groups, 40 pages in a group or 60 top-level pages; a group id that isn't lowercase letters, digits and dashes (`^[a-z][a-z0-9-]{0,31}$`) or is used twice; a name that is empty, over 24 characters, holds `<` or `>` or a control character (names are plain text and drawn escaped); a route outside the manifest's route charset, `home` (the brand row is fixed), or a page placed twice; an `order` entry listed twice or naming neither a `top` page nor a declared group; any unknown field. A route this server doesn't offer (a plugin not installed) is kept and ignored when drawn. |
+| `DELETE /api/nav-layout` | **Admin (Bearer)** | — | Back to the default (deletes the row). |
+
+A save or reset fires `pg_notify('nav_layout_changed')`; the `nav_layout`
+realtime channel (`nav_layout.changed`, the layout or `null`) redraws every
+open dashboard holding a household credential at once. A browser without the
+socket (a guest) reads it again when its tab comes back into view, or on the
+next load.
+
 ### 3.3 Capabilities
 
 | Method & path | Auth | Response / purpose |

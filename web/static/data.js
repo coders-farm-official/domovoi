@@ -851,6 +851,7 @@ const reportMutationFailure = (fire, verb, e, { kept = false, key = null } = {})
 const apiGet = (path, opts) => apiFetch(path, opts && opts.quiet ? { quiet: true } : {});
 const apiPost = (path, body) => apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
 const apiPatch = (path, body) => apiFetch(path, { method: 'PATCH', body: JSON.stringify(body || {}) });
+const apiPut = (path, body) => apiFetch(path, { method: 'PUT', body: JSON.stringify(body || {}) });
 const apiDelete = (path, body) => apiFetch(path, {
   method: 'DELETE',
   body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -1853,7 +1854,7 @@ const openRoomQueue = (room) => {
 
 // Expose to other Babel scripts (mirrors components.jsx's pattern).
 Object.assign(window, {
-  apiGet, apiPost, apiPatch, apiDelete, deviceDownload,
+  apiGet, apiPost, apiPatch, apiPut, apiDelete, deviceDownload,
   apiFetch, apiFetchRaw, apiUpload,
   apiHeaders, withDeviceToken,
   stateBus, ServerStore, ServerRestart, DeviceIdentity, apiErrorText, isAuthFailure,

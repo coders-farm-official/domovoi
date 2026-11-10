@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-10 — one menu for every browser (optional)
+
+Dashboard. One database migration (V045, `household_settings`), applied by
+the usual update.
+
+* **Settings → System → App layout → Menu** (admin): rename the sidebar's
+  groups (Media, Tools), add and delete groups, move any page, plugin
+  pages, Chat and Plugins included, into a group or to the top, and change
+  the order, with a live preview; **Reset to default** brings the usual
+  menu back. It is kept on the server, so every browser that opens this
+  Domovoi's dashboard shows it, and open dashboards change at once when it
+  is saved. Nothing needs doing: without a saved menu the default stays.
+  Home stays at the top; the shared-screen and AI-off hiding still apply.
+* The phone app keeps its own layout. The **Phone bar** card on the same
+  page is still this browser only.
+* New: `GET` (open) / `PUT` / `DELETE` (admin) `/api/nav-layout`
+  ([API_REFERENCE.md](API_REFERENCE.md)).
+
 ## 2026-11-10 — what uses the server's memory
 
 Dashboard and core. Nothing to run.

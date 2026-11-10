@@ -257,6 +257,12 @@
         ? Promise.race([Auth.ready(), new Promise((resolve) => setTimeout(resolve, 4000))])
         : Promise.resolve();
       DeviceIdentity.boot();
+      // The household's menu layout (Settings → App layout), asked beside
+      // the manifest and waited for (capped) so the first paint is already
+      // the household's menu, not the default flashing first.
+      const navLayoutReady = (typeof NavLayoutStore !== 'undefined')
+        ? Promise.race([NavLayoutStore.load(), new Promise((resolve) => setTimeout(resolve, 2500))])
+        : Promise.resolve();
 
       let manifest = { plugins: [], core_nav: {} };
       try {
@@ -280,6 +286,7 @@
         });
       });
       try { await authReady; } catch { /* never fatal: render as the status says */ }
+      try { await navLayoutReady; } catch { /* never fatal: the default menu */ }
       renderApp();
     };
 

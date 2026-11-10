@@ -275,6 +275,7 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
     apiGet: (p) => api.call('GET', p),
     apiPost: (p, body) => api.call('POST', p, body),
     apiPatch: (p, body) => api.call('PATCH', p, body),
+    apiPut: (p, body) => api.call('PUT', p, body),
     apiDelete: (p) => api.call('DELETE', p),
     apiUpload: (p, body) => api.call('UPLOAD', p, null),
     apiErrorText: (e) => String((e && e.message) || e),
