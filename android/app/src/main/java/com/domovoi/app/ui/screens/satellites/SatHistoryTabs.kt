@@ -167,9 +167,10 @@ private fun TurnCard(c: SatTurn, showId: Boolean) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(relTime(c.at), style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint)
-            when (c.status) {
-                "pending" -> Pill("waiting", Tone.Idle)
-                "no_answer", "unheard" -> Pill("no answer", Tone.Warn)
+            when {
+                satTurnIgnored(c) -> Pill("ignored", Tone.Idle)
+                c.status == "pending" -> Pill("waiting", Tone.Idle)
+                c.status == "no_answer" || c.status == "unheard" -> Pill("no answer", Tone.Warn)
                 else -> Pill(c.matched_handler ?: "qa", if (c.matched_handler != null) Tone.Brand else Tone.Idle)
             }
             if (showId) {

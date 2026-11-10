@@ -302,10 +302,14 @@ const SAT_NO_ANSWER_WHY = {
   speech_off: 'speech recognition is off',
 };
 const satTurnStatus = (c) => (c && c.status) || 'answered';
+// Left unanswered on purpose: a long capture that sounded like a TV or
+// people talking among themselves, not a request (2026-11-09). Not a failure.
+const satTurnIgnored = (c) => satTurnStatus(c) === 'no_answer' && c.no_answer_reason === 'overheard';
 // The reply line's words when there is no reply to show, else null.
 const SatTurnUnanswered = (c) => {
   const st = satTurnStatus(c);
   if (st === 'pending') return 'waiting for an answer…';
+  if (satTurnIgnored(c)) return 'ignored — sounded like background talk';
   if (st === 'no_answer' || st === 'unheard') {
     const why = SAT_NO_ANSWER_WHY[c.no_answer_reason];
     return why ? `no answer — ${why}` : 'no answer';
@@ -328,6 +332,7 @@ const SatTurnSaid = ({ c }) => {
 const SatTurnPill = ({ c }) => {
   const st = satTurnStatus(c);
   if (st === 'pending') return <Pill tone="idle" live>waiting</Pill>;
+  if (satTurnIgnored(c)) return <Pill tone="idle">ignored</Pill>;
   if (st === 'no_answer' || st === 'unheard') return <Pill tone="warn">no answer</Pill>;
   return <Pill tone={c.matched_handler ? 'live' : 'idle'}>{c.matched_handler || 'qa'}</Pill>;
 };
@@ -390,6 +395,14 @@ const SatConversationTurn = ({ c }) => {
 const satHealthAgeTone = (sec) => sec == null ? 'idle' : sec < 150 ? 'ok' : sec < 900 ? 'warn' : 'err';
 const satHealthTempTone = (c) => c == null ? 'idle' : c < 70 ? 'ok' : c < 80 ? 'warn' : 'err';
 const satHealthThrottle = (flags) => (flags || []).filter(f => !f.endsWith('_occurred'));
+// The wake threshold in use when it isn't the [wake] threshold setting (a
+// pushed wake word left its own on the device; 2026-11-09), else null.
+// Older room devices send neither number: null.
+const satWakeOverride = (s) => {
+  if (!s || typeof s.wake_threshold !== 'number' || typeof s.wake_threshold_setting !== 'number') return null;
+  if (Math.abs(s.wake_threshold - s.wake_threshold_setting) < 0.001) return null;
+  return { inUse: s.wake_threshold.toFixed(2), setting: s.wake_threshold_setting.toFixed(2) };
+};
 const satHealthMb = (kb) => kb == null ? '—' : `${(kb / 1024).toFixed(0)} MB`;
 // A spare device's battery, `{percent, charging, on_power}` (laptops and
 // phones send the same object); null on a device without one (every Pi).
@@ -580,6 +593,8 @@ const SatHealthCard = ({ room, online }) => {
           <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the room device is bringing the house network back">setup hotspot on</Pill>}
         {s && satNeeds2023(s.boot) &&
           <Pill tone="warn" title="Secure Boot is on and the firmware lacks Microsoft's 2023 certificate (below)">firmware needs the 2023 certificate</Pill>}
+        {satWakeOverride(s) &&
+          <Pill tone="warn" title="a wake word pushed from the dashboard left its own threshold on this room device; it is the one in use">wake threshold {satWakeOverride(s).inUse}</Pill>}
         {s && s.mic_blocked === true &&
           <Pill tone="err" title="the device's microphone is switched off in its own settings (a phone's mic privacy toggle): it hears only silence">mic blocked</Pill>}
         {throttle.length > 0 && <Pill tone="err">{throttle.join(', ').replace(/_/g, ' ')}</Pill>}
@@ -590,6 +605,11 @@ const SatHealthCard = ({ room, online }) => {
       {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
           {s.settings_ignored.join('; ')}. It uses its board’s default instead; a new value from the Settings tab replaces the stored one.
+        </div>
+      )}
+      {satWakeOverride(s) && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          It wakes at threshold {satWakeOverride(s).inUse}, not the {satWakeOverride(s).setting} in its Settings tab: a wake word pushed earlier left its own value behind. Setting the wake sensitivity again replaces it.
         </div>
       )}
       {s && s.reboot_needed && (
