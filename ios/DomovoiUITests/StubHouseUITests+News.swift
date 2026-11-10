@@ -1260,10 +1260,13 @@ extension StubHouseUITests {
             // with its reading; under it, or unmeasurable, fails with the
             // reason. `Contrast failed` only, these ten only, this pass only.
             //
-            // The anonymous allowance is unchanged: scrolled to the foot the
-            // first chip row is cut by the page's top edge, and
-            // ``newsCutLeaves(in:)`` allows one anonymous `Contrast failed`
-            // per leaf it measures cut (R003 and I014: three and three).
+            // Scrolled to the foot the first chip row is cut by the page's
+            // top edge, and ``newsCutLeaves(in:)`` allows one anonymous
+            // `Contrast failed` per leaf it measures cut (R003 and I014:
+            // three and three). I018 reported the same three cuts as one
+            // anonymous `Potentially inaccessible text` instead, so on this
+            // pass that may spend from the same budget, the two together
+            // within the cut count (``newsAnonymousBudget(_:cut:hidden:footPass:)``).
             for _ in 0..<12 { app.swipeUp(velocity: .slow) }
             evidence(app, "news-12-audited-foot")
             let foot = try auditNews(app, "news-foot", Self.newsFootPass)
@@ -1907,26 +1910,46 @@ extension StubHouseUITests {
         for row in hidden { print("NEWS AUDIT [\(what)] HIDDEN :: \(row)") }
         let split = Self.floorAndRest(try auditIssues(app, name))
         var counts: [String: Int] = [:]
-        var rest: [String] = []
-        var anonymousAllowed = cut.count + hidden.count
+        var unclaimed: [String] = []
         for found in split.rest {
             // In this order, and each one narrow: a line no classifier claims
-            // lands in `rest` and fails the caller.
+            // goes to the anonymous budget below, and what that does not
+            // spend lands in `rest` and fails the caller.
             if Self.newsOutsideTheViewport(viewport, found) {
                 counts["outside the viewport", default: 0] += 1
             } else if Self.newsScalingFalsePositive(found) {
                 counts["measured scaling false positives", default: 0] += 1
             } else if behindADialog, Self.newsHiddenPageText(found) {
                 counts["the hidden page's text", default: 0] += 1
-            } else if Self.newsAnonymousContrast(found), anonymousAllowed > 0 {
-                // One per cut leaf or hidden row and no more — the count is
-                // this pass's own measurement, printed above, not a tolerance.
-                anonymousAllowed -= 1
-                counts["leaves an edge cuts in half or rows the viewport hides", default: 0] += 1
             } else {
-                rest.append(found)
+                unclaimed.append(found)
             }
         }
+        // One anonymous finding per cut leaf or hidden row and no more — the
+        // counts are this pass's own measurements, printed above, not a
+        // tolerance (``newsAnonymousBudget(_:cut:hidden:footPass:)``).
+        let budget = Self.newsAnonymousBudget(
+            unclaimed,
+            cut: cut.count,
+            hidden: hidden.count,
+            footPass: what == Self.newsFootPass
+        )
+        for line in budget.contrast {
+            print("NEWS AUDIT [\(what)] excused from the cut/hidden budget :: \(line)")
+        }
+        for line in budget.unexposed {
+            print(
+                "NEWS AUDIT [\(what)] excused from the cut budget "
+                    + "(a cut leaf reported as text with no element) :: \(line)"
+            )
+        }
+        if !budget.contrast.isEmpty {
+            counts["leaves an edge cuts in half or rows the viewport hides"] = budget.contrast.count
+        }
+        if !budget.unexposed.isEmpty {
+            counts["cut leaves reported as unexposed text"] = budget.unexposed.count
+        }
+        let rest = budget.kept
         let classified = counts
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
@@ -1934,6 +1957,116 @@ extension StubHouseUITests {
         print("NEWS AUDIT [\(what)] floor=\(split.floor) rest=\(rest.count) \(classified)")
         for found in split.rest { print("NEWS AUDIT   \(found)") }
         return rest.map { "[\(what)] \($0)" }
+    }
+
+    /// The anonymous findings a pass's own measured cuts pay for. **Pure**,
+    /// so ``testNews_TheAnonymousBudgetIsACount()`` pins it without an app.
+    ///
+    /// * An anonymous `Contrast failed` spends one of `cut + hidden`: one per
+    ///   leaf an edge cuts (``newsCutLeaves(in:)``) or row the viewport hides
+    ///   (``newsHiddenRows(in:)``), as before.
+    /// * **Foot pass only**, an anonymous `Potentially inaccessible text`
+    ///   spends from the same budget, and only while the anonymous
+    ///   `Contrast failed` and these together stay within `cut` alone. I014's
+    ///   foot pass returned its three cut chips as three anonymous contrast
+    ///   findings; I018's returned the same three cuts as no anonymous
+    ///   contrast and one of these: the cut row's remains in the navigation
+    ///   bar's band, text with no element behind it. Contrast is spent first
+    ///   over the whole list, so the cap does not depend on the order Apple
+    ///   reports in.
+    /// * Anything else (a named finding, another headline, one past the
+    ///   budget) is `kept`, and fails the caller.
+    static func newsAnonymousBudget(
+        _ lines: [String],
+        cut: Int,
+        hidden: Int,
+        footPass: Bool
+    ) -> (contrast: [String], unexposed: [String], kept: [String]) {
+        var left = max(0, cut) + max(0, hidden)
+        var contrast: [String] = []
+        var others: [String] = []
+        for line in lines {
+            if newsAnonymousContrast(line), left > 0 {
+                left -= 1
+                contrast.append(line)
+            } else {
+                others.append(line)
+            }
+        }
+        var unexposed: [String] = []
+        var kept: [String] = []
+        for line in others {
+            if footPass, newsAnonymousUnexposed(line), left > 0,
+               contrast.count + unexposed.count < cut {
+                left -= 1
+                unexposed.append(line)
+            } else {
+                kept.append(line)
+            }
+        }
+        return (contrast, unexposed, kept)
+    }
+
+    /// A `Potentially inaccessible text` the audit would not attribute: the
+    /// shape only; ``newsAnonymousBudget(_:cut:hidden:footPass:)`` decides.
+    static func newsAnonymousUnexposed(_ line: String) -> Bool {
+        line.hasPrefix("Potentially inaccessible text") && line.hasSuffix("| element: nil")
+    }
+
+    /// ``newsAnonymousBudget(_:cut:hidden:footPass:)``, pinned. No app is
+    /// launched: the budget is a count over strings, and each case below is
+    /// one a train has produced or one the allowance must refuse.
+    func testNews_TheAnonymousBudgetIsACount() {
+        let contrast = "Contrast failed: Contrast failed for element | element: nil"
+        let unexposed = "Potentially inaccessible text: This element appears to display text "
+            + "that should be represented using the accessibility API. | element: nil"
+        let namedUnexposed = "Potentially inaccessible text: This element appears to display text "
+            + "that should be represented using the accessibility API. | element: type=48 "
+            + "label='saved feed' frame=(32.0, 511.7, 86.7, 20.3)"
+        let three = [contrast, contrast, contrast]
+
+        // I014's foot: three cuts, three anonymous contrast, all spent.
+        let i014 = Self.newsAnonymousBudget(three, cut: 3, hidden: 2, footPass: true)
+        XCTAssertEqual(i014.contrast.count, 3)
+        XCTAssertEqual(i014.kept, [])
+
+        // I018's foot: three cuts, no anonymous contrast, one unexposed text.
+        let i018 = Self.newsAnonymousBudget([unexposed], cut: 3, hidden: 2, footPass: true)
+        XCTAssertEqual(i018.unexposed, [unexposed])
+        XCTAssertEqual(i018.kept, [])
+
+        // Three contrast and one unexposed against three cuts: one too many,
+        // in either order Apple reports them, and with hidden rows to spare,
+        // because the unexposed text is capped by the cuts alone.
+        for hidden in [0, 2] {
+            for lines in [three + [unexposed], [unexposed] + three] {
+                let over = Self.newsAnonymousBudget(lines, cut: 3, hidden: hidden, footPass: true)
+                XCTAssertEqual(over.kept, [unexposed], "hidden=\(hidden) order=\(lines)")
+                XCTAssertEqual(over.contrast.count, 3, "hidden=\(hidden) order=\(lines)")
+            }
+        }
+
+        // No cut: nothing for unexposed text, hidden rows or not.
+        XCTAssertEqual(
+            Self.newsAnonymousBudget([unexposed], cut: 0, hidden: 2, footPass: true).kept,
+            [unexposed]
+        )
+        // A named one is never spent.
+        XCTAssertEqual(
+            Self.newsAnonymousBudget([namedUnexposed], cut: 3, hidden: 0, footPass: true).kept,
+            [namedUnexposed]
+        )
+        // Off the foot pass, unexposed text is never spent.
+        XCTAssertEqual(
+            Self.newsAnonymousBudget([unexposed], cut: 3, hidden: 0, footPass: false).kept,
+            [unexposed]
+        )
+        // Anonymous contrast keeps its old budget: cut plus hidden, no more.
+        XCTAssertEqual(Self.newsAnonymousBudget([contrast], cut: 0, hidden: 1, footPass: false).kept, [])
+        XCTAssertEqual(
+            Self.newsAnonymousBudget([contrast, contrast], cut: 0, hidden: 1, footPass: false).kept,
+            [contrast]
+        )
     }
 
     // MARK: - 12b. the foot pass's contrast, measured where the page settled
