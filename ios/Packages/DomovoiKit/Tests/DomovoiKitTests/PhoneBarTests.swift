@@ -149,7 +149,9 @@ final class PhoneBarTests: XCTestCase {
     /// `everyChoiceIsALauncherScreen`
     func testEveryChoiceIsALauncherScreen() {
         XCTAssertEqual(.home, PhoneBar.choices.first)
-        XCTAssertEqual(workspaceRoutes, Array(PhoneBar.choices.dropFirst()))
+        // The workspace, then People: a Settings section since the nav
+        // regroup, still a deliberate pick for the bar.
+        XCTAssertEqual(workspaceRoutes + [.people], Array(PhoneBar.choices.dropFirst()))
         XCTAssertTrue(PhoneBar.choices.allSatisfy { !launcherlessRoutes.contains($0) })
         XCTAssertFalse(PhoneBar.choices.contains(.settings))
         XCTAssertFalse(PhoneBar.choices.contains(.manual))

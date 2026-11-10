@@ -150,7 +150,10 @@ struct RouteScreen: View {
             // ``PeopleView`` says what is left out and why there is no
             // control for any of it — the rename and the forget Android draws
             // and a phone cannot do, and the voice enrolment this screen
-            // never had.
+            // never had. Since the nav regroup `navigate(.people)` resolves to
+            // Settings → Household → People (``settingsTabFor(_:)``), so, as
+            // with Rooms below, this branch is only reached by a direct
+            // `go(.people)` and stays filled so that is not a dead screen.
             PeopleView(model: model)
         case .satellites:
             // slot: satellites
@@ -229,7 +232,7 @@ struct ScreenPlaceholder: View {
 /// — lands on that section, which is ``settingsPlace(of:)`` resolving it
 /// through the alias table.
 ///
-/// The three levels, the search and the fourteen panels are a later batch's.
+/// The three levels, the search and the fifteen panels are a later batch's.
 /// What this draws is where the request landed, and takes it, so coming back
 /// to Settings later starts at the index.
 ///
@@ -356,10 +359,42 @@ struct SettingsPlaceholder: View {
             // (`SettingsScreen.kt:233-236`). This `.onAppear` also runs after
             // such a bounce, which is exactly why it must not reset anything
             // itself — it would undo the fix.
+            //
+            // **Kept as asked, filtered when drawn** (``shown``): a paired
+            // phone counts as a shared screen until the server's registration
+            // answer lands, so a link to People in that first moment draws
+            // Household and then People once the answer says this is a
+            // phone — where filtering here would have parked it on
+            // Household for good. Android filters at the request
+            // (`SettingsScreen.kt:265`); the kitchen tablet sees the same
+            // either way.
             if let asked = model.takeSettingsTab() {
                 place = settingsPlace(of: asked)
             }
         }
+        // **A request that arrives while Settings is already open** — a
+        // People tab on the bar tapped from inside Settings, a Health row's
+        // link — is taken here, because ``NavigationState/go(_:)`` refuses a
+        // move to the open route and `.onAppear` does not fire again. Android's
+        // `LaunchedEffect(request.tab)` (`SettingsScreen.kt:269-272`), with its
+        // rule: a key Settings does not know leaves it where it is.
+        .onChange(of: model.navigation.settingsTab) { _, asked in
+            guard asked != nil, let taken = model.takeSettingsTab() else { return }
+            let landed = settingsPlace(of: taken)
+            if landed != .index { place = landed }
+        }
+    }
+
+    /// This phone is a shared screen: People is left out of Household, and a
+    /// link to it opens the group instead (``SettingsSection/shownOn(sharedScreen:)``).
+    private var sharedScreen: Bool { model.visibility.sharedScreen }
+
+    /// ``place`` as it is drawn: Android's `placeOf(at, shared)`, re-read on
+    /// every composition (`SettingsScreen.kt:274`), so a section a shared
+    /// screen hides is its group — and a phone marked shared while People is
+    /// open leaves People.
+    private var shown: SettingsPlace {
+        settingsPlace(of: place.key, sharedScreen: sharedScreen)
     }
 
     private var content: some View {
@@ -373,10 +408,11 @@ struct SettingsPlaceholder: View {
             // "Text of this element may be clipped at larger Dynamic Type
             // sizes" and, once the element was legible in the log, named two
             // of these: the `Phones & browsers` heading and the
-            // `back to Rooms & devices` button. A `Text` or a button label
-            // with no `fixedSize` can be squeezed flat by its parent, and
-            // these are section names and group names — "Rooms & devices",
-            // "Chat & AI" — that get long at an accessibility size.
+            // `back to Rooms & devices` button (Household's old name). A `Text`
+            // or a button label with no `fixedSize` can be squeezed flat by
+            // its parent, and these are section names and group names —
+            // "Phones & browsers", "Chat & AI" — that get long at an
+            // accessibility size.
             //
             // `minimumScaleFactor` is the other answer and is rejected
             // throughout this app: it makes text smaller for the person who
@@ -398,7 +434,7 @@ struct SettingsPlaceholder: View {
             // 432 cases). So the defect is the control's *size*, not a colour
             // and not the case's scroll. `contentShape` is what makes the
             // grown frame the tap target rather than just the words in it.
-            switch place {
+            switch shown {
             case .index:
                 ForEach(SettingsGroup.allCases, id: \.self) { group in
                     Button(group.label) { place = .group(group) }
@@ -410,13 +446,13 @@ struct SettingsPlaceholder: View {
                 Text(group.label)
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
-                ForEach(sections(of: group), id: \.key) { section in
+                ForEach(sections(of: group, sharedScreen: sharedScreen), id: \.key) { section in
                     Button(section.label) { place = .section(section) }
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(minHeight: 44)
                         .contentShape(.rect)
                 }
-                Button(ShellStrings.allSettings) { place = place.up ?? .index }
+                Button(ShellStrings.allSettings) { place = shown.up ?? .index }
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(minHeight: 44)
                     .contentShape(.rect)
@@ -433,7 +469,7 @@ struct SettingsPlaceholder: View {
                     section: section,
                     askingToForget: $askingToForget
                 )
-                Button(ShellStrings.backTo(section.group.label)) { place = place.up ?? .index }
+                Button(ShellStrings.backTo(section.group.label)) { place = shown.up ?? .index }
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(minHeight: 44)
                     .contentShape(.rect)
@@ -464,6 +500,15 @@ struct SettingsSectionScreen: View {
             // are part 3's; §6.5's four are a batch of their own, as
             // ``PhonesAndBrowsersPanel`` says and the report sizes.
             PhonesAndBrowsersPanel(model: model, askingToForget: $askingToForget)
+        case "people":
+            // slot: people
+            // Settings → Household → People since the nav regroup: the People
+            // screen embedded, as Android's `PeopleScreen(embedded = true)`
+            // (`SettingsScreen.kt:290`) — Settings draws the heading and
+            // already scrolls, so the screen draws only its counts and no
+            // scroll view of its own. A shared screen never lists it
+            // (``SettingsPlaceholder``'s `shown`).
+            PeopleView(model: model, embedded: true)
         case "rooms":
             // slot: rooms
             // `embedded:` is Android's own flag (`SatellitesScreen.kt:80`):

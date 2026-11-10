@@ -1,7 +1,7 @@
 import Foundation
 
 /// Settings' groups and sections, as pure data: the five group labels and the
-/// fourteen sections with their keys, labels, one-line descriptions, search
+/// fifteen sections with their keys, labels, one-line descriptions, search
 /// words, old keys and dashboard addresses.
 ///
 /// A port of `SettingsSection` and `SettingsGroup` in
@@ -18,8 +18,14 @@ import Foundation
 /// **Two shapes deliberately left out**, because they are not strings and not
 /// this batch's: each section's icon (a Material icon name with no SwiftUI
 /// counterpart to choose yet) and the group's icon. Part 2 picks those.
+///
+/// **Household was "Rooms & devices"** (key `rooms-and-devices`) until the nav
+/// regroup (`SettingsScreen.kt:98-105`, commit adb2ad06): it holds Rooms,
+/// People, Phones & browsers and Printers & scanners, and App layout moved to
+/// System. ``aliases`` keeps the old key, so a link from before still lands
+/// (``SettingsGroup/named(_:)``).
 public enum SettingsGroup: String, CaseIterable, Sendable {
-    case roomsAndDevices = "rooms-and-devices"
+    case household
     case voice
     case chatAndAi = "chat-and-ai"
     case privacy
@@ -27,9 +33,24 @@ public enum SettingsGroup: String, CaseIterable, Sendable {
 
     public var key: String { rawValue }
 
+    /// Keys this group had before, so an old link still opens it.
+    public var aliases: [String] {
+        switch self {
+        case .household: return ["rooms-and-devices"]
+        default: return []
+        }
+    }
+
+    /// The group a key names, by its key or a key it had before
+    /// (`groupNamed`, `SettingsScreen.kt:186-188`).
+    public static func named(_ key: String?) -> SettingsGroup? {
+        guard let key else { return nil }
+        return allCases.first { $0.key == key } ?? allCases.first { $0.aliases.contains(key) }
+    }
+
     public var label: String {
         switch self {
-        case .roomsAndDevices: return "Rooms & devices"
+        case .household: return "Household"
         case .voice: return "Voice"
         case .chatAndAi: return "Chat & AI"
         case .privacy: return "Privacy"
@@ -75,31 +96,30 @@ public struct SettingsSection: Equatable, Sendable {
 
 public extension SettingsSection {
 
-    /// The fourteen sections, in the Kotlin's declaration order — which is
+    /// The fifteen sections, in the Kotlin's declaration order — which is
     /// the order they are listed in, so it is not incidental.
     static let all: [SettingsSection] = [
         SettingsSection(
-            key: "rooms", label: "Rooms", group: .roomsAndDevices,
+            key: "rooms", label: "Rooms", group: .household,
             sub: "Each room's device: status, announcements, and each room's details.",
             words: "satellite satellites pi speaker microphone room announce wifi",
             aliases: ["satellites"]
         ),
         SettingsSection(
-            key: "phones-and-browsers", label: "Phones & browsers", group: .roomsAndDevices,
+            key: "people", label: "People", group: .household,
+            sub: "Who lives here: each person's profile, what Domovoi remembers, and their conversations.",
+            words: "people person family member members household voice profile enrolled memory conversations denylist"
+        ),
+        SettingsSection(
+            key: "phones-and-browsers", label: "Phones & browsers", group: .household,
             sub: "Which server this phone talks to, and who's listening. The household's other phones and browsers are on the dashboard.",
             words: "connection server pair pairing household token phone device identity trust",
             aliases: ["connection"]
         ),
         SettingsSection(
-            key: "printers", label: "Printers & scanners", group: .roomsAndDevices,
+            key: "printers", label: "Printers & scanners", group: .household,
             sub: "The printers and scanners your home server prints and scans with.",
             words: "printer printers print printing scanner scanners scan scanning ink toner paper"
-        ),
-        SettingsSection(
-            key: "app-layout", label: "App layout", group: .roomsAndDevices,
-            sub: "The tabs along the bottom of this phone, left to right.",
-            words: "phone bar tabs bottom bar layout",
-            aliases: ["phonebar"]
         ),
         SettingsSection(
             key: "wake-words", label: "Wake words", group: .voice,
@@ -153,6 +173,12 @@ public extension SettingsSection {
             words: "health status problems check containers incident server database"
         ),
         SettingsSection(
+            key: "app-layout", label: "App layout", group: .system,
+            sub: "The tabs along the bottom of this phone, left to right.",
+            words: "phone bar tabs bottom bar layout",
+            aliases: ["phonebar"]
+        ),
+        SettingsSection(
             key: "advanced", label: "Advanced", group: .system,
             sub: "The admin account and every setting of the Domovoi server — on the dashboard.",
             words: "advanced configuration config admin password settings",
@@ -166,5 +192,17 @@ public extension SettingsSection {
     static func named(_ key: String?) -> SettingsSection? {
         guard let key else { return nil }
         return all.first { $0.key == key } ?? all.first { $0.aliases.contains(key) }
+    }
+
+    /// Sections a shared screen (the kitchen tablet) leaves out: one person's
+    /// things, as ``sharedScreenHidden`` leaves People off every launcher
+    /// (`SharedScreenHiddenSections`, `SettingsScreen.kt:176-181`).
+    /// Presentational, like the rest of the shared view.
+    static let sharedScreenHiddenKeys: Set<String> = ["people"]
+
+    /// Whether this section is listed on a phone that is (or is not) a shared
+    /// screen (`shownOn`).
+    func shownOn(sharedScreen: Bool) -> Bool {
+        !(sharedScreen && Self.sharedScreenHiddenKeys.contains(key))
     }
 }

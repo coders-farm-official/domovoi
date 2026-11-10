@@ -2228,7 +2228,7 @@ extension StubHouseUITests {
             roomsSummaryText(app).waitForExistence(timeout: 30),
             "the roster did not draw, so there is nothing to audit"
         )
-        // **D57.** `back to Rooms & devices` is the foot of every Settings
+        // **D57.** `back to Household` (once `back to Rooms & devices`) is the foot of every Settings
         // section (`RouteScreen.swift:296`), and the audit used to fail its
         // contrast — a finding this case excused as the shell's.
         //
@@ -2247,11 +2247,11 @@ extension StubHouseUITests {
         // quietly dropped a finding against a real control is the thing that
         // hides the next one.
         if let page = roomsScrollView(app, strip: false) {
-            let foot = app.buttons[ShellStringsUnderTest.backToRooms]
+            let foot = app.buttons[ShellStringsUnderTest.backToHousehold]
             XCTAssertTrue(foot.waitForExistence(timeout: 20), "the Settings section has no foot")
             XCTAssertTrue(
                 roomsBring(foot, into: page, vertical: true),
-                "`back to Rooms & devices` could not be brought wholly onto "
+                "`back to Household` could not be brought wholly onto "
                     + "the window, so the audit would measure a clipped "
                     + "button again and report a contrast failure that is the "
                     + "measurement's and not the button's"
@@ -2445,7 +2445,7 @@ extension StubHouseUITests {
             "Apple's audit has findings against the Rooms roster beyond the "
                 + "measured floor: " + rosterRest.joined(separator: " / ")
                 + " — an unattributed `Hit area is too small` here is "
-                + "`back to Rooms & devices` (RouteScreen.swift:413, "
+                + "`back to Household` (RouteScreen.swift's section foot, "
                 + "192.3 x 20.3), the shell's section foot, and its three "
                 + "siblings at :387, :395 and :398 are the same shape; see "
                 + "this case's comment for the elimination"
@@ -2927,13 +2927,13 @@ extension StubHouseUITests {
     }
 
     /// The one **measured allowance** on the roster, by signature:
-    /// `back to Rooms & devices` clipped by the page's foot at the position
+    /// `back to Household` clipped by the page's foot at the position
     /// the audit leaves the page in.
     ///
     /// A line is allowed only when **all** of these hold, and each is
     /// printed:
     ///  * its headline is one of the two contrast headlines;
-    ///  * its label is exactly ``ShellStringsUnderTest/backToRooms``;
+    ///  * its label is exactly ``ShellStringsUnderTest/backToHousehold``;
     ///  * in `clippedOn`, every page element with that label **straddles**
     ///    the page's foot, partly above it and partly below. This is D57's
     ///    geometry: "half a button against whatever is past the clip is not
@@ -2952,7 +2952,7 @@ extension StubHouseUITests {
         picture: CGImage?,
         window: CGRect
     ) -> (allowed: [String], kept: [String]) {
-        let foot = ShellStringsUnderTest.backToRooms
+        let foot = ShellStringsUnderTest.backToHousehold
         var allowed: [String] = []
         var kept: [String] = []
         for line in lines {

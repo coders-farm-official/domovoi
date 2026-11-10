@@ -76,6 +76,26 @@ final class ShellNavigationTests: XCTestCase {
         XCTAssertEqual([.settings], state.path)
     }
 
+    /// The nav regroup (`RoutesTest.peopleLeftTheMainNavButStaysABarChoice`):
+    /// People is Settings → Household → People, so a People tab on a saved
+    /// bar, or anything else that navigates to People, opens Settings on it —
+    /// and the request is left for Settings to take even when Settings is the
+    /// screen already open, which is the case the view's `onChange` is for.
+    func testPeopleOpensSettingsOnPeople() throws {
+        var state = NavigationState()
+        state.navigate(.people)
+        XCTAssertEqual(.settings, state.route)
+        XCTAssertEqual("people", state.settingsTab)
+        XCTAssertFalse(state.path.contains(.people))
+        let people = try XCTUnwrap(SettingsSection.named("people"))
+        XCTAssertEqual(.section(people), settingsPlace(of: state.takeSettingsTab()))
+
+        // From inside Settings: no second push, and the request is waiting.
+        state.navigate(.people)
+        XCTAssertEqual([.settings], state.path)
+        XCTAssertEqual("people", state.settingsTab)
+    }
+
     /// The request is **taken**, so coming back to Settings later starts at
     /// its index (`SettingsScreen.kt:233-236`).
     func testASettingsSectionRequestIsTakenOnce() {
@@ -110,11 +130,13 @@ final class ShellNavigationTests: XCTestCase {
     /// `Routes.kt` says in so many words.
     func testBecomingASharedScreenDoesNotThrowYouOffThePageYouAreOn() {
         var state = NavigationState()
-        state.go(.people)
+        state.go(.news)
         XCTAssertFalse(state.capabilitiesChanged(seen(.empty, shared: true)))
-        XCTAssertEqual(.people, state.route)
-        // ...but no launcher offers it any more.
-        XCTAssertFalse(sidebarSections(seen(.empty, shared: true)).workspace.contains(.people))
+        XCTAssertEqual(.news, state.route)
+        // ...but no launcher offers it any more. (News, not People: People
+        // left the sidebar for Settings in the nav regroup.)
+        XCTAssertFalse(sidebarSections(seen(.empty, shared: true)).workspace.contains(.news))
+        XCTAssertTrue(sidebarSections(seen(.empty, shared: false)).workspace.contains(.news))
     }
 
     /// Chat with the server's AI off and no engine on the phone is the same
@@ -219,11 +241,28 @@ final class ShellNavigationTests: XCTestCase {
         XCTAssertFalse(sections.workspace.contains(.home))
         XCTAssertFalse(sections.system.contains(.home))
         XCTAssertEqual([.settings, .manual], sections.system)
-        // The workspace order is the web's, with the gated screens absent
-        // until their plugin is.
-        XCTAssertEqual([.chat, .music, .podcasts, .audiobooks, .videos, .news, .people, .calendar, .files],
+        // The workspace order is the web's grouped order, with the gated
+        // screens absent until their plugin is, and People gone to Settings.
+        XCTAssertEqual([.chat, .music, .podcasts, .audiobooks, .videos, .news, .calendar, .files],
                        sections.workspace)
         XCTAssertFalse(sections.workspace.contains(.satellites))
         XCTAssertFalse(sections.workspace.contains(.containers))
+        XCTAssertFalse(sections.workspace.contains(.people))
+    }
+
+    /// The sidebar is Android's drawer: Chat, then Media, then Tools.
+    func testTheSidebarIsGroupedChatMediaTools() {
+        let tree = sidebarTree(seen(phoneCanChat: true))
+        guard let media = defaultNav.groups.first(where: { $0.id == "media" }),
+              let tools = defaultNav.groups.first(where: { $0.id == "tools" })
+        else { return XCTFail("the default groups are not media and tools") }
+        XCTAssertEqual(
+            [
+                .item(.chat),
+                .group(media, [.music, .podcasts, .audiobooks, .videos]),
+                .group(tools, [.news, .calendar, .files]),
+            ],
+            tree
+        )
     }
 }

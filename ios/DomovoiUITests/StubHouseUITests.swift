@@ -1694,23 +1694,23 @@ final class StubHouseUITests: XCTestCase {
         // it, and the case failed on "no back button on the pairing screen"
         // with the panel in front of it. A lazy page's foot is unbuilt, not
         // off screen, so existence needs the flicks as much as reach does.
-        let backToRooms = app.buttons[ShellStringsUnderTest.backToRooms]
+        let backToHousehold = app.buttons[ShellStringsUnderTest.backToHousehold]
         var reaching = 0
-        while !backToRooms.exists || !backToRooms.isHittable, reaching < 12 {
+        while !backToHousehold.exists || !backToHousehold.isHittable, reaching < 12 {
             app.swipeUp(velocity: .slow)
             reaching += 1
         }
         XCTAssertTrue(
-            backToRooms.exists,
+            backToHousehold.exists,
             "no back button on the pairing screen after \(reaching) flicks"
         )
         XCTAssertTrue(
-            backToRooms.isHittable,
+            backToHousehold.isHittable,
             "the pairing screen's back button never came into reach — a tap on "
                 + "an element that is not hittable throws `Activation point "
                 + "invalid`"
         )
-        backToRooms.tap()
+        backToHousehold.tap()
         let printers = app.buttons[ShellStringsUnderTest.printersSection]
         XCTAssertTrue(printers.waitForExistence(timeout: 10), "tapping back did not reach the group list")
         try step("B-group")
@@ -1742,7 +1742,7 @@ final class StubHouseUITests: XCTestCase {
         // switch, room chips and two buttons — and a tap on an element that is
         // not hittable throws `Activation point invalid`, which is how three
         // Music cases died in this same run. Existence is not reach.
-        let backAgain = app.buttons[ShellStringsUnderTest.backToRooms]
+        let backAgain = app.buttons[ShellStringsUnderTest.backToHousehold]
         XCTAssertTrue(backAgain.waitForExistence(timeout: 10), "no back button on the printers section")
         var flicks = 0
         while !backAgain.isHittable, flicks < 12 {
@@ -1758,7 +1758,7 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(allSettings.waitForExistence(timeout: 10), "no all-settings button on the group list")
         allSettings.tap()
         XCTAssertTrue(
-            app.buttons[ShellStringsUnderTest.roomsGroup].waitForExistence(timeout: 10),
+            app.buttons[ShellStringsUnderTest.householdGroup].waitForExistence(timeout: 10),
             "all settings did not reach the index"
         )
         try step("D-index")
@@ -5961,10 +5961,11 @@ enum ShellStringsUnderTest {
     static let allSettings = "all settings"
 
     /// ``ShellStrings/backTo(_:)`` for the group every section the bisect
-    /// visits belongs to.
-    static let backToRooms = "back to Rooms & devices"
+    /// visits belongs to: **Household**, which was "Rooms & devices" until
+    /// the nav regroup (`SettingsSections.swift`, Android adb2ad06).
+    static let backToHousehold = "back to Household"
 
-    static let roomsGroup = "Rooms & devices"
+    static let householdGroup = "Household"
 
     /// A section in the same group as `Phones & browsers`. It was the control
     /// because it had **no screen**; the Printing item built it on

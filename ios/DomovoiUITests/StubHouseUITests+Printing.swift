@@ -33,7 +33,7 @@ extension StubHouseUITests {
     /// Reset the house, launch into Settings and walk to Printers & scanners.
     ///
     /// The two labels are the ones the bisect case already uses
-    /// (``ShellStringsUnderTest/roomsGroup`` and `.printersSection`), so a
+    /// (``ShellStringsUnderTest/householdGroup`` and `.printersSection`), so a
     /// rename cannot leave this file matching nothing while the bisect keeps
     /// passing.
     ///
@@ -51,7 +51,7 @@ extension StubHouseUITests {
         // what the audit runs found meant nothing, because the root had not
         // drawn under it.
         let app = launch(mode: mode, push: "Settings", pushDelay: 2)
-        let group = app.buttons[ShellStringsUnderTest.roomsGroup]
+        let group = app.buttons[ShellStringsUnderTest.householdGroup]
         guard group.waitForExistence(timeout: 30) else {
             print("=== SETTINGS NEVER DREW ITS GROUPS — tree follows ===")
             print(app.debugDescription)
@@ -63,7 +63,7 @@ extension StubHouseUITests {
         // that exists and is not hittable lands on nothing and reads exactly
         // like a screen that never drew.
         guard printingScrollToHittable(app, group) else {
-            XCTFail("the Rooms & devices group is unreachable")
+            XCTFail("the Household group is unreachable")
             return nil
         }
         group.tap()
@@ -71,7 +71,7 @@ extension StubHouseUITests {
         guard section.waitForExistence(timeout: 15) else {
             print("=== NO PRINTERS SECTION — tree follows ===")
             print(app.debugDescription)
-            XCTFail("the Rooms & devices group has no Printers & scanners")
+            XCTFail("the Household group has no Printers & scanners")
             return nil
         }
         guard printingScrollToHittable(app, section) else {

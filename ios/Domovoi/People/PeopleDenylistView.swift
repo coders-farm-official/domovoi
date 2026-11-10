@@ -15,10 +15,13 @@ struct PeopleDenylistView: View {
 
     let people: PeopleModel
 
+    /// Inside Settings → People, which already scrolls (``PeopleView/embedded``).
+    var embedded = false
+
     @ScaledMetric(relativeTo: .body) private var glyphWidth: CGFloat = 24
 
     var body: some View {
-        ScrollView {
+        PeopleScroll(embedded: embedded) {
             VStack(alignment: .leading, spacing: 18) {
                 header
                 Text(PeopleStrings.denylistExplainer)
@@ -27,8 +30,6 @@ struct PeopleDenylistView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 count
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

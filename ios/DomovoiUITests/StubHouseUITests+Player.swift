@@ -720,7 +720,7 @@ extension StubHouseUITests {
     /// coordinate.
     @MainActor
     func reachPhonesAndBrowsersFromSettings(_ app: XCUIApplication) -> Bool {
-        let group = app.buttons[PlayerListenerUnderTest.roomsAndDevices]
+        let group = app.buttons[PlayerListenerUnderTest.household]
         guard group.waitForExistence(timeout: 30) else {
             print("SETTINGS INDEX NOT REACHED — tree follows")
             print(app.debugDescription)
@@ -729,7 +729,7 @@ extension StubHouseUITests {
         group.tap()
         let section = app.buttons[PlayerListenerUnderTest.phonesAndBrowsers]
         guard section.waitForExistence(timeout: 20) else {
-            print("`Rooms & devices` HAS NO `Phones & browsers` — tree follows")
+            print("`Household` HAS NO `Phones & browsers` — tree follows")
             print(app.debugDescription)
             return false
         }
@@ -817,8 +817,8 @@ enum PlayerListenerUnderTest {
     /// sentence — matched on a different screen, which is the point.
     static let chipChevy = "listening as Chevy"
 
-    /// The Settings index's group and section
-    /// (`SettingsSections.swift:88`).
-    static let roomsAndDevices = "Rooms & devices"
+    /// The Settings index's group and section (`SettingsSections.swift`):
+    /// Household, "Rooms & devices" until the nav regroup.
+    static let household = "Household"
     static let phonesAndBrowsers = "Phones & browsers"
 }

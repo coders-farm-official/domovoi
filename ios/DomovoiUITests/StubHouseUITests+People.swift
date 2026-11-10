@@ -9,10 +9,12 @@ import XCTest
 /// on four screens that never asked for one.
 ///
 /// The screen is reached by **seeding the push** (`launch(push: "People")`),
-/// not by tapping: `Route.people` is on no phone bar
-/// (`defaultPhoneBar`, `Route.swift:118`) and is in `sharedScreenHidden`, so
-/// Home's everything grid is the only tap route and it needs a scroll on a
-/// phone. Nothing here opens the connection sheet.
+/// not by tapping. Since the nav regroup People is **Settings → Household →
+/// People**: the seeded `navigate(.people)` opens Settings on that section
+/// (`settingsTabFor`), where the screen is drawn embedded — Settings' own
+/// heading and scroll, the counts line, the roster, and the section's
+/// `back to Household` foot. It is on no default bar and no longer on Home's
+/// grid. Nothing here opens the connection sheet.
 ///
 /// ### What the fixture was written to make provable
 ///
@@ -1234,7 +1236,7 @@ extension StubHouseUITests {
     /// |---|---|---|
     /// | `unverified` | **4.12:1** | 5.72:1 |
     /// | `  live` | **4.15:1** | 7.43:1 |
-    /// | `domovoi / people` | — | 7.43:1 |
+    /// | `domovoi / people` (now `domovoi / settings`: People is a Settings section) | — | 7.43:1 |
     /// | `127.0.0.1:6601` | — | 15.47:1 |
     ///
     /// The two that fail fail at the banner's own grey timestamp — `now`,

@@ -258,6 +258,34 @@ final class ShellStringsTests: XCTestCase {
         return out
     }
 
+    // MARK: - the nav regroup, before this tree's Kotlin has it
+
+    /// Whether this checkout's `SettingsScreen.kt` is still the one from
+    /// **before** Android's nav regroup (commit adb2ad06): it still declares
+    /// `RoomsAndDevices("rooms-and-devices", …)`.
+    ///
+    /// **The iOS branch is cut before the regroup.** The port lands on
+    /// wf/ios-b-all, whose `android/` is main from before it, and the Android
+    /// files are deliberately not copied onto an iOS branch. So until main is
+    /// merged in, the Kotlin this file reads cannot say "Household" or
+    /// People's sentence, and ``testEverySettingsSectionMatchesTheKotlin()``
+    /// pins exactly those fields — the Household group's label, key and
+    /// aliases, and the People section's label, key, sub and words — one by
+    /// one against adb2ad06's literals instead.
+    ///
+    /// It keys on the **old** marker being present, not the new one being
+    /// absent: the day the merge brings the regroup, the old declaration is
+    /// gone, this is false, and every field is read from the Kotlin again —
+    /// so a reformatted Kotlin fails loudly rather than leaving the pins on
+    /// for ever (NewsStringsTests' shape).
+    private static let kotlinPredatesTheNavRegroup: Bool = {
+        let url = repositoryRoot.appendingPathComponent(
+            "android/app/src/main/java/com/domovoi/app/ui/screens/settings/SettingsScreen.kt"
+        )
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        return text.contains("RoomsAndDevices(\"rooms-and-devices\"")
+    }()
+
     // MARK: - the helpers every assertion goes through
 
     /// **A whole string of ours is a whole string of the Kotlin's.** The
@@ -867,14 +895,39 @@ final class ShellStringsTests: XCTestCase {
 
     /// Every section's label and `sub`, and the five group labels, read from
     /// the table they were ported from.
-    func testEverySettingsSectionMatchesTheKotlin() {
-        XCTAssertEqual(14, SettingsSection.all.count)
+    func testEverySettingsSectionMatchesTheKotlin() throws {
+        XCTAssertEqual(15, SettingsSection.all.count)
         XCTAssertEqual(5, SettingsGroup.allCases.count)
-        for group in SettingsGroup.allCases {
+        // Before the merge brings the regroup's Kotlin, the fields it added
+        // are pinned one by one against adb2ad06's own literals
+        // (`git show adb2ad06:android/app/src/main/java/com/domovoi/app/ui/screens/settings/SettingsScreen.kt`,
+        // `SettingsGroup.Household` and `SettingsSection.People`), and only
+        // those fields skip the Kotlin below.
+        let pinned = Self.kotlinPredatesTheNavRegroup
+        if pinned {
+            XCTAssertEqual("Household", SettingsGroup.household.label)
+            XCTAssertEqual("household", SettingsGroup.household.key)
+            XCTAssertEqual(["rooms-and-devices"], SettingsGroup.household.aliases)
+            let people = try XCTUnwrap(SettingsSection.named("people"))
+            XCTAssertEqual("People", people.label)
+            XCTAssertEqual("people", people.key)
+            XCTAssertEqual(
+                "Who lives here: each person's profile, what Domovoi remembers, and their conversations.",
+                people.sub
+            )
+            XCTAssertEqual(
+                "people person family member members household voice profile enrolled memory conversations denylist",
+                people.words
+            )
+            XCTAssertTrue(people.aliases.isEmpty)
+            XCTAssertNil(people.dashboard)
+        }
+        for group in SettingsGroup.allCases where !(pinned && group == .household) {
             assertKotlinSaysWhole(group.label)
             assertKotlinSaysWhole(group.key)
+            for alias in group.aliases { assertKotlinSaysWhole(alias) }
         }
-        for section in SettingsSection.all {
+        for section in SettingsSection.all where !(pinned && section.key == "people") {
             assertKotlinSaysWhole(section.label)
             assertKotlinSaysWhole(section.sub)
             assertKotlinSaysWhole(section.key)
@@ -883,7 +936,7 @@ final class ShellStringsTests: XCTestCase {
             if let dashboard = section.dashboard { assertKotlinSaysWhole(dashboard) }
         }
         // The keys are unique, and every alias resolves.
-        XCTAssertEqual(14, Set(SettingsSection.all.map(\.key)).count)
+        XCTAssertEqual(15, Set(SettingsSection.all.map(\.key)).count)
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)

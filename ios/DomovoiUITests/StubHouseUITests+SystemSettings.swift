@@ -45,7 +45,7 @@ extension StubHouseUITests {
     @MainActor
     func testSystemSettings_AppLayoutAddsAndRemovesATab() throws {
         let app = launch(push: "Settings")
-        XCTAssertTrue(systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout))
+        XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
         guard let settled = systemSettingsSettledBar(app) else {
             evidence(app, "systemsettings-layout-never-settled")
             return XCTFail("the preview line never settled with chat on the bar")
@@ -151,7 +151,7 @@ extension StubHouseUITests {
     @MainActor
     func testSystemSettings_AppLayoutDefaultRestoresTheBar() throws {
         let app = launch(push: "Settings")
-        XCTAssertTrue(systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout))
+        XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
         XCTAssertNotNil(systemSettingsSettledBar(app), "the preview line never settled")
 
         // **Before any edit.** `default` is enabled only while the store's key
@@ -212,7 +212,7 @@ extension StubHouseUITests {
     @MainActor
     func testSystemSettings_AppLayoutHomeCannotMoveOrGo() throws {
         let app = launch(push: "Settings")
-        XCTAssertTrue(systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout))
+        XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
         XCTAssertNotNil(systemSettingsSettledBar(app), "the preview line never settled")
         evidence(app, "systemsettings-home-row")
 
@@ -553,7 +553,7 @@ extension StubHouseUITests {
         ] {
             let app = launch(mode: mode, push: "Settings")
             XCTAssertTrue(
-                systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout),
+                systemSettingsReach(app, group: .system, section: .appLayout),
                 "App layout was not reached at the \(name) type size"
             )
             XCTAssertNotNil(
@@ -720,7 +720,7 @@ extension StubHouseUITests {
         // has no contextual type of its own.
         let strip: String? = header ? nil : "topBar"
         let app = launch(strip: strip, push: "Settings")
-        XCTAssertTrue(systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout))
+        XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
         XCTAssertNotNil(systemSettingsSettledBar(app), "the preview line never settled")
         return try systemSettingsAudit(
             app,
@@ -1065,9 +1065,10 @@ extension StubHouseUITests {
 /// away from its case.
 enum SystemSettingsStringsUnderTest {
 
-    /// ``SettingsGroup/label``.
+    /// ``SettingsGroup/label``. App layout is in **System** since the nav
+    /// regroup (it was under "Rooms & devices", now Household).
     enum Group: String {
-        case roomsAndDevices = "Rooms & devices"
+        case household = "Household"
         case system = "System"
     }
 

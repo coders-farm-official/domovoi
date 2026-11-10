@@ -12,7 +12,7 @@ import Foundation
 ///    answer here begins with it and every edit strips it out, works on the
 ///    rest, and prepends it again.
 ///  - **Slots 2…5 are the person's**, from ``choices`` — Home plus
-///    ``workspaceRoutes``. Settings, the manual, Rooms and Containers are
+///    ``workspaceRoutes`` plus People. Settings, the manual, Rooms and Containers are
 ///    never eligible.
 ///  - **Two to five tabs.** A saved bar left with fewer than ``min`` after
 ///    filtering falls back to the *default*, re-filtered.
@@ -38,8 +38,12 @@ public enum PhoneBar {
     public static let max = 5
     public static let min = 2
 
-    /// The screens that may sit on the bar, in the sidebar's order.
-    public static let choices: [Route] = [.home] + workspaceRoutes
+    /// The screens that may sit on the bar, in the sidebar's order: Home,
+    /// the workspace, then People — off the sidebar and the grid since the
+    /// nav regroup (a Settings section), but a deliberate personal pick here,
+    /// so a bar saved with it keeps the tab, which opens Settings → People
+    /// (`PhoneBar.kt:24-29`).
+    public static let choices: [Route] = [.home] + workspaceRoutes + [.people]
 
     /// The tabs, left to right, for a saved bar (`nil` = never saved, or
     /// unreadable) on a server with these capabilities (`PhoneBar.kt:74`).

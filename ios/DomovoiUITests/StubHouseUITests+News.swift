@@ -2110,7 +2110,7 @@ enum NewsStringsUnderTest {
 
     /// ``NewsStrings/noPeople`` and its sub-line.
     static let noPeople = "no people enrolled yet"
-    static let noPeopleSub = "enroll a speaker on the people page first"
+    static let noPeopleSub = "enroll a speaker under People in Settings first"
 
     /// ``NewsStrings/feedAdded``.
     static let feedAdded = "feed added"

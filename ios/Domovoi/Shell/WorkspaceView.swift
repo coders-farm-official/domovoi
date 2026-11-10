@@ -45,14 +45,27 @@ struct WorkspaceView: View {
     /// waiting would otherwise consume the one push and leave the test
     /// watching for a screen that never arrives. Pushing twice is harmless —
     /// ``NavigationState/go(_:)`` refuses a move to the open route.
+    ///
+    /// ``AuditStrip/seededSettingsTab`` is the same push by a Settings
+    /// **key** rather than a route — `openSettingsTab`, which is what a link
+    /// naming a section or a group does — so a case can hand Settings an old
+    /// key (`rooms-and-devices`) that no route names. It wins over a seeded
+    /// route when a launch passes both.
     private func seedPushIfAsked() async {
-        guard !seededPush, let route = AuditStrip.seededRoute else { return }
+        guard !seededPush else { return }
+        let tab = AuditStrip.seededSettingsTab
+        let route = AuditStrip.seededRoute
+        guard tab != nil || route != nil else { return }
         if let delay = AuditStrip.pushDelay {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
         guard !seededPush else { return }
         seededPush = true
-        model.navigate(route)
+        if let tab {
+            model.openSettingsTab(tab)
+        } else if let route {
+            model.navigate(route)
+        }
     }
 
     @ViewBuilder private var layout: some View {
@@ -393,6 +406,18 @@ enum AuditStrip: String {
         #endif
     }
 
+    /// A Settings key to open once the workspace is up, through
+    /// ``ShellModel/openSettingsTab(_:)`` — a section's key, a group's, or an
+    /// old one (`rooms-and-devices`). DEBUG-only, read once, like
+    /// ``seededRoute``.
+    static var seededSettingsTab: String? {
+        #if DEBUG
+        return value(after: "-domovoi-audit-settings")
+        #else
+        return nil
+        #endif
+    }
+
     /// Seconds to wait before the seeded push, so that the root has drawn
     /// before anything covers it. Nil means push on the first frame, which is
     /// what produced a run of zeroes that meant nothing.
@@ -421,12 +446,25 @@ enum AuditStrip: String {
 /// The sidebar's two sections (``sidebarSections(_:)``). Home is the brand
 /// row above them and never a list item, as on the web desktop and in
 /// Android's drawer.
+///
+/// **The workspace is grouped** since the nav regroup (``sidebarTree(_:)``):
+/// Chat, then **Media** and **Tools**, each a row that opens and shuts in
+/// place with its screens under it — Android's drawer
+/// (`NavGroupsUi.kt`, `GroupedWorkspace`). Which groups are open is this
+/// device's (``NavGroupsOpen``, kept in `UserDefaults` as Android keeps it in
+/// Prefs): Media starts open, and arriving on a screen opens the group holding
+/// it, as the web sidebar does. People is not here: it is Settings →
+/// Household.
 struct SidebarList: View {
 
     let model: ShellModel
 
+    @AppStorage(NavGroupsOpen.storageKey) private var openRaw = ""
+
     var body: some View {
         let sections = sidebarSections(model.visibility)
+        let tree = navTree(sections.workspace)
+        let open = NavGroupsOpen.decode(openRaw)
         List {
             Button {
                 model.navigate(.home)
@@ -440,20 +478,64 @@ struct SidebarList: View {
             }
             .accessibilityLabel(ShellStrings.homeLabel)
             Section(ShellStrings.drawerWorkspace) {
-                ForEach(sections.workspace, id: \.self) { route in
-                    SidebarRow(route: route, selected: model.navigation.route == route) {
-                        model.navigate(route)
+                ForEach(tree, id: \.self) { entry in
+                    switch entry {
+                    case .item(let route):
+                        row(route)
+                    case .group(let group, let routes):
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { NavGroupsOpen.isOpen(group, open) },
+                                set: { shown in
+                                    guard shown != NavGroupsOpen.isOpen(group, open) else { return }
+                                    openRaw = NavGroupsOpen.encode(NavGroupsOpen.toggled(group, open))
+                                }
+                            )
+                        ) {
+                            ForEach(routes, id: \.self) { route in row(route) }
+                        } label: {
+                            groupHeader(group, open: NavGroupsOpen.isOpen(group, open), routes: routes)
+                        }
                     }
                 }
             }
             Section(ShellStrings.drawerSystem) {
-                ForEach(sections.system, id: \.self) { route in
-                    SidebarRow(route: route, selected: model.navigation.route == route) {
-                        model.navigate(route)
-                    }
-                }
+                ForEach(sections.system, id: \.self) { route in row(route) }
             }
         }
+        // Arriving on a screen opens the group that holds it, and so does
+        // the tree changing under the open screen — a plugin arriving makes a
+        // one-item group a real one (`NavGroupsOpen.openedFor`, Android's
+        // `LaunchedEffect(route, tree)`, keyed on both).
+        .onAppear { openGroupHolding(model.navigation.route) }
+        .onChange(of: model.navigation.route) { _, route in openGroupHolding(route) }
+        .onChange(of: tree) { _, _ in openGroupHolding(model.navigation.route) }
+    }
+
+    /// A group's header. **Shut while it holds the open page, it is lit**, as
+    /// that page's row would be (`NavGroupHeader`, `NavGroupsUi.kt:72-90`):
+    /// the brand ink and the selected trait. Android also washes the row in
+    /// `brandSoft`; this app has no such token and a new fill would be a
+    /// colour nobody has measured, so the ink carries it — ``Color/brandInk``
+    /// is the measured text ink.
+    private func groupHeader(_ group: NavGroupInfo, open: Bool, routes: [Route]) -> some View {
+        let lit = !open && routes.contains(model.navigation.route)
+        return Label(group.label, systemImage: group.systemImage)
+            .foregroundStyle(lit ? Color.brandInk : Color.primary)
+            .fontWeight(lit ? .semibold : .regular)
+            .accessibilityAddTraits(lit ? .isSelected : [])
+    }
+
+    private func row(_ route: Route) -> some View {
+        SidebarRow(route: route, selected: model.navigation.route == route) {
+            model.navigate(route)
+        }
+    }
+
+    private func openGroupHolding(_ route: Route) {
+        let now = NavGroupsOpen.decode(openRaw)
+        let next = NavGroupsOpen.openedFor(route, tree: sidebarTree(model.visibility), state: now)
+        if next != now { openRaw = NavGroupsOpen.encode(next) }
     }
 }
 

@@ -13,6 +13,13 @@ import SwiftUI
 /// show — which ``ShellModel/everything`` already computes for the sidebar.
 /// The grid returning nothing is a real state: with every screen on the bar
 /// the card is not drawn at all.
+///
+/// **Under the sidebar's group headings** since the nav regroup
+/// (`HomeSections.kt:1035-1056`, ``tileRuns(_:)``): `media` over Podcasts,
+/// Audiobooks and the plugin pages, `tools` over News, Calendar and Files,
+/// lowercase as the web's grid has them; a group left with one tile (its
+/// others on the bar) and the top-level tiles — Chat, Settings, the manual —
+/// sit in an unheaded run. People is not a tile: it is Settings → Household.
 struct HomeEverythingView: View {
 
     let tiles: [Route]
@@ -31,10 +38,13 @@ struct HomeEverythingView: View {
     /// throughout this app.
     private var perRow: Int { typeSize.isAccessibilitySize ? 1 : 3 }
 
-    /// ``tiles`` in rows of ``perRow``.
-    private var rows: [[Route]] {
-        stride(from: 0, to: tiles.count, by: perRow).map { start in
-            Array(tiles[start ..< min(start + perRow, tiles.count)])
+    /// ``tiles`` under their headings (``tileRuns(_:)``).
+    private var runs: [TileRun] { tileRuns(tiles) }
+
+    /// One run's tiles in rows of ``perRow``.
+    private func rows(_ routes: [Route]) -> [[Route]] {
+        stride(from: 0, to: routes.count, by: perRow).map { start in
+            Array(routes[start ..< min(start + perRow, routes.count)])
         }
     }
 
@@ -49,7 +59,7 @@ struct HomeEverythingView: View {
                 //
                 // This was `LazyVGrid(columns:)`, and it cost Home **six**
                 // `Dynamic Type font sizes are partially unsupported`
-                // findings, one per tile. Thirteen tiles at most and no fetch
+                // findings, one per tile. Twelve tiles at most and no fetch
                 // behind any of them (map §7.6), so the laziness was never
                 // earning its place; plain rows are both the fix and the
                 // simpler shape.
@@ -86,14 +96,21 @@ struct HomeEverythingView: View {
                         ForEach(tiles, id: \.self) { route in tile(route) }
                     }
                 } else {
-                    VStack(spacing: 8) {
-                        ForEach(rows, id: \.self) { row in
-                            HStack(spacing: 8) {
-                                ForEach(row, id: \.self) { route in
-                                    tile(route)
-                                }
-                                ForEach(Array(0 ..< max(0, perRow - row.count)), id: \.self) { _ in
-                                    Color.clear.frame(maxWidth: .infinity, minHeight: 72)
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(runs.enumerated()), id: \.offset) { index, run in
+                            if let group = run.group {
+                                heading(group, first: index == 0)
+                            } else if index > 0 {
+                                Spacer().frame(height: 4)
+                            }
+                            ForEach(rows(run.routes), id: \.self) { row in
+                                HStack(spacing: 8) {
+                                    ForEach(row, id: \.self) { route in
+                                        tile(route)
+                                    }
+                                    ForEach(Array(0 ..< max(0, perRow - row.count)), id: \.self) { _ in
+                                        Color.clear.frame(maxWidth: .infinity, minHeight: 72)
+                                    }
                                 }
                             }
                         }
@@ -101,6 +118,25 @@ struct HomeEverythingView: View {
                 }
             }
         }
+    }
+
+    /// A group's heading over its tiles: the label lowercased, as Android's
+    /// `run.group.label.lowercase()` in `labelSmall` (`HomeSections.kt:1039`),
+    /// and a heading to VoiceOver, as Android's `semantics { heading() }`.
+    ///
+    /// **``Color/fgMuted``, not a lighter ink**: Android's is `fgSubtle`, and
+    /// this app has no such token — the one it has was measured, a third one
+    /// would be a colour nobody has (``HealthSectionCard``'s note, DECISIONS
+    /// "there is no fgSubtle"). `.caption`, the tiles' own label size, so it
+    /// scales with them and is small beside the card's title, as Android's is.
+    private func heading(_ group: NavGroupInfo, first: Bool) -> some View {
+        Text(group.label.lowercased())
+            .font(.caption)
+            .foregroundStyle(Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 2)
+            .padding(.top, first ? 0 : 4)
+            .accessibilityAddTraits(.isHeader)
     }
 
     /// One tile: the route's symbol and its ``Route/label`` — drawn with its
