@@ -104,6 +104,14 @@ final class RoomsModelTests: XCTestCase {
         """)
         let timerDeleteStatus = Shared(204)
 
+        /// `GET .../{room}/conversations`, every room alike. A `Shared` so a
+        /// case can settle a pending turn **between** two of the poll's reads.
+        let conversations = Shared("""
+        [{"id":11,"session_id":"3fa85f64571745","at":"2026-11-02T19:00:05Z",
+          "user_text":"put the marmalade on the list","assistant_text":"added it",
+          "matched_handler":"lists"}]
+        """)
+
         let quietHours = Shared(#"{"room_id":"kitchen","mode":"house","start":null,"end":null}"#)
         let quietPutStatus = Shared(200)
         let scopePutStatus = Shared(200)
@@ -238,11 +246,7 @@ final class RoomsModelTests: XCTestCase {
                     """)
                 }
                 if path.hasSuffix("/conversations") {
-                    return .json("""
-                    [{"id":11,"session_id":"3fa85f64571745","at":"2026-11-02T19:00:05Z",
-                      "user_text":"put the marmalade on the list","assistant_text":"added it",
-                      "matched_handler":"lists"}]
-                    """)
+                    return .json(conversations.current)
                 }
                 if path.hasSuffix("/notes") {
                     return .json(#"[{"id":3,"body":"the bins go out on Tuesday","captured_at":"2026-11-01T09:00:00Z"}]"#)
@@ -1047,5 +1051,213 @@ final class RoomsModelTests: XCTestCase {
         model.received(StateEvent(type: "chat.changed", frame: "{}"))
         await nothingHappens()
         XCTAssertEqual(settled, requests(to: "/api/satellites").count)
+    }
+
+    // MARK: - the pending poll (server V043; `RefreshWhilePending`, `SatHistoryTabs.kt:226-242`)
+
+    /// A turn said a moment ago, its reply still being worked out.
+    private static let pendingTurn = """
+    [{"id":21,"session_id":"3fa85f64571745","at":"2026-11-02T19:00:05Z",
+      "user_text":"what time is it","assistant_text":null,"status":"pending"},
+     {"id":11,"session_id":"3fa85f64571745","at":"2026-11-02T18:59:00Z",
+      "user_text":"put the marmalade on the list","assistant_text":"added it",
+      "matched_handler":"lists"}]
+    """
+
+    /// The same turn once the reply has come.
+    private static let answeredTurn = """
+    [{"id":21,"session_id":"3fa85f64571745","at":"2026-11-02T19:00:05Z",
+      "user_text":"what time is it","assistant_text":"It's seven.","status":"answered",
+      "matched_handler":"time"},
+     {"id":11,"session_id":"3fa85f64571745","at":"2026-11-02T18:59:00Z",
+      "user_text":"put the marmalade on the list","assistant_text":"added it",
+      "matched_handler":"lists"}]
+    """
+
+    private static let kitchenHistory = "/api/satellites/kitchen/conversations"
+
+    /// The kitchen open on its conversations tab, the tab on screen, and its
+    /// first read landed.
+    private func onConversations(_ model: RoomsModel, onScreen: Bool = true) async -> RoomsRoomModel {
+        await loaded(model)
+        model.open("kitchen")
+        model.select(.conversations)
+        let reads = model.reads(for: "kitchen")
+        if onScreen { reads.historyOnScreen(.conversations, true) }
+        await settleUntil({ reads.conversations.data?.isEmpty == false }, "the conversations read")
+        return reads
+    }
+
+    /// `pending` is read again every three seconds, and the read that brings
+    /// the answer is the last one — Android's poll ends when
+    /// `satAnyPending` goes false.
+    func testAPendingTurnIsReadAgainEveryThreeSecondsUntilItIsAnswered() async {
+        let house = House()
+        house.conversations.set(Self.pendingTurn)
+        let (model, _, waits, _) = rig(house: house)
+        let reads = await onConversations(model)
+        await settleUntil({ waits.asked(roomsPendingPollMs) == 1 }, "the poll's first wait")
+        XCTAssertTrue(reads.pollingPending)
+        assertAsked(1, Self.kitchenHistory, "the poll waits before its first read, as Android's `delay` does")
+
+        waits.allow(roomsPendingPollMs)
+        await settleUntil({ self.requests(to: Self.kitchenHistory).count == 2 }, "the poll's first read")
+        await settleUntil({ waits.asked(roomsPendingPollMs) == 2 }, "the poll's second wait")
+        XCTAssertTrue(reads.pollingPending, "still pending, still polling")
+
+        house.conversations.set(Self.answeredTurn)
+        waits.allow(roomsPendingPollMs)
+        await settleUntil(
+            { reads.conversations.data?.first { $0.id == 21 }?.assistantText == "It's seven." },
+            "the answer filling in"
+        )
+        XCTAssertFalse(reads.pollingPending, "nothing is pending, so the poll is over")
+        XCTAssertNil(roomsTurnUnanswered(reads.conversations.data?.first { $0.id == 21 } ?? RoomsTurn()))
+
+        waits.allow(roomsPendingPollMs, times: 3)
+        await nothingHappens()
+        assertAsked(3, Self.kitchenHistory, "no read after the last pending turn settled")
+    }
+
+    /// No pending turn, no poll — the ordinary history is read when its tab
+    /// is opened and never again on its own.
+    func testAnAnsweredHistoryIsNotPolled() async {
+        let (model, _, waits, _) = rig()
+        let reads = await onConversations(model)
+        await nothingHappens()
+        XCTAssertFalse(reads.pollingPending)
+        XCTAssertEqual(0, waits.asked(roomsPendingPollMs), "nothing pending, nothing to wait for")
+        assertAsked(1, Self.kitchenHistory, "read once, when the tab was shown")
+    }
+
+    /// "Visible" is Android's: one of the two tabs that show turns is on
+    /// screen, and the app is in front (`repeatOnLifecycle(STARTED)`). Off
+    /// either, the poll stops; back on both, it starts over with a fresh
+    /// three seconds.
+    func testThePollRunsOnlyWhileAHistoryTabIsOnScreenAndInFront() async {
+        let house = House()
+        house.conversations.set(Self.pendingTurn)
+        let (model, _, waits, _) = rig(house: house)
+        let reads = await onConversations(model, onScreen: false)
+        await nothingHappens()
+        XCTAssertFalse(reads.pollingPending, "a pending turn on a tab nobody is looking at is not polled")
+        XCTAssertEqual(0, waits.asked(roomsPendingPollMs))
+
+        reads.historyOnScreen(.conversations, true)
+        XCTAssertTrue(reads.pollingPending)
+        await settleUntil({ waits.asked(roomsPendingPollMs) == 1 }, "the poll's first wait")
+
+        // The background: the wait is cancelled, and three seconds passing
+        // reads nothing.
+        reads.appInForeground(false)
+        XCTAssertFalse(reads.pollingPending, "the background pauses the poll")
+        waits.allow(roomsPendingPollMs)
+        await nothingHappens()
+        assertAsked(1, Self.kitchenHistory, "no read while the app is in the background")
+        XCTAssertEqual(1, waits.asked(roomsPendingPollMs), "and no second wait was started")
+
+        // Back in front: a new wait, which spends the three seconds that
+        // passed above, and a read.
+        reads.appInForeground(true)
+        XCTAssertTrue(reads.pollingPending, "the front resumes it")
+        await settleUntil({ self.requests(to: Self.kitchenHistory).count == 2 }, "the resumed poll's read")
+
+        // Off screen: the tab went away.
+        reads.historyOnScreen(.conversations, false)
+        XCTAssertFalse(reads.pollingPending, "the tab leaving stops the poll")
+        waits.allow(roomsPendingPollMs, times: 3)
+        await nothingHappens()
+        assertAsked(2, Self.kitchenHistory, "no read once the tab is gone")
+
+        // The sessions tab polls too: its expanded sessions draw from the
+        // same read.
+        reads.historyOnScreen(.sessions, true)
+        XCTAssertTrue(reads.pollingPending, "the sessions tab is a history tab as well")
+        reads.historyOnScreen(.sessions, false)
+        XCTAssertFalse(reads.pollingPending)
+    }
+
+    /// The poll's reads are this room's: another room's list is never asked
+    /// for and never written.
+    func testThePollReadsOnlyItsOwnRoom() async {
+        let house = House()
+        house.conversations.set(Self.pendingTurn)
+        let (model, _, waits, _) = rig(house: house)
+        let office = model.reads(for: "office")
+        let reads = await onConversations(model)
+        await settleUntil({ waits.asked(roomsPendingPollMs) == 1 }, "the poll's first wait")
+        waits.allow(roomsPendingPollMs)
+        await settleUntil({ self.requests(to: Self.kitchenHistory).count == 2 }, "the poll's read")
+        XCTAssertTrue(reads.pollingPending)
+        assertAsked(0, "/api/satellites/office/conversations", "the poll asked about another room")
+        XCTAssertNil(office.conversations.data, "and wrote nothing into another room's list")
+        XCTAssertFalse(office.pollingPending)
+        model.stop()
+    }
+
+    /// A tick that wakes up in **another house** reads nothing and ends the
+    /// poll: `kitchen` there is a different room. The model is not told of
+    /// the move here, which is the frame between the store changing and
+    /// ``RoomsModel/serverChanged()`` running (`RoomsView`'s `onChange`).
+    func testThePollStopsWhenThePhoneMovesHouse() async {
+        let house = House()
+        house.conversations.set(Self.pendingTurn)
+        let (model, _, waits, store) = rig(house: house)
+        let reads = await onConversations(model)
+        await settleUntil({ waits.asked(roomsPendingPollMs) == 1 }, "the poll's first wait")
+
+        store.trustServer(otherServer, identity: TestIdentity.real.pin)
+        XCTAssertTrue(store.setServerURL(otherServer))
+        waits.allow(roomsPendingPollMs)
+        await settleUntil({ !reads.pollingPending }, "the poll noticing the move")
+        await nothingHappens()
+        assertAsked(1, Self.kitchenHistory, "the tick after the move asked the new house about its kitchen")
+    }
+
+    /// The read the poll repeats is **keyed to the house it asked**: an
+    /// answer that comes back after the move is not written into the list.
+    /// The move happens inside the round trip, by parking the request.
+    func testAnHistoryAnswerFromTheOldHouseIsNotWritten() async {
+        let house = House()
+        let (model, _, _, store) = rig(house: house)
+        await loaded(model)
+        // A local, so the `@Sendable` answer does not reach into this
+        // main-actor class for it.
+        let pending = Self.pendingTurn
+        let park = parkRequest(
+            to: Self.kitchenHistory,
+            answering: { .json(pending) },
+            otherwise: Self.plain(house)
+        )
+        model.open("kitchen")
+        model.select(.conversations)
+        let reads = model.reads(for: "kitchen")
+        reads.historyOnScreen(.conversations, true)
+        await settle(for: park.arrived, what: "the conversations request")
+
+        store.trustServer(otherServer, identity: TestIdentity.real.pin)
+        XCTAssertTrue(store.setServerURL(otherServer))
+        park.release.set(true)
+        await everythingLands()
+        XCTAssertFalse(park.ranOut.current, "the park was released rather than timing out")
+        XCTAssertNil(
+            reads.conversations.data,
+            "the old house's turns were written into the list after the phone moved house"
+        )
+        XCTAssertFalse(reads.pollingPending, "and its pending turn started no poll")
+    }
+
+    /// The screen going away ends the poll with everything else.
+    func testStopEndsThePoll() async {
+        let house = House()
+        house.conversations.set(Self.pendingTurn)
+        let (model, _, waits, _) = rig(house: house)
+        let reads = await onConversations(model)
+        await settleUntil({ waits.asked(roomsPendingPollMs) == 1 }, "the poll's first wait")
+        model.stop()
+        XCTAssertFalse(reads.pollingPending)
+        waits.allow(roomsPendingPollMs, times: 3)
+        await nothingHappens()
+        assertAsked(1, Self.kitchenHistory, "a read after stop()")
     }
 }

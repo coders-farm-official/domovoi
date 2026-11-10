@@ -235,7 +235,7 @@ public final class RoomsModel {
     /// because a route holds nothing.
     public func reads(for roomID: String) -> RoomsRoomModel {
         if let existing = byRoom[roomID] { return existing }
-        let made = RoomsRoomModel(roomID: roomID, in: container)
+        let made = RoomsRoomModel(roomID: roomID, in: container, wait: wait)
         byRoom[roomID] = made
         return made
     }
@@ -679,10 +679,40 @@ public final class RoomsRoomModel {
 
     private var refreshed: Set<RoomsTab> = []
 
-    public init(roomID: String, in container: AppContainer) {
+    // MARK: the pending poll's inputs
+
+    /// The history tabs of this room that are on screen now — `sessions`,
+    /// `conversations` or, for a moment during a switch between them, both.
+    /// Android's poll lives in exactly those two composables
+    /// (`RefreshWhilePending`, `SatHistoryTabs.kt:72` and `:245`), so they are
+    /// what "visible" means; nothing else on the screen keeps it running.
+    private var historyShowing: Set<RoomsTab> = []
+
+    /// Whether the app is in front. Android's poll runs inside
+    /// `repeatOnLifecycle(STARTED)` (6df97968), so it stops in the background
+    /// and starts over — a fresh three seconds, then a read — on the way back.
+    private var inForeground = true
+
+    /// The poll, while it runs, and the number it was started under.
+    private var poll: Task<Void, Never>?
+    private var pollEpoch = 0
+
+    private let wait: @Sendable (Int64) async throws -> Void
+    private let serverKey: @Sendable () -> String
+
+    public init(
+        roomID: String,
+        in container: AppContainer,
+        wait: @Sendable @escaping (Int64) async throws -> Void = {
+            try await Task.sleep(for: .milliseconds($0))
+        }
+    ) {
         self.roomID = roomID
         let client = container.client
         let room = roomID
+        let store = container.store
+        self.wait = wait
+        self.serverKey = { store.serverURL }
         self.health = ApiRead(in: container) {
             // `runCatching{}.getOrNull()` on Android (`SatOverviewTab.kt:82`):
             // a health read that fails is "nothing to say", not an error on
@@ -701,7 +731,18 @@ public final class RoomsRoomModel {
             try await client.get(RoomsApi.sessions(room), as: [RoomsSession].self)
         }
         self.conversations = ApiRead(in: container) {
-            try await client.get(RoomsApi.conversations(room), as: [RoomsTurn].self)
+            // **Keyed to the house it was asked of**, checked after the await.
+            // This read is the one the pending poll repeats every three
+            // seconds, so it is the one most likely to be in flight when the
+            // phone moves house — and the room ids are the same words in
+            // both houses. An answer that comes back after the move is
+            // dropped rather than written over this room's list; the move's
+            // own re-read (``ApiRead/serverChanged()``, or the room model
+            // being rebuilt by ``RoomsModel/serverChanged()``) fills it in.
+            let asked = store.serverURL
+            let turns = try await client.get(RoomsApi.conversations(room), as: [RoomsTurn].self)
+            guard store.serverURL == asked else { throw CancellationError() }
+            return turns
         }
         self.notes = ApiRead(in: container) {
             try await client.get(RoomsApi.notes(room), as: [RoomsNote].self)
@@ -712,6 +753,10 @@ public final class RoomsRoomModel {
         self.played = ApiRead(in: container) {
             try await client.get(RoomsApi.recentlyPlayed(room), as: [RoomsPlayed].self)
         }
+        // A landed list is what can start the poll (a turn became pending)
+        // or end it (the last one settled) — Android's `LaunchedEffect`
+        // keyed on `satAnyPending(turns)`.
+        self.conversations.onValue = { [weak self] in self?.followPending() }
     }
 
     /// Read what `tab` needs, the first time it is shown.
@@ -797,12 +842,85 @@ public final class RoomsRoomModel {
         // Only the reads that can change without this phone asking. The
         // history tabs are read when they are opened and not on a push: a
         // conversation list that re-sorted under a finger while somebody read
-        // it is worse than one a tap refreshes.
+        // it is worse than one a tap refreshes. The one exception is the
+        // pending poll below, which is Android's and is not a push.
         timers.received(event)
         health.received(event)
     }
 
+    // MARK: - the pending poll
+
+    /// A history tab of this room came on screen (`true`) or left it.
+    /// Called by the tab's view, which is the only thing that knows.
+    public func historyOnScreen(_ tab: RoomsTab, _ shown: Bool) {
+        if shown {
+            historyShowing.insert(tab)
+        } else {
+            historyShowing.remove(tab)
+        }
+        followPending()
+    }
+
+    /// The app came to the front (`true`) or went to the background.
+    public func appInForeground(_ front: Bool) {
+        guard front != inForeground else { return }
+        inForeground = front
+        followPending()
+    }
+
+    /// Whether the poll is running — for a test, and for nothing else.
+    public var pollingPending: Bool { poll != nil }
+
+    /// While a turn is still waiting for its answer, read the history again
+    /// every ``roomsPendingPollMs`` (`RefreshWhilePending`,
+    /// `SatHistoryTabs.kt:226-242`): only while a history tab of this room is
+    /// on screen, only in the foreground, and only until no turn in the read
+    /// is pending.
+    ///
+    /// A poll that is already running is **left running** while the answer
+    /// stays yes, as Android's effect is not re-launched while its key
+    /// (`pending`) holds — so a list that lands every three seconds does not
+    /// push the next read another three seconds away each time.
+    func followPending() {
+        let wanted = !historyShowing.isEmpty && inForeground && roomsAnyPending(conversations.data)
+        guard wanted else {
+            stopPoll()
+            return
+        }
+        guard poll == nil else { return }
+        pollEpoch += 1
+        let epoch = pollEpoch
+        let house = serverKey()
+        let wait = self.wait
+        poll = Task { @MainActor [weak self] in
+            while true {
+                do {
+                    try await wait(roomsPendingPollMs)
+                } catch {
+                    return
+                }
+                // **After the await, check whose poll this still is**: the
+                // tab may have gone, the app may be in the background, and
+                // the phone may be in another house — where a `kitchen` is a
+                // different room. Any of those and this tick reads nothing.
+                guard let self, !Task.isCancelled, self.pollEpoch == epoch else { return }
+                guard self.serverKey() == house else {
+                    self.stopPoll()
+                    return
+                }
+                self.conversations.refresh()
+            }
+        }
+    }
+
+    private func stopPoll() {
+        pollEpoch += 1
+        poll?.cancel()
+        poll = nil
+    }
+
     public func stop() {
+        stopPoll()
         health.stop()
         config.stop()
         quietHours.stop()
