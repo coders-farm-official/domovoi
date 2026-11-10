@@ -3489,6 +3489,11 @@ class _AdminWakeRecordStartBody(BaseModel):
 
 class _AdminWakeRecordStopBody(BaseModel):
     room_id: str
+    # The word whose take to stop. When given, every room recording THAT word
+    # is stopped, whichever room the dashboard's picker happens to show (after
+    # a reload the picker falls back to the first room, so a stop sent only to
+    # `room_id` missed the room actually recording: 2026-11-10).
+    wake_word_id: int | None = None
 
 
 class _AdminWakePushBody(BaseModel):
@@ -3692,7 +3697,7 @@ async def admin_wake_record_start(
                         status_code=409,
                         detail=(
                             f"{label} is already recording in {where}. "
-                            f"Stop that take first (Stop with {other_room} picked)."
+                            f"Stop that take first."
                         ),
                     )
             busy = getattr(target, "wake_recording", None)
@@ -3759,19 +3764,29 @@ async def admin_wake_record_stop(
     """Stop an in-progress wake-word recording on ``room_id`` and let the Pi
     resume its normal wake loop. 404 when the room isn't connected; 502 on a
     send failure."""
-    target = app.state.active_sessions.get(body.room_id)
-    if target is None:
-        raise HTTPException(
-            status_code=404, detail=f"room {body.room_id!r} not connected"
-        )
-    try:
-        await target.stop_wake_recording()
-    except Exception as e:
-        log.warning("admin wake record stop to room=%s failed: %s", body.room_id, e)
-        raise HTTPException(
-            status_code=502, detail=f"couldn't reach the room device: {e}"
-        ) from e
-    return {"recording": False, "room_id": body.room_id}
+    targets: dict[str, Any] = {}
+    if body.wake_word_id is not None:
+        for rid, sess in list(app.state.active_sessions.items()):
+            rec = getattr(sess, "wake_recording", None)
+            if rec is not None and rec.wake_word_id == body.wake_word_id:
+                targets[rid] = sess
+    if not targets:
+        target = app.state.active_sessions.get(body.room_id)
+        if target is None:
+            raise HTTPException(
+                status_code=404, detail=f"room {body.room_id!r} not connected"
+            )
+        targets[body.room_id] = target
+    for rid, target in targets.items():
+        try:
+            await target.stop_wake_recording()
+        except Exception as e:
+            log.warning("admin wake record stop to room=%s failed: %s", rid, e)
+            raise HTTPException(
+                status_code=502, detail=f"couldn't reach the room device: {e}"
+            ) from e
+    stopped = sorted(targets)
+    return {"recording": False, "room_id": stopped[0], "rooms": stopped}
 
 
 @app.post(

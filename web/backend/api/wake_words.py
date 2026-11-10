@@ -413,7 +413,9 @@ async def record_stop(wake_word_id: int, body: RoomBody, request: Request):
     normal wake loop. Pass-through 404 when the room isn't connected."""
     status, payload = await post_admin(
         "/v1/admin/wake/record/stop",
-        {"room_id": body.room_id},
+        # The word too: the core stops whichever room records it, not only
+        # the room the picker shows (see the core endpoint).
+        {"room_id": body.room_id, "wake_word_id": wake_word_id},
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)

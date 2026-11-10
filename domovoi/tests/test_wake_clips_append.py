@@ -628,3 +628,55 @@ async def test_a_successful_training_records_which_clips_it_had(tmp_path, monkey
     marker = wq.read_trained(slug_dir)
     assert marker["last_clip"] == 3 and marker["clips"] == 3
     assert wq.new_since_training(slug_dir) == 1
+
+
+# ─── Stop reaches the room that is recording, not the picker's room ──────
+
+
+class _StopSat(_Sat):
+    def __init__(self, room_id: str, recording: WakeRecordingState | None = None) -> None:
+        super().__init__(room_id, recording)
+        self.stopped = 0
+
+    async def stop_wake_recording(self) -> None:
+        self.stopped += 1
+        self.wake_recording = None
+
+
+async def _record_stop(sessions: dict, body: dict):
+    from domovoi.main import app as core_app
+
+    async with core_app.router.lifespan_context(core_app):
+        core_app.state.active_sessions = sessions
+        async with AsyncClient(transport=ASGITransport(app=core_app),
+                               base_url="http://test") as client:
+            return await client.post("/v1/admin/wake/record/stop", json=body)
+
+
+def _rec(wid: int) -> WakeRecordingState:
+    return WakeRecordingState(wake_word_id=wid, slug="w", clip_seconds=2.0, target_count=10)
+
+
+@pytest.mark.asyncio
+async def test_stop_reaches_the_recording_room_whatever_the_picker_shows():
+    """After a reload the picker shows the first room; Stop must still end the
+    take in the room that is actually recording that word (2026-11-10)."""
+    basement = _StopSat("basement")
+    office = _StopSat("office", _rec(7))
+    r = await _record_stop({"basement": basement, "office": office},
+                           {"room_id": "basement", "wake_word_id": 7})
+    assert r.status_code == 200, r.text
+    assert office.stopped == 1 and office.wake_recording is None
+    assert basement.stopped == 0
+    assert r.json()["rooms"] == ["office"]
+
+
+@pytest.mark.asyncio
+async def test_stop_without_a_recording_falls_back_to_the_named_room():
+    kitchen = _StopSat("kitchen")
+    r = await _record_stop({"kitchen": kitchen}, {"room_id": "kitchen", "wake_word_id": 3})
+    assert r.status_code == 200 and kitchen.stopped == 1
+    r = await _record_stop({"kitchen": kitchen}, {"room_id": "kitchen"})
+    assert r.status_code == 200 and kitchen.stopped == 2
+    r = await _record_stop({}, {"room_id": "garage", "wake_word_id": 3})
+    assert r.status_code == 404
