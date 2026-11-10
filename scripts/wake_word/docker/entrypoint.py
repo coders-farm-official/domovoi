@@ -38,17 +38,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Plain resumable HTTPS for every Hugging Face download, not the Xet transfer
-# client. With the pinned huggingface_hub 2.2.0 + hf-xet 1.7.0, the one-time
-# feature download under the dashboard's "Turn on" (nice'd, --cpu-shares 128,
-# so it runs long) failed near the end with "process() takes no keyword
-# arguments" from inside hf-xet, on a household install and again in a
-# reproduction (2026-11-09); the same files fetched quickly outside those
-# limits succeeded. Plain HTTPS resumes from the partial file on a retry.
-# Read by huggingface_hub when it is first imported, so it is set here, before
-# anything below imports it (datasets included). An operator's own value wins.
-os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-
 OWW_REPO = Path("/opt/openWakeWord")
 TRAIN_PY = OWW_REPO / "openwakeword" / "train.py"
 TEMPLATE = Path("/opt/train_config.template.yaml")
