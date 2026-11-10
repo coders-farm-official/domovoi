@@ -41,7 +41,7 @@ Note the Pi's `room_id` / hostname before you touch anything; you'll reuse the e
 
 The device-profile code, the resampler, and the rewritten LED module all live under `satellite/`, so the server's normal satellite upgrade delivers them. Do this **while the HAT still works** so a botched upgrade is obvious before you've changed hardware.
 
-In the dashboard: **Settings → Rooms & devices → Rooms →** the room **→ Overview → Upgrade satellite**. The satellite fetches the server's `satellite/` code (every file checked against the server's manifest), then restarts itself. Developers can copy the tree by hand instead, from the server's checkout:
+In the dashboard: **Settings → Household → Rooms →** the room **→ Overview → Upgrade satellite**. The satellite fetches the server's `satellite/` code (every file checked against the server's manifest), then restarts itself. Developers can copy the tree by hand instead, from the server's checkout:
 
 ```bash
 rsync -av --exclude __pycache__ \

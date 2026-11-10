@@ -4,7 +4,7 @@
 > its sudoers lines and root helpers (`domovoi-apply-payload`,
 > `domovoi-sync-time`, `domovoi-reboot`, `wpa_cli`) are for a dedicated Pi
 > and would hand the server root on someone's computer. Use the dashboard's
-> **Settings → Rooms & devices → Rooms → add a spare device** instead. A
+> **Settings → Household → Rooms → add a spare device** instead. A
 > Linux laptop or mini PC gets a one-line install command for
 > `satellite/scripts/install-pc.sh` (the `generic_pc` profile, no root
 > helpers). A Windows laptop or PC gets a Setup to double-click
@@ -44,12 +44,12 @@
 > written straight to a drive gets `ap.json` from the server, as before.
 >
 > **Zero-touch path first (USB adoption).** If your SD card was prepared
-> with the Domovoi satellite payload (dashboard → Settings → Rooms & devices →
+> with the Domovoi satellite payload (dashboard → Settings → Household →
 > Rooms → prepare a room's SD card, or an image that boots into provisioning
 > mode), you don't need
 > most of this checklist: **boot the device, plug it into the Domovoi
 > server's USB port**, and an "adopt" card appears in the dashboard's
-> Settings → Rooms & devices → Rooms. Name it, enter Wi-Fi, done — the device configures
+> Settings → Household → Rooms. Name it, enter Wi-Fi, done — the device configures
 > itself, pre-paired, and reboots onto your network. The device presents
 > as a `DOMOVOI-SET` flash drive while waiting (see
 > `satellite/provisioning_mode.py`; requires `mtools`/`dosfstools` on the
@@ -526,7 +526,7 @@ After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reco
 
 ### 8.1 Sudoers entry for self-restart
 
-The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button in Settings → Rooms & devices → Rooms. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
+The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button in Settings → Household → Rooms. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
 
 > **Who can ask for it:** both buttons are admin actions on the server — the config push and the restart require an admin sign-in on the dashboard (`401` without one), as does pushing a wake model. Everyday room control — volume, playback, announcements — needs the household device token instead, which every satellite and app already carries. See [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md#the-tiers).
 
@@ -692,7 +692,7 @@ printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee /etc/systemd/system.conf.
 sudo reboot
 ```
 
-After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Rooms & devices → Rooms → room → Overview; not the System → Health page) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
+After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Household → Rooms → room → Overview; not the System → Health page) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
 
 ### 8.4 Network settings (applied as root at every boot)
 
@@ -712,7 +712,7 @@ Three settings every satellite carries since 2026-10-12, because the router kept
 - **When the boot step does the rename itself** (the first boot after the upgrade, before that unit exists, and the first boot after a room rename, which the helper cannot know of), it asks DHCP once more under the new name: `nmcli device modify wlan0 ipv4.dhcp-hostname domovoi-<room>`. This changes only the active connection; nothing is saved in the profile. NetworkManager restarts its DHCP client without leaving the network. It does this only right after an actual rename, only on the house profile, and only once the link is up (it waits up to 45 s). The router then shows the new name after a **single** reboot.
 - **A new card** is named before setup joins the house Wi-Fi, so even its first DHCP request carries `domovoi-<room>`.
 
-**What it did is on the Health card.** Each satellite's health sample carries `net_step` (what the step did on this boot) and `hostname` (the unit's name now). The Health card (Settings → Rooms & devices → Rooms → room → Overview) and the Android app's satellite overview show them as **boot network step**, with the reason:
+**What it did is on the Health card.** Each satellite's health sample carries `net_step` (what the step did on this boot) and `hostname` (the unit's name now). The Health card (Settings → Household → Rooms → room → Overview) and the Android app's satellite overview show them as **boot network step**, with the reason:
 
 | State | Meaning |
 |---|---|
@@ -730,7 +730,7 @@ A satellite older than this shows neither field, and its card reads as before.
 
 **It also keeps root's record of the server's address** (`/etc/domovoi/server.url`, which the clock helper trusts over its caller) with the server when it moves: the client finds the server again by name and saves the new address in `config.toml`; at the next boot root makes that address sign a fresh challenge for itself with the root-owned identity pin before it updates its record. A server that does not answer that boot is tried again at the next. (On a card prepared since this change the clock helper does the same check itself on every connect, so the clock follows at once.) A video satellite's kiosk is restarted when the address changes, and the kiosk launcher clears Chromium's profile lock, which names the old host after a rename.
 
-**What changed is logged.** Each run writes `/var/lib/domovoi/net-settings.json` (root's directory, readable by the satellite user; what it changed, left alone, or could not do); the client reads it and logs every line, so it lands in the log the server keeps for the room (Settings → Rooms & devices → Rooms → room → Logs, *retained*) as `network settings (applied as root at boot): changed: …`. The service's own journal has the same lines: `journalctl -u domovoi-provisioning -b`.
+**What changed is logged.** Each run writes `/var/lib/domovoi/net-settings.json` (root's directory, readable by the satellite user; what it changed, left alone, or could not do); the client reads it and logs every line, so it lands in the log the server keeps for the room (Settings → Household → Rooms → room → Logs, *retained*) as `network settings (applied as root at boot): changed: …`. The service's own journal has the same lines: `journalctl -u domovoi-provisioning -b`.
 
 **A hand-built unit without that service** (installed without `--with-provisioning`) applies the same step by hand, after each satellite upgrade that changes it:
 
@@ -846,7 +846,7 @@ journalctl -u domovoi-satellite -f           # tail logs (Ctrl+C exits the tail;
 journalctl -u domovoi-satellite --since "10 min ago"   # historical logs without tailing
 ```
 
-**Iterating on satellite code by hand** (developers; otherwise use **Upgrade satellite** under Settings → Rooms & devices → Rooms → the room → Overview, which pushes the server's current satellite code and restarts the satellite) — from the server's checkout, rsync + restart in one go:
+**Iterating on satellite code by hand** (developers; otherwise use **Upgrade satellite** under Settings → Household → Rooms → the room → Overview, which pushes the server's current satellite code and restarts the satellite) — from the server's checkout, rsync + restart in one go:
 
 ```bash
 rsync -av --exclude __pycache__ \
@@ -880,7 +880,7 @@ The server requires a token for **every** room by default (`SATELLITE_PAIRING_ST
 
 If you **re-flash the SD card**, **replace the Pi**, or **move a room to a new device**, the new device generates a *fresh* token that won't match the one the server has on file for that room — so its `hello` is refused (case: token mismatch) and it can't connect. Clear the old pairing so the new device can re-pair:
 
-- **From the dashboard:** Settings → Rooms & devices → Rooms → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
+- **From the dashboard:** Settings → Household → Rooms → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
 - **Effect:** the server deletes the room's `satellite_pairings` row; the next `hello` from that room is a first pairing again: it waits on the dashboard for you to approve it by the six-digit code the new device says (or, where strict pairing is turned off, claims the room with the new device's token).
 
 You do **not** need to reset pairing for a normal `restart`, `upgrade`, or `reboot` — the token sidecar survives those (it lives in `~/.domovoi/`, outside the code tree). Only a wiped config dir / new device needs a reset.

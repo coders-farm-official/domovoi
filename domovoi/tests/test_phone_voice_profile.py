@@ -421,7 +421,7 @@ async def test_two_people_with_the_name_are_never_guessed_between(db_session, op
         yes = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
     assert asked["reply"] == (
         "There's more than one Alex, so I won't guess which one is you. "
-        "An admin can rename or remove one of them on the People page. "
+        "An admin can rename or remove one of them in Settings, under People. "
         "Then tell me your name again."
     )
     assert asked["expect_followup"] is False

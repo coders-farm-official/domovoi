@@ -81,7 +81,7 @@ fun NewsScreen() {
                 ErrorState(people.error ?: "request failed", people.refresh)
             people.data.isNullOrEmpty() -> EmptyState(
                 "no people enrolled yet",
-                "enroll a speaker on the people page first",
+                "enroll a speaker under People in Settings first",
             )
             selectedPerson == null -> EmptyState(
                 "pick a person",
@@ -166,7 +166,7 @@ private fun PeoplePane(
         Spacer(Modifier.height(8.dp))
         if (people.isEmpty()) {
             Text(
-                "No people enrolled yet. Enroll a speaker on the People page first.",
+                "No people enrolled yet. Enroll a speaker under People in Settings first.",
                 style = MaterialTheme.typography.bodySmall,
                 color = Domovoi.colors.fgMuted,
             )

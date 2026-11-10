@@ -60,7 +60,7 @@ without asking first:
   * two or more people called X (left over from before this rule, a
     "no" above, or a parent and child): nobody is guessed, and the answer
     says what to do —
-    an admin renames or removes one on the People page
+    an admin renames or removes one in Settings, under People
     (:func:`_more_than_one`).
   * "who am I" names the person the voice matched and, when someone else
     has that name too, says so; a voice too close to two people says
@@ -164,7 +164,7 @@ def _answered_where_asked(data: dict, ctx: Context) -> bool:
 
 #: What an admin does about two people with one name, said at the end of
 #: every answer that won't guess between them.
-_SORT_IT_OUT = "An admin can rename or remove one of them on the People page."
+_SORT_IT_OUT = "An admin can rename or remove one of them in Settings, under People."
 
 
 def _more_than_one(name: str) -> str:
@@ -1177,7 +1177,7 @@ class VoiceProfileHandler(Handler):
         else:
             text = (
                 f"Okay, I've added you as a new {name}. An admin can give one of "
-                "you a different name on the People page."
+                "you a different name in Settings, under People."
             )
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 
@@ -1580,8 +1580,8 @@ class VoiceProfileHandler(Handler):
                 return Response(
                     text=(
                         "Your voice is close to two people I know, so I won't guess "
-                        "whose voice to forget. An admin can remove a person on the "
-                        "People page."
+                        "whose voice to forget. An admin can remove a person in Settings, "
+                        "under People."
                     ),
                     session_id=ctx.session_id,
                     matched_handler=self.name,
@@ -1794,13 +1794,13 @@ class VoiceProfileHandler(Handler):
             text = (
                 f"I've forgotten the voice you added to {name}. I kept {name}'s "
                 f"profile and memories: your voice doesn't match the one I learned "
-                f"for {name}, so only an admin can delete those, on the People page."
+                f"for {name}, so only an admin can delete those, in Settings, under People."
             )
         elif scope == "unheard":
             text = (
                 "I couldn't hear your voice well enough to check it's you, so I "
                 "haven't forgotten anything. Try again, or an admin can remove a "
-                "person on the People page."
+                "person in Settings, under People."
             )
         else:
             log.info(
@@ -1809,8 +1809,8 @@ class VoiceProfileHandler(Handler):
             )
             text = (
                 f"Your voice doesn't match the one I learned for {name}, so I "
-                "haven't forgotten anything. An admin can remove a person on the "
-                "People page."
+                "haven't forgotten anything. An admin can remove a person in Settings, "
+                "under People."
             )
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 

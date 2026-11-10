@@ -97,7 +97,7 @@ _DOMOVOI_WORDS = re.compile(
 
 NO_PHONE_TEXT = (
     "There's no phone marked as {who} yet, so I haven't sent anything. In the Domovoi app, "
-    "open Settings, then Rooms and devices, then Phones and browsers, and set This phone belongs to."
+    "open Settings, then Household, then Phones and browsers, and set This phone belongs to."
 )
 
 
