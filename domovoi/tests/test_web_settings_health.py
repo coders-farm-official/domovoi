@@ -286,15 +286,15 @@ def test_search_jumps_straight_to_a_setting(driven) -> None:
     assert b["history"][0] == ["Voice history", "Privacy", "settings/voice-history"]
     assert b["recordings"][0][0] == "Voice history"          # its old name finds it
     assert b["satellite"][0][0] == "Rooms"
-    assert ["Household token", "Rooms & devices › Phones & browsers",
+    assert ["Household token", "Household › Phones & browsers",
             "settings/phones-and-browsers/household-token"] in b["token"]
     assert b["acoustid"][0] == ["AcoustID key", "System › Advanced", "settings/advanced/acoustid_api_key"]
     assert b["nothing"] == [] and b["blank"] == []
     # Printers & scanners: a slot, not a promise, until wf/printing registers it.
     assert b["printer"] == []
     a = driven["search"]["after"]
-    assert a["printer"][0] == ["Printers & scanners", "Rooms & devices", "settings/printers"]
-    assert a["rooms"] == ["Rooms", "Phones & browsers", "Printers & scanners", "App layout"]
+    assert a["printer"][0] == ["Printers & scanners", "Household", "settings/printers"]
+    assert a["rooms"] == ["Rooms", "People", "Phones & browsers", "Printers & scanners"]
 
 
 def test_advanced_opens_folded_and_a_named_setting_unfolds_it() -> None:

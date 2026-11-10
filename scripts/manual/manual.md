@@ -72,13 +72,13 @@ network.
    browser asks for it once. [More detail](README.md#2-claim-the-admin-account)
 2. **Answer the internet question**: Yes, Sometimes or No. You can change
    it later in [Settings → Privacy → Internet](#settings/internet).
-3. **Add your first room**: [Settings → Rooms & devices → Rooms](#settings/rooms).
+3. **Add your first room**: [Settings → Household → Rooms](#settings/rooms).
    See [A Raspberry Pi room](#node:pi-room).
 4. **Say the wake word** in that room: {wake}, then "what time is it?"
 5. **Introduce yourself** in that room: "my name is …", then "yes".
 6. **Add your music**: [Music](#music), **Upload**, or copy files into the
    server's music folder.
-7. **Put the app on your phones**: [Settings → Rooms & devices → Phones &
+7. **Put the app on your phones**: [Settings → Household → Phones &
    browsers → Get the Domovoi app](#settings/phones-and-browsers).
 
 ---
@@ -179,8 +179,13 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
 - The **app** brings the everyday pages to your phone, with its own music
   player and Chat. Chat holds your chats on the home server and chats
   that run on the phone itself, with no server.
-- **Settings** is in five groups: Rooms & devices, Voice, Chat & AI,
-  Privacy, and System. The search box at the top finds a setting by name:
+- The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts,
+  Audiobooks, Videos, and pages plugins add there, like Stations) and
+  **Tools** (News, Calendar, Files), each opening in place, then
+  **Plugins**. On a phone, Home's "everything" grid has the same groups.
+- **Settings** is in groups: Household (Rooms, People, Phones &
+  browsers, Printers & scanners), Voice, Chat & AI, Privacy, and System
+  (with App layout). The search box at the top finds a setting by name:
   try "wake", "voice history" or "token".
 
 [More detail](README.md#what-each-interface-can-do)
@@ -212,7 +217,7 @@ time it comes; add morning, evening, am or pm to be sure.
 - "what reminders do I have"
 
 **Also:** your timers show on [Home](#home) and in each room's **Timers**
-tab ([Settings → Rooms & devices → Rooms](#settings/rooms)).
+tab ([Settings → Household → Rooms](#settings/rooms)).
 
 **App:** if Home's timers card says "Timers may ring a few minutes late on
 this phone", tap **allow alarms**.
@@ -325,8 +330,7 @@ voices](#node:people)).
 - "what do you remember about me"
 - "forget that I parked on level 3"
 
-**Also:** notes show in each room's **Notes** tab ([Settings → Rooms &
-devices → Rooms](#settings/rooms)). Memories show on [People](#people),
+**Also:** notes show in each room's **Notes** tab ([Settings → Household → Rooms](#settings/rooms)). Memories show on [Settings → Household → People](#settings/people),
 under each person's **Memory** tab.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
@@ -705,7 +709,7 @@ says "The manual doesn't cover that." rather than guessing.
 
 After the short answer, Domovoi asks "Want me to send the steps to your
 phone?" Say yes, and they arrive as a chat called "Help: …" on the phones
-marked as yours ([Settings → Rooms & devices → Phones &
+marked as yours ([Settings → Household → Phones &
 browsers](#app/connection), **This phone belongs to**, in the app). If
 Domovoi doesn't know your voice, it asks who to send them to. It never
 sends them to every phone.
@@ -1060,7 +1064,7 @@ too (often called AirScan or eSCL).
 
 **How to**
 
-- [Settings → Rooms & devices → Printers & scanners](#settings/printers)
+- [Settings → Household → Printers & scanners](#settings/printers)
   shows the printers Domovoi can see. Press **Add** on yours, name it,
   then **Test page**. Not listed? Press **Look for printers** (**Look
   again** once it has looked), or type its address under **Add by
@@ -1131,7 +1135,7 @@ included. It comes from your own server; no store is needed.
 
 **How to**
 
-1. On the dashboard, [Settings → Rooms & devices → Phones & browsers →
+1. On the dashboard, [Settings → Household → Phones & browsers →
    Get the Domovoi app](#settings/phones-and-browsers) shows a QR code. If
    it says the app isn't on the server yet, ask whoever set up Domovoi to
    press **Download the app to this server**.
@@ -1141,11 +1145,11 @@ included. It comes from your own server; no store is needed.
    your Wi-Fi), and press **trust this server**. Can't see it? Use **add
    manually** with the dashboard's address.
 4. **pair this phone**: type the household token. An admin finds it in
-   [Settings → Rooms & devices → Phones & browsers → Household
+   [Settings → Household → Phones & browsers → Household
    token](#settings/phones-and-browsers).
 
 **App:** switch or forget a server from the server name at the top, or in
-[Settings → Rooms & devices → Phones & browsers](#app/connection).
+[Settings → Household → Phones & browsers](#app/connection).
 
 **If something's wrong:** "App not installed" means a 32-bit phone; take
 the 32-bit app from the same page. [More detail](docs/ANDROID_COMPATIBILITY.md)
@@ -1351,7 +1355,7 @@ chat can answer about a photo, in airplane mode too.
 
 ### App settings and updates
 
-- [Settings → Rooms & devices → App layout](#settings/app-layout): pick 2
+- [Settings → System → App layout](#settings/app-layout): pick 2
   to 5 tabs for the bottom of the screen. Home always comes first.
 - [Settings → Voice → Voices](#app/voice): how this phone speaks.
 - The app's Settings has the dashboard's groups and names. What only the
@@ -1375,7 +1379,7 @@ chat can answer about a photo, in airplane mode too.
 [live slot: rooms]
 
 Each room is one listening device: a Raspberry Pi, a spare laptop, or a
-phone. [Settings → Rooms & devices → Rooms](#settings/rooms) lists them.
+phone. [Settings → Household → Rooms](#settings/rooms) lists them.
 Each card shows:
 
 - online or offline;
@@ -1414,7 +1418,7 @@ it still answers when you ask it something.
 What isn't spoken then isn't said later. A low battery still shows on
 Home and on your phones.
 
-**App:** [Settings → Rooms & devices → Rooms](#settings/rooms) shows the
+**App:** [Settings → Household → Rooms](#settings/rooms) shows the
 same rooms.
 
 **Try saying** (in the room itself)
@@ -1444,7 +1448,7 @@ About the price of a smart speaker. [Parts list](docs/SATELLITE_HARDWARE.md)
 
 1. Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card
    in the server's card reader.
-2. [Settings → Rooms & devices → Rooms](#settings/rooms) → **prepare a
+2. [Settings → Household → Rooms](#settings/rooms) → **prepare a
    room's SD card**. Choose **wi-fi setup portal**, then **write to** the
    card's drive, and press **Prepare**.
 3. **On the Windows install**, which can't see SD cards: choose
@@ -1469,7 +1473,7 @@ Domovoi.
 
 **How to** *(admin)*
 
-1. [Settings → Rooms & devices → Rooms](#settings/rooms) → **add a spare
+1. [Settings → Household → Rooms](#settings/rooms) → **add a spare
    device**. Type the room's name, then press **make the code**.
 2. **Windows:** on that PC, signed in as the account it should use, press
    **Download the Windows Setup** (or type the short address the card
@@ -1507,7 +1511,7 @@ announcements.
 
 **How to**
 
-1. *(admin, once)* [Settings → Rooms & devices → Rooms](#settings/rooms) →
+1. *(admin, once)* [Settings → Household → Rooms](#settings/rooms) →
    **prepare a room's SD card** → **Refresh caches**. This gives phones the
    wake word.
 2. *(admin)* **add a spare device**, name the room, then **make the
@@ -1520,7 +1524,7 @@ announcements.
 5. Approve the six-digit code on the dashboard.
 
 **App:** a phone that already has the app can do this from [Settings →
-Rooms & devices → Rooms](#settings/rooms) → **Use this device as a room**,
+Household → Rooms](#settings/rooms) → **Use this device as a room**,
 or from the **Domovoi Room** icon. A phone you also use every day needs a
 screen lock, and while it's a room, the rest of the app is locked.
 
@@ -1638,13 +1642,13 @@ are personal.
 
 - Teach a new room your voice: say "my name is …" there. It asks "Is that
   you?"; say yes.
-- [People](#people) shows everyone, when they were last heard, and their
+- [Settings → Household → People](#settings/people) shows everyone, when they were last heard, and their
   memories.
 - *(admin)* **rename**, **forget person**, or delete one wrong voice
   sample.
 
 **If something's wrong:** two people with the same name: an admin renames
-one on [People](#people).
+one on [Settings → Household → People](#settings/people).
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
 
@@ -1676,7 +1680,7 @@ on the server itself. Ask whoever set up Domovoi.
 
 ### Devices and house rules
 
-[Settings → Rooms & devices → Phones & browsers](#settings/phones-and-browsers):
+[Settings → Household → Phones & browsers](#settings/phones-and-browsers):
 
 - **This device**: give this browser or phone a name. It's what queues
   show as "added by".
@@ -1717,13 +1721,13 @@ each room's **Conversations** tab.
 
 - "forget me", in your own voice: deletes your profile, voice samples,
   memories and everything you said to Domovoi.
-- *(admin)* [People](#people) → **Voice history** → **Keep voice
+- *(admin)* [Settings → Household → People](#settings/people) → **Voice history** → **Keep voice
   history**: 30 days, 90 days (the default), 1 year or Forever. Older
   turns are deleted every day. It's also in [Settings → System →
   Advanced](#settings/advanced) → **show the settings** → **Privacy**.
 - *(admin)* **Delete all voice history**, on the same page, deletes it all
   at once. People, voice samples, memories, notes, timers and chats stay.
-- *(admin)* **forget person** on [People](#people) does what "forget me"
+- *(admin)* **forget person** on [Settings → Household → People](#settings/people) does what "forget me"
   does, for anyone: it deletes only what that person said.
 - "never save my voice": Domovoi stops learning it.
 - Delete a chat: the bin icon in [Chat](#chat). Its pictures, documents,
@@ -1859,7 +1863,7 @@ updates](#settings/about) → **Restart Domovoi** *(admin)*.
 **If every room is offline but the dashboard opens**, the server's core
 has stopped answering. It restarts itself within about a minute. If it
 doesn't, an admin presses **Restart the core**. It's on [Home](#home), on
-[Settings → Rooms & devices → Rooms](#settings/rooms), on [Settings →
+[Settings → Household → Rooms](#settings/rooms), on [Settings →
 System → About & updates](#settings/about), and on the Domovoi server row
 of [Settings → System → Health](#settings/health). The app says the core
 isn't answering, and reconnects by itself.

@@ -281,7 +281,8 @@ SCENARIOS: dict[str, dict] = {
           const cards = h.findAll((e) => w.__cls(e).includes('sat-card')).length;
           const drawerBefore = h.findAll({ type: 'aside' }).length;
           await h.click((e) => w.__cls(e).includes('sat-card'));
-          return { tabs: w.SETTINGS_GROUPS.find((g) => g.id === 'rooms-and-devices').sections,
+          return { tabs: w.SETTINGS_GROUPS.find((g) => g.id === 'household').sections,
+                   system: w.SETTINGS_GROUPS.find((g) => g.id === 'system').sections,
                    headers, summary, cards, drawerBefore,
                    drawerAfter: h.findAll({ type: 'aside' }).length, hash: w.location.hash };
         """,
@@ -466,9 +467,11 @@ def test_the_editor_on_a_shared_screen_offers_no_personal_page(driven) -> None:
 
 
 def test_the_editor_is_a_settings_tab_of_its_own(driven) -> None:
-    # Settings → Rooms & devices → App layout (the phone bar's editor).
+    # Settings → System → App layout (the phone bar's editor; it was in
+    # Rooms & devices, now Household, until 2026-11-09).
     tabs = driven["settings_on_satellites"]["tabs"]
-    assert tabs == ["rooms", "phones-and-browsers", "printers", "app-layout"]
+    assert tabs == ["rooms", "people", "phones-and-browsers", "printers"]
+    assert "app-layout" in driven["settings_on_satellites"]["system"]
     settings = _src("settings.jsx")
     panel = settings[settings.index("const PhoneBarPanel"):]
     assert "<PhoneBarCard fire={fire}/>" in panel[:panel.index("};")]
@@ -490,7 +493,8 @@ def test_the_old_route_opens_the_settings_tab(driven) -> None:
     assert o["replaced"] == ["#settings/rooms", "#settings/rooms"]
     # The address is the whole story: no session storage, no window event.
     assert o["ss"] is None and o["events"] == []
-    assert o["aliases"] == {"satellites": ["rooms"], "containers": ["health", "containers"]}
+    assert o["aliases"] == {"satellites": ["rooms"], "containers": ["health", "containers"],
+                            "people": ["people"]}
 
 
 def test_the_shell_resolves_the_alias_on_load_on_hashchange_and_on_setroute() -> None:

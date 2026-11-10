@@ -65,7 +65,8 @@
 .brand-row .word { font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
 
 .nav { display: flex; flex-direction: column; gap: 1px; }
-.nav-item {
+/* A page row, and a group's header button (which is not a page). */
+.nav-item, .nav-group-head {
   display: flex; align-items: center; gap: 10px;
   height: 32px; padding: 0 10px;
   border-radius: var(--r-sm);
@@ -76,10 +77,11 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   user-select: none;
 }
-.nav-item:hover { background: var(--brand-soft); color: var(--fg); }
+.nav-item:hover, .nav-group-head:hover { background: var(--brand-soft); color: var(--fg); }
 .nav-item.active { background: var(--brand-soft); color: var(--fg); border-color: var(--border); box-shadow: var(--inner-highlight); }
 .nav-item.active .ico { color: var(--brand-ink); }
 .nav-item.active .badge { color: var(--fg-muted); }   /* faint is too faint on the amber wash */
+.nav-group-head .ico { width: 16px; height: 16px; flex: none; color: var(--fg-subtle); }
 .nav-item .ico { width: 16px; height: 16px; flex: none; color: var(--fg-subtle); }
 /* A plugin's nav icon drawn as a mask (PluginNavIcon, components.jsx): the
    icon's shape, painted in the colour of the text around it, so it follows
@@ -94,6 +96,30 @@
 /* Home's own row: on a desktop the brand row above is that link, so the
    row only exists in the phone strip (see the 760px block). */
 .sidebar .nav-item.brand-link { display: none; }
+/* A page only a phone bar carries (People, a Settings section since
+   2026-11-09): no desktop row. */
+.sidebar .nav-item.bar-only { display: none; }
+a.nav-item, a.nav-item:hover { text-decoration: none; }
+.nav-item:focus-visible, .nav-group-head:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: -2px; }
+
+/* Sidebar groups (components.jsx NAV_GROUPS / resolveNavTree): a header
+   button that opens in place, its pages indented beneath it. */
+.nav-group { display: flex; flex-direction: column; gap: 1px; }
+.nav-group-head {
+  width: 100%; font: inherit; font-size: 13px; font-weight: 500; text-align: left;
+  background: transparent; appearance: none;
+}
+.nav-group-head .nav-group-chev { margin-left: auto; display: inline-flex; color: var(--fg-subtle);
+  transition: transform var(--dur-fast) var(--ease); }
+.nav-group.open > .nav-group-head .nav-group-chev { transform: rotate(90deg); }
+.nav-group-dot + .nav-group-chev { margin-left: 6px; }
+/* A folded group holding the page on screen: its icon in the active ink. */
+.nav-group.has-active:not(.open) > .nav-group-head { color: var(--fg); }
+.nav-group.has-active:not(.open) > .nav-group-head .ico { color: var(--brand-ink); }
+.nav-group-dot { margin-left: auto; width: 5px; height: 5px; border-radius: 9999px; background: var(--fg-faint); flex: none; }
+.nav-group-items { display: flex; flex-direction: column; gap: 1px; }
+.nav-group:not(.open) > .nav-group-items { display: none; }
+.nav-group-items > .nav-item { padding-left: 22px; }
 
 .nav-section {
   font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em;
@@ -527,6 +553,13 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-item.more-active { background: var(--brand-soft); color: var(--fg); }
   .sidebar .nav-item.more-active .ico { color: var(--brand-ink); }
   .sidebar .nav-item .badge { display: none; }
+  /* The groups dissolve into the strip: their rows are the nav's own
+     flex items again (so --strip-order places them), folded or not, and
+     the header buttons hide: the strip is pages only. */
+  .sidebar .nav-group, .sidebar .nav-group-items,
+  .sidebar .nav-group:not(.open) > .nav-group-items { display: contents; }
+  .sidebar .nav-group-head { display: none; }
+  .sidebar .nav-item.bar-only.primary { display: flex; }
   .main { padding: 16px; padding-bottom: 88px; min-width: 0; --main-pad-t: 16px; }
   /* The container guard's banner follows .main's 16px padding. */
   .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
@@ -1538,6 +1571,8 @@ a.home-att-row:hover { background: var(--brand-soft); }
 
 /* everything (phones) */
 .home-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 4px 12px 8px; }
+/* The sidebar's groups on the grid (Media, Tools): a small lowercase heading. */
+.home-grid-head { font-size: 11px; font-weight: 500; color: var(--fg-subtle); padding: 6px 14px 0; }
 .home-tile {
   position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   min-height: 72px; padding: 12px 4px;
@@ -1987,6 +2022,13 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .settings-content { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .settings-section-title { margin: 0; font-size: 18px; font-weight: 600; color: var(--fg); }
 .settings-section-sub { margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+/* People (people.jsx): the roster beside the person; one column on a
+   phone. Inside Settings → People the section head names it, so the page
+   draws only its count line. */
+.people-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: stretch; }
+.people-count { font-size: 12px; color: var(--fg-muted); margin-bottom: 12px; }
+@media (max-width: 1100px) { .settings-content .people-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .people-layout { grid-template-columns: minmax(0, 1fr); } }
 .settings-marked { outline: 2px solid var(--brand); outline-offset: 4px; border-radius: var(--r-md); }
 @media (max-width: 760px) {
   .settings-shell { display: block; }

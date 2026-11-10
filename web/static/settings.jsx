@@ -4072,7 +4072,7 @@ const HouseholdTokenCard = ({ fire }) => {
             </Button>
           </div>
           <div style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
-            Sent as the <span className="mono">{header}</span> header. On a phone: Settings → Rooms & devices → Phones & browsers → Household token.
+            Sent as the <span className="mono">{header}</span> header. On a phone: Settings → Household → Phones & browsers → Household token.
             {thisPaired
               ? ' This browser is paired with it.'
               : ' This browser is not paired with it yet — log in again or paste it into the pairing prompt.'}
@@ -4519,19 +4519,26 @@ const CapturesPanel = () => {
  * for what is being built (none shows a promise before it can do
  * something). */
 const SETTINGS_GROUPS = [
-  { id: 'rooms-and-devices', label: 'Rooms & devices', icon: 'house',
-    sections: ['rooms', 'phones-and-browsers', 'printers', 'app-layout'] },
+  // "Rooms & devices" until 2026-11-09: its old address still opens it.
+  { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
+    sections: ['rooms', 'people', 'phones-and-browsers', 'printers'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
-  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'advanced'] },
+  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'app-layout', 'advanced'] },
 ];
 
 const SETTINGS_SECTIONS = [
   { id: 'rooms', label: 'Rooms', aliases: ['satellites'],
     sub: 'Each room: status, approvals and adoption, announcements, and each room’s drawer.',
     words: 'satellite satellites pi speaker microphone mic approve approval adopt announce announcement drawer wifi wi-fi upgrade screen kiosk intercom' },
+  // The whole People page (people.jsx), a sidebar page until 2026-11-09:
+  // #people opens it here (SETTINGS_TAB_ROUTES, components.jsx). One
+  // person's things, so a shared screen leaves it off (`personal`).
+  { id: 'people', label: 'People', personal: true,
+    sub: 'Everyone Domovoi knows by voice: when they were last heard, their voice samples, memories and voice history.',
+    words: 'people person persons voice voices enrolled enrol enroll speaker speakers recognize recognise who memory memories forget rename samples' },
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
     words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
@@ -4609,6 +4616,10 @@ const settingsPanel = (id, marks) => {
     case 'rooms': return <SatellitesPanel/>;
     case 'phones-and-browsers': return <DevicesPanel/>;
     case 'app-layout': return <PhoneBarPanel/>;
+    case 'people': {
+      const People = window.PeoplePage;
+      return typeof People === 'function' ? <People embedded/> : null;
+    }
     case 'wake-words': return <WakeWordsPanel/>;
     case 'voices': return <VoicesPanel/>;
     case 'greetings': return <GreetingsPanel/>;
@@ -4626,12 +4637,16 @@ const settingsPanel = (id, marks) => {
 };
 
 /* The groups and sections this page shows: an optional section only once
- * its panel is registered, a group only with a section in it. */
-const settingsLayout = () => {
+ * its panel is registered, a group only with a section in it. On a shared
+ * screen (the kitchen tablet) a `personal` section (People) is in no group
+ * and no search, as it is on no launcher; like the rest of the shared
+ * view that is presentational: its address still opens it. */
+const settingsLayout = ({ shared = false } = {}) => {
   const extras = settingsExtraSections();
   const sections = SETTINGS_SECTIONS.filter((s) => !s.optional || extras[s.id]);
+  const listed = sections.filter((s) => !(shared && s.personal));
   const groups = SETTINGS_GROUPS
-    .map((g) => ({ ...g, sections: g.sections.map((id) => sections.find((s) => s.id === id)).filter(Boolean) }))
+    .map((g) => ({ ...g, sections: g.sections.map((id) => listed.find((s) => s.id === id)).filter(Boolean) }))
     .filter((g) => g.sections.length);
   return { sections, groups };
 };
@@ -4760,9 +4775,11 @@ const useSettingsPhone = () => {
 
 const SettingsPage = () => {
   const phone = useSettingsPhone();
-  const { sections, groups } = settingsLayout();
-  // Groups have addresses too (a phone's list of its sections).
-  const routes = React.useMemo(() => [...sections, ...groups.map((g) => ({ id: g.id }))], [sections, groups]);
+  const shared = useSharedScreen();
+  const { sections, groups } = settingsLayout({ shared });
+  // Groups have addresses too (a phone's list of its sections), and the
+  // words they had before a rename.
+  const routes = React.useMemo(() => [...sections, ...groups.map((g) => ({ id: g.id, aliases: g.aliases }))], [sections, groups]);
   // The section is the address's (#settings/<section>): a click writes it,
   // a link to one (Home's rows, a "needs internet" note) opens it, also
   // while this page is on screen, and Back goes to the one before.

@@ -50,7 +50,6 @@ ROUTES: dict[str, dict] = {
     "audiobooks": {"dashboard": "#audiobooks", "app": {"screen": "Audiobooks"}},
     "videos": {"dashboard": "#videos", "app": {"screen": "Videos"}},
     "news": {"dashboard": "#news", "app": {"screen": "News"}},
-    "people": {"dashboard": "#people", "app": {"screen": "People"}},
     "calendar": {"dashboard": "#calendar", "app": {"screen": "Calendar"}},
     "files": {"dashboard": "#files", "app": {"screen": "Files"}},
     "plugins": {"dashboard": "#plugins", "app": {"dashboard": True}},
@@ -60,6 +59,7 @@ ROUTES: dict[str, dict] = {
     "settings/about": {"dashboard": "#settings/about", "app": {"screen": "Settings", "tab": "about"}},
     "settings/app-layout": {"dashboard": "#settings/app-layout", "app": {"screen": "Settings", "tab": "app-layout"}},
     "settings/rooms": {"dashboard": "#settings/rooms", "app": {"screen": "Settings", "tab": "rooms"}},
+    "settings/people": {"dashboard": "#settings/people", "app": {"screen": "Settings", "tab": "people"}},
     "settings/greetings": {"dashboard": "#settings/greetings", "app": {"screen": "Settings", "tab": "greetings"}},
     "settings/printers": {"dashboard": "#settings/printers", "app": {"screen": "Settings", "tab": "printers"}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
@@ -192,7 +192,7 @@ CHECKLIST: list[dict] = [
     {"id": "introduce", "done_when": "people", "platforms": ["dashboard", "app"]},
     {"id": "music", "done_when": "music", "platforms": ["dashboard", "app"]},
     {"id": "app", "done_when": "phone_app", "platforms": ["dashboard"],
-     "app_text": "**Pair this phone**: [Settings → Rooms & devices → Phones & browsers](#app/connection) → **Household token**.",
+     "app_text": "**Pair this phone**: [Settings → Household → Phones & browsers](#app/connection) → **Household token**.",
      "app_done_when": "this_phone_paired"},
 ]
 

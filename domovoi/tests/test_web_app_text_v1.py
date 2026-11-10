@@ -8,7 +8,7 @@
   in now: a blocked device is lifted in Settings → Phones & browsers (not
   "Devices"), command recordings are reviewed in Settings → Voice history
   (not "settings → recordings"), the phone's household token is under
-  Settings → Rooms & devices → Phones & browsers (not "Connection").
+  Settings → Household → Phones & browsers (not "Connection").
 * The About card uses the plain descriptor, not "voice assistant".
 
 The page name is driven through domovoi/tests/jsx_interact_harness.js (the
@@ -75,7 +75,7 @@ def test_ask_domovoi_names_the_page_as_it_is_now(names) -> None:
     assert names["#settings/devices"] == "Settings → Phones & browsers"
     assert names["#settings/recordings"] == "Settings → Voice history"
     assert names["#settings/health"] == "Settings → Health"
-    assert names["#settings/rooms-and-devices"] == "Settings → Rooms & devices"
+    assert names["#settings/rooms-and-devices"] == "Settings → Household"
     assert names["#settings/nonsense"] == "Settings → nonsense"
     assert not any(v in ("Satellites", "Containers") for v in names.values()), names
 

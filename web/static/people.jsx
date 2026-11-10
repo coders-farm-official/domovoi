@@ -866,8 +866,11 @@ const VoiceHistoryView = ({ vh, onBack, fire }) => {
   );
 };
 
-/* ---- Page ------------------------------------------------- */
-const PeoplePage = () => {
+/* ---- Page -------------------------------------------------
+ * Settings → Household → People since 2026-11-09 (`embedded`: inside the
+ * Settings section, which carries the title, so only the count line is
+ * drawn here); #people opens it there. */
+const PeoplePage = ({ embedded = false } = {}) => {
   const [selectedId, setSelectedId] = React.useState(null);
   const [view, setView] = React.useState('roster'); // roster | denylist | history
   const [tab, setTab] = React.useState('profile');
@@ -979,13 +982,15 @@ const PeoplePage = () => {
   ];
 
   return (
-    <div className="page">
-      <PageHeader
-        title="People"
-        sub={`${people.length} enrolled · ${liveCount} heard in the last 5 min`}
-      />
+    <div className={embedded ? 'people-embedded' : 'page'}>
+      {embedded
+        ? <div className="people-count">{`${people.length} enrolled · ${liveCount} heard in the last 5 min`}</div>
+        : <PageHeader
+            title="People"
+            sub={`${people.length} enrolled · ${liveCount} heard in the last 5 min`}
+          />}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16, alignItems: 'stretch' }}>
+      <div className="people-layout">
         {/* Left rail */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Card>

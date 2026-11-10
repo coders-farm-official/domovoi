@@ -317,7 +317,7 @@ def test_the_join_page_without_the_app_tells_the_admin_where_and_offers_reload()
 
     page = _join("http://192.168.1.20:6370/join#" + PAYLOAD, _app_status(ready=(False, False)))
     words = page["install-state"]["text"]
-    assert "Settings → Rooms & devices → Phones & browsers → Download the app to this server" in words
+    assert "Settings → Household → Phones & browsers → Download the app to this server" in words
     assert "reload this page" in words and "Not the admin?" in words
     assert not page["reload-line"]["hidden"]
     ready = _join("http://192.168.1.20:6370/join#" + PAYLOAD, _app_status())
