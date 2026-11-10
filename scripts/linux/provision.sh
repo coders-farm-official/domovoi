@@ -96,7 +96,12 @@
 #                journal kept on disk (scripts/linux/units/journald-domovoi.conf
 #                as /etc/systemd/journald.conf.d/50-domovoi.conf, then
 #                systemd-journald restarted; DOMOVOI_MANAGE_JOURNAL=0 in
-#                /etc/default/domovoi-update leaves the journal alone)
+#                /etc/default/domovoi-update leaves the journal alone), and
+#                the file-cache trim (scripts/linux/cache-trim.py as root's
+#                /usr/local/lib/domovoi-cache-trim/cache-trim.py, its
+#                domovoi-cache-trim.service and .timer, the timer enabled;
+#                it trims inside WSL only; DOMOVOI_MANAGE_CACHE_TRIM=0
+#                leaves it alone)
 #   timezone     bare metal: --timezone, through timedatectl. WSL: the zone
 #                follows Windows (WSL rewrites /etc/localtime and
 #                /etc/timezone at every distro start), so --timezone is
@@ -3778,6 +3783,54 @@ manage_journal() {
   return 0
 }
 
+# The file-cache trim (scripts/linux/cache-trim.py; docs/LINUX_HOST.md, "The
+# file-cache trim"): root's copy of the script, in a folder only root can
+# write, and its service and timer, the timer enabled. The update unit
+# installs the same files (apply-update.sh, reconcile_cache_trim), so an
+# install from before it gets them there. DOMOVOI_MANAGE_CACHE_TRIM=0 (or
+# false/no/off) in /etc/default/domovoi-update leaves them alone.
+CACHE_TRIM_LIB=$ROOT/usr/local/lib/domovoi-cache-trim/cache-trim.py
+CACHE_TRIM_UNITS=(domovoi-cache-trim.service domovoi-cache-trim.timer)
+manage_cache_trim() {
+  local v
+  v=$(update_default DOMOVOI_MANAGE_CACHE_TRIM)
+  case ${v,,} in 0|false|no|off) return 1 ;; esac
+  return 0
+}
+cache_trim_inputs() {
+  local u
+  if ! manage_cache_trim; then echo "cache trim: left alone"; return 0; fi
+  cat "$(src_file scripts/linux/cache-trim.py)" 2>/dev/null
+  for u in "${CACHE_TRIM_UNITS[@]}"; do cat "$(src_file "scripts/linux/units/$u")" 2>/dev/null; done
+}
+cache_trim_in_place() {
+  local u
+  manage_cache_trim || return 0
+  cmp -s "$(src_file scripts/linux/cache-trim.py)" "$CACHE_TRIM_LIB" || return 1
+  for u in "${CACHE_TRIM_UNITS[@]}"; do cmp -s "$(src_file "scripts/linux/units/$u")" "$UNIT_DIR/$u" || return 1; done
+}
+install_cache_trim() {
+  local u src changed=0
+  if ! manage_cache_trim; then log "the file-cache trim left as it is (DOMOVOI_MANAGE_CACHE_TRIM in /etc/default/domovoi-update)"; return 0; fi
+  src=$(src_file scripts/linux/cache-trim.py)
+  [ -f "$src" ] || die "the checkout has no scripts/linux/cache-trim.py"
+  install -d -m 0755 "$(dirname "$CACHE_TRIM_LIB")" || die "can't create $(dirname "$CACHE_TRIM_LIB")"
+  chmod 0755 "$(dirname "$CACHE_TRIM_LIB")" && chown root:root "$(dirname "$CACHE_TRIM_LIB")" \
+    || die "can't make $(dirname "$CACHE_TRIM_LIB") root's alone"
+  if write_if_changed "$CACHE_TRIM_LIB" 0644 <"$src"; then changed=1; fi
+  for u in "${CACHE_TRIM_UNITS[@]}"; do
+    [ -f "$(src_file "scripts/linux/units/$u")" ] || die "the checkout has no scripts/linux/units/$u"
+    if write_if_changed "$UNIT_DIR/$u" 0644 <"$(src_file "scripts/linux/units/$u")"; then changed=1; fi
+  done
+  if [ "$changed" = 1 ]; then
+    log "installed the file-cache trim (/usr/local/lib/domovoi-cache-trim/cache-trim.py, domovoi-cache-trim.timer)"
+    if systemd_running; then
+      { systemctl daemon-reload && systemctl enable --now domovoi-cache-trim.timer; } \
+        || warn "domovoi-cache-trim.timer could not be enabled; the file cache is not trimmed until it is"
+    fi
+  fi
+}
+
 # A shipped unit with this box's checkout, home and user (docs/LINUX_HOST.md,
 # Make it an appliance: "change User=, WorkingDirectory=, ExecStart=,
 # Environment=HOME= and the ReadWritePaths= / BindPaths= lines").
@@ -3814,6 +3867,7 @@ inputs_units() {
   media_dropin_text
   printf '%s\n' "${SLEEP_TARGETS[@]}"
   if manage_journal; then cat "$(journald_dropin_src)" 2>/dev/null; else echo "journal: left alone"; fi
+  cache_trim_inputs
 }
 check_units() {
   local u d
@@ -3826,12 +3880,15 @@ check_units() {
   done
   masks_in_place "${SLEEP_TARGETS[@]}" || return 1
   if manage_journal; then cmp -s "$(journald_dropin_src)" "$JOURNALD_DROPIN" || return 1; fi
+  cache_trim_in_place || return 1
 }
 plan_units() {
   printf '%s\n' "${SHIPPED_UNITS[@]/#//etc/systemd/system/}"
   restart_grant
   if manage_journal; then echo "/etc/systemd/journald.conf.d/50-domovoi.conf (the journal on disk), then restart systemd-journald"
   else echo "the journal left as it is (DOMOVOI_MANAGE_JOURNAL in /etc/default/domovoi-update)"; fi
+  if manage_cache_trim; then echo "/usr/local/lib/domovoi-cache-trim/cache-trim.py and domovoi-cache-trim.{service,timer} (the file-cache trim), the timer enabled"
+  else echo "the file-cache trim left as it is (DOMOVOI_MANAGE_CACHE_TRIM in /etc/default/domovoi-update)"; fi
 }
 do_units() {
   local u d out changed=()
@@ -3864,6 +3921,7 @@ do_units() {
   # sleeps; masked anyway, as on the Beelink.
   mask_units "${SLEEP_TARGETS[@]}"
   install_journald_dropin
+  install_cache_trim
   if [ "${#changed[@]}" -gt 0 ]; then
     printf '%s\n' "${changed[@]}" >>"$UNITS_CHANGED_FILE"
     systemctl daemon-reload

@@ -1,0 +1,31 @@
+[Unit]
+# Installed by scripts/linux/provision.sh and scripts/linux/apply-update.sh
+# (docs/LINUX_HOST.md, "The file-cache trim"); started every 2 minutes by
+# domovoi-cache-trim.timer. Inside WSL it hands old file cache back to
+# Windows above a limit; on a dedicated Linux box it only records the
+# cache, unless /etc/domovoi/cache-trim.conf switches it on.
+Description=Domovoi file-cache trim
+Documentation=file:///opt/domovoi/docs/LINUX_HOST.md
+
+[Service]
+Type=oneshot
+# The root-owned copy, never the checkout's (the service user can edit that).
+# -I -S: no environment, no site-packages, no current folder on the path.
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/domovoi-cache-trim/cache-trim.py
+TimeoutStartSec=5min
+Nice=10
+IOSchedulingClass=idle
+# /var/lib/domovoi-cache-trim, 0755: the status file the core reads.
+StateDirectory=domovoi-cache-trim
+StateDirectoryMode=0755
+# It reads /proc and /etc/domovoi, asks systemd about domovoi-update, and
+# writes /proc/sys/vm/drop_caches and its status file; nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
