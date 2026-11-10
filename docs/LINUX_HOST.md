@@ -1074,27 +1074,40 @@ root, `/usr/bin/python3 -I -S
 (standard library only). Each run:
 
 1. reads `/proc/meminfo`: the file cache is `Cached + Buffers - Shmem`
-   (Health's figure); what a trim can free is that less `Mapped` (an AI
-   model Ollama keeps loaded is in use, and the trim leaves it);
+   (Health's figure); what a trim can free is the file LRU
+   (`Active(file) + Inactive(file)`) less the file pages programs have
+   mapped (`Mapped - Shmem`: an AI model Ollama keeps loaded is in use,
+   and the trim leaves it);
 2. is **on inside WSL** (the kernel names Microsoft) and **off on a
    dedicated box**, where the cache is harmless;
 3. trims when what it can free is over the limit, **max(4 GB, 10% of the
-   memory)**: 4 GB on a 32 GB VM, 6.3 GB on a 63 GB one. A few GB keep
-   what Domovoi reads again and again fast (the database, the Python
-   libraries, Whisper's model, the song playing);
+   memory)**, by at least 256 MB: 4 GB on a 32 GB VM, 6.3 GB on a 63 GB
+   one. The cache up to the limit stays: a few GB keep what Domovoi reads
+   again and again fast (the database, the Python libraries, Whisper's
+   model, the song playing);
 4. skips while an update or Restart runs (`domovoi-update.service`
    activating), and when it trimmed less than 2 minutes ago;
-5. trims with `sync` and `1 > /proc/sys/vm/drop_caches`: the clean page
-   cache only (never dentries and inodes, never what a program holds), and
-   logs one line with the cache before and after
-   (`journalctl -u domovoi-cache-trim`);
+5. frees **only what is over the limit** where the kernel can: `<bytes>
+   swappiness=0` into the root cgroup's `/sys/fs/cgroup/memory.reclaim`
+   (cgroup v2), which asks the kernel for file pages rather than pushing
+   programs' memory to swap. A kernel that has no such file, or doesn't
+   take the `swappiness=` argument (before Linux 6.12: WSL's 6.6 kernel
+   refuses it), gets the fallback: `sync` and `1 >
+   /proc/sys/vm/drop_caches`, which drops all the clean page cache (never
+   dentries and inodes, never what a program holds) and never swaps.
+   `swappiness=0` is a preference, not a promise, so swap use is compared
+   before and after a reclaim: if it grew by more than 64 MB the status
+   file says so and the trim uses the fallback from then on. One log line
+   per trim, with the cache before and after and the method
+   (`journalctl -u domovoi-cache-trim`); a run with nothing to do logs
+   nothing (`LogLevelMax=notice`);
 6. writes what it found to `/var/lib/domovoi-cache-trim/status.json`
    (root's, readable by all), which Health's memory row shows: *file cache
    is trimmed automatically above 6.3 GB · last trimmed 3m ago (freed 22
    GB)*, or that it isn't trimmed here.
 
 `provision.sh` (the units step) and every update run install the script
-and the two units, and enable the timer when any of them changed, so an
+and the two units, and enable the timer whenever it isn't enabled, so an
 install from before the trim gets it with its next update. There is no
 dashboard setting: the defaults are meant to need none.
 

@@ -2174,10 +2174,13 @@ its timer.
   (no environment, no site-packages, no current folder on the import path),
   standard library only, under `ProtectSystem=strict`, `ProtectHome`,
   `NoNewPrivileges` and a private `/tmp`.
-- **What it does** is fixed: `sync`, then `1` into
+- **What it does** is fixed: the bytes over its limit, with `swappiness=0`,
+  into the root cgroup's `memory.reclaim`, or, where the kernel can't take
+  that (and after a reclaim that let swap grow), `sync` then `1` into
   `/proc/sys/vm/drop_caches` (clean page cache only: nothing a program holds,
   no data written or lost), at most once per interval, never while an update
-  or restart runs. It reads `/proc`, asks systemd whether
+  or restart runs. That is why the unit leaves `/sys/fs/cgroup` writable (no
+  `ProtectControlGroups=`). It reads `/proc`, asks systemd whether
   `domovoi-update.service` runs, and writes its own status file.
 - **What it takes from outside** is one number and one word, from
   `/etc/domovoi/cache-trim.conf`, and only while root owns that file and its
@@ -2200,7 +2203,9 @@ hidden `domovoi-svc` account and writes that account's `.wslconfig`.
   both hops; reads are admin reads). The core checks the numbers against the
   PC's bounds and writes `~/.domovoi/hardware_limits/request.json` (0600):
   `{"v": 1, "memory_gb": N|null, "processors": N|null, "restart_id":
-  32 hex|null}`.
+  32 hex|null, "at": "YYYY-MM-DDTHH:MM:SSZ"}` (`at`: when it was written;
+  DomovoiHost reports which request it has read by it, and acts on no
+  restart id older than 15 minutes).
 - **How DomovoiHost reads it**: every 30 s, as the distro's **service
   user** (`wsl.exe -u domovoi --exec /usr/bin/head -c 2049 <path>`), so a
   link there can't make it read anything that user couldn't, and it never

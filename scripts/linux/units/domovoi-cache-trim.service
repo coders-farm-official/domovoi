@@ -18,14 +18,20 @@ IOSchedulingClass=idle
 # /var/lib/domovoi-cache-trim, 0755: the status file the core reads.
 StateDirectory=domovoi-cache-trim
 StateDirectoryMode=0755
+# Its lines are notice-level, and nothing below notice reaches the journal:
+# a run with nothing to do (every 2 minutes) leaves no trace, systemd's own
+# "Starting/Finished" lines included; a trim, or a problem, does.
+SyslogLevel=notice
+LogLevelMax=notice
 # It reads /proc and /etc/domovoi, asks systemd about domovoi-update, and
-# writes /proc/sys/vm/drop_caches and its status file; nothing else.
+# writes the root cgroup's memory.reclaim (or /proc/sys/vm/drop_caches) and
+# its status file; nothing else. No ProtectControlGroups=: that would make
+# /sys/fs/cgroup, and so memory.reclaim, read-only.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 ProtectKernelModules=yes
-ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX

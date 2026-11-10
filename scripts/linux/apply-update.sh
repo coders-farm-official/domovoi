@@ -2725,7 +2725,14 @@ reconcile_cache_trim() {
       esac
     done
   fi
-  if [ -z "$why" ] && [ "${#changed[@]}" -eq 0 ]; then return 0; fi
+  # The timer enabled whenever it isn't (a box where it was never enabled,
+  # or a disable that wasn't the opt-out), not only when a file changed.
+  local enabled=1
+  if command -v systemctl >/dev/null 2>&1 && ! systemctl is-enabled --quiet "$CACHE_TRIM_TIMER" 2>/dev/null; then
+    enabled=0
+  fi
+  if [ -z "$why" ] && [ "${#changed[@]}" -eq 0 ] && [ "$enabled" = 1 ]; then return 0; fi
+  if [ -z "$why" ] && [ "$enabled" = 0 ] && [ "${#changed[@]}" -eq 0 ]; then changed+=("$CACHE_TRIM_TIMER enabled"); fi
   if [ -z "$why" ] && command -v systemctl >/dev/null 2>&1; then
     if ! { systemctl daemon-reload && systemctl enable --now "$CACHE_TRIM_TIMER"; }; then
       why="the files are in place but $CACHE_TRIM_TIMER could not be enabled"

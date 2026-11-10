@@ -14,32 +14,44 @@ room, and the VM holds that memory on Windows' side. WSL's own
 ``autoMemoryReclaim`` only hands it back once the VM is idle, which a house
 assistant rarely is; on 2026-11-10 a house showed 51 GB of cache in a 63 GB
 VM while programs used 5.3 GB, and Windows paged and compressed around it.
-Dropping the clean page cache hands it to Windows within minutes.
+Freed page cache goes back to Windows within minutes.
 
 What one run does:
 
 1. Reads /proc/meminfo. The file cache is ``Cached + Buffers - Shmem``
    (the Health page's figure, domovoi/host_memory.py). What a trim can
-   free is that less ``Mapped``: pages a program has mapped (an AI model
-   Ollama keeps loaded, say) are in use, drop_caches leaves them, and
+   free is the file LRU (``Active(file) + Inactive(file)``, which holds no
+   shared memory) less the file pages programs have mapped, at least
+   ``Mapped - Shmem`` (``Mapped`` counts mapped shared memory too, so
+   taking all of it off would count that twice). Pages a program has
+   mapped (an AI model Ollama keeps loaded, say) are in use and stay;
    counting them would trim every 2 minutes for nothing. The trim is due
-   when the part it can free is over the limit.
+   when the part it can free is over the limit by at least 256 MiB.
 2. On or off: ON inside WSL (the kernel names Microsoft, the rule
    domovoi/host_kind.py uses), OFF on a dedicated Linux box, where the
    cache is harmless (the kernel hands it to programs the moment they
    need it, and nobody else wants the memory). The operator file below
    can switch it either way.
 3. The limit: max(4 GiB, 10% of MemTotal) unless the operator file sets
-   one. A few GB of cache keeps what Domovoi reads again and again fast
-   (the database's working set, the Python libraries, Whisper's model,
-   the music being played); old reads beyond it are what fills the VM.
+   one. The cache UP TO the limit stays: a few GB keep what Domovoi reads
+   again and again fast (the database's working set, the Python libraries,
+   Whisper's model, the music being played); old reads beyond it are what
+   fills the VM.
 4. Skips while an update or restart of Domovoi runs (domovoi-update.service
    activating: the marker domovoi/self_restart.py reads too), and when the
    last trim was under 100 s ago (at most one per timer interval).
-5. Trims: ``sync`` (dirty pages are written, so they become clean), then
-   ``1`` into /proc/sys/vm/drop_caches: the clean page cache only, never
-   dentries/inodes, never anything a program holds. Logs one line with the
-   cache before and after.
+5. Trims only the excess, where the kernel can: ``<excess bytes>
+   swappiness=0`` into the root cgroup's /sys/fs/cgroup/memory.reclaim
+   (cgroup v2; WSL's 6.x kernels have the file). swappiness=0 asks the
+   kernel to reclaim file pages, not to push programs' memory to swap; a
+   kernel that doesn't take that argument (before 6.12) refuses the write,
+   and then, as on a kernel without the file, the fallback runs: ``sync``,
+   then ``1`` into /proc/sys/vm/drop_caches, which drops all the clean page
+   cache (never dentries/inodes, never what a program holds) and never
+   swaps. swappiness=0 is a preference, not a promise, so swap use is
+   compared before and after: if it grew by more than 64 MiB, the status
+   records it and every later run uses the fallback instead. Logs one line
+   with the cache before and after and the method.
 6. Writes what it found and did to /var/lib/domovoi-cache-trim/status.json
    (root's, 0644: the core reads it for the Health page's memory row).
 
@@ -58,6 +70,7 @@ status file and the journal: defaults, never a half-read file.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import stat
@@ -70,8 +83,11 @@ DEFAULT_MIN_LIMIT = 4 * GIB
 DEFAULT_SHARE = 0.10
 LIMIT_GB_MIN = 1
 LIMIT_GB_MAX = 1024
-# What a trim must be able to free before it is worth one.
-MIN_DROPPABLE = 512 * 1024 * 1024
+# How far over the limit before a trim is worth one.
+MIN_EXCESS = 256 * 1024 * 1024
+# Swap that grew this much across a memory.reclaim counts as swapping.
+SWAP_GROWTH_MAX = 64 * 1024 * 1024
+RECLAIM_FILE = "/sys/fs/cgroup/memory.reclaim"
 # The timer starts a run every 120 s; a run started by hand in between
 # (or a timer catching up) doesn't trim twice.
 MIN_INTERVAL_SEC = 100
@@ -113,11 +129,21 @@ def parse_meminfo(text: str) -> dict[str, int]:
 
 
 def cache_figures(mi: dict[str, int]) -> dict[str, int]:
-    """``{total, cache, droppable}`` in bytes: the file cache as Health
-    shows it, and the part of it a trim can free (not mapped)."""
-    cache = max(0, mi.get("Cached", 0) + mi.get("Buffers", 0) - mi.get("Shmem", 0))
-    droppable = max(0, cache - mi.get("Mapped", 0))
-    return {"total": mi.get("MemTotal", 0), "cache": cache, "droppable": droppable}
+    """``{total, cache, droppable, swap_used}`` in bytes: the file cache as
+    Health shows it, and the part of it a trim can free (module docstring,
+    step 1)."""
+    shmem = mi.get("Shmem", 0)
+    cache = max(0, mi.get("Cached", 0) + mi.get("Buffers", 0) - shmem)
+    # File pages programs map: Mapped counts mapped shared memory too, which
+    # is not in the file LRU (nor in `cache`), so at least Mapped - Shmem.
+    file_mapped = max(0, mi.get("Mapped", 0) - shmem)
+    if "Active(file)" in mi and "Inactive(file)" in mi:
+        lru = mi["Active(file)"] + mi["Inactive(file)"]
+    else:
+        lru = cache
+    droppable = max(0, min(cache, lru) - file_mapped)
+    swap_used = max(0, mi.get("SwapTotal", 0) - mi.get("SwapFree", mi.get("SwapTotal", 0)))
+    return {"total": mi.get("MemTotal", 0), "cache": cache, "droppable": droppable, "swap_used": swap_used}
 
 
 def is_wsl(proc_root: str = "/proc") -> bool:
@@ -233,8 +259,8 @@ def decide(*, figures: dict[str, int], wsl: bool, override: dict[str, object],
         return {**out, "action": "skip", "why": "an update or restart of Domovoi is running"}
     if figures["droppable"] <= limit:
         return {**out, "action": "under", "why": "under the limit"}
-    if figures["droppable"] < MIN_DROPPABLE:
-        return {**out, "action": "under", "why": "too little to free"}
+    if figures["droppable"] - limit < MIN_EXCESS:
+        return {**out, "action": "under", "why": "too little over the limit"}
     if last_trim_at is not None and 0 <= now - last_trim_at < MIN_INTERVAL_SEC:
         return {**out, "action": "skip", "why": "trimmed less than 2 minutes ago"}
     return {**out, "action": "trim", "why": "over the limit"}
@@ -284,12 +310,58 @@ def drop_page_cache(proc_root: str) -> None:
         f.write("1\n")
 
 
+def reclaim(reclaim_file: str, nbytes: int) -> str:
+    """``<nbytes> swappiness=0`` into memory.reclaim: ``done``, ``partial``
+    (the kernel reclaimed less than asked: EAGAIN), ``unsupported`` (no
+    file, or a kernel that refuses the swappiness argument: EINVAL).
+    Other errors raise."""
+    if not os.path.exists(reclaim_file):
+        return "unsupported"
+    try:
+        fd = os.open(reclaim_file, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return "unsupported"
+    try:
+        os.write(fd, f"{int(nbytes)} swappiness=0".encode("ascii"))
+    except OSError as e:
+        if e.errno == errno.EINVAL:
+            return "unsupported"
+        if e.errno == errno.EAGAIN:
+            return "partial"
+        raise
+    finally:
+        os.close(fd)
+    return "done"
+
+
+def trim(*, proc_root: str, reclaim_file: str, excess: int, before: dict[str, int],
+         reclaim_allowed: bool, read_after) -> dict[str, object]:
+    """Free ``excess`` bytes of clean file cache (memory.reclaim), or all of
+    it (drop_caches) where that can't be done without risking swap. Returns
+    ``{method, after, swapped, note}``; ``after`` is the figures afterwards."""
+    note = None
+    if reclaim_allowed:
+        state = reclaim(reclaim_file, excess)
+        if state in ("done", "partial"):
+            after = read_after()
+            swapped = after["swap_used"] - before["swap_used"] > SWAP_GROWTH_MAX
+            return {"method": "reclaim", "after": after, "swapped": swapped,
+                    "note": "the kernel freed less than asked" if state == "partial" else None}
+        note = "memory.reclaim can't be told to leave swap alone on this kernel"
+    drop_page_cache(proc_root)
+    return {"method": "drop_caches", "after": read_after(), "swapped": False, "note": note}
+
+
+def _figures(proc_root: str) -> dict[str, int]:
+    with open(os.path.join(proc_root, "meminfo"), encoding="utf-8", errors="replace") as f:
+        return cache_figures(parse_meminfo(f.read()))
+
+
 def run(*, proc_root: str, status_path: str, override_path: str, root_uids: tuple[int, ...],
-        systemctl: str, dry_run: bool, clock=time.time) -> int:
+        systemctl: str, dry_run: bool, clock=time.time, reclaim_file: str = RECLAIM_FILE) -> int:
     now = clock()
     try:
-        with open(os.path.join(proc_root, "meminfo"), encoding="utf-8", errors="replace") as f:
-            figures = cache_figures(parse_meminfo(f.read()))
+        figures = _figures(proc_root)
     except OSError as e:
         log(f"can't read {proc_root}/meminfo: {e}")
         return 1
@@ -319,28 +391,38 @@ def run(*, proc_root: str, status_path: str, override_path: str, root_uids: tupl
         "why": d["why"],
         "override_problem": problem,
         "last_trim": last,
+        # A memory.reclaim that once let swap grow is not used again here.
+        "reclaim_swapped": previous.get("reclaim_swapped") is True,
     }
+    excess = max(0, figures["droppable"] - int(d["limit"]))   # type: ignore[arg-type]
     if d["action"] == "trim" and not dry_run:
-        try:
-            drop_page_cache(proc_root)
-        except OSError as e:
-            log(f"could not drop the page cache: {e}")
-            doc["action"], doc["why"] = "failed", f"could not drop the page cache: {e.strerror or e}"
-        else:
+        def read_after() -> dict[str, int]:
             try:
-                with open(os.path.join(proc_root, "meminfo"), encoding="utf-8", errors="replace") as f:
-                    after = cache_figures(parse_meminfo(f.read()))
+                return _figures(proc_root)
             except OSError:
-                after = {"cache": figures["cache"], "droppable": figures["droppable"]}
-            freed = max(0, figures["cache"] - after["cache"])
+                return dict(figures)
+        try:
+            out = trim(proc_root=proc_root, reclaim_file=reclaim_file, excess=excess, before=figures,
+                       reclaim_allowed=not doc["reclaim_swapped"], read_after=read_after)
+        except OSError as e:
+            log(f"could not trim the page cache: {e}")
+            doc["action"], doc["why"] = "failed", f"could not trim the page cache: {e.strerror or e}"
+        else:
+            after = out["after"]
+            freed = max(0, figures["cache"] - after["cache"])   # type: ignore[index]
             doc["last_trim"] = {"at": iso(now), "at_epoch": int(now), "before_bytes": figures["cache"],
-                                "after_bytes": after["cache"], "freed_bytes": freed}
-            doc["cache_bytes"], doc["droppable_bytes"] = after["cache"], after["droppable"]
-            log(f"file cache {fmt_gb(figures['cache'])} ({fmt_gb(figures['droppable'])} not in use) was over "
-                f"the {fmt_gb(int(d['limit']))} limit: trimmed to {fmt_gb(after['cache'])}, "
-                f"freed {fmt_gb(freed)}")
+                                "after_bytes": after["cache"], "freed_bytes": freed,   # type: ignore[index]
+                                "method": out["method"]}
+            doc["cache_bytes"], doc["droppable_bytes"] = after["cache"], after["droppable"]   # type: ignore[index]
+            if out["swapped"]:
+                doc["reclaim_swapped"] = True
+            log(f"file cache {fmt_gb(figures['cache'])} ({fmt_gb(figures['droppable'])} not in use) was "
+                f"{fmt_gb(excess)} over the {fmt_gb(int(d['limit']))} limit: trimmed to "
+                f"{fmt_gb(after['cache'])}, freed {fmt_gb(freed)} ({out['method']}"   # type: ignore[index]
+                + (f"; {out['note']}" if out["note"] else "")
+                + ("; swap grew, so later trims use drop_caches" if out["swapped"] else "") + ")")
     elif d["action"] == "trim":
-        log(f"dry run: would trim {fmt_gb(figures['droppable'])} of file cache "
+        log(f"dry run: would trim {fmt_gb(excess)} of file cache "
             f"(limit {fmt_gb(int(d['limit']))})")
     if dry_run:
         print(json.dumps(doc, indent=1, sort_keys=True))
@@ -361,8 +443,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--status", default=STATUS_FILE, help=argparse.SUPPRESS)
     p.add_argument("--override", default=OVERRIDE_FILE, help=argparse.SUPPRESS)
     p.add_argument("--systemctl", default=SYSTEMCTL, help=argparse.SUPPRESS)
+    p.add_argument("--reclaim", default=RECLAIM_FILE, help=argparse.SUPPRESS)
     a = p.parse_args(argv)
-    test_paths = (a.proc, a.status, a.override, a.systemctl) != ("/proc", STATUS_FILE, OVERRIDE_FILE, SYSTEMCTL)
+    test_paths = ((a.proc, a.status, a.override, a.systemctl, a.reclaim)
+                  != ("/proc", STATUS_FILE, OVERRIDE_FILE, SYSTEMCTL, RECLAIM_FILE))
     euid = getattr(os, "geteuid", lambda: 0)()
     if not test_paths and not a.dry_run and euid != 0:
         log("run as root (domovoi-cache-trim.service), or with --dry-run")
@@ -370,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
     # Under the test paths the caller's own uid stands in for root.
     uids = (0, euid) if test_paths else (0,)
     return run(proc_root=a.proc, status_path=a.status, override_path=a.override, root_uids=uids,
-               systemctl=a.systemctl, dry_run=a.dry_run)
+               systemctl=a.systemctl, dry_run=a.dry_run, reclaim_file=a.reclaim)
 
 
 if __name__ == "__main__":

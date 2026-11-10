@@ -3808,6 +3808,7 @@ cache_trim_in_place() {
   manage_cache_trim || return 0
   cmp -s "$(src_file scripts/linux/cache-trim.py)" "$CACHE_TRIM_LIB" || return 1
   for u in "${CACHE_TRIM_UNITS[@]}"; do cmp -s "$(src_file "scripts/linux/units/$u")" "$UNIT_DIR/$u" || return 1; done
+  if systemd_running; then systemctl is-enabled --quiet domovoi-cache-trim.timer 2>/dev/null || return 1; fi
 }
 install_cache_trim() {
   local u src changed=0
@@ -3824,10 +3825,11 @@ install_cache_trim() {
   done
   if [ "$changed" = 1 ]; then
     log "installed the file-cache trim (/usr/local/lib/domovoi-cache-trim/cache-trim.py, domovoi-cache-trim.timer)"
-    if systemd_running; then
-      { systemctl daemon-reload && systemctl enable --now domovoi-cache-trim.timer; } \
-        || warn "domovoi-cache-trim.timer could not be enabled; the file cache is not trimmed until it is"
-    fi
+  fi
+  # Enabled whenever it isn't, not only when a file changed.
+  if systemd_running && { [ "$changed" = 1 ] || ! systemctl is-enabled --quiet domovoi-cache-trim.timer 2>/dev/null; }; then
+    { systemctl daemon-reload && systemctl enable --now domovoi-cache-trim.timer; } \
+      || warn "domovoi-cache-trim.timer could not be enabled; the file cache is not trimmed until it is"
   fi
 }
 

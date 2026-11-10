@@ -2171,6 +2171,13 @@ case_cache_trim_installed() {
   run_prov "${wsl_args[@]}" --skip-models
   check "an edited copy: units ran again" eq "$(state_of units)" done
   check "and put it back" cmp -s "$lib" "$REAL_REPO/scripts/linux/cache-trim.py"
+  # The files in place but the timer disabled: enabled again (review
+  # 2026-11-10), not left off until a file changes.
+  rm -f "$STATE/enabled/domovoi-cache-trim.timer"
+  : >"$STATE/calls.log"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "a disabled timer: units ran again" eq "$(state_of units)" done
+  check "and enabled it" called "systemctl enable --now domovoi-cache-trim.timer"
   end_case
 }
 

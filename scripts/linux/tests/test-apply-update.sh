@@ -110,6 +110,13 @@ if [ "${1-}" = show ]; then
   case "$*" in *"-p RestartUSec "*) cat "$SHIM_STATE/show-restartusec" 2>/dev/null || echo 100ms ;; esac
   exit 0
 fi
+# Every unit is enabled unless disabled-<unit> says otherwise; enable
+# clears it.
+if [ "${1-}" = is-enabled ]; then
+  if [ -f "$SHIM_STATE/disabled-${!#}" ]; then exit 1; fi
+  exit 0
+fi
+if [ "${1-}" = enable ]; then rm -f "$SHIM_STATE/disabled-${!#}"; fi
 # stop-hangs lists units whose stop never finishes by itself: only a
 # SIGKILL (`systemctl kill`) ends it, and not even that for a unit also in
 # kill-fails.
@@ -1581,13 +1588,23 @@ case_cache_trim_installed_once() {
   : >"$STATE/calls.log"
   MANAGE_CACHE_TRIM=1 run_update
   check "second run ok" eq "$(field status)" '"ok"'
-  check "no second enable" not_called "domovoi-cache-trim.timer"
+  check "no second enable" not_called "enable --now domovoi-cache-trim.timer"
   check "no step the second time" eq "$(step_names)" "signature stop-services start-services health searxng"
   printf 'print("edited")\n' >"$lib"
   : >"$STATE/calls.log"
   MANAGE_CACHE_TRIM=1 run_update
   check "an edited copy is put back" cmp -s "$lib" "$HERE/../cache-trim.py"
   check "and the timer enabled again" called "systemctl enable --now domovoi-cache-trim.timer"
+  # Files as they should be, but the timer not enabled (review 2026-11-10):
+  # enabled all the same.
+  : >"$STATE/disabled-domovoi-cache-trim.timer"
+  : >"$STATE/calls.log"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "a disabled timer is enabled" called "systemctl enable --now domovoi-cache-trim.timer"
+  check "an ok step that says so" grep -qF "domovoi-cache-trim.timer enabled" "$RESULT"
+  : >"$STATE/calls.log"
+  MANAGE_CACHE_TRIM=1 run_update
+  check "then left alone" not_called "enable --now domovoi-cache-trim.timer"
   end_case
 }
 
@@ -1612,7 +1629,7 @@ case_cache_trim_refuses_a_folder_others_can_write() {
   check "the restart still ok" eq "$(field status)" '"ok"'
   check "a warn step" step_is cache-trim warn
   check "nothing put there" test ! -e "$dir/cache-trim.py"
-  check "the timer not enabled" not_called "domovoi-cache-trim.timer"
+  check "the timer not enabled" not_called "enable --now domovoi-cache-trim.timer"
   end_case
 }
 

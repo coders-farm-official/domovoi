@@ -29,13 +29,18 @@ assert _spec.loader is not None
 _spec.loader.exec_module(ct)
 
 
-def meminfo(total_gb: float, cached_gb: float, *, buffers_gb=0.0, shmem_gb=0.0, mapped_gb=0.0) -> str:
+def meminfo(total_gb: float, cached_gb: float, *, buffers_gb=0.0, shmem_gb=0.0, mapped_gb=0.0,
+            lru_gb: float | None = None, swap_used_gb: float = 0.0) -> str:
     kb = lambda g: int(g * 1024 * 1024)  # noqa: E731
-    return (
+    text = (
         f"MemTotal:       {kb(total_gb)} kB\nMemFree:        1000 kB\n"
         f"Buffers:        {kb(buffers_gb)} kB\nCached:         {kb(cached_gb)} kB\n"
         f"Shmem:          {kb(shmem_gb)} kB\nMapped:         {kb(mapped_gb)} kB\nHugePages_Total:       0\n"
+        f"SwapTotal:      {kb(8)} kB\nSwapFree:       {kb(8 - swap_used_gb)} kB\n"
     )
+    if lru_gb is not None:
+        text += f"Active(file):   {kb(lru_gb / 2)} kB\nInactive(file): {kb(lru_gb / 2)} kB\n"
+    return text
 
 
 # ─── what the cache is ───────────────────────────────────────────────────
@@ -45,7 +50,24 @@ def test_cache_is_the_health_rows_figure_and_mapped_pages_cannot_be_freed() -> N
     f = ct.cache_figures(ct.parse_meminfo(meminfo(63, 50, buffers_gb=2, shmem_gb=1, mapped_gb=9)))
     assert f["total"] == 63 * GIB
     assert f["cache"] == 51 * GIB              # Cached + Buffers - Shmem
-    assert f["droppable"] == 42 * GIB          # less what programs have mapped
+    # Less the file pages mapped: Mapped less the shared memory it also
+    # counts (which `cache` never held), so Shmem isn't taken off twice.
+    assert f["droppable"] == 43 * GIB
+
+
+def test_the_file_lru_is_what_can_be_freed_when_the_kernel_says() -> None:
+    # The file LRU holds no shared memory; it can be smaller than `cache`
+    # (unevictable pages, say), never counted as more.
+    f = ct.cache_figures(ct.parse_meminfo(meminfo(63, 50, buffers_gb=2, shmem_gb=1, mapped_gb=9, lru_gb=40)))
+    assert f["droppable"] == 32 * GIB
+    f = ct.cache_figures(ct.parse_meminfo(meminfo(63, 10, lru_gb=40)))
+    assert f["droppable"] == 10 * GIB
+
+
+def test_shared_memory_that_is_mapped_is_not_taken_off_twice() -> None:
+    # Postgres' shared buffers: 2 GB of shmem, all of it mapped.
+    f = ct.cache_figures(ct.parse_meminfo(meminfo(63, 22, shmem_gb=2, mapped_gb=2, lru_gb=20)))
+    assert f["cache"] == 20 * GIB and f["droppable"] == 20 * GIB
 
 
 def test_figures_never_go_negative() -> None:
@@ -204,13 +226,19 @@ def test_at_most_once_per_interval() -> None:
 
 def test_too_little_to_free_is_not_a_trim() -> None:
     assert _decide(override={"limit_gb": 1}, cache=1.3, droppable=0.25)["action"] == "under"
+    # Over the limit, but by less than 256 MiB: not worth a trim.
+    assert _decide(override={"limit_gb": 8}, cache=9, droppable=8.2)["action"] == "under"
+    assert _decide(override={"limit_gb": 8}, cache=9, droppable=8.3)["action"] == "trim"
 
 
 # ─── one whole run ───────────────────────────────────────────────────────
 
 
 def _run(tmp_path: Path, monkeypatch, before: str, after: str | None = None, *, wsl=True,
-         systemctl_state="inactive", dry_run=False, now=1_800_000_000.0):
+         systemctl_state="inactive", dry_run=False, now=1_800_000_000.0, reclaim_answer=None,
+         reclaims: list | None = None):
+    """One run against a fake /proc. ``reclaim_answer`` None: no
+    memory.reclaim on this kernel; else what the (faked) write answers."""
     proc = _proc(tmp_path, osrelease="6.6.87.2-microsoft-standard-WSL2" if wsl else "6.8.0-generic")
     (proc / "meminfo").write_text(before)
     status = tmp_path / "state" / "status.json"
@@ -221,12 +249,71 @@ def _run(tmp_path: Path, monkeypatch, before: str, after: str | None = None, *, 
         if after is not None:
             (proc / "meminfo").write_text(after)
 
+    def fake_reclaim(path: str, nbytes: int) -> str:
+        if reclaim_answer is None:
+            return "unsupported"
+        if reclaims is not None:
+            reclaims.append(nbytes)
+        if reclaim_answer in ("done", "partial") and after is not None:
+            (proc / "meminfo").write_text(after)
+        return reclaim_answer
+
     monkeypatch.setattr(ct, "drop_page_cache", drop)
+    monkeypatch.setattr(ct, "reclaim", fake_reclaim)
     monkeypatch.setattr(ct, "update_running", lambda systemctl: systemctl_state == "activating")
     rc = ct.run(proc_root=str(proc), status_path=str(status), override_path=str(tmp_path / "none.conf"),
-                root_uids=(0,), systemctl="systemctl", dry_run=dry_run, clock=lambda: now)
+                root_uids=(0,), systemctl="systemctl", dry_run=dry_run, clock=lambda: now,
+                reclaim_file=str(tmp_path / "memory.reclaim"))
     doc = json.loads(status.read_text()) if status.exists() else None
     return rc, doc, dropped
+
+
+def test_only_the_excess_is_reclaimed_where_the_kernel_can(tmp_path, monkeypatch, capsys) -> None:
+    asked: list[int] = []
+    rc, doc, dropped = _run(tmp_path, monkeypatch, meminfo(63, 51), meminfo(63, 6.4),
+                            reclaim_answer="done", reclaims=asked)
+    assert rc == 0 and dropped == []                       # never drop_caches when reclaim works
+    limit = int(0.1 * 63 * GIB)
+    assert asked == [51 * GIB - limit]                     # the excess, not the whole cache
+    assert doc["last_trim"]["method"] == "reclaim"
+    assert doc["reclaim_swapped"] is False
+    assert "(reclaim)" in capsys.readouterr().out
+
+
+def test_a_kernel_without_the_swappiness_argument_falls_back_to_drop_caches(tmp_path, monkeypatch, capsys) -> None:
+    rc, doc, dropped = _run(tmp_path, monkeypatch, meminfo(63, 51), meminfo(63, 1.2), reclaim_answer="unsupported")
+    assert dropped == [True] and doc["last_trim"]["method"] == "drop_caches"
+    assert "can't be told to leave swap alone" in capsys.readouterr().out
+
+
+def test_no_memory_reclaim_file_falls_back_to_drop_caches(tmp_path, monkeypatch) -> None:
+    rc, doc, dropped = _run(tmp_path, monkeypatch, meminfo(63, 51), meminfo(63, 1.2))
+    assert dropped == [True] and doc["last_trim"]["method"] == "drop_caches"
+
+
+def test_a_reclaim_that_grew_swap_is_never_used_again(tmp_path, monkeypatch, capsys) -> None:
+    rc, doc, dropped = _run(tmp_path, monkeypatch, meminfo(63, 51), meminfo(63, 6.4, swap_used_gb=1),
+                            reclaim_answer="done")
+    assert doc["reclaim_swapped"] is True and dropped == []
+    assert "swap grew" in capsys.readouterr().out
+    asked: list[int] = []
+    rc, doc, dropped = _run(tmp_path, monkeypatch, meminfo(63, 51), meminfo(63, 1.2),
+                            reclaim_answer="done", reclaims=asked, now=1_800_001_000.0)
+    assert asked == [] and dropped == [True] and doc["last_trim"]["method"] == "drop_caches"
+    assert doc["reclaim_swapped"] is True
+
+
+def test_a_partial_reclaim_is_a_trim(tmp_path, monkeypatch) -> None:
+    rc, doc, dropped = _run(tmp_path, monkeypatch, meminfo(63, 51), meminfo(63, 20), reclaim_answer="partial")
+    assert doc["action"] == "trim" and doc["last_trim"]["method"] == "reclaim" and dropped == []
+
+
+def test_the_reclaim_write_is_bytes_and_swappiness_zero(tmp_path) -> None:
+    f = tmp_path / "memory.reclaim"
+    f.write_text("")
+    assert ct.reclaim(str(f), 12345) == "done"
+    assert f.read_text() == "12345 swappiness=0"
+    assert ct.reclaim(str(tmp_path / "missing"), 1) == "unsupported"
 
 
 def test_a_run_trims_logs_and_records_before_and_after(tmp_path, monkeypatch, capsys) -> None:
@@ -270,6 +357,11 @@ def test_the_unit_runs_roots_copy_in_isolated_mode() -> None:
     assert "ExecStart=/usr/bin/python3 -I -S /usr/local/lib/domovoi-cache-trim/cache-trim.py\n" in unit
     assert "Type=oneshot" in unit and "StateDirectory=domovoi-cache-trim" in unit
     assert "User=" not in unit
+    # Quiet unless it trims (review 2026-11-10), and /sys/fs/cgroup writable
+    # for memory.reclaim.
+    lines = unit.splitlines()
+    assert "SyslogLevel=notice" in lines and "LogLevelMax=notice" in lines
+    assert not any(line.startswith("ProtectControlGroups=") for line in lines)
     timer = (REPO_ROOT / "scripts" / "linux" / "units" / "domovoi-cache-trim.timer").read_text()
     assert "OnUnitActiveSec=2min" in timer and "WantedBy=timers.target" in timer
 
@@ -281,4 +373,4 @@ def test_the_script_uses_the_standard_library_only() -> None:
     tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
     names = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     names |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    assert names <= {"__future__", "argparse", "json", "os", "stat", "subprocess", "sys", "time"}, names
+    assert names <= {"__future__", "argparse", "errno", "json", "os", "stat", "subprocess", "sys", "time"}, names
