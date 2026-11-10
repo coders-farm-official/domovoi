@@ -528,7 +528,13 @@ admin) shows this PC's memory and processor cores and sets the ceiling:
 new limit applies when Domovoi's Linux system next starts: after Windows
 restarts, or at once with **Restart Domovoi now** on the card (Domovoi is
 offline for a couple of minutes; the rooms reconnect by themselves). The
-card says when Domovoi still runs on the old size. The dashboard's other
+card says when Domovoi still runs on the old size. **Restart Domovoi now**
+is refused while an update or a Restart of Domovoi runs, and DomovoiHost
+checks again itself: a restart for new limits waits until the update has
+finished (the card says so), so it never cuts an update off. A restart
+asked for more than 15 minutes before DomovoiHost read it (Windows
+restarted in between, say) is not done: the VM already starts with the
+new size. The dashboard's other
 **Restart Domovoi** restarts the services inside the VM and doesn't apply
 it.
 
@@ -620,8 +626,13 @@ you share them.
   or two of the install finishing; rooms and phones reconnect by
   themselves. While an install runs it doesn't touch `wsl.exe` at all (it
   sees Windows Installer's busy flag), then looks again after 5, 10, 20, 30
-  seconds and every minute after; `host.log` says *WSL went away* and *WSL
-  answers again*. On 2026-11-10 at 00:25 the update to WSL 3.0.5.0 left
+  seconds and every minute after (after 30 minutes of Windows Installer
+  being busy it asks WSL anyway: another product's install can hold it that
+  long); `host.log` says *Domovoi is down* and *WSL answers*. The same wait
+  covers a start that fails for another reason (at boot, or after a restart
+  for new limits): DomovoiHost keeps trying, on the same backoff, and the
+  icon says *Domovoi didn't start; trying again…* (a first install that
+  fails still waits for Setup, which shows why). On 2026-11-10 at 00:25 the update to WSL 3.0.5.0 left
   Domovoi down until someone noticed: until then DomovoiHost depended on
   WSLService, so Windows stopped it along with WSL and never started it
   again. Since the Windows Setup built that day it depends on no other

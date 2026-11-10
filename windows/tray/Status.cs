@@ -58,8 +58,7 @@ namespace Domovoi.Windows.Tray
             // WSL went away under Domovoi (incident 2026-11-10: Windows
             // Update installed a new WSL). DomovoiHost waits for it and
             // starts Domovoi again; say so instead of "stopped" or "a
-            // problem". A DomovoiHost someone stopped is still "stopped"
-            // unless WSL was updated (Windows then restarts the host).
+            // problem". A DomovoiHost someone stopped is still "stopped".
             Verdict wsl = WslVerdict(f, notReadySince, now, grace);
             if (wsl != null) return wsl;
             switch (f.Service)
@@ -83,10 +82,15 @@ namespace Domovoi.Windows.Tray
 
         static Verdict WslVerdict(Facts f, DateTime notReadySince, DateTime now, TimeSpan grace)
         {
-            if (f.Wsl == null || f.Service == ServiceFact.NotInstalled || f.Service == ServiceFact.NotChecked) return null;
+            // A stopped host is never "starting again": since DomovoiHost
+            // depends on no service, a WSL update no longer stops it, so a
+            // stopped one was stopped on purpose (or failed, and the SCM
+            // starts it: "stopped" until then is the truth) (review
+            // 2026-11-10).
+            if (f.Wsl == null || f.Service == ServiceFact.NotInstalled || f.Service == ServiceFact.NotChecked
+                || f.Service == ServiceFact.Stopped || f.Service == ServiceFact.Stopping) return null;
             bool updated = WslOutage.Updated(f.Wsl, f.WslVersionWhenUp);
             bool down = WslOutage.Gone(f.Wsl);
-            if (f.Service == ServiceFact.Stopped && !updated) return null;
             // A new WSL that is back: Domovoi is coming up again, for at
             // most twice the usual grace, then the usual words.
             if (!down && !(updated && now - notReadySince < grace + grace)) return null;

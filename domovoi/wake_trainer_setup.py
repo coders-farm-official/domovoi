@@ -342,10 +342,16 @@ def _host_limits_report() -> dict | None:
 
 
 def pc_memory_gb(distro_mib: int) -> tuple[int | None, str]:
-    """(the PC's memory in GB, as words) behind a WSL distro's MemTotal,
-    by the Windows installer's rule (windows/common/WslConfig.cs
-    MemoryCapGb): a PC under 24 GB gives the distro 10 GB, a larger one
-    its memory minus 8 GB, at most 64."""
+    """(the PC's memory in GB, as words) behind a WSL distro's MemTotal, a
+    guess for a DomovoiHost that doesn't report the PC
+    (domovoi/host_limits.py; with a report the caller uses its figures).
+    It reads the installer's rule (windows/common/WslConfig.cs
+    MemoryCapGb) backwards where that rule is RAM minus 8 GB: the only
+    place a refusal needs it, a distro under 24 GB. A PC under 24 GB gives
+    the distro 10 GB ("less than 24 GB"); 24 to 31 GB gives RAM - 8 (16 to
+    23). Since 2026-11-10 a PC of 32 GB or more gets at least 24 GB
+    (min(RAM - 8, max(24, min(32, RAM / 2)))), which needs no refusal; a
+    distro of 63 GB or more can only be an older install's RAM - 8 cap."""
     gb = distro_mib / 1024
     if gb < 12:
         return None, "less than 24 GB"

@@ -30,8 +30,12 @@
 //     Domovoi's Linux system so the VM starts with the new size: the units
 //     stopped, the distro terminated, `wsl --shutdown` as domovoi-svc (this
 //     account's WSL only: the household's own WSL and Docker run on), then
-//     the usual bring-up. At most one per RestartGap; the id is recorded
-//     first, so a request can't restart it twice.
+//     the usual bring-up. At most one per RestartGap; never while
+//     domovoi-update.service runs (an update or the dashboard's Restart:
+//     it waits, "busy", and asks again at the next poll); never for an id
+//     older than RestartMaxAge by its request's `at`; and only once the id
+//     is recorded in host-state.json, so a request can't restart it twice
+//     (DecideRestart).
 //
 // Without a restart the new size applies when the VM next starts on its
 // own: after Windows restarts, or a repair.
@@ -93,7 +97,14 @@ namespace Domovoi.Windows
         public string Problem;
         public LimitsChoice Choice;
         public string RestartId;
+        // The request's `at` (when the core wrote it), as written and as a
+        // time; null when it has none.
+        public string At;
+        public DateTime? AtUtc;
     }
+
+    // What to do about a request's restart id (HardwareLimits.DecideRestart).
+    public enum LimitsRestart { None, Stale, TooSoon, Busy, Go }
 
     public static class HardwareLimits
     {
@@ -114,6 +125,37 @@ namespace Domovoi.Windows
         public const int ProcessorsFloor = 2;
 
         static readonly Regex HexId = new Regex("^[0-9a-f]{32}\\z");
+        static readonly Regex AtShape = new Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
+
+        // A restart id older than this (by its request's `at`) is never
+        // acted on: written before Windows restarted, say, so the VM already
+        // runs the new size. The core also takes a done id back.
+        public static readonly TimeSpan RestartMaxAge = TimeSpan.FromMinutes(15);
+        static readonly string[] UpdateBusyStates = { "active", "activating", "deactivating", "reloading", "refreshing" };
+
+        // What to do about the request's restart id. doneId: the last one
+        // acted on (host-state.json); stateReadable: false when that file
+        // can't be read, and then nothing is done (an id that can't be
+        // recorded would restart again at every poll). updateState:
+        // domovoi-update.service's ActiveState, null when unknown, which
+        // waits too: a restart must never cut an update off.
+        public static LimitsRestart DecideRestart(LimitsRequest req, string doneId, bool stateReadable, DateTime nowUtc,
+                                                  DateTime lastRestartUtc, string updateState)
+        {
+            if (req == null || req.RestartId == null || req.State == "invalid" || !stateReadable) return LimitsRestart.None;
+            if (req.RestartId == doneId) return LimitsRestart.None;
+            if (req.AtUtc == null || nowUtc - req.AtUtc.Value > RestartMaxAge || req.AtUtc.Value - nowUtc > TimeSpan.FromMinutes(5))
+                return LimitsRestart.Stale;
+            if (nowUtc - lastRestartUtc < RestartGap) return LimitsRestart.TooSoon;
+            if (updateState == null || Array.IndexOf(UpdateBusyStates, updateState.Trim()) >= 0) return LimitsRestart.Busy;
+            return LimitsRestart.Go;
+        }
+
+        public static string[] UpdateStateArgs(string distro)
+        {
+            return new[] { "-d", distro, "-u", "root", "--cd", "/", "--exec", "/usr/bin/systemctl", "show", "-p", "ActiveState",
+                           "--value", "domovoi-update.service" };
+        }
         static readonly HashSet<string> Keys = new HashSet<string>(StringComparer.Ordinal)
             { "v", "memory_gb", "processors", "restart_id", "at" };
 
@@ -125,11 +167,22 @@ namespace Domovoi.Windows
 
         public static LimitsBounds Bounds(long ramBytes, int logicalProcessors)
         {
+            return Bounds(ramBytes, 0, logicalProcessors);
+        }
+
+        // ramBytes: installed (the label the page shows); usableBytes: what
+        // Windows can use (GlobalMemoryStatusEx's ullTotalPhys, a little
+        // under: the firmware and the GPU take some), which the maximum is
+        // counted from, whole GB down (review 2026-11-10). 0: unknown, then
+        // the installed figure.
+        public static LimitsBounds Bounds(long ramBytes, long usableBytes, int logicalProcessors)
+        {
             var b = new LimitsBounds();
-            b.RamGb = LabelledGb(ramBytes);
+            b.RamGb = LabelledGb(ramBytes > 0 ? ramBytes : usableBytes);
             b.LogicalProcessors = Math.Max(1, logicalProcessors);
             b.MemoryMin = MemoryFloorGb;
-            b.MemoryMax = Math.Max(MemoryFloorGb, b.RamGb - WindowsReserveGb);
+            int usableGb = usableBytes > 0 ? (int)Math.Floor(usableBytes / (1024.0 * 1024.0 * 1024.0)) : b.RamGb;
+            b.MemoryMax = Math.Max(MemoryFloorGb, usableGb - WindowsReserveGb);
             b.ProcessorsMin = Math.Min(ProcessorsFloor, b.LogicalProcessors);
             b.ProcessorsMax = b.LogicalProcessors;
             return b;
@@ -199,6 +252,21 @@ namespace Domovoi.Windows
                 string id = Json.Str(d, "restart_id");
                 if (id == null || !HexId.IsMatch(id)) { r.Problem = "restart_id is not 32 hex digits"; return r; }
                 r.RestartId = id;
+            }
+            if (!Json.IsNull(d, "at"))
+            {
+                string at = Json.Str(d, "at");
+                DateTime t;
+                if (at == null || !AtShape.IsMatch(at)
+                    || !DateTime.TryParseExact(at, "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture,
+                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out t))
+                {
+                    r.Problem = "at is not a UTC time";
+                    r.RestartId = null;
+                    return r;
+                }
+                r.At = at;
+                r.AtUtc = DateTime.SpecifyKind(t, DateTimeKind.Utc);
             }
             bool moved = false;
             var c = new LimitsChoice();
@@ -303,6 +371,9 @@ namespace Domovoi.Windows
             d["processors"] = cpu;
             d["request"] = last == null ? "none" : last.State;
             d["request_problem"] = last == null ? null : last.Problem;
+            // Which request this report has read (its `at`): the core tells
+            // "saved, not read yet" from it, whatever was clamped.
+            d["request_at"] = last == null ? null : last.At;
             d["restart"] = restartState ?? "none";
             d["written_at"] = utc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
             return Json.Serialize(d) + "\n";
@@ -312,8 +383,11 @@ namespace Domovoi.Windows
         // past the limit, so a bigger file reads as too large.
         public static string[] ReadArgs(string distro)
         {
-            return new[] { "-d", distro, "-u", ServiceUser, "--cd", "/", "--exec", "/usr/bin/head", "-c",
-                           Inv.S(MaxRequestBytes + 1), RequestFile };
+            // Under timeout -s KILL 5: a FIFO put where the request goes
+            // would otherwise hold the read (and the host's loop) until
+            // TimeoutMs (review 2026-11-10).
+            return new[] { "-d", distro, "-u", ServiceUser, "--cd", "/", "--exec", "/usr/bin/timeout", "-s", "KILL", "5",
+                           "/usr/bin/head", "-c", Inv.S(MaxRequestBytes + 1), RequestFile };
         }
 
         // As root, the report on stdin, like side.json.
@@ -356,6 +430,15 @@ namespace Domovoi.Windows
             s.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
             if (GlobalMemoryStatusEx(ref s)) return (long)s.ullTotalPhys;
             return 0;
+        }
+
+        // What Windows can use (ullTotalPhys): the maximum is counted from
+        // this. 0: unknown.
+        public static long UsableRamBytes()
+        {
+            var s = new MEMORYSTATUSEX();
+            s.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
+            return GlobalMemoryStatusEx(ref s) ? (long)s.ullTotalPhys : 0;
         }
     }
 }

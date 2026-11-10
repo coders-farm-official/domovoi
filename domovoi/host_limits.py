@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import stat
 from datetime import datetime, timezone
@@ -58,6 +59,14 @@ WARN_BELOW_GB = 16
 TRAINING_GB = 24
 
 GIB = 1024 ** 3
+
+#: What DomovoiHost says of the last restart for new limits. "busy": it
+#: waits because an update or Restart of Domovoi runs.
+RESTART_STATES = ("none", "waiting", "busy", "done", "failed")
+_AT_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+
+UPDATE_RUNNING = ("an update or restart of Domovoi is running; restart it for the new limits once "
+                  "that has finished")
 
 
 def report_file() -> Path:
@@ -125,9 +134,13 @@ def read_report() -> dict[str, Any] | None:
         return None
     request = doc.get("request") if doc.get("request") in ("none", "ok", "clamped", "invalid") else "none"
     problem = doc.get("request_problem")
-    restart = doc.get("restart") if doc.get("restart") in ("none", "waiting", "done", "failed") else "none"
+    restart = doc.get("restart") if doc.get("restart") in RESTART_STATES else "none"
     written = doc.get("written_at")
+    seen = doc.get("request_at")
     return {
+        # The `at` of the request DomovoiHost last read (taken, clamped or
+        # refused): how the page knows it has been seen.
+        "request_at": seen if isinstance(seen, str) and _AT_RE.fullmatch(seen) else None,
         "ram_gb": ram,
         "logical_processors": cores,
         "memory_gb": mem,
@@ -149,8 +162,10 @@ def read_request() -> dict[str, Any] | None:
     if not isinstance(doc, dict) or doc.get("v") != 1:
         return None
     rid = doc.get("restart_id")
+    at = doc.get("at")
     return {"memory_gb": _int(doc.get("memory_gb"), 1), "processors": _int(doc.get("processors"), 1),
-            "restart_id": rid if isinstance(rid, str) else None}
+            "restart_id": rid if isinstance(rid, str) else None,
+            "at": at if isinstance(at, str) and _AT_RE.fullmatch(at) else None}
 
 
 def _running(proc_root: Path = Path("/proc")) -> dict[str, Any]:
@@ -186,6 +201,7 @@ def status(*, report: dict[str, Any] | None = None, running: dict[str, Any] | No
         return {"available": False,
                 "why": "only the Windows install has a share of the PC to set (DomovoiHost reports it)"}
     running = _running() if running is None else running
+    from_disk = request is None
     request = read_request() if request is None else request
     mem, cpu = report["memory_gb"], report["processors"]
     file_mem = mem["in_file"] if mem["in_file"] is not None else mem["default"]
@@ -193,9 +209,22 @@ def status(*, report: dict[str, Any] | None = None, running: dict[str, Any] | No
     pending_mem = not memory_matches(file_mem, running.get("memory_gb"))
     run_cpu = running.get("processors")
     pending_cpu = bool(file_cpu and run_cpu and file_cpu != run_cpu)
-    # The core asked for something DomovoiHost hasn't taken yet (it reads
-    # every 30 s while Domovoi runs).
-    waiting = bool(request) and (request["memory_gb"] != mem["chosen"] or request["processors"] != cpu["chosen"])
+    # The core asked for something DomovoiHost hasn't read yet (it reads
+    # every 30 s while Domovoi runs): by the request's `at`, which the
+    # report echoes, since a clamped request's numbers never match.
+    if request and request.get("at") and report.get("request_at") is not None:
+        waiting = request["at"] != report["request_at"]
+    else:
+        waiting = bool(request) and (request["memory_gb"] != mem["chosen"] or request["processors"] != cpu["chosen"])
+    pending = pending_mem or pending_cpu
+    # A restart id the VM no longer needs is taken back, so it can't fire
+    # later (a DomovoiHost started after it was written, say).
+    if from_disk and request and request.get("restart_id") and not pending and not waiting:
+        try:
+            _write_request({"v": 1, "memory_gb": request["memory_gb"], "processors": request["processors"],
+                            "restart_id": None, "at": request.get("at") or _now()})
+        except OSError as e:
+            log.warning("hardware limits: can't take back a done restart id: %s", e)
     return {
         "available": True,
         "ram_gb": report["ram_gb"],
@@ -203,7 +232,7 @@ def status(*, report: dict[str, Any] | None = None, running: dict[str, Any] | No
         "memory_gb": mem,
         "processors": cpu,
         "running": running,
-        "pending": pending_mem or pending_cpu,
+        "pending": pending,
         "waiting_for_host": waiting,
         # What this core last asked for (None: never): the page shows it
         # until DomovoiHost reports it as ``chosen``.
@@ -222,6 +251,10 @@ class Refused(ValueError):
     """A choice the report's bounds don't allow, or no Windows host."""
 
 
+class Busy(Refused):
+    """A restart asked for while an update or Restart of Domovoi runs."""
+
+
 def _checked(value: Any, bounds: dict[str, int | None], what: str) -> int | None:
     if value is None:
         return None
@@ -233,7 +266,8 @@ def _checked(value: Any, bounds: dict[str, int | None], what: str) -> int | None
     return value
 
 
-def save(memory_gb: int | None, processors: int | None, *, restart_now: bool = False) -> dict[str, Any]:
+def save(memory_gb: int | None, processors: int | None, *, restart_now: bool = False,
+         update_running=None) -> dict[str, Any]:
     """Write the request for DomovoiHost: the two limits (None: automatic)
     and, with ``restart_now``, a fresh restart id. Refused (``Refused``)
     without a report or outside its bounds. Returns :func:`status`."""
@@ -244,9 +278,38 @@ def save(memory_gb: int | None, processors: int | None, *, restart_now: bool = F
         "v": 1,
         "memory_gb": _checked(memory_gb, report["memory_gb"], "memory_gb"),
         "processors": _checked(processors, report["processors"], "processors"),
-        "restart_id": secrets.token_hex(16) if restart_now else None,
-        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "restart_id": None,
+        "at": _now(),
     }
+    if restart_now:
+        if (update_running or _update_running)():
+            raise Busy(UPDATE_RUNNING)
+        doc["restart_id"] = secrets.token_hex(16)
+    _write_request(doc)
+    log.info("hardware limits: asked DomovoiHost for memory %s, processors %s%s",
+             doc["memory_gb"] or "automatic", doc["processors"] or "automatic",
+             " and a restart" if restart_now else "")
+    return status(report=report)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _update_running() -> bool:
+    """An update or Restart of Domovoi runs now (domovoi/self_restart.py's
+    own test: the update unit activating, or a restart just accepted). A
+    limits restart then would stop the services under it."""
+    try:
+        from domovoi import git_version, self_restart
+
+        return self_restart.underway(git_version.read_last_update())
+    except Exception:  # noqa: BLE001 - can't tell: let DomovoiHost's own check decide
+        log.debug("hardware limits: can't tell whether an update runs", exc_info=True)
+        return False
+
+
+def _write_request(doc: dict[str, Any]) -> None:
     d = request_dir()
     d.mkdir(parents=True, exist_ok=True)
     try:
@@ -258,7 +321,3 @@ def save(memory_gb: int | None, processors: int | None, *, restart_now: bool = F
     with os.fdopen(fd, "wb") as f:
         f.write((json.dumps(doc) + "\n").encode("ascii"))
     os.replace(tmp, d / REQUEST_NAME)
-    log.info("hardware limits: asked DomovoiHost for memory %s, processors %s%s",
-             doc["memory_gb"] or "automatic", doc["processors"] or "automatic",
-             " and a restart" if restart_now else "")
-    return status(report=report)

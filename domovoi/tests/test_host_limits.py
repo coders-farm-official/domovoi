@@ -101,9 +101,9 @@ def test_automatic_is_null(host) -> None:
 
 
 def test_restart_now_carries_a_fresh_id_each_time(host) -> None:
-    hl.save(24, None, restart_now=True)
+    hl.save(24, None, restart_now=True, update_running=lambda: False)
     a = json.loads(host["req"].read_text())["restart_id"]
-    hl.save(24, None, restart_now=True)
+    hl.save(24, None, restart_now=True, update_running=lambda: False)
     b = json.loads(host["req"].read_text())["restart_id"]
     assert len(a) == 32 and int(a, 16) >= 0 and a != b
 
@@ -162,6 +162,54 @@ def test_automatic_processors_are_every_core(host) -> None:
     assert s["pending"] is False
 
 
+def test_a_restart_is_refused_while_an_update_runs(host) -> None:
+    """Review 2026-11-10: a limits restart stops the units, which would cut
+    an update (or the dashboard's Restart) off. DomovoiHost checks too."""
+    with pytest.raises(hl.Busy, match="update or restart of Domovoi is running"):
+        hl.save(24, None, restart_now=True, update_running=lambda: True)
+    assert not host["req"].exists()
+    # Saving the limits without a restart is fine meanwhile.
+    hl.save(24, None, update_running=lambda: True)
+    assert json.loads(host["req"].read_text())["restart_id"] is None
+    hl.save(24, None, restart_now=True, update_running=lambda: False)
+    assert json.loads(host["req"].read_text())["restart_id"]
+
+
+def test_waiting_clears_when_the_host_read_a_clamped_request(host) -> None:
+    """The host clamps (its bounds can be tighter than this report's), so
+    the numbers never match; it echoes the request's `at` instead."""
+    hl.save(124, None)
+    at = json.loads(host["req"].read_text())["at"]
+    host["write"]({**REPORT, "memory_gb": {**REPORT["memory_gb"], "chosen": 123}, "request": "clamped",
+                   "request_at": at})
+    s = hl.status(running={"memory_gb": 31.3, "processors": 32})
+    assert s["waiting_for_host"] is False
+    host["write"]({**REPORT, "request_at": "2026-01-01T00:00:00Z"})
+    assert hl.status(running={"memory_gb": 31.3, "processors": 32})["waiting_for_host"] is True
+
+
+def test_a_done_restart_id_is_taken_back(host) -> None:
+    """Once the VM runs on what .wslconfig says and the host has read the
+    request, its restart id goes, so it can never fire later."""
+    hl.save(32, None, restart_now=True, update_running=lambda: False)
+    doc = json.loads(host["req"].read_text())
+    host["write"]({**REPORT, "memory_gb": {**REPORT["memory_gb"], "chosen": 32}, "request_at": doc["at"]})
+    hl.status(running={"memory_gb": 31.3, "processors": 32})          # not pending, read: cleared
+    after = json.loads(host["req"].read_text())
+    assert after["restart_id"] is None and after["at"] == doc["at"] and after["memory_gb"] == 32
+    # Still pending (the VM runs on 62 GB): kept.
+    hl.save(32, None, restart_now=True, update_running=lambda: False)
+    doc = json.loads(host["req"].read_text())
+    host["write"]({**REPORT, "memory_gb": {**REPORT["memory_gb"], "chosen": 32}, "request_at": doc["at"]})
+    hl.status(running={"memory_gb": 62.6, "processors": 32})
+    assert json.loads(host["req"].read_text())["restart_id"] == doc["restart_id"]
+
+
+def test_the_busy_restart_state_is_read(host) -> None:
+    host["write"]({**REPORT, "restart": "busy"})
+    assert hl.read_report()["restart"] == "busy"
+
+
 def test_waiting_for_host_clears_once_it_reports_the_choice(host) -> None:
     hl.save(24, None)
     report = hl.read_report()
@@ -197,8 +245,13 @@ async def test_the_core_endpoint_refuses_out_of_bounds_with_400(host, monkeypatc
     from domovoi.tests.auth_testkit import bearer, install_fake_db
 
     install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
+    monkeypatch.setattr(hl, "_update_running", lambda: True)
     async with AsyncClient(transport=ASGITransport(app=core_app, raise_app_exceptions=False),
                            base_url="http://test") as c:
+        r = await c.post("/v1/admin/host-limits", json={"memory_gb": 24, "restart_now": True},
+                         headers=bearer("admin-token"))
+        assert r.status_code == 409 and "update or restart" in r.json()["detail"]
+        monkeypatch.setattr(hl, "_update_running", lambda: False)
         r = await c.post("/v1/admin/host-limits", json={"memory_gb": 4}, headers=bearer("admin-token"))
         assert r.status_code == 400 and "8 to 124" in r.json()["detail"]
         r = await c.post("/v1/admin/host-limits", json={"memory_gb": 24, "restart_now": True},

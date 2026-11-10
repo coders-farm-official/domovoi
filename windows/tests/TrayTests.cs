@@ -542,8 +542,11 @@ static partial class Tests
             Eq(TrayState.Starting, v.State, "waiting, never 'a problem', however long the install");
             Eq("Domovoi stopped: Windows updated WSL, starting again\u2026", v.Line, "the words");
             True(v.Line.Length <= 63, "fits a tooltip");
-            // The incident: the old registration let the SCM stop the host too.
-            Eq(WslOutage.UpdatedMessage, decide(new Facts { Service = ServiceFact.Stopped, Wsl = updating }, now).Line, "host stopped by the update: Windows restarts it");
+            // A host the admin stopped, even while WSL updates: plainly
+            // stopped (no dependency now, so the update never stops it).
+            Eq("Domovoi is stopped", decide(new Facts { Service = ServiceFact.Stopped, Wsl = updating, WslVersionWhenUp = "2.7.14.0" }, now).Line, "stopped on purpose during an update");
+            Eq(TrayState.Starting, decide(new Facts { Service = ServiceFact.Stopping, Wsl = updating }, now).State, "stopping: the usual words");
+            True(decide(new Facts { Service = ServiceFact.Stopping, Wsl = updating }, now).Line != WslOutage.UpdatedMessage, "not the WSL words");
             // A new wsl.exe, back up: still coming back, for twice the grace.
             var back = new WslFacts { Version = "3.0.5.0", Service = WslService.Running };
             Eq(WslOutage.UpdatedMessage, decide(new Facts { Service = ServiceFact.Running, Wsl = back, WslVersionWhenUp = "2.7.14.0" }, now.AddMinutes(-15)).Line, "coming back");

@@ -6592,13 +6592,16 @@ async def admin_set_host_limits(body: HostLimitsBody) -> dict[str, Any]:
     (null: automatic) inside this PC's bounds, and with ``restart_now`` a
     restart of Domovoi's Linux system so it starts with them (a couple of
     minutes offline). Applies when the VM next starts; DomovoiHost reads
-    the request within 30 s. 400 outside the bounds or off Windows."""
+    the request within 30 s. 400 outside the bounds or off Windows; 409
+    for ``restart_now`` while an update or Restart of Domovoi runs."""
     from domovoi import host_limits
 
     try:
         return await asyncio.to_thread(
             host_limits.save, body.memory_gb, body.processors, restart_now=body.restart_now
         )
+    except host_limits.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except host_limits.Refused as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

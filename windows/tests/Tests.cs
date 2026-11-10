@@ -727,6 +727,60 @@ static partial class Tests
             Eq("Domovoi stopped: WSL stopped, starting again\u2026", WslOutage.Message(new WslFacts { Version = "2.7.14.0", Service = WslService.Stopped }, "2.7.14.0"), "same version");
             Eq(WslOutage.StoppedMessage, WslOutage.Message(new WslFacts { Version = "3.0.5.0" }, null), "no version known from before");
         });
+        Run("wsl outage: an MSI that holds Windows Installer for 30 minutes no longer blocks asking", delegate
+        {
+            var clock = new MsiClock();
+            DateTime t0 = new DateTime(2026, 11, 10, 0, 25, 0, DateTimeKind.Utc);
+            Eq(TimeSpan.Zero, clock.For(true, t0), "starts");
+            var f = new WslFacts { MsiBusy = true, Service = WslService.Running, MsiBusyFor = clock.For(true, t0.AddMinutes(29)) };
+            True(!WslOutage.MayAsk(f), "29 minutes: still waits");
+            f.MsiBusyFor = clock.For(true, t0.AddMinutes(30));
+            True(WslOutage.MayAsk(f), "30 minutes: asks anyway");
+            f.Answers = true;
+            Eq(WslProbe.Recover, WslOutage.Decide(f), "and comes back when it answers");
+            Eq(TimeSpan.Zero, clock.For(false, t0.AddMinutes(31)), "not busy: the clock resets");
+            Eq(TimeSpan.Zero, clock.For(true, t0.AddMinutes(32)), "a new install counts afresh");
+        });
+        Run("wsl outage: only a wsl.exe that can't start means WSL went away", delegate
+        {
+            True(WslOutage.IsWslFailure(new System.ComponentModel.Win32Exception(2)), "wsl.exe missing");
+            True(!WslOutage.IsWslFailure(new System.IO.IOException("disk")), "an I/O error is a bug: the host stops, the SCM restarts it");
+            True(!WslOutage.IsWslFailure(new InvalidOperationException("x")), "nor this");
+            True(!WslOutage.IsWslFailure(new NullReferenceException()), "nor this");
+        });
+        Run("recovery: a failed bring-up is tried again unless it was a first install", delegate
+        {
+            True(WslOutage.RetryFailedBringUp(false, false), "after WSL came back, or a limits restart");
+            True(WslOutage.RetryFailedBringUp(true, true), "the service's start, a job already provisioned (every boot)");
+            True(!WslOutage.RetryFailedBringUp(true, false), "a first install: Setup shows why and decides");
+            var r = new Recovery();
+            DateTime t = new DateTime(2026, 11, 10, 1, 0, 0, DateTimeKind.Utc);
+            r.Lost(t, false);
+            True(r.Down && !r.WslTrouble && r.Attempts == 0, "down, WSL fine");
+            True(!r.Due(t.AddSeconds(4)) && r.Due(t.AddSeconds(5)), "first look after 5 s");
+            r.Failed(t.AddSeconds(5)); r.Failed(t.AddSeconds(15)); r.Failed(t.AddSeconds(35));
+            Eq(3, r.Attempts, "three tries");
+            r.Lost(t.AddSeconds(40), true);
+            Eq(3, r.Attempts, "lost again while waiting: the count is kept (no reset to 5 s)");
+            True(r.WslTrouble, "now WSL's trouble");
+            True(!r.Due(t.AddSeconds(41)), "and the next look isn't moved earlier");
+            r.Recovered();
+            True(!r.Down && r.Attempts == 0, "back");
+            r.Lost(t.AddMinutes(5), true);
+            Eq(0, r.Attempts, "a new outage starts afresh");
+            Eq("Domovoi didn't start; trying again\u2026", WslOutage.DownMessage(new WslFacts(), null, false), "the words when WSL is fine");
+        });
+        Run("service: an unregister never ends with an error code (no SCM restart mid-uninstall)", delegate
+        {
+            Eq(0, HostExit.CodeFor(true, true), "unregister failed: 0, recorded in unregister.json");
+            Eq(0, HostExit.CodeFor(true, false), "unregister done: 0");
+            Eq(1064, HostExit.CodeFor(false, true), "the long-running host failed: the SCM restarts it");
+            Eq(0, HostExit.CodeFor(false, false), "stopped: 0");
+            var d = HostExit.UnregisterFailure(new InvalidOperationException("WSL did not answer"), new DateTime(2026, 11, 10, 1, 0, 0, DateTimeKind.Utc));
+            True(Json.Bool(d, "ok") == false, "ok false");
+            True(Json.Str(d, "error").Contains("WSL did not answer"), "the reason, for the uninstaller");
+            True(Json.Str(d, "at").StartsWith("2026-11-10T01:00:00", StringComparison.Ordinal), "when");
+        });
         Run("service: no dependency on WSLService, restarted on any failure", delegate
         {
             Eq("", Domovoi.Windows.Helper.HostService.NoDependencies, "an empty list (\"\" removes dependencies; null keeps them)");
@@ -853,7 +907,77 @@ static partial class Tests
             string s = HardwareLimits.ReportScript();
             True(s.Contains("chown root:root /var/lib/domovoi-windows") && s.Contains("chmod 0644") && s.Contains("sha256sum /var/lib/domovoi-windows/limits.json"), "root's file");
             string[] a = HardwareLimits.ReadArgs("domovoi");
-            SeqEq(new[] { "-d", "domovoi", "-u", "domovoi", "--cd", "/", "--exec", "/usr/bin/head", "-c", "2049", "/home/domovoi/.domovoi/hardware_limits/request.json" }, a, "read as the service user, bounded");
+            SeqEq(new[] { "-d", "domovoi", "-u", "domovoi", "--cd", "/", "--exec", "/usr/bin/timeout", "-s", "KILL", "5",
+                          "/usr/bin/head", "-c", "2049", "/home/domovoi/.domovoi/hardware_limits/request.json" }, a,
+                  "read as the service user, bounded in size and (a FIFO) in time");
+            SeqEq(new[] { "-d", "domovoi", "-u", "root", "--cd", "/", "--exec", "/usr/bin/systemctl", "show", "-p", "ActiveState", "--value", "domovoi-update.service" },
+                  HardwareLimits.UpdateStateArgs("domovoi"), "the update unit's state, read as root");
+        });
+        Run("limits: the maximum counts from what Windows can use", delegate
+        {
+            LimitsBounds b = HardwareLimits.Bounds(137242800128L, 137242800128L - G / 3 - G / 4, 32);
+            Eq(128, b.RamGb, "the label from the installed RAM");
+            Eq(123, b.MemoryMax, "127.x GB usable, whole GB down, less 4");
+            Eq(124, HardwareLimits.Bounds(137242800128L, 0, 32).MemoryMax, "usable unknown: the installed figure");
+            Eq(28, HardwareLimits.Bounds(0, 32 * G, 8).MemoryMax, "installed unknown: the usable one");
+        });
+        Run("limits: the request's time", delegate
+        {
+            LimitsRequest r = HardwareLimits.Parse("{\"v\":1,\"memory_gb\":24,\"restart_id\":\"0123456789abcdef0123456789abcdef\",\"at\":\"2026-11-10T05:00:00Z\"}", b128);
+            Eq("2026-11-10T05:00:00Z", r.At, "as written");
+            Eq(new DateTime(2026, 11, 10, 5, 0, 0, DateTimeKind.Utc), r.AtUtc.Value, "as a time");
+            foreach (string bad in new[] { "yesterday", "2026-11-10 05:00:00", "2026-13-40T05:00:00Z", "2026-11-10T05:00:00+02:00" })
+            {
+                LimitsRequest x = HardwareLimits.Parse("{\"v\":1,\"restart_id\":\"0123456789abcdef0123456789abcdef\",\"at\":\"" + bad + "\"}", b128);
+                Eq("invalid", x.State, "refused: " + bad);
+                True(x.RestartId == null, "and no restart from it");
+            }
+            True(HardwareLimits.Parse("{\"v\":1}", b128).AtUtc == null, "none at all: fine, no time");
+            string report = HardwareLimits.Report(b128, new LimitsChoice(), new LimitsChoice(), new LimitsChoice(), r, "none", DateTime.UtcNow);
+            Eq("2026-11-10T05:00:00Z", Json.Str(Json.ParseObject(report), "request_at"), "the report says which request it read");
+        });
+        Run("limits: which restart ids restart Domovoi", delegate
+        {
+            DateTime now = new DateTime(2026, 11, 10, 5, 10, 0, DateTimeKind.Utc);
+            Func<string, LimitsRequest> req = at => HardwareLimits.Parse(
+                "{\"v\":1,\"memory_gb\":24,\"restart_id\":\"0123456789abcdef0123456789abcdef\"" + (at == null ? "" : ",\"at\":\"" + at + "\"") + "}", b128);
+            const string id = "0123456789abcdef0123456789abcdef";
+            DateTime never = DateTime.MinValue;
+            Eq(LimitsRestart.Go, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, "inactive"), "fresh, nothing running");
+            Eq(LimitsRestart.Go, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, "failed"), "an update that failed earlier is not running");
+            foreach (string busy in new[] { "active", "activating", "deactivating", "reloading" })
+                Eq(LimitsRestart.Busy, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, busy), "the update unit " + busy + ": wait");
+            Eq(LimitsRestart.Busy, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, never, null), "can't tell: wait");
+            Eq(LimitsRestart.None, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), id, true, now, never, "inactive"), "already done");
+            Eq(LimitsRestart.None, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, false, now, never, "inactive"), "host-state.json unreadable: nothing, since the id couldn't be recorded");
+            Eq(LimitsRestart.Stale, HardwareLimits.DecideRestart(req("2026-11-10T04:50:00Z"), null, true, now, never, "inactive"), "older than 15 minutes (written before a reboot)");
+            Eq(LimitsRestart.Stale, HardwareLimits.DecideRestart(req(null), null, true, now, never, "inactive"), "no time");
+            Eq(LimitsRestart.Stale, HardwareLimits.DecideRestart(req("2026-11-10T06:10:00Z"), null, true, now, never, "inactive"), "from the future");
+            Eq(LimitsRestart.TooSoon, HardwareLimits.DecideRestart(req("2026-11-10T05:09:00Z"), null, true, now, now.AddMinutes(-5), "inactive"), "one per 10 minutes");
+            Eq(LimitsRestart.None, HardwareLimits.DecideRestart(HardwareLimits.Parse("{\"v\":1}", b128), null, true, now, never, "inactive"), "no id");
+        });
+        Run("host state: read-modify-write never wipes what it can't read", delegate
+        {
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-hoststate-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                string file = System.IO.Path.Combine(dir, "host-state.json");
+                var s = new HostStateStore(file);
+                string why;
+                var one = new Dictionary<string, object>(); one["imported"] = true;
+                True(s.Update(one, DateTime.UtcNow, out why), "a first key, no file yet");
+                var two = new Dictionary<string, object>(); two["limits_restart_id"] = "x";
+                True(s.Update(two, DateTime.UtcNow, out why), "a second key");
+                var d = s.ReadStrict();
+                True(Json.Bool(d, "imported") == true && Json.Str(d, "limits_restart_id") == "x", "both kept");
+                System.IO.File.WriteAllText(file, "{\"imported\": true, \"generation\": 3, ");   // torn
+                True(!s.Update(two, DateTime.UtcNow, out why), "a file that can't be read: the change refused");
+                True(why != null && why.Contains("can't be read"), "and says why");
+                Eq("{\"imported\": true, \"generation\": 3, ", System.IO.File.ReadAllText(file), "the file left as it was");
+                True(s.ReadStrict() == null && s.Read().Count == 0, "strict read: null; plain read: empty");
+            }
+            finally { System.IO.Directory.Delete(dir, true); }
         });
     }
 

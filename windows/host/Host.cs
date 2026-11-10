@@ -73,17 +73,14 @@ namespace Domovoi.Windows.Host
         string coreLogLastError;
         // The household's hardware limits (HardwareLimits.cs): when the
         // request is next read, the report last written (its text without
-        // the time), the last problem logged, when the last restart for
-        // them ran and how it went, and whether this process has read a
-        // request yet (a restart id already there at its first read is
-        // taken as seen, not acted on: this process's own start is what
-        // brought the VM up).
+        // the time), the last problem logged, and when the last restart for
+        // them ran and how it went. Which restart ids to act on:
+        // HardwareLimits.DecideRestart.
         DateTime limitsNext = DateTime.MinValue;
         string limitsLastReport;
         string limitsLastProblem;
         DateTime limitsLastRestart = DateTime.MinValue;
         string limitsRestartState = "none";
-        bool limitsFirstRead = true;
 
         public Host(ManualResetEvent stop)
         {
@@ -154,21 +151,20 @@ namespace Domovoi.Windows.Host
 
         string StateFile { get { return Path.Combine(Paths.HostOut, "host-state.json"); } }
 
-        Dictionary<string, object> ReadState()
-        {
-            try { return Json.ReadFile(StateFile) ?? new Dictionary<string, object>(); }
-            catch (FormatException) { return new Dictionary<string, object>(); }
-            catch (IOException) { return new Dictionary<string, object>(); }
-        }
+        HostStateStore Store { get { return new HostStateStore(StateFile); } }
 
-        void UpdateState(string key, object value)
+        Dictionary<string, object> ReadState() { return Store.Read(); }
+
+        // Read-modify-write (HostStateStore.cs): false, logged, when it
+        // didn't land; a file that can't be read is never overwritten.
+        bool UpdateState(string key, object value)
         {
-            var d = ReadState();
-            d[key] = value;
-            d["at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
-            try { Json.WriteFile(StateFile, d); }
-            catch (IOException e) { log.Write("can't record " + key + ": " + e.Message); }
-            catch (UnauthorizedAccessException e) { log.Write("can't record " + key + ": " + e.Message); }
+            string why;
+            var changes = new Dictionary<string, object>();
+            changes[key] = value;
+            if (Store.Update(changes, DateTime.UtcNow, out why)) return true;
+            log.Write("can't record " + key + ": " + why);
+            return false;
         }
 
         bool AlreadyProvisioned(HostJob job)
@@ -179,14 +175,12 @@ namespace Domovoi.Windows.Host
 
         void RecordProvisioned(HostJob job, string result)
         {
-            var d = ReadState();
+            var d = new Dictionary<string, object>();
             d["generation"] = job.Generation;
             d["attempt"] = job.Attempt;
             d["result"] = result;
-            d["at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
-            try { Json.WriteFile(StateFile, d); }
-            catch (IOException e) { log.Write("can't record the result: " + e.Message); }
-            catch (UnauthorizedAccessException e) { log.Write("can't record the result: " + e.Message); }
+            string why;
+            if (!Store.Update(d, DateTime.UtcNow, out why)) log.Write("can't record the result: " + why);
         }
 
         // The distro was imported once: its disk is the household's data and
@@ -220,7 +214,7 @@ namespace Domovoi.Windows.Host
                 // bring Domovoi up again.
                 try
                 {
-                    if (wslDown)
+                    if (recovery.Down)
                     {
                         if (job != null && WaitForWsl(job)) ready = true;
                         if (Sleep(1000)) break;
@@ -243,6 +237,15 @@ namespace Domovoi.Windows.Host
                         lock (statusGate) status.Percent = 0;
                         ready = BringUp(job);
                         if (ready) wslVersionUp = WslOutage.ExeVersion(Paths.WslExe);
+                        // At the service's start for a job already
+                        // provisioned (every boot), a bring-up that failed is
+                        // tried again; a first install's failure waits for
+                        // Setup (review 2026-11-10).
+                        else if (!Stopping && WslOutage.RetryFailedBringUp(true, AlreadyProvisioned(job)))
+                        {
+                            DomovoiDown("Domovoi didn't come up at the start", WslGoneNow());
+                            continue;
+                        }
                     }
                     else
                     {
@@ -252,7 +255,7 @@ namespace Domovoi.Windows.Host
                         if (ready && holder != null && SafeExited(holder) && WslGoneNow())
                         {
                             ready = false;
-                            WslLost("the holder ended and WSL isn't answering");
+                            DomovoiDown("the holder ended and WSL isn't answering", true);
                             continue;
                         }
                         KeepHolder();
@@ -261,81 +264,91 @@ namespace Domovoi.Windows.Host
                     }
                     ProcessRequests(ready);
                     if (ready) PeriodicCoreLog();
-                    if (ready) ready = PollLimits(job);
+                    if (ready)
+                    {
+                        ready = PollLimits(job);
+                        if (!ready && !Stopping)
+                        {
+                            DomovoiDown("Domovoi didn't come up after the restart for its new limits", WslGoneNow());
+                            continue;
+                        }
+                    }
                 }
-                catch (System.ComponentModel.Win32Exception e) { ready = false; WslLost("wsl.exe could not be run: " + e.Message); }
-                catch (IOException e) { ready = false; WslLost("WSL failed: " + e.Message); }
-                catch (InvalidOperationException e) { ready = false; WslLost("WSL failed: " + e.Message); }
+                // Only a wsl.exe that can't be started means WSL went away
+                // (WslOutage.IsWslFailure); anything else is a bug, which
+                // stops the host, and the SCM starts it again.
+                catch (System.ComponentModel.Win32Exception e)
+                {
+                    ready = false;
+                    DomovoiDown("wsl.exe could not be run: " + e.Message, true);
+                }
                 if (DateTime.UtcNow - lastStatusWrite > TimeSpan.FromSeconds(10)) WriteStatus(true);
                 if (Sleep(1000)) break;
             }
             log.Write("DomovoiHost stopping");
         }
 
-        // -- WSL going away (WslOutage.cs) --------------------------------
+        // -- Domovoi down: WSL went away, or a bring-up failed (WslOutage.cs)
 
-        bool wslDown;
-        int wslAttempts;
-        DateTime wslNextLook = DateTime.MinValue;
+        readonly Recovery recovery = new Recovery();
+        readonly MsiClock msiClock = new MsiClock();
         // wsl.exe's version when Domovoi last came up: another one after an
         // outage means Windows updated WSL.
         string wslVersionUp;
 
-        // Whether WSL itself is in trouble: the reads first, wsl.exe only
-        // when asking it can't get in an update's way.
-        bool WslGoneNow()
+        WslFacts LookAtWsl()
         {
             WslFacts f = WslOutage.Look(Paths.WslExe);
+            f.MsiBusyFor = msiClock.For(f.MsiBusy, DateTime.UtcNow);
             if (WslOutage.MayAsk(f)) f.Answers = AskWsl();
-            return WslOutage.Gone(f);
+            return f;
         }
+
+        // Whether WSL itself is in trouble: the reads first, wsl.exe only
+        // when asking it can't get in an update's way.
+        bool WslGoneNow() { return WslOutage.Gone(LookAtWsl()); }
 
         bool? AskWsl()
         {
             try { return Wsl.Registered() != null; }
             catch (System.ComponentModel.Win32Exception) { return false; }
-            catch (IOException) { return false; }
         }
 
-        void WslLost(string why)
+        void DomovoiDown(string why, bool wslTrouble)
         {
             KillHolder();
-            if (!wslDown) log.Write("WSL went away (" + why + "); waiting for it, then starting Domovoi again");
-            wslDown = true;
-            wslAttempts = 0;
-            wslNextLook = DateTime.UtcNow + WslOutage.Delay(0);
+            if (!recovery.Down) log.Write("Domovoi is down (" + why + "); " + (wslTrouble ? "waiting for WSL, then " : "") + "starting it again");
+            recovery.Lost(DateTime.UtcNow, wslTrouble);
             WslFacts f = WslOutage.Look(Paths.WslExe);
-            Status("waiting", HostProgress.PhaseConfig, 0, WslOutage.Message(f, wslVersionUp));
+            Status("waiting", HostProgress.PhaseConfig, 0, WslOutage.DownMessage(f, wslVersionUp, wslTrouble));
         }
 
         // One look, when it is due. True once Domovoi is up again.
         bool WaitForWsl(HostJob job)
         {
-            if (DateTime.UtcNow < wslNextLook) return false;
-            WslFacts f = WslOutage.Look(Paths.WslExe);
-            if (WslOutage.MayAsk(f)) f.Answers = AskWsl();
-            string message = WslOutage.Message(f, wslVersionUp);
+            if (!recovery.Due(DateTime.UtcNow)) return false;
+            WslFacts f = LookAtWsl();
             if (WslOutage.Decide(f) == WslProbe.Wait)
             {
-                wslNextLook = DateTime.UtcNow + WslOutage.Delay(++wslAttempts);
+                recovery.Failed(DateTime.UtcNow);
+                string message = WslOutage.DownMessage(f, wslVersionUp, true);
                 if (status.Message != message) Status("waiting", HostProgress.PhaseConfig, 0, message);
                 return false;
             }
-            log.Write("WSL answers again" + (f.Version != null ? " (wsl.exe " + f.Version + ")" : "") + "; starting Domovoi again");
+            log.Write("WSL answers" + (f.Version != null ? " (wsl.exe " + f.Version + ")" : "") + "; starting Domovoi again (try " + Inv.S(recovery.Attempts + 1) + ")");
             holderNext = DateTime.MinValue;
             holderBackoffSec = 5;
             limitsNext = DateTime.MinValue;
             coreLogNext = DateTime.MinValue;
-            bool up = BringUp(job);
-            if (up)
+            if (BringUp(job))
             {
-                wslDown = false;
+                recovery.Recovered();
                 wslVersionUp = f.Version;
-                log.Write("Domovoi is running again after WSL went away");
+                log.Write("Domovoi is running again");
                 return true;
             }
             // BringUp said why (status.json); look again later.
-            wslNextLook = DateTime.UtcNow + WslOutage.Delay(++wslAttempts);
+            recovery.Failed(DateTime.UtcNow);
             return false;
         }
 
@@ -493,7 +506,7 @@ namespace Domovoi.Windows.Host
 
         static LimitsBounds CurrentBounds()
         {
-            return HardwareLimits.Bounds(HardwareLimits.InstalledRamBytes(), Environment.ProcessorCount);
+            return HardwareLimits.Bounds(HardwareLimits.InstalledRamBytes(), HardwareLimits.UsableRamBytes(), Environment.ProcessorCount);
         }
 
         // null, or why the file could not be written.
@@ -555,29 +568,54 @@ namespace Domovoi.Windows.Host
                 if (error != null) log.Write("the new limits are kept, but " + error);
             }
             bool ready = true;
-            if (req.RestartId != null && req.RestartId != Json.Str(ReadState(), "limits_restart_id"))
+            Dictionary<string, object> st = Store.ReadStrict();
+            string done = st == null ? null : Json.Str(st, "limits_restart_id");
+            LimitsRestart decision = HardwareLimits.DecideRestart(req, done, st != null, DateTime.UtcNow, limitsLastRestart,
+                req.RestartId != null && st != null ? UpdateUnitState() : null);
+            switch (decision)
             {
-                if (limitsFirstRead)
-                {
+                case LimitsRestart.TooSoon: limitsRestartState = "waiting"; break;
+                case LimitsRestart.Busy:
+                    // An update or Restart of Domovoi runs: stopping the
+                    // units now would cut it off. Asked again next poll.
+                    if (limitsRestartState != "busy") log.Write("a restart for the new limits waits: an update or restart of Domovoi is running");
+                    limitsRestartState = "busy";
+                    break;
+                case LimitsRestart.Stale:
+                    // Older than RestartMaxAge (written before a reboot, say):
+                    // recorded as seen, never acted on.
                     UpdateState("limits_restart_id", req.RestartId);
-                }
-                else if (DateTime.UtcNow - limitsLastRestart < HardwareLimits.RestartGap)
-                {
-                    limitsRestartState = "waiting";
-                }
-                else
-                {
-                    // Recorded first: a restart that fails is not tried again.
-                    UpdateState("limits_restart_id", req.RestartId);
+                    break;
+                case LimitsRestart.Go:
+                    // Recorded first, and only then: a restart whose id can't
+                    // be recorded would run again at every poll.
+                    if (!UpdateState("limits_restart_id", req.RestartId))
+                    {
+                        log.Write("the restart for the new limits is not done: its id could not be recorded");
+                        limitsRestartState = "failed";
+                        break;
+                    }
                     limitsLastRestart = DateTime.UtcNow;
                     ready = RestartForLimits(job);
                     limitsRestartState = ready ? "done" : "failed";
                     limitsNext = DateTime.MinValue;
-                }
+                    break;
             }
-            limitsFirstRead = false;
             if (ready && holder != null && !SafeExited(holder)) ReportLimits(job, b, req);
             return ready;
+        }
+
+        // domovoi-update.service's ActiveState, as root; null when it can't
+        // be read (then the restart waits too: HardwareLimits.DecideRestart).
+        string UpdateUnitState()
+        {
+            try
+            {
+                WslResult r = Wsl.Run(HardwareLimits.UpdateStateArgs(Paths.DistroName), 30000, null, 4096);
+                if (r.TimedOut || r.ExitCode != 0) return null;
+                return r.Stdout.Trim();
+            }
+            catch (System.ComponentModel.Win32Exception) { return null; }
         }
 
         void ReportLimits(HostJob job, LimitsBounds b, LimitsRequest req)
@@ -1210,6 +1248,19 @@ namespace Domovoi.Windows.Host
             log.Write("wsl --terminate exit " + Inv.S(t.ExitCode) + (t.TimedOut ? " (timed out)" : ""));
             lock (statusGate) { status.State = "stopped"; status.Message = "DomovoiHost is stopped"; }
             WriteStatus(true);
+        }
+
+        // The uninstaller reads unregister.json; a failure it can show beats
+        // a host that stopped saying nothing.
+        public void UnregisterFailed(Exception e)
+        {
+            try
+            {
+                Json.WriteFile(Paths.UnregisterResult, HostExit.UnregisterFailure(e, DateTime.UtcNow));
+                Status("unregistered", HostProgress.PhaseConfig, 0, "Removing Domovoi's Linux system failed");
+            }
+            catch (IOException x) { log.Write("can't write unregister.json: " + x.Message); }
+            catch (UnauthorizedAccessException x) { log.Write("can't write unregister.json: " + x.Message); }
         }
 
         public void Unregister()

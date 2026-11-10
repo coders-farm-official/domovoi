@@ -706,6 +706,11 @@ const HealthLimitsCard = () => {
               Domovoi’s Windows side refused the last change{d.request_problem ? `: ${d.request_problem}` : ''}.
             </div>
           )}
+          {d.restart === 'busy' && (
+            <div className="health-mem-facts" data-limit-state="restart-busy">
+              An update or restart of Domovoi is running · the restart for the new limits follows once it has finished.
+            </div>
+          )}
           {d.restart === 'failed' && (
             <div className="health-mem-missing" data-limit-state="restart-failed">
               The last restart for new limits didn’t finish · Save logs from the tray icon says why.
