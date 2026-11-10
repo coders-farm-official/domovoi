@@ -40,7 +40,7 @@ house's other PCs with no internet needed.
 | | Supported | Notes |
 |---|---|---|
 | Windows | 11 22H2 or later (build 22621+), Home or Pro, x64 | Not Windows 10, not Arm64: mirrored networking and the Hyper-V firewall need 22H2. |
-| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). Above 24 GB the cap is the PC's memory minus 8 GB, at most 64 GB; file cache inside counts as used to Windows until the distro has been idle a while. Settings → System → Health → **memory** shows what uses it ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)). |
+| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). Above 24 GB the cap is half the PC's memory, between 24 and 32 GB, and never more than the PC's memory minus 8 GB (since 2026-11-10; before, the memory minus 8 GB up to 64 GB). You can change it, and cap the processor cores too: [How much of this PC Domovoi may use](#how-much-of-this-pc-domovoi-may-use). File cache inside counts as used to Windows; Domovoi hands what is over a few GB back every 2 minutes. Settings → System → Health → **memory** shows what uses it ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)). |
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
@@ -472,10 +472,13 @@ PC needs for it:
   isn't installed then. More:
   [LINUX_HOST.md, Wake-word training](LINUX_HOST.md#wake-word-training).
 - **Memory.** Training needs the distro to see 24 GB, the line where it
-  gets the standard models. The distro gets the PC's memory minus 8 GB,
-  so that means a PC with about 32 GB or more; below that the card says
+  gets the standard models. By default the distro gets half the PC's
+  memory, between 24 and 32 GB (never more than the memory minus 8 GB), so
+  that means a PC with about 32 GB or more; below that the card says
   training can't be turned on here, in the PC's terms ("this PC has about
-  24 GB").
+  24 GB"). If you lowered Domovoi's share under 24 GB
+  ([How much of this PC Domovoi may use](#how-much-of-this-pc-domovoi-may-use)),
+  the card says to raise it.
 - **Disk and download.** About 22 GB downloaded, once, and about 32 GB
   more disk the first time (the trainer and its training data), then
   about 0.5 GB per wake word, in the distro's disk
@@ -508,6 +511,57 @@ processor. Without an NVIDIA card, training
 runs on the processor: about 75 minutes a word on 8 cores, and voice
 answers more slowly while it runs. The card says so and asks before
 turning training on and again before each **Train**.
+
+## How much of this PC Domovoi may use
+
+Domovoi's Linux side is a virtual machine, and its size is the hidden
+account's `.wslconfig` (`memory=`, `processors=`), which WSL reads when
+that VM starts. Settings → System → Health → **This PC** (signed in as the
+admin) shows this PC's memory and processor cores and sets the ceiling:
+
+| | Automatic (the default) | Range | Notes |
+|---|---|---|---|
+| **Memory** | The installer's share: 10 GB on a PC under 24 GB; above that half the PC's memory, between 24 and 32 GB, never more than the memory minus 8 GB (24 GB PC: 16, 32 GB: 24, 64 GB and up: 32) | 8 GB to the PC's memory minus 4 GB | A warning under 16 GB: the AI models, speech recognition and the rooms' music may not all fit. Wake-word training needs 24 GB. |
+| **Processor cores** | All of them (WSL's default) | 2 to all of the PC's logical processors | Fewer cores leave more of the PC to games and work, and make answers and transcription slower. |
+
+**When it applies.** The VM reads `.wslconfig` only when it starts, so a
+new limit applies when Domovoi's Linux system next starts: after Windows
+restarts, or at once with **Restart Domovoi now** on the card (Domovoi is
+offline for a couple of minutes; the rooms reconnect by themselves). The
+card says when Domovoi still runs on the old size. The dashboard's other
+**Restart Domovoi** restarts the services inside the VM and doesn't apply
+it.
+
+**Why 32 GB at most by default (2026-11-10).** Domovoi's programs use
+between 5 and 10 GB, the AI models up to 9 GB more, and wake-word training 24 GB
+while it runs. Before, the installer gave a big PC its memory minus 8 GB,
+up to 64 GB: on a 128 GB PC the VM held 51 GB of file cache next to 5 GB
+of programs, and Windows compressed and paged around it (WSL hands cache
+back only once the VM idles, which a house assistant rarely does). Domovoi
+now trims that cache itself ([LINUX_HOST.md, The file-cache
+trim](LINUX_HOST.md#the-file-cache-trim)), and the default share is
+smaller. A household that wants more raises it on the card.
+
+**How it reaches the PC.** The dashboard can't write a Windows file, and
+nothing inside the distro can either. The core writes the admin's choice
+to `~/.domovoi/hardware_limits/request.json` in the distro; DomovoiHost
+reads it every 30 seconds, as the distro's service user, checks it (two
+whole numbers or automatic, inside this PC's bounds) and writes
+`.wslconfig`. It reports the PC's memory, cores and the limits back to
+`/var/lib/domovoi-windows/limits.json` as root, which is what the card
+shows. [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-file-cache-trim-and-the-windows-ceiling)
+says why this is safe.
+
+**Which build.** The card, the request channel and the new default come
+with **DomovoiHost from a Windows Setup built on 2026-11-10 or later**: run
+the newest `DomovoiSetup.exe` to repair an older install (the tray's
+**Update Domovoi** does when a release carries it). A repair also writes
+the new default share into `.wslconfig`, unless you set your own on the
+card. Until then the card isn't shown. The file-cache trim needs no new
+Setup: it comes with the next Domovoi update.
+
+**A Linux server** has no such ceiling in Domovoi: its programs share the
+machine with nothing Domovoi manages, and the card isn't shown there.
 
 ## The trust boundary on a shared PC
 

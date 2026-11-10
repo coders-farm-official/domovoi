@@ -1057,6 +1057,74 @@ satellite shows red, plays "Sorry, I didn't get an answer from the
 server", and listens for the wake word again. Both work with older cores
 too.
 
+### The file-cache trim
+
+Linux keeps every file it read in memory (the page cache) until a program
+needs the room. On a dedicated box that is free speed. Inside the Windows
+installer's WSL VM it isn't: the cache holds memory Windows wants back, and
+WSL returns it only once the VM is idle, which a house assistant rarely is
+(on 2026-11-10 a house had 51 GB of cache in a 63 GB VM next to 5 GB of
+programs, and Windows was compressing and paging around it).
+
+So Domovoi trims it. `domovoi-cache-trim.timer` starts
+`domovoi-cache-trim.service` every 2 minutes, a oneshot that runs, as
+root, `/usr/bin/python3 -I -S
+/usr/local/lib/domovoi-cache-trim/cache-trim.py`, a root-owned copy of
+[`scripts/linux/cache-trim.py`](../scripts/linux/cache-trim.py)
+(standard library only). Each run:
+
+1. reads `/proc/meminfo`: the file cache is `Cached + Buffers - Shmem`
+   (Health's figure); what a trim can free is that less `Mapped` (an AI
+   model Ollama keeps loaded is in use, and the trim leaves it);
+2. is **on inside WSL** (the kernel names Microsoft) and **off on a
+   dedicated box**, where the cache is harmless;
+3. trims when what it can free is over the limit, **max(4 GB, 10% of the
+   memory)**: 4 GB on a 32 GB VM, 6.3 GB on a 63 GB one. A few GB keep
+   what Domovoi reads again and again fast (the database, the Python
+   libraries, Whisper's model, the song playing);
+4. skips while an update or Restart runs (`domovoi-update.service`
+   activating), and when it trimmed less than 2 minutes ago;
+5. trims with `sync` and `1 > /proc/sys/vm/drop_caches`: the clean page
+   cache only (never dentries and inodes, never what a program holds), and
+   logs one line with the cache before and after
+   (`journalctl -u domovoi-cache-trim`);
+6. writes what it found to `/var/lib/domovoi-cache-trim/status.json`
+   (root's, readable by all), which Health's memory row shows: *file cache
+   is trimmed automatically above 6.3 GB · last trimmed 3m ago (freed 22
+   GB)*, or that it isn't trimmed here.
+
+`provision.sh` (the units step) and every update run install the script
+and the two units, and enable the timer when any of them changed, so an
+install from before the trim gets it with its next update. There is no
+dashboard setting: the defaults are meant to need none.
+
+**For an operator**, `/etc/domovoi/cache-trim.conf` (root's, not writable
+by anyone else, or it is ignored):
+
+```ini
+# auto (the default): on inside WSL only. on: trim on this box too. off: never.
+enabled=auto
+# The limit, a whole number of GiB, 1-1024. Default: max(4, 10% of the memory).
+limit_gb=8
+```
+
+Anything else in the file (another key, a number out of range, a key
+twice) makes the trim ignore the whole file and use its defaults; the
+status file and the journal say why. To take the trim out entirely, set
+`DOMOVOI_MANAGE_CACHE_TRIM=0` in `/etc/default/domovoi-update` and run
+`sudo systemctl disable --now domovoi-cache-trim.timer`.
+
+```bash
+sudo python3 -I -S /usr/local/lib/domovoi-cache-trim/cache-trim.py --dry-run   # what it would do now
+cat /var/lib/domovoi-cache-trim/status.json
+journalctl -u domovoi-cache-trim --since today
+```
+
+**The size of the box itself** (how much of the PC Domovoi may use) is a
+Windows-install setting, through DomovoiHost
+([WINDOWS_HOST.md](WINDOWS_HOST.md#how-much-of-this-pc-domovoi-may-use)). A
+Linux server has no such ceiling in Domovoi.
+
 ### Internet or not
 
 The internet answer needs nothing from the units. Saving it in Settings →
@@ -1797,6 +1865,8 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_UPDATE_TRAINER_TIMEOUT=1800
 # 0: leave the journal where it is (The loop watchdog). Default: kept on disk (journald's own size limits).
 # DOMOVOI_MANAGE_JOURNAL=1
+# 0: leave the file-cache trim's script and units alone (The file-cache trim). Default: installed, the timer enabled.
+# DOMOVOI_MANAGE_CACHE_TRIM=1
 # The update verifier's fetch into root's mirror (The update verifier): seconds, and KB a file.
 # DOMOVOI_VERIFY_FETCH_TIMEOUT=900
 # DOMOVOI_VERIFY_FETCH_MAX_KB=2097152
