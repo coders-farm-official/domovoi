@@ -162,7 +162,14 @@ final class NewsStringsTests: XCTestCase {
         assertKotlinSays(NewsStrings.title)
         assertKotlinSays(NewsStrings.subtitle, "NewsScreen.kt:97 — saved stories, not their saved stories")
         assertKotlinSays(NewsStrings.noPeople)
-        assertKotlinSays(NewsStrings.noPeopleSub)
+        // Core 5d2b1807 moved the hint to where People is now. Read from the
+        // Kotlin once this tree's `NewsScreen.kt` has it; until main is merged
+        // into the iOS branch, against 5d2b1807's literal (`NewsScreen.kt:84`).
+        if Self.source.contains("enroll a speaker on the people page first") {
+            XCTAssertEqual("enroll a speaker under People in Settings first", NewsStrings.noPeopleSub)
+        } else {
+            assertKotlinSays(NewsStrings.noPeopleSub)
+        }
         assertKotlinSays(NewsStrings.pickAPerson)
         assertKotlinSays(NewsStrings.pickAPersonSub)
         assertKotlinSays(NewsStrings.requestFailed)

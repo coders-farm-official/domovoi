@@ -91,7 +91,9 @@ public struct NavigationState: Equatable, Sendable {
     /// (`AppShell.kt:312`).
     ///
     /// A route that is really a Settings section (``settingsTabFor(_:)``:
-    /// Rooms and Containers) opens **Settings**, on that section. So Rooms is
+    /// Rooms, Containers and, since the nav regroup, People) opens
+    /// **Settings**, on that section — so a phone bar saved with a People tab
+    /// still opens People, in Settings → Household. So Rooms is
     /// not a destination on this platform either — it is a row inside
     /// Settings that a link can name.
     public mutating func navigate(_ route: Route) {
@@ -230,4 +232,13 @@ public func shellLayout(idiom: ShellIdiom, width: ShellWidth) -> ShellLayout {
 /// `testHomeIsTheBrandRowAndNotAListItem` holds it here.
 public func sidebarSections(_ visibility: RouteVisibility) -> (workspace: [Route], system: [Route]) {
     (workspace: workspaceRoutes.filter { $0.visibleOn(visibility) }, system: [.settings, .manual])
+}
+
+/// The sidebar's workspace section, grouped as the dashboard's is — Chat,
+/// then **Media** and **Tools** (``navTree(_:override:defaults:pluginGroups:)``):
+/// the iPad's counterpart of Android's drawer (`AppShell.kt:979-983`,
+/// `GroupedWorkspace`). An iPhone has no sidebar; its grouped surface is
+/// Home's grid (``tileRuns(_:)``).
+public func sidebarTree(_ visibility: RouteVisibility) -> [NavEntry] {
+    navTree(sidebarSections(visibility).workspace)
 }

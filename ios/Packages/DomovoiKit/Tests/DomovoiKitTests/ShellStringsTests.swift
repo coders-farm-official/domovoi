@@ -258,6 +258,54 @@ final class ShellStringsTests: XCTestCase {
         return out
     }
 
+    // MARK: - the nav regroup, before this tree's Kotlin has it
+
+    /// Whether this checkout's `SettingsScreen.kt` already has Android's nav
+    /// regroup (commit adb2ad06: `Household("household", …)`).
+    ///
+    /// **The iOS branch is cut before it.** The port lands on wf/ios-b-all,
+    /// whose `android/` is main from before the regroup, and the Android
+    /// files are deliberately not copied onto an iOS branch. So until main is
+    /// merged in, the Kotlin this file reads cannot say "Household" or
+    /// People's sentence, and ``assertRegroupSays(_:)`` checks those few
+    /// strings against adb2ad06's own literals instead. The moment the merge
+    /// brings the regroup, this is true and every one of them is read from
+    /// the Kotlin again, end to end, with no edit here.
+    private static let kotlinHasTheNavRegroup: Bool = {
+        let url = repositoryRoot.appendingPathComponent(
+            "android/app/src/main/java/com/domovoi/app/ui/screens/settings/SettingsScreen.kt"
+        )
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        return text.contains("Household(\"household\"")
+    }()
+
+    /// The strings the regroup added to `SettingsScreen.kt`, copied from
+    /// `git show adb2ad06:android/app/src/main/java/com/domovoi/app/ui/screens/settings/SettingsScreen.kt`
+    /// (`SettingsGroup.Household`, `SettingsSection.People`).
+    private static let navRegroupLiterals: Set<String> = [
+        "Household",
+        "household",
+        "rooms-and-devices",
+        "People",
+        "people",
+        "Who lives here: each person's profile, what Domovoi remembers, and their conversations.",
+        "people person family member members household voice profile enrolled memory conversations denylist",
+    ]
+
+    /// ``assertKotlinSaysWhole(_:_:file:line:)`` for a string the regroup
+    /// added: against the Kotlin once the tree has the regroup, against
+    /// adb2ad06's literal until then — and any **other** string still goes
+    /// to the Kotlin, so this cannot excuse a string the regroup did not
+    /// write.
+    private func assertRegroupSays(
+        _ string: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        if !Self.kotlinHasTheNavRegroup && Self.navRegroupLiterals.contains(string) { return }
+        assertKotlinSaysWhole(string, file: file, line: line)
+    }
+
     // MARK: - the helpers every assertion goes through
 
     /// **A whole string of ours is a whole string of the Kotlin's.** The
@@ -868,22 +916,23 @@ final class ShellStringsTests: XCTestCase {
     /// Every section's label and `sub`, and the five group labels, read from
     /// the table they were ported from.
     func testEverySettingsSectionMatchesTheKotlin() {
-        XCTAssertEqual(14, SettingsSection.all.count)
+        XCTAssertEqual(15, SettingsSection.all.count)
         XCTAssertEqual(5, SettingsGroup.allCases.count)
         for group in SettingsGroup.allCases {
-            assertKotlinSaysWhole(group.label)
-            assertKotlinSaysWhole(group.key)
+            assertRegroupSays(group.label)
+            assertRegroupSays(group.key)
+            for alias in group.aliases { assertRegroupSays(alias) }
         }
         for section in SettingsSection.all {
-            assertKotlinSaysWhole(section.label)
-            assertKotlinSaysWhole(section.sub)
-            assertKotlinSaysWhole(section.key)
-            if !section.words.isEmpty { assertKotlinSaysWhole(section.words) }
+            assertRegroupSays(section.label)
+            assertRegroupSays(section.sub)
+            assertRegroupSays(section.key)
+            if !section.words.isEmpty { assertRegroupSays(section.words) }
             for alias in section.aliases { assertKotlinSaysWhole(alias) }
             if let dashboard = section.dashboard { assertKotlinSaysWhole(dashboard) }
         }
         // The keys are unique, and every alias resolves.
-        XCTAssertEqual(14, Set(SettingsSection.all.map(\.key)).count)
+        XCTAssertEqual(15, Set(SettingsSection.all.map(\.key)).count)
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)

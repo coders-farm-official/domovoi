@@ -65,6 +65,15 @@ struct PeopleView: View {
 
     let model: ShellModel
 
+    /// Drawn inside Settings → Household → People (the nav regroup), as
+    /// Android's `PeopleScreen(embedded = true)` is (`PeopleScreen.kt:68`):
+    /// Settings already has the heading **and already scrolls**, so the
+    /// header shrinks to the counts and none of the three screens adds a
+    /// `ScrollView` of its own — a scroll view inside a scroll view is the
+    /// bug ``SettingsPlaceholder`` records, and ``RoomsView`` takes the same
+    /// flag for the same reason.
+    var embedded = false
+
     @State private var people: PeopleModel?
 
     /// **One** detail model, pointed at whoever is selected, rather than one
@@ -168,13 +177,14 @@ struct PeopleView: View {
     @ViewBuilder private var screen: some View {
         if let people, let detail {
             if people.denylistOpen {
-                PeopleDenylistView(people: people)
+                PeopleDenylistView(people: people, embedded: embedded)
             } else if let person = people.selected {
                 PersonDetailView(
                     person: person,
                     people: people,
                     detail: detail,
-                    forgetting: $forgetting
+                    forgetting: $forgetting,
+                    embedded: embedded
                 )
             } else {
                 roster(people)
@@ -189,15 +199,13 @@ struct PeopleView: View {
     // MARK: - the roster
 
     private func roster(_ people: PeopleModel) -> some View {
-        ScrollView {
+        PeopleScroll(embedded: embedded) {
             LazyVStack(alignment: .leading, spacing: 12) {
                 header(people)
                 filterField(people)
                 rows(people)
                 PeopleDenylistCard(people: people)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -207,12 +215,17 @@ struct PeopleView: View {
     /// The subtitle is the one line on this screen only a **completed** read
     /// can produce, which is why the case that proves the roster landed waits
     /// for it rather than for a row.
+    ///
+    /// Embedded, only the counts: Settings' section page already names the
+    /// screen (`PeopleHeader`, `PeopleScreen.kt:162-170`).
     private func header(_ people: PeopleModel) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(PeopleStrings.title)
-                .font(.title2)
-                .accessibilityAddTraits(.isHeader)
-                .fixedSize(horizontal: false, vertical: true)
+            if !embedded {
+                Text(PeopleStrings.title)
+                    .font(.title2)
+                    .accessibilityAddTraits(.isHeader)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(people.subtitle)
                 .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
@@ -261,6 +274,28 @@ struct PeopleView: View {
             ForEach(shown) { person in
                 PersonRosterRow(person: person, people: people)
                 Divider()
+            }
+        }
+    }
+}
+
+/// The three People screens' scroll: their own `ScrollView` on the route,
+/// none inside Settings, which already scrolls (``PeopleView/embedded``).
+/// The padding goes with it — Settings pads its content already.
+struct PeopleScroll<Content: View>: View {
+
+    let embedded: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if embedded {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ScrollView {
+                content()
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

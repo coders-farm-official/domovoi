@@ -119,7 +119,9 @@ final class RouteTests: XCTestCase {
     func testTheNavigationTablesCoverEveryDestinationExactlyOnce() {
         XCTAssertEqual([.home, .music, .videos, .chat], defaultPhoneBar)
         let reachable = Set([Route.home] + everythingRoutes)
-        XCTAssertEqual(Set(Route.allCases).subtracting(launcherlessRoutes), reachable)
+        // People is a Settings section since the nav regroup: on the bar only
+        // if a phone picks it, never on the grid.
+        XCTAssertEqual(Set(Route.allCases).subtracting(launcherlessRoutes).subtracting([.people]), reachable)
         XCTAssertEqual(1 + everythingRoutes.count, reachable.count, "no duplicates")
         XCTAssertTrue(defaultPhoneBar.allSatisfy { $0 == .home || everythingRoutes.contains($0) })
         XCTAssertTrue(everythingRoutes.contains(.settings))
@@ -147,7 +149,9 @@ final class RouteTests: XCTestCase {
     func testRoomsIsASettingsSectionAndOnNoLauncher() {
         XCTAssertEqual("rooms", settingsTabFor(.satellites))
         XCTAssertEqual("health", settingsTabFor(.containers))
-        for route in Route.allCases where route != .satellites && route != .containers {
+        // People is Settings → Household → People (the nav regroup).
+        XCTAssertEqual("people", settingsTabFor(.people))
+        for route in Route.allCases where ![.satellites, .containers, .people].contains(route) {
             XCTAssertNil(settingsTabFor(route), route.name)
         }
         XCTAssertFalse(workspaceRoutes.contains(.satellites))
@@ -158,6 +162,7 @@ final class RouteTests: XCTestCase {
         // interception land somewhere.
         XCTAssertNotNil(SettingsSection.named("rooms"))
         XCTAssertNotNil(SettingsSection.named("health"))
+        XCTAssertNotNil(SettingsSection.named("people"))
     }
 
     /// `sharedScreenLeavesPersonalScreensOffEveryLauncher`
@@ -295,11 +300,13 @@ final class RouteTests: XCTestCase {
         }
         XCTAssertFalse(tiles.contains(.satellites))
         XCTAssertFalse(tiles.contains(.containers))
+        XCTAssertFalse(tiles.contains(.people), "People is a Settings section")
         XCTAssertTrue(tiles.contains(.settings))
         XCTAssertTrue(tiles.contains(.manual))
-        // Together they are every route but the two launcherless ones.
+        // Together they are every route but the two launcherless ones and
+        // People.
         XCTAssertEqual(
-            Set(Route.allCases).subtracting(launcherlessRoutes).subtracting([.stations, .images]),
+            Set(Route.allCases).subtracting(launcherlessRoutes).subtracting([.stations, .images, .people]),
             Set(tiles + bar),
             "with no manifest the two gated screens are the only ones missing"
         )

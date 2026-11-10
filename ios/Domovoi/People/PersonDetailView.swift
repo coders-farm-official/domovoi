@@ -34,18 +34,19 @@ struct PersonDetailView: View {
 
     @Binding var forgetting: PersonForgetAsk?
 
+    /// Inside Settings → People, which already scrolls (``PeopleView/embedded``).
+    var embedded = false
+
     @State private var tab: PersonDetailTab = .profile
 
     var body: some View {
-        ScrollView {
+        PeopleScroll(embedded: embedded) {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 PersonTabBar(titles: detail.tabTitles, tab: $tab)
                 Divider()
                 content
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         // **The five reads start here**, not in the row that was tapped: a
         // `Task` begun in a lazy row dies with the row, and

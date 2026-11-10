@@ -9,10 +9,12 @@ import XCTest
 /// on four screens that never asked for one.
 ///
 /// The screen is reached by **seeding the push** (`launch(push: "People")`),
-/// not by tapping: `Route.people` is on no phone bar
-/// (`defaultPhoneBar`, `Route.swift:118`) and is in `sharedScreenHidden`, so
-/// Home's everything grid is the only tap route and it needs a scroll on a
-/// phone. Nothing here opens the connection sheet.
+/// not by tapping. Since the nav regroup People is **Settings → Household →
+/// People**: the seeded `navigate(.people)` opens Settings on that section
+/// (`settingsTabFor`), where the screen is drawn embedded — Settings' own
+/// heading and scroll, the counts line, the roster, and the section's
+/// `back to Household` foot. It is on no default bar and no longer on Home's
+/// grid. Nothing here opens the connection sheet.
 ///
 /// ### What the fixture was written to make provable
 ///

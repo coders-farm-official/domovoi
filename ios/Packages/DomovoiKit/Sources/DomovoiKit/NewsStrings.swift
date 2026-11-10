@@ -32,8 +32,10 @@ public enum NewsStrings {
     public static let subtitle = "topics of interest, discovered feeds, and saved stories"
 
     /// `NewsScreen.kt:82-85` — the house has answered and nobody is enrolled.
+    /// People is in Settings since the nav regroup, and the hint says where
+    /// (core 5d2b1807).
     public static let noPeople = "no people enrolled yet"
-    public static let noPeopleSub = "enroll a speaker on the people page first"
+    public static let noPeopleSub = "enroll a speaker under People in Settings first"
 
     /// `NewsScreen.kt:86-89` — a roster with rows in it and none chosen,
     /// which the default selection normally prevents.

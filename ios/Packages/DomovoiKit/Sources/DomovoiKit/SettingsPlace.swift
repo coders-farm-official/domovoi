@@ -45,28 +45,36 @@ public enum SettingsPlace: Equatable, Sendable {
     }
 }
 
-/// The place a saved key or a link stands for.
+/// The place a saved key or a link stands for (`placeOf`,
+/// `SettingsScreen.kt:222-241`).
 ///
-/// **A group is only ever reached through the prefix**, which is what lets a
-/// group's key be a section's old name: `"voice"` is both the Voice *group*'s
-/// key and an alias of the Voices *section*, and an unprefixed `"voice"`
-/// resolves to the section, as Android's comment says it should.
+/// **A prefixed key is always a group**, which is what lets a group's key be a
+/// section's old name: `"voice"` is both the Voice *group*'s key and an alias
+/// of the Voices *section*, and an unprefixed `"voice"` resolves to the
+/// section, as Android's comment says it should. A bare key that names no
+/// section but does name a group — `"household"`, or the old
+/// `"rooms-and-devices"` — opens that group (the nav regroup).
+///
+/// A section a shared screen hides is its **group** instead: a link to People
+/// on the kitchen tablet opens Household, without People in it.
 ///
 /// Anything unrecognised is the index, never nothing: a link naming a section
 /// this build does not have lands somewhere a person can use.
-public func settingsPlace(of key: String?) -> SettingsPlace {
+public func settingsPlace(of key: String?, sharedScreen: Bool = false) -> SettingsPlace {
     guard let key, !key.isEmpty else { return .index }
     if key.hasPrefix(SettingsPlace.groupPrefix) {
         let name = String(key.dropFirst(SettingsPlace.groupPrefix.count))
-        guard let group = SettingsGroup.allCases.first(where: { $0.key == name }) else { return .index }
+        guard let group = SettingsGroup.named(name) else { return .index }
         return .group(group)
     }
-    guard let section = SettingsSection.named(key) else { return .index }
-    return .section(section)
+    guard let section = SettingsSection.named(key) else {
+        return SettingsGroup.named(key).map { SettingsPlace.group($0) } ?? .index
+    }
+    return section.shownOn(sharedScreen: sharedScreen) ? .section(section) : .group(section.group)
 }
 
-/// The sections of one group, in the table's own order
-/// (`SettingsScreen.kt:160`, `sectionsOf`).
-public func sections(of group: SettingsGroup) -> [SettingsSection] {
-    SettingsSection.all.filter { $0.group == group }
+/// The sections of one group, in the table's own order, less the ones a
+/// shared screen hides (`sectionsOf`, `SettingsScreen.kt:183-184`).
+public func sections(of group: SettingsGroup, sharedScreen: Bool = false) -> [SettingsSection] {
+    SettingsSection.all.filter { $0.group == group && $0.shownOn(sharedScreen: sharedScreen) }
 }
