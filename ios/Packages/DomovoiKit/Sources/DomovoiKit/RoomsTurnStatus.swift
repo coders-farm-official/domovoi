@@ -8,7 +8,7 @@ import Foundation
 // every satellite turn is written the moment its transcript exists, as
 // `pending`, and settled to `answered`, `no_answer` (with a reason) or
 // `unheard`. Android draws those as a pill and a reply line
-// (`SatHistoryTabs.kt:167-216`, `SatModels.kt:170-200`, commits df499168,
+// (`SatHistoryTabs.kt:170-175` and `:188-223`, `SatModels.kt:170-206`, commits df499168,
 // 6df97968 and a35b5540); this file is those rules and their words, and
 // `RoomsHistoryViews.swift` draws them.
 //
@@ -20,7 +20,7 @@ extension RoomsStrings {
 
     // MARK: - a turn's status
 
-    /// The pills (`SatHistoryTabs.kt:170-173`).
+    /// The pills (`SatHistoryTabs.kt:170-175`).
     public static let turnPillIgnored = "ignored"
     public static let turnPillWaiting = "waiting"
     public static let turnPillNoAnswer = "no answer"
@@ -110,7 +110,7 @@ public func roomsTurnSaid(_ turn: RoomsTurn) -> String? {
 }
 
 /// The card's pill: a turn's status when it has one worth saying, else the
-/// handler that took it (`SatHistoryTabs.kt:169-174`).
+/// handler that took it (`SatHistoryTabs.kt:170-175`).
 ///
 /// The order is Android's and it matters: `ignored` is tested **before**
 /// `no_answer`, because an overheard turn is a `no_answer` and must not wear

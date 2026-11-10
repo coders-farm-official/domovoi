@@ -1053,7 +1053,7 @@ final class RoomsModelTests: XCTestCase {
         XCTAssertEqual(settled, requests(to: "/api/satellites").count)
     }
 
-    // MARK: - the pending poll (server V043; `RefreshWhilePending`, `SatHistoryTabs.kt:226-242`)
+    // MARK: - the pending poll (server V043; `RefreshWhilePending`, `SatHistoryTabs.kt:227-243`)
 
     /// A turn said a moment ago, its reply still being worked out.
     private static let pendingTurn = """
@@ -1195,11 +1195,17 @@ final class RoomsModelTests: XCTestCase {
         model.stop()
     }
 
-    /// A tick that wakes up in **another house** reads nothing and ends the
-    /// poll: `kitchen` there is a different room. The model is not told of
-    /// the move here, which is the frame between the store changing and
-    /// ``RoomsModel/serverChanged()`` running (`RoomsView`'s `onChange`).
-    func testThePollStopsWhenThePhoneMovesHouse() async {
+    /// A tick that wakes up in **another house** reads nothing: `kitchen`
+    /// there is a different room, and the old house's poll ends. The model
+    /// is not told of the move here, which is the frame between the store
+    /// changing and ``RoomsModel/serverChanged()`` running (`RoomsView`'s
+    /// `onChange`).
+    ///
+    /// And the poll is **asked again at once** rather than left stopped: a
+    /// pending turn that has landed by then is the new house's to poll, so a
+    /// poll keyed to the new house starts, with its own fresh three seconds,
+    /// instead of nothing polling until some other list happens to arrive.
+    func testAPollTickInAnotherHouseReadsNothingAndStartsOverThere() async {
         let house = House()
         house.conversations.set(Self.pendingTurn)
         let (model, _, waits, store) = rig(house: house)
@@ -1209,9 +1215,21 @@ final class RoomsModelTests: XCTestCase {
         store.trustServer(otherServer, identity: TestIdentity.real.pin)
         XCTAssertTrue(store.setServerURL(otherServer))
         waits.allow(roomsPendingPollMs)
-        await settleUntil({ !reads.pollingPending }, "the poll noticing the move")
+        // The old poll's tick: no read, and a new poll's first wait.
+        await settleUntil({ waits.asked(roomsPendingPollMs) == 2 }, "the new house's poll starting")
         await nothingHappens()
-        assertAsked(1, Self.kitchenHistory, "the tick after the move asked the new house about its kitchen")
+        assertAsked(1, Self.kitchenHistory, "the old house's tick asked the new house about its kitchen")
+        XCTAssertTrue(reads.pollingPending, "a pending turn on screen was left with no poll after the move")
+
+        // The new poll reads on its own three seconds — the new house's.
+        waits.allow(roomsPendingPollMs)
+        await settleUntil({ self.requests(to: Self.kitchenHistory).count == 2 }, "the new house's poll reading")
+        XCTAssertEqual(
+            URL(string: otherServer)?.host,
+            requests(to: Self.kitchenHistory).last?.url?.host,
+            "the restarted poll read a house other than the one the phone is in"
+        )
+        model.stop()
     }
 
     /// The read the poll repeats is **keyed to the house it asked**: an

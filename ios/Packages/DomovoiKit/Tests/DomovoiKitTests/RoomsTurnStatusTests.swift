@@ -176,7 +176,7 @@ final class RoomsTurnStatusTests: XCTestCase {
 
     // MARK: - the pills
 
-    /// `SatHistoryTabs.kt:169-174`, in Android's order: `ignored` is asked
+    /// `SatHistoryTabs.kt:170-175`, in Android's order: `ignored` is asked
     /// first, so an overheard turn — which IS a `no_answer` — wears the idle
     /// tone and not the warn tone a failure wears.
     func testEachStatesPillAndTone() {

@@ -30,9 +30,10 @@ import XCTest
 /// `history-pending` with a large count after ``roomsOpen(mode:pushDelay:roster:micSeam:)``
 /// (which resets the house first).
 ///
-/// Every line is found by **its turn's identifier** (`rooms.turn.<id>.said` /
-/// `.reply`), not by its words: `no answer` is also three pills' label, and a
-/// query by words would pass on the wrong row.
+/// Every line and pill is found by **its turn's identifier**
+/// (`rooms.turn.<id>.said` / `.reply` / `.pill`), not by its words: `no answer`
+/// is three pills' label and one reply's, and a query by words would pass on
+/// the wrong row.
 extension StubHouseUITests {
 
     /// The study open on its conversations tab, with every turn drawn.
@@ -58,6 +59,7 @@ extension StubHouseUITests {
     enum HistoryLine: String {
         case said
         case reply
+        case pill
     }
 
     @MainActor
@@ -110,7 +112,7 @@ extension StubHouseUITests {
     // MARK: - the cases
 
     /// Each state draws Android's words (`satTurnUnanswered` / `satTurnSaid`,
-    /// `SatModels.kt:176-200`) and pill (`SatHistoryTabs.kt:169-174`) — and a
+    /// `SatModels.kt:176-200`) and pill (`SatHistoryTabs.kt:170-175`) — and a
     /// row from before V043 still draws its answer.
     @MainActor
     func testRoomsHistory_EachTurnStateSaysWhatHappened() throws {
@@ -129,8 +131,8 @@ extension StubHouseUITests {
             "a pending turn does not show what was said"
         )
         XCTAssertTrue(
-            app.staticTexts[RoomsHistoryUnderTest.pillWaiting].exists,
-            "no `waiting` pill on the pending turn"
+            historyWait(app, 301, .pill, RoomsHistoryUnderTest.pillWaiting),
+            "the pending turn's pill is not `waiting`"
         )
 
         XCTAssertTrue(
@@ -138,13 +140,18 @@ extension StubHouseUITests {
             "an overheard turn does not say it was ignored as background talk"
         )
         XCTAssertTrue(
-            app.staticTexts[RoomsHistoryUnderTest.pillIgnored].exists,
-            "no `ignored` pill on the overheard turn"
+            historyWait(app, 302, .pill, RoomsHistoryUnderTest.pillIgnored),
+            "the overheard turn's pill is not `ignored` — a `no answer` here is "
+                + "background talk drawn as a failure"
         )
 
         XCTAssertTrue(
             historyWait(app, 303, .reply, RoomsHistoryUnderTest.timedOut),
             "a timed-out turn does not say so"
+        )
+        XCTAssertTrue(
+            historyWait(app, 303, .pill, RoomsHistoryUnderTest.pillNoAnswer),
+            "the timed-out turn's pill is not `no answer`"
         )
 
         XCTAssertTrue(
@@ -155,6 +162,10 @@ extension StubHouseUITests {
             historyWait(app, 304, .reply, RoomsHistoryUnderTest.somethingWentWrong),
             "an unheard turn does not say why there was no answer"
         )
+        XCTAssertTrue(
+            historyWait(app, 304, .pill, RoomsHistoryUnderTest.pillNoAnswer),
+            "the unheard turn's pill is not `no answer`"
+        )
 
         XCTAssertTrue(
             historyWait(app, 305, .reply, RoomsHistoryUnderTest.noAnswer),
@@ -164,13 +175,17 @@ extension StubHouseUITests {
             historyWait(app, 305, .said, RoomsHistoryUnderTest.unknownSaid),
             "the unknown-reason turn lost what was said"
         )
+        XCTAssertTrue(
+            historyWait(app, 305, .pill, RoomsHistoryUnderTest.pillNoAnswer),
+            "the unknown-reason turn's pill is not `no answer`"
+        )
 
         XCTAssertTrue(
             historyWait(app, 306, .reply, RoomsHistoryUnderTest.lampAnswer),
             "a row from before V043 no longer draws its answer"
         )
         XCTAssertTrue(
-            app.staticTexts[RoomsHistoryUnderTest.pillLights].exists,
+            historyWait(app, 306, .pill, RoomsHistoryUnderTest.pillLights),
             "a row from before V043 lost its handler pill"
         )
         XCTAssertTrue(
@@ -181,8 +196,11 @@ extension StubHouseUITests {
 
     /// The pending turn fills in **by itself**: the app reads the list again
     /// every three seconds while a turn is waiting (`RefreshWhilePending`,
-    /// `SatHistoryTabs.kt:226-242`), and the house answers it on its fourth
-    /// read. No tap, no pull, no push.
+    /// `SatHistoryTabs.kt:227-243`), and the house answers it on its fourth
+    /// read. **The evidence is the answer appearing with nothing touched**:
+    /// this case makes no tap, pull or tab switch after the list first draws,
+    /// and the house sends no push, so a re-read the app made on its own is
+    /// the only way the words can change.
     @MainActor
     func testRoomsHistory_APendingTurnFillsInItsAnswer() throws {
         guard let app = historyOpen(holdPending: false) else {
@@ -190,8 +208,8 @@ extension StubHouseUITests {
             return
         }
         // The first look may already be late — the house answers on its
-        // fourth read — so "waiting" is printed, not asserted, and the
-        // assertion is on the house's count below.
+        // fourth read, about nine seconds in — so "waiting" is printed, not
+        // asserted. The assertion is the answer arriving untouched.
         let first = historyLine(app, 301, .reply)
         let sawWaiting = first.exists && first.label == RoomsHistoryUnderTest.waiting
         print("ROOMS HISTORY pending: waiting drawn at first look = \(sawWaiting)")
@@ -202,7 +220,7 @@ extension StubHouseUITests {
             "the pending turn never filled in its answer while the tab was open"
         )
         XCTAssertTrue(
-            app.staticTexts[RoomsHistoryUnderTest.pillTime].exists,
+            historyWait(app, 301, .pill, RoomsHistoryUnderTest.pillTime),
             "the answered turn did not take its handler's pill"
         )
         XCTAssertFalse(
@@ -210,13 +228,9 @@ extension StubHouseUITests {
             "`waiting for an answer…` is still drawn after the answer came"
         )
         evidence(app, "rooms-history-03-answered")
+        // The house's count, for the stop check below and for the log.
         let reads = historyReads()
-        XCTAssertGreaterThanOrEqual(
-            reads,
-            4,
-            "the house served the study's list \(reads) times; the answer comes on the "
-                + "fourth, so anything less means the app did not poll"
-        )
+        print("ROOMS HISTORY pending: the house served the study's list \(reads) times")
 
         // And it stops: nothing is pending, so nine more seconds read nothing.
         sleep(9)
@@ -264,8 +278,10 @@ extension StubHouseUITests {
             split.floor,
             Self.knownPushedBarFloor,
             "the history tab's anonymous floor is \(split.floor), not the known "
-                + "\(Self.knownPushedBarFloor) of a pushed screen — first measured by this case, "
-                + "so if they are all `element: nil` bar findings this is the number to re-pin: "
+                + "\(Self.knownPushedBarFloor) of a pushed screen. This tab has never been "
+                + "audited before this case, so the expectation is the pushed-screen floor and "
+                + "not a measurement of this tab; if they are all `element: nil` bar findings, "
+                + "this is the number to re-pin: "
                 + found.joined(separator: " | ")
         )
     }
@@ -281,6 +297,7 @@ enum RoomsHistoryUnderTest {
     static let pillWaiting = "waiting"
     static let pillIgnored = "ignored"
     static let pillLights = "lights"
+    static let pillNoAnswer = "no answer"
     static let pillTime = "time"
 
     static let waiting = "waiting for an answer…"

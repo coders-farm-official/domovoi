@@ -684,18 +684,22 @@ public final class RoomsRoomModel {
     /// The history tabs of this room that are on screen now — `sessions`,
     /// `conversations` or, for a moment during a switch between them, both.
     /// Android's poll lives in exactly those two composables
-    /// (`RefreshWhilePending`, `SatHistoryTabs.kt:72` and `:245`), so they are
+    /// (`RefreshWhilePending`, `SatHistoryTabs.kt:75` and `:254`), so they are
     /// what "visible" means; nothing else on the screen keeps it running.
-    private var historyShowing: Set<RoomsTab> = []
+    ///
+    /// This and the three below are the poll's bookkeeping, which no view
+    /// draws — `@ObservationIgnored`, so a tab appearing or a tick starting
+    /// does not invalidate whatever happens to read this model.
+    @ObservationIgnored private var historyShowing: Set<RoomsTab> = []
 
     /// Whether the app is in front. Android's poll runs inside
     /// `repeatOnLifecycle(STARTED)` (6df97968), so it stops in the background
     /// and starts over — a fresh three seconds, then a read — on the way back.
-    private var inForeground = true
+    @ObservationIgnored private var inForeground = true
 
     /// The poll, while it runs, and the number it was started under.
-    private var poll: Task<Void, Never>?
-    private var pollEpoch = 0
+    @ObservationIgnored private var poll: Task<Void, Never>?
+    @ObservationIgnored private var pollEpoch = 0
 
     private let wait: @Sendable (Int64) async throws -> Void
     private let serverKey: @Sendable () -> String
@@ -730,15 +734,27 @@ public final class RoomsRoomModel {
         self.sessions = ApiRead(in: container) {
             try await client.get(RoomsApi.sessions(room), as: [RoomsSession].self)
         }
-        self.conversations = ApiRead(in: container) {
+        self.conversations = ApiRead(in: container) { @MainActor in
             // **Keyed to the house it was asked of**, checked after the await.
             // This read is the one the pending poll repeats every three
             // seconds, so it is the one most likely to be in flight when the
             // phone moves house — and the room ids are the same words in
             // both houses. An answer that comes back after the move is
-            // dropped rather than written over this room's list; the move's
-            // own re-read (``ApiRead/serverChanged()``, or the room model
-            // being rebuilt by ``RoomsModel/serverChanged()``) fills it in.
+            // dropped rather than written over this room's list.
+            //
+            // **On the main actor**, which is the point of the annotation:
+            // ``ApiRead``'s `run` is main-actor code awaiting this closure, so
+            // the check below and `run`'s write of `data` are one main-actor
+            // step with no suspension between them. Without it the check ran
+            // off the main actor and a switch landing in the hop back could
+            // still write one stale list.
+            //
+            // Nothing here refills the list. A screen that moved house goes
+            // through ``RoomsModel/serverChanged()``, which stops this model
+            // and drops it — the next room opened is a new model with its own
+            // first read. A read still joined to the container's registry is
+            // re-read by ``ApiRead/serverChanged()`` when the shell announces
+            // the move.
             let asked = store.serverURL
             let turns = try await client.get(RoomsApi.conversations(room), as: [RoomsTurn].self)
             guard store.serverURL == asked else { throw CancellationError() }
@@ -873,7 +889,7 @@ public final class RoomsRoomModel {
 
     /// While a turn is still waiting for its answer, read the history again
     /// every ``roomsPendingPollMs`` (`RefreshWhilePending`,
-    /// `SatHistoryTabs.kt:226-242`): only while a history tab of this room is
+    /// `SatHistoryTabs.kt:227-243`): only while a history tab of this room is
     /// on screen, only in the foreground, and only until no turn in the read
     /// is pending.
     ///
@@ -905,7 +921,12 @@ public final class RoomsRoomModel {
                 // different room. Any of those and this tick reads nothing.
                 guard let self, !Task.isCancelled, self.pollEpoch == epoch else { return }
                 guard self.serverKey() == house else {
+                    // This poll was the old house's. Asked again at once, so
+                    // a pending turn that has already landed from the new
+                    // house starts a poll of its own instead of waiting for
+                    // the next list that happens to arrive.
                     self.stopPoll()
+                    self.followPending()
                     return
                 }
                 self.conversations.refresh()

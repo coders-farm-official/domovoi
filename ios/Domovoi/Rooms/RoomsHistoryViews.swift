@@ -35,7 +35,7 @@ struct RoomsSessionsView: View {
                 }
             }
         }
-        // Android polls from this tab too (`SatHistoryTabs.kt:72`), on the
+        // Android polls from this tab too (`SatHistoryTabs.kt:75`), on the
         // conversations read its expanded sessions draw from — whether or
         // not the session holding the pending turn is open.
         .modifier(RoomsPendingPoll(reads: reads, tab: .sessions))
@@ -151,6 +151,7 @@ struct RoomsTurnCard: View {
             .foregroundStyle(Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
         HomeTonePill(label: pill.text, tone: pill.tone)
+            .accessibilityIdentifier("rooms.turn.\(turn.id).pill")
         Text(turn.matchedPath ?? "#\(turn.id)")
             .font(.caption.monospaced())
             .foregroundStyle(Color.fgMuted)
@@ -159,7 +160,7 @@ struct RoomsTurnCard: View {
     }
 }
 
-/// The conversations tab — `SatConversationsTab` (`SatHistoryTabs.kt:208`):
+/// The conversations tab — `SatConversationsTab` (`SatHistoryTabs.kt:248`):
 /// every turn in the room, with a search that filters what is already here.
 struct RoomsConversationsView: View {
 
@@ -201,7 +202,7 @@ struct RoomsConversationsView: View {
                 }
             }
         }
-        // `SatHistoryTabs.kt:245`. The rule is the whole read's, not what
+        // `SatHistoryTabs.kt:254`. The rule is the whole read's, not what
         // the search leaves on screen: a pending turn the query hides still
         // keeps the list reading, as it does on Android.
         .modifier(RoomsPendingPoll(reads: reads, tab: .conversations))
@@ -258,6 +259,7 @@ struct RoomsConversationTurn: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 HomeTonePill(label: pill.text, tone: pill.tone)
+                    .accessibilityIdentifier("rooms.turn.\(turn.id).pill")
                 Spacer(minLength: 0)
             }
             RoomsTurnLines(reads: reads, turn: turn)
@@ -269,22 +271,24 @@ struct RoomsConversationTurn: View {
 }
 
 /// What was said and what came back — the part of `TurnCard`
-/// (`SatHistoryTabs.kt:184-219`) both of this file's turn cards draw, so the
+/// (`SatHistoryTabs.kt:188-223`) both of this file's turn cards draw, so the
 /// statuses cannot be ported to one and forgotten on the other.
 ///
 /// * **What was said** is the transcript in curly quotes, or, for a turn
 ///   speech recognition never made out, ``RoomsStrings/turnUnheard`` in
-///   italic muted ink (`:185-191`) — the one line here that is about the
+///   italic muted ink (`:188-195`) — the one line here that is about the
 ///   *request* failing rather than the answer.
 /// * **The reply** is the answer, cut at 130 characters with `more`; or, for
 ///   a turn with no answer to show, ``roomsTurnUnanswered(_:)``'s words in
-///   italic muted ink, with no `more` (`:200-216`). `ignored — sounded like
+///   italic muted ink, with no `more` (`:196-222`). `ignored — sounded like
 ///   background talk` is drawn exactly like the others: the pill is where
 ///   Android tells it apart (idle, not warn), and the words say it was on
 ///   purpose.
 ///
-/// Each line carries an identifier with the turn's id, so a test can read one
-/// row's line without matching the pill's `no answer` on another.
+/// Each line carries an identifier with the turn's id (and so does each card's
+/// pill, `rooms.turn.<id>.pill`), so a test can read one row's line or pill
+/// without matching the same words on another row — `no answer` is three
+/// pills' label and one reply's.
 struct RoomsTurnLines: View {
 
     let reads: RoomsRoomModel
@@ -303,7 +307,7 @@ struct RoomsTurnLines: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("rooms.turn.\(turn.id).said")
                 } else {
-                    // The quotes are Android's (`SatHistoryTabs.kt:180`): what a
+                    // The quotes are Android's (`SatModels.kt:199`): what a
                     // person said is quoted and what the house answered is not.
                     Text(said)
                         .font(.subheadline)
@@ -344,7 +348,7 @@ struct RoomsTurnLines: View {
 
 /// Tell the room's model whether a history tab is on screen and whether the
 /// app is in front — the two inputs of Android's `RefreshWhilePending`
-/// (`SatHistoryTabs.kt:226-242`) that only a view can know. The loop, its
+/// (`SatHistoryTabs.kt:227-243`) that only a view can know. The loop, its
 /// three seconds and the pending rule are ``RoomsRoomModel``'s.
 ///
 /// **`.background` is the only phase that pauses it.** Android's poll runs
