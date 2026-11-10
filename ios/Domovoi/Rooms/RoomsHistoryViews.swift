@@ -12,6 +12,9 @@ import SwiftUI
 //
 // **No row holds a `Task`.** The cancel and the add are the model's, which
 // outlives the row, the tab and the screen (`SatHistoryTabs.kt:294`, `:437`).
+// That includes the pending poll: the two tabs that show turns only *say*
+// they are on screen (``RoomsPendingPoll``), and the loop is
+// ``RoomsRoomModel/historyOnScreen(_:_:)``'s.
 // ---------------------------------------------------------------------------
 
 /// The sessions tab — `SatSessionsTab` (`SatHistoryTabs.kt:62`).
@@ -32,6 +35,10 @@ struct RoomsSessionsView: View {
                 }
             }
         }
+        // Android polls from this tab too (`SatHistoryTabs.kt:75`), on the
+        // conversations read its expanded sessions draw from — whether or
+        // not the session holding the pending turn is open.
+        .modifier(RoomsPendingPoll(reads: reads, tab: .sessions))
     }
 }
 
@@ -122,38 +129,14 @@ struct RoomsTurnCard: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let pill = roomsHandlerPill(turn)
-        let answer = roomsTurnText(turn.assistantText, expanded: reads.expandedTurns.contains(turn.id))
+        let pill = roomsTurnPill(turn)
         return VStack(alignment: .leading, spacing: 6) {
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 4) { stamp(pill) }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 8) { stamp(pill) }
             }
-            if let said = turn.userText, !said.isEmpty {
-                // The quotes are Android's (`SatHistoryTabs.kt:180`): what a
-                // person said is quoted and what the house answered is not.
-                Text(RoomsStrings.quoted(said))
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !answer.shown.isEmpty {
-                Text(answer.shown)
-                    .font(.footnote)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if answer.truncated {
-                HomeLink(
-                    reads.expandedTurns.contains(turn.id) ? RoomsStrings.less : RoomsStrings.more
-                ) {
-                    if reads.expandedTurns.contains(turn.id) {
-                        reads.expandedTurns.remove(turn.id)
-                    } else {
-                        reads.expandedTurns.insert(turn.id)
-                    }
-                }
-            }
+            RoomsTurnLines(reads: reads, turn: turn)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -168,6 +151,7 @@ struct RoomsTurnCard: View {
             .foregroundStyle(Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
         HomeTonePill(label: pill.text, tone: pill.tone)
+            .accessibilityIdentifier("rooms.turn.\(turn.id).pill")
         Text(turn.matchedPath ?? "#\(turn.id)")
             .font(.caption.monospaced())
             .foregroundStyle(Color.fgMuted)
@@ -176,7 +160,7 @@ struct RoomsTurnCard: View {
     }
 }
 
-/// The conversations tab — `SatConversationsTab` (`SatHistoryTabs.kt:208`):
+/// The conversations tab — `SatConversationsTab` (`SatHistoryTabs.kt:248`):
 /// every turn in the room, with a search that filters what is already here.
 struct RoomsConversationsView: View {
 
@@ -218,6 +202,10 @@ struct RoomsConversationsView: View {
                 }
             }
         }
+        // `SatHistoryTabs.kt:254`. The rule is the whole read's, not what
+        // the search leaves on screen: a pending turn the query hides still
+        // keeps the list reading, as it does on Android.
+        .modifier(RoomsPendingPoll(reads: reads, tab: .conversations))
     }
 
     /// The search box — **a different control at an accessibility size**, for
@@ -267,39 +255,122 @@ struct RoomsConversationTurn: View {
     let turn: RoomsTurn
 
     var body: some View {
-        let pill = roomsHandlerPill(turn)
-        let answer = roomsTurnText(turn.assistantText, expanded: reads.expandedTurns.contains(turn.id))
+        let pill = roomsTurnPill(turn)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 HomeTonePill(label: pill.text, tone: pill.tone)
+                    .accessibilityIdentifier("rooms.turn.\(turn.id).pill")
                 Spacer(minLength: 0)
             }
-            if let said = turn.userText, !said.isEmpty {
-                Text(RoomsStrings.quoted(said))
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !answer.shown.isEmpty {
-                Text(answer.shown)
-                    .font(.footnote)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if answer.truncated {
-                HomeLink(
-                    reads.expandedTurns.contains(turn.id) ? RoomsStrings.less : RoomsStrings.more
-                ) {
-                    if reads.expandedTurns.contains(turn.id) {
-                        reads.expandedTurns.remove(turn.id)
-                    } else {
-                        reads.expandedTurns.insert(turn.id)
-                    }
-                }
-            }
+            RoomsTurnLines(reads: reads, turn: turn)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// What was said and what came back — the part of `TurnCard`
+/// (`SatHistoryTabs.kt:188-223`) both of this file's turn cards draw, so the
+/// statuses cannot be ported to one and forgotten on the other.
+///
+/// * **What was said** is the transcript in curly quotes, or, for a turn
+///   speech recognition never made out, ``RoomsStrings/turnUnheard`` in
+///   italic muted ink (`:188-195`) — the one line here that is about the
+///   *request* failing rather than the answer.
+/// * **The reply** is the answer, cut at 130 characters with `more`; or, for
+///   a turn with no answer to show, ``roomsTurnUnanswered(_:)``'s words in
+///   italic muted ink, with no `more` (`:196-222`). `ignored — sounded like
+///   background talk` is drawn exactly like the others: the pill is where
+///   Android tells it apart (idle, not warn), and the words say it was on
+///   purpose.
+///
+/// Each line carries an identifier with the turn's id (and so does each card's
+/// pill, `rooms.turn.<id>.pill`), so a test can read one row's line or pill
+/// without matching the same words on another row — `no answer` is three
+/// pills' label and one reply's.
+struct RoomsTurnLines: View {
+
+    let reads: RoomsRoomModel
+    let turn: RoomsTurn
+
+    var body: some View {
+        let unanswered = roomsTurnUnanswered(turn)
+        let answer = roomsTurnText(turn.assistantText, expanded: reads.expandedTurns.contains(turn.id))
+        VStack(alignment: .leading, spacing: 6) {
+            if let said = roomsTurnSaid(turn) {
+                if roomsTurnUnheard(turn) {
+                    Text(said)
+                        .font(.subheadline)
+                        .italic()
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("rooms.turn.\(turn.id).said")
+                } else {
+                    // The quotes are Android's (`SatModels.kt:199`): what a
+                    // person said is quoted and what the house answered is not.
+                    Text(said)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("rooms.turn.\(turn.id).said")
+                }
+            }
+            if let unanswered {
+                Text(unanswered)
+                    .font(.footnote)
+                    .italic()
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("rooms.turn.\(turn.id).reply")
+            } else {
+                if !answer.shown.isEmpty {
+                    Text(answer.shown)
+                        .font(.footnote)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("rooms.turn.\(turn.id).reply")
+                }
+                if answer.truncated {
+                    HomeLink(
+                        reads.expandedTurns.contains(turn.id) ? RoomsStrings.less : RoomsStrings.more
+                    ) {
+                        if reads.expandedTurns.contains(turn.id) {
+                            reads.expandedTurns.remove(turn.id)
+                        } else {
+                            reads.expandedTurns.insert(turn.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Tell the room's model whether a history tab is on screen and whether the
+/// app is in front — the two inputs of Android's `RefreshWhilePending`
+/// (`SatHistoryTabs.kt:227-243`) that only a view can know. The loop, its
+/// three seconds and the pending rule are ``RoomsRoomModel``'s.
+///
+/// **`.background` is the only phase that pauses it.** Android's poll runs
+/// while the lifecycle is at least `STARTED`, which is "visible", and an
+/// `.inactive` scene — the app switcher, a notification pulled down over it —
+/// is still drawn. The phase is read again on appear, because a tab that was
+/// not on screen when the app came back never saw the change.
+struct RoomsPendingPoll: ViewModifier {
+
+    let reads: RoomsRoomModel
+    let tab: RoomsTab
+
+    @Environment(\.scenePhase) private var phase
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                reads.appInForeground(phase != .background)
+                reads.historyOnScreen(tab, true)
+            }
+            .onDisappear { reads.historyOnScreen(tab, false) }
+            .onChange(of: phase) { _, now in reads.appInForeground(now != .background) }
     }
 }
 

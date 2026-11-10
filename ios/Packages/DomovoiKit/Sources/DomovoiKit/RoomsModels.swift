@@ -419,6 +419,30 @@ public struct RoomsTurn: Equatable, Sendable, Decodable, Identifiable {
     public let userText: String?
     public let assistantText: String?
 
+    /// Where the turn got to (server V043, 2026-11-09; `SatModels.kt:160-167`):
+    /// `answered`, `pending` (said, the reply still being worked out),
+    /// `no_answer` (see ``noAnswerReason``) or `unheard` (speech recognition
+    /// never made it out; `user_text` is `""` and ``audioMs`` is the
+    /// recording's length). **An older server sends none of these, and its
+    /// turn reads as answered** — nil here, and every rule in
+    /// `RoomsTurnStatus.swift` takes nil as `answered`.
+    public let status: String?
+
+    /// For `no_answer` / `unheard`: `timed_out`, `error`, `interrupted`,
+    /// `restarted`, `speech_off` or `overheard` (V044's list) — an open
+    /// vocabulary, so an unknown word is a plain "no answer", never a failure
+    /// to decode.
+    public let noAnswerReason: String?
+
+    /// The request's recording length, for a satellite's turn. Drawn only on
+    /// an `unheard` turn (``roomsTurnSaid(_:)``), as Android does.
+    public let audioMs: Int64?
+
+    /// The wake word's peak score, 0...1 (V044). **Decoded and not drawn**:
+    /// Android's `SatTurn` does not read it at all, and the phone shows only
+    /// what Android shows.
+    public let wakeScore: Double?
+
     public init(
         id: Int64 = 0,
         at: String? = nil,
@@ -426,7 +450,11 @@ public struct RoomsTurn: Equatable, Sendable, Decodable, Identifiable {
         matchedHandler: String? = nil,
         matchedPath: String? = nil,
         userText: String? = nil,
-        assistantText: String? = nil
+        assistantText: String? = nil,
+        status: String? = nil,
+        noAnswerReason: String? = nil,
+        audioMs: Int64? = nil,
+        wakeScore: Double? = nil
     ) {
         self.id = id
         self.at = at
@@ -435,6 +463,10 @@ public struct RoomsTurn: Equatable, Sendable, Decodable, Identifiable {
         self.matchedPath = matchedPath
         self.userText = userText
         self.assistantText = assistantText
+        self.status = status
+        self.noAnswerReason = noAnswerReason
+        self.audioMs = audioMs
+        self.wakeScore = wakeScore
     }
 
     enum CodingKeys: String, CodingKey {
@@ -444,6 +476,10 @@ public struct RoomsTurn: Equatable, Sendable, Decodable, Identifiable {
         case matchedPath = "matched_path"
         case userText = "user_text"
         case assistantText = "assistant_text"
+        case status
+        case noAnswerReason = "no_answer_reason"
+        case audioMs = "audio_ms"
+        case wakeScore = "wake_score"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -455,6 +491,14 @@ public struct RoomsTurn: Equatable, Sendable, Decodable, Identifiable {
         matchedPath = try c.decodeIfPresent(String.self, forKey: .matchedPath)
         userText = try c.decodeIfPresent(String.self, forKey: .userText)
         assistantText = try c.decodeIfPresent(String.self, forKey: .assistantText)
+        // The four V043/V044 fields are read **leniently**: a value of the
+        // wrong type reads as absent rather than failing the whole list. The
+        // list is a bare array, so one bad row would otherwise blank every
+        // turn in the room — the opposite of what these fields are for.
+        status = (try? c.decodeIfPresent(String.self, forKey: .status)) ?? nil
+        noAnswerReason = (try? c.decodeIfPresent(String.self, forKey: .noAnswerReason)) ?? nil
+        audioMs = (try? c.decodeIfPresent(Int64.self, forKey: .audioMs)) ?? nil
+        wakeScore = (try? c.decodeIfPresent(Double.self, forKey: .wakeScore)) ?? nil
     }
 }
 
