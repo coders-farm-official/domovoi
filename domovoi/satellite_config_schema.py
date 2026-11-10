@@ -89,7 +89,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How easily the wake word triggers (0–1). HIGHER = fewer false "
         "wakes (the room triggers less); lower = more sensitive. "
         "Default 0.5 — raise toward 0.6–0.7 if it wakes on background noise.",
-        "float", min=0.0, max=1.0,
+        "float", min=0.0, max=1.0, step=0.05, widget="slider",
+        slider_labels=("more sensitive", "fewer false wakes"),
     ),
     FieldSpec(
         "wake.ack_mode", "Wake acknowledgement", "Wake word",
@@ -133,7 +134,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How much speech (ms) is needed to count as an interruption. Raise "
         "to 500+ if echo trips it; lower to ~150 for snappier interrupts "
         "with headphones.",
-        "int", min=100, max=2000, unit="ms",
+        "int", min=100, max=2000, unit="ms", step=50, widget="slider",
+        slider_labels=("interrupts on less speech", "needs more speech to interrupt"),
     ),
     FieldSpec(
         "barge_in.vad_aggressiveness_during_tts", "Echo resistance (during TTS)",
@@ -141,7 +143,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How strictly speech is detected while the bot is talking (0–3). "
         "Higher resists speaker echo better. The XVF3800's on-chip AEC "
         "means it can run lower than a HAT.",
-        "int", min=0, max=3,
+        "int", min=0, max=3, step=1, widget="slider",
+        slider_labels=("easier to interrupt", "resists speaker echo"),
     ),
 
     # ─── Listening / endpointing ───────────────────────────────────────
@@ -149,26 +152,30 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "listen.vad_aggressiveness", "Speech detection strictness", "Listening",
         "How strictly speech is detected while capturing your command "
         "(0–3). Higher ends the utterance sooner on a pause.",
-        "int", min=0, max=3,
+        "int", min=0, max=3, step=1, widget="slider",
+        slider_labels=("waits through pauses", "ends sooner on a pause"),
     ),
     FieldSpec(
         "listen.silence_timeout", "End-of-speech silence", "Listening",
         "Seconds of silence that end your command. Lower = snappier "
         "responses; too low cuts you off during a natural pause.",
-        "float", min=0.3, max=5.0, unit="sec",
+        "float", min=0.3, max=5.0, unit="sec", step=0.1, widget="slider",
+        slider_labels=("answers sooner", "waits through longer pauses"),
     ),
     FieldSpec(
         "listen.max_record_seconds", "Max command length", "Listening",
         "Hard cap on how long a single spoken command can run before the "
         "device gives up and sends what it has.",
-        "float", min=5.0, max=60.0, unit="sec",
+        "float", min=5.0, max=60.0, unit="sec", step=1, widget="slider",
+        slider_labels=("shorter commands", "longer commands"),
     ),
     FieldSpec(
         "listen.followup_pre_speech_timeout", "Follow-up wait", "Listening",
         "After the bot asks a question ('Did I get that right?'), how long "
         "to wait for your reply — with no wake word needed — before giving "
         "up and returning to wake-word listen.",
-        "float", min=2.0, max=20.0, unit="sec",
+        "float", min=2.0, max=20.0, unit="sec", step=1, widget="slider",
+        slider_labels=("waits less", "waits longer"),
     ),
     FieldSpec(
         "listen.early_commit", "Stop listening early on a whole command",
@@ -190,7 +197,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "starts the transcript sooner, but also on the gaps between words, "
         "which costs the server a transcript it throws away. Whole 30 ms "
         "steps.",
-        "int", section="advanced", min=90, max=600, unit="ms",
+        "int", section="advanced", min=90, max=600, unit="ms", step=30,
     ),
     FieldSpec(
         "listen.response_deadline_sec", "Reply deadline", "Listening",
@@ -201,7 +208,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "anything, this deadline is off and the reply backstop takes over. "
         "Default 75; 0 turns it off. Below about 60 it can cut off the "
         "server's own apology when speech recognition is slow.",
-        "float", min=0.0, max=600.0, unit="sec",
+        "float", min=0.0, max=600.0, unit="sec", step=5,
     ),
     FieldSpec(
         "listen.response_backstop_sec", "Reply backstop", "Listening",
@@ -213,7 +220,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "chat, never counts, and the server says it is still working every "
         "30 s, so this only catches a server that has gone completely "
         "silent. Default 240; 0 turns it off.",
-        "float", min=0.0, max=900.0, unit="sec",
+        "float", min=0.0, max=900.0, unit="sec", step=5,
     ),
 
     # ─── Noise gate ────────────────────────────────────────────────────
@@ -222,7 +229,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Loudness floor (dBFS) — audio quieter than this is ignored even if "
         "it looks like speech. Lower = more permissive. With auto-calibrate "
         "on, this is only the boot-time fallback.",
-        "float", min=-80.0, max=-10.0, unit="dBFS",
+        "float", min=-80.0, max=-10.0, unit="dBFS", step=1, widget="slider",
+        slider_labels=("hears quieter sounds", "ignores more background noise"),
     ),
     FieldSpec(
         "noise_gate.auto_calibrate", "Auto-calibrate noise floor", "Noise gate",
@@ -241,7 +249,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "greeting.funny_chance", "Funny-greeting chance", "Greeting",
         "When the wake acknowledgement is the spoken greeting: the "
         "probability (0–1) that it is a funny line rather than a plain one.",
-        "float", min=0.0, max=1.0,
+        "float", min=0.0, max=1.0, step=0.05, widget="slider",
+        slider_labels=("always plain", "always funny"),
     ),
 
     # ─── Playback ──────────────────────────────────────────────────────
@@ -250,21 +259,24 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Make-up loudness for the bot's voice + greetings (not music). "
         "Raise to 2–4 if Domovoi sounds quiet next to music; ~5 is the "
         "clip ceiling. 1.0 = no change.",
-        "float", min=1.0, max=5.0,
+        "float", min=1.0, max=5.0, step=0.1, widget="slider",
+        slider_labels=("no boost", "louder (may distort)"),
     ),
     FieldSpec(
         "playback.tts_prebuffer_sec", "TTS pre-buffer", "Playback",
         "Seconds of the bot's voice buffered before playback starts. Higher "
         "resists network jitter (mid-word chop) at the cost of a little "
         "startup latency; 0 = immediate.",
-        "float", min=0.0, max=2.0, unit="sec",
+        "float", min=0.0, max=2.0, unit="sec", step=0.1, widget="slider",
+        slider_labels=("starts talking sooner", "smoother on weak Wi-Fi"),
     ),
     FieldSpec(
         "music.buffer_sec", "Music buffer", "Playback",
         "Seconds of music held before a song starts. This is the cushion "
         "for Wi-Fi dropouts: raise it if music is choppy in this room. "
         "Songs start, pause and skip that much later.",
-        "float", min=0.0, max=10.0, unit="sec",
+        "float", min=0.0, max=10.0, unit="sec", step=0.5, widget="slider",
+        slider_labels=("songs start sooner", "fewer dropouts on weak Wi-Fi"),
     ),
 
     # ─── Voice input / Display (video satellites) ──────────────────────
@@ -356,7 +368,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "leds.num_leds", "LED count", "LEDs",
         "Number of LEDs on the board (HAT = 3, XVF3800 ring = 12). Wrong "
         "count looks wrong but won't break anything else.",
-        "int", section="advanced", min=1, max=64,
+        "int", section="advanced", min=1, max=64, step=1,
     ),
     FieldSpec(
         "leds.brightness", "LED brightness", "LEDs",
@@ -375,7 +387,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "mic_gain.target_dbfs", "Mic-gain target", "Mic gain",
         "Ambient level the mic-gain tune aims for (dBFS). Lower = quieter "
         "mic with more headroom; higher = hotter. -55 is a healthy floor.",
-        "float", section="advanced", min=-70.0, max=-40.0, unit="dBFS",
+        "float", section="advanced", min=-70.0, max=-40.0, unit="dBFS", step=1,
     ),
     FieldSpec(
         "wifi.enabled", "WiFi self-heal", "WiFi",
@@ -391,7 +403,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Below this rx rate (Mbit/s) the watcher notes the link as slow in "
         "its log. Informational only: an idle link reports the 1 Mbit/s "
         "beacon rate, so the rate no longer decides a reassociate.",
-        "float", section="advanced", min=1.0, max=50.0, unit="Mbit/s",
+        "float", section="advanced", min=1.0, max=50.0, unit="Mbit/s", step=1,
     ),
 ]
 

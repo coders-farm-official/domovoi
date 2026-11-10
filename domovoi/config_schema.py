@@ -65,6 +65,7 @@ command itself, always the repo's own wrapper; the trainer's numbers
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Callable, Literal
@@ -112,6 +113,16 @@ class FieldSpec:
     # answer is "never": the whole field, or only these choice values.
     needs_internet: bool = False
     needs_internet_choices: tuple[str, ...] = ()
+    # int/float fields: how far one press of an arrow key (or a spinner
+    # click) moves the value. None = :func:`effective_step` picks one from
+    # the range. Typing is never held to it: any value inside min..max saves.
+    step: float | None = None
+    # "slider": the dashboard draws a range slider (min at the left end, max
+    # at the right) with the number beside it. Needs min, max and
+    # ``slider_labels`` — what the LEFT and RIGHT ends actually do, in words
+    # ("more sensitive", "fewer false wakes"). None = a number box.
+    widget: Literal["slider"] | None = None
+    slider_labels: tuple[str, str] | None = None
 
     @property
     def secret(self) -> bool:
@@ -307,7 +318,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "or Ollama reloads the model every time it switches. Applies "
         "immediately to voice; the text chat picks it up when the dashboard "
         "restarts.",
-        "int", tier="reapply", min=0, max=262144,
+        "int", tier="reapply", min=0, max=262144, step=1024,
     ),
     FieldSpec(
         "ollama_tool_num_ctx", "Tool-routing context window", "Models",
@@ -317,7 +328,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "description, and grows with each plugin; if routing gets worse as "
         "plugins are added, try 8192. Uses more memory while the model is "
         "loaded. Applies immediately.",
-        "int", tier="reapply", min=0, max=262144,
+        "int", tier="reapply", min=0, max=262144, step=1024,
     ),
     FieldSpec(
         "ollama_vision_model", "Vision model", "Models",
@@ -335,7 +346,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "the Q&A model, or Ollama reloads it between the two). Uses more "
         "memory while the vision model is loaded. The text chat picks it up "
         "when the dashboard restarts.",
-        "int", tier="restart", min=0, max=262144,
+        "int", tier="restart", min=0, max=262144, step=1024,
     ),
     FieldSpec(
         "ollama_chat_num_predict", "Chat reply length limit", "Models",
@@ -345,7 +356,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "repeating itself can't run on until its memory is full. 2048 (about "
         "1,500 words) leaves room for any real answer. 0 means no limit. The "
         "text chat picks it up when the dashboard restarts.",
-        "int", tier="restart", min=0, max=32768,
+        "int", tier="restart", min=0, max=32768, step=256,
     ),
     FieldSpec(
         "ollama_keep_alive", "Keep models loaded for", "Models",
@@ -401,7 +412,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "tts_speed", "Speaking rate", "Voice & speech",
         "How fast the bot talks. 1.0 = normal, 1.2 = a bit quicker, 0.9 = "
         "a bit slower. Applies to the next thing it says.",
-        "float", tier="reapply", min=0.5, max=2.0,
+        "float", tier="reapply", min=0.5, max=2.0, step=0.05, widget="slider",
+        slider_labels=("slower", "faster"),
     ),
     FieldSpec(
         "quiet_hours_enabled", "Quiet hours", "Voice & speech",
@@ -431,7 +443,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How close a voice must match an enrolled profile to be recognized "
         "as that person. Higher = stricter (fewer wrong IDs, but more "
         "'who's speaking?'); lower = looser (more IDs, more mistakes).",
-        "float", min=0.5, max=0.95,
+        "float", min=0.5, max=0.95, step=0.01, widget="slider",
+        slider_labels=("names people more readily", "fewer wrong names"),
     ),
     FieldSpec(
         "voice_profile_match_margin", "Match margin", "Voice profiles",
@@ -439,7 +452,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "the best one must be before the bot names anyone. Closer than "
         "this and it says it isn't sure instead of guessing. Raise it if "
         "two people keep getting mixed up.",
-        "float", min=0.0, max=0.3,
+        "float", min=0.0, max=0.3, step=0.01, widget="slider",
+        slider_labels=("guesses between close voices", "says it isn't sure more often"),
     ),
     FieldSpec(
         "voice_profile_drift_reenroll_after", "Learn a room after",
@@ -448,14 +462,15 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "someone has no voice sample yet, that clip is saved as their "
         "sample for the room (one per room). Borderline or close-call "
         "recognitions are never saved. Higher = more conservative.",
-        "int", min=1, max=10,
+        "int", min=1, max=10, widget="slider",
+        slider_labels=("learns a room sooner", "learns more cautiously"),
     ),
     FieldSpec(
         "voice_profile_soft_tier_sec", "Recent-speaker window", "Voice profiles",
         "If a known speaker was heard within this many seconds, the bot is "
         "more relaxed about re-confirming who they are. Raising it means it "
         "trusts a recent identification for longer.",
-        "int", min=60, max=86400, unit="sec",
+        "int", min=60, max=86400, unit="sec", step=60,
     ),
 
     # ─── Conversation & memory ─────────────────────────────────────────
@@ -467,7 +482,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "many — cutting in halves lets the model reuse its cached reading of "
         "the conversation between cuts. Higher = it remembers more of the "
         "conversation, at the cost of more tokens and a little latency.",
-        "int", min=2, max=50, unit="turns",
+        "int", min=2, max=50, unit="turns", step=2, widget="slider",
+        slider_labels=("remembers less, answers faster", "remembers more of the chat"),
     ),
     FieldSpec(
         "memory_extractor_min_confidence", "Memory confidence floor",
@@ -475,7 +491,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Minimum confidence before the bot saves a long-term fact it inferred "
         "about you (a preference, a name). Higher = fewer but surer memories; "
         "lower = it remembers more, including shakier guesses.",
-        "float", min=0.3, max=0.95,
+        "float", min=0.3, max=0.95, step=0.05, widget="slider",
+        slider_labels=("remembers more", "fewer, surer memories"),
     ),
 
     # ─── Privacy ───────────────────────────────────────────────────────
@@ -575,13 +592,14 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Minimum fingerprint-match score to accept metadata (artist/album) "
         "the enricher pulls for a local track. Higher = only confident "
         "matches are written; lower risks wrong tags.",
-        "float", min=0.5, max=1.0,
+        "float", min=0.5, max=1.0, step=0.05, widget="slider",
+        slider_labels=("accepts more matches", "only confident matches"),
     ),
     FieldSpec(
         "media_plays_retention_days", "Play-history retention", "Library",
         "How long each room's 'Recently played' history is kept before "
         "the pruner deletes old rows. 0 = keep forever.",
-        "int", min=0, max=3650, unit="days",
+        "int", min=0, max=3650, unit="days", step=1,
     ),
     FieldSpec(
         "music_match_enabled", "Match names by sound", "Library",
@@ -648,7 +666,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How sure (0-1) a sound match must be to play without asking. "
         "Lower = fewer questions and more wrong songs. Measured at 0.90; "
         "change it only on purpose. Applies immediately.",
-        "float", section="advanced", tier="hot", min=0.8, max=1.0,
+        "float", section="advanced", tier="hot", min=0.8, max=1.0, step=0.01,
     ),
     FieldSpec(
         "music_match_ask_threshold", "Ask-first score", "Library",
@@ -656,7 +674,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "mean …?'. Below it the plain text search runs. Lower = more "
         "questions about things you don't have. At or above the play score "
         "= never ask. Measured at 0.75. Applies immediately.",
-        "float", section="advanced", tier="hot", min=0.5, max=1.0,
+        "float", section="advanced", tier="hot", min=0.5, max=1.0, step=0.01,
     ),
 
     # ─── Drop-in (live room-to-room audio) ─────────────────────────────
@@ -679,21 +697,23 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "dropin_ring_timeout_sec", "Ring timeout", "Drop-in",
         "How long a phone waits for a rung room to answer before giving "
         "up. Ring mode only.",
-        "float", min=5.0, max=300.0, unit="sec",
+        "float", min=5.0, max=300.0, unit="sec", step=5, widget="slider",
+        slider_labels=("gives up sooner", "rings longer"),
     ),
     FieldSpec(
         "dropin_silence_timeout_sec", "Silence auto-end", "Drop-in",
         "End a call automatically after this many seconds with no relayed "
         "audio from either side. Effective only when the relay noise gate is "
         "on, so true silence is detectable.",
-        "float", min=0.0, max=600.0, unit="sec",
+        "float", min=0.0, max=600.0, unit="sec", step=5,
     ),
     FieldSpec(
         "dropin_relay_gate_dbfs", "Relay noise gate", "Drop-in",
         "Audio quieter than this (dBFS) isn't relayed to the other room — "
         "silences bounced echo and room tone. Lower = more permissive "
         "(relays quieter audio); higher = stricter.",
-        "float", min=-120.0, max=0.0, unit="dBFS",
+        "float", min=-120.0, max=0.0, unit="dBFS", step=1, widget="slider",
+        slider_labels=("relays everything", "relays only loud sound"),
     ),
 
     # ─── News ──────────────────────────────────────────────────────────
@@ -710,7 +730,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How many stories each news ask reads back — per geographic scope "
         "in the general briefing and per topics/subject query. Editable by "
         "voice too ('give me 5 stories').",
-        "int", min=1, max=10, unit="items",
+        "int", min=1, max=10, unit="items", widget="slider",
+        slider_labels=("fewer stories", "more stories"),
     ),
     FieldSpec(
         "news_location", "Local news location", "News",
@@ -723,7 +744,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "news_retention_days", "News retention", "News",
         "How long fetched news items are kept before the daily sweep deletes "
         "them. Favorited items are never auto-deleted.",
-        "int", min=1, max=3650, unit="days",
+        "int", min=1, max=3650, unit="days", step=1,
     ),
     FieldSpec(
         "news_fetch_hour", "News fetch hour", "News",
@@ -778,7 +799,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "memory_extractor_loop_sec", "Memory extractor interval", "Workers",
         "How often the memory extractor scans for new facts. Takes effect "
         "after a restart.",
-        "float", tier="restart", min=10, max=3600, unit="sec",
+        "float", tier="restart", min=10, max=3600, unit="sec", step=5,
     ),
 
     # ─── Advanced (folded + warning) ───────────────────────────────────
@@ -804,7 +825,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "(a word takes about 20 minutes, 26 the first time), two hours or "
         "more on the CPU (about 75 minutes a word on 8 cores). Raise it "
         "with more samples below.",
-        "int", section="advanced", tier="hot", min=0, max=86400, unit="sec",
+        "int", section="advanced", tier="hot", min=0, max=86400, unit="sec", step=300,
     ),
     FieldSpec(
         "wake_trainer_n_samples", "Synthetic clips per wake word", "Wake words",
@@ -831,21 +852,21 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "your rooms (each copy gets different room echo and noise). "
         "0 = the trainer's 0.2. More only helps with many varied "
         "recordings; with few it learns those exact takes.",
-        "float", section="advanced", tier="hot", min=0, max=0.9,
+        "float", section="advanced", tier="hot", min=0, max=0.9, step=0.05,
     ),
     FieldSpec(
         "wake_trainer_cpus", "CPUs for training", "Wake words",
         "How many CPUs a training may use. 0 = all but a quarter of them, "
         "at least two left for the voice pipeline. Training always gets "
         "the CPU last when voice needs it.",
-        "float", section="advanced", tier="hot", min=0, max=256,
+        "float", section="advanced", tier="hot", min=0, max=256, step=1,
     ),
     FieldSpec(
         "wake_trainer_memory_gb", "Memory for training", "Wake words",
         "The most memory a training may use, in GB. It needed about 9.3 GB "
         "at the defaults; a run that needs more than this stops with an "
         "out-of-memory error instead of slowing the whole server down.",
-        "int", section="advanced", tier="hot", min=4, max=256, unit="GB",
+        "int", section="advanced", tier="hot", min=4, max=256, unit="GB", step=1,
     ),
     FieldSpec(
         "database_url", "Database URL", "Connections",
@@ -880,7 +901,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Starting port for per-room MPD control sockets (each room gets the "
         "next port up). Changing this after rooms are provisioned can collide "
         "with running containers. Takes effect after a restart.",
-        "int", section="advanced", tier="restart", min=1024, max=65000,
+        "int", section="advanced", tier="restart", min=1024, max=65000, step=1,
     ),
     FieldSpec(
         "music_dir", "Music directory", "Paths",
@@ -948,7 +969,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "a shorter wait after every command, up to the core count, but "
         "leaves less CPU for the language model while it works. Ignored on "
         "cuda. Takes effect after a restart.",
-        "int", section="advanced", tier="restart", min=0, max=256,
+        "int", section="advanced", tier="restart", min=0, max=256, step=1,
     ),
     FieldSpec(
         "whisper_short_window_enabled", "Fast decoding for short commands",
@@ -1019,7 +1040,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Speech-to-text",
         "How much silence after the last word before a closed phrase "
         "(\"pause the music\") ends the capture. Longer is safer and slower.",
-        "int", section="advanced", tier="hot", min=200, max=2000, unit="ms",
+        "int", section="advanced", tier="hot", min=200, max=2000, unit="ms", step=50,
     ),
     FieldSpec(
         "early_commit_hold_b_ms", "Early-stop hold (timers, numbers, clock)",
@@ -1027,7 +1048,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How much silence after the last word before a phrase a pause can "
         "split (\"set a timer for ten minutes\") ends the capture. Keep it "
         "above the closed-phrase hold.",
-        "int", section="advanced", tier="hot", min=200, max=3000, unit="ms",
+        "int", section="advanced", tier="hot", min=200, max=3000, unit="ms", step=50,
     ),
     FieldSpec(
         "fastlane_mode", "Fast lane", "Speech-to-text",
@@ -1060,7 +1081,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "How often the Domovoi server pings each room device's WebSocket to "
         "detect a dead connection. Lower = faster dead-socket detection, "
         "slightly more traffic. Takes effect after a restart.",
-        "float", section="advanced", tier="restart", min=1, max=120, unit="sec",
+        "float", section="advanced", tier="restart", min=1, max=120, unit="sec", step=1,
     ),
 
     # ─── Security ──────────────────────────────────────────────────────
@@ -1084,7 +1105,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "connection from any device on the LAN never creates a room. Real "
         "room devices say hello immediately; raise this only on a very slow "
         "link. Takes effect after a restart.",
-        "float", section="advanced", tier="restart", min=1, max=60, unit="sec",
+        "float", section="advanced", tier="restart", min=1, max=60, unit="sec", step=1,
     ),
     # 'hot' holds for the web process too: it reads the live value from the
     # core's /v1/admin/snapshot, like home_problems_visibility above.
@@ -1113,7 +1134,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "reload can still look at everything but asks for the password "
         "before changing anything. 0 = every reload asks again. Applies "
         "immediately.",
-        "int", tier="hot", min=0, max=1440, unit="min",
+        "int", tier="hot", min=0, max=1440, unit="min", step=15, widget="slider",
+        slider_labels=("asks on every reload", "stays signed in longer"),
     ),
     FieldSpec(
         "satellite_adoption_enabled", "USB room adoption", "Security",
@@ -1148,6 +1170,63 @@ FIELD_BY_NAME: dict[str, FieldSpec] = {f.name: f for f in EDITABLE_FIELDS}
 
 def editable_field_names() -> set[str]:
     return set(FIELD_BY_NAME)
+
+
+def auto_step(lo: float, hi: float, *, integer: bool) -> float | int:
+    """About a twentieth of the range, rounded to 1, 2 or 5 × 10^n (the
+    nearest of the three in ratio, so never more than ~1.4× a twentieth:
+    at most a fourteenth of the range). Whole numbers never step by less
+    than 1."""
+    span = float(hi) - float(lo)
+    if span <= 0:
+        return 1
+    raw = span / 20.0
+    exp = math.floor(math.log10(raw))
+    mant = raw / 10.0 ** exp
+    best = min((1, 2, 5, 10), key=lambda m: abs(math.log10(mant / m)))
+    if best == 10:
+        best, exp = 1, exp + 1
+    # Through a decimal string, so 0.05 is 0.05 and not 0.05000000000000001.
+    step = float(f"{best}e{exp}")
+    if integer:
+        return max(1, int(round(step)))
+    return step
+
+
+def effective_step(spec: FieldSpec) -> float | int | None:
+    """How far one arrow press moves an int/float field: its own ``step``
+    when it sets one, else :func:`auto_step` over min..max (1 for a whole
+    number with no range). None for every other type, and for a float
+    with no range (there is none today; a test holds that).
+
+    The ONE place a step is decided: the server sends it with every field
+    (``/v1/admin/config``, ``/v1/admin/satellite/{room}/config``) and the
+    dashboard, Android and iOS read it from there."""
+    if spec.type not in ("int", "float"):
+        return None
+    integer = spec.type == "int"
+    if spec.step is not None:
+        return max(1, int(spec.step)) if integer else spec.step
+    if spec.min is None or spec.max is None:
+        return 1 if integer else None
+    return auto_step(spec.min, spec.max, integer=integer)
+
+
+def widget_payload(spec: FieldSpec) -> dict[str, object]:
+    """The keys every config read adds for a field's control: ``step``,
+    and ``widget`` / ``slider_labels`` (a slider only when the field has
+    both ends and words for them; otherwise a number box)."""
+    slider = (
+        spec.widget == "slider"
+        and spec.type in ("int", "float")
+        and spec.min is not None and spec.max is not None
+        and spec.slider_labels is not None
+    )
+    return {
+        "step": effective_step(spec),
+        "widget": "slider" if slider else None,
+        "slider_labels": list(spec.slider_labels) if slider and spec.slider_labels else None,
+    }
 
 
 def coerce_and_validate(spec: FieldSpec, value: object) -> object:

@@ -2034,12 +2034,15 @@ const RoomSettingsBody = ({ room, fire }) => {
   const setEdit = (name, v) => setEdits(prev => ({ ...prev, [name]: v }));
   const valueOf = (f) => (f.name in edits ? edits[f.name] : f.value);
   const dirtyCount = Object.keys(edits).length;
+  // Edited numbers that can't be saved: each says why under its row, and
+  // Save waits for them (configFieldProblem, components.jsx).
+  const badEdits = configEditProblems(fields, edits);
   const common = fields.filter(f => f.section !== 'advanced');
   const advanced = fields.filter(f => f.section === 'advanced');
   const rejectedCount = result && result.rejected ? Object.keys(result.rejected).length : 0;
 
   const save = async () => {
-    if (dirtyCount === 0) return;
+    if (dirtyCount === 0 || badEdits.length > 0) return;
     if (!window.confirm(`Save and restart the ${room} room? It'll drop offline for a few seconds while it applies the change.`)) return;
     setSaving(true); setResult(null);
     try {
@@ -2097,8 +2100,13 @@ const RoomSettingsBody = ({ room, fire }) => {
         {result && result.restarting && <div style={{ fontSize: 12, color: 'var(--warn-ink)', marginBottom: 8 }}>saved — {room} is restarting to apply. It'll reconnect shortly; reopen to confirm.</div>}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{dirtyCount > 0 ? `${dirtyCount} unsaved` : 'no changes'}</span>
+          {badEdits.length > 0 && (
+            <span className="config-save-held" style={{ fontSize: 12, color: 'var(--err-ink)' }}>
+              {badEdits.length === 1 ? 'one value needs fixing' : `${badEdits.length} values need fixing`}
+            </span>
+          )}
           <div style={{ marginLeft: 'auto' }}>
-            <Button variant="primary" icon="check" onClick={save} disabled={saving || dirtyCount === 0}>{saving ? 'Saving…' : 'Save & restart'}</Button>
+            <Button variant="primary" icon="check" onClick={save} disabled={saving || dirtyCount === 0 || badEdits.length > 0}>{saving ? 'Saving…' : 'Save & restart'}</Button>
           </div>
         </div>
       </div>

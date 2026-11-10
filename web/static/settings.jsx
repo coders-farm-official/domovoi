@@ -1760,6 +1760,9 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
   // A write-only field has no value to show: null until something is typed.
   const valueOf = (f) => (f.name in edits ? edits[f.name] : (f.write_only ? null : f.value));
   const dirtyCount = Object.keys(edits).length;
+  // Edited numbers that can't be saved (out of range, not a number): each
+  // says why under its row, and Save waits for them (configFieldProblem).
+  const badEdits = configEditProblems(fields, edits);
   // Restart-required names in words: a field's own label, else these.
   const restartWords = (name) => {
     const row = fields.find((x) => x.name === name);
@@ -1811,7 +1814,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
   }, [wantAdvanced, advanced.length]);
 
   const save = async () => {
-    if (dirtyCount === 0) return;
+    if (dirtyCount === 0 || badEdits.length > 0) return;
     setSaving(true); setResult(null);
     try {
       const res = await apiPatch('/api/config/editable', { changes: edits });
@@ -1963,8 +1966,14 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
               {dirtyCount > 0 ? `${dirtyCount} unsaved` : 'no changes'}
             </span>
+            {badEdits.length > 0 && (
+              <span className="config-save-held" style={{ fontSize: 12, color: 'var(--err-ink)' }}>
+                {badEdits.length === 1 ? 'one value needs fixing' : `${badEdits.length} values need fixing`}
+              </span>
+            )}
             <div style={{ marginLeft: 'auto' }}>
-              <Button variant="primary" icon="check" onClick={save} disabled={saving || dirtyCount === 0}>
+              <Button variant="primary" icon="check" onClick={save}
+                      disabled={saving || dirtyCount === 0 || badEdits.length > 0}>
                 {saving ? 'Saving…' : 'Save'}
               </Button>
             </div>
