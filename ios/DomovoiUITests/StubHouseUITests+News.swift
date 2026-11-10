@@ -1233,68 +1233,41 @@ extension StubHouseUITests {
             // been asserting less. Scrolled down, they are ordinary visible
             // elements and the audit reads them properly.
             //
-            // **Train R001 named ten elements here that this run's own
-            // pixels clear, and they are not News's.** Its foot pass
-            // reported `Contrast failed` against all nine
-            // `news-category-…` Buttons and against the `saved feed`
-            // heading. Sampled from the attachment that run took **of this
-            // very pass** (`news-12-audited-foot…png`, 3x, at the elements'
-            // own frames): the chip word is 151,88,0 on 242,242,247 —
-            // **5.07:1** — and `saved feed` is 0,0,0 on 241,241,242 —
-            // **18.60:1**. Both clear 4.5:1 for body text.
+            // **The audit moves this page, so its verdicts on ten of this
+            // screen's elements are measured, not believed.** R001 named
+            // `Contrast failed` against all nine `news-category-…` chips and
+            // the `saved feed` heading; R002 and I014 named none; I018 named
+            // the same ten again. R002's clean run was credited to a ring
+            // colour change, but I018 carries that ring, so the credit was
+            // wrong. What I018 shows is the move: every frame Apple wrote sits
+            // 40.3 points below the same element in the tree taken just before
+            // the audit (the categories sentence 47.0 → 87.3, in I014 too;
+            // the chips 92.7 → 133.0; `saved feed` 471.3 → 511.7). The
+            // audit's Dynamic Type sweep re-laid the scrolled page out, as it
+            // did Rooms and Home's grid. Read off I018's own foot picture
+            // where each is drawn, the six whole chips are `#975800` on
+            // `#F2F2F7` 5.07:1 and `saved feed` `#000000` on `#F1F1F2`
+            // 18.60:1. The first row is under the navigation bar there; the
+            // same process's landing picture reads `world` and `national`
+            // 5.07:1 and the picked `tech` `#281600` on `#F2A618` 8.50:1. At
+            // Apple's frames that picture holds other things (3.73:1 is the
+            // free-form field's hint).
             //
-            // The control is what settles it. Train S008's foot screenshot
-            // and R001's differ **only in the status-bar clock**
-            // (`ImageChops.difference` bounding box = x 54–89, y 23–36
-            // points, nothing else in 393 x 852), the two trees carry the
-            // same frames, and S008's audit named none of these ten. Same
-            // pixels, same geometry, opposite verdict: the colours are not
-            // the finding.
+            // So ``newsFootContrastMeasured(_:_:)`` retakes the picture once
+            // the audit has returned and reads each named element's own ink
+            // at its settled frame, first bringing one the navigation bar
+            // covers wholly into view. 4.5:1 or better is excused and printed
+            // with its reading; under it, or unmeasurable, fails with the
+            // reason. `Contrast failed` only, these ten only, this pass only.
             //
-            // **And R002 cleared all ten without a line of anyone else's
-            // code changing.** Round 2 read the difference as an app-wide
-            // sweep coming from the window's root —
-            // `AlertsHintLifecycle.body(content:)` puts
-            // `.accessibilityHidden(model.explaining)` on the whole app
-            // (`ios/Domovoi/Alerts/AlertsHintRowView.swift:265-266`, hooked
-            // in at `ios/Domovoi/DomovoiApp.swift:214`) — and cited a
-            // synthesised `Button` layer in R001's chip row as its cost.
-            // Both halves were wrong, and this run says so: the root
-            // modifier is still there in R002, and its foot pass names
-            // neither a category chip nor `saved feed`. The only thing that
-            // changed between the two runs is this screen's own ring
-            // (`fgMuted@0.35` to `0.7`, `brandInk` to `brandFg`), which is
-            // the chips' half; `saved feed` does not turn on a ring and is a
-            // run-to-run difference in what the auditor would sample. The
-            // extra `Button` layer was round 1's own
-            // `accessibilityElement(children: .ignore)` — S005, S008 and
-            // S011 predate it and R001 and R002 both carry it, and
-            // ``HomeAttentionView``'s rows wear the same layer from the same
-            // modifier in the same run.
-            //
-            // Nothing is classified for any of it: a `Contrast failed`
-            // naming an element of this screen fails this case.
-            // `integration/news.md` round 3 carries the numbers.
-            //
-            // **What R003's foot pass did report is the top edge, three
-            // times.** One named finding — the `Categories give broad
-            // coverage…` sentence at y = 47, above the viewport, which
-            // ``newsOutsideTheViewport(_:_:)`` discounts — and three
-            // anonymous `Contrast failed`. The tree says what the audit was
-            // shown in halves: scrolled to the foot, the first row of
-            // category chips sits at y = 92.7 against a scroll view whose top
-            // edge is y = 93.3, so `news-category-world`, `-national` and
-            // `-tech` are each cut by six tenths of a point and what is left
-            // of them is drawn in the navigation bar's own band. The run's
-            // screenshot shows it plainly: that band holds `Back` and a wash
-            // of the picked chip's amber, and not one of the three words is
-            // legible. Three cut leaves, three anonymous findings, and the
-            // six chips below them — identical ink, same pass — measured
-            // 5.07:1 and audited clean. ``newsCutLeaves(in:)`` carries the
-            // count; a fourth anonymous finding fails this case.
+            // The anonymous allowance is unchanged: scrolled to the foot the
+            // first chip row is cut by the page's top edge, and
+            // ``newsCutLeaves(in:)`` allows one anonymous `Contrast failed`
+            // per leaf it measures cut (R003 and I014: three and three).
             for _ in 0..<12 { app.swipeUp(velocity: .slow) }
             evidence(app, "news-12-audited-foot")
-            findings += try auditNews(app, "news-foot", "the foot of the page")
+            let foot = try auditNews(app, "news-foot", Self.newsFootPass)
+            findings += newsFootContrastMeasured(app, foot)
         } catch {
             mishaps.append("the page and foot audits could not be run: \(error)")
         }
@@ -1397,11 +1370,12 @@ extension StubHouseUITests {
                 + "edge was measured cutting in half on that pass (the `CUT "
                 + "::` lines in the log name them). Nothing else is "
                 + "discounted: a `Contrast failed` naming a category chip, "
-                + "`saved feed` or a person chip is this screen's to fix — "
-                + "R001 named ten of them and R002 named none, with only this "
-                + "screen's own ring changed in between (the foot pass's "
-                + "comment carries that measurement). An anonymous one beyond "
-                + "the cut count is an unknown this case reports"
+                + "`saved feed` or a person chip is this screen's to fix, "
+                + "except a foot-pass chip or `saved feed` whose own ink, "
+                + "measured where the page settled after the audit, clears "
+                + "4.5:1 (the `NEWS FOOT` lines print each reading; a kept "
+                + "one says why). An anonymous one beyond the cut count is an "
+                + "unknown this case reports"
         )
     }
 
@@ -1962,6 +1936,248 @@ extension StubHouseUITests {
         return rest.map { "[\(what)] \($0)" }
     }
 
+    // MARK: - 12b. the foot pass's contrast, measured where the page settled
+
+    /// The foot pass's name, spelled once: ``auditNews(_:_:_:behindADialog:allowingLeavesCutByAnEdge:)``
+    /// prefixes every line it returns with it, and ``newsFootTarget(in:)``
+    /// takes only lines that carry it, which is what keeps the allowance off
+    /// the page and dialog passes.
+    static let newsFootPass = "the foot of the page"
+
+    /// How many flicks ``newsFootContrastMeasured(_:_:)`` may spend bringing
+    /// an element the navigation bar covers wholly into view. The first chip
+    /// row needs under 45 points; six slow flicks is far more than that.
+    static let newsFootFlicks = 6
+
+    /// The foot pass's named `Contrast failed` findings on a category chip or
+    /// on `saved feed`, **measured** where the page settled after the audit,
+    /// rather than believed (I018: the audit judged the page 40.3 points away
+    /// from where the case left it; the comment at the foot pass has it).
+    ///
+    /// Every other line is returned untouched, so it fails the case. Each line
+    /// it takes is judged by ``newsFootJudge(_:on:read:)`` on a picture and a
+    /// tree retaken after the audit (``newsFootSettled(_:_:)``): excused and
+    /// printed with its reading at 4.5:1 or better; returned, with the reason
+    /// appended, when it reads under that or cannot be read. An element the
+    /// navigation bar covers is brought wholly into view one flick at a time
+    /// and read there; one that never gets there is returned, and the tree
+    /// is printed.
+    @MainActor
+    func newsFootContrastMeasured(_ app: XCUIApplication, _ lines: [String]) -> [String] {
+        var kept: [String] = []
+        var pending: [String] = []
+        for line in lines {
+            if Self.newsFootTarget(in: line) == nil { kept.append(line) } else { pending.append(line) }
+        }
+        guard !pending.isEmpty else { return kept }
+        print(
+            "NEWS FOOT: \(pending.count) named `Contrast failed` on this screen's chips or "
+                + "`saved feed` — measured where the page settled"
+        )
+        var flicks = 0
+        var excused = 0
+        while !pending.isEmpty {
+            let moment = flicks == 0 ? "settled after the audit" : "after \(flicks) flick(s)"
+            guard let settled = newsFootSettled(app, moment) else {
+                for line in pending {
+                    let why = "no steady picture and tree could be taken \(moment), so it was not measured"
+                    print("NEWS FOOT NOT excused :: \(why) :: \(line)")
+                    kept.append("\(line) :: NOT excused: \(why)")
+                }
+                break
+            }
+            let (page, picture) = settled
+            var covered: [(line: String, frame: CGRect)] = []
+            for line in pending {
+                let verdict = Self.newsFootJudge(line, on: page) {
+                    Self.roomsLeafInk(picture, window: page.window, frame: $0)
+                }
+                switch verdict {
+                case .notOurs:
+                    kept.append(line)
+                case .excused(let said):
+                    excused += 1
+                    print("NEWS FOOT excused, measured \(moment) :: \(said) :: \(line)")
+                case .kept(let why):
+                    print("NEWS FOOT NOT excused, \(moment) :: \(why) :: \(line)")
+                    kept.append("\(line) :: NOT excused (\(moment)): \(why)")
+                case .covered(let frame):
+                    covered.append((line: line, frame: frame))
+                }
+            }
+            pending = covered.map { $0.line }
+            guard let first = covered.first else { break }
+            guard flicks < Self.newsFootFlicks else {
+                for one in covered {
+                    let why = "never wholly in view: at \(one.frame) \(moment), against the visible page \(page.visible)"
+                    print("NEWS FOOT NOT excused :: \(why) :: \(one.line)")
+                    kept.append("\(one.line) :: NOT excused: \(why)")
+                }
+                print("=== NEWS FOOT: COVERED ELEMENTS NEVER CAME WHOLLY INTO VIEW — tree follows ===")
+                print(app.debugDescription)
+                break
+            }
+            print(
+                "NEWS FOOT: \(covered.count) covered \(moment) (first at \(first.frame), "
+                    + "visible page \(page.visible)) — one flick"
+            )
+            if first.frame.midY < page.visible.midY {
+                app.swipeDown(velocity: .slow)
+            } else {
+                app.swipeUp(velocity: .slow)
+            }
+            flicks += 1
+        }
+        print("NEWS FOOT measured: excused=\(excused) returned=\(kept.count) flicks=\(flicks)")
+        return kept
+    }
+
+    /// The page's geometry and a picture of it, **after** the audit, taken as
+    /// tree, screenshot, tree, and kept only when the two trees agree on
+    /// every element ``newsFootPage(in:)`` reads: a page still moving is not
+    /// a measurement. Three tries, a second apart; `nil` with a line saying
+    /// why. The picture is attached, so every reading can be checked against
+    /// what was measured.
+    @MainActor
+    func newsFootSettled(_ app: XCUIApplication, _ moment: String) -> (NewsFootPage, CGImage)? {
+        for attempt in 1...3 {
+            guard app.state == .runningForeground else {
+                print("NEWS FOOT: the app is \(app.state.rawValue), not running — nothing measured \(moment)")
+                return nil
+            }
+            let beat = XCTestExpectation(description: "the page settles before it is measured")
+            _ = XCTWaiter.wait(for: [beat], timeout: 1)
+            guard let before = newsTree(app) else { return nil }
+            let shot = app.screenshot()
+            guard let after = newsTree(app) else { return nil }
+            let one = Self.newsFootPage(in: before)
+            let two = Self.newsFootPage(in: after)
+            guard one == two else {
+                print("NEWS FOOT: the page moved while it was photographed \(moment) (try \(attempt) of 3)")
+                continue
+            }
+            guard let picture = shot.image.cgImage else {
+                print("NEWS FOOT: the screenshot \(moment) has no bitmap")
+                return nil
+            }
+            let attachment = XCTAttachment(screenshot: shot)
+            attachment.name = "news-12-foot-measured-" + moment.replacingOccurrences(of: " ", with: "-")
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            print(
+                "NEWS FOOT page \(moment): window \(two.window), visible \(two.visible); "
+                    + two.elements.map { "'\($0.label)' \($0.frame)" }.joined(separator: ", ")
+            )
+            return (two, picture)
+        }
+        return nil
+    }
+
+    /// What ``newsFootJudge(_:on:read:)`` needs from one tree: the window,
+    /// the part of the page's scroll view the navigation bar does not cover,
+    /// and every category chip and `saved feed` heading with its frame.
+    @MainActor
+    static func newsFootPage(in tree: XCUIElementSnapshot) -> NewsFootPage {
+        let nodes = newsDescendants(tree)
+        let viewport = newsPageViewport(in: tree)
+        let bar = nodes.first { $0.elementType == .navigationBar }?.frame ?? .zero
+        var visible = viewport
+        // Scrolled to the foot, the bar (93.3–137.3 in I018) lies over the
+        // scroll view's top (93.3): what is under it is not drawn.
+        if !viewport.isEmpty, !bar.isEmpty, bar.minY <= viewport.minY + 0.5, bar.maxY > viewport.minY {
+            visible = CGRect(
+                x: viewport.minX,
+                y: bar.maxY,
+                width: viewport.width,
+                height: max(0, viewport.maxY - bar.maxY)
+            )
+        }
+        let elements = nodes
+            .filter {
+                ($0.elementType == .button
+                    && $0.identifier.hasPrefix(NewsStringsUnderTest.categoryChipPrefix))
+                    || ($0.elementType == .staticText && $0.label == NewsStringsUnderTest.savedFeed)
+            }
+            .map {
+                NewsFootElement(
+                    type: $0.elementType.rawValue,
+                    id: $0.identifier,
+                    label: $0.label,
+                    frame: $0.frame
+                )
+            }
+        return NewsFootPage(window: tree.frame, visible: visible, elements: elements)
+    }
+
+    /// The element a foot-pass line names, when it is one this allowance may
+    /// measure: a **`Contrast failed`** line from **the foot pass**, naming a
+    /// `news-category-…` Button or the `saved feed` StaticText (no
+    /// identifier). `nil` for everything else — another headline, another
+    /// pass, another element, an anonymous finding — so that line fails.
+    static func newsFootTarget(in line: String) -> NewsFootElement? {
+        guard line.hasPrefix("[\(newsFootPass)] Contrast failed:"),
+              let element = line.range(of: "| element: type=")
+        else { return nil }
+        let digits = line[element.upperBound...].prefix { $0.isNumber }
+        guard let type = UInt(digits), let label = roomsLabel(in: line) else { return nil }
+        var id = ""
+        if let open = line.range(of: " id='", range: element.upperBound..<line.endIndex),
+           let close = line.range(of: "' label='", range: open.upperBound..<line.endIndex) {
+            id = String(line[open.upperBound..<close.lowerBound])
+        }
+        let chip = NewsStringsUnderTest.categoryChipPrefix
+        let isChip = type == XCUIElement.ElementType.button.rawValue
+            && id.hasPrefix(chip) && id.count > chip.count
+        let isSavedFeed = type == XCUIElement.ElementType.staticText.rawValue
+            && id.isEmpty && label == NewsStringsUnderTest.savedFeed
+        guard isChip || isSavedFeed else { return nil }
+        return NewsFootElement(type: type, id: id, label: label, frame: frame(in: line) ?? .zero)
+    }
+
+    /// One foot-pass line against one settled page. **Pure**: the page is
+    /// data and the ink comes from `read`, so the judgement needs no app.
+    ///
+    /// * not ``newsFootTarget(in:)``'s: `.notOurs` (the caller keeps it);
+    /// * no visible page, or not exactly one element answering to the line's
+    ///   type, identifier and label: `.kept`, with the reason;
+    /// * the element not wholly inside the visible page: `.covered`, so the
+    ///   caller can bring it into view and ask again;
+    /// * nothing but paper in its frame: `.kept`;
+    /// * its ink under ``roomsContrastFloor`` (4.5:1, held whatever the text
+    ///   size): `.kept`, with the reading;
+    /// * otherwise `.excused`, with the reading.
+    @MainActor
+    static func newsFootJudge(
+        _ line: String,
+        on page: NewsFootPage,
+        read: (CGRect) -> (ink: String, paper: String, ratio: Double)?
+    ) -> NewsFootVerdict {
+        guard let target = newsFootTarget(in: line) else { return .notOurs }
+        let name = target.id.isEmpty ? "'\(target.label)'" : target.id
+        let visible = page.visible
+        guard !visible.isEmpty else { return .kept("no visible page was measured, so \(name) was not read") }
+        let twins = page.elements.filter {
+            $0.type == target.type && $0.id == target.id && $0.label == target.label
+        }
+        guard twins.count == 1, let one = twins.first else {
+            return .kept("\(twins.count) elements answer to \(name) in the settled tree, not one")
+        }
+        let at = one.frame
+        let whole = at.height > 0
+            && at.minX >= visible.minX - 0.5 && at.maxX <= visible.maxX + 0.5
+            && at.minY >= visible.minY - 0.5 && at.maxY <= visible.maxY + 0.5
+        guard whole else { return .covered(at) }
+        guard let reading = read(at) else {
+            return .kept("\(name) at \(at) holds only its paper — nothing to read")
+        }
+        let said = "\(name) drawn at \(at) (Apple's frame \(target.frame)) reads \(reading.ink) on "
+            + "\(reading.paper) " + String(format: "%.2f", reading.ratio) + ":1"
+        guard reading.ratio >= roomsContrastFloor else {
+            return .kept("\(said), under 4.5:1 where it is drawn — the colour is the defect")
+        }
+        return .excused(said)
+    }
+
     // MARK: - 13. the largest type size
 
     /// At AX5 the topic row is a column and the text is **measured** to have
@@ -2108,6 +2324,13 @@ enum NewsStringsUnderTest {
     /// ``NewsStrings/removeTopicBody(_:)`` for the seeded free-form topic.
     static let removeFormulaOne = "Remove \"Formula 1\" and its feeds?"
 
+    /// ``NewsStrings/savedFeedLabel``, the saved feed card's heading.
+    static let savedFeed = "saved feed"
+
+    /// Every category chip's identifier starts with this
+    /// (`NewsTopicsView.swift`: `news-category-<word>`).
+    static let categoryChipPrefix = "news-category-"
+
     /// ``NewsStrings/noPeople`` and its sub-line.
     static let noPeople = "no people enrolled yet"
     static let noPeopleSub = "enroll a speaker under People in Settings first"
@@ -2151,4 +2374,35 @@ enum NewsStringsUnderTest {
 
     /// The stub's detail for a roster read that failed.
     static let rosterFailureDetail = "the people table is not answering"
+}
+
+/// One element as ``StubHouseUITests/newsFootPage(in:)`` reads it from a
+/// tree, or as ``StubHouseUITests/newsFootTarget(in:)`` reads it from an
+/// audit line (`frame` is then Apple's).
+struct NewsFootElement: Equatable {
+    let type: UInt
+    let id: String
+    let label: String
+    let frame: CGRect
+}
+
+/// The foot of News after the audit: the window (for the picture's scale),
+/// the part of the page's scroll view the navigation bar leaves uncovered,
+/// and the elements the foot allowance may measure.
+struct NewsFootPage: Equatable {
+    let window: CGRect
+    let visible: CGRect
+    let elements: [NewsFootElement]
+}
+
+/// ``StubHouseUITests/newsFootJudge(_:on:read:)``'s answer for one line.
+enum NewsFootVerdict: Equatable {
+    /// Not a line this allowance takes; it fails the case.
+    case notOurs
+    /// Measured at or over 4.5:1 where drawn; the reading.
+    case excused(String)
+    /// Measured under 4.5:1, or unmeasurable; the reason. It fails the case.
+    case kept(String)
+    /// Not wholly in the visible page at this frame; bring it into view.
+    case covered(CGRect)
 }
