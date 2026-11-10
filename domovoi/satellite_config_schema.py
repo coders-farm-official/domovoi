@@ -98,10 +98,10 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "wake.patience_frames", "Wake confirmation", "Wake word",
         "How long the wake word must be heard before the room wakes, in "
         "80 ms steps: the score has to stay up that many steps in a row and "
-        "reach the wake sensitivity on at least one. Default 2 (adds 80 ms): "
-        "a blip from the TV or a phone no longer wakes the room, a wake word "
-        "said across the room still does. Raise to 3 if the room still wakes "
-        "on background noise; 1 wakes on the first blip, as before. A wake "
+        "reach the wake sensitivity on at least one. Default 1: the first "
+        "strong moment wakes the room. Raise to 2 or 3 if the room wakes on "
+        "short blips from the TV or a phone; a voice across the room can then "
+        "need saying twice, so try it before keeping it. A wake "
         "word said to interrupt a reply (barge-in) or during a drop-in call "
         "still counts on the first step.",
         "int", min=1, max=5, step=1, widget="slider",

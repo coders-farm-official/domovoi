@@ -115,12 +115,12 @@ def test_nothing_wakes_in_the_cooldown_and_the_swallowed_score_is_kept() -> None
 
 
 def test_the_settings_fall_back_to_the_defaults() -> None:
-    assert wake_gate.PATIENCE_DEFAULT == 2 and wake_gate.COOLDOWN_SEC_DEFAULT == 2.0
-    assert wake_gate.patience_setting(None) == 2
+    assert wake_gate.PATIENCE_DEFAULT == 1 and wake_gate.COOLDOWN_SEC_DEFAULT == 2.0
+    assert wake_gate.patience_setting(None) == 1
     assert wake_gate.patience_setting(3) == 3
     assert wake_gate.patience_setting(0) == 1 and wake_gate.patience_setting(9) == 5
     for bad in ("x", True, 2.5):
-        assert wake_gate.patience_setting(bad) == 2
+        assert wake_gate.patience_setting(bad) == 1
     assert wake_gate.cooldown_setting(None) == 2.0
     assert wake_gate.cooldown_setting(0) == 0.0
     assert wake_gate.cooldown_setting(99) == 10.0 and wake_gate.cooldown_setting(-1) == 0.0
@@ -133,7 +133,7 @@ def test_the_settings_fall_back_to_the_defaults() -> None:
 
 def test_the_config_reads_them_and_reports_them() -> None:
     cfg = client.Config.from_toml({})
-    assert (cfg.wake_patience_frames, cfg.wake_cooldown_sec) == (2, 2.0)
+    assert (cfg.wake_patience_frames, cfg.wake_cooldown_sec) == (1, 2.0)
     cfg = client.Config.from_toml({"wake": {"patience_frames": 3, "cooldown_sec": 2.5}})
     assert (cfg.wake_patience_frames, cfg.wake_cooldown_sec) == (3, 2.5)
     assert {"wake.patience_frames", "wake.cooldown_sec"} <= remote_config.SETTABLE

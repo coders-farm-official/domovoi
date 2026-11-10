@@ -6,7 +6,7 @@ ended, so a one-chunk blip from the TV woke the room, and media that kept
 saying the wake word re-woke it seconds after every turn. Two rules now,
 both defaults with no setup:
 
-* **Patience** (``[wake] patience_frames``, default 2): the score must stay
+* **Patience** (``[wake] patience_frames``, default 1): the score must stay
   up on that many chunks IN A ROW and reach the threshold on at least one
   of them. "Up" is a floor below the threshold, ``max(0.3, threshold x
   0.6)`` (never above the threshold), so a far-field wake word whose peak
@@ -14,7 +14,12 @@ both defaults with no setup:
   threshold of 0.8) still wakes, while a lone blip (0.85 between chunks
   under 0.2) does not. A real wake word keeps the score raised for several
   chunks (the model's features span about a second); the cost is 80 ms per
-  chunk of patience past the first (2 = +80 ms). Only the main wake loop
+  chunk of patience past the first (2 = +80 ms). The default is 1 (wake on
+  the first chunk over the threshold): on an XVF3800 a real "hey Jarvis"
+  across the office scored 0.90 on ONE chunk with its neighbours under the
+  floor, so 2 rejected a third of real wakes (owner's office log,
+  2026-11-10). 2 or 3 stay available for a room that wakes on blips; the
+  core's overheard rule is what keeps media from getting answers. Only the main wake loop
   uses it: a wake word said to interrupt a reply (barge-in) or during a
   drop-in call still wakes on one chunk.
 * **Cooldown** (``[wake] cooldown_sec``, default 2.0): after a turn that
@@ -33,7 +38,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-PATIENCE_DEFAULT = 2
+PATIENCE_DEFAULT = 1
 PATIENCE_MIN = 1
 PATIENCE_MAX = 5
 COOLDOWN_SEC_DEFAULT = 2.0

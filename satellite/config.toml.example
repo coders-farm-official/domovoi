@@ -171,12 +171,12 @@ threshold = 0.5
 
 # How many 80 ms chunks in a row the score must stay up (above
 # max(0.3, threshold x 0.6)) and reach the threshold on at least one, before
-# the room wakes (1-5). 2, the default, adds 80 ms: a one-chunk blip from a
-# TV or a phone no longer wakes the room; a wake word said across the room
-# keeps the score up for several chunks and still does. 1 = as before. A
-# wake word that interrupts a reply (barge-in) or comes during a drop-in call
-# still counts on one chunk.
-# patience_frames = 2
+# the room wakes (1-5). 1, the default, wakes on the first chunk over the
+# threshold. 2 or 3 (each adds 80 ms) ignore one-chunk blips from a TV or a
+# phone, but a voice across the room can then need saying twice. A wake word
+# that interrupts a reply (barge-in) or comes during a drop-in call always
+# counts on one chunk.
+# patience_frames = 1
 
 # Seconds the wake word is ignored after a turn that went wrong (0-10, 0 =
 # off): one the server ignored as background talk, one cut off at
