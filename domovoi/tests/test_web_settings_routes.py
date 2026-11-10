@@ -387,19 +387,21 @@ def _src(name: str) -> str:
 
 def test_settings_is_five_groups_in_plain_words(driven) -> None:
     """Owner design 2026-10-21. Printers & scanners, Search and Chat are
-    slots: they show once their panel is registered, never as a promise."""
+    slots: they show once their panel is registered, never as a promise.
+    Since 2026-11-09 the first group is Household, with People in it, and
+    App layout is in System (test_web_nav_groups.py)."""
     assert driven["pure"]["groups"] == [
-        ["Rooms & devices", ["Rooms", "Phones & browsers", "App layout"]],
+        ["Household", ["Rooms", "People", "Phones & browsers"]],
         ["Voice", ["Wake words", "Voices", "Greetings"]],
         ["Chat & AI", ["Models"]],
         ["Privacy", ["Internet", "Voice history"]],
-        ["System", ["About & updates", "Health", "Advanced"]],
+        ["System", ["About & updates", "Health", "App layout", "Advanced"]],
     ]
     o = driven["settings_groups_and_names"]
-    assert o["heads"] == ["Rooms & devices", "Voice", "Chat & AI", "Privacy", "System"]
+    assert o["heads"] == ["Household", "Voice", "Chat & AI", "Privacy", "System"]
     assert [label for label, _ in o["items"]] == [
-        "Rooms", "Phones & browsers", "App layout", "Wake words", "Voices", "Greetings", "Models",
-        "Internet", "Voice history", "About & updates", "Health", "Advanced"]
+        "Rooms", "People", "Phones & browsers", "Wake words", "Voices", "Greetings", "Models",
+        "Internet", "Voice history", "About & updates", "Health", "App layout", "Advanced"]
     assert dict(o["items"])["Voice history"] == "#settings/voice-history"
     assert o["title"] == "Greetings"
 
@@ -408,7 +410,7 @@ def test_every_settings_section_has_an_address_and_its_old_names_open_it(driven)
     o = driven["pure"]
     slugs = dict(o["slugs"])
     assert slugs == {s: s for s in (
-        "rooms", "phones-and-browsers", "app-layout", "wake-words", "voices", "greetings", "models",
+        "rooms", "people", "phones-and-browsers", "app-layout", "wake-words", "voices", "greetings", "models",
         "internet", "voice-history", "about", "health", "advanced")}
     ids = [i for i, _ in o["slugs"]]
     assert o["roundTrip"] == ids

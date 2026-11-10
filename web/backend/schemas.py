@@ -432,11 +432,15 @@ class ConversationTurn(BaseModel):
     # "no_answer" with no reason: its turn never finished.
     status: str = "answered"
     # For no_answer / unheard: "timed_out" | "error" | "interrupted" |
-    # "restarted" | "speech_off"; None otherwise.
+    # "restarted" | "speech_off" | "overheard" (a long capture left
+    # unanswered on purpose as background talk); None otherwise.
     no_answer_reason: str | None = None
     # The request's recording length in milliseconds (a satellite's turns
     # from V043 on); None otherwise.
     audio_ms: int | None = None
+    # The wake word's peak score, 0..1 (V044; satellites from 2026-11-09,
+    # wake-word turns only); None otherwise.
+    wake_score: float | None = None
 
 
 class RecentlyPlayed(BaseModel):

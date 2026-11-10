@@ -91,7 +91,7 @@ export SATELLITE_ADOPTION_SCAN_DIRS=/media/domovoi/setup
 room's default is the Wi-Fi setup portal, which never touches the server's
 USB ports ([SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md)). And if the
 server can't mount the card, pick **download overlay zip** when you prepare
-it (Settings → Rooms & devices → Rooms → prepare a room's SD card) and unzip it onto the card
+it (Settings → Household → Rooms → prepare a room's SD card) and unzip it onto the card
 from another computer. USB adoption still has an open checklist of its own
 ([HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md)); the manual path in
 [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) is the proven
@@ -386,7 +386,7 @@ sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-es
 ```
 
 `xorriso` is what the core runs to make an old computer's room stick
-(Settings → Rooms & devices → Rooms → add a spare device → old computer; a GPL program
+(Settings → Household → Rooms → add a spare device → old computer; a GPL program
 run on its own, never bundled with Domovoi). `libchromaprint-tools`
 provides `fpcalc` for library enrichment, and
 `python3-dev` + `build-essential` are what let the sdist-only pins
@@ -922,7 +922,7 @@ sorts after `50-domovoi-restart.conf`.
 
 **The dashboard's Restart the core.** When the core doesn't answer, an
 admin gets **Restart the core** on Settings → System → About & updates, on Settings →
-Rooms & devices → Rooms and on Home's "isn't answering" row. It ends only a core that is
+Household → Rooms and on Home's "isn't answering" row. It ends only a core that is
 truly stuck, never one that is busy, slow or missing its database:
 
 - **Liveness, not health.** The web asks `GET /v1/alive`, which the
@@ -2377,7 +2377,7 @@ sudo ufw allow from 192.168.0.0/16 to any port 8050:8099 proto tcp
 ```
 
 **Printers and scanners.** Domovoi prints to and scans from network
-printers only (Settings → Rooms & devices → Printers & scanners). It finds them with a
+printers only (Settings → Household → Printers & scanners). It finds them with a
 three-second multicast (mDNS) look, and the answers come back to UDP 5353.
 A host firewall that drops incoming multicast hides the printers from that
 look; **Look again** (which also sweeps your home network) and **Add by

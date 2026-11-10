@@ -261,14 +261,14 @@ exists, asks "Add this phone's voice to X?" and a "yes" adds that clip to
 X's phone samples (at most three by default, the oldest dropped) rather
 than enrolling a second X; a new name enrols into the phone set. Only the
 chat mic does this. An admin sees and deletes phone samples apart from
-satellite samples on the People page.
+satellite samples in Settings → Household → People.
 
 **"My name is …" at a satellite** follows the same one-name-one-person
 rule (2026-10-15): for an X who exists, and who the voice was not matched
 as, the satellite asks "I already know someone called X. Is that you?",
 and a "yes" as the very next turn (within 60 s) adds that clip to X's
 **satellite** samples for that room; a "no" enrols a new person called X
-from that clip, and the People page flags the pair. Next
+from that clip, and Settings → Household → People flags the pair. Next
 to the learning from a run of confident matches, this is the one way a
 satellite sample is added to someone who already exists, and it rests on
 what the speaker says: a voice is not a password, and anyone in a room can
@@ -276,7 +276,7 @@ claim a name — as anyone could already enrol a second X before. What it
 changes is that the clip joins X's voice (so the speaker may then be
 recognized as X, with X's memories and favorites) rather than starting a
 person of its own. An opted-out voice is never added, and an admin sees
-each sample with its room and date on the People page and deletes a wrong
+each sample with its room and date in Settings → Household → People and deletes a wrong
 one there. Two people who already share a name are never guessed between:
 every path says so and leaves the choice to an admin, who renames
 (`PATCH /api/people/{id}`, admin tier; a name someone else has is refused)
@@ -297,12 +297,12 @@ memories and favorites, and what they said (their turns, see
 [Voice history](#voice-history-whats-kept-for-how-long)) — only when the
 voice matches the person's **own**
 samples (the ones they enrolled with, or learned from their own voice) at
-the usual match threshold, or when an admin does it on the People page. Any
+the usual match threshold, or when an admin does it in Settings → Household → People. Any
 other voice loses only the samples it claimed (and what rooms learned
 through them), and Domovoi says so: "I've forgotten the voice you added to
 Sam. I kept Sam's profile and memories …". A voice that matches
 neither the person nor a claim of its own forgets nothing, and is told why.
-A household with no claims sees no change. The People page marks each
+A household with no claims sees no change. Settings → Household → People marks each
 claimed sample; where it was claimed and by whom are shown to an admin
 only, who deletes a wrong one there (a phone sample's room names the phone,
 so `GET /api/people/{id}/profiles`, which is open, leaves it out for
@@ -370,6 +370,17 @@ drop-in socket, the log pull) were gated already. The dashboard asks an
 unpaired browser to pair when one of these is refused and shows the
 history once it has; the Android app sends the token on every request
 anyway.
+
+**Where the server's memory goes is an admin read (2026-11-10).**
+Settings → System → Health's memory row (`GET /api/models/memory`, and the
+core's `GET /v1/admin/memory` behind it) names the services, the Docker
+containers and the largest programs running on the box, so it takes
+`require_admin_read` at both hops, like the container guard's status and
+the disk row beside it: a household member's browser never asks for it.
+Programs are named by the kernel's `comm` only (`/proc/<pid>/comm`, at most
+15 characters); their command lines and environments are never read, since
+an argument can carry a password or a token. Nothing in it changes
+anything on the host.
 
 **So is who is home, and the calendar (2026-10-08).** The `/ws/state`
 push needed a household credential because it carries presence, calendar
@@ -1809,7 +1820,7 @@ Owner, 2026-10-17 (before 1.0): what people say to Domovoi was kept with no
 limit, forgetting a person only took their name off it, and there was no
 delete. Now there is a limit, a delete, and forgetting someone removes what
 they said. Everything below is `domovoi/voice_history.py`,
-`domovoi/workers/voice_history_pruner.py`, V030 and People → **Voice
+`domovoi/workers/voice_history_pruner.py`, V030 and Settings → Household → People → **Voice
 history** on the dashboard (the same "Keep voice history" setting is also
 under Settings → Advanced → Privacy; Settings → Privacy → Voice history is
 the page for command recordings, below). Chat is not voice history: a
@@ -1818,8 +1829,8 @@ home-server chat is kept until it is deleted (see [Data at rest](#data-at-rest))
 | | |
 |---|---|
 | **What voice history is** | Every routed turn — what was said and what Domovoi answered (`conversation_log`: the Conversations and Sessions tabs read it) and its routing record with the transcript (`intents_log`; the dashboard's `[ui]` actions are rows there too, and so is the fast lane's own hearing, inside `timings`) — plus each room's short-term conversation (`sessions.context`: the last exchanges, the last answer for "say that again", what a turn parked waiting for a "yes") and the satellites' logs kept on the server (`~/.domovoi/satellite-logs/`, a `heard:` line for every utterance and the text of every reply). A turn said into the app's chat mic is one of these too (room `phone-<device id>`). |
-| **How long** | **Keep voice history**: 30 days, **90 days (the default)**, 1 year, or forever. Once a day the core deletes everything older: both logs' rows, a session idle that long, the older exchanges of a room that is still talking, and the older lines of the satellites' logs. Saving a shorter setting does it at once (People → Voice history asks first). Forever deletes nothing on its own. The setting is `VOICE_HISTORY_KEEP` (`30`, `90`, `365`, `forever`); a value written in `.env` by hand rounds **up** to the next choice, never down (45 keeps 90 days; 0 or more than a year keeps everything), and anything unreadable (`6 months`, `2y`, a typo) deletes nothing: it reads as forever until it is fixed, and the log says so once. **The first run after the update that brings this deletes everything older than 90 days** unless `VOICE_HISTORY_KEEP` says otherwise. A run is skipped, with a warning in the log, when the server's clock looks wrong: earlier than the newest turn, or so far ahead that every turn would go; so a house that has said nothing for longer than the setting keeps its last turns until somebody speaks again. |
-| **Deleting it all** | People → Voice history → **Delete all voice history** (an admin), after a confirmation that names what goes and what stays. Everything said until that moment goes, everywhere: the rows of both logs, every room's short-term conversation and the satellites' logs. It runs on the server as a job (`voice_history_jobs`), in the same small batches as the daily run; the page shows its progress, a restart in the middle finishes it at the next start, and a failure is retried within the hour. Something said after the press stays. |
+| **How long** | **Keep voice history**: 30 days, **90 days (the default)**, 1 year, or forever. Once a day the core deletes everything older: both logs' rows, a session idle that long, the older exchanges of a room that is still talking, and the older lines of the satellites' logs. Saving a shorter setting does it at once (Settings → Household → People → Voice history asks first). Forever deletes nothing on its own. The setting is `VOICE_HISTORY_KEEP` (`30`, `90`, `365`, `forever`); a value written in `.env` by hand rounds **up** to the next choice, never down (45 keeps 90 days; 0 or more than a year keeps everything), and anything unreadable (`6 months`, `2y`, a typo) deletes nothing: it reads as forever until it is fixed, and the log says so once. **The first run after the update that brings this deletes everything older than 90 days** unless `VOICE_HISTORY_KEEP` says otherwise. A run is skipped, with a warning in the log, when the server's clock looks wrong: earlier than the newest turn, or so far ahead that every turn would go; so a house that has said nothing for longer than the setting keeps its last turns until somebody speaks again. |
+| **Deleting it all** | Settings → Household → People → Voice history → **Delete all voice history** (an admin), after a confirmation that names what goes and what stays. Everything said until that moment goes, everywhere: the rows of both logs, every room's short-term conversation and the satellites' logs. It runs on the server as a job (`voice_history_jobs`), in the same small batches as the daily run; the page shows its progress, a restart in the middle finishes it at the next start, and a failure is retried within the hour. Something said after the press stays. |
 | **Forgetting one person** | "Forget me" in the person's own voice, answered **yes** to "Say yes to delete everything you've said" (the very next turn, within a minute, in the same room or on the same phone, and not in somebody else's recognized voice; anything else deletes nothing), or People → a person → **forget person** (an admin), deletes **what they said**: every turn voice identification attributed to them as the **speaker** (the turn's `person_id`), with Domovoi's answers, and the short-term conversation of each session they spoke in (those entries name no speaker, so the whole of it goes); then the person, their voice samples, memories, favorites and preferences — one transaction. **A turn in which somebody else said their name is not theirs and stays**: it carries the other speaker's id, or none, and the text is never searched. A voice that only *claimed* their name loses only the samples it added and deletes no turns (S1 above); what that voice said while it was recognized as them stays filed under them, and goes with their own "forget me". The "forget me" and the question are theirs and go with the rest; the "yes" is written with nobody's id on it and goes when the setting's window passes. The tool router never offers the forget command on talk about forgetting something else ("forget about it", "forget that"). |
 | **Who can read it** | Unchanged (the 2026-10-16 delta review left this tier as it is): any **paired device** — one holding the household token (a header, or `?device_token=`), or an admin's session (the Bearer, or the dashboard's cookie) — reads a room's Conversations and Sessions (`GET /api/satellites/{room}/conversations`, `/sessions`) and a person's (`GET /api/people/{id}/conversations`, `/sessions`); anything else on the LAN gets `401`. Before first-run setup everything is open to the LAN, as everywhere. `GET /api/voice-history` — the setting, how many turns are kept and since when, the last cleanup and delete, never a word — is the same tier. Changing the setting and deleting it all are an admin's (Bearer; `501` before setup); forgetting a person from the dashboard is an admin's (Bearer; the pre-setup grace kept, like every person and profile delete). |
 | **What stays** | Memories already extracted from conversations (their own table; delete one on the person's Memory tab), voice samples, voice notes, timers and their 7-day history, the music played ("Recently played", its own 90-day setting), chat threads (a chat-mic turn is also a message in its thread, kept until the thread is deleted; forgetting the speaker clears its speaker mark), the opt-in command recordings (14 days at most), the names a person taught for an artist, and people themselves. |
@@ -1870,6 +1881,21 @@ and migration V018.
 | **"Only reminders for this device"** (per satellite, default off) | A row in `timer_own_only_rooms` turns it on: that satellite then announces only the timers and reminders set on it; the room a timer was set in always announces its own. Read open (`GET /api/satellites/{room}/timer-announcements`, and `timers_own_only` on every roster row) — anyone in the house may see how a room behaves, like `capture_commands`. Written on the **device tier** (`PUT` with the household token or an admin Bearer, plus the `X-Requested-With` header every write needs; the dashboard cookie alone is `403`), like volume and the room label, because it only changes what a room *says* — on, the room says less; off, the default, it announces every room's timers. It is neither a privacy control (command recording, which records audio, is the admin security tier) nor device configuration (the satellite config push rewrites the Pi and is admin), and the Android app, which holds only the household token, carries the same switch. |
 | **The dashboard's alert** | A card per fire in the corner of every open dashboard page, until dismissed (dismissals are per browser, kept in its own storage) or 30 minutes on. No browser notification and no sound: a plain-http LAN page is not a secure context, and Web Push would need a third-party push service. |
 | **What it sends anywhere** | Nothing new. No Web Push, no FCM: the phone learns of a fire over its existing socket to the Domovoi server while the app is open, from a background check it makes to that same server about every 15 minutes while it is not (two reads with the household token, from an alarm, not a service), or from its own alarm. **The background check goes only over Wi-Fi or Ethernet**: it sends the household token, usually as plain http to the server's private address, and off Wi-Fi it asks nothing (the timers already on the phone still ring). **On any network, the token goes out only after the server at the saved address has proved its identity** — a token-less `GET /api/health?challenge=` whose signed answer must match the key this phone pinned (see "Trusting a server before talking to it"): on a foreign Wi-Fi that reuses the home subnet, or a hotspot redirecting the port, whatever answers there gets that probe and, failing it, nothing — not from the background check, not from the open app's socket and reachability loop, not from a ringing alarm's confirm (which has no Wi-Fi gate and so used to send the token over mobile data too). Before 2026-10-08 the token went to whatever held the address, and the phone did not remember which network it was paired on. |
+
+## The web menu layout (house-wide, admin)
+
+Settings → System → App layout → **Menu** lets an admin rename the
+sidebar's groups, add and delete groups, and move or reorder pages for every
+browser on this Domovoi (`web/backend/api/nav_layout.py`, migration V045
+`household_settings`).
+
+| | |
+|---|---|
+| **Who changes it** | An admin: `PUT` / `DELETE /api/nav-layout` take `require_admin_mutation` (an admin Bearer plus the `X-Requested-With` header every write needs; the dashboard cookie alone is `403`, the household token `401`). Like the other daily-surface admin writes it keeps the pre-setup grace: on a box nobody has claimed yet, anyone on the LAN can change it, as they can everything else then. |
+| **Who reads it** | Anyone who can open the dashboard: `GET /api/nav-layout` is open, like the plugin manifest the shell reads beside it before anyone signs in, and the `nav_layout.changed` push carries the same value to sockets that hold a household credential. It holds group names and page addresses only: no person, device or usage. Don't put anything private in a group's name. |
+| **What a layout can't do** | Show a page the screen would hide: the shared-screen rule (People, Chat, Files, News off a marked device) and the AI switch are applied in the browser after the layout, so a page the household hid never appears, whichever group it is in. Move Home (the brand row is fixed). Grant access to anything: a page's own tier is unchanged, the layout only says where its link sits. |
+| **What it stores** | One JSON object, validated by the server before it is kept: at most 8 KB, 12 groups, 40 pages per group, 60 top-level pages; group ids `^[a-z][a-z0-9-]{0,31}$`, unique; names plain text, 1 to 24 characters, no `<`, `>` or control characters (and drawn escaped anyway); routes in the manifest's route charset. The table itself refuses anything but a JSON object of at most 32 KB. A stored layout that no longer validates is read as the default. |
+| **The phone app** | Keeps its own layout on the phone and never reads this. |
 
 ## Lyrics (household tier only)
 

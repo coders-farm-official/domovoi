@@ -70,10 +70,13 @@ web/
 
 ## Settings
 
-`static/settings.jsx` builds Settings from `SETTINGS_GROUPS`: Rooms &
-devices (Rooms, Phones & browsers, Printers & scanners, App layout), Voice
-(Wake words, Voices, Greetings), Chat & AI (Models, Search, Chat), Privacy
-(Internet, Voice history) and System (About & updates, Health, Advanced).
+`static/settings.jsx` builds Settings from `SETTINGS_GROUPS`: Household
+(Rooms, People, Phones & browsers, Printers & scanners), Voice (Wake
+words, Voices, Greetings), Chat & AI (Models, Search, Chat), Privacy
+(Internet, Voice history), Documents (Fonts) and System (About & updates,
+Health, App layout, Advanced). People is the People page (`people.jsx`),
+drawn inside its section; `#people` opens it there, and a shared screen
+doesn't list it.
 A search box at the top finds sections and cards inside them. Every
 section's address is `#settings/<id>`; an id is never renamed (a rename
 adds an alias, so old links keep working).
@@ -142,8 +145,13 @@ The frontend shell is data-driven off **`GET /api/plugins/manifest`**
 text, wraps it in an IIFE, Babel-transforms it, and executes it —
 pages register under `window.DomovoiPlugins.<slug>.pages.<Name>`.
 Routes, sidebar items (interleaved with core `nav_order` values:
-music=10 … settings=100), badges, and browser-player source kinds all
-come from the manifest. A `plugins_changed` NOTIFY re-syncs the
+music=10 … settings=100, and placed in the sidebar's Media or Tools group
+by a page's `nav_group`; `components.jsx` `NAV_GROUPS` and
+`resolveNavTree`), badges, and browser-player source kinds all
+come from the manifest. Beside it the bootstrap reads the household's
+menu layout (**`GET /api/nav-layout`**, open; an admin edits it in
+Settings → System → App layout, `api/nav_layout.py`, V045), which
+`resolveNavTree` applies on top; a save pushes `nav_layout.changed`. A `plugins_changed` NOTIFY re-syncs the
 backend live and shows connected dashboards a "reload to get new
 pages" toast; upgraded plugin *web code* needs a web-process restart
 (Python can't re-import a loaded module safely).

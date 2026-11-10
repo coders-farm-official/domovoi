@@ -23,8 +23,10 @@ object PhoneBar {
 
     /** Screens that may sit on the bar, in the drawer's order: Home, then
      *  the workspace (Settings and the manual stay on the grid, as on the
-     *  web). */
-    val Choices: List<Route> = listOf(Route.Home) + WorkspaceRoutes
+     *  web), then People: off the drawer and the grid since the nav regroup
+     *  (a Settings section), but a deliberate personal pick here, so a bar
+     *  saved with it keeps the tab, which opens Settings → People. */
+    val Choices: List<Route> = listOf(Route.Home) + WorkspaceRoutes + Route.People
 
     private val codec = ListSerializer(String.serializer())
 

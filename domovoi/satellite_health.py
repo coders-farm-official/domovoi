@@ -270,6 +270,11 @@ SAMPLE_FIELDS: dict[str, Any] = {
     # 2011 certificates, whether the boot loader is frozen. The dashboard
     # warns when Secure Boot is on and the 2023 certificate is missing.
     "boot": _boot,
+    # 2026-11-09 (false wakes): the wake threshold the detector uses, and
+    # the [wake] threshold setting. They differ when a model pushed from the
+    # dashboard left its own threshold on the satellite; the room drawer
+    # says so. An older satellite sends neither.
+    "wake_threshold": _num, "wake_threshold_setting": _num,
 }
 
 

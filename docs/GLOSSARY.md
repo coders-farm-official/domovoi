@@ -59,13 +59,13 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. Since 2026-10-10 a guest may change the *room queue* of a room that is playing (add, remove one at a time, reorder — no clear, and never the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
 
-**Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Rooms & devices → Phones & browsers → Guests, from the guests the core recorded acting this week.
+**Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Household → Phones & browsers → Guests, from the guests the core recorded acting this week.
 
 **Handler** — the unit of voice functionality: a class that declares its *fast paths*, a tool schema for LLM routing, its network needs (`requires_network: no | degraded | yes`), and an offline fallback. Timers, music, intercom, news — each is a handler; plugins add more.
 
 **Help desk** — Domovoi answering questions about Domovoi, in chat or by voice, from its own user manual, FAQ, troubleshooting guide, an entry for every dashboard error and installed plugins' help. It names the section it used, or says the manual doesn't cover the question. The **?** in the dashboard's top bar opens it. With *AI features* off it is a plain search. See the [FAQ](FAQ.md#how-do-i-ask-domovoi-for-help).
 
-**Household token** — the shared secret a phone or browser presents so the server knows it belongs to the household (the `X-Device-Token` header; the API calls it the device token). An admin sees it under Settings → Rooms & devices → Phones & browsers → Household token. It is not the *admin session*: it opens everyday features, not risky ones.
+**Household token** — the shared secret a phone or browser presents so the server knows it belongs to the household (the `X-Device-Token` header; the API calls it the device token). An admin sees it under Settings → Household → Phones & browsers → Household token. It is not the *admin session*: it opens everyday features, not risky ones.
 
 **ICY metadata** — the `StreamTitle` now-playing tags many internet radio streams embed. The radio plugin's ICY poller reads them as the cheap first tier of song detection, with audio sampling as the fallback.
 
@@ -111,7 +111,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Realtime channel** — the live-update path from database to browser: a feature fires a Postgres NOTIFY on commit, the dashboard's listener maps it to a named channel (e.g. `radio.stations`) and pushes a fresh snapshot over WebSocket. Plugins declare theirs in the manifest.
 
-**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Rooms & devices → Rooms address; each room owns one satellite and one *MPD* instance.
+**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Household → Rooms address; each room owns one satellite and one *MPD* instance.
 
 **Room mode** — an Android phone or tablet used as a room: on its charger it listens for the *wake word*, answers, plays the room's music and takes announcements. See [Spare-device satellites](SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode).
 

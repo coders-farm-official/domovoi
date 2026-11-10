@@ -52,7 +52,9 @@ class RoutesTest {
         // whatever is on this phone's bar, PhoneBarTest).
         assertEquals(listOf(Route.Home, Route.Music, Route.Videos, Route.Chat), DefaultPhoneBar)
         val reachable = (listOf(Route.Home) + EverythingRoutes).toSet()
-        assertEquals(Route.entries.toSet() - LauncherlessRoutes, reachable)
+        // People is a Settings section since the nav regroup: on the bar
+        // only if a phone picks it, never on the grid.
+        assertEquals(Route.entries.toSet() - LauncherlessRoutes - Route.People, reachable)
         assertEquals(1 + EverythingRoutes.size, reachable.size) // no duplicates
         assertTrue(DefaultPhoneBar.all { it == Route.Home || it in EverythingRoutes })
         // Settings and the manual have no tab, so the grid must carry them.
@@ -87,7 +89,9 @@ class RoutesTest {
         assertEquals("rooms", settingsTabFor(Route.Satellites))
         // The container guard's details are part of Settings → Health (2026-10-21).
         assertEquals("health", settingsTabFor(Route.Containers))
-        Route.entries.filter { it != Route.Satellites && it != Route.Containers }
+        // People is Settings → Household → People (the nav regroup).
+        assertEquals("people", settingsTabFor(Route.People))
+        Route.entries.filter { it != Route.Satellites && it != Route.Containers && it != Route.People }
             .forEach { assertNull(it.name, settingsTabFor(it)) }
         assertFalse(Route.Satellites in WorkspaceRoutes)
         assertFalse(Route.Satellites in EverythingRoutes)
@@ -112,6 +116,172 @@ class RoutesTest {
         // Capability gating still applies on top.
         assertFalse(Route.Stations.visibleOn(Capabilities.EMPTY, shared = false))
         assertTrue(Route.Stations.visibleOn(caps(CAP_STATIONS), shared = true))
+    }
+
+    // ─── the nav regroup ─────────────────────────────────────────────────
+
+    private val both = caps(CAP_STATIONS, CAP_IMAGEGEN)
+    private val media = DefaultNav.groups.first { it.id == "media" }
+    private val tools = DefaultNav.groups.first { it.id == "tools" }
+
+    private fun visible(c: Capabilities, shared: Boolean) = WorkspaceRoutes.filter { it.visibleOn(c, shared) }
+
+    private fun group(t: List<NavEntry>, id: String) =
+        t.filterIsInstance<NavEntry.Group>().firstOrNull { it.group.id == id }
+
+    @Test fun theDefaultDrawerIsChatThenMediaThenTools() {
+        onDeviceAssistant = { true }
+        assertEquals(
+            listOf(
+                NavEntry.Item(Route.Chat),
+                NavEntry.Group(media, listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images)),
+                NavEntry.Group(tools, listOf(Route.News, Route.Calendar, Route.Files)),
+            ),
+            navTree(visible(both, shared = false)),
+        )
+        assertEquals(listOf("media" to "Media", "tools" to "Tools"), DefaultNav.groups.map { it.id to it.label })
+        assertTrue(media.openByDefault)
+        assertFalse(tools.openByDefault)
+    }
+
+    @Test fun withoutThePluginsMediaHoldsTheCoreFour() {
+        onDeviceAssistant = { true }
+        assertEquals(
+            listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos),
+            group(navTree(visible(Capabilities.EMPTY, false)), "media")!!.routes,
+        )
+        // The plugin pages' groups are data, a parameter of the resolver.
+        assertEquals(mapOf(Route.Stations to "media", Route.Images to "media"), PluginNavGroups)
+        val t = navTree(visible(both, false), pluginGroups = mapOf(Route.Stations to "tools"))
+        // Members keep the default order: Stations (position 5) leads News (7).
+        assertEquals(listOf(Route.Stations, Route.News, Route.Calendar, Route.Files), group(t, "tools")!!.routes)
+        // A plugin group no group has: the page is top level, at its position.
+        assertTrue(NavEntry.Item(Route.Images) in t)
+    }
+
+    @Test fun aGroupWithOneVisibleItemIsThatItemFlatAndAnEmptyOneGoes() {
+        assertEquals(
+            listOf(NavEntry.Item(Route.Chat), NavEntry.Item(Route.Music), NavEntry.Item(Route.Files)),
+            navTree(listOf(Route.Chat, Route.Music, Route.Files)),
+        )
+        assertEquals(listOf(NavEntry.Item(Route.Chat)), navTree(listOf(Route.Chat)))
+        assertEquals(emptyList<NavEntry>(), navTree(emptyList()))
+    }
+
+    @Test fun aSharedScreenDropsPeopleNewsFilesAndChat() {
+        onDeviceAssistant = { true }
+        assertEquals(
+            listOf(
+                NavEntry.Group(media, listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images)),
+                // Tools keeps only Calendar: one item, so flat.
+                NavEntry.Item(Route.Calendar),
+            ),
+            navTree(visible(both, shared = true)),
+        )
+    }
+
+    @Test fun anOverrideRenamesMediaAndMovesFilesIntoIt() {
+        onDeviceAssistant = { true }
+        val o = NavOverride(groups = listOf(
+            NavOverrideGroup("media", "Watch & listen", listOf("files", "music")),
+            NavOverrideGroup("tools", "Tools", emptyList()),
+        ))
+        val t = navTree(visible(both, false), o)
+        val m = group(t, "media")!!
+        assertEquals("Watch & listen", m.group.label)
+        // Listed first, in the listed order; the unmentioned members after, in default order.
+        assertEquals(
+            listOf(Route.Files, Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images),
+            m.routes,
+        )
+        // Keeps the default group's icon and open-by-default.
+        assertEquals(media.icon, m.group.icon)
+        assertTrue(m.group.openByDefault)
+        assertEquals(listOf(Route.News, Route.Calendar), group(t, "tools")!!.routes)
+        assertEquals(listOf(NavEntry.Item(Route.Chat), m, group(t, "tools")), t)
+    }
+
+    @Test fun anOverrideWithItsOwnGroupAndTopAndAnUnknownKey() {
+        onDeviceAssistant = { true }
+        val o = NavOverride(
+            groups = listOf(
+                NavOverrideGroup("media", "Media", listOf("music")),
+                NavOverrideGroup("kids", "Kids", listOf("videos", "bogus", "stations", "videos")),
+                NavOverrideGroup("tools", "Tools"),
+            ),
+            top = listOf("calendar", "music", "bogus"),
+        )
+        val t = navTree(visible(both, false), o)
+        val kids = group(t, "kids")!!
+        assertEquals(NavGroupInfo("kids", "Kids"), kids.group)
+        assertEquals(listOf(Route.Videos, Route.Stations), kids.routes)
+        // Music's first mention (Media) wins over top.
+        assertEquals(listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Images), group(t, "media")!!.routes)
+        assertEquals(listOf(Route.News, Route.Files), group(t, "tools")!!.routes)
+        // Sorted by default position: chat 0, media (music 1), kids (videos 4),
+        // tools (news 7), calendar 8.
+        assertEquals(
+            listOf(NavEntry.Item(Route.Chat), group(t, "media"), kids, group(t, "tools"), NavEntry.Item(Route.Calendar)),
+            t,
+        )
+        // An override's route that is not visible is ignored too.
+        val noRadio = navTree(visible(Capabilities.EMPTY, false), o)
+        assertEquals(NavEntry.Item(Route.Videos), noRadio.first { it == NavEntry.Item(Route.Videos) })
+    }
+
+    @Test fun aDefaultGroupTheOverrideDropsSendsItsMembersTopLevel() {
+        onDeviceAssistant = { true }
+        // Only Media: Tools is gone, so News, Calendar and Files are top level.
+        val o = NavOverride(groups = listOf(NavOverrideGroup("media", "Media")))
+        assertEquals(
+            listOf(
+                NavEntry.Item(Route.Chat),
+                NavEntry.Group(media, listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images)),
+                NavEntry.Item(Route.News), NavEntry.Item(Route.Calendar), NavEntry.Item(Route.Files),
+            ),
+            navTree(visible(both, false), o),
+        )
+        // An empty override: no groups at all, everything top level in default order.
+        assertEquals(
+            visible(both, false).map { NavEntry.Item(it) },
+            navTree(visible(both, false), NavOverride()),
+        )
+    }
+
+    @Test fun everyWorkspaceRouteHasTheWebsKey() {
+        WorkspaceRoutes.forEach { r -> assertEquals(r, routeForNavKey(NavKeys.getValue(r))) }
+        assertEquals("stations", NavKeys[Route.Stations])
+        assertEquals("imagegen", NavKeys[Route.Images])
+        assertNull(routeForNavKey("bogus"))
+        assertEquals(NavKeys.size, NavKeys.values.toSet().size)
+    }
+
+    @Test fun peopleLeftTheMainNavButStaysABarChoice() {
+        assertFalse(Route.People in WorkspaceRoutes)
+        assertFalse(Route.People in EverythingRoutes)
+        assertTrue(Route.People in PhoneBar.Choices)
+        // A bar saved with People keeps the tab; the shell opens Settings → People.
+        val saved = listOf(Route.Home, Route.People, Route.Music)
+        assertEquals(saved, PhoneBar.routes(saved, Capabilities.EMPTY, shared = false))
+        assertEquals("people", settingsTabFor(Route.People))
+    }
+
+    @Test fun groupOpenStateIsPerDeviceMediaOpenByDefault() {
+        val none = NavGroupsOpen.decode(null)
+        assertTrue(NavGroupsOpen.isOpen(media, none))
+        assertFalse(NavGroupsOpen.isOpen(tools, none))
+        val shut = NavGroupsOpen.toggled(media, none)
+        assertFalse(NavGroupsOpen.isOpen(media, NavGroupsOpen.decode(NavGroupsOpen.encode(shut))))
+        assertEquals("media=0,tools=1", NavGroupsOpen.encode(mapOf("tools" to true, "media" to false)))
+        // Junk, and the retired groups' keys, change nothing.
+        val old = NavGroupsOpen.decode("listen=0,view=1,,=1,tools=maybe,nonsense")
+        assertTrue(NavGroupsOpen.isOpen(media, old))
+        assertFalse(NavGroupsOpen.isOpen(tools, old))
+        // A group containing the current page opens; an open one stays as it is.
+        val tree = navTree(WorkspaceRoutes)
+        assertTrue(NavGroupsOpen.isOpen(tools, NavGroupsOpen.openedFor(Route.Files, tree, none)))
+        assertEquals(none, NavGroupsOpen.openedFor(Route.Music, tree, none))
+        assertEquals(none, NavGroupsOpen.openedFor(Route.Chat, tree, none))
     }
 
     /** Delta review N7: "this phone" (the local shell, one tap from the

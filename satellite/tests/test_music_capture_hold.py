@@ -283,6 +283,9 @@ class Room:
             output_device=None,
             device=types.SimpleNamespace(playback_sample_rate=None, supports_full_duplex=True),
             mic_enabled=True,
+            # One wake chunk wakes, at once (satellite/wake_gate.py is
+            # tested in test_wake_gate.py).
+            wake_patience_frames=1, wake_cooldown_sec=0.0,
         )
         for name in ("shutdown_event", "playback_active", "stop_playback",
                      "expect_followup", "wake_recording", "dropin_active", "chat_active",

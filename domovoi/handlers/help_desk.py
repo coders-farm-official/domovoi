@@ -19,7 +19,7 @@ FAQ, the troubleshooting guide, plugins' help files —
      free-text choice); a name the household knows sends it there, and
      anything else, or no answer at all, sends nothing;
    * recognised but no phone marked as theirs → said plainly, with where
-     to set it (the app's Settings → Rooms & devices → Phones & browsers →
+     to set it (the app's Settings → Household → Phones & browsers →
      "This phone belongs to"); nothing is guessed;
    * never a broadcast: there is no "everyone" here.
 
@@ -97,7 +97,7 @@ _DOMOVOI_WORDS = re.compile(
 
 NO_PHONE_TEXT = (
     "There's no phone marked as {who} yet, so I haven't sent anything. In the Domovoi app, "
-    "open Settings, then Rooms and devices, then Phones and browsers, and set This phone belongs to."
+    "open Settings, then Household, then Phones and browsers, and set This phone belongs to."
 )
 
 

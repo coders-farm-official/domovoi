@@ -74,6 +74,7 @@ warnings = []
 # nav_icon = "web/static/icon.svg"            # one colour (currentColor), transparent background
 # nav_icon_dark = "web/static/icon-dark.svg"  # optional: draw the dark-theme icon yourself
 # nav_order = 60
+# nav_group = "tools"                        # optional: "media" or "tools" (a sidebar group); leave out for a top-level row
 '''
 
 _SCAFFOLD_CORE = '''"""Core entry point for the {slug} plugin."""

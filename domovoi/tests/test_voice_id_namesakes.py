@@ -13,7 +13,7 @@ satellite still enrolled a second X. Now:
 * the yes to "Did I get that right?" / "was that X?" re-checks the name,
   under a lock (two enrolments of one new name at once make one person);
 * two people called X: nobody is guessed, and the answer says what to do
-  (an admin renames or removes one on the People page);
+  (an admin renames or removes one in Settings, under People);
 * "who am I" says when someone else has your name, and when your voice
   matches two people (with or without the same name); "forget me" never
   guesses whose profile to delete;
@@ -68,7 +68,7 @@ KAMRON_HERE = np.full(16_000, 2222, dtype=np.int16).tobytes()
 STRANGER = np.full(16_000, 3333, dtype=np.int16).tobytes()
 
 ROOM_QUESTION = "I already know someone called Kamron. Is that you?"
-SORT_IT_OUT = "An admin can rename or remove one of them on the People page."
+SORT_IT_OUT = "An admin can rename or remove one of them in Settings, under People."
 
 
 def _more_than_one(name: str) -> str:
@@ -245,7 +245,7 @@ async def test_my_name_at_a_satellite_for_someone_known_asks_then_adds_a_room_sa
 
 NEW_NAMESAKE = (
     "Okay, I've added you as a new Kamron. An admin can give one of you a "
-    "different name on the People page."
+    "different name in Settings, under People."
 )
 
 
@@ -547,7 +547,7 @@ async def test_forget_me_never_guesses_whose_profile_to_delete(room) -> None:
     end = await room.say("Forget me.", KAMRON_HERE)
     assert _reply(end) == (
         "Your voice is close to two people I know, so I won't guess whose voice to "
-        "forget. An admin can remove a person on the People page."
+        "forget. An admin can remove a person in Settings, under People."
     )
     assert len(await _people()) == 2
     plain = await room.say("Forget me.", STRANGER)

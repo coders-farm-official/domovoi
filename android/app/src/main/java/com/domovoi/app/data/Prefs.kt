@@ -75,6 +75,7 @@ class Prefs(
     private val kPreferLocal = booleanPreferencesKey("prefer_local")
     private val kPhoneFolders = stringPreferencesKey("phone_folders")
     private val kPhoneBar = stringPreferencesKey("phone_bar")
+    private val kNavGroupsOpen = stringPreferencesKey("nav_groups_open")
     private val kChatPlace = stringPreferencesKey("chat_place")
     private val kChatServerShareSeen = booleanPreferencesKey("chat_server_share_seen")
     private val kChatPins = stringPreferencesKey("chat_pins")
@@ -165,6 +166,13 @@ class Prefs(
     private val _phoneBar = MutableStateFlow<String?>(null)
     val phoneBar: StateFlow<String?> = _phoneBar
 
+    /** Which drawer groups (Media, Tools, …) this phone has open or shut,
+     *  as ui/shell/Routes.kt NavGroupsOpen encodes it; null = never
+     *  toggled (each group's default). Per device, as the web keeps it in
+     *  localStorage. */
+    private val _navGroupsOpen = MutableStateFlow<String?>(null)
+    val navGroupsOpen: StateFlow<String?> = _navGroupsOpen
+
     /** Where this phone last chatted (ui/screens/chat/ChatPlace.kt
      *  ChatPlaceKind.key: "phone" or "server"); null = never, so a new chat
      *  starts in the first default. */
@@ -254,6 +262,7 @@ class Prefs(
             val bar = PhoneBar.migrate(savedBar)
             _phoneBar.value = bar
             if (bar != null && bar != savedBar) scope.launch { context.dataStore.edit { it[kPhoneBar] = bar } }
+            _navGroupsOpen.value = p[kNavGroupsOpen]
             _chatPlace.value = p[kChatPlace]
             _chatServerShareSeen.value = p[kChatServerShareSeen] ?: false
             _chatPins.value = ServerCredentials.decodeTrusted(p[kChatPins])
@@ -524,6 +533,15 @@ class Prefs(
         _phoneBar.value = encoded
         scope.launch {
             context.dataStore.edit { if (encoded == null) it.remove(kPhoneBar) else it[kPhoneBar] = encoded }
+        }
+    }
+
+    fun setNavGroupsOpen(encoded: String) {
+        if (_navGroupsOpen.value == encoded) return
+        _navGroupsOpen.value = encoded
+        scope.launch {
+            runCatching { context.dataStore.edit { it[kNavGroupsOpen] = encoded } }
+                .onFailure { Log.w(TAG, "nav groups not saved: ${it.message}") }
         }
     }
 

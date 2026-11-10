@@ -4072,7 +4072,7 @@ const HouseholdTokenCard = ({ fire }) => {
             </Button>
           </div>
           <div style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
-            Sent as the <span className="mono">{header}</span> header. On a phone: Settings → Rooms & devices → Phones & browsers → Household token.
+            Sent as the <span className="mono">{header}</span> header. On a phone: Settings → Household → Phones & browsers → Household token.
             {thisPaired
               ? ' This browser is paired with it.'
               : ' This browser is not paired with it yet — log in again or paste it into the pairing prompt.'}
@@ -4128,7 +4128,7 @@ const PhoneBarCard = ({ fire }) => {
   const spare = items.filter((it) => !bar.includes(it.route));
   const full = bar.length >= PHONE_BAR_MAX;
   return (
-    <Card title="Phone bar"
+    <Card title="Phone bar · this browser only"
           sub={`The tabs along the bottom of this browser at phone width, left to right. Home is always first; ${PHONE_BAR_MIN} to ${PHONE_BAR_MAX} tabs. Everything else is on Home's “everything” grid.`}>
       <div className="phone-bar-edit" style={{ padding: '8px 16px 4px' }}>
         {bar.map((r, i) => (
@@ -4187,10 +4187,310 @@ const PhoneBarCard = ({ fire }) => {
   );
 };
 
-// Settings → App layout.
+/* ---- Menu: the household's web sidebar (admin) -------------------------
+ * Settings → System → App layout's first card. The menu every browser on
+ * this Domovoi draws (sidebar, Home's "everything" grid, the phone strip's
+ * rows): kept on the server (GET/PUT/DELETE /api/nav-layout,
+ * web/backend/api/nav_layout.py), changed by an admin only, and pushed to
+ * open dashboards when saved (nav_layout.changed, NavLayoutStore in
+ * components.jsx). Optional: the default needs nothing, so the card shows
+ * the menu and one "change the menu" button; the editor opens on that.
+ * Edits are a draft with a live preview beside it until Save. Every control
+ * is a button or a select, so the keyboard does everything. */
+const NAV_LAYOUT_LABEL_MAX = 24;
+
+const navLayoutLabelProblem = (label, max = NAV_LAYOUT_LABEL_MAX) => {
+  const t = String(label || '').replace(/\s+/g, ' ').trim();
+  if (!t) return 'give the group a name';
+  if (t.length > max) return `at most ${max} characters`;
+  if (/[<>]/.test(t)) return 'no < or > in a name';
+  return null;
+};
+
+/* The sidebar as `layout` draws it on this screen (items: navItemsFor, so
+ * the shared-screen and AI-off hiding apply), every group open. */
+const NavLayoutPreview = ({ items, layout }) => {
+  const tree = resolveNavTree(items, layout);
+  const glyph = (it) => (it.core
+    ? <Icon name={it.icon} size={16} className="ico"/>
+    : <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark}/>);
+  return (
+    <div className="nav-layout-preview" aria-label="menu preview" role="group">
+      <div className="label" style={{ marginBottom: 6 }}>preview</div>
+      <div className="nav-layout-preview-box">
+        <div className="nav-layout-preview-row brand">
+          <DomovoiGlyph size={16}/><span className="lab">domovoi</span>
+        </div>
+        {tree.map((e) => (e.kind === 'item' ? (
+          <div key={e.item.route} className="nav-layout-preview-row">{glyph(e.item)}<span className="lab">{e.item.label}</span></div>
+        ) : (
+          <div key={`g:${e.id}`} className="nav-layout-preview-group">
+            <div className="nav-layout-preview-row head">
+              <Icon name={e.icon} size={16} className="ico"/><span className="lab">{e.label}</span>
+              <Icon name="chevron-down" size={14}/>
+            </div>
+            {e.items.map((it) => (
+              <div key={it.route} className="nav-layout-preview-row sub">{glyph(it)}<span className="lab">{it.label}</span></div>
+            ))}
+          </div>
+        )))}
+      </div>
+    </div>
+  );
+};
+
+const NavLayoutCard = ({ fire }) => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    if (typeof Auth === 'undefined') return undefined;
+    try { return Auth.subscribe(force); } catch { return undefined; }
+  }, []);
+  const saved = useNavLayout();
+  const shared = useSharedScreen();
+  const ai = useAiFeatures();
+  const manifest = window.DomovoiPluginManifest || { plugins: [] };
+  // Every page this server has (nothing hidden: the layout is the house's),
+  // and the ones this screen shows (the preview, as this browser draws it).
+  const all = buildNavItems(manifest).filter((it) => !it.brandLink && !it.barOnly);
+  const shown = navItemsFor(manifest, { shared, ai });
+  const shownRoutes = new Set(shown.map((it) => it.route));
+  const byRoute = {};
+  all.forEach((it) => { byRoute[it.route] = it; });
+  const limits = NavLayoutStore.limits() || {};
+  const labelMax = limits.label_max || NAV_LAYOUT_LABEL_MAX;
+  const maxGroups = limits.max_groups || 12;
+
+  const [draft, setDraft] = React.useState(null);   // null = not editing
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [confirmReset, setConfirmReset] = React.useState(false);
+  const focusGroup = React.useRef(null);
+
+  let canEdit = false;
+  try {
+    canEdit = typeof Auth !== 'undefined'
+      && (Auth.isLoggedIn() || !!(Auth.status && Auth.status.setup_complete === false));
+  } catch { /* auth.js absent */ }
+
+  const startEditing = async () => {
+    setError(null);
+    if (!canEdit) {
+      let ok = false;
+      try { ok = await Auth.ensureLoggedIn(); } catch { ok = false; }
+      if (!ok) return;
+    }
+    setDraft(navLayoutFull(all, saved));
+  };
+  const edit = (op, a) => setDraft((d) => navLayoutEdit(d, op, a));
+  React.useEffect(() => {
+    if (!focusGroup.current) return;
+    const id = `nav-layout-name-${focusGroup.current}`;
+    focusGroup.current = null;
+    try {
+      const el = document.getElementById(id);
+      if (el) { el.focus(); el.select(); }
+    } catch { /* no document (a test sandbox): nothing to focus */ }
+  }, [draft]);
+
+  const label = (r) => (byRoute[r] && byRoute[r].label) || r;
+  const problems = draft ? draft.groups.map((g) => [g.id, navLayoutLabelProblem(g.label, labelMax)]).filter((x) => x[1]) : [];
+  const dirty = draft && JSON.stringify(draft) !== JSON.stringify(navLayoutFull(all, saved));
+
+  const save = async () => {
+    if (!draft || problems.length) return;
+    setBusy(true);
+    setError(null);
+    const body = {
+      version: 1,
+      groups: draft.groups.map((g) => ({ id: g.id, label: g.label.replace(/\s+/g, ' ').trim(), items: g.items })),
+      top: draft.top,
+      order: draft.order,
+    };
+    try {
+      const out = await apiPut('/api/nav-layout', body);
+      NavLayoutStore.set(out ? out.layout : body);
+      setDraft(null);
+      fire('menu saved for every browser on this Domovoi');
+    } catch (e) {
+      setError(mutationErrorText(e, 'Save'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reset = async () => {
+    setConfirmReset(false);
+    setBusy(true);
+    setError(null);
+    try {
+      await apiDelete('/api/nav-layout');
+      NavLayoutStore.set(null);
+      setDraft(null);
+      fire('menu back to the default for every browser');
+    } catch (e) {
+      setError(mutationErrorText(e, 'Reset', { kept: false }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const addGroup = () => {
+    const id = navGroupId(draft, 'new group');
+    focusGroup.current = id;
+    edit('add-group', { id, label: 'New group' });
+  };
+
+  const glyph = (it) => (it && !it.core
+    ? <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark}/>
+    : <Icon name={(it && it.icon) || 'puzzle'} size={16}/>);
+  const fieldStyle = {
+    font: 'inherit', fontSize: 13, height: 32, padding: '0 8px', borderRadius: 'var(--r-sm)',
+    border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)',
+  };
+  // "move to": the top level or any group but the one it is in.
+  const moveSelect = (route, here) => (
+    <select aria-label={`move ${label(route)} to`} value="" style={{ ...fieldStyle, maxWidth: 150 }}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              edit('move', { route, to: v === '__top' ? null : v });
+            }}>
+      <option value="">move to…</option>
+      {here !== null && <option value="__top">top level</option>}
+      {draft.groups.filter((g) => g.id !== here).map((g) => (
+        <option key={g.id} value={g.id}>{(g.label || g.id).trim() || g.id}</option>
+      ))}
+    </select>
+  );
+  const pageRow = (route, here, i, n) => (
+    <div key={route} className="nav-layout-row" data-route={route}>
+      {glyph(byRoute[route])}
+      <span className="nav-layout-name">
+        {label(route)}
+        {!shownRoutes.has(route) && <span className="nav-layout-note"> · hidden on this screen</span>}
+      </span>
+      <IconButton name="chevron-up" title={`move ${label(route)} up`} aria-label={`move ${label(route)} up`}
+                  disabled={i <= 0} onClick={() => edit('up', { token: route })}/>
+      <IconButton name="chevron-down" title={`move ${label(route)} down`} aria-label={`move ${label(route)} down`}
+                  disabled={i >= n - 1} onClick={() => edit('down', { token: route })}/>
+      {moveSelect(route, here)}
+    </div>
+  );
+
+  const groupBlock = (g, i, n) => {
+    const problem = navLayoutLabelProblem(g.label, labelMax);
+    const name = (g.label || '').trim() || 'this group';
+    return (
+      <div key={`group:${g.id}`} className="nav-layout-group" data-group={g.id}>
+        <div className="nav-layout-row head">
+          <Icon name="folder" size={16}/>
+          <input id={`nav-layout-name-${g.id}`} className="nav-layout-input" value={g.label}
+                 maxLength={labelMax} aria-label={`name of the group ${name}`}
+                 aria-invalid={problem ? 'true' : undefined}
+                 onChange={(e) => edit('rename', { id: g.id, label: e.target.value })} style={fieldStyle}/>
+          <IconButton name="chevron-up" title={`move ${name} up`} aria-label={`move the group ${name} up`}
+                      disabled={i <= 0} onClick={() => edit('up', { token: `group:${g.id}` })}/>
+          <IconButton name="chevron-down" title={`move ${name} down`} aria-label={`move the group ${name} down`}
+                      disabled={i >= n - 1} onClick={() => edit('down', { token: `group:${g.id}` })}/>
+          <IconButton name="trash-2" title={`delete ${name} (its pages go to the top level)`}
+                      aria-label={`delete the group ${name}; its pages go to the top level`}
+                      onClick={() => edit('delete-group', { id: g.id })}/>
+        </div>
+        {problem && <div className="nav-layout-problem" role="alert">{problem}</div>}
+        <div className="nav-layout-group-items">
+          {g.items.length
+            ? g.items.map((r, j) => pageRow(r, g.id, j, g.items.length))
+            : <div className="nav-layout-note" style={{ padding: '8px 0' }}>no pages yet · use “move to…” on a page to put it here (an empty group isn’t shown)</div>}
+        </div>
+      </div>
+    );
+  };
+
+  const intro = 'This changes the menu for everyone using this Domovoi in a web browser. The phone app has its own layout in the app.';
+  const status = saved ? 'custom menu' : 'default menu';
+
+  if (!draft) {
+    return (
+      <Card title="Menu" sub={intro}>
+        <div className="nav-layout-closed">
+          <NavLayoutPreview items={shown} layout={saved}/>
+          <div className="nav-layout-closed-side">
+            <div className="nav-layout-status" style={{ fontSize: 13, fontWeight: 600 }}>{status}</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              Nothing to do here unless you want to: rename the groups, add your own, or move pages
+              between them. Home always stays at the top. Only an admin can change it.
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button icon="pencil" onClick={startEditing}>change the menu</Button>
+              {saved && canEdit && (
+                <Button variant="ghost" icon="rotate-ccw" disabled={busy} onClick={() => setConfirmReset(true)}>
+                  reset to default
+                </Button>
+              )}
+            </div>
+            {error && <div className="nav-layout-problem" role="alert">{error}</div>}
+          </div>
+        </div>
+        <DeleteConfirmDialog open={confirmReset} title="Reset the menu to the default?" icon="rotate-ccw"
+                             confirmLabel="Reset" busy={busy}
+                             onCancel={() => setConfirmReset(false)} onConfirm={reset}>
+          <div>Every browser on this Domovoi goes back to Home · Chat · Media · Tools · Plugins.</div>
+        </DeleteConfirmDialog>
+      </Card>
+    );
+  }
+
+  const n = draft.order.length;
+  return (
+    <Card title="Menu" sub={intro}>
+      <div className="nav-layout-edit">
+        <div className="nav-layout-list" role="group" aria-label="menu editor">
+          <div className="nav-layout-row fixed">
+            <Icon name="house" size={16}/>
+            <span className="nav-layout-name">Home</span>
+            <span className="nav-layout-note">always at the top</span>
+          </div>
+          {draft.order.map((tok, i) => {
+            if (tok.startsWith('group:')) {
+              const g = draft.groups.find((x) => `group:${x.id}` === tok);
+              return g ? groupBlock(g, i, n) : null;
+            }
+            return pageRow(tok, null, i, n);
+          })}
+          <div style={{ padding: '10px 0 4px' }}>
+            <Button icon="folder-plus" disabled={draft.groups.length >= maxGroups} onClick={addGroup}>
+              new group
+            </Button>
+            {draft.groups.length >= maxGroups && (
+              <span className="nav-layout-note"> · at most {maxGroups} groups</span>
+            )}
+          </div>
+        </div>
+        <NavLayoutPreview items={shown} layout={draft}/>
+      </div>
+      {error && <div className="nav-layout-problem" role="alert" style={{ padding: '0 16px 8px' }}>{error}</div>}
+      <div className="nav-layout-actions">
+        <Button variant="primary" icon="check" disabled={busy || !dirty || problems.length > 0} onClick={save}>
+          {busy ? 'saving…' : 'save for everyone'}
+        </Button>
+        <Button icon="x" disabled={busy} onClick={() => { setDraft(null); setError(null); }}>cancel</Button>
+        <span style={{ flex: 1 }}/>
+        <Button variant="ghost" icon="rotate-ccw" disabled={busy || !saved} onClick={() => setConfirmReset(true)}
+                title={saved ? 'go back to the default menu for every browser' : 'the menu is already the default'}>
+          reset to default
+        </Button>
+      </div>
+      <DeleteConfirmDialog open={confirmReset} title="Reset the menu to the default?" icon="rotate-ccw"
+                           confirmLabel="Reset" busy={busy}
+                           onCancel={() => setConfirmReset(false)} onConfirm={reset}>
+        <div>Every browser on this Domovoi goes back to Home · Chat · Media · Tools · Plugins.</div>
+      </DeleteConfirmDialog>
+    </Card>
+  );
+};
+
+// Settings → App layout: the household's menu, then this browser's phone bar.
 const PhoneBarPanel = () => {
   const [fire, toastNode] = useToast();
-  return <><PhoneBarCard fire={fire}/>{toastNode}</>;
+  return <><NavLayoutCard fire={fire}/><PhoneBarCard fire={fire}/>{toastNode}</>;
 };
 
 /* Get the Domovoi app (2026-10-15): this server hands its household's
@@ -4519,19 +4819,26 @@ const CapturesPanel = () => {
  * for what is being built (none shows a promise before it can do
  * something). */
 const SETTINGS_GROUPS = [
-  { id: 'rooms-and-devices', label: 'Rooms & devices', icon: 'house',
-    sections: ['rooms', 'phones-and-browsers', 'printers', 'app-layout'] },
+  // "Rooms & devices" until 2026-11-09: its old address still opens it.
+  { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
+    sections: ['rooms', 'people', 'phones-and-browsers', 'printers'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
-  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'advanced'] },
+  { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'app-layout', 'advanced'] },
 ];
 
 const SETTINGS_SECTIONS = [
   { id: 'rooms', label: 'Rooms', aliases: ['satellites'],
     sub: 'Each room: status, approvals and adoption, announcements, and each room’s drawer.',
     words: 'satellite satellites pi speaker microphone mic approve approval adopt announce announcement drawer wifi wi-fi upgrade screen kiosk intercom' },
+  // The whole People page (people.jsx), a sidebar page until 2026-11-09:
+  // #people opens it here (SETTINGS_TAB_ROUTES, components.jsx). One
+  // person's things, so a shared screen leaves it off (`personal`).
+  { id: 'people', label: 'People', personal: true,
+    sub: 'Everyone Domovoi knows by voice: when they were last heard, their voice samples, memories and voice history.',
+    words: 'people person persons voice voices enrolled enrol enroll speaker speakers recognize recognise who memory memories forget rename samples' },
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
     words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
@@ -4539,8 +4846,8 @@ const SETTINGS_SECTIONS = [
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
   { id: 'app-layout', label: 'App layout', aliases: ['phone-bar', 'phonebar'],
-    sub: 'The tabs along the bottom of this browser at phone width — kept in this browser only.',
-    words: 'phone bar tabs bottom bar layout menu navigation' },
+    sub: 'The menu every browser on this Domovoi shows (admin), and this browser’s phone bar.',
+    words: 'phone bar tabs bottom bar layout menu navigation sidebar group groups media tools rename reorder' },
   { id: 'wake-words', label: 'Wake words', aliases: ['wakewords'],
     sub: 'The words that wake Domovoi: train your own, record clips in a room.',
     words: 'wake word words hey hello train training clips record' },
@@ -4609,6 +4916,10 @@ const settingsPanel = (id, marks) => {
     case 'rooms': return <SatellitesPanel/>;
     case 'phones-and-browsers': return <DevicesPanel/>;
     case 'app-layout': return <PhoneBarPanel/>;
+    case 'people': {
+      const People = window.PeoplePage;
+      return typeof People === 'function' ? <People embedded/> : null;
+    }
     case 'wake-words': return <WakeWordsPanel/>;
     case 'voices': return <VoicesPanel/>;
     case 'greetings': return <GreetingsPanel/>;
@@ -4626,12 +4937,16 @@ const settingsPanel = (id, marks) => {
 };
 
 /* The groups and sections this page shows: an optional section only once
- * its panel is registered, a group only with a section in it. */
-const settingsLayout = () => {
+ * its panel is registered, a group only with a section in it. On a shared
+ * screen (the kitchen tablet) a `personal` section (People) is in no group
+ * and no search, as it is on no launcher; like the rest of the shared
+ * view that is presentational: its address still opens it. */
+const settingsLayout = ({ shared = false } = {}) => {
   const extras = settingsExtraSections();
   const sections = SETTINGS_SECTIONS.filter((s) => !s.optional || extras[s.id]);
+  const listed = sections.filter((s) => !(shared && s.personal));
   const groups = SETTINGS_GROUPS
-    .map((g) => ({ ...g, sections: g.sections.map((id) => sections.find((s) => s.id === id)).filter(Boolean) }))
+    .map((g) => ({ ...g, sections: g.sections.map((id) => listed.find((s) => s.id === id)).filter(Boolean) }))
     .filter((g) => g.sections.length);
   return { sections, groups };
 };
@@ -4760,9 +5075,11 @@ const useSettingsPhone = () => {
 
 const SettingsPage = () => {
   const phone = useSettingsPhone();
-  const { sections, groups } = settingsLayout();
-  // Groups have addresses too (a phone's list of its sections).
-  const routes = React.useMemo(() => [...sections, ...groups.map((g) => ({ id: g.id }))], [sections, groups]);
+  const shared = useSharedScreen();
+  const { sections, groups } = settingsLayout({ shared });
+  // Groups have addresses too (a phone's list of its sections), and the
+  // words they had before a rename.
+  const routes = React.useMemo(() => [...sections, ...groups.map((g) => ({ id: g.id, aliases: g.aliases }))], [sections, groups]);
   // The section is the address's (#settings/<section>): a click writes it,
   // a link to one (Home's rows, a "needs internet" note) opens it, also
   // while this page is on screen, and Back goes to the one before.

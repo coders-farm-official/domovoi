@@ -40,6 +40,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -1030,10 +1032,26 @@ internal fun HomeEverything(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            tiles.chunked(3).forEach { line ->
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    line.forEach { r -> Box(Modifier.weight(1f)) { EverythingTile(r, counts.forRoute(r)) { onOpen(r) } } }
-                    repeat(3 - line.size) { Spacer(Modifier.weight(1f)) }
+            // Under the drawer's group headings, lowercase as the web's grid
+            // has them (tileRuns, HomeModels.kt).
+            tileRuns(tiles).forEachIndexed { i, run ->
+                if (run.group != null) {
+                    Text(
+                        run.group.label.lowercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgSubtle,
+                        modifier = Modifier
+                            .padding(start = 2.dp, top = if (i > 0) 4.dp else 0.dp)
+                            .semantics { heading() },
+                    )
+                } else if (i > 0) {
+                    Spacer(Modifier.height(4.dp))
+                }
+                run.routes.chunked(3).forEach { line ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        line.forEach { r -> Box(Modifier.weight(1f)) { EverythingTile(r, counts.forRoute(r)) { onOpen(r) } } }
+                        repeat(3 - line.size) { Spacer(Modifier.weight(1f)) }
+                    }
                 }
             }
         }

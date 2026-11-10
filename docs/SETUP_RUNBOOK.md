@@ -320,7 +320,7 @@ token, so the examples below carry it. It lives in
 `~/.domovoi/device-token.txt` on the server (mode 0600) and the shell
 snippets read it straight from there; on a box where you are not the
 domovoi user (the Windows installer's distro, say), read it from the
-dashboard's Settings → Rooms & devices → Phones & browsers → Household token instead, or
+dashboard's Settings → Household → Phones & browsers → Household token instead, or
 pass `-H "Authorization: Bearer <admin token>"`. Before setup, drop the
 header — a fresh install answers without one.
 
@@ -412,7 +412,7 @@ There are two routes.
 
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
-**Settings → Rooms & devices → Rooms → prepare a room's SD card**. It writes a first-boot overlay
+**Settings → Household → Rooms → prepare a room's SD card**. It writes a first-boot overlay
 and an offline payload (wheels, packages, the satellite code from this
 machine, plugin payloads) to the card. The payload comes from the
 server's caches, which the server fills while it has internet (**Refresh
@@ -421,7 +421,7 @@ If a cache is incomplete the build warns, and the Pi fetches the rest over
 its own connection; its second boot also runs `apt` online to settle
 package dependencies, and tries again on later boots if it can't. Boot the
 Pi, plug it into the server's USB port, and adopt it from Settings →
-Rooms & devices → Rooms — name and Wi-Fi, done.
+Household → Rooms — name and Wi-Fi, done.
 
 > ⚠️ **Be aware:** this flow is code-complete but has **not yet been
 > validated on real hardware** —
@@ -494,7 +494,7 @@ domovoi_url = "ws://<your-server>:6370"
 
 Use whatever name resolves reliably on your LAN. On first connection the
 core automatically provisions that room's MPD container and the room
-appears in the dashboard's Settings → Rooms & devices → Rooms.
+appears in the dashboard's Settings → Household → Rooms.
 
 ---
 

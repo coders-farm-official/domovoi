@@ -10,7 +10,7 @@ and his memories (``review-delta-1016/test_zz_voice_takeover.py``). Now:
   as a claim (V029: when, where, and who the voice was recognized as);
 * "forget me" deletes the person only for a voice that matches the
   person's OWN samples (the existing match threshold), or an admin does it
-  on the People page; any other voice loses only the samples it claimed
+  in Settings, under People; any other voice loses only the samples it claimed
   (and what rooms learned through them), and is told so plainly;
 * a room sample learned from a voice recognized only through a claim goes
   with that claim;
@@ -177,7 +177,7 @@ async def test_a_stranger_claims_kamron_then_forget_me_takes_only_the_strangers_
     assert gone["reply"] == (
         "I've forgotten the voice you added to Kamron. I kept Kamron's profile and "
         "memories: your voice doesn't match the one I learned for Kamron, so only an "
-        "admin can delete those, on the People page."
+        "admin can delete those, in Settings, under People."
     )
     assert await _people_named("Kamron") == 1
     assert await _memories("kamron private note") == 1

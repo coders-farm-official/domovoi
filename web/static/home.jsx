@@ -981,7 +981,32 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   const ai = useAiFeatures();
   const items = navItemsFor(manifest, { shared, ai });
   const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
-  const tiles = items.filter((it) => !onBar.has(it.route)).concat(HOME_EXTRA_TILES);
+  // The sidebar's groups (resolveNavTree, components.jsx) over what the bar
+  // leaves: a group with one tile left is a plain tile, like the sidebar's
+  // one-page group. Runs of plain tiles share a heading-less grid.
+  // The household's menu layout (Settings → App layout), as the sidebar.
+  const tree = resolveNavTree(items.filter((it) => !onBar.has(it.route)), useNavLayout());
+  const blocks = [];
+  const plain = (it) => {
+    const last = blocks[blocks.length - 1];
+    if (last && !last.label) last.tiles.push(it);
+    else blocks.push({ key: `run-${blocks.length}`, label: null, tiles: [it] });
+  };
+  tree.forEach((e) => {
+    if (e.kind === 'group') blocks.push({ key: e.id, label: e.label, tiles: e.items });
+    else plain(e.item);
+  });
+  HOME_EXTRA_TILES.forEach(plain);
+  const tile = (it) => {
+    const badge = it.core ? (it.countKey ? c[it.countKey] : null) : badges[it.route];
+    return (
+      <a key={it.route} href={`#${it.route}`} className="home-tile">
+        {it.core ? <Icon name={it.icon} size={18}/> : <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark} size={18}/>}
+        <span className="lab">{it.label}</span>
+        {badge != null && <span className="home-tile-badge">{badge}</span>}
+      </a>
+    );
+  };
   const edit = (
     <a href="#settings/app-layout" className="home-link home-bar-edit">
       edit the bar
@@ -990,18 +1015,12 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   return (
     <div className="home-sec home-sec-everything">
       <Card title="everything" action={edit}>
-        <div className="home-grid">
-          {tiles.map((it) => {
-            const badge = it.core ? (it.countKey ? c[it.countKey] : null) : badges[it.route];
-            return (
-              <a key={it.route} href={`#${it.route}`} className="home-tile">
-                {it.core ? <Icon name={it.icon} size={18}/> : <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark} size={18}/>}
-                <span className="lab">{it.label}</span>
-                {badge != null && <span className="home-tile-badge">{badge}</span>}
-              </a>
-            );
-          })}
-        </div>
+        {blocks.map((b) => (
+          <div key={b.key} className="home-grid-block" role={b.label ? 'group' : undefined} aria-label={b.label ? b.label : undefined}>
+            {b.label && <div className="home-grid-head">{b.label.toLowerCase()}</div>}
+            <div className="home-grid">{b.tiles.map(tile)}</div>
+          </div>
+        ))}
       </Card>
     </div>
   );

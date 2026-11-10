@@ -30,7 +30,7 @@ using the server PC as a room is planned for the server's tray icon (it
 doesn't do that yet). This Setup carries that room installer
 (`DomovoiSatelliteSetup.exe`) and, each time Domovoi starts, the service
 copies it into the server's own cache inside the distro, so **Settings >
-Rooms & devices > Rooms > add a spare device** hands it to the
+Household > Rooms > add a spare device** hands it to the
 house's other PCs with no internet needed.
 
 ---
@@ -40,7 +40,7 @@ house's other PCs with no internet needed.
 | | Supported | Notes |
 |---|---|---|
 | Windows | 11 22H2 or later (build 22621+), Home or Pro, x64 | Not Windows 10, not Arm64: mirrored networking and the Hyper-V firewall need 22H2. |
-| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). |
+| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). Above 24 GB the cap is the PC's memory minus 8 GB, at most 64 GB; file cache inside counts as used to Windows until the distro has been idle a while. Settings → System → Health → **memory** shows what uses it ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)). |
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
@@ -352,7 +352,7 @@ card's files as a zip and the icon's card helper puts them on the card:
 1. Flash a microSD card with **Raspberry Pi OS Lite (64-bit)** in
    Raspberry Pi Imager. When Imager offers to apply OS customisation
    settings, choose **No**.
-2. In the dashboard, **Settings > Rooms & devices > Rooms > prepare a room's SD card**:
+2. In the dashboard, **Settings > Household > Rooms > prepare a room's SD card**:
    pick the board and the microphone, **Prepare**, then **download for the
    card helper**. Keep the setup network password it shows on screen.
 3. **Prepare a room's SD card...** in the icon's menu. It picks the newest
@@ -364,7 +364,7 @@ card's files as a zip and the icon's card helper puts them on the card:
    disk or the Windows drive), asks for the setup network password, writes
    the card, reads everything back to check it, and offers **Eject**.
 4. Put the card in the Pi and switch it on. Join its setup Wi-Fi from your
-   phone, then approve it in **Settings > Rooms & devices > Rooms**.
+   phone, then approve it in **Settings > Household > Rooms**.
 
 It writes exactly what a server that can see the card writes
 (`domovoi/satellite_media/overlay.py`, checked byte for byte by the tests):
@@ -421,7 +421,7 @@ service name in a test.
 ## Printers and scanners
 
 Domovoi prints to and scans from printers on your home network (AirPrint,
-IPP Everywhere and Mopria printers, eSCL scanners): **Settings > Rooms & devices > Printers &
+IPP Everywhere and Mopria printers, eSCL scanners): **Settings > Household > Printers &
 scanners**. A printer on a USB cable, or one that needs its maker's driver,
 isn't supported on any host. Nothing here needs the internet.
 
@@ -615,7 +615,7 @@ you share them.
   app can't reach Domovoi, the dashboard says the server isn't
   answering): the core inside the distro has frozen. It notices by itself
   and restarts within a minute or so; if it hasn't, an admin gets
-  **Restart the core** on Settings > System > About & updates, Settings > Rooms & devices > Rooms and Home
+  **Restart the core** on Settings > System > About & updates, Settings > Household > Rooms and Home
   ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#everything-offline-dashboard-up)).
   The distro runs the same units and the same loop watchdog as a Linux
   server ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog)):

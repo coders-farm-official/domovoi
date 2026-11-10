@@ -17,7 +17,7 @@ from domovoi.satellite_config_schema import (
 # web joins this schema's fields with the values that report caches. If you
 # add/remove a field here, update the Pi report (and this set) too.
 _EXPECTED_KEYS = {
-    "wake.threshold", "wake.ack_mode",
+    "wake.threshold", "wake.ack_mode", "wake.patience_frames", "wake.cooldown_sec",
     "barge_in.enabled", "barge_in.require_wake_word", "barge_in.min_speech_ms",
     "barge_in.vad_aggressiveness_during_tts",
     "listen.vad_aggressiveness", "listen.silence_timeout",

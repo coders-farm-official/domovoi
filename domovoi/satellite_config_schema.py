@@ -92,6 +92,31 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "float", min=0.0, max=1.0, step=0.05, widget="slider",
         slider_labels=("more sensitive", "fewer false wakes"),
     ),
+    # False wakes, 2026-11-09: a household with the TV on reaches for this
+    # one next to the sensitivity, so it is a common slider.
+    FieldSpec(
+        "wake.patience_frames", "Wake confirmation", "Wake word",
+        "How long the wake word must be heard before the room wakes, in "
+        "80 ms steps: the score has to stay up that many steps in a row and "
+        "reach the wake sensitivity on at least one. Default 2 (adds 80 ms): "
+        "a blip from the TV or a phone no longer wakes the room, a wake word "
+        "said across the room still does. Raise to 3 if the room still wakes "
+        "on background noise; 1 wakes on the first blip, as before. A wake "
+        "word said to interrupt a reply (barge-in) or during a drop-in call "
+        "still counts on the first step.",
+        "int", min=1, max=5, step=1, widget="slider",
+        slider_labels=("wakes on the first blip", "fewer false wakes"),
+    ),
+    # Tuned once, if ever: advanced, a number box.
+    FieldSpec(
+        "wake.cooldown_sec", "Wake pause after a turn", "Wake word",
+        "Seconds the wake word is ignored after a turn that went wrong: one "
+        "Domovoi ignored as background talk, one cut off at Max command "
+        "length, or one that ended in an error or with no reply, so a TV "
+        "repeating the word can't start the next one at once. After an "
+        "ordinary answered turn there is no pause. Default 2; 0 turns it off.",
+        "float", section="advanced", min=0.0, max=10.0, unit="sec", step=0.5,
+    ),
     FieldSpec(
         "wake.ack_mode", "Wake acknowledgement", "Wake word",
         "What the room does when it hears the wake word, before it "

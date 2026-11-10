@@ -66,6 +66,35 @@ const healthViewer = () => {
 
 const healthPlural = (n, one, many) => `${n} ${n === 1 ? one : (many || `${one}s`)}`;
 
+/* A size in plain units: "31 GB", "9.4 GB", "640 MB". */
+const healthSize = (bytes) => {
+  const b = Number(bytes) || 0;
+  const gb = b / (1024 ** 3);
+  if (gb >= 10) return `${Math.round(gb)} GB`;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  return `${Math.max(1, Math.round(b / (1024 ** 2)))} MB`;
+};
+
+// Programs have less than this share of the memory free: worth a warning.
+const HEALTH_MEM_LOW = 0.1;
+
+/* The memory row's words (core /v1/admin/memory, domovoi/host_memory.py).
+ * File cache "dominates" when it is at least what programs use and at
+ * least a quarter of the total: that is when people read the box as full. */
+const healthMemoryWords = (mem) => {
+  const total = mem.total_bytes || 0;
+  const programs = mem.programs_bytes || 0;
+  const cache = mem.cache_bytes || 0;
+  const low = total > 0 && (mem.available_bytes || 0) < total * HEALTH_MEM_LOW;
+  return {
+    low,
+    cacheHeavy: total > 0 && cache >= programs && cache >= total / 4,
+    text: low
+      ? `running low · ${healthSize(mem.available_bytes || 0)} of ${healthSize(total)} left for programs`
+      : `using ${healthSize(programs)} for programs · ${healthSize(cache)} file cache (handed back when needed)`,
+  };
+};
+
 /* The container guard's check: from the shared store (components.jsx),
  * the banner's own words. The words follow the reader's tier: a browser
  * with no household credential gets only "something needs an admin's
@@ -99,7 +128,7 @@ const healthGuardCheck = (guard) => {
  * problem (it ranks err → warn, then by it). `fix` is the page that fixes
  * it; `items` the rooms or plugins a row is about. */
 const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
-                        approvals, pending, version, hardware, config, internet, guard }) => {
+                        approvals, pending, version, hardware, config, internet, guard, memory }) => {
   const v = viewer || {};
   const out = [];
   const add = (c) => out.push(c);
@@ -186,6 +215,19 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       if (disk.percent >= HEALTH_DISK_WARN) {
         add({ ...c, tone: disk.percent >= HEALTH_DISK_ERR ? 'err' : 'warn', text: `home disk is ${pct}% full` });
       } else add({ ...c, tone: 'ok', text: `home disk is ${pct}% full` });
+    }
+  }
+  {
+    // Where the memory goes (an admin read; Health only, Home never asks).
+    // Information more than a check: amber only when programs are short.
+    const c = { key: 'memory', part: 'server', label: 'memory', scope: 'admin', order: 16 };
+    if (waits) add(wait(c));
+    else if (!memory) add(unread(c));
+    else if (memory.available === false) {
+      add({ ...c, tone: 'idle', text: memory.why || 'not available on this system' });
+    } else {
+      const w = healthMemoryWords(memory);
+      add({ ...c, tone: w.low ? 'warn' : 'ok', text: w.text, memory });
     }
   }
 
@@ -462,8 +504,70 @@ const HEALTH_ROOM_EVENTS = [
   'satellites.presence.changed', 'satellites.display.changed', 'satellites.pending.changed', 'room_battery.changed',
 ];
 
+const HEALTH_MEM_KIND = { service: 'Domovoi service', container: 'container', process: 'program' };
+const HEALTH_MEM_SOURCE = { services: 'Domovoi services', containers: 'containers', processes: 'other programs' };
+
+/* The memory row unfolded: what the total is made of, then what uses it,
+ * largest first. Plain words; the honest part is the file cache. */
+const HealthMemoryDetail = ({ mem }) => {
+  const w = healthMemoryWords(mem);
+  const wsl = mem.host === 'wsl';
+  const rows = [...(mem.breakdown || [])].sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+  const facts = [`${healthSize(mem.total_bytes)} in all`, `${healthSize(mem.free_bytes)} unused`];
+  if ((mem.shared_bytes || 0) >= 256 * 1024 * 1024) facts.push(`${healthSize(mem.shared_bytes)} shared`);
+  if ((mem.swap_used_bytes || 0) >= 64 * 1024 * 1024) facts.push(`${healthSize(mem.swap_used_bytes)} moved to swap`);
+  return (
+    <div className="health-mem" data-health-memory="detail">
+      <div className="health-mem-facts">{facts.join(' · ')}</div>
+      {wsl && (
+        <p className="health-mem-note" data-mem-note="limit">
+          Domovoi may use up to about {healthSize(mem.total_bytes)} of this PC’s memory: the share
+          its installer gave it.
+        </p>
+      )}
+      {w.cacheHeavy && (
+        <p className="health-mem-note" data-mem-note="cache">
+          Most of it is file cache: files read lately, kept in memory so they open fast. That’s normal,
+          and programs get it back the moment they need it.
+          {wsl && ' Windows gets it back once Domovoi has been idle for a little while.'}
+        </p>
+      )}
+      {rows.length > 0 ? (
+        <ul className="health-mem-list">
+          {rows.map((r, i) => (
+            <li key={`${r.kind}-${r.name}-${i}`} className="health-mem-item" data-kind={r.kind}>
+              <span className="health-mem-name">
+                {r.label}
+                {r.kind === 'process' && r.count > 1 && <span className="health-mem-sub"> · {r.count} running</span>}
+                {r.kind === 'container' && r.label === 'other container' && (
+                  <span className="health-mem-sub mono"> · {r.name}</span>
+                )}
+              </span>
+              <span className="health-mem-kind">{HEALTH_MEM_KIND[r.kind] || r.kind}</span>
+              <span className="health-mem-size mono">{healthSize(r.bytes)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="health-mem-facts">nothing to break down</div>
+      )}
+      {rows.some((r) => r.kind === 'process') && (
+        <div className="health-mem-facts">
+          programs that share memory count it once each, so their sizes can add up to more than they use
+        </div>
+      )}
+      {(mem.missing || []).map((m) => (
+        <div key={m.source} className="health-mem-missing" data-mem-missing={m.source}>
+          couldn’t check {HEALTH_MEM_SOURCE[m.source] || m.source}: {m.why}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const HealthRow = ({ c }) => {
   const problem = c.tone === 'err' || c.tone === 'warn';
+  const [open, setOpen] = React.useState(false);
   return (
     <div className={`health-row${problem ? ' health-row-problem' : ''}`} data-check={c.key} data-tone={c.tone}>
       <StatusDot tone={c.tone}/>
@@ -485,6 +589,13 @@ const HealthRow = ({ c }) => {
         <a className="home-link health-fix" href={c.fix}>open {c.fixLabel || 'it'}</a>
       )}
       {c.coreDown && <span className="health-fix"><CoreRestart/></span>}
+      {c.memory && (
+        <button type="button" className="home-link health-fix health-mem-toggle" aria-expanded={open}
+                onClick={() => setOpen((o) => !o)}>
+          {open ? 'hide details' : 'what uses it'}
+        </button>
+      )}
+      {c.memory && open && <HealthMemoryDetail mem={c.memory}/>}
     </div>
   );
 };
@@ -516,6 +627,9 @@ const HealthPanel = ({ marks = [] }) => {
   const version = useApiObject(admin ? '/api/config/version' : null, HEALTH_QUIET);
   const hardware = useApiObject(admin ? '/api/models/hardware' : null, HEALTH_QUIET);
   const internet = useApiObject(admin ? '/api/config/internet' : null, HEALTH_QUIET);
+  // Read once per visit, not polled: the core looks at Docker and every
+  // process for it (bounded, cached 15 s there).
+  const memory = useApiObject(admin ? '/api/models/memory' : null, HEALTH_QUIET);
   const m = useCtrModel();
 
   // Browser-side plugin errors (index.html's pipeline): re-render on news.
@@ -538,7 +652,7 @@ const HealthPanel = ({ marks = [] }) => {
     pluginErrors: (window.DomovoiPluginErrors && window.DomovoiPluginErrors._bySlug) || {},
     acq: acq.data, approvals: approvals.data, pending: pending.data,
     version: version.data, hardware: hardware.data, config: cfg.data, internet: internet.data,
-    guard: m.s,
+    guard: m.s, memory: memory.data,
   });
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   const audience = (!admin && !cfg.data && !cfg.error) ? 'none' : healthAudience({ viewer, visibility, shared });
@@ -568,7 +682,7 @@ const HealthPanel = ({ marks = [] }) => {
   // couldn't run.
   const sources = [['server', health], ['rooms', guest ? null : sats], ['plugins', plugins], ['media requests', acq],
     ...(admin ? [['approvals', approvals], ['adoption', pending], ['updates', version], ['disk', hardware],
-                 ['internet', internet]] : [])];
+                 ['internet', internet], ['memory', memory]] : [])];
   const failed = sources.filter(([, r]) => r && !r.loading && r.data == null && r.error != null).map(([n]) => n);
 
   if (audience === 'none' || audience === 'summary') {
@@ -600,7 +714,7 @@ const HealthPanel = ({ marks = [] }) => {
       </div>
       {!admin && viewer.known && (
         <div className="ctr-hint">
-          sign in as the admin to see updates, disk space and rooms waiting for approval ·{' '}
+          sign in as the admin to see updates, disk space, memory and rooms waiting for approval ·{' '}
           <button type="button" className="home-link"
                   onClick={() => { try { Auth.requestLogin(); } catch { /* no auth module */ } }}>sign in</button>
         </div>
@@ -630,4 +744,4 @@ const HealthPanel = ({ marks = [] }) => {
 window.DomovoiSettingsSections = window.DomovoiSettingsSections || {};
 window.DomovoiSettingsSections.health = { Panel: HealthPanel };
 
-Object.assign(window, { healthChecks, healthProblems, healthAudience, healthViewer, HealthPanel });
+Object.assign(window, { healthChecks, healthProblems, healthAudience, healthViewer, healthSize, HealthPanel });

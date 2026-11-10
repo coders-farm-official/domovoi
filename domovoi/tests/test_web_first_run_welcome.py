@@ -484,7 +484,7 @@ def test_no_keep_this_one_without_a_token(driven) -> None:
     assert s["dialog"] == "You're all set" and s["token"] is None
     texts = [b["text"] for b in s["buttons"]]
     assert "Done" in texts and "Keep this one" not in texts
-    assert "Settings → Rooms & devices → Phones & browsers → Household token" in s["text"]
+    assert "Settings → Household → Phones & browsers → Household token" in s["text"]
 
 
 def test_copy_works_on_plain_http(driven) -> None:
@@ -535,7 +535,7 @@ def test_the_right_token_connects_and_the_prompt_goes(driven) -> None:
 
 def test_where_do_i_find_it(driven) -> None:
     s = driven["connect_where"]
-    assert ("Ask whoever set up Domovoi — it’s in Settings → Rooms & devices → Phones & browsers"
+    assert ("Ask whoever set up Domovoi — it’s in Settings → Household → Phones & browsers"
             " → Household token.") in s["text"]
 
 

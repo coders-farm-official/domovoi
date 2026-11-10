@@ -4,6 +4,40 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-10 — one menu for every browser (optional)
+
+Dashboard. One database migration (V045, `household_settings`), applied by
+the usual update.
+
+* **Settings → System → App layout → Menu** (admin): rename the sidebar's
+  groups (Media, Tools), add and delete groups, move any page, plugin
+  pages, Chat and Plugins included, into a group or to the top, and change
+  the order, with a live preview; **Reset to default** brings the usual
+  menu back. It is kept on the server, so every browser that opens this
+  Domovoi's dashboard shows it, and open dashboards change at once when it
+  is saved. Nothing needs doing: without a saved menu the default stays.
+  Home stays at the top; the shared-screen and AI-off hiding still apply.
+* The phone app keeps its own layout. The **Phone bar** card on the same
+  page is still this browser only.
+* New: `GET` (open) / `PUT` / `DELETE` (admin) `/api/nav-layout`
+  ([API_REFERENCE.md](API_REFERENCE.md)).
+
+## 2026-11-10 — what uses the server's memory
+
+Dashboard and core. Nothing to run.
+
+* **Settings → System → Health → Server → memory** (admin) says how much
+  memory programs use and how much is file cache, e.g. *using 9.4 GB for
+  programs · 31 GB file cache (handed back when needed)*. **what uses it**
+  lists each Domovoi service, each container (the music player for a room,
+  the database, the search helper, a plugin's container, the wake-word
+  trainer) and the largest other programs, largest first. On the Windows
+  installer it also says how much of the PC's memory Domovoi may use, and
+  that Windows gets file cache back once Domovoi is idle
+  ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-servers-memory-looks-full)).
+  It turns amber only when less than a tenth is left for programs, which
+  also puts it on Home's "needs attention" list.
+
 ## 2026-11-09 — no more rooms stuck "thinking"
 
 When speech recognition on the Domovoi server got stuck, every room sat

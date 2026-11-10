@@ -92,6 +92,8 @@ page = "StationsPage"
 nav_label = "Stations"
 nav_icon = "web/static/icon.svg"
 nav_order = 50
+# In the sidebar's Media group, beside Music and Podcasts.
+nav_group = "media"
 badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 [[web.player_sources]]
 kind = "radio"

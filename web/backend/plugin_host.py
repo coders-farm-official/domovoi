@@ -60,7 +60,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from domovoi.plugins_runtime.accent import manifest_accent
-from domovoi.plugins_runtime.manifest import nav_icon_problem
+from domovoi.plugins_runtime.manifest import NAV_GROUPS, nav_icon_problem
 from web.backend.db import session_scope
 from web.backend.static_cache import STATIC_CACHE_CONTROL
 
@@ -766,6 +766,14 @@ class PluginHost:
                             if _icon_url(pg.get("nav_icon")) else None
                         ),
                         "nav_order": pg.get("nav_order", 50),
+                        # The sidebar group it asked for (manifest.NAV_GROUPS),
+                        # or None: a top-level row. A value this dashboard
+                        # doesn't know (a row written by a newer core) is
+                        # top level too, never an error.
+                        "nav_group": (
+                            pg.get("nav_group")
+                            if pg.get("nav_group") in NAV_GROUPS else None
+                        ),
                         "badge": pg.get("badge"),
                     }
                 )

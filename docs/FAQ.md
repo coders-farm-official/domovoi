@@ -122,7 +122,7 @@ Yes. After setup (which downloads the software and models), answer **No, keep ev
 ## How do I add rooms?
 
 A room *is* a satellite, and every room is added from the dashboard, as
-admin, in **Settings → Rooms & devices → Rooms**:
+admin, in **Settings → Household → Rooms**:
 
 1. **A Raspberry Pi:** put Raspberry Pi OS Lite (64-bit) on a microSD card,
    put the card in the server's card reader, and use **prepare a room's
@@ -136,7 +136,7 @@ admin, in **Settings → Rooms & devices → Rooms**:
    approval** and press **approve**.
 3. That's it — on first connection, the server provisions that room's own
    music daemon (an MPD container with its own queue and volume) and the
-   room appears in Settings → Rooms & devices → Rooms.
+   room appears in Settings → Household → Rooms.
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by the name you gave. The by-hand route (installing the satellite client and pointing it at `ws://<server>:6370` yourself) is in the [Satellite hardware guide](SATELLITE_HARDWARE.md) and `satellite/PROVISIONING.md`.
 
@@ -144,7 +144,7 @@ Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in
 
 Yes. A spare **Linux laptop or mini PC** (Debian or Ubuntu) or a
 **Windows 10/11 laptop or PC** can be a room: in the dashboard, as admin,
-**Settings → Rooms & devices → Rooms → add a spare device**, name the room, and run the
+**Settings → Household → Rooms → add a spare device**, name the room, and run the
 one-line command it shows on that computer (one for Linux, one for Windows
 PowerShell). It installs the satellite, makes sure it's talking to *your*
 server, and shows an approval code to type into the dashboard. A tray
@@ -187,7 +187,7 @@ Not once the real one has connected. Each satellite generates a random **pairing
 
 Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one. An install that upgrades into this release and never set the line becomes strict at its next restart: paired rooms are unaffected, and a satellite that hasn't paired yet asks for approval once.
 
-**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Rooms & devices → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
+**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Household → Rooms → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
 One thing pairing does *not* do: encrypt the audio. LAN traffic is still unencrypted in v1 (TLS is on the hardening backlog), so keep satellites and the server on a network segment you control. See [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network).
 
@@ -242,9 +242,9 @@ There is no integration. Domovoi doesn't control lights, locks or thermostats, a
 
 ## Does it support multiple people?
 
-Yes — voice profiles. Say "I'm Sarah" and confirm, and Domovoi enrolls your voice locally (a voice embedding, stored in your Postgres — no cloud). After that it recognizes who's speaking and personalizes: per-person memories ("remember that I…"), per-person news topics, and a "who am I?" you can ask any time. You can introduce someone else ("this is my friend Alex"), and "forget me" deletes a person's profile, voice data and what they've said to Domovoi outright — when it is their own voice saying it (a voice that only claimed the name loses just what it added; an admin can always remove a person on the People page). Matching thresholds are tunable per household if siblings' voices collide.
+Yes — voice profiles. Say "I'm Sarah" and confirm, and Domovoi enrolls your voice locally (a voice embedding, stored in your Postgres — no cloud). After that it recognizes who's speaking and personalizes: per-person memories ("remember that I…"), per-person news topics, and a "who am I?" you can ask any time. You can introduce someone else ("this is my friend Alex"), and "forget me" deletes a person's profile, voice data and what they've said to Domovoi outright — when it is their own voice saying it (a voice that only claimed the name loses just what it added; an admin can always remove a person in Settings → Household → People). Matching thresholds are tunable per household if siblings' voices collide.
 
-If a room doesn't recognize you yet, say "I'm Sarah" there too: Domovoi asks "I already know someone called Sarah. Is that you?", and a yes teaches it your voice in that room. A no adds you as a new Sarah; with two Sarahs Domovoi won't guess which one is speaking when the name is said, so give one of you a different name on the People page (an admin can rename anyone there), or use a full name ("I'm Sarah Lee") from the start.
+If a room doesn't recognize you yet, say "I'm Sarah" there too: Domovoi asks "I already know someone called Sarah. Is that you?", and a yes teaches it your voice in that room. A no adds you as a new Sarah; with two Sarahs Domovoi won't guess which one is speaking when the name is said, so give one of you a different name in Settings → Household → People (an admin can rename anyone there), or use a full name ("I'm Sarah Lee") from the start.
 
 ## Who added that song, and can I stop someone adding more?
 
@@ -261,11 +261,11 @@ before this existed — simply show nothing rather than a guess.
 
 Devices name themselves. A browser or phone introduces itself the first time
 it loads, with a name guessed from the platform ("Chrome on Windows", "Pixel
-8"); you can rename it in **Settings → Rooms & devices → Phones & browsers** (dashboard) or **Settings →
-Rooms & devices → Phones & browsers** (app). Renaming relabels that device's existing queue entries.
+8"); you can rename it in **Settings → Household → Phones & browsers** (dashboard) or **Settings →
+Household → Phones & browsers** (app). Renaming relabels that device's existing queue entries.
 
 An admin can take queue editing away from a named device — one room, or every
-room — in **Settings → Rooms & devices → Phones & browsers → Queue access**. A blocked device can still
+room — in **Settings → Household → Phones & browsers → Queue access**. A blocked device can still
 *see* the queue and still plays its own music; it just can't change what the
 room plays. Be aware of what this is: a device tells the server who it is, and
 nothing on a trusted LAN forces it to be honest, so this reliably settles a
@@ -287,7 +287,7 @@ a paired device. (A determined guest could still empty a queue song by song;
 that's what bans and the off switch are for.) A guest's songs show "added by a guest", and
 a guest isn't shown the names of the household's devices.
 
-To stop one guest, sign in as admin and open **Settings → Rooms & devices → Phones & browsers → Guests**:
+To stop one guest, sign in as admin and open **Settings → Household → Phones & browsers → Guests**:
 it lists the guests that changed the music this week, with a **ban** button
 (also on any queue entry a guest added). A ban covers every room, the queue
 and the playback buttons alike, and matches that phone's browser id or its
@@ -321,7 +321,7 @@ same as playing music. **Deleting** is the one Files action that does need
 admin, because it's the one that destroys something; the phone app can't sign
 in as admin, so delete from the dashboard. If one device keeps filling the
 libraries with things it shouldn't, an admin can take uploading, moving and
-importing away from it in **Settings → Rooms & devices → Phones & browsers → Files access** — it can still
+importing away from it in **Settings → Household → Phones & browsers → Files access** — it can still
 browse and download, and the Files page tells it why it can't change anything.
 The same honesty note as queue access applies: a device tells the server who it
 is, so this settles a household argument rather than stopping someone
@@ -397,19 +397,19 @@ To keep it all in the house, answer **No** in Settings → Privacy → Internet:
 
 ## Can Domovoi print and scan?
 
-Yes, on network printers and scanners, with no drivers: any printer that works with AirPrint, IPP Everywhere or Mopria, and any scanner that works over eSCL ("AirScan"). USB printers and printers that need a maker's driver are not supported. **Settings → Rooms & devices → Printers & scanners** finds them on your network, adds one by name or address, and prints a test page. **Print** is on PDFs, pictures, text and markdown files and spreadsheets in Files and Documents (a Word or OpenDocument file says "save it as PDF first"); **Scan** puts several pages into one PDF in Documents → Scans. By voice: "print two copies of the lease" (it says the pages and asks first), "how much ink is left", "scan this to Documents".
+Yes, on network printers and scanners, with no drivers: any printer that works with AirPrint, IPP Everywhere or Mopria, and any scanner that works over eSCL ("AirScan"). USB printers and printers that need a maker's driver are not supported. **Settings → Household → Printers & scanners** finds them on your network, adds one by name or address, and prints a test page. **Print** is on PDFs, pictures, text and markdown files and spreadsheets in Files and Documents (a Word or OpenDocument file says "save it as PDF first"); **Scan** puts several pages into one PDF in Documents → Scans. By voice: "print two copies of the lease" (it says the pages and asks first), "how much ink is left", "scan this to Documents".
 
 Everything stays on your network, and printing and scanning keep working when the internet answer is **No**. Domovoi keeps a log of print jobs (which device or room, the document's title, pages, when, which printer) for 90 days; paired devices can read it and an admin can clear it. Limits an admin can change: 100 pages and 20 copies a job, 500 sheets a day for the house.
 
 ## How do I ask Domovoi for help?
 
-Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, Domovoi can offer to send the steps to the phone marked as yours (the app's Settings → Rooms & devices → Phones & browsers → "This phone belongs to"). With AI chat and questions turned off, help is a plain search of the manual and the docs.
+Ask it. In chat or by voice, "how do I add a room?" is answered from Domovoi's own manual, this FAQ, the troubleshooting guide, an entry for every dashboard error and your installed plugins' help; the answer names the section it came from, and when none covers the question it says "The manual doesn't cover that." The dashboard has a **?** in the top bar of every page, **ask Domovoi about this** on an error, and **report a problem**, which builds a summary with addresses, tokens and codes taken out for you to copy and post yourself: nothing is sent anywhere. By voice, Domovoi can offer to send the steps to the phone marked as yours (the app's Settings → Household → Phones & browsers → "This phone belongs to"). With AI chat and questions turned off, help is a plain search of the manual and the docs.
 
 ## How long is what we say kept, and can we delete it?
 
 **90 days by default, and yes.** Domovoi writes down what people say to it
 and what it answered, so the Conversations and Sessions tabs can show it
-(to paired devices only). On the dashboard, **People → Voice history** has:
+(to paired devices only). On the dashboard, **Settings → Household → People → Voice history** has:
 
 - **Keep voice history**: 30 days, 90 days (the default), 1 year, or
   Forever. Anything older is deleted once a day, and right away when you
