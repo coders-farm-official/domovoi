@@ -85,6 +85,22 @@ final class UnclaimedServerTests: XCTestCase {
         XCTAssertEqual("use a different server", UnclaimedServerStrings.useADifferentServer)
     }
 
+    /// Train I014's audit finding, answered the way the app answered it
+    /// twice before: VoiceOver hears `the server at <address>`, in the same
+    /// words as the forget card and the phone-source switch.
+    func testTheAddressReadsAsTheServerAtItAndNotAsBareDigits() {
+        XCTAssertEqual("the server at 127.0.0.1:6606", UnclaimedServerStrings.addressLabel("127.0.0.1:6606"))
+        XCTAssertEqual(
+            forgetServerAddressLabel("192.168.1.20:6369"),
+            UnclaimedServerStrings.addressLabel("192.168.1.20:6369"),
+            "one wording for an address on its own, app-wide"
+        )
+        XCTAssertEqual(
+            PhoneMediaStrings.serverSideLabel("192.168.1.20:6369"),
+            UnclaimedServerStrings.addressLabel("192.168.1.20:6369")
+        )
+    }
+
     func testOnlyTheButtonsOwnReadSaysStillNotSetUp() {
         XCTAssertTrue(saysStillUnclaimed(fromButton: true, read: false))
         XCTAssertFalse(saysStillUnclaimed(fromButton: true, read: true), "claimed now: the screen just goes")

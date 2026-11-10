@@ -50,6 +50,9 @@ extension StubHouseUITests {
         static let still = "still not set up — claim it on the dashboard first"
         /// The opening of `unclaimedText`, `UnclaimedServer.kt:67`.
         static let textOpening = "Open its dashboard in a web browser and claim it, then come back."
+        /// `UnclaimedServerStrings.addressLabel` for the 6606 house — the
+        /// forget card's `the server at …` wording (train I014).
+        static let addressLabel = "the server at 127.0.0.1:6606"
         /// `ShellStrings.connectionTitle`: the sheet that must never open.
         static let connectionSheet = "connection"
     }
@@ -96,9 +99,15 @@ extension StubHouseUITests {
             .matching(NSPredicate(format: "label BEGINSWITH %@", UnclaimedUnderTest.textOpening))
             .firstMatch
         XCTAssertTrue(opening.exists, "the explanation is drawn")
+        // By its VoiceOver label, which is what XCUITest matches: since
+        // train I014 that is `the server at …`, not the bare digits drawn.
         XCTAssertTrue(
+            app.staticTexts[UnclaimedUnderTest.addressLabel].exists,
+            "the address to open is drawn, and reads as a phrase"
+        )
+        XCTAssertFalse(
             app.staticTexts["127.0.0.1:\(Self.unclaimedPort)"].exists,
-            "the address to open is drawn"
+            "no element is labelled with the bare address (I014's audit finding)"
         )
 
         // `Check again` is waited for, not read once: while the launch's own

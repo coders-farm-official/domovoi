@@ -32,6 +32,9 @@ import SwiftUI
 ///  - **No glyph.** Android draws `DomovoiGlyph(48)` above the title; this
 ///    app has no brand glyph view to draw, and a substitute would be a
 ///    picture nobody chose.
+///  - **The address reads `the server at …` to VoiceOver**
+///    (``UnclaimedServerStrings/addressLabel(_:)``, train I014); Android's
+///    reads it raw. The drawn text is the bare address.
 ///  - **The address and the hint are in ``Color/fgMuted``**, not Android's
 ///    `fgFaint`/`fgSubtle`: those inks are under 4.5:1 on white, which
 ///    Apple's audit fails, and the track's rule is the measured ink
@@ -59,6 +62,15 @@ struct UnclaimedServerView: View {
                     Text(address)
                         .font(.caption.monospaced())
                         .foregroundStyle(Color.fgMuted)
+                        // Wraps rather than clips: the forget card's address
+                        // met `Text clipped` at AX5 the moment it had a
+                        // readable label (ConnectionDialogView.swift).
+                        .fixedSize(horizontal: false, vertical: true)
+                        // Train I014: "Label not human-readable" against the
+                        // bare address. The drawn text is unchanged; VoiceOver
+                        // hears `the server at …`, the app's wording for this
+                        // on the forget card and the phone-source switch.
+                        .accessibilityLabel(UnclaimedServerStrings.addressLabel(address))
                     Text(UnclaimedServerStrings.text(address: address))
                         .font(.body)
                         .foregroundStyle(Color.fgMuted)
