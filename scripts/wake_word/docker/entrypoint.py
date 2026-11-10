@@ -175,6 +175,12 @@ def ensure_dataset() -> None:
             local_dir=str(FEATURES_DIR),
         )
     except Exception as e:
+        # The traceback goes to the log first: the dashboard's "what it
+        # printed last" shows it, and the one-line reason alone (an error
+        # raised deep in a library) was not enough to find the cause.
+        import traceback
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
         die(f"feature dataset download failed: {e}. Re-running resumes "
             f"(huggingface_hub caches partial files); check container network "
             f"+ that the named cache volume has room for ~17.5 GB.", 4)

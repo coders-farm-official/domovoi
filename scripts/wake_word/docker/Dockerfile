@@ -158,6 +158,15 @@ RUN pip install --no-cache-dir \
         "datasets==3.6.0" \
         "scipy<1.15"
 
+# Brotli 1.2: the base image's conda Brotli is 1.1.0, but httpx2 (what
+# huggingface_hub downloads through) passes `output_buffer_limit` to
+# Decompressor.process(), which 1.1.0 refuses ("process() takes no keyword
+# arguments"). Any brotli-encoded response then crashes the download: the
+# one-time feature download failed this way on a household install and in a
+# reproduction after the server dropped the connection mid-file (2026-11-09).
+# The check below fails the BUILD if the pair ever disagrees again. MIT.
+RUN pip install --no-cache-dir "Brotli==1.2.0" &&     python -c "import brotli; from httpx2._decoders import BrotliDecoder as D; d = D(); s = b'x' * 100000; assert b''.join(d.decode(brotli.compress(s))) == s; print('brotli', brotli.__version__, 'decodes through httpx2')"
+
 # Bake openWakeWord's FEATURE models (melspectrogram.onnx + embedding_model.onnx,
 # plus the bundled wake models) into resources/models/ at BUILD time. AudioFeatures
 # (used by both --augment_clips and --train_model) hard-requires these and would
