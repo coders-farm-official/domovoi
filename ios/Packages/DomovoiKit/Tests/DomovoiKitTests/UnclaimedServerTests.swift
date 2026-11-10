@@ -229,8 +229,8 @@ final class UnclaimedServerTests: XCTestCase {
     /// read lands late and is dropped (below), so the newer one says it.
     func testAReadStartedAfterTheButtonCarriesItsWordsWhenItLandsFirst() async {
         let rig = ModelRig(server: server)
-        let button = rig.model.checkAgain(unreachable: false)
-        let socket = rig.model.ask(.socket, unreachable: false)
+        let button = await rig.reached(rig.model.checkAgain(unreachable: false))
+        let socket = await rig.reached(rig.model.ask(.socket, unreachable: false))
         await rig.answer(newest: false, socket)
         XCTAssertEqual([UnclaimedServerStrings.still], rig.said.current)
         await rig.answer(oldest: false, button)
@@ -245,8 +245,8 @@ final class UnclaimedServerTests: XCTestCase {
         await rig.answer(oldest: false, rig.model.ask(.socket, unreachable: false))
         XCTAssertTrue(rig.model.blocks)
 
-        let before = rig.model.ask(.socket, unreachable: false)
-        let after = rig.model.ask(.foreground, unreachable: false)
+        let before = await rig.reached(rig.model.ask(.socket, unreachable: false))
+        let after = await rig.reached(rig.model.ask(.foreground, unreachable: false))
         await rig.answer(newest: true, after)
         XCTAssertFalse(rig.model.blocks)
         await rig.answer(oldest: false, before)
@@ -258,11 +258,11 @@ final class UnclaimedServerTests: XCTestCase {
     /// must not end B's own `checking…`.
     func testAReadFromBeforeASwitchNeitherBlocksNorTouchesTheNewServer() async {
         let rig = ModelRig(server: server)
-        let fromA = rig.model.ask(.socket, unreachable: false)
+        let fromA = await rig.reached(rig.model.ask(.socket, unreachable: false))
 
         rig.active.set(other)
         XCTAssertTrue(rig.model.serverIs(other))
-        let fromB = rig.model.ask(.serverPicked, unreachable: false)
+        let fromB = await rig.reached(rig.model.ask(.serverPicked, unreachable: false))
         XCTAssertTrue(rig.model.checking)
 
         await rig.answer(oldest: false, fromA)
@@ -315,16 +315,17 @@ final class UnclaimedServerTests: XCTestCase {
             let isA = request.url?.host == "10.0.0.42"
             return .json(#"{"setup_complete": \#(!isA)}"#)
         }
-        let (shell, store) = shellRig()
+        // **A bare container, no `ShellModel`.** With a shell built on it,
+        // the store write below fires the selection sink, the shell's
+        // refresh asks B for its own status, and this case counted that
+        // read as if it were the one under test (pkgtest 2026-11-10, two of
+        // three runs: `["10.0.0.42", "10.0.0.77"]`).
+        let (container, store) = clientRig()
         XCTAssertTrue(store.setServerURL(other))
-        guard let answer = await readStatus(shell.container.client, server: server, "the real read of A") else {
-            shell.stop()
-            return
-        }
+        guard let answer = await readStatus(container.client, server: server, "the real read of A") else { return }
         XCTAssertEqual(false, answer, "A's own answer")
         let hosts = StubURLProtocol.recorded.filter { $0.url?.path == authStatusPath }.map { $0.url?.host ?? "" }
         XCTAssertEqual(["10.0.0.42"], hosts, "sent to A, not to the client's current server B")
-        shell.stop()
     }
 
     /// A refusal is not an answer, **whatever its body says**, and neither is
@@ -582,6 +583,30 @@ final class UnclaimedServerTests: XCTestCase {
             await land(task, "the read answered newest-first (\(String(describing: value)))", file: file, line: line)
         }
 
+        /// `task`, once its read has **reached** the scripted server.
+        ///
+        /// Needed wherever two reads are out at once. The scripted server
+        /// answers by position — oldest, newest — and the case names the
+        /// task it expects that to be; but two `Task`s made back to back on
+        /// the main actor are not promised to start in the order they were
+        /// made. Measured: pkgtest on 2026-11-10 (`wf/ios-c-unclaimed3`,
+        /// the first of three runs) answered "newest" in
+        /// `testAnOlderReadLandingLateDoesNotUndoANewerOne` and resumed the
+        /// OTHER read, so the task the case then awaited never finished —
+        /// which, with the unbounded `await task.value` this file used to
+        /// have, is a suite parked for ever. Waiting for each read to arrive
+        /// before asking the next makes arrival order the asking order.
+        @MainActor
+        func reached(
+            _ task: Task<Void, Never>?,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) async -> Task<Void, Never>? {
+            guard task != nil else { return nil }
+            _ = await waitForReads(file: file, line: line)
+            return task
+        }
+
         @MainActor
         private func land(_ task: Task<Void, Never>?, _ what: String, file: StaticString, line: UInt) async {
             let landed = await finishes(task, within: unclaimedWaitSeconds, what, file: file, line: line)
@@ -603,6 +628,23 @@ final class UnclaimedServerTests: XCTestCase {
             if !reached { reads.drain() }
             return reached
         }
+    }
+
+    /// The client alone: a container over the same store as ``shellRig()``
+    /// with nothing subscribed to it.
+    private func clientRig() -> (AppContainer, InMemoryShellStore) {
+        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
+        store.upsertKnownServer(url: server, name: nil)
+        store.trustServer(other)
+        store.upsertKnownServer(url: other, name: nil)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        return (container, store)
     }
 
     private func shellRig() -> (ShellModel, InMemoryShellStore) {
