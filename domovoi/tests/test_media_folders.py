@@ -512,9 +512,19 @@ async def test_docker_desktop_sources_recreate_nothing_at_start(monkeypatch) -> 
 
 
 def _deps(app, path, method):
-    for r in app.routes:
-        if getattr(r, "path", None) == path and method in getattr(r, "methods", set()):
-            return {d.call.__name__ for d in r.dependant.dependencies}
+    # The shared walk: FastAPI >= 0.139 keeps included routers nested, so a
+    # flat look at app.routes misses them (domovoi/tests/route_walk.py).
+    from domovoi.tests.route_walk import iter_route_contexts
+
+    def calls(dep):
+        for d in getattr(dep, "dependencies", ()):
+            if d.call is not None:
+                yield getattr(d.call, "__name__", repr(d.call))
+            yield from calls(d)
+
+    for r in iter_route_contexts(app.routes):
+        if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or set()):
+            return set(calls(getattr(r, "dependant", None)))
     raise AssertionError(f"no {method} {path}")
 
 
