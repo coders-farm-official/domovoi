@@ -924,7 +924,7 @@
           "music"
         ],
         "summary": "List Library",
-        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active ``q`` / ``source`` / ``favorited`` filters.\n\nAlways paged (default 50, max 200), as it always was. ``cursor`` (from\nthe previous page's ``next_cursor``) pages by keyset \u2014 rows added,\nremoved or re-sorted while somebody scrolls are neither repeated nor\nskipped \u2014 and is what both clients now send; ``offset`` still works\nfor the installed Android app (web/backend/api/paging.py).\n\nSort options are whitelisted (the ORDER BY can't be user-supplied)\nso a malformed ``sort`` returns 422 rather than a SQL error.",
+        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active ``q`` / ``source`` / ``favorited`` filters.\n\nAlways paged (default 50, max 200), as it always was. ``cursor`` (from\nthe previous page's ``next_cursor``) pages by keyset \u2014 rows added,\nremoved or re-sorted while somebody scrolls are neither repeated nor\nskipped \u2014 and is what both clients now send; ``offset`` still works\nfor the installed Android app (web/backend/api/paging.py).\n\nSort options are whitelisted (the ORDER BY can't be user-supplied)\nso a malformed ``sort`` returns 422 rather than a SQL error.\n\n``q`` (web/backend/api/music_search.py, owner 2026-11-11): every word,\npunctuation-, accent- and case-blind, somewhere in the title, artist\nor album \u2014 best match first, ``sort`` ordering the rows that match\nequally well; when no row holds every word, the rows most like the\nquery (typos). ``artist`` (the Artists view): only that performer's\ntracks, every credit that names them (\"Jeezy, T.I.\" is T.I.'s too);\n``album`` narrows that to one of their albums.",
         "operationId": "list_library_api_music_library_get",
         "parameters": [
           {
@@ -934,16 +934,55 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 200
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Substring filter against title/artist/album and the library-relative file_path (the path a client is shown, never the server's absolute one)",
+              "description": "Search: every word (case, accents, apostrophes, dots and hyphens ignored) somewhere in title/artist/album, best match first; or a substring of the library-relative file_path (the path a client is shown, never the server's absolute one). When nothing holds every word, the tracks most like the query (typos).",
               "title": "Q"
             },
-            "description": "Substring filter against title/artist/album and the library-relative file_path (the path a client is shown, never the server's absolute one)"
+            "description": "Search: every word (case, accents, apostrophes, dots and hyphens ignored) somewhere in title/artist/album, best match first; or a substring of the library-relative file_path (the path a client is shown, never the server's absolute one). When nothing holds every word, the tracks most like the query (typos)."
+          },
+          {
+            "name": "artist",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this performer's tracks, as GET /api/music/artists names them: every credit naming them ('Jeezy, T.I.' counts for T.I.).",
+              "title": "Artist"
+            },
+            "description": "Only this performer's tracks, as GET /api/music/artists names them: every credit naming them ('Jeezy, T.I.' counts for T.I.)."
+          },
+          {
+            "name": "album",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "With artist: only this album of theirs ('' = tracks with no album).",
+              "title": "Album"
+            },
+            "description": "With artist: only this album of theirs ('' = tracks with no album)."
           },
           {
             "name": "source",
@@ -991,7 +1030,8 @@
                 "added_asc",
                 "title",
                 "artist",
-                "duration"
+                "duration",
+                "album"
               ],
               "type": "string",
               "default": "added_desc",
@@ -2264,6 +2304,170 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/artists": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Artists",
+        "description": "One page of the library's performers (module docstring). With ``q``,\nbest match first, then ``sort``.",
+        "operationId": "list_artists_api_music_artists_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search artist names (the library search's rules).",
+              "title": "Q"
+            },
+            "description": "Search artist names (the library search's rules)."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "name",
+                "tracks"
+              ],
+              "type": "string",
+              "default": "name",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtistPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/artist": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Artist Detail",
+        "description": "One performer: albums A-Z (no album last) and every track id in\nalbum order (the files' order within an album), for play / shuffle.",
+        "operationId": "artist_detail_api_music_artist_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtistDetail"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -5550,7 +5754,7 @@
           "satellites"
         ],
         "summary": "List Recently Played",
-        "description": "Everything this room has played \u2014 library, playlist, and\nprovider-plugin picks (``source`` is an open enum) \u2014 newest first.\nAn external play that isn't yet in the library carries\n``can_add=True`` so the drawer can offer \"+ add to library\", which\nenqueues a generic media acquisition (design \u00a74.8/\u00a710.1); the\nfrontend shows the button only while a fulfiller capability is\nregistered.",
+        "description": "Everything this room has played \u2014 library, playlist, and\nprovider-plugin picks (``source`` is an open enum) \u2014 newest first.\nAn external play that isn't yet in the library carries\n``can_add=True`` so the drawer can offer \"+ add to library\", which\nenqueues a generic media acquisition (design \u00a74.8/\u00a710.1).\n\n``can_add`` asks whether anything can fulfil it (D55, owner decision\n2026-11-03: \"no fulfiller means no button and no error\"). It used to\nbe a property of the ROW alone, so with nothing installed to act on\nthe queue every phone drew a button whose only outcome was the\nqueue's graceful-absence sentence \u2014 a control that cannot do what it\nsays. The answer comes from the same place add-by-query and\nadd-by-url get theirs (``_availability``, which reads the core's\n``GET /v1/acquisitions`` \u2192 ``ACQUISITIONS.availability()``,\ndomovoi/main.py:5874), so one answer cannot disagree with another.\nA core that does not answer leaves availability ``None`` \u2014 not a\npositive answer, so no button, and no error for anyone to read\neither.\n\nWhich flag decides is **per row**, because the add a client makes is:\na row with a stored ``url`` is added by add-by-url\n(``can_fulfill_url``), and a row with only a title is added by\nadd-by-query (``can_fulfill_query``) \u2014 the dashboard's own fork\n(``web/static/satellites.jsx:1752-1764``). One flag for both rows\nwould have withdrawn the dashboard's title-only add on a house whose\ninstalled fulfiller takes queries and not URLs.\n\nA URL row also needs the internet to be ON: add-by-url refuses with\n409 under the \"never\" answer (``domovoi/main.py:5790-5791``), where\nadd-by-query still queues the row for later, so the switch only takes\nthe URL button away. ``egress.policy()`` is read from the\nenvironment and the env file, so this process sees the same answer\nthe core does (``web/backend/api/chat.py:1822`` reads it the same\nway).\n\n**The answer is per CALLER as well as per row.** For a caller that is\nnot an admin session the core's gate is narrower: the URL must match a\nregistered fulfiller's ``url_matcher`` allowlist\n(``ACQUISITIONS.url_allowed_by_fulfillers``, domovoi/main.py:5785-5789,\nand a fulfiller registered without a matcher never allowlists). That\nis live core-registry state, so this route asks the core for it \u2014\n``POST /v1/acquisitions/url-allowed``, batched over the page's URLs,\nadded for this decision \u2014 and a URL the installed provider does not\nrecognise gets no button rather than a button whose press returns the\ncore's 403 (\"adding by URL requires an admin session, or a URL\nmatching an installed media provider\"). An admin session skips that\nquestion, because its add passes whatever the matchers say: gating it\non the allowlist would have withdrawn the dashboard's add on a house\nwhose fulfiller registered no matcher at all.\n\nTwo things it still does not promise, both of them about the moment\nof the press rather than the state of the house: a non-admin caller\nalso meets a per-source rate limit (429 after\n``URL_FETCH_MAX_PER_WINDOW`` in the window), and the URL must still\npass ``net_safety.check_outbound_url`` \u2014 a loopback or private-address\nhost is a 400. Neither can be answered honestly for a row the person\nhas not pressed yet.",
         "operationId": "list_recently_played_api_satellites__room_id__recently_played_get",
         "parameters": [
           {
@@ -18236,6 +18440,168 @@
           "message"
         ],
         "title": "AnnounceRequest"
+      },
+      "ArtistAlbum": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "track_count": {
+            "type": "integer",
+            "title": "Track Count"
+          },
+          "cover_track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Track Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "track_count"
+        ],
+        "title": "ArtistAlbum"
+      },
+      "ArtistDetail": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "track_count": {
+            "type": "integer",
+            "title": "Track Count"
+          },
+          "albums": {
+            "items": {
+              "$ref": "#/components/schemas/ArtistAlbum"
+            },
+            "type": "array",
+            "title": "Albums"
+          },
+          "track_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Track Ids"
+          },
+          "track_ids_truncated": {
+            "type": "boolean",
+            "title": "Track Ids Truncated",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "track_count",
+          "albums",
+          "track_ids"
+        ],
+        "title": "ArtistDetail"
+      },
+      "ArtistPage": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ArtistRow"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items",
+          "limit"
+        ],
+        "title": "ArtistPage"
+      },
+      "ArtistRow": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "track_count": {
+            "type": "integer",
+            "title": "Track Count"
+          },
+          "album_count": {
+            "type": "integer",
+            "title": "Album Count"
+          },
+          "cover_track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Track Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "track_count",
+          "album_count"
+        ],
+        "title": "ArtistRow"
       },
       "Body_extract_document_api_chat_documents_extract_post": {
         "properties": {
