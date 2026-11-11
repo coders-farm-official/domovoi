@@ -38,6 +38,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import text
 
@@ -268,25 +269,48 @@ def _nested_mountpoints(music_dir: str) -> list[tuple[Path, str]]:
         (settings.audiobooks_dir, "audiobooks"),
     ):
         host_path = Path(host_dir).expanduser()
-        # Docker Desktop on Windows refuses a bind mount whose host path
-        # doesn't exist; the lifespan creates these lazily, but guard here
-        # too so a stale config can't wedge MPD provisioning entirely.
-        if not host_path.exists():
-            continue
         placeholder = music_root / container_sub
         try:
+            # Docker Desktop on Windows refuses a bind mount whose host path
+            # doesn't exist; the lifespan creates these lazily, but guard
+            # here too so a stale config can't wedge MPD provisioning.
+            if not host_path.exists():
+                continue
             if not placeholder.is_dir():
-                placeholder.mkdir(parents=True, exist_ok=True)
+                # No parents=True: a music folder that isn't there (not
+                # mounted, a drive unplugged) is never made here.
+                placeholder.mkdir(exist_ok=True)
                 log.info("made %s: the mountpoint the rooms' music players mount %s on",
                          placeholder, container_sub)
         except OSError as e:
-            log.warning(
-                "could not create mountpoint %s for nested MPD mount; "
-                "skipping %s: %s", placeholder, container_sub, e
+            _warn_hourly(
+                f"mountpoint:{placeholder}",
+                "could not create mountpoint %s for nested MPD mount; skipping %s: %s",
+                placeholder, container_sub, e,
             )
             continue
         found.append((host_path, container_sub))
     return found
+
+
+# key -> loop-free monotonic time of the last warning logged under it.
+_WARNED_AT: dict[str, float] = {}
+_WARN_EVERY_SEC = 3600.0
+
+
+def _warn_hourly(key: str, msg: str, *args: object) -> None:
+    """A warning that repeats (a room that won't start, polled by a
+    dashboard; a placeholder that can't be made) is logged once an hour per
+    key, and at debug level in between."""
+    import time
+
+    now = time.monotonic()
+    last = _WARNED_AT.get(key)
+    if last is None or now - last >= _WARN_EVERY_SEC:
+        _WARNED_AT[key] = now
+        log.warning(msg, *args)
+    else:
+        log.debug(msg, *args)
 
 
 async def _create_container(
@@ -306,11 +330,14 @@ async def _create_container(
     # works for spoken audio identically to music. Read-only like /music —
     # the web/worker processes own writes into these host dirs.
     extra_mounts: list[str] = []
-    for host_path, container_sub in _nested_mountpoints(music_dir):
+    for host_path, container_sub in await asyncio.to_thread(_nested_mountpoints, music_dir):
         extra_mounts += ["-v", f"{host_path.as_posix()}:/music/{container_sub}:ro"]
 
     rc, _, err = await _run_docker(
         "run", "-d",
+        # The image is Domovoi's own local build: never fetch a same-named
+        # one from a registry instead.
+        "--pull", "never",
         "--name", name,
         "--restart", "unless-stopped",
         # Control port: loopback only (see module docstring). Stream port:
@@ -338,8 +365,12 @@ async def _ensure_container(
     http_port: int,
     music_dir: str,
     volume_name: str,
+    room_id: str | None = None,
 ) -> None:
-    """Make sure container ``name`` exists and is running. Idempotent."""
+    """Make sure container ``name`` exists and is running. Idempotent.
+    ``room_id``: the room it plays for, so a start also takes internet
+    streams out of its queue under ``INTERNET_ACCESS=never``
+    (:func:`_after_start`)."""
     state = await _container_state(name)
     if state is not None:
         host_ip = await _control_port_host_ip(name)
@@ -376,14 +407,14 @@ async def _ensure_container(
         # ever changes between starts is the image tag, which we keep stable.
         # The nested mounts' placeholders first: one removed since the
         # container was made fails the start (_nested_mountpoints).
-        _nested_mountpoints(music_dir)
+        await asyncio.to_thread(_nested_mountpoints, music_dir)
         await _start_container(name)
     # The container was just created or (re)started — re-assert the mixer
     # volume so a room booting from wiped/stale MPD state isn't silently
     # attenuated. Only runs when we actually start something (the early
     # return above skips already-running daemons, leaving their live volume
     # — possibly a user's deliberate setvol — untouched).
-    await _pin_startup_volume(control_port)
+    await _after_start(room_id, control_port)
 
 
 # What MPD says first on every control connection: "OK MPD <version>".
@@ -561,6 +592,7 @@ async def rebuild_image() -> dict:
                     await _ensure_container(
                         name=container, image=tag, control_port=int(ctrl), http_port=int(http),
                         music_dir=settings.music_dir, volume_name=_volume_name(room_id),
+                        room_id=room_id,
                     )
                 except Exception as e:  # noqa: BLE001 — the other rooms still move
                     log.warning("music player for room=%s not moved to the rebuilt image: %s", room_id, e)
@@ -606,6 +638,7 @@ async def warm_known_rooms() -> int:
                     http_port=int(http),
                     music_dir=settings.music_dir,
                     volume_name=_volume_name(room_id),
+                    room_id=room_id,
                 )
             rooms_warmed += 1
         except Exception as e:
@@ -627,14 +660,24 @@ async def warm_known_rooms() -> int:
 # code 128 and never tries that container again (2026-11-11: every room of
 # a house stayed down for 14 hours after an update restarted its WSL VM,
 # its Music/audiobooks placeholder gone). Each start below remakes the
-# placeholders first. Three places start
-# such a room again, all through the functions below and all refusing while
-# a tamper incident freezes the house's risky operations (docs/
-# CONTAINER_GUARD.md, "The freeze"): the core's start (a bounded retry, in
-# the background, of the rooms its warm couldn't start), a music command
-# that can't reach its room's player (clients/mpd.py, once, then the command
-# again) and the container guard (engine.py, one start with backoff before
-# it reports the room).
+# placeholders first. Three places start such a room again, all through
+# start_stopped_room: the core's start (a bounded retry, in the background,
+# of the rooms its warm couldn't start), a music command that can't reach
+# its room's player (clients/mpd.py, once, then the command again) and the
+# container guard (engine.py, one start with backoff before it reports the
+# room). Every one of them:
+#
+# * starts only a STOPPED container: never recreates one that exists (a
+#   running one is left as it is, whatever it mounts);
+# * starts only a container that is a room player Domovoi made: Domovoi's
+#   music player image (the guard's recorded baseline), no privileged mode,
+#   host namespaces or Docker socket, the provisioner's restart policy and
+#   mounts (container_guard.detect.room_player_shape); started by its ID,
+#   so the container judged is the one started;
+# * refuses while a tamper incident freezes risky operations, and when the
+#   freeze can't be read (fails closed);
+# * leaves a room alone while another operation holds it (a warm, a retire,
+#   the image rebuild).
 
 # When the start's background retry looks again at the rooms its warm could
 # not start: about ten minutes in all, then the guard takes over.
@@ -643,10 +686,17 @@ WARM_RETRY_DELAYS: tuple[float, ...] = (10.0, 20.0, 40.0, 80.0, 160.0, 300.0)
 # another: a dashboard polling a dead room doesn't run `docker start` every
 # few seconds.
 HEAL_COOLDOWN_SEC = 60.0
+# After a start, the internet-off purge asks the room this many times, this
+# far apart, while its daemon comes up.
+PURGE_TRIES = 3
+PURGE_RETRY_SEC = 2.0
 
 _warm_retry_task: asyncio.Task | None = None
 _heal_last: dict[str, float] = {}
 _heal_tasks: dict[str, asyncio.Future] = {}
+# Post-start work running in the background: referenced here so the event
+# loop's weak reference isn't the only one (a task can vanish mid-run).
+_BACKGROUND: set[asyncio.Task] = set()
 
 
 def reset_self_heal() -> None:
@@ -655,70 +705,212 @@ def reset_self_heal() -> None:
     _heal_last.clear()
     _heal_tasks.clear()
     _warm_retry_task = None
+    _WARNED_AT.clear()
 
 
 async def frozen_by() -> str | None:
-    """The tamper incident that freezes risky operations right now, in
-    words ("incident #12"), or None. A database it can't read is not a
-    freeze (freeze.frozen_incidents fails open the same way)."""
+    """Why the self-heal must not start anything right now, in words, or
+    None: an open tamper incident (``"incident #12"``), or a freeze state
+    that can't be read. Fails CLOSED, unlike the HTTP freeze
+    (container_guard/freeze.py), which fails open because every frozen
+    operation needs the database anyway: a start needs only Docker."""
     try:
-        from domovoi.container_guard import freeze
+        from domovoi.container_guard import store
+        from domovoi.db.session import session_scope
 
-        rows = await freeze.frozen_incidents()
-    except Exception as e:  # noqa: BLE001
-        log.debug("music player self-heal: freeze state unreadable: %s", e)
-        return None
+        async with session_scope() as s:
+            rows = await store.frozen_by(s)
+    except Exception as e:  # noqa: BLE001 — fail closed
+        return f"the freeze state can't be read ({str(e)[:120]})"
     return f"incident #{rows[0].get('id')}" if rows else None
 
 
-async def start_stopped_room(room_id: str, container: str | None = None, *, why: str) -> str:
+def room_busy(room_id: str) -> str | None:
+    """Another operation is working on ``room_id``'s player right now (a
+    warm, a retire, a start, the image rebuild): its reason, or None."""
+    from domovoi.container_guard import holds
+
+    if _REBUILD_LOCK is not None and _REBUILD_LOCK.locked():
+        return "the music player image is being rebuilt"
+    running = holds._RUNNING.get(f"room:{room_id}")
+    if running is not None and running[0] > 0:
+        return str(running[2])
+    return None
+
+
+async def _inspect_room(target: str) -> Any | None:
+    """``docker inspect`` of one container (by name or ID) as the guard
+    reads it (container_guard.model.Observed), or None when it isn't
+    there."""
+    from domovoi.container_guard.docker_cli import parse_inspect
+
+    rc, out, _ = await _run_docker("inspect", target, timeout=10.0)
+    if rc != 0:
+        return None
+    found = parse_inspect(out)
+    return found[0] if found else None
+
+
+async def _trusted_image_ids() -> set[str]:
+    """The music player images a room may run: the guard's recorded
+    baseline and the build before it, or, before the guard recorded any,
+    what the tag names now. Raises when it can't be read (the caller then
+    starts nothing)."""
+    from domovoi.container_guard import store
+    from domovoi.container_guard.engine import MPD_BASELINE_KEY, MPD_PREVIOUS_KEY
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        ids = {
+            (row or {}).get("value")
+            for row in (await store.get_baseline(s, MPD_BASELINE_KEY),
+                        await store.get_baseline(s, MPD_PREVIOUS_KEY))
+        }
+    ids.discard(None)
+    if not ids:
+        tag_id = await _image_id(settings.mpd_image_tag)
+        if tag_id:
+            ids.add(tag_id)
+    return {str(i) for i in ids}
+
+
+def room_player_problem(obs: Any, image_ids: set[str]) -> str | None:
+    """Why ``obs`` must not be started as a room's music player, in words,
+    or None when it is one Domovoi made (see the section comment)."""
+    from domovoi.container_guard.detect import room_player_shape
+
+    if not image_ids or obs.image_id not in image_ids:
+        return "it runs another image than Domovoi's music player"
+    risky = obs.security()
+    if risky:
+        return f"it runs with {', '.join(risky)}"
+    return room_player_shape(obs)
+
+
+async def start_stopped_room(
+    room_id: str,
+    container: str | None = None,
+    *,
+    why: str,
+    container_id: str | None = None,
+) -> str:
     """``docker start`` a provisioned room's music player that exists but
-    isn't running, held for the container guard while it starts. Never
-    creates or recreates anything. Returns what it found and did:
-    ``"started"``, ``"running"`` (nothing to do), ``"missing"``, ``"frozen"``
-    (a tamper incident is open: left alone), or the state it leaves alone
-    (``"paused"``, ``"restarting"``, ``"removing"``). Raises RuntimeError
-    when Docker refuses the start (its words: a bind mount whose source is
-    missing, a port another program holds)."""
-    name = container or _container_name(room_id)
+    isn't running, by its ID, held for the container guard while it starts.
+    Never creates or recreates anything. Returns what it found and did:
+    ``"started"``, ``"running"`` (nothing to do), ``"missing"``,
+    ``"frozen"``, ``"busy"`` (another operation holds the room),
+    ``"refused"`` (not a room player Domovoi made: logged), or the state it
+    leaves alone (``"paused"``, ``"restarting"``, ``"removing"``). Raises
+    RuntimeError when Docker refuses the start (its words: a bind mount
+    whose source is missing, a port another program holds). The caller runs
+    :func:`_after_start` (or schedules it)."""
+    target = container_id or container or _container_name(room_id)
+    busy = room_busy(room_id)
+    if busy is not None:
+        log.info("music player for room=%s not started: %s", room_id, busy)
+        return "busy"
     incident = await frozen_by()
     if incident is not None:
-        log.warning(
-            "music player for room=%s not started: %s freezes risky operations "
-            "until an admin clears it", room_id, incident,
-        )
+        _warn_hourly(f"frozen:{room_id}",
+                     "music player for room=%s not started: %s (risky operations are frozen "
+                     "until an admin clears it)", room_id, incident)
         return "frozen"
-    state = await _container_state(name)
-    if state is None:
+    obs = await _inspect_room(target)
+    if obs is None:
         return "missing"
-    if state in ("running", "paused", "restarting", "removing"):
-        return state
+    if obs.running or obs.paused or obs.restarting or obs.status == "removing":
+        return "paused" if obs.paused else ("restarting" if obs.restarting else
+                                            "running" if obs.running else obs.status)
+    try:
+        image_ids = await _trusted_image_ids()
+    except Exception as e:  # noqa: BLE001 — no proof it's ours: don't start it
+        _warn_hourly(f"refused:{room_id}",
+                     "music player for room=%s not started: its image can't be checked (%s)",
+                     room_id, e)
+        return "refused"
+    problem = room_player_problem(obs, image_ids)
+    if problem is not None:
+        _warn_hourly(f"refused:{room_id}",
+                     "container %s (%s) for room=%s not started: %s",
+                     obs.name, obs.id[:12], room_id, problem)
+        return "refused"
     with _room_hold(room_id, "starting again"):
-        _nested_mountpoints(settings.music_dir)
-        await _start_container(name)
-    log.warning("music player for room=%s was %s; started it again (%s)", room_id, state, why)
+        await asyncio.to_thread(_nested_mountpoints, settings.music_dir)
+        await _start_container(obs.id)
+    log.warning("music player for room=%s was %s; started it again (%s)",
+                room_id, obs.status, why)
     return "started"
 
 
+async def _after_start(room_id: str | None, control_port: int) -> None:
+    """What every start of a room's player is followed by, wherever it
+    came from: the mixer pinned to the startup volume (which waits for
+    MPD's greeting), then, under ``INTERNET_ACCESS=never``, internet
+    streams taken out of the room's queue (MPD resumes whatever its state
+    file holds; mpd_internet.purge_room), asked a few times while the
+    daemon comes up. Never raises."""
+    await _pin_startup_volume(control_port)
+    if room_id is None or not egress.internet_turned_off():
+        return
+    from domovoi import mpd_internet
+    from domovoi.clients.mpd import RealMPDClient
+
+    client = RealMPDClient(settings.mpd_host, control_port)
+    for attempt in range(1, PURGE_TRIES + 1):
+        try:
+            await mpd_internet.purge_room(room_id, client)
+            return
+        except Exception as e:  # noqa: BLE001 — a daemon still starting
+            if attempt == PURGE_TRIES:
+                log.warning("internet off: couldn't check room=%s's music queue after "
+                            "its start: %s", room_id, e)
+                return
+            await asyncio.sleep(PURGE_RETRY_SEC)
+
+
+def schedule_after_start(room_id: str, control_port: int) -> asyncio.Task:
+    """:func:`_after_start` in the background (the guard's check doesn't
+    wait for MPD's greeting), kept referenced until it ends."""
+    task = asyncio.get_running_loop().create_task(_after_start(room_id, control_port))
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+    return task
+
+
 async def _reconcile_room(room_id: str, ctrl: int, http: int, container: str) -> str:
-    """One more go at what the start's warm does for a room: make sure its
-    container exists and runs (``_ensure_container``), unless frozen.
-    Returns ``"running"``, ``"started"`` or ``"frozen"``; raises when it
-    still can't."""
+    """One more go at a room the start's warm couldn't start, or one a
+    music command found down. A MISSING container is created as the warm
+    does; a stopped one is started by :func:`start_stopped_room` (all its
+    checks); a running one is left exactly as it is: never recreated here,
+    whatever it mounts or binds (that is the warm's call, at the core's
+    next start). Returns ``"created"``, ``"started"``, ``"running"`` or
+    what :func:`start_stopped_room` said (``"frozen"``, ``"busy"``,
+    ``"refused"``, ...); raises when Docker refuses."""
+    busy = room_busy(room_id)
+    if busy is not None:
+        return "busy"
     incident = await frozen_by()
     if incident is not None:
         return "frozen"
-    before = await _container_state(container)
-    with _room_hold(room_id, "starting again"):
-        await _ensure_container(
-            name=container,
-            image=settings.mpd_image_tag,
-            control_port=ctrl,
-            http_port=http,
-            music_dir=settings.music_dir,
-            volume_name=_volume_name(room_id),
-        )
-    return "running" if before == "running" else "started"
+    obs = await _inspect_room(container)
+    if obs is None:
+        with _room_hold(room_id, "being created again"):
+            if await _container_state(container) is not None:
+                return "running"          # appeared meanwhile: someone else's start
+            await _create_container(
+                name=container, image=settings.mpd_image_tag, control_port=ctrl,
+                http_port=http, music_dir=settings.music_dir,
+                volume_name=_volume_name(room_id),
+            )
+        await _after_start(room_id, ctrl)
+        return "created"
+    if obs.running:
+        return "running"
+    outcome = await start_stopped_room(
+        room_id, container, why="it hadn't started with the core", container_id=obs.id)
+    if outcome == "started":
+        await _after_start(room_id, ctrl)
+    return outcome
 
 
 async def retry_warm(
@@ -728,7 +920,8 @@ async def retry_warm(
     """Look again, after each of ``delays``, at the rooms the start's warm
     couldn't start, until each runs or the delays run out. Logs every
     outcome; returns the rooms still down at the end (the container guard
-    reports those)."""
+    reports those). A room it may not start (frozen, busy, not Domovoi's)
+    is asked again at the next delay."""
     pending = list(rooms)
     for attempt, delay in enumerate(delays, start=1):
         if not pending:
@@ -746,15 +939,13 @@ async def retry_warm(
                 )
                 still.append(room)
                 continue
-            if outcome == "frozen":
-                log.warning(
-                    "music player for room=%s not started: a tamper incident freezes "
-                    "risky operations (try %d of %d)", room_id, attempt, len(delays),
-                )
+            if outcome in ("started", "created"):
+                log.warning("music player for room=%s %s on try %d after the core's start",
+                            room_id, outcome, attempt)
+            elif outcome != "running":
+                log.warning("music player for room=%s not started (%s; try %d of %d)",
+                            room_id, outcome, attempt, len(delays))
                 still.append(room)
-            elif outcome == "started":
-                log.warning("music player for room=%s started on try %d after the core's start",
-                            room_id, attempt)
         pending = still
     if pending:
         log.warning(
@@ -781,11 +972,11 @@ def schedule_warm_retry(rooms: list[tuple[str, int, int, str]]) -> asyncio.Task 
 
 async def heal_room(room_id: str) -> bool:
     """A music command couldn't reach ``room_id``'s player: start it again
-    if its container exists and is stopped (or create it when it is
-    missing), then wait for MPD's greeting. True when it did and the player
-    now answers, so the caller tries its command once more. At most one
-    attempt per room per :data:`HEAL_COOLDOWN_SEC`; commands arriving while
-    one runs share it. Never raises."""
+    if its container is stopped (or create it when it is missing), then
+    wait for MPD's greeting. True when it did and the player now answers,
+    so the caller tries its command once more. At most one attempt per room
+    per :data:`HEAL_COOLDOWN_SEC`; commands arriving while one runs share
+    it. Never raises."""
     task = _heal_tasks.get(room_id)
     if task is None or task.done():
         loop = asyncio.get_running_loop()
@@ -808,20 +999,18 @@ async def _heal(room_id: str) -> bool:
     if ports is None:
         return False
     ctrl, http = ports
-    container = _container_name(room_id)
     try:
-        if await _container_state(container) == "running":
-            return False
-        outcome = await _reconcile_room(room_id, int(ctrl), int(http), container)
+        outcome = await _reconcile_room(room_id, int(ctrl), int(http), _container_name(room_id))
     except Exception as e:  # noqa: BLE001
-        log.warning("music player for room=%s could not be started for a music command: %s",
-                    room_id, e)
+        _warn_hourly(f"heal:{room_id}",
+                     "music player for room=%s could not be started for a music command: %s",
+                     room_id, e)
         return False
-    if outcome != "started":
+    if outcome not in ("started", "created"):
         return False
-    log.warning("music player for room=%s was stopped; started it for a music command", room_id)
-    # _ensure_container pinned the volume, which waited for the greeting;
-    # wait once more, briefly, in case that wait gave up early.
+    log.warning("music player for room=%s was down; %s it for a music command", room_id, outcome)
+    # _after_start pinned the volume, which waited for the greeting; wait
+    # once more, briefly, in case that wait gave up early.
     return await _wait_for_mpd(settings.mpd_host, int(ctrl), timeout=5.0)
 
 
@@ -912,6 +1101,7 @@ async def _ensure_room(room_id: str) -> tuple[int, int]:
                 http_port=http,
                 music_dir=music_dir,
                 volume_name=volume,
+                room_id=room_id,
             )
         except Exception as e:
             log.warning("ensure_container for room=%s failed: %s", room_id, e)
@@ -979,6 +1169,7 @@ async def _ensure_room(room_id: str) -> tuple[int, int]:
         http_port=http,
         music_dir=music_dir,
         volume_name=volume,
+        room_id=room_id,
     )
     if not await _wait_for_mpd(
         settings.mpd_host, ctrl, timeout=settings.mpd_provision_timeout_sec

@@ -47,9 +47,20 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from domovoi import git_run
-from domovoi.container_guard import freeze, holds, store
+from domovoi.container_guard import holds, store
 from domovoi.container_guard.compose import ComposeService, parse_services, project_name, read_services
-from domovoi.container_guard.detect import DOCKER_KEY, Detection, RestartMemory, detect
+from domovoi.container_guard.detect import (
+    DOCKER_KEY,
+    NO_DATA,
+    OK,
+    Detection,
+    RestartMemory,
+    _config_finding,
+    _image_finding,
+    detect,
+    image_verdict,
+    room_player_shape,
+)
 from domovoi.container_guard.docker_cli import Claimer, DockerCli
 from domovoi.container_guard.expected import (
     ExpectedSet,
@@ -76,6 +87,10 @@ AUTO_START_FIRST_RETRY_SEC = 60.0
 AUTO_START_MAX_SEC = 900.0
 # The "started it again" notes kept for the status (newest last).
 AUTO_START_NOTES = 20
+# A container started this many times in this window is reported instead
+# of started again: it keeps stopping.
+AUTO_START_CAP = 3
+AUTO_START_WINDOW_SEC = 30 * 60.0
 # Resolved incidents past the retention are pruned about once a day.
 PRUNE_EVERY_SEC = 24 * 3600.0
 
@@ -260,7 +275,7 @@ class ContainerGuard:
         self.session_factory = session_factory or _default_session_factory
         self._gather = gather or gather_expected
         self._global_hold = global_hold or default_global_hold
-        # Starts a room's stopped music player: (room_id, container) ->
+        # Starts a room's stopped music player: (room_id, container ID) ->
         # "started", or another word for what it found; raises when Docker
         # refuses the start (_auto_start).
         self._starter = starter or default_room_starter
@@ -268,6 +283,8 @@ class ContainerGuard:
         # before it, Docker's words for why the last start failed).
         self._start_backoff: dict[str, tuple[float, float, str]] = {}
         self.restarted: list[dict[str, Any]] = []
+        # container ID -> monotonic times the guard started it (the cap).
+        self._auto_starts: dict[str, list[float]] = {}
         self.started_mono = clock()
         self.started_wall = wall()
         self.debouncer = Debouncer(self._config())
@@ -506,24 +523,41 @@ class ContainerGuard:
         never retries a start that failed (2026-11-11: five rooms down for
         14 hours after a WSL restart, each "stopped (exit code 128)").
 
+        Only a container that is a room player Domovoi made is started, by
+        its ID: the image the guard expects (:func:`detect.image_verdict`),
+        no security setting its declaration doesn't allow, and the
+        provisioner's restart policy and mounts
+        (:func:`detect.room_player_shape`). Anything else under a room's
+        name is never started: another image or a risky setting is reported
+        as tampering (as it would be if it ran), another shape keeps the
+        "stopped" finding with the reason.
+
         * It starts: its finding leaves this check, so no incident opens and
           no phone is told; the guard keeps a short note (``restarted`` in
           the status) and logs it. The starter holds the room for the guard
-          while it starts and for a minute after (``room:<id>``), so the
-          next checks don't judge it half up.
+          while it starts and for a minute after (``room:<id>``).
         * It doesn't: the finding stays, with Docker's reason added, and
           opens the incident on the usual debounce. The next start waits
           :data:`AUTO_START_FIRST_RETRY_SEC`, doubling up to
           :data:`AUTO_START_MAX_SEC`, while the room stays down.
-        * A tamper incident is open (the freeze): nothing is started and
-          the finding is reported as it is. A paused player is left alone,
-          and so is everything that isn't a room's player: a stopped
-          database or plugin is reported, never started behind anyone's
-          back."""
+        * It keeps stopping: after :data:`AUTO_START_CAP` starts of one
+          container in :data:`AUTO_START_WINDOW_SEC`, it is reported
+          ("started N times; it keeps stopping") instead of started again.
+        * A tamper incident is open (the freeze), or the freeze can't be
+          read: nothing is started. A paused player is left alone, and so is
+          everything that isn't a room's player."""
         running = {n for n, o in view.containers.items() if o.running}
         for name in [n for n in self._start_backoff if n in running]:
             del self._start_backoff[name]
-        candidates: list[tuple[int, Finding, Any]] = []
+        now = self.clock()
+        for cid in list(self._auto_starts):
+            self._auto_starts[cid] = [t for t in self._auto_starts[cid]
+                                      if now - t < AUTO_START_WINDOW_SEC]
+            if not self._auto_starts[cid]:
+                del self._auto_starts[cid]
+        candidates: list[tuple[int, Finding, Any, Any]] = []
+        notes: dict[int, str] = {}
+        extra_findings: list[Finding] = []
         for i, f in enumerate(det.findings):
             if f.cls != FAILURE or f.kind != "stopped" or not f.container:
                 continue
@@ -533,30 +567,49 @@ class ContainerGuard:
             obs = view.containers.get(f.container)
             if obs is None or obs.paused or obs.running:
                 continue
-            candidates.append((i, f, e))
-        if not candidates:
-            return
-        now = self.clock()
-        due = [(i, f, e) for i, f, e in candidates
+            verdict = image_verdict(e, obs, view)
+            if verdict == NO_DATA:
+                notes[i] = "Not started: its image couldn't be checked."
+                continue
+            if verdict != OK:
+                # A container under the room's name that isn't Domovoi's
+                # music player: never started, reported as it would be if
+                # it ran.
+                extra_findings.append(_image_finding(e, obs, view))
+                notes[i] = "Not started: it runs another image than Domovoi's music player."
+                continue
+            risky = sorted(set(obs.security()) - e.allow)
+            if risky:
+                extra_findings.append(_config_finding(e, obs, risky))
+                notes[i] = "Not started: it runs with settings Domovoi's music players never have."
+                continue
+            shape = room_player_shape(obs)
+            if shape:
+                notes[i] = f"Not started: {shape}."
+                continue
+            starts = self._auto_starts.get(obs.id, [])
+            if len(starts) >= AUTO_START_CAP:
+                notes[i] = (f"Domovoi started it {len(starts)} times in the last "
+                            f"{int(AUTO_START_WINDOW_SEC // 60)} minutes; it keeps stopping.")
+                continue
+            candidates.append((i, f, e, obs))
+        due = [(i, f, e, obs) for i, f, e, obs in candidates
                if now >= self._start_backoff.get(f.container or "", (0.0, 0.0, ""))[0]]
         frozen = False
         if due:
-            try:
-                incidents = await freeze.frozen_incidents(self.session_factory)
-            except Exception:  # noqa: BLE001 — frozen_incidents fails open by itself
-                incidents = []
-            if incidents:
+            why_frozen = await self._frozen()
+            if why_frozen:
                 frozen = True
-                log.warning("container guard: %d stopped music player(s) not started: incident "
-                            "#%s freezes risky operations", len(due), incidents[0].get("id"))
+                log.warning("container guard: %d stopped music player(s) not started: %s",
+                            len(due), why_frozen)
         drop: set[int] = set()
-        for i, f, e in ([] if frozen else due):
+        for i, f, e, obs in ([] if frozen else due):
             name = f.container or ""
             exit_code = (f.found or {}).get("exit_code")
             stopped = ("stopped" if exit_code in (None, 0)
                        else f"stopped (exit code {exit_code})")
             try:
-                outcome = await self._starter(e.room_id, name)
+                outcome = await self._starter(e.room_id, obs.id)
             except Exception as err:  # noqa: BLE001 — reported with the finding
                 last_wait = self._start_backoff.get(name, (0.0, 0.0, ""))[1]
                 wait = min(max(last_wait * 2, AUTO_START_FIRST_RETRY_SEC), AUTO_START_MAX_SEC)
@@ -570,6 +623,7 @@ class ContainerGuard:
                 continue
             drop.add(i)
             self._start_backoff.pop(name, None)
+            self._auto_starts.setdefault(obs.id, []).append(now)
             self.debouncer.pending.pop(f.key, None)
             note = {
                 "container": name, "room": e.room_id, "exit_code": exit_code, "at": self.wall(),
@@ -577,21 +631,37 @@ class ContainerGuard:
             }
             self.restarted = (self.restarted + [note])[-AUTO_START_NOTES:]
             log.warning("container guard: %s", note["summary"])
-        # Every room still down after a failed start says why, on every
-        # check until it runs (the incident opens on whichever check the
-        # debounce allows, often one between two tries).
-        for i, f, _e in candidates:
+        # Every room still down says why, on every check until it runs (the
+        # incident opens on whichever check the debounce allows, often one
+        # between two tries).
+        for i in range(len(det.findings)):
             if i in drop:
                 continue
-            why = self._start_backoff.get(f.container or "", (0.0, 0.0, ""))[2]
-            if why:
-                det.findings[i] = dataclasses.replace(
-                    f,
-                    summary=f"{f.summary} Starting it again failed: {why}",
-                    found={**(f.found or {}), "start_error": why},
-                )
+            f = det.findings[i]
+            why = self._start_backoff.get(f.container or "", (0.0, 0.0, ""))[2] \
+                if any(i == c[0] for c in candidates) else ""
+            note = notes.get(i) or (f"Starting it again failed: {why}" if why else "")
+            if note:
+                found = dict(f.found or {})
+                if why:
+                    found["start_error"] = why
+                if i in notes:
+                    found["not_started"] = notes[i]
+                det.findings[i] = dataclasses.replace(f, summary=f"{f.summary} {note}", found=found)
         if drop:
             det.findings = [f for i, f in enumerate(det.findings) if i not in drop]
+        det.findings.extend(extra_findings)
+
+    async def _frozen(self) -> str | None:
+        """Why nothing may be started now: an open tamper incident, or a
+        freeze state that can't be read (fails closed: a start needs only
+        Docker, not the database)."""
+        try:
+            async with self.session_factory() as s:
+                rows = await store.frozen_by(s)
+        except Exception as e:  # noqa: BLE001
+            return f"the freeze state can't be read ({str(e)[:120]})"
+        return f"incident #{rows[0].get('id')} freezes risky operations" if rows else None
 
     async def _with_rebuild_hint(self, f: Finding, exp: ExpectedSet) -> Finding:
         """A music player image incident about to open: when the update
@@ -727,19 +797,20 @@ def capitalize_first(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-async def default_room_starter(room_id: str, container: str) -> str:
-    """The guard's start of a stopped room player: ``docker start`` only
-    (mpd_provisioner.start_stopped_room, which holds the room and refuses
-    while frozen too), then the startup volume pin in the background, so
+async def default_room_starter(room_id: str, container_id: str) -> str:
+    """The guard's start of a stopped room player, by its container ID:
+    mpd_provisioner.start_stopped_room (which checks the container, the
+    freeze and the room's holds again, and holds the room), then the
+    post-start work (volume pin, internet-off purge) in the background, so
     the check isn't held up waiting for MPD's greeting."""
     from domovoi import mpd_provisioner
     from domovoi.clients import mpd as mpd_module
 
     outcome = await mpd_provisioner.start_stopped_room(
-        room_id, container, why="the container guard found it stopped")
+        room_id, why="the container guard found it stopped", container_id=container_id)
     ports = mpd_module._room_ports.get(room_id)
     if outcome == "started" and ports is not None:
-        asyncio.get_running_loop().create_task(mpd_provisioner._pin_startup_volume(int(ports[0])))
+        mpd_provisioner.schedule_after_start(room_id, int(ports[0]))
     return outcome
 
 

@@ -203,6 +203,7 @@ class Observed:
     network_mode: str = ""
     pid_mode: str = ""
     mounts: tuple[tuple[str, str], ...] = ()   # (source, destination)
+    restart_policy: str = ""       # HostConfig.RestartPolicy.Name ("unless-stopped", "no", ...)
     labels: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
 
     def security(self) -> list[str]:

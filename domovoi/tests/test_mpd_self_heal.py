@@ -93,38 +93,87 @@ async def fake_mpd(port: int) -> asyncio.AbstractServer:
     return await asyncio.start_server(serve, HOST, port)
 
 
+MPD_ID = "sha256:" + "a" * 64
+MOUNTS = (("/var/lib/docker/volumes/v/_data", "/var/lib/mpd"), ("/srv/media/music", "/music"),
+          ("/srv/media/audiobooks", "/music/audiobooks"),
+          ("/opt/domovoi/domovoi/mpd.conf", "/etc/mpd.conf"))
+
+
+def room_player(name: str, status: str = "exited", **kw) -> Observed:
+    """A room's music player as the provisioner makes it."""
+    base = dict(id=f"id-{name}", name=name, status=status, running=status == "running",
+                paused=status == "paused", exit_code=128 if status == "exited" else 0,
+                config_image="domovoi-mpd:latest", image_id=MPD_ID, mounts=MOUNTS,
+                restart_policy="unless-stopped")
+    base.update(kw)
+    return Observed(**base)
+
+
 class FakeRooms:
-    """Containers by name with a state; every start recorded."""
+    """Containers by name with a state (and, if set, a shape); every start
+    (by ID), create and post-start recorded."""
 
     def __init__(self, monkeypatch, **states: str | None) -> None:
         self.states = dict(states)
+        self.shape: dict[str, dict] = {}
         self.starts: list[str] = []
+        self.started_ids: list[str] = []
+        self.creates: list[str] = []
+        self.after: list[tuple[str | None, int]] = []
         self.fail_with: str | None = None
         self.frozen: str | None = None
         monkeypatch.setattr(mpd_provisioner, "_container_state", self.state)
+        monkeypatch.setattr(mpd_provisioner, "_inspect_room", self.inspect)
         monkeypatch.setattr(mpd_provisioner, "_ensure_container", self.ensure)
+        monkeypatch.setattr(mpd_provisioner, "_create_container", self.create)
         monkeypatch.setattr(mpd_provisioner, "_start_container", self.start)
         monkeypatch.setattr(mpd_provisioner, "_wait_for_mpd", self.wait)
+        monkeypatch.setattr(mpd_provisioner, "_after_start", self.after_start)
         monkeypatch.setattr(mpd_provisioner, "frozen_by", self.frozen_by)
+        monkeypatch.setattr(mpd_provisioner, "_trusted_image_ids", self.trusted)
+
+    def _name(self, target: str) -> str:
+        return target[3:] if target.startswith("id-") else target
 
     async def state(self, name):
-        return self.states.get(name)
+        return self.states.get(self._name(name))
 
-    async def start(self, name):
+    async def inspect(self, target):
+        name = self._name(target)
+        st = self.states.get(name)
+        return None if st is None else room_player(name, st, **self.shape.get(name, {}))
+
+    async def start(self, target):
+        name = self._name(target)
         self.starts.append(name)
+        self.started_ids.append(target)
+        if self.fail_with:
+            raise RuntimeError(self.fail_with)
+        self.states[name] = "running"
+
+    async def create(self, *, name, **_kw):
+        self.creates.append(name)
         if self.fail_with:
             raise RuntimeError(self.fail_with)
         self.states[name] = "running"
 
     async def ensure(self, *, name, **_kw):
-        if self.states.get(name) != "running":
+        if self.states.get(name) is None:
+            await self.create(name=name)
+        elif self.states.get(name) != "running":
             await self.start(name)
 
     async def wait(self, *_a, **_k):
         return True
 
+    async def after_start(self, room_id, port):
+        self.after.append((room_id, port))
+
     async def frozen_by(self):
         return self.frozen
+
+    async def trusted(self):
+        return {MPD_ID}
 
 
 # ─── the core's start ─────────────────────────────────────────────────────
@@ -193,6 +242,8 @@ async def test_the_retry_starts_a_room_once_what_it_needs_is_there(monkeypatch) 
     assert still == []
     assert rooms.states["domovoi-mpd-office"] == "running"
     assert seen == [10.0, 20.0]     # stops looking once every room runs
+    assert rooms.started_ids[-1] == "id-domovoi-mpd-office"     # by its ID
+    assert rooms.after == [("office", 6650)]                     # the post-start hook, once
 
 
 async def test_the_retry_is_bounded(monkeypatch) -> None:
@@ -361,13 +412,16 @@ async def test_the_handler_s_pause_after_the_room_is_started(monkeypatch, starts
 
 CFG = GuardConfig(failure_grace_sec=120, daemon_grace_sec=300, tamper_confirm_sec=25,
                   boot_grace_sec=0, interval_sec=30)
-MPD_ID = "sha256:" + "a" * 64
 NAME = "cgtest-mpd-office"
 
 
+PLAYER_ID = "m" * 64
+
+
 def stopped_player(**kw) -> Observed:
-    base = dict(id="m" * 64, name=NAME, status="exited", running=False, exit_code=128,
-                config_image="domovoi-mpd:latest", image_id=MPD_ID)
+    base = dict(id=PLAYER_ID, name=NAME, status="exited", running=False, exit_code=128,
+                config_image="domovoi-mpd:latest", image_id=MPD_ID, mounts=MOUNTS,
+                restart_policy="unless-stopped")
     base.update(kw)
     return Observed(**base)
 
@@ -458,7 +512,7 @@ async def test_a_stopped_player_the_guard_starts_is_a_note_not_an_incident(guard
     guard, docker, clock, _, starts, _ = guard_env
     docker.show(stopped_player())
     status = await _check(guard, clock)
-    assert starts == [("office", NAME)]
+    assert starts == [("office", PLAYER_ID)]
     assert status["findings"] == [] and status["pending"] == []
     for _ in range(6):                      # three minutes: past every grace
         await _check(guard, clock)
@@ -467,7 +521,7 @@ async def test_a_stopped_player_the_guard_starts_is_a_note_not_an_incident(guard
     assert note["room"] == "office" and note["exit_code"] == 128
     assert note["summary"] == ("The music player for office had stopped (exit code 128); "
                                "the guard started it again.")
-    assert starts == [("office", NAME)]
+    assert starts == [("office", PLAYER_ID)]
 
 
 @requires_db
@@ -548,21 +602,16 @@ async def test_the_guard_s_default_starter_only_starts_and_holds_the_room(monkey
     from domovoi.container_guard import engine
 
     rooms = FakeRooms(monkeypatch, **{NAME: "exited"})
-    pins: list[int] = []
-
-    async def pin(port):
-        pins.append(port)
-
-    monkeypatch.setattr(mpd_provisioner, "_pin_startup_volume", pin)
     mpd_module._room_ports["office"] = (6650, 8050)
-    assert await engine.default_room_starter("office", NAME) == "started"
-    assert rooms.starts == [NAME]
+    assert await engine.default_room_starter("office", f"id-{NAME}") == "started"
+    assert rooms.started_ids == [f"id-{NAME}"]
     assert holds.held("room:office")                # settling for a minute
-    await asyncio.sleep(0)
-    assert pins == [6650]
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert rooms.after == [("office", 6650)]        # scheduled, kept referenced
     rooms.frozen = "incident #9"
     rooms.states[NAME] = "exited"
-    assert await engine.default_room_starter("office", NAME) == "frozen"
+    assert await engine.default_room_starter("office", f"id-{NAME}") == "frozen"
     assert rooms.starts == [NAME]
 
 
@@ -600,11 +649,11 @@ def _docker_that_needs_the_placeholders(monkeypatch, music, state="exited"):
             return 0, args[1] + "\n", ""
         raise AssertionError(f"unexpected docker {args}")
 
-    async def pin(_port):
+    async def after(_room, _port):
         return None
 
     monkeypatch.setattr(mpd_provisioner, "_run_docker", run_docker)
-    monkeypatch.setattr(mpd_provisioner, "_pin_startup_volume", pin)
+    monkeypatch.setattr(mpd_provisioner, "_after_start", after)
     return starts
 
 
@@ -628,7 +677,15 @@ async def test_the_guard_s_start_makes_it_again_too(monkeypatch, media) -> None:
     async def not_frozen():
         return None
 
+    async def inspect(target):
+        return room_player("domovoi-mpd-office")
+
+    async def trusted():
+        return {MPD_ID}
+
     monkeypatch.setattr(mpd_provisioner, "frozen_by", not_frozen)
+    monkeypatch.setattr(mpd_provisioner, "_inspect_room", inspect)
+    monkeypatch.setattr(mpd_provisioner, "_trusted_image_ids", trusted)
     assert await mpd_provisioner.start_stopped_room("office", "domovoi-mpd-office",
                                                     why="test") == "started"
     assert starts == [True]
@@ -656,3 +713,226 @@ async def test_a_placeholder_that_can_t_be_made_is_logged_and_the_start_says_why
         )
     assert starts == [False]
     assert "could not create mountpoint" in caplog.text
+
+
+# ─── review round 1: only Domovoi's own stopped player is ever started ────
+
+@pytest.mark.parametrize("shape, why", [
+    ({"privileged": True}, "privileged"),
+    ({"mounts": MOUNTS + (("/var/run/docker.sock", "/var/run/docker.sock"),)}, "docker_socket"),
+    ({"image_id": "sha256:" + "e" * 64, "config_image": "evil:latest"}, "another image"),
+    ({"restart_policy": "no"}, "restart policy"),
+    ({"mounts": MOUNTS + (("/", "/host"),)}, "root_mount"),
+    ({"mounts": MOUNTS[1:]}, "lacks the /var/lib/mpd"),
+])
+async def test_a_stopped_container_that_isn_t_a_room_player_is_never_started(
+    monkeypatch, caplog, shape, why,
+) -> None:
+    rooms = FakeRooms(monkeypatch, **{"domovoi-mpd-office": "exited"})
+    rooms.shape["domovoi-mpd-office"] = shape
+    assert await mpd_provisioner.start_stopped_room("office", why="test") == "refused"
+    assert rooms.starts == []
+    assert why in caplog.text
+
+
+async def test_the_start_goes_by_the_inspected_container_s_id(monkeypatch) -> None:
+    rooms = FakeRooms(monkeypatch, **{"domovoi-mpd-office": "exited"})
+    assert await mpd_provisioner.start_stopped_room("office", why="test") == "started"
+    assert rooms.started_ids == ["id-domovoi-mpd-office"]
+
+
+async def test_the_retry_and_heal_never_recreate_a_running_container(monkeypatch) -> None:
+    """A running player is left exactly as it is (whatever it mounts or
+    binds): recreating is the warm's call at the core's next start."""
+    rooms = FakeRooms(monkeypatch, **{"domovoi-mpd-office": "running"})
+    assert await mpd_provisioner._reconcile_room("office", 6650, 8050,
+                                                 "domovoi-mpd-office") == "running"
+    mpd_module._room_ports["office"] = (6650, 8050)
+    assert await mpd_provisioner.heal_room("office") is False
+    assert rooms.starts == [] and rooms.creates == [] and rooms.after == []
+
+
+async def test_a_missing_container_is_created_and_said_so(monkeypatch) -> None:
+    rooms = FakeRooms(monkeypatch)
+    assert await mpd_provisioner._reconcile_room("office", 6650, 8050,
+                                                 "domovoi-mpd-office") == "created"
+    assert rooms.creates == ["domovoi-mpd-office"] and rooms.after == [("office", 6650)]
+
+
+async def test_a_room_another_operation_holds_is_left_alone(monkeypatch) -> None:
+    rooms = FakeRooms(monkeypatch, **{"domovoi-mpd-office": "exited"})
+    mpd_module._room_ports["office"] = (6650, 8050)
+    with holds.holding("room:office", "the music player for office is being removed",
+                       settle_sec=0):
+        assert await mpd_provisioner._reconcile_room(
+            "office", 6650, 8050, "domovoi-mpd-office") == "busy"
+        assert await mpd_provisioner.heal_room("office") is False
+    lock = asyncio.Lock()
+    monkeypatch.setattr(mpd_provisioner, "_REBUILD_LOCK", lock)
+    async with lock:
+        assert await mpd_provisioner.start_stopped_room("office", why="test") == "busy"
+    assert rooms.starts == []
+
+
+async def test_the_freeze_check_fails_closed(monkeypatch) -> None:
+    async def unreadable(_s):
+        raise RuntimeError("database is away")
+
+    monkeypatch.setattr(store, "frozen_by", unreadable)
+    why = await mpd_provisioner.frozen_by()
+    assert why is not None and "can't be read" in why
+
+
+@requires_db
+async def test_an_open_tamper_incident_is_a_freeze() -> None:
+    from domovoi.db.session import engine as db_engine
+    from domovoi.db.session import session_scope
+
+    async with db_engine.begin() as conn:
+        await conn.execute(text("TRUNCATE container_incidents RESTART IDENTITY"))
+    try:
+        assert await mpd_provisioner.frozen_by() is None
+        async with session_scope() as s:
+            iid, _ = await store.open_incident(s, Finding(
+                key="tamper:image:x:y", cls=TAMPER, kind="image", severity="error",
+                container="x", owner="core", label="x", summary="x"))
+        assert await mpd_provisioner.frozen_by() == f"incident #{iid}"
+    finally:
+        async with db_engine.begin() as conn:
+            await conn.execute(text("TRUNCATE container_incidents RESTART IDENTITY"))
+
+
+@pytest.mark.parametrize("never", [True, False])
+async def test_after_a_start_internet_streams_leave_the_queue_when_internet_is_never(
+    monkeypatch, never,
+) -> None:
+    from domovoi import egress, mpd_internet
+
+    pins: list[int] = []
+    purged: list[str] = []
+
+    async def pin(port):
+        pins.append(port)
+
+    async def purge(room_id, client):
+        purged.append(room_id)
+        if len(purged) == 1:
+            raise ConnectionRefusedError("still starting")
+        return 2
+
+    monkeypatch.setattr(mpd_provisioner, "_pin_startup_volume", pin)
+    monkeypatch.setattr(mpd_internet, "purge_room", purge)
+    monkeypatch.setattr(mpd_provisioner, "PURGE_RETRY_SEC", 0.0)
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: never)
+    await mpd_provisioner._after_start("office", 6650)
+    assert pins == [6650]
+    assert purged == (["office", "office"] if never else [])
+
+
+async def test_a_heal_that_keeps_failing_warns_once_an_hour(monkeypatch, caplog) -> None:
+    rooms = FakeRooms(monkeypatch, **{"domovoi-mpd-office": "exited"})
+    rooms.fail_with = 'make mountpoint "/music/audiobooks": read-only file system'
+    mpd_module._room_ports["office"] = (6650, 8050)
+    for _ in range(3):
+        mpd_provisioner._heal_last.clear()          # past the cooldown each time
+        assert await mpd_provisioner.heal_room("office") is False
+    assert len(rooms.starts) == 3
+    warned = [r for r in caplog.records
+              if r.levelname == "WARNING" and "read-only file system" in r.getMessage()]
+    assert len(warned) == 1
+
+
+async def test_a_room_s_container_is_made_from_the_local_image_only(monkeypatch, tmp_path) -> None:
+    seen: list[tuple] = []
+
+    async def run_docker(*args, timeout=60.0):
+        seen.append(args)
+        return 0, "id\n", ""
+
+    monkeypatch.setattr(mpd_provisioner, "_run_docker", run_docker)
+    monkeypatch.setattr(mpd_provisioner.settings, "podcasts_dir", str(tmp_path / "nope1"))
+    monkeypatch.setattr(mpd_provisioner.settings, "audiobooks_dir", str(tmp_path / "nope2"))
+    await mpd_provisioner._create_container(
+        name="domovoi-mpd-office", image="domovoi-mpd:latest", control_port=6650,
+        http_port=8050, music_dir=str(tmp_path), volume_name="v")
+    (run,) = seen
+    assert run[:2] == ("run", "-d") and run[run.index("--pull") + 1] == "never"
+
+
+# ─── the guard: the reviewer's scenario and its kin ───────────────────────
+
+@requires_db
+async def test_a_foreign_privileged_container_under_a_room_s_name_is_never_started(
+    guard_env,
+) -> None:
+    """Review 2026-11-11 (B1), as proved: a --privileged container with the
+    Docker socket mounted, named like the room's player, its payload
+    exiting at once. Before the fix the guard started it 20 times and
+    reported nothing. Now: never started, reported as tampering."""
+    guard, docker, clock, _, starts, _ = guard_env
+    evil = stopped_player(id="e" * 64, config_image="evil:latest", image_id="sha256:" + "e" * 64,
+                          privileged=True, exit_code=0, restart_policy="no",
+                          mounts=(("/var/run/docker.sock", "/var/run/docker.sock"),))
+    docker.show(evil)
+    for _ in range(20):
+        await _check(guard, clock)
+    assert starts == []
+    rows = await _open_rows()
+    assert ("tamper", "image") in {(r["class"], r["kind"]) for r in rows}
+    stopped = [r for r in rows if r["kind"] == "stopped"]
+    assert stopped and "Not started" in stopped[0]["summary"]
+
+
+@requires_db
+async def test_domovoi_s_image_with_a_risky_setting_is_not_started_either(guard_env) -> None:
+    guard, docker, clock, _, starts, _ = guard_env
+    docker.show(stopped_player(
+        mounts=MOUNTS + (("/var/run/docker.sock", "/var/run/docker.sock"),)))
+    for _ in range(3):
+        await _check(guard, clock)
+    assert starts == []
+    assert ("tamper", "config") in {(r["class"], r["kind"]) for r in await _open_rows()}
+
+
+@requires_db
+async def test_another_shape_keeps_the_stopped_finding_with_the_reason(guard_env) -> None:
+    guard, docker, clock, _, starts, _ = guard_env
+    docker.show(stopped_player(restart_policy="no"))
+    for _ in range(6):
+        await _check(guard, clock)
+    assert starts == []
+    (inc,) = await _open_rows()
+    assert inc["kind"] == "stopped" and "Not started: its restart policy is 'no'" in inc["summary"]
+
+
+@requires_db
+async def test_a_player_that_keeps_stopping_is_reported_after_three_starts(guard_env) -> None:
+    guard, docker, clock, _, starts, _ = guard_env
+    for _ in range(8):
+        docker.show(stopped_player())          # down again at every look
+        await _check(guard, clock)
+    assert len(starts) == 3
+    (inc,) = await _open_rows()
+    assert inc["kind"] == "stopped"
+    assert "Domovoi started it 3 times in the last 30 minutes; it keeps stopping." in inc["summary"]
+    # Half an hour later the count has run out: it is tried again.
+    clock.t += 30 * 60
+    docker.show(stopped_player())
+    await _check(guard, clock)
+    assert len(starts) == 4
+
+
+@requires_db
+async def test_the_guard_starts_nothing_when_the_freeze_can_t_be_read(
+    guard_env, monkeypatch,
+) -> None:
+    guard, docker, clock, _, starts, _ = guard_env
+
+    async def unreadable(_s):
+        raise RuntimeError("database is away")
+
+    monkeypatch.setattr(store, "frozen_by", unreadable)
+    docker.show(stopped_player())
+    for _ in range(3):
+        await _check(guard, clock)
+    assert starts == []

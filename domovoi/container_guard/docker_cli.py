@@ -250,6 +250,8 @@ def parse_inspect(out: str) -> list[Observed]:
                 network_mode=str(host.get("NetworkMode") or ""),
                 pid_mode=str(host.get("PidMode") or ""),
                 mounts=mounts,
+                restart_policy=str((host.get("RestartPolicy") or {}).get("Name") or "")
+                if isinstance(host.get("RestartPolicy"), dict) else "",
                 labels={str(k): str(v) for k, v in (config.get("Labels") or {}).items()},
             )
         )
