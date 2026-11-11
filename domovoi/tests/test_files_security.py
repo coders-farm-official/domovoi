@@ -568,7 +568,7 @@ def test_build_core_libraries_warns_once_then_again_on_regression(media_env, cap
 
 
 def test_ensure_then_build_restores_documents_and_pictures(media_env):
-    """The end-to-end shape of Kamron's bug, DB-free."""
+    """The end-to-end shape of the owner's bug, DB-free."""
     before = {lib.id for lib in fs.build_core_libraries(fs._allowed_under_config())}
     assert "core:documents" not in before and "core:pictures" not in before
 

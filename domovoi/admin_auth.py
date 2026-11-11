@@ -837,7 +837,7 @@ def normalize_device_token(value: str | None) -> str | None:
 # ─── The rule for an admin-CHOSEN household token ─────────────────────────
 
 # Floor and cap on the STORED form (after the outer whitespace is trimmed).
-# The floor is the only strength rule there is — Kamron's call, stated in
+# The floor is the only strength rule there is — the owner's call, stated in
 # the dialog: a token a person picked is easier to remember and easier to
 # guess, and :data:`DEVICE_TOKEN_BACKOFF` is all that stands behind it. The
 # cap is not a limit anybody meets; it exists so nothing downstream (the
@@ -877,7 +877,7 @@ def validate_custom_device_token(value: str | None) -> str:
       header bytes as latin-1, so a UTF-8 token arrives mojibake'd and
       simply never compares equal, while the web→core proxy hop (httpx)
       raises ``UnicodeEncodeError`` and turns a 401 into a 500. No emoji,
-      which is also where Kamron drew the line.
+      which is also where the owner drew the line.
     * **at least :data:`DEVICE_TOKEN_MIN_LEN` characters**, measured on the
       trimmed form; at most :data:`DEVICE_TOKEN_MAX_LEN`.
     * **something other than separators.** ``- - - - - - -`` passes every

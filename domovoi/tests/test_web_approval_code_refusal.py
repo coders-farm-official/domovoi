@@ -1,6 +1,6 @@
 """A mistyped approval code must not ask for the admin password (F-050).
 
-Kamron stands at a new satellite, reads six digits off it, and types them
+The owner stands at a new satellite, reads six digits off it, and types them
 into the Satellites page. One wrong digit used to cost him a re-login:
 
 * the core answered a mismatch with **403**;
@@ -299,7 +299,7 @@ def test_the_detail_is_reachable_without_the_status_line(data_js):
 # The second half of the finding, and the one no test could see. The
 # core's throttle sentence is 433 characters and ends by naming the
 # third of three places the six digits can still be read; the dashboard
-# rendered it through a 400-character `slice`, so what Kamron actually
+# rendered it through a 400-character `slice`, so what the owner actually
 # read ended "…and it is the code column of th" — mid-word, recovery
 # route gone, looking like a broken dashboard rather than like advice.
 #

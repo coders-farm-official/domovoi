@@ -90,7 +90,7 @@ object PhotoText {
         return ("block" in s && s.size >= 2) || ("amount" in s && "reference" in s) || s.size >= 3
     }
 
-    /** "Dear Kamron," opening a line, and "Warm regards," closing one: a letter by itself. */
+    /** "Dear Alex," opening a line, and "Warm regards," closing one: a letter by itself. */
     private val GREETING = Regex("(?im)^\\s*(?:dear|hello|hi)\\b[^\\n]{0,60},\\s*$")
     private val SIGN_OFF = Regex(
         "(?im)^\\s*(?:sincerely|yours (?:sincerely|faithfully|truly)|(?:kind |best |warm |with )?regards|best wishes|" +

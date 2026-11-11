@@ -132,7 +132,7 @@ internal fun MarkdownToolbar(onTool: (MdTool) -> Unit) {
  * Measured on a landscape phone (1080px tall, IME top 394): the shell ends
  * the editor at the top of the keyboard, leaving 320px from the status bar
  * down. This bar in its full form takes 181px of that and the document body
- * gets 139 — one line, and a band too short to fling, which is Kamron's
+ * gets 139 — one line, and a band too short to fling, which is the owner's
  * original complaint ("I couldn't scroll down to see what I was typing")
  * still true in landscape after [MarkdownToolbar] had already gone.
  *

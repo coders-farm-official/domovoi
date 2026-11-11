@@ -4,7 +4,7 @@ import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.ServerIdentity
 
 /*
- * Which server the phone's queue came from (2026-10-12, Kamron's phone: he
+ * Which server the phone's queue came from (2026-10-12, the owner's phone: he
  * played music from one Domovoi, connected the app to a fresh one at
  * another address, and the mini player still showed the first one's song).
  *

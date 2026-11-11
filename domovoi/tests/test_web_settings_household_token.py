@@ -615,7 +615,7 @@ def test_the_dialog_says_which_rule_will_match_live_as_it_is_typed(outcomes) -> 
 
 def test_the_rule_line_never_blocks_saving(outcomes) -> None:
     """It describes what the token will do; it is not a complaint about
-    it. Kamron's whole point was that any printable ASCII is allowed."""
+    it. The owner's whole point was that any printable ASCII is allowed."""
     o = outcomes["the_rule_line_follows_what_is_typed"]
     assert set(o["saveDisabled"].values()) == {False}
     assert o["calls"] == 0, "typing posts nothing"

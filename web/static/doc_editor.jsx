@@ -565,7 +565,7 @@
      fixed-height controls are CRAMPED at that setting. That is a recorded
      limit, not an oversight. Capping the zoom was the alternative and was
      rejected: someone who asks for 200% text and silently gets 150% is the
-     misleading-control shape Kamron ruled out.
+     misleading-control shape the owner ruled out.
      The host sets it for the DOCUMENT editor only: the same WebView factory
      builds the spreadsheet editor, whose Univer grid is canvas text that
      textZoom cannot reach under DOM chrome that it does.

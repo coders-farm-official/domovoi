@@ -82,7 +82,7 @@ def test_clusterer_splits_different_speakers() -> None:
 async def test_third_party_intro_parks_expectation_when_introducer_known(
     db_session,
 ) -> None:
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
     await db_session.commit()
 
@@ -182,7 +182,7 @@ async def test_buffer_unknown_voice_turn_no_expectation_is_noop(db_session) -> N
 @requires_db
 @pytest.mark.asyncio
 async def test_buffer_unknown_voice_turn_appends_to_expectation(db_session) -> None:
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
     await save_third_party_expectation(
         db_session,
@@ -225,7 +225,7 @@ async def test_buffer_two_distinct_unknown_voices_create_two_clusters(
 ) -> None:
     """Stranger walks in mid-window — should land in its own cluster
     rather than polluting Alex's."""
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
     await save_third_party_expectation(
         db_session,
@@ -273,7 +273,7 @@ async def test_inject_ask_appends_when_classifier_confident(
 ) -> None:
     """Classifier returns high confidence → response gets the appendix,
     expect_followup is set, and pending_confirmation is parked."""
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
 
     pcm = np.full(16_000, 1234, dtype=np.int16).tobytes()
@@ -333,7 +333,7 @@ async def test_inject_ask_appends_when_classifier_confident(
 async def test_inject_ask_skips_when_classifier_unconfident(
     db_session, monkeypatch,
 ) -> None:
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
 
     pcm = np.full(16_000, 1234, dtype=np.int16).tobytes()
@@ -385,7 +385,7 @@ async def test_inject_ask_skips_when_classifier_unconfident(
 async def test_inject_ask_skips_when_speaker_is_not_introducer(
     db_session, monkeypatch,
 ) -> None:
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     other_id = await PeopleRepository(db_session).create(name="Other")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
 
@@ -447,7 +447,7 @@ async def test_third_party_confirm_yes_enrolls_and_clears_expectation(
         embedding.astype(np.float32).tobytes()
     ).decode("ascii")
 
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     await save_third_party_expectation(
         db_session,
         sid,
@@ -510,7 +510,7 @@ async def test_third_party_confirm_no_drops_cluster_keeps_expectation(
     e2 = base64.b64encode(_fake_embedding(2).astype(np.float32).tobytes()).decode(
         "ascii"
     )
-    introducer_id = await PeopleRepository(db_session).create(name="Kamron")
+    introducer_id = await PeopleRepository(db_session).create(name="Jordan")
     await save_third_party_expectation(
         db_session,
         sid,

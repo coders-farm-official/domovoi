@@ -43,4 +43,3 @@ eighty EY1 T IY0
 ninety N AY1 N T IY0
 minute M IH1 N IH0 T
 minutes M IH1 N IH0 T S
-kamron K AE1 M R AA2 N

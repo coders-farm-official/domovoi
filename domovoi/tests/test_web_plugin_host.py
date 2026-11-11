@@ -88,7 +88,7 @@ def test_import_guard_preloads_lazily_imported_request_modules():
             # the ``domovoi`` package rather than as ``domovoi._ed25519``.
             # Nothing under ``web/backend`` ever names it, so the
             # source-derived scan that follows could not see it either. The
-            # refusal reached Kamron as a failed Prepare job.
+            # refusal reached the owner as a failed Prepare job.
             "domovoi.server_identity",
             "domovoi._ed25519",
         ):

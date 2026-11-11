@@ -1191,7 +1191,7 @@ internal fun fitStretches(canScrollBackward: Boolean, canScrollForward: Boolean)
  * multi-paragraph reply on a 1080x2520 phone) gave a drag no response at all.
  * On the emulator a held 600px drag screenshots pixel-identical to the still
  * frame, where a list that can scroll stretches. That reads as a locked
- * screen: Kamron's "my scroll seems to be locked" (2026-10-12). Opening the
+ * screen: the owner's "my scroll seems to be locked" (2026-10-12). Opening the
  * keyboard shortens the pane until the same thread overflows by ~400px, which
  * was his "when I click into the chat I can scroll a little bit". Nothing was
  * locked; there was nothing to scroll and nothing said so.

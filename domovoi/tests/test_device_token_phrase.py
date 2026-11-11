@@ -55,7 +55,7 @@ def test_the_word_bank_still_buys_eight_bits_a_word() -> None:
     assert admin_auth.DEVICE_TOKEN_WORDS == 8
     # 256 choices per word, 8 words → 2**64.
     assert 256 ** admin_auth.DEVICE_TOKEN_WORDS == 2 ** 64
-    # The setup code Kamron already lives with is the same strength — that
+    # The setup code the owner already lives with is the same strength — that
     # is the whole argument for this being enough.
     assert admin_auth.generate_setup_code().count("-") == 7
 

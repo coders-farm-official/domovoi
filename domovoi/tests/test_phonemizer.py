@@ -80,7 +80,7 @@ def test_an_unstressed_uh_is_a_schwa(ph):
     assert ph.resolve_pronunciation("Domovoi", "DOM-uh-voy").phones == ("D", "AA1", "M", "AH0", "V", "OY2")
 
 
-# Kamron, 2026-10-12: "Kamron = kamren" (and "Kam-ren") for his name said
+# 2026-10-12: "Camryn = kamren" (and "Kam-ren") for a name said
 # like Cameron. The same results are golden cases (say_it_like-008..013),
 # which the Kotlin port is held to.
 @pytest.mark.parametrize("say,phones,en", [
@@ -90,10 +90,10 @@ def test_an_unstressed_uh_is_a_schwa(ph):
     ("kamren", "K AE1 M ER0 AH0 N", "kˈaməɹən"),   # one piece, as the model reads it: Cameron
     ("kam-REN", "K AE2 M R EH1 N", "kamɹˈɛn"),     # stressed: a full e
 ])
-def test_kamron(ph, say, phones, en):
-    e = ph.resolve_pronunciation("Kamron", say)
+def test_camryn(ph, say, phones, en):
+    e = ph.resolve_pronunciation("Camryn", say)
     assert " ".join(e.phones) == phones
-    assert ph.phonemize("Kamron.", extra=[e]) == [en + "."]
+    assert ph.phonemize("Camryn.", extra=[e]) == [en + "."]
 
 
 @pytest.mark.parametrize("syllable,arpa", [

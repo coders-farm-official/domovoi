@@ -1,6 +1,6 @@
 """What a home-Wi-Fi join actually did, attempt by attempt, for the card.
 
-Kamron's card on 2026-10-22, after the WPA2/WPA3 fix, still read
+The owner's card on 2026-10-22, after the WPA2/WPA3 fix, still read
 "the password wasn't accepted (Secrets were required)" with a ``join_log``
 that was only the last eight lines of the journal: NetworkManager giving up
 and the regulatory domain being re-applied after the disconnect. Nothing in

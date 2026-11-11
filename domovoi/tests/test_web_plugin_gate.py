@@ -408,7 +408,7 @@ async def test_radio_mutations_return_401_unauthenticated(
 async def test_radio_daily_mutations_take_the_household_token(
     radio_app, monkeypatch, method: str, path: str
 ) -> None:
-    """Kamron's phone: paired, not signed in as an admin. Play, the star,
+    """The owner's phone: paired, not signed in as an admin. Play, the star,
     the edits, forget and the simulcast lookup all go through."""
     _radio_claimed(monkeypatch)
     from domovoi.tests.auth_testkit import HEADER

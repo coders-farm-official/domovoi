@@ -485,7 +485,7 @@ async def test_third_yes_triggers_prefs_offer_followup(db_session) -> None:
     """After AUTO_SEARCH_OFFER_THRESHOLD yeses for the same (person, category),
     the response tacks on the auto-search meta-offer and parks a
     prefs_offer pending_confirmation."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
 
     # Pre-seed: yes_count = threshold - 1 so this is the threshold yes.
@@ -534,7 +534,7 @@ async def test_third_yes_triggers_prefs_offer_followup(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_yes_to_prefs_offer_flips_auto_search(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
     await SessionRepository(db_session).set_context_key(
         sid,
@@ -566,7 +566,7 @@ async def test_yes_to_prefs_offer_flips_auto_search(db_session) -> None:
 async def test_auto_search_short_circuits_qa(db_session) -> None:
     """With auto_search=true, the router skips ollama_client.qa_with_uncertainty
     entirely and routes straight to DoubleCheck's answer_question_from_web."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await WebSearchPrefsRepository(db_session).set_auto(
         person_id, CATEGORY_PRICES_FINANCE, True
     )

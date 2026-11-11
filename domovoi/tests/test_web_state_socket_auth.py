@@ -271,11 +271,11 @@ def test_an_admitted_subscriber_still_receives_the_whole_payload(
         ws.portal.call(
             broadcaster.broadcast,
             "people.last_seen.changed",
-            {"people": [{"name": "Kamron", "last_seen_at": "2026-09-22T12:00:00Z"}]},
+            {"people": [{"name": "Alex", "last_seen_at": "2026-09-22T12:00:00Z"}]},
         )
         event = ws.receive_json()
     assert event["type"] == "people.last_seen.changed"
-    assert event["people"][0]["name"] == "Kamron"
+    assert event["people"][0]["name"] == "Alex"
 
 
 def test_nothing_is_pushed_to_a_socket_that_never_got_in(claimed, broadcaster) -> None:

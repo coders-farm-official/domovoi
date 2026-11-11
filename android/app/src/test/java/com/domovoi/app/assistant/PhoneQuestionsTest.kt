@@ -157,8 +157,8 @@ class PhoneQuestionsTest {
     @Test fun whoAmI() {
         val phone = FakePhone()
         assertTrue(say(PhoneQuestion.WHO_AM_I, phone).startsWith("I don't know your name."))
-        phone.facts = PromptFacts(listener = "Kamron Kennedy")
-        assertEquals("You're Kamron, as this phone's Settings say.", say(PhoneQuestion.WHO_AM_I, phone))
+        phone.facts = PromptFacts(listener = "Alex Morgan")
+        assertEquals("You're Alex, as this phone's Settings say.", say(PhoneQuestion.WHO_AM_I, phone))
     }
 
     @Test fun roundOneAmbiguities() {

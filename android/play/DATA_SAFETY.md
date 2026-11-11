@@ -26,7 +26,7 @@ a third-party server", but its closest example, a user sending files
 directly to their own external drive or cloud storage account, does not
 need declaring. The answers below take that example: **not collected and
 not shared**, the way a self-hosted file or media client does, with the
-privacy policy spelling out what goes there. If Kamron prefers to be
+privacy policy spelling out what goes there. If the owner prefers to be
 maximally cautious, the alternative is "Option B" at the end.
 
 The email draft is the same kind of call: handing data to another app on
@@ -42,7 +42,7 @@ from "sharing"; the declaration below is the cautious reading.
 | Do you provide a way for users to request that their data be deleted? | **Yes** | Email info@codersfarm.org to delete a report we received (privacy policy, "Reports"). Everything on the phone has in-app delete (conversations, reports, models) and goes with an uninstall. |
 | Does the app allow users to create an account? | **No** | There is no account with Coders Farm. Pairing with the household server is not an account with us. |
 
-If Kamron decides the email draft is the user's own transfer, the report
+If the owner decides the email draft is the user's own transfer, the report
 rows can be left out, but the lookup rows (Section 2) stay: the app itself
 sends those words to Wikipedia or the person's own search. Keep the report
 described in the privacy policy either way. Recommended: declare the

@@ -1538,8 +1538,8 @@ class VoiceProfileHandler(Handler):
         if ctx.person_id is None:
             names = await self._candidate_names(ctx, session)
             if names and all(_same_name(n, names[0]) for n in names):
-                # The duplicate-name case at its plainest: two Kamrons with
-                # Kamron's voice, so neither can be named.
+                # The duplicate-name case at its plainest: two Alexes with
+                # Alex's voice, so neither can be named.
                 text = (
                     f"Your voice matches more than one {names[0]}, so I can't tell "
                     f"which one you are. {_SORT_IT_OUT}"

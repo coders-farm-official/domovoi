@@ -1,7 +1,7 @@
 """Every kind of home network the setup portal can be asked to join, and
 what it says when it can't (2026-10-22).
 
-Kamron reflashed his satellites (Pi Zero 2 W) and none would join
+The owner reflashed his satellites (Pi Zero 2 W) and none would join
 "Maple Wifi 2.0", a TP-Link in WPA2/WPA3 mixed mode
 ("WPA3-Personal+WPA2-PSK[AES]"). The portal said
 

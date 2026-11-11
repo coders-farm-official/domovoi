@@ -54,7 +54,7 @@ import kotlinx.serialization.Serializable
 // is the Files tab's job — this screen is the engine's state, the lane and
 // the history. Engine install/start/stop stays on the web dashboard.
 //
-// It is a READ-ONLY screen from a phone (2026-11-03, Kamron's decision 67:
+// It is a READ-ONLY screen from a phone (2026-11-03, the owner's decision 67:
 // "image generation is dashboard only"). What is not here, and why there is
 // no control for it:
 //
@@ -70,7 +70,7 @@ import kotlinx.serialization.Serializable
 // answered 401 "admin session required" from every phone, every time: the
 // prompt field and `generate` were drawn and refused, and the bin opened a
 // destructive confirmation that could only ever fail at the end of it.
-// Kamron's no-misleading-controls rule says a control that cannot do what it
+// The owner's no-misleading-controls rule says a control that cannot do what it
 // says is not drawn, so they are not. The iPhone drew them for one round and
 // removed them the same way (ios/Domovoi/Images/ImagesView.swift's header
 // carries the long form of this argument).

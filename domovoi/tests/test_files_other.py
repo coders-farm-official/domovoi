@@ -1,5 +1,5 @@
 """Documents and Other: two views of the one shared Documents folder
-(web/backend/api/doc_types.py, Kamron 2026-10-27).
+(web/backend/api/doc_types.py, the owner 2026-10-27).
 
 * Documents lists document types (and folders); Other lists everything
   else (and folders). Neither lists the other's files, nothing moves on

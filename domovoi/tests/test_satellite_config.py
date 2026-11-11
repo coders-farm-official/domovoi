@@ -72,7 +72,7 @@ def test_coercion_and_bounds() -> None:
 
 
 def test_wake_ack_mode_field() -> None:
-    """Kamron, 2026-09-29: the wake acknowledgement is per satellite, three
+    """The owner, 2026-09-29: the wake acknowledgement is per satellite, three
     modes, the spoken greeting by default — offered in words, saved as the
     value the Pi reads from [wake] ack_mode."""
     spec = FIELD_BY_NAME["wake.ack_mode"]

@@ -2567,7 +2567,7 @@ const APPROVAL_CODE_LEN = 6;
  * auth retry treats any 401/403 on it as "sign in again" — it opens the
  * admin-password modal and replays once a bearer exists. That is right
  * for a refusal about WHO is asking and wrong for a refusal about WHAT
- * was typed: one mistyped digit used to throw Kamron out of the approval
+ * was typed: one mistyped digit used to throw the owner out of the approval
  * he was standing in front of and into the password prompt, and the
  * first refusal arrived as `approve failed: 403 Forbidden:
  * {"detail":"…"}` — a status line and a JSON blob — in a toast (F-050).
@@ -3161,7 +3161,7 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
 /* The phone column of "add a spare device" (2026-10-23). The QR code opens
  * the join page, and that page installs the app FROM THIS SERVER: so the
  * code is offered only once the server holds a checked copy (no misleading
- * controls: Kamron's Moto scanned it and was told "the app isn't on this
+ * controls: the owner's Moto scanned it and was told "the app isn't on this
  * server yet"). Until then the first step is putting the app here
  * (AppOnServer: the download, its progress, the upload when internet is
  * off, the admin sign-in), and the code appears the moment that is done. A

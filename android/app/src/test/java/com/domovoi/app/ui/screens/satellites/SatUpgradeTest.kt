@@ -19,7 +19,7 @@ import java.time.Instant
 
 /**
  * The satellite upgrade button stays locked from the server's yes until the
- * satellite is back (Kamron, 2026-10-13: it stayed enabled after a
+ * satellite is back (the owner, 2026-10-13: it stayed enabled after a
  * successful request, on the dashboard and here). The web twin is
  * satellites.jsx satUpgradeView; the server's record is
  * domovoi/satellite_upgrades.py.

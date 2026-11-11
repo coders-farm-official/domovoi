@@ -125,7 +125,7 @@ def test_near_ties_are_marked_in_respellings_too():
     and checked for near ties like any word of the text ("kamren",
     say_it_like-010). Since the respelling key (2026-10-12) "shiv" is no
     longer one: the key reads it, the same on every runtime."""
-    case = next(c for c in LIST_CASES if c["pronunciations"] == [["Kamron", "kamren"]])
+    case = next(c for c in LIST_CASES if c["pronunciations"] == [["Camryn", "kamren"]])
     assert case["respelling_model"] == [["kamren", "K AE1 M ER0 AH0 N"]]
     siobhan = next(c for c in LIST_CASES if c["pronunciations"] == [["Siobhan", "shiv-AWN"]])
     assert "respelling_model" not in siobhan and "near_tie" not in siobhan

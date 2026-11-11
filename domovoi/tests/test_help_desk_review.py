@@ -35,16 +35,16 @@ SEEDS = {
     "ssid_quoted": "wpa_supplicant: could not associate with 'SmithFamily5G'",
     "ssid_kv": "ssid=SmithFamily5G reason=4-way handshake timeout",
     "ssid_plain": "Wi-Fi network SmithFamily5G not found",
-    "hostname_bare": "could not resolve kamron-desktop",
-    "hostname_port": "connect to kamron-desktop:6369 refused",
+    "hostname_bare": "could not resolve alex-desktop",
+    "hostname_port": "connect to alex-desktop:6369 refused",
     "fqdn": "GET nas.smith-family.net failed",
     "fqdn_port": "upstream ha.smithhouse.org:8123 timed out",
-    "person_name": "Voice ID matched Kamron Kennedy (0.81)",
+    "person_name": "Voice ID matched Alex Morgan (0.81)",
     "transcript": "last heard: 'hey jarvis call mom about the biopsy results'",
     "pairing_code_spaced": "pairing code 482 193",
 }
-LEAKS = ["SmithFamily5G", "kamron-desktop", "smith-family.net", "smithhouse.org", "Kamron Kennedy",
-         "Kamron", "biopsy", "Sunflower2024", "482 193"]
+LEAKS = ["SmithFamily5G", "alex-desktop", "smith-family.net", "smithhouse.org", "Alex Morgan",
+         "Alex", "biopsy", "Sunflower2024", "482 193"]
 
 
 def _state() -> troubleshoot.State:
@@ -54,7 +54,7 @@ def _state() -> troubleshoot.State:
                {"room_id": "ellies_room", "status": "online"}],
         sat_health={
             "kitchen": {"received_at": NOW, "sample": {
-                "core_ok": False, "hostname": "kamron-desktop",
+                "core_ok": False, "hostname": "alex-desktop",
                 "wifi": {"ssid": "SmithFamily5G", "signal_dbm": -60},
                 "reboot_needed": SEEDS["ssid_quoted"] + "; " + SEEDS["hostname_port"],
                 "settings_ignored": [SEEDS["ssid_kv"], SEEDS["person_name"]],
@@ -67,9 +67,9 @@ def _state() -> troubleshoot.State:
         }}},
         plugins=[{"slug": "ha_bridge", "name": "HA bridge", "status": "load_error",
                   "last_error": SEEDS["fqdn"] + " token Sunflower2024! " + SEEDS["custom_token"]}],
-        last_update={"status": "failed", "error": "pulled https://user:pw@git.example.com/repo.git on kamron-desktop",
+        last_update={"status": "failed", "error": "pulled https://user:pw@git.example.com/repo.git on alex-desktop",
                      "steps": [{"name": "pull", "status": "failed"}]},
-        guard={"banner": {"show": True, "text": "container on kamron-desktop changed"},
+        guard={"banner": {"show": True, "text": "container on alex-desktop changed"},
                "incidents": [{"open": True, "summary": "image pulled from registry.smithhouse.org:5000"}]},
         internet="always", now=NOW,
     )
@@ -78,8 +78,8 @@ def _state() -> troubleshoot.State:
 def _known() -> list[str]:
     # What known.gather() reads from this install: the token, people, the
     # satellites' samples, the configured URLs.
-    return (["Sunflower2024!"] + name_values(["Kamron Kennedy"])
-            + sample_values([{"wifi": {"ssid": "SmithFamily5G"}, "hostname": "kamron-desktop"}])
+    return (["Sunflower2024!"] + name_values(["Alex Morgan"])
+            + sample_values([{"wifi": {"ssid": "SmithFamily5G"}, "hostname": "alex-desktop"}])
             + ["nas.smith-family.net", "smith-family.net", "ha.smithhouse.org", "smithhouse.org"])
 
 
@@ -99,7 +99,7 @@ def test_known_values_never_reach_the_report() -> None:
     lf = facts.build(version="1.0.0", internet="always", ai_on=True, rooms=st.rooms, plugins=st.plugins)
     with known_values(_known()):
         report = diagnostics.build(lf, troubleshoot.findings(st, admin=True),
-                                   what_happened="Kamron's phone can't reach 10.0.0.5", now=NOW, host="Linux")
+                                   what_happened="Alex's phone can't reach 10.0.0.5", now=NOW, host="Linux")
     for leak in LEAKS + ["ellies", "10.0.0.5"]:
         assert leak.lower() not in report.lower(), (leak, report)
 
@@ -120,7 +120,7 @@ def test_known_values_come_from_the_settings_urls_and_names() -> None:
 
     got = config_values(S())
     assert "search.smithhouse.org" in got and "smithhouse.org" in got and "localhost" not in got
-    assert {"Kamron Kennedy", "Kamron", "Kennedy"} <= set(name_values(["Kamron Kennedy"]))
+    assert {"Alex Morgan", "Alex", "Morgan"} <= set(name_values(["Alex Morgan"]))
 
 
 def test_the_docs_promise_only_what_is_guaranteed() -> None:

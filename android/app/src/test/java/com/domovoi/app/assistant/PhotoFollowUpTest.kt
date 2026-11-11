@@ -186,7 +186,7 @@ class PhotoFollowUpTest {
     }
 
     private companion object {
-        const val INVITATION = "Dear Kamron,\nYou're invited to the garden party on October 30, 2026.\n" +
+        const val INVITATION = "Dear Alex,\nYou're invited to the garden party on October 30, 2026.\n" +
             "Please reply by October 25.\nWarm regards,\nMaria Lopez\n12 Elm Street"
     }
 }

@@ -11,7 +11,7 @@ The six digits are pinned at BOTH ends, deliberately:
 So restarting the satellite re-announces the SAME code, and rejecting the
 row on the dashboard only lets the device recreate it with the same
 number. The 429 used to advise a power-cycle "for a fresh code", which is
-the one thing that cannot work; Kamron lost a hardware setup session to
+the one thing that cannot work; the owner lost a hardware setup session to
 it. The pinning is correct and stays — only the words change.
 
 This module pins the words, so nobody restores the old advice:

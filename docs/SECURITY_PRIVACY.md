@@ -436,7 +436,7 @@ The room's "saved" line names the title, never the letter's words.
 
 `GET /api/music/now-playing` stays open — the kiosk reads it unpaired —
 but its `added_by`, the registered name of the device that queued what a
-room is playing ("Kamron's Pixel"), is named only to a household
+room is playing ("Alex's Pixel"), is named only to a household
 credential (the tiers `/ws/state` admits) and is `null` for anyone else,
 so the open poll says what plays, not whose phone is driving which room.
 

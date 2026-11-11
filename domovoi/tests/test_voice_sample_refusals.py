@@ -1,4 +1,4 @@
-"""Settings -> Voices play buttons say why a sample can't play (Kamron,
+"""Settings -> Voices play buttons say why a sample can't play (the owner,
 2026-10-12: every button answered "sample failed: 502 Bad Gateway").
 
 The web passes the core's own sentence through instead of a bare 502; the
@@ -103,7 +103,7 @@ async def test_a_preview_the_core_refuses_says_why(monkeypatch) -> None:
     install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
     _core_answers(monkeypatch, voice_api, 502, json.dumps({"detail": "the voice en_US-norman-medium could not speak"}).encode())
     async with _web() as c:
-        r = await c.post("/api/voice/pronunciations/preview", json={"word": "Kamron", "say_like": "KAM-ren"})
+        r = await c.post("/api/voice/pronunciations/preview", json={"word": "Camryn", "say_like": "KAM-ren"})
     assert r.status_code == 502
     assert r.json()["detail"] == "the preview could not be said: the voice en_US-norman-medium could not speak"
 

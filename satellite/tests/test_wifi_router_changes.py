@@ -1,7 +1,7 @@
 """A router whose security changes after the satellite was set up
 (2026-10-22).
 
-Kamron switched his access point to "WPA3-Personal+WPA2-PSK" to match his
+The owner switched his access point to "WPA3-Personal+WPA2-PSK" to match his
 main router. Every satellite set up before it dropped off and stayed off,
 and a power cycle did not help: the saved ``domovoi-home`` profile
 (``wpa-psk``, PMF at NetworkManager's default) lets NM offer SAE to a mixed
@@ -148,7 +148,7 @@ def test_pmf_is_read_in_every_shape_nmcli_prints():
 
 
 def test_wpa2_to_mixed_the_satellite_rejoins_by_itself():
-    """Kamron's case: set up on WPA2 (the profile setup used to make), the
+    """The owner's case: set up on WPA2 (the profile setup used to make), the
     router goes mixed, NM offers SAE, the Pi can't, and the link is gone."""
     h = Home(security="WPA2 WPA3", router=("wpa-psk", "sae"), km="wpa-psk", pmf="default",
              guard=False)

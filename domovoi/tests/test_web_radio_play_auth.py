@@ -1,6 +1,6 @@
 """Playing the radio from a browser that is not signed in as an admin.
 
-Kamron's phone, 2026-09-25: tapping "play here" on a favorite showed TWO
+The owner's phone, 2026-09-25: tapping "play here" on a favorite showed TWO
 identical toasts, ``play failed: 401 Unauthorized: {"detail":"admin
 session required"}``. Two causes, both pinned here:
 

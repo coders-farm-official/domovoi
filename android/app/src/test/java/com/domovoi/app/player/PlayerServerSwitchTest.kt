@@ -27,7 +27,7 @@ import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * 2026-10-12, Kamron's phone: music played from one Domovoi through the
+ * 2026-10-12, the owner's phone: music played from one Domovoi through the
  * chat mic; the app was then connected to a fresh Domovoi at another
  * address, and the mini player still showed the first one's song. What the
  * phone queued from a server belongs to that server, by identity

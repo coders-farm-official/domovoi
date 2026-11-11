@@ -9,7 +9,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Images is look-only from a phone (Kamron's decision 67, 2026-11-04:
+ * Images is look-only from a phone (the owner's decision 67, 2026-11-04:
  * "image generation is dashboard only").
  *
  * The imagegen plugin marks its three mutating routes `ADMIN_ONLY`
@@ -17,7 +17,7 @@ import java.io.File
  * `:360` generate, `:339` cancel, `:651` delete history) and this app sends
  * only `X-Device-Token`, so a phone is never admin and all three answered
  * 401 "admin session required". The screen drew them anyway, which is the
- * control Kamron's no-misleading-controls rule forbids; the iPhone removed
+ * control the owner's no-misleading-controls rule forbids; the iPhone removed
  * the same three on 2026-11-03 (`ios/Domovoi/Images/ImagesView.swift`).
  *
  * Two kinds of check, because either alone can pass while the screen is

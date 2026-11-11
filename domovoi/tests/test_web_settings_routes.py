@@ -1,7 +1,7 @@
 """Every tab has an address (owner request 2026-10-12, after the first
 Windows install).
 
-Kamron: the installer's last page should link straight to Settings →
+The owner: the installer's last page should link straight to Settings →
 Configuration, where the admin account is made, but "if we link to settings,
 it defaults to Greetings. Each tab should be able to be linked to directly
 and when clicking around our URL should change."

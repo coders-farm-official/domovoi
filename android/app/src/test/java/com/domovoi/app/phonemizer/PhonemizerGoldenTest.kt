@@ -253,7 +253,7 @@ class PhonemizerGoldenTest {
     }
 
     /** The respelling key on the same syllables as test_phonemizer.py's
-     *  test_the_respelling_key, and Kamron's name (test_kamron). */
+     *  test_the_respelling_key, and the name Camryn (test_camryn). */
     @Test fun theRespellingKey() {
         val key = mapOf(
             "shuh" to "SH AH1", "zhahn" to "ZH AA1 N", "dhuh" to "DH AH1", "tsuh" to "T S AH1",
@@ -266,15 +266,15 @@ class PhonemizerGoldenTest {
         }
         assertEquals(listOf("R", "EH1", "N") to "lex", ph.respellingArpa("ren"))
         assertEquals("lex", ph.respellingArpa("ts").second)
-        val kamron = mapOf(
+        val camryn = mapOf(
             "KAM-ren" to ("K AE1 M R AH0 N" to "kˈamɹən."), "Kam-ren" to ("K AE1 M R AH0 N" to "kˈamɹən."),
             "KAM-run" to ("K AE1 M R AH0 N" to "kˈamɹən."), "kamren" to ("K AE1 M ER0 AH0 N" to "kˈaməɹən."),
             "kam-REN" to ("K AE2 M R EH1 N" to "kamɹˈɛn."),
         )
-        for ((say, want) in kamron) {
-            val p = Phonemizer(data, model, listOf("Kamron" to say))
-            assertEquals(say, want.first, p.pronunciations().getValue("kamron").resolved)
-            assertEquals(say, listOf(want.second), p.phonemize("Kamron."))
+        for ((say, want) in camryn) {
+            val p = Phonemizer(data, model, listOf("Camryn" to say))
+            assertEquals(say, want.first, p.pronunciations().getValue("camryn").resolved)
+            assertEquals(say, listOf(want.second), p.phonemize("Camryn."))
         }
         fun resolved(word: String, say: String) =
             Phonemizer(data, model, listOf(word to say)).pronunciations().values.single().resolved

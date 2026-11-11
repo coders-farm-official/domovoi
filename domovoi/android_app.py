@@ -38,7 +38,7 @@ runtime (domovoi/satellite_windows.py):
 * :func:`status` / :func:`public_status` — what the dashboard card and the
   join page show.
 
-**After an update** (2026-10-23, Kamron's Moto: "the app isn't on this
+**After an update** (2026-10-23, the owner's Moto: "the app isn't on this
 server yet" from a QR code the dashboard had just offered). The cache is
 kept per release (``…/android_app/<versionCode>/``), and an update that
 brings a new ``android/release.json`` names a new, empty folder: the

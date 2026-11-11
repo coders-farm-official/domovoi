@@ -221,7 +221,7 @@ STORE_SCENARIOS = {
     "save_dismissed": {"call": "save", "sequence": [403], "pair": False,
                        "refusal": DEVICE_COOKIE_ONLY},
     # A DELETE on the same folder is the admin tier: cookie, no bearer,
-    # sign in at the prompt. (Kamron's state, on the verb that still asks.)
+    # sign in at the prompt. (the owner's state, on the verb that still asks.)
     "delete_signed_in": {"call": "delete", "sequence": [403, 200], "signIn": True,
                          "refusal": ADMIN_COOKIE_ONLY},
     # Same, but the operator changes their mind at the password prompt.
@@ -380,7 +380,7 @@ const __resp = (status, body) => ({
   text: async () => body,
   json: async () => JSON.parse(body),
 });
-// The browser Kamron actually has: the cookie renders GET state, and it
+// The browser the owner actually has: the cookie renders GET state, and it
 // holds NEITHER the household token (never paired, or it was rotated) nor
 // a Bearer. Pairing is what a save needs; signing in is what a delete or
 // a zip needs.

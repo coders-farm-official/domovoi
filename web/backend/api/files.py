@@ -147,7 +147,7 @@ _MAX_IMPORT_BYTES = 20 * 1024 * 1024 * 1024  # 20 GiB total per import
 
 # Named libraries a household device may READ but not write into. EMPTY,
 # and deliberately so: it held ``core:documents`` until 2026-09-24, when
-# Kamron settled that saving documents, spreadsheets and images is a
+# The owner settled that saving documents, spreadsheets and images is a
 # household action and only deleting needs admin. Putting an id back here
 # reverses that decision — the hook stays for a library that genuinely
 # needs it, not as a place to restore Documents to.

@@ -506,7 +506,7 @@ def test_it_runs_only_after_wifi_joins(monkeypatch, tmp_path):
 
 # ─── the order: the core's name, the last-known address, the sweep ────────
 #
-# Kamron, 2026-10-12: "the less the user has to do the better". Before this
+# The owner, 2026-10-12: "the less the user has to do the better". Before this
 # a satellite used whatever address it had written down, for ever: a core
 # whose DHCP lease moved left every satellite dialling the old address until
 # someone edited each one. The name comes first now, and the sweep last —

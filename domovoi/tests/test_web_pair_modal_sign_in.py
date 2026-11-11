@@ -55,7 +55,7 @@ DEVICE_TOKEN_OK = {"status": 200, "body": {"token": "household-from-login", "hea
 # ── half 1: the Auth store + the 401 replay ─────────────────────────────
 
 STORE_SCENARIOS = {
-    # The whole journey Kamron hit: a device-tier refusal, a prompt for a
+    # The whole journey the owner hit: a device-tier refusal, a prompt for a
     # token this browser has never heard of, and out through the login.
     "sign_in_instead_pairs_and_replays_once": {
         "responses": [DEVICE_401, LOGIN_OK, DEVICE_TOKEN_OK, OK],

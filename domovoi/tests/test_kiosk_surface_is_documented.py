@@ -1,7 +1,7 @@
 """FE-3 — the video satellite's kiosk surface stays open, and the security
 doc says so in as many words.
 
-Kamron's call: the kiosk renders unattended with nobody to hold a
+The owner's call: the kiosk renders unattended with nobody to hold a
 credential, so its page, its now-playing read and its pause / resume verbs
 remain daily tier. What this pins is that the documentation and the code
 agree — if either the gate or the paragraph moves, this fails and the other

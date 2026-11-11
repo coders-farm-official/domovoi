@@ -1,7 +1,7 @@
 """Settings → Models: errors stay until dismissed, and a pull of a name
 that doesn't exist says what was probably meant (owner report 2026-10-13).
 
-Kamron typed ``qwen3-v1:2b`` (the model is ``qwen3-vl:2b``) into "pull by
+The owner typed ``qwen3-v1:2b`` (the model is ``qwen3-vl:2b``) into "pull by
 name" on his phone: the error showed and vanished before he could read it.
 A pull of an unknown name is no HTTP error (Ollama answers it with an error
 LINE, so the job fails a second later), and the failed job leaves the job

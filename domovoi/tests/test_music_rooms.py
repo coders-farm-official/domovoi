@@ -51,7 +51,7 @@ from domovoi.tests.conftest import requires_db
 HOUSE = [
     ("dining_room", "Dining Room", "voice", True),
     ("garage", None, "voice", True),
-    ("kamron_office", "Kamron's Office", "voice", True),
+    ("jordan_office", "Jordan's Office", "voice", True),
     ("kids_room", None, "voice", True),
     ("den_tablet", "Den", "voice", True),        # a room-mode phone (board android_room)
     ("study_laptop", "Study", "voice", True),    # a laptop satellite (board linux_pc)
@@ -60,11 +60,11 @@ HOUSE = [
     ("porch", None, "voice", False),             # adopted, never connected
 ]
 PORTS = {
-    "dining_room": (6650, 8050), "garage": (6651, 8051), "kamron_office": (6652, 8052),
+    "dining_room": (6650, 8050), "garage": (6651, 8051), "jordan_office": (6652, 8052),
     "kids_room": (6653, 8053), "den_tablet": (6654, 8054), "study_laptop": (6655, 8055),
     "living_room": (6656, 8056), "living_room_tv": (6657, 8057),
 }
-ONLINE = ["dining_room", "garage", "kamron_office", "den_tablet", "study_laptop",
+ONLINE = ["dining_room", "garage", "jordan_office", "den_tablet", "study_laptop",
           "living_room", "living_room_tv"]  # kids_room is offline
 
 
@@ -243,8 +243,8 @@ def _sat(ctx: Context, room: str) -> FakeSat:
     ("in the garage speaker", "garage"),
     ("in the dining room", "dining_room"),     # id and label agree
     ("in the diningroom", "dining_room"),
-    ("in kamron's office", "kamron_office"),   # the label
-    ("in kamrons office", "kamron_office"),
+    ("in jordan's office", "jordan_office"),   # the label
+    ("in jordans office", "jordan_office"),
     ("in the kid's room", "kids_room"),        # the id, possessive slip
     ("in the kids room", "kids_room"),
     ("in the den", "den_tablet"),              # a room-mode phone, by its label
@@ -296,7 +296,7 @@ def test_a_song_that_merely_ends_in_a_place_names_no_place(said) -> None:
 def test_how_a_room_is_said() -> None:
     assert spoken_room("garage") == "the garage"
     assert spoken_room("dining_room", "Dining Room") == "the dining room"
-    assert spoken_room("kamron_office", "Kamron's Office") == "Kamron's Office"
+    assert spoken_room("jordan_office", "Jordan's Office") == "Jordan's Office"
     assert spoken_room("x", "the Annex") == "the Annex"
     assert room_key("The Kids' Room") == room_key("kids_room") == "kidroom"
 
@@ -429,7 +429,7 @@ async def test_an_artist_in_another_room(house, said) -> None:
 
 
 async def test_a_room_by_its_label_and_a_room_mode_phone_and_a_laptop(house) -> None:
-    for said, room in (("play weezer in kamron's office", "kamron_office"),
+    for said, room in (("play weezer in jordan's office", "jordan_office"),
                        ("play weezer in the den", "den_tablet"),
                        ("play weezer in the study", "study_laptop")):
         house.lib.played.clear()
@@ -498,16 +498,16 @@ async def test_everywhere_is_one_room_at_a_time_for_a_play(house) -> None:
 
 
 async def test_stop_everywhere_stops_every_playing_room(house) -> None:
-    for room in ("garage", "kamron_office", "dining_room"):
+    for room in ("garage", "jordan_office", "dining_room"):
         await house.clients[room].prepare_files([f"{room}.mp3"])
         await house.clients[room].resume()
     ctx = _ctx()
     resp = await _say("stop the music everywhere", ctx)
-    assert resp.text == "Stopped the music in the dining room, the garage and Kamron's Office."
+    assert resp.text == "Stopped the music in the dining room, the garage and Jordan's Office."
     assert resp.music_action == "stop"  # the asking room's own, on its own reply
     assert {"type": "music_stop"} in _sat(ctx, "garage").frames
-    assert {"type": "music_stop"} in _sat(ctx, "kamron_office").frames
-    assert all(house.clients[r]._state == "stop" for r in ("garage", "kamron_office", "dining_room"))
+    assert {"type": "music_stop"} in _sat(ctx, "jordan_office").frames
+    assert all(house.clients[r]._state == "stop" for r in ("garage", "jordan_office", "dining_room"))
 
 
 async def test_nothing_playing_anywhere(house) -> None:
@@ -525,7 +525,7 @@ async def test_a_room_the_house_does_not_have_is_named_with_the_ones_it_has(hous
     resp = await _say(said, _ctx())
     assert resp.text == (
         f"I don't have a room called {room}. I have the den, the dining room, the garage, "
-        "Kamron's Office, the kids room and 3 more."
+        "Jordan's Office, the kids room and 3 more."
     )
     assert house.lib.played == []
 

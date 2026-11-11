@@ -3,7 +3,7 @@
 
 Since V026 / 2026-10-15, "my name is X" for an X who exists, then "yes",
 adds the speaker's clip to X's samples. The review proved on the DB that a
-stranger's phone could then say "forget me" and delete Kamron, his profile
+stranger's phone could then say "forget me" and delete Priya, his profile
 and his memories (``review-delta-1016/test_zz_voice_takeover.py``). Now:
 
 * "yes, that's me" still adds the clip (it teaches rooms the voice), marked
@@ -44,8 +44,8 @@ from domovoi.tests.conftest import requires_db
 from domovoi.tests.test_phone_voice import ROOM as PHONE_ROOM
 from domovoi.tests.test_phone_voice import _client, _thread
 from domovoi.tests.test_phone_voice_profile import (  # noqa: F401 — fixtures
-    KAMRON_PHONE,
-    KAMRON_ROOM,
+    PRIYA_PHONE,
+    PRIYA_ROOM,
     STRANGER,
     _people_named,
     _person,
@@ -70,12 +70,12 @@ def _sample(i: int, vec: np.ndarray, *, source="satellite", claimed=False, claim
     )
 
 
-KAMRON, STRANGER_V, OTHER = _unit(1), _unit(2), _unit(3)
+PRIYA, STRANGER_V, OTHER = _unit(1), _unit(2), _unit(3)
 
 
 def test_only_the_persons_own_samples_say_whose_voice_it_is() -> None:
-    samples = [_sample(1, KAMRON), _sample(2, STRANGER_V, claimed=True)]
-    assert voice_identifier.is_own_voice(KAMRON, samples, phone=False)
+    samples = [_sample(1, PRIYA), _sample(2, STRANGER_V, claimed=True)]
+    assert voice_identifier.is_own_voice(PRIYA, samples, phone=False)
     # The stranger matches the claim it made, 1.0, and the centroid of both
     # (0.7): neither counts.
     assert not voice_identifier.is_own_voice(STRANGER_V, samples, phone=False)
@@ -86,32 +86,32 @@ def test_only_the_persons_own_samples_say_whose_voice_it_is() -> None:
 
 def test_a_phone_turn_is_held_against_the_own_phone_set_first() -> None:
     samples = [
-        _sample(1, KAMRON, source="satellite"),
+        _sample(1, PRIYA, source="satellite"),
         _sample(2, OTHER, source="phone"),
         _sample(3, STRANGER_V, source="phone", claimed=True),
     ]
     assert voice_identifier.is_own_voice(OTHER, samples, phone=True)
-    assert not voice_identifier.is_own_voice(KAMRON, samples, phone=True)
+    assert not voice_identifier.is_own_voice(PRIYA, samples, phone=True)
     # No own phone sample: their own satellite voice decides.
-    assert voice_identifier.is_own_voice(KAMRON, [samples[0], samples[2]], phone=True)
+    assert voice_identifier.is_own_voice(PRIYA, [samples[0], samples[2]], phone=True)
 
 
 def test_the_claims_a_voice_made_are_the_ones_it_matches_or_taught_a_room() -> None:
     samples = [
-        _sample(1, KAMRON),
+        _sample(1, PRIYA),
         _sample(2, STRANGER_V, claimed=True),
         _sample(3, OTHER, claimed=True),               # someone else's claim
         _sample(4, STRANGER_V, claim_of=3),            # learned through claim 3
     ]
     assert voice_identifier.claims_by_this_voice(STRANGER_V, samples) == [2, 3]
     assert voice_identifier.claims_by_this_voice(OTHER, samples) == [3]
-    assert voice_identifier.claims_by_this_voice(KAMRON, samples) == []
+    assert voice_identifier.claims_by_this_voice(PRIYA, samples) == []
 
 
 def test_a_room_learns_a_claimed_voice_as_part_of_the_claim() -> None:
-    samples = [_sample(1, KAMRON), _sample(2, STRANGER_V, claimed=True)]
+    samples = [_sample(1, PRIYA), _sample(2, STRANGER_V, claimed=True)]
     assert voice_identifier.learned_through_claim(STRANGER_V, samples) == 2
-    assert voice_identifier.learned_through_claim(KAMRON, samples) is None
+    assert voice_identifier.learned_through_claim(PRIYA, samples) is None
     # No claim at all: nothing to inherit, whatever the voice.
     assert voice_identifier.learned_through_claim(STRANGER_V, [samples[0]]) is None
     # A claim learned again names the claim it stands on, not itself.
@@ -152,19 +152,19 @@ async def _rows(pid: int) -> list[dict]:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_a_stranger_claims_kamron_then_forget_me_takes_only_the_strangers_voice(
+async def test_a_stranger_claims_priya_then_forget_me_takes_only_the_strangers_voice(
     db_session, open_gate, whisper,
 ) -> None:
     """review-delta-1016/test_zz_voice_takeover.py: it ended "people named
-    Kamron left: 0 | his memory rows left: 0"."""
-    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
-    await _memory(kamron, "kamron private note")
+    Priya left: 0 | his memory rows left: 0"."""
+    priya = await _person("Priya", satellite=PRIYA_ROOM)
+    await _memory(priya, "priya private note")
     tid = await _thread()
     async with _client() as c:
-        asked = await _say(c, tid, whisper, "My name is Kamron.", STRANGER)
-        assert asked["reply"] == "Add this phone's voice to Kamron?"
+        asked = await _say(c, tid, whisper, "My name is Priya.", STRANGER)
+        assert asked["reply"] == "Add this phone's voice to Priya?"
         await _say(c, tid, whisper, "Yes.", STRANGER)
-        rows = await _rows(kamron)
+        rows = await _rows(priya)
         assert [(r["source"], r["claimed_at"] is not None) for r in rows] == [
             ("satellite", False), ("phone", True),
         ]
@@ -172,16 +172,16 @@ async def test_a_stranger_claims_kamron_then_forget_me_takes_only_the_strangers_
         assert claim["claim_room"] == PHONE_ROOM and claim["room_id"] == PHONE_ROOM
         assert claim["claimed_by_person_id"] is None          # an unknown voice
         who = await _say(c, tid, whisper, "Who am I?", STRANGER)
-        assert who["reply"].startswith("You're Kamron")       # the claim still teaches the phone
+        assert who["reply"].startswith("You're Priya")       # the claim still teaches the phone
         gone = await _say(c, tid, whisper, "Forget me.", STRANGER)
     assert gone["reply"] == (
-        "I've forgotten the voice you added to Kamron. I kept Kamron's profile and "
-        "memories: your voice doesn't match the one I learned for Kamron, so only an "
+        "I've forgotten the voice you added to Priya. I kept Priya's profile and "
+        "memories: your voice doesn't match the one I learned for Priya, so only an "
         "admin can delete those, in Settings, under People."
     )
-    assert await _people_named("Kamron") == 1
-    assert await _memories("kamron private note") == 1
-    assert [(r["source"], r["room_id"]) for r in await _rows(kamron)] == [("satellite", "kitchen")]
+    assert await _people_named("Priya") == 1
+    assert await _memories("priya private note") == 1
+    assert [(r["source"], r["room_id"]) for r in await _rows(priya)] == [("satellite", "kitchen")]
 
 
 @requires_db
@@ -189,44 +189,44 @@ async def test_a_stranger_claims_kamron_then_forget_me_takes_only_the_strangers_
 async def test_forget_me_in_the_persons_own_voice_still_forgets_them(
     db_session, open_gate, whisper,
 ) -> None:
-    """Kamron himself (his own phone sample) after a stranger's claim: the
+    """Priya himself (his own phone sample) after a stranger's claim: the
     whole person goes, as it always did, and the answer says what."""
-    kamron = await _person("Kamron", satellite=KAMRON_ROOM, phone=KAMRON_PHONE)
+    priya = await _person("Priya", satellite=PRIYA_ROOM, phone=PRIYA_PHONE)
     async with SessionLocal() as s:
         # A second phone sample of his own, so a stranger's one claim
         # doesn't pull his phone centroid under the threshold (the stub's
         # voices are unrelated vectors, unlike two real speakers).
         repo = VoiceProfilesRepository(s)
-        await repo.add(person_id=kamron, embedding=await _vec(KAMRON_PHONE), model=repo.EMBEDDING_MODEL_TAG,
+        await repo.add(person_id=priya, embedding=await _vec(PRIYA_PHONE), model=repo.EMBEDDING_MODEL_TAG,
                        room_id="phone-android-old", sample_seconds=None, source="phone")
         await s.commit()
-    await _memory(kamron, "kamron private note")
+    await _memory(priya, "priya private note")
     tid = await _thread()
     async with _client() as c:
-        await _say(c, tid, whisper, "My name is Kamron.", STRANGER)
+        await _say(c, tid, whisper, "My name is Priya.", STRANGER)
         await _say(c, tid, whisper, "Yes.", STRANGER)
-        assert sum(r["claimed_at"] is not None for r in await _rows(kamron)) == 1
-        asked = await _say(c, tid, whisper, "Forget me.", KAMRON_PHONE)
-        assert asked["reply"] == "Kamron, I'll forget your voice, your profile, what I remember about you and everything you've said to me. Say yes to delete everything you've said."
-        assert await _people_named("Kamron") == 1   # nothing before the yes
-        gone = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
+        assert sum(r["claimed_at"] is not None for r in await _rows(priya)) == 1
+        asked = await _say(c, tid, whisper, "Forget me.", PRIYA_PHONE)
+        assert asked["reply"] == "Priya, I'll forget your voice, your profile, what I remember about you and everything you've said to me. Say yes to delete everything you've said."
+        assert await _people_named("Priya") == 1   # nothing before the yes
+        gone = await _say(c, tid, whisper, "Yes.", PRIYA_PHONE)
     assert gone["reply"] == (
-        "Okay, I've forgotten you, Kamron: your voice, your profile, everything "
+        "Okay, I've forgotten you, Priya: your voice, your profile, everything "
         "I remembered about you and what you've said to me."
     )
-    assert await _people_named("Kamron") == 0
-    assert await _memories("kamron private note") == 0
+    assert await _people_named("Priya") == 0
+    assert await _memories("priya private note") == 0
 
 
 @requires_db
 @pytest.mark.asyncio
 async def test_without_any_claim_forget_me_is_what_it_was(db_session, open_gate, whisper) -> None:
-    ana = await _person("Ana", phone=KAMRON_PHONE)
+    ana = await _person("Ana", phone=PRIYA_PHONE)
     tid = await _thread()
     async with _client() as c:
-        asked = await _say(c, tid, whisper, "Forget me.", KAMRON_PHONE)
+        asked = await _say(c, tid, whisper, "Forget me.", PRIYA_PHONE)
         assert asked["reply"].startswith("Ana, I'll forget your voice")
-        gone = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
+        gone = await _say(c, tid, whisper, "Yes.", PRIYA_PHONE)
     assert gone["reply"].startswith("Okay, I've forgotten you, Ana")
     assert await _people_named("Ana") == 0
     assert ana
@@ -237,23 +237,23 @@ async def test_without_any_claim_forget_me_is_what_it_was(db_session, open_gate,
 async def test_a_known_voice_claiming_someone_else_is_recorded_as_who_claimed(
     db_session, open_gate, whisper,
 ) -> None:
-    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    priya = await _person("Priya", satellite=PRIYA_ROOM)
     chevy = await _person("Chevy", phone=STRANGER)
     tid = await _thread()
     async with _client() as c:
-        assert (await _say(c, tid, whisper, "My name is Kamron.", STRANGER))["reply"] == (
-            "Add this phone's voice to Kamron?"
+        assert (await _say(c, tid, whisper, "My name is Priya.", STRANGER))["reply"] == (
+            "Add this phone's voice to Priya?"
         )
         await _say(c, tid, whisper, "Yes.", STRANGER)
-    claim = (await _rows(kamron))[-1]
+    claim = (await _rows(priya))[-1]
     assert claim["claimed_by_person_id"] == chevy and claim["claimed_at"] is not None
-    # That voice is now as close to Kamron (through the claim) as to Chevy:
+    # That voice is now as close to Priya (through the claim) as to Chevy:
     # "forget me" never guesses, and nobody is deleted.
     async with _client() as c:
         tid2 = await _thread()
         gone = await _say(c, tid2, whisper, "Forget me.", STRANGER)
     assert gone["reply"].startswith("Your voice is close to two people I know")
-    assert await _people_named("Kamron") == 1 and await _people_named("Chevy") == 1
+    assert await _people_named("Priya") == 1 and await _people_named("Chevy") == 1
 
 
 # ─── At a satellite ───────────────────────────────────────────────────────
@@ -264,71 +264,71 @@ async def test_a_known_voice_claiming_someone_else_is_recorded_as_who_claimed(
 async def test_a_room_claim_is_marked_and_forget_me_from_that_voice_keeps_the_person(
     db_session,
 ) -> None:
-    """The handler's own paths, at a satellite: "my name is Kamron" → "Is
+    """The handler's own paths, at a satellite: "my name is Priya" → "Is
     that you?" → yes adds the clip as a claim for the room; "forget me" from
-    that voice (Kamron has no voice of his own yet: an admin made him on
-    the People page) removes the claim and keeps Kamron."""
+    that voice (Priya has no voice of his own yet: an admin made him on
+    the People page) removes the claim and keeps Priya."""
     from domovoi.db.repositories import PeopleRepository, SessionRepository
 
     handler = VoiceProfileHandler()
     async with SessionLocal() as s:
-        kamron = await PeopleRepository(s).create(name="Kamron")
+        priya = await PeopleRepository(s).create(name="Priya")
         sid = await SessionRepository(s).get_or_create(None, "garage")
         await s.commit()
-    await _memory(kamron, "kamron garage note")
+    await _memory(priya, "priya garage note")
     stranger = await StubVoiceEmbedder().embed(STRANGER)
     ctx = Context(session_id=sid, room_id="garage", online=True, trigger="wake_word",
                   embedding_bytes=stranger.astype(np.float32).tobytes())
     async with SessionLocal() as s:
-        asked = await handler._start_self_intro("Kamron", ctx, s)
+        asked = await handler._start_self_intro("Priya", ctx, s)
         await s.commit()
-    assert asked.text == "I already know someone called Kamron. Is that you?"
+    assert asked.text == "I already know someone called Priya. Is that you?"
     async with SessionLocal() as s:
         pending = (await SessionRepository(s).get_context(sid))["pending_confirmation"]
         done = await handler.handle_choice_reply(pending["kind"], pending, "yes", ctx, s)
         await s.commit()
-    assert done.text == "Done — I'll know your voice in this room now, Kamron."
-    [row] = await _rows(kamron)
+    assert done.text == "Done — I'll know your voice in this room now, Priya."
+    [row] = await _rows(priya)
     assert row["claimed_at"] is not None and row["claim_room"] == "garage"
     assert row["claimed_by_person_id"] is None
 
     ctx = Context(session_id=sid, room_id="garage", online=True, trigger="wake_word",
-                  person_id=kamron, embedding_bytes=stranger.astype(np.float32).tobytes())
+                  person_id=priya, embedding_bytes=stranger.astype(np.float32).tobytes())
     async with SessionLocal() as s:
         gone = await handler._forget(ctx, s)
         await s.commit()
-    assert gone.text.startswith("I've forgotten the voice you added to Kamron.")
+    assert gone.text.startswith("I've forgotten the voice you added to Priya.")
     assert ctx.person_id is None
-    assert await _rows(kamron) == []
-    assert await _people_named("Kamron") == 1
-    assert await _memories("kamron garage note") == 1
+    assert await _rows(priya) == []
+    assert await _people_named("Priya") == 1
+    assert await _memories("priya garage note") == 1
 
 
 @requires_db
 @pytest.mark.asyncio
 async def test_a_voice_that_neither_matches_nor_claimed_deletes_nothing(db_session) -> None:
-    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    priya = await _person("Priya", satellite=PRIYA_ROOM)
     async with SessionLocal() as s:
         repo = VoiceProfilesRepository(s)
-        await repo.add(person_id=kamron, embedding=await _vec(STRANGER), model=repo.EMBEDDING_MODEL_TAG,
+        await repo.add(person_id=priya, embedding=await _vec(STRANGER), model=repo.EMBEDDING_MODEL_TAG,
                        room_id="office", sample_seconds=None, claimed=True, claim_room="office")
         await s.commit()
     third = await StubVoiceEmbedder().embed(np.full(16_000, 4242, dtype=np.int16).tobytes())
     handler = VoiceProfileHandler()
     for embedding, expected in (
         (third.astype(np.float32).tobytes(),
-         "Your voice doesn't match the one I learned for Kamron, so I haven't forgotten anything."),
+         "Your voice doesn't match the one I learned for Priya, so I haven't forgotten anything."),
         (None, "I couldn't hear your voice well enough to check it's you, so I haven't forgotten anything."),
     ):
-        ctx = Context(session_id=None, room_id="office", online=True, person_id=kamron,
+        ctx = Context(session_id=None, room_id="office", online=True, person_id=priya,
                       embedding_bytes=embedding)
         async with SessionLocal() as s:
             r = await handler._forget(ctx, s)
             await s.commit()
         assert r.text.startswith(expected), r.text
-        assert ctx.person_id == kamron
-    assert len(await _rows(kamron)) == 2
-    assert await _people_named("Kamron") == 1
+        assert ctx.person_id == priya
+    assert len(await _rows(priya)) == 2
+    assert await _people_named("Priya") == 1
 
 
 @requires_db
@@ -339,31 +339,31 @@ async def test_a_room_learns_a_claimed_voice_with_the_claim_and_loses_it_with_th
     """Job 4 (learning a room) on a voice recognized only through a claim:
     the learned sample points at the claim, and removing the claim (forget
     me, or an admin's delete) takes it too."""
-    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    priya = await _person("Priya", satellite=PRIYA_ROOM)
     async with SessionLocal() as s:
         repo = VoiceProfilesRepository(s)
-        claim = await repo.add(person_id=kamron, embedding=await _vec(STRANGER),
+        claim = await repo.add(person_id=priya, embedding=await _vec(STRANGER),
                                model=repo.EMBEDDING_MODEL_TAG, room_id="office",
                                sample_seconds=None, claimed=True, claim_room="office")
         await s.commit()
-    decision = voice_identifier._Decision(kamron, kamron, 0.95, None, None, False, True)
+    decision = voice_identifier._Decision(priya, priya, 0.95, None, None, False, True)
     stranger = await StubVoiceEmbedder().embed(STRANGER)
-    own = await StubVoiceEmbedder().embed(KAMRON_ROOM)
+    own = await StubVoiceEmbedder().embed(PRIYA_ROOM)
     voice_identifier._CONFIDENT_HITS.clear()
     try:
         for _ in range(settings.voice_profile_drift_reenroll_after):
-            await voice_identifier._learn_room(kamron, "garage", stranger, {"kitchen", "office"}, decision)
+            await voice_identifier._learn_room(priya, "garage", stranger, {"kitchen", "office"}, decision)
         for _ in range(settings.voice_profile_drift_reenroll_after):
-            await voice_identifier._learn_room(kamron, "attic", own, {"kitchen", "office"}, decision)
+            await voice_identifier._learn_room(priya, "attic", own, {"kitchen", "office"}, decision)
     finally:
         voice_identifier._CONFIDENT_HITS.clear()
-    by_room = {r["room_id"]: r for r in await _rows(kamron)}
+    by_room = {r["room_id"]: r for r in await _rows(priya)}
     assert by_room["garage"]["claim_of"] == claim and by_room["garage"]["claimed_at"] is None
-    assert by_room["attic"]["claim_of"] is None                 # Kamron's own voice
+    assert by_room["attic"]["claim_of"] is None                 # Priya's own voice
     async with SessionLocal() as s:
-        assert await VoiceProfilesRepository(s).delete_samples(kamron, [claim]) == 1
+        assert await VoiceProfilesRepository(s).delete_samples(priya, [claim]) == 1
         await s.commit()
-    assert sorted(r["room_id"] for r in await _rows(kamron)) == ["attic", "kitchen"]
+    assert sorted(r["room_id"] for r in await _rows(priya)) == ["attic", "kitchen"]
 
 
 # ─── The phone set's cap ──────────────────────────────────────────────────
@@ -372,19 +372,19 @@ async def test_a_room_learns_a_claimed_voice_with_the_claim_and_loses_it_with_th
 @requires_db
 @pytest.mark.asyncio
 async def test_another_phones_claims_never_push_the_persons_own_phone_voice_out(db_session) -> None:
-    kamron = await _person("Kamron")
+    priya = await _person("Priya")
     cap = settings.voice_profile_phone_sample_cap
     async with SessionLocal() as s:
         repo = VoiceProfilesRepository(s)
         for i in range(cap):
-            await repo.add_phone_sample(person_id=kamron, embedding=_unit(100 + i).tobytes(),
+            await repo.add_phone_sample(person_id=priya, embedding=_unit(100 + i).tobytes(),
                                         model=repo.EMBEDDING_MODEL_TAG, room_id="phone-own", cap=cap)
         for i in range(cap + 2):
-            await repo.add_phone_sample(person_id=kamron, embedding=_unit(200 + i).tobytes(),
+            await repo.add_phone_sample(person_id=priya, embedding=_unit(200 + i).tobytes(),
                                         model=repo.EMBEDDING_MODEL_TAG, room_id="phone-other",
                                         cap=cap, claimed=True)
         await s.commit()
-    rows = await _rows(kamron)
+    rows = await _rows(priya)
     assert len(rows) == cap
     # The newest claim is kept (it was just said yes to); the rest are the
     # person's own, newest first.
@@ -406,8 +406,8 @@ def test_the_listing_marks_claims_and_keeps_who_and_where_for_an_admin(monkeypat
     async def _seed() -> tuple[int, int]:
         async with engine.begin() as conn:
             await conn.execute(text("TRUNCATE people RESTART IDENTITY CASCADE"))
-            kamron = int((await conn.execute(
-                text("INSERT INTO people (name) VALUES ('Kamron') RETURNING id"))).scalar_one())
+            priya = int((await conn.execute(
+                text("INSERT INTO people (name) VALUES ('Priya') RETURNING id"))).scalar_one())
             chevy = int((await conn.execute(
                 text("INSERT INTO people (name) VALUES ('Chevy') RETURNING id"))).scalar_one())
             for room, source, claimed, by in (
@@ -421,15 +421,15 @@ def test_the_listing_marks_claims_and_keeps_who_and_where_for_an_admin(monkeypat
                         "claimed_at, claim_room, claimed_by_person_id) VALUES (:p, :e, 'resemblyzer-v1', "
                         ":r, :s, CASE WHEN :c THEN NOW() END, CASE WHEN :c THEN :r END, :b)"
                     ),
-                    {"p": kamron, "e": b"\0" * 1024, "r": room, "s": source, "c": claimed, "b": by},
+                    {"p": priya, "e": b"\0" * 1024, "r": room, "s": source, "c": claimed, "b": by},
                 )
-            return kamron, chevy
+            return priya, chevy
 
-    kamron, chevy = asyncio.run(_seed())
+    priya, chevy = asyncio.run(_seed())
     install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
     with TestClient(web_app) as c:
-        open_rows = c.get(f"/api/people/{kamron}/profiles").json()
-        admin_rows = c.get(f"/api/people/{kamron}/profiles", headers=bearer(ADMIN_TOKEN)).json()
+        open_rows = c.get(f"/api/people/{priya}/profiles").json()
+        admin_rows = c.get(f"/api/people/{priya}/profiles", headers=bearer(ADMIN_TOKEN)).json()
     by_room_open = sorted((r["source"], r["room_id"], r["claimed"]) for r in open_rows)
     # N4: an open caller never sees a phone's id, nor who claimed or where.
     assert by_room_open == [("phone", None, False), ("phone", None, True), ("satellite", "kitchen", False)]
@@ -459,12 +459,12 @@ async def test_v029_applies_again_cleanly_and_leaves_old_rows_as_the_persons_own
         if any(ln.strip() and not ln.strip().startswith("--") for ln in st.splitlines())
     ]
     assert len(statements) == 5
-    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    priya = await _person("Priya", satellite=PRIYA_ROOM)
     for _ in range(2):
         async with engine.begin() as conn:
             for st in statements:
                 await conn.exec_driver_sql(st)
-    [row] = await _rows(kamron)
+    [row] = await _rows(priya)
     assert (row["claimed_at"], row["claim_room"], row["claimed_by_person_id"], row["claim_of"]) == (
         None, None, None, None,
     )

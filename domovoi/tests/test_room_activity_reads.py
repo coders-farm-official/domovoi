@@ -10,7 +10,7 @@ the people roster and the calendar. Its siblings kept answering anyone:
   Wi-Fi and audio hardware. Now ``require_device_read``.
 * ``GET /api/music/now-playing``: open, polled every 1.5 s, and its
   ``added_by`` named the registered device that queued each room's song
-  ("Kamron's Pixel") — whose device is driving which room right now. The
+  ("Alex's Pixel") — whose device is driving which room right now. The
   card stays open (the kiosk display reads it unpaired); ``added_by`` is
   named only to a household credential, the ``/ws/state`` tiers.
 
@@ -30,7 +30,7 @@ from web.backend.schemas import NowPlaying, NowPlayingSong
 
 DEVICE_TOKEN = "room-activity-household-token"
 ADMIN_TOKEN = "room-activity-admin-session"
-DEVICE_NAME = "Kamron's Pixel"
+DEVICE_NAME = "Alex's Pixel"
 
 
 @pytest.fixture

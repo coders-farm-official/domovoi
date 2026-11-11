@@ -9,7 +9,7 @@ retries were back-to-back with no rescan, so all failed identically, and the
 failure was reported as "wrong password?" with nmcli's real reason
 discarded. The answer was to rescan first, and to keep nmcli's words.
 
-The second, on Kamron's third satellite: rescanning is not reliable either,
+The second, on the owner's third satellite: rescanning is not reliable either,
 because the radio is STILL hosting the setup AP while the portal renders the
 result. After 12 s of fruitless scanning the join went ahead blind - and
 `connect ... password ...` asks NM to INFER the security type from a scan
@@ -278,7 +278,7 @@ def _km(add: dict) -> str:
 
 
 def test_a_blind_join_names_the_security_type_and_works(blind):
-    """Kamron's case, exactly: the SSID is not in the scan cache, because
+    """The owner's case, exactly: the SSID is not in the scan cache, because
     wlan0 is still hosting the setup AP. The old code joined anyway and let
     NM infer - there was nothing to infer from, so the profile had a PSK and
     no key-mgmt and activation failed on a correct password."""
@@ -424,7 +424,7 @@ def test_an_ssid_with_a_colon_is_read_back_correctly(blind):
 
 
 def test_a_stale_profile_with_no_key_mgmt_is_replaced_not_inherited(blind):
-    """The state Kamron's device is in right now. `nmcli device wifi
+    """The state the owner's device is in right now. `nmcli device wifi
     connect` REUSES a saved profile matching the ssid, so the broken one
     the first attempt wrote made every later attempt fail identically no
     matter what was typed."""

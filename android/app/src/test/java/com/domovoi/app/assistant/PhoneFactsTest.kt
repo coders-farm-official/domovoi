@@ -14,13 +14,13 @@ class PhoneFactsTest {
         playing = playing,
         sleepRemainingSec = 20 * 60,
         server = ServerLink.CONNECTED,
-        listener = "Kamron Kennedy",
+        listener = "Alex Morgan",
     )
 
     @Test fun theLineSaysEachFact() {
         assertEquals(
             "Phone facts: playing \"Glass Harbor\" by Velvet Kites on this phone, sleep timer 20 minutes left. " +
-                "Connected to the home server. The person talking is Kamron (say the name only if asked).",
+                "Connected to the home server. The person talking is Alex (say the name only if asked).",
             PhoneFacts.line(full),
         )
     }

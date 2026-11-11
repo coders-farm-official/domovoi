@@ -11,7 +11,7 @@ Two halves:
 
 Supplies: ``printer-supply`` (PWG 5100.13) when the printer has it,
 otherwise the CUPS ``marker-*`` family — which is load-bearing, not a
-fallback: Kamron's Brother HL-L3220CDW reports only ``marker-*`` (P0,
+fallback: the owner's Brother HL-L3220CDW reports only ``marker-*`` (P0,
 2026-10-21). A level of -1/-2/-3 means "unknown / some left" and is shown
 as "level not reported", never as a number.
 

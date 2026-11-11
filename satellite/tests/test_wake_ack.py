@@ -4,7 +4,7 @@ Office satellite, 2026-09-28 (conversation_log #187): the wake greeting
 "Back so soon?" played over the command capture, trusting the XVF3800's
 echo cancellation to keep it out of the mic. Some of it got through, the
 capture ended on the pause after it, and the core answered Domovoi's own
-words. Kamron's decision (2026-09-29): acknowledge first, then listen —
+words. The owner's decision (2026-09-29): acknowledge first, then listen —
 per satellite, `[wake] ack_mode`:
 
 * "greeting" (the default): the spoken clip plays to its end (a hard cap

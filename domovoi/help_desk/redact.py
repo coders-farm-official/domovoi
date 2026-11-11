@@ -118,7 +118,7 @@ _RULES: list[tuple[re.Pattern[str], Any]] = [
     (re.compile(r"(?i)(?<![\w:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?:%\w+)?(?![\w:])"), _ipv6),
     # Domain names (nas.smith-family.net, ha.smithhouse.org:8123).
     (re.compile(rf"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?\.)+(?:{_TLDS})(?::\d{{1,5}})?\b"), "[host]"),
-    # A bare host with a port (kamron-desktop:6369).
+    # A bare host with a port (alex-desktop:6369).
     (re.compile(r"(?i)\b[a-z][a-z0-9-]{1,62}:\d{2,5}\b"), "[host]"),
     (re.compile(r"(?i)(?:[A-Z]:\\Users\\|/home/|/Users/)[^\\/\s]+"), "[home]"),
     # The setup code and the household token: eight lowercase words joined

@@ -793,7 +793,7 @@ def test_the_phone_qr_carries_the_join_link(phone):
 
 
 def test_no_qr_to_scan_until_the_app_is_on_the_server(phone):
-    """Kamron's Moto, 2026-10-23: the card showed the code, the page it
+    """The owner's Moto, 2026-10-23: the card showed the code, the page it
     opened said the app wasn't on the server. Now the first step says so,
     and the code appears once the app is here."""
     r = phone["missing"]

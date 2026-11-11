@@ -84,7 +84,7 @@ def _household(path):
     ws.column_dimensions["C"].width = 14
     ws.row_dimensions[1].height = 30
     ws.freeze_panes = "A2"
-    ws["A2"].comment = Comment("monthly", "Kamron")
+    ws["A2"].comment = Comment("monthly", "Alex")
     dv = DataValidation(type="list", formula1='"yes,no"')
     ws.add_data_validation(dv)
     dv.add("D5")

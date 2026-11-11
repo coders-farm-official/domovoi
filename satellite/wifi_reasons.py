@@ -7,7 +7,7 @@ nmcli printed. On a real NetworkManager that last line is always
     Hint: use 'journalctl -xe NM_CONNECTION=<uuid> + NM_DEVICE=wlan0' to get more details.
 
 so the actual reason (the line above it) was thrown away, and a household
-whose password was right was told to check it (Kamron's satellites,
+whose password was right was told to check it (the owner's satellites,
 2026-10-22, a WPA2/WPA3 router). This module is the one place a failure
 gets a name:
 

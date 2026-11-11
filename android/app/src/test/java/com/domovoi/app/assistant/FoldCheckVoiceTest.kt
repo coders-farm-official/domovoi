@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * Kamron's Fold check (2026-10-21), the voice and card findings, through the
+ * The owner's Fold check (2026-10-21), the voice and card findings, through the
  * real controller and voice session:
  * 1. a card's button tapped twice set two Clock timers;
  * 2. spoken turns that reached the model came back "stopped" with no answer;

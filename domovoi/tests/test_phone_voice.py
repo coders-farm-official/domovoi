@@ -503,7 +503,7 @@ async def test_music_from_a_phone_never_touches_a_rooms_player(
 @pytest.mark.parametrize(
     ("said", "routed"),
     [
-        # As speech-to-text spelled them on Kamron's phone, 2026-10-12.
+        # As speech-to-text spelled them on the owner's phone, 2026-10-12.
         ("Hey Domovoit, play Suicide Boys.", "play Suicide Boys."),
         ("Hey Domavoy, what time is it?", "what time is it?"),
         ("Hey Domovoi, turn it down.", "turn it down."),

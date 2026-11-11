@@ -133,7 +133,7 @@ def test_format_transcript_reverses_to_chronological() -> None:
 async def test_tick_skips_person_below_threshold(db_session) -> None:
     """No extraction should run when a person has fewer than
     ``memory_extractor_threshold_turns`` new conversation_log rows."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     # Touch last_seen so they qualify for the active window. The
     # active-window query needs last_seen_at recently set.
     await PeopleRepository(db_session).touch_last_seen(person_id)
@@ -178,7 +178,7 @@ async def test_tick_skips_person_below_threshold(db_session) -> None:
 async def test_tick_extracts_and_writes_pending_above_confidence(
     db_session,
 ) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await PeopleRepository(db_session).touch_last_seen(person_id)
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
     log_repo = ConversationLogRepository(db_session)
@@ -249,7 +249,7 @@ async def test_tick_extracts_and_writes_pending_above_confidence(
 @requires_db
 @pytest.mark.asyncio
 async def test_tick_dedups_against_existing_active_or_pending(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await PeopleRepository(db_session).touch_last_seen(person_id)
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
     log_repo = ConversationLogRepository(db_session)
@@ -312,7 +312,7 @@ async def test_tick_dedups_against_existing_active_or_pending(db_session) -> Non
 async def test_tick_does_not_stamp_on_ollama_failure(db_session) -> None:
     """Hard failure should leave last_extracted_at NULL so the next
     tick retries the same window."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await PeopleRepository(db_session).touch_last_seen(person_id)
     sid = await SessionRepository(db_session).get_or_create(None, "kitchen")
     log_repo = ConversationLogRepository(db_session)
@@ -356,7 +356,7 @@ async def test_tick_does_not_stamp_on_ollama_failure(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_handle_confirmation_yes_promotes_to_active(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     memory_id = await MemoriesRepository(db_session).add(
         person_id=person_id,
         body="vegetarian",
@@ -388,7 +388,7 @@ async def test_handle_confirmation_yes_promotes_to_active(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_handle_confirmation_no_marks_rejected(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     memory_id = await MemoriesRepository(db_session).add(
         person_id=person_id,
         body="works nights",
@@ -425,7 +425,7 @@ async def test_router_surfaces_pending_memory_on_qa(db_session) -> None:
     """A QA turn for a known speaker with an eligible pending memory
     should append the offer and park a ``pending_memory_offer``
     confirmation."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     memory_id = await MemoriesRepository(db_session).add(
         person_id=person_id,
         body="has a dog named Max",
@@ -455,7 +455,7 @@ async def test_router_pending_memory_yields_to_self_doubt_offer(
 ) -> None:
     """When both could fire, the self-doubt web-search offer wins —
     we never park two pending_confirmations at once."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await MemoriesRepository(db_session).add(
         person_id=person_id,
         body="has a dog named Max",
@@ -485,7 +485,7 @@ async def test_router_pending_memory_yields_to_self_doubt_offer(
 async def test_pending_memory_cooldown_suppresses_resurfacing(db_session) -> None:
     """A pending memory that was just offered (last_offered_at = NOW)
     should NOT surface again until the cooldown elapses."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await MemoriesRepository(db_session).add(
         person_id=person_id,
         body="vegetarian",

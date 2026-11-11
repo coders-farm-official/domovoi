@@ -123,7 +123,7 @@ class PhoneChatControllerTest {
 
     @Test fun theModelIsToldTheFactsAndOfferedTheReadTools() {
         phone.facts = PromptFacts(NowPlayingFact("Glass Harbor", "Velvet Kites"), server = ServerLink.CONNECTED,
-            listener = "Kamron")
+            listener = "Alex")
         val c = controller()
         c.ask("Tell me a joke")
         val turn = engines.single().turns.single()

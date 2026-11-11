@@ -9,7 +9,7 @@ something to fetch it by — so on a house with no provider plugin installed
 every phone drew "+ add to library" on every external play, and the only
 thing pressing it could produce was the acquisition queue's
 graceful-absence sentence. A control that cannot do what it says is not
-drawn (Kamron's no-misleading-controls rule).
+drawn (the owner's no-misleading-controls rule).
 
 Three questions, in the order the route asks them, cheapest first:
 

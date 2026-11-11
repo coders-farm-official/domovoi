@@ -151,10 +151,10 @@ class N1GateReceiver : BroadcastReceiver() {
             playing = NowPlayingFact("Glass Harbor", "Velvet Kites", positionSec = 72.0, durationSec = 238.0),
             sleepRemainingSec = 20 * 60,
             server = ServerLink.CONNECTED,
-            listener = "Kamron",
+            listener = "Alex",
         )
 
-        private val MENTIONS = listOf("glass harbor", "velvet kites", "sleep timer", "kamron", "home server")
+        private val MENTIONS = listOf("glass harbor", "velvet kites", "sleep timer", "alex", "home server")
 
         /** The 20 scripted questions and what a right answer contains. */
         private val SCRIPTED: List<Pair<String, String>> = listOf(
@@ -173,7 +173,7 @@ class N1GateReceiver : BroadcastReceiver() {
             "What's on my calendar today?" to "calendar",
             "Which headphones are connected?" to "headphones|bluetooth|connected",
             "How long is left on the sleep timer?" to "20",
-            "What's my name?" to "kamron",
+            "What's my name?" to "alex",
             "What rooms are in my house?" to "home server chats",
             "Am I connected to the home server?" to "yes|connected",
             "Do I have a video called glacier trip on this phone?" to "glacier",

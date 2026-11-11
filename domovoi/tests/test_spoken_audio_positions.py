@@ -21,7 +21,7 @@ async def _make_person(session, name: str) -> int:
 @requires_db
 @pytest.mark.asyncio
 async def test_upsert_is_idempotent_per_person(db_session) -> None:
-    pid = await _make_person(db_session, "Kamron")
+    pid = await _make_person(db_session, "Alex")
     for pos in (10, 55, 300):
         await sa.upsert_position(
             db_session, item_type=sa.ITEM_AUDIOBOOK, item_id=1,

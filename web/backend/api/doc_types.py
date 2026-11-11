@@ -1,7 +1,7 @@
 """Which files are documents: the line between the Documents and Other views.
 
 Documents and Other are two views of ONE shared folder (``documents_dir``),
-decided by Kamron on 2026-10-27: "Only doc related file types should show in
+decided by the owner on 2026-10-27: "Only doc related file types should show in
 docs, then everything can show in other but the other tab only allows for
 downloading/uploading", then "Everything out of the shared Documents
 directory", then "whatever shows in Documents must not show in Other".

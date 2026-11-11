@@ -14,7 +14,7 @@ object VoiceSamples {
         "Now playing \"Bohemian Rhapsody\" by Queen in the living room.",
         "Your reminder for Tuesday, October 14th: call the dentist at 9 a.m.",
         "Hey Domovoi! Sure, I'll turn that down.",
-        "Kamron asked me to remind you to take out the recycling.",
+        "Alex asked me to remind you to take out the recycling.",
         "Here's one: why did the scarecrow win an award? Because he was outstanding in his field.",
         "The Wi-Fi password is on the fridge, next to the takeout menu.",
         "Nguyen, Siobhan and Joaquin are all home.",

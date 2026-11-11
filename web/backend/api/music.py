@@ -887,7 +887,7 @@ async def cancel_acquisition(acq_id: int) -> None:
 
 
 # Who may read WHOSE device queued what each room plays (``added_by``, a
-# registered device's name — "Kamron's Pixel"): the tiers ``/ws/state``
+# registered device's name — "Alex's Pixel"): the tiers ``/ws/state``
 # admits — the household token, an admin Bearer or cookie session, the
 # pre-setup grace. The rest of the now-playing card stays open (the kiosk
 # display reads it unpaired); for anyone else ``added_by`` is null, the

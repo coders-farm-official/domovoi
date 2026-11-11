@@ -253,14 +253,14 @@ class ChatHomeTest {
         val text = serverChatText(
             "Dinner ideas",
             listOf(
-                MessageRow(role = "user", content = "what's for dinner?", speaker_name = "Kamron"),
+                MessageRow(role = "user", content = "what's for dinner?", speaker_name = "Alex"),
                 MessageRow(role = "assistant", content = "Lentil soup."),
                 MessageRow(role = "user", content = "and dessert?"),
                 MessageRow(role = "assistant", content = "", error = "The model stopped."),
             ),
         )
         assertEquals(
-            "Dinner ideas\nChat with Domovoi on the home server\n\nKamron: what's for dinner?\n\nDomovoi: Lentil soup.\n" +
+            "Dinner ideas\nChat with Domovoi on the home server\n\nAlex: what's for dinner?\n\nDomovoi: Lentil soup.\n" +
                 "\nYou: and dessert?\n\nDomovoi: [The model stopped.]\n",
             text,
         )

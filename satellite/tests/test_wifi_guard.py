@@ -1,7 +1,7 @@
 """The connect requests nobody answered (2026-10-23, the third hardware
 report).
 
-Kamron's card: two TP-Link access points in EasyMesh, both "WPA3-Personal+
+The owner's card: two TP-Link access points in EasyMesh, both "WPA3-Personal+
 WPA2-PSK", 18 "Trying to associate" lines, every one "Authentication with
 <AP> timed out" ten seconds later, and NetworkManager's "association took
 too long" -> need-auth -> no-secrets, which nmcli reports as "Secrets were
@@ -163,7 +163,7 @@ def test_a_pi_4_still_gets_wpa3_but_never_ft():
 
 # ─── what the card says about it ─────────────────────────────────────────
 
-# Lines from Kamron's card, the BSSID kept so the diagnostics can label it.
+# Lines from the owner's card, the BSSID kept so the diagnostics can label it.
 BSSID = "50:91:e3:12:b1:f6"
 CARD_LINES = "\n".join([
     "<info>  [1792777617.1239] Config: added 'key_mgmt' value 'WPA-PSK WPA-PSK-SHA256 FT-PSK SAE FT-SAE'",

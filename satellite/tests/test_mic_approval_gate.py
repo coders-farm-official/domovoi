@@ -765,7 +765,7 @@ def test_a_thread_start_failure_at_boot_still_raises(monkeypatch):
 
 # ─── the first boot after the upgrade ────────────────────────────────────
 #
-# Kamron has three satellites in his house. Each one restarts into this code
+# The owner has three satellites in his house. Each one restarts into this code
 # with NO approval record, because only this code writes one. If "no record"
 # meant "not approved", all three would be deaf until their core answered —
 # and if the core is down at that moment (the power cut where the Pis boot

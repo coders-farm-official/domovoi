@@ -1,7 +1,7 @@
 """Keep the house network's profile in step with the router's security.
 
 The setup page builds ``domovoi-home`` for the router as it was that day.
-Routers change: Kamron switched his access point to "WPA3-Personal +
+Routers change: the owner switched his access point to "WPA3-Personal +
 WPA2-PSK" to match his main router (2026-10-22), and every satellite set up
 before it dropped off and stayed off — a power cycle did not help — because
 the saved profile (``wpa-psk``, PMF at NetworkManager's default) lets NM

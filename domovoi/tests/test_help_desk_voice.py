@@ -277,14 +277,14 @@ async def test_a_phone_turn_gets_the_answer_without_the_offer(voice) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_the_same_steps_go_once_and_a_person_gets_a_few_an_hour(voice) -> None:
-    kamron = await voice.person("Kamron")
-    await voice.phone("android-kamron", kamron)
+    alex = await voice.person("Alex")
+    await voice.phone("android-alex", alex)
     said = []
     for _ in range(4):                                   # the reviewer's spam loop
         await voice("how do I change the wake word")
         await voice("yes")
-        said.append((await voice("kamron")).text)
-    assert said[0].startswith("Sent to Kamron's phone.")
+        said.append((await voice("alex")).text)
+    assert said[0].startswith("Sent to Alex's phone.")
     assert all("already sent those steps" in s for s in said[1:])
     assert len(await voice.deliveries()) == 1
     # Different steps: at most PER_PERSON_HOUR an hour, from any session.
@@ -294,7 +294,7 @@ async def test_the_same_steps_go_once_and_a_person_gets_a_few_an_hour(voice) -> 
                     ("how do I pair the app", "den")):
         await voice(q, room=room)
         await voice("yes", room=room)
-        await voice("kamron", room=room)
+        await voice("alex", room=room)
     assert len(await voice.deliveries()) == delivery.PER_PERSON_HOUR
 
 

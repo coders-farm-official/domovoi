@@ -1,7 +1,7 @@
 """The household's rooms, and the room a spoken request names.
 
 "Play jazz in the garage", "stop the music in the dining room", "what's
-playing in Kamron's office": a music command may end with a PLACE. This
+playing in Alex's office": a music command may end with a PLACE. This
 module answers two questions about it, without deciding anything about
 music:
 
@@ -105,7 +105,7 @@ def _order_free_key(phrase: str) -> str:
 
 def spoken_room(room_id: str, label: str | None = None) -> str:
     """How a reply says a room: "the garage", "the living room",
-    "Kamron's office" — its label from Settings → Rooms when it has
+    "Alex's office" — its label from Settings → Rooms when it has
     one, else its id with the underscores read as spaces."""
     name = " ".join((label or "").split()) or " ".join(
         room_id.replace("_", " ").replace("-", " ").split()

@@ -66,8 +66,8 @@ object PhoneFacts {
      * is connected (owner, 2026-10-21). About 15-50 tokens: "Phone facts: playing "Glass Harbor" by
      * Velvet Kites on this phone, sleep timer 20 minutes left. Connected to
      * the home server. The person talking is
-     * Kamron (say the name only if asked)." (The last clause after
-     * the emulator gate: E2B once offered "a board game night with Kamron".)
+     * Alex (say the name only if asked)." (The last clause after
+     * the emulator gate: E2B once offered "a board game night with Alex".)
      *
      * The playback position is left out on purpose: it changes every second,
      * so a kept conversation would be told the line again on every turn (the
@@ -116,7 +116,7 @@ object PhoneFacts {
         return sentences.joinToString(" ").ifBlank { null }
     }
 
-    /** "Kamron" from "Kamron Kennedy"; null for a blank name. */
+    /** "Alex" from "Alex Morgan"; null for a blank name. */
     fun firstName(name: String?): String? =
         name?.trim()?.split(Regex("\\s+"))?.firstOrNull()?.takeIf { it.isNotBlank() }?.let { cut(it) }
 

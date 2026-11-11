@@ -320,7 +320,7 @@ sealed interface ReportDestination {
 }
 
 /**
- * WHERE REPORTS GO: the owner's one line. Kamron's choice (2026-10-15): an
+ * WHERE REPORTS GO: the owner's one line. The owner's choice (2026-10-15): an
  * email draft to Coders Farm's address, the same one the Play listing gives
  * as its contact (info@codersfarm.org since 2026-10-16). The other shapes it
  * can take:

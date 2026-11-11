@@ -1,6 +1,6 @@
 """The admin sign-in and first-run setup put the caret in their first field.
 
-Kamron, 2026-10-13, on the live box from a phone: the password prompt came
+The owner, 2026-10-13, on the live box from a phone: the password prompt came
 up and the keyboard with it, but the caret was not in the field, and typing
 did nothing until he tapped it.
 

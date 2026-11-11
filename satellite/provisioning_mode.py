@@ -409,7 +409,7 @@ def _nmcli_detail(r, psk: str) -> str:
     The reason, not the last line: a real nmcli ends every activation
     failure with ``Hint: use 'journalctl -xe NM_CONNECTION=...`` and the
     reason is the ``Error:`` line ABOVE it. Taking the last line is what
-    showed Kamron the hint instead of the reason (2026-10-22), and what made
+    showed the owner the hint instead of the reason (2026-10-22), and what made
     the sae fallback never run (the hint matched no failure marker)."""
     return wifi_reasons.reason_line(_scrub(_nmcli_text(r), psk))
 

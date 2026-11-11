@@ -142,7 +142,7 @@ so the two have to agree, and both are needed:
   network is consulted — and that worker used to be cache-first with no
   revalidation at all;
 * the worker cannot reach a browser where it never registers: a first
-  load, a failed registration, or the ordinary case on Kamron's box, where
+  load, a failed registration, or the ordinary case on the owner's box, where
   the dashboard is served over plain HTTP at
   ``http://192.168.1.20:6369`` and a service worker therefore CANNOT
   register, because that is not a secure context. On that install this

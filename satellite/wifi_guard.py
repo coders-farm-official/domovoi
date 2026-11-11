@@ -1,6 +1,6 @@
 """Keep wpa_supplicant to the Wi-Fi security this radio can actually do.
 
-Kamron's card on 2026-10-23 (two TP-Link access points in EasyMesh, both
+The owner's card on 2026-10-23 (two TP-Link access points in EasyMesh, both
 "WPA3-Personal+WPA2-PSK"): 18 "Trying to associate" lines, every one ending
 "Authentication with <AP> timed out" ten seconds later, on both access
 points, whatever the profile said. The supplicant was handed

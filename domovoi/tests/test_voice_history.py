@@ -1040,38 +1040,38 @@ async def test_a_stranger_who_claimed_a_name_forgets_none_of_their_turns(
     vh, db_session, open_gate, whisper,
 ) -> None:
     """T-V1, the 2026-10-17 privacy review's test 1, through the real
-    phone route: a stranger's phone says "My name is Kamron.", "Yes.", "Who
-    am I?" (recognized as Kamron through the claimed sample), "Forget me."
-    Only the claimed sample goes; Kamron and every turn of his stay."""
+    phone route: a stranger's phone says "My name is Alex.", "Yes.", "Who
+    am I?" (recognized as Alex through the claimed sample), "Forget me."
+    Only the claimed sample goes; Alex and every turn of his stay."""
     from domovoi.tests.test_phone_voice import _client, _thread
     from domovoi.tests.test_phone_voice_profile import (
-        KAMRON_ROOM, STRANGER, _people_named, _person, _samples, _say,
+        PRIYA_ROOM, STRANGER, _people_named, _person, _samples, _say,
     )
 
     clean, _ = vh
     await clean()
-    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    alex = await _person("Alex", satellite=PRIYA_ROOM)
     now = _now()
-    await _turn(now - 3 * DAY, "kamron: what's on my calendar", person=kamron)
-    await _turn(now - 2 * DAY, "kamron: remind me about the dentist", person=kamron)
-    await _turn(now - DAY, "someone: is Kamron home")
-    samples_before = len(await _samples(kamron))
+    await _turn(now - 3 * DAY, "alex: what's on my calendar", person=alex)
+    await _turn(now - 2 * DAY, "alex: remind me about the dentist", person=alex)
+    await _turn(now - DAY, "someone: is Alex home")
+    samples_before = len(await _samples(alex))
     tid = await _thread()
     async with _client() as c:
-        await _say(c, tid, whisper, "My name is Kamron.", STRANGER)
+        await _say(c, tid, whisper, "My name is Alex.", STRANGER)
         await _say(c, tid, whisper, "Yes.", STRANGER)
         who = await _say(c, tid, whisper, "Who am I?", STRANGER)
-        assert who["reply"].startswith("You're Kamron")
+        assert who["reply"].startswith("You're Alex")
         gone = await _say(c, tid, whisper, "Forget me.", STRANGER)
-    assert gone["reply"].startswith("I've forgotten the voice you added to Kamron.")
-    assert await _people_named("Kamron") == 1
-    assert len(await _samples(kamron)) == samples_before
+    assert gone["reply"].startswith("I've forgotten the voice you added to Alex.")
+    assert await _people_named("Alex") == 1
+    assert len(await _samples(alex)) == samples_before
     async with engine.begin() as conn:
         texts = [r[0] for r in (await conn.execute(text("SELECT user_text FROM conversation_log"))).all()]
-    for mine in ("kamron: what's on my calendar", "kamron: remind me about the dentist", "someone: is Kamron home"):
+    for mine in ("alex: what's on my calendar", "alex: remind me about the dentist", "someone: is Alex home"):
         assert mine in texts
     assert await _scalar(
-        "SELECT COUNT(*) FROM intents_log WHERE transcript LIKE 'kamron:%' AND person_id = :p", p=kamron) == 2
+        "SELECT COUNT(*) FROM intents_log WHERE transcript LIKE 'alex:%' AND person_id = :p", p=alex) == 2
 
 
 @requires_db

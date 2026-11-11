@@ -87,7 +87,7 @@ def test_an_uploaded_voice_plays_only_when_it_can_speak(voices):
 
 
 def test_a_kept_catalogue_voice_downloads_on_its_first_sample(voices):
-    """Kamron's Cori (en_GB-cori-high, kept from the old catalogue): not on
+    """The owner's Cori (en_GB-cori-high, kept from the old catalogue): not on
     a fresh box until something speaks in it, and its first sample fetches
     it as its first reply would. Not under "never" (nothing can fetch it),
     nor a catalogue voice in another language (it could not speak here)."""

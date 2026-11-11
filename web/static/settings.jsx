@@ -329,7 +329,7 @@ const UploadPiper = ({ onUpload }) => {
  */
 
 const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters, the syllables split by hyphens and the '
-  + 'stressed one in CAPITALS: Domovoi = DOH-moe-voy, Kamron = KAM-ren, Siobhan = shiv-AWN, Nguyen = win. '
+  + 'stressed one in CAPITALS: Domovoi = DOH-moe-voy, Camryn = KAM-ren, Siobhan = shiv-AWN, Nguyen = win. '
   + 'The other syllables are said lightly. Sounds as dictionaries spell them: uh (but), ay (say), ee (see), '
   + 'oh (go), oo (too), ow (now), zh (measure). Advanced: the voice’s own phonemes between slashes, /wɪn/ '
   + '(hover a play button you have heard to see them).';
@@ -357,7 +357,7 @@ const VoiceSettingsCards = ({ fire }) => {
   React.useEffect(() => stopAudio, []);
 
   // Play a WAV the server synthesizes; `key` marks which button is busy.
-  // `say`: a "say it like" preview, toasted in plain words ("Kamron →
+  // `say`: a "say it like" preview, toasted in plain words ("Camryn →
   // KAM-ren"), its phonemes kept for the button's hover.
   const playFrom = async (key, path, opts, say) => {
     stopAudio();
@@ -489,7 +489,7 @@ const VoiceSettingsCards = ({ fire }) => {
         ))}
         <form onSubmit={addEntry}
               style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <input className="cal-inp" value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Kamron)"
+          <input className="cal-inp" value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Camryn)"
                  aria-label="Word" maxLength={48} style={{ ..._voiceFieldLayout, flex: '1 1 140px' }}/>
           <input className="cal-inp" value={sayLike} onChange={(e) => setSayLike(e.target.value)}
                  placeholder="Say it like (e.g. KAM-ren)" aria-label="Say it like" maxLength={100}

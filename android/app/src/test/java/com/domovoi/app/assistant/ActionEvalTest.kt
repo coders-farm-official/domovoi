@@ -386,7 +386,7 @@ class ActionEvalTest {
         assertTrue("false actions on the review's near-misses: " + acted.joinToString("; "), acted.isEmpty())
     }
 
-    /** Kamron's Fold check (2026-10-21): "Set an alarm for five minutes
+    /** The owner's Fold check (2026-10-21): "Set an alarm for five minutes
      *  from now" and "Remind me in five minutes (to check Dome of War)" got
      *  no card. The Clock app has no reminders and these are durations: a
      *  timer for N, named for what to do; "remind me at 7 to …" is an alarm. */

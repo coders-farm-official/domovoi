@@ -215,7 +215,7 @@ async def test_anon_speaker_favorite_returns_guidance(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_remember_writes_memory_row(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     handler = MemoryHandler()
     ctx = Context(room_id="kitchen", person_id=person_id)
 
@@ -233,7 +233,7 @@ async def test_remember_writes_memory_row(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_forget_deletes_unique_match(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     repo = MemoriesRepository(db_session)
     await repo.add(person_id=person_id, body="I like jazz", source="explicit")
     await repo.add(person_id=person_id, body="my dog is named Max", source="explicit")
@@ -254,7 +254,7 @@ async def test_forget_deletes_unique_match(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_forget_with_ambiguous_match_asks_to_specify(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     repo = MemoriesRepository(db_session)
     # Two memories both containing "dog".
     await repo.add(person_id=person_id, body="my dog is named Max", source="explicit")
@@ -274,7 +274,7 @@ async def test_forget_with_ambiguous_match_asks_to_specify(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_list_memories_renders_known_facts(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     repo = MemoriesRepository(db_session)
     await repo.add(person_id=person_id, body="I like jazz", source="explicit")
     await repo.add(person_id=person_id, body="I have a dog named Max", source="explicit")
@@ -295,7 +295,7 @@ async def test_list_memories_renders_known_facts(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_favorite_add_then_list(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     handler = MemoryHandler()
     ctx = Context(room_id="kitchen", person_id=person_id)
 
@@ -328,7 +328,7 @@ async def test_favorite_add_then_list(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_favorite_forget_by_kind_clears_all_values(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     repo = FavoritesRepository(db_session)
     await repo.add(person_id=person_id, kind="team", value="The Mariners")
     await repo.add(person_id=person_id, kind="team", value="The Sounders")
@@ -352,7 +352,7 @@ async def test_favorite_forget_by_kind_clears_all_values(db_session) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_people_preferences_set_get_delete(db_session) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     repo = PeopleRepository(db_session)
 
     assert await repo.get_preferences(person_id) == {}
@@ -383,7 +383,7 @@ async def test_build_profile_prefix_anon_returns_empty(db_session) -> None:
 async def test_build_profile_prefix_includes_name_memories_favorites(
     db_session,
 ) -> None:
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await MemoriesRepository(db_session).add(
         person_id=person_id, body="I have a dog named Max", source="explicit"
     )
@@ -395,7 +395,7 @@ async def test_build_profile_prefix_includes_name_memories_favorites(
     )
 
     blob = await build_profile_prefix(person_id, db_session)
-    assert "Kamron" in blob
+    assert "Alex" in blob
     assert "Max" in blob
     assert "jazz" in blob
     assert "America/Los_Angeles" in blob
@@ -406,17 +406,17 @@ async def test_build_profile_prefix_includes_name_memories_favorites(
 async def test_build_profile_prefix_excludes_pending_memories(db_session) -> None:
     """Implicit-extracted memories sitting in pending must NOT leak
     into the QA prefix — they're awaiting user confirmation."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     repo = MemoriesRepository(db_session)
     await repo.add(
         person_id=person_id,
-        body="confirmed fact about kamron",
+        body="confirmed fact about alex",
         source="explicit",
         status="active",
     )
     await repo.add(
         person_id=person_id,
-        body="unconfirmed guess about kamron",
+        body="unconfirmed guess about alex",
         source="implicit",
         status="pending",
     )
@@ -430,7 +430,7 @@ async def test_build_profile_prefix_excludes_pending_memories(db_session) -> Non
 async def test_build_profile_prefix_truncates_over_soft_cap(db_session) -> None:
     """A very long memory should produce a truncated blob with the
     trailing ellipsis sentinel."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     big_body = "lorem ipsum " * 400  # well past 2000 chars
     await MemoriesRepository(db_session).add(
         person_id=person_id, body=big_body, source="explicit"
@@ -450,7 +450,7 @@ async def test_router_threads_profile_prefix_into_qa(db_session) -> None:
     speaker should have the profile prefix threaded into the stubbed
     qa_with_uncertainty call — the stub tags it so we can assert on
     the response text."""
-    person_id = await PeopleRepository(db_session).create(name="Kamron")
+    person_id = await PeopleRepository(db_session).create(name="Alex")
     await MemoriesRepository(db_session).add(
         person_id=person_id, body="I like jazz", source="explicit"
     )

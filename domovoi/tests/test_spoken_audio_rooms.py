@@ -187,10 +187,10 @@ async def test_the_latest_episode_plays_in_the_garage(store) -> None:
 
 async def test_an_audiobook_by_name_in_a_room_by_its_label(store) -> None:
     ctx = _ctx()
-    resp = await _say("play the audiobook dune in kamron's office", ctx)
-    assert resp.text == "Playing Dune in Kamron's Office."
-    assert "spoken/books/dune.m4b" in store.clients["kamron_office"]._song["file"]
-    assert len(_started(ctx, "kamron_office")) == 1
+    resp = await _say("play the audiobook dune in jordan's office", ctx)
+    assert resp.text == "Playing Dune in Jordan's Office."
+    assert "spoken/books/dune.m4b" in store.clients["jordan_office"]._song["file"]
+    assert len(_started(ctx, "jordan_office")) == 1
 
 
 @pytest.mark.parametrize("said, kind", [

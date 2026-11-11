@@ -18,13 +18,13 @@ class HouseholdNamesTest {
     private val home = "http://192.168.1.20:6369"
 
     @Test fun theListenerIsNamedOnlyForTheIdSeen() {
-        names.recordListener(home, "3", "Kamron Kennedy")
-        assertEquals("Kamron Kennedy", names.listenerName(home, "3"))
+        names.recordListener(home, "3", "Alex Morgan")
+        assertEquals("Alex Morgan", names.listenerName(home, "3"))
         assertNull("another person picked", names.listenerName(home, "4"))
         assertNull("me (this device)", names.listenerName(home, null))
         assertNull("another server", names.listenerName("http://192.168.1.30:6369", "3"))
         names.recordListener("", "3", "x")
         names.recordListener(home, "3", null)
-        assertEquals("Kamron Kennedy", names.listenerName(home, "3"))
+        assertEquals("Alex Morgan", names.listenerName(home, "3"))
     }
 }

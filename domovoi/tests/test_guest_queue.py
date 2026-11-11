@@ -1504,7 +1504,7 @@ async def test_r1_a_junk_query_token_on_the_web_read_gets_the_guest_view(
     db = FakeWebDb()
     stub = rooms[ACTIVE]
     first = int(stub._queue[0]["id"])
-    db.provenance = [(first, "Kamron's Pixel", "android-kamron-1234", "2026-10-11T10:00:00Z")]
+    db.provenance = [(first, "Alex's Pixel", "android-alex-1234", "2026-10-11T10:00:00Z")]
     monkeypatch.setattr(queue_api, "session_scope", db.scope())
     monkeypatch.setattr(queue_api, "get_cached_snapshot", lambda: {"guest_queue_editing": True})
     sent: list[dict] = []

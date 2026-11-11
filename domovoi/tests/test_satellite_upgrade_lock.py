@@ -1,6 +1,6 @@
 """A satellite upgrade is one at a time, and everyone can see it running.
 
-Kamron, 2026-10-13: Settings → Satellites' Upgrade button stayed enabled
+The owner, 2026-10-13: Settings → Satellites' Upgrade button stayed enabled
 after a successful upgrade request. The core's upgrade request is fire and
 forget (the satellite syncs, restarts and says hello again), so nothing on
 the server said an upgrade was under way: a reload, another tab or the app

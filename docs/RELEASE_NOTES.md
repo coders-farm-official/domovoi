@@ -2826,14 +2826,14 @@ Android app only (a new APK); nothing changes on the server.
 
 A server update (core and dashboard; no migration).
 
-* **"My name is Kamron" at a satellite no longer makes a second Kamron
+* **"My name is Alex" at a satellite no longer makes a second Alex
   without asking.** If someone already has that name and the room
   doesn't recognize the voice as them, Domovoi asks "I already know
-  someone called Kamron. Is that you?". A "yes" as your very next answer
-  (within a minute) adds that clip to Kamron's voice **for that room**,
+  someone called Alex. Is that you?". A "yes" as your very next answer
+  (within a minute) adds that clip to Alex's voice **for that room**,
   so the room knows you from then on: this is how you teach a new room
-  your voice. A "no" adds you as a new Kamron right away ("Okay, I've
-  added you as a new Kamron. An admin can give one of you a different
+  your voice. A "no" adds you as a new Alex right away ("Okay, I've
+  added you as a new Alex. An admin can give one of you a different
   name on the People page."). The phone's chat mic has its own question
   ("Add this phone's voice to …?"), where "no" still adds nothing.
 * **A yes is a claim, not a proof.** Whoever answers "yes" adds their
@@ -2845,10 +2845,10 @@ A server update (core and dashboard; no migration).
   say so and send you to the People page ("An admin can rename or remove
   one of them on the People page"). "Who am I" also says when your voice
   matches two people, and whether they share a name.
-* **Already have two Kamrons?** (the old satellite path made them.) The
+* **Already have two Alexes?** (the old satellite path made them.) The
   People page marks everyone who shares a name ("same name", with each
   one's number). If they are the same person, forget the extra one and
-  say "my name is Kamron" again in any room that then doesn't know the
+  say "my name is Alex" again in any room that then doesn't know the
   voice; if they are different people, rename one.
 * **The People page's rename works** (it used to say "not implemented").
   It is admin only and refuses a name someone else already has.
@@ -2919,7 +2919,7 @@ Server only (the app's manual gains the examples in its next build).
   "some music in the garage" and played it in the room that asked. The
   language model's music tool takes a room too, for other phrasings.
 * **Rooms are matched by their id and their label** in Settings →
-  Satellites ("the kids room", "Kamron's office"), room-mode phones and
+  Satellites ("the kids room", "Alex's office"), room-mode phones and
   laptop satellites included, never by a near miss. "In here" is the room
   you're in. A room the house doesn't have is answered with the ones it
   has. "Everywhere": stop and pause act on every room that is playing; a
@@ -3374,7 +3374,7 @@ update (and update the app).
 
 * **Norman no longer babbles short sentences.** Norman (the default until
   this batch) ran away on a short sentence said on its own: a "say it like" preview
-  ("Kamron.", "Domovoi."), a one-word reply ("Okay.", "Done."), the
+  ("Alex.", "Domovoi."), a one-word reply ("Okay.", "Done."), the
   "Hi, I'm Norman." of its own sample, came out as two to six seconds of
   sound in no language. The phonemes were right; Kristin and Linda say the
   same ones correctly. A voice is now checked once when it first says a
@@ -3385,10 +3385,10 @@ update (and update the app).
 * **"Say it like" reads respellings better.** A syllable no dictionary
   knows goes by the usual respelling key (uh as in but, ay as in say, zh as
   in measure: `SEER-shuh` was "SEER-shoo"), a light last "ren", "sel" or
-  "dem" is said like the end of "Cameron" (`Kamron = KAM-ren`), and a
+  "dem" is said like the end of "Cameron" (`Camryn = KAM-ren`), and a
   respelling that runs together into a dictionary word with the same
   stress (`CAM-er-on`) is read as that word. The preview toast says what
-  was previewed in words ("Kamron → KAM-ren"); the voice's phonemes are on
+  was previewed in words ("Camryn → KAM-ren"); the voice's phonemes are on
   the play button's hover. An entry saved before may sound slightly
   different: `NOO-yen` now ends like "Cameron" too; write `noo-YEN` for a
   full "yen".

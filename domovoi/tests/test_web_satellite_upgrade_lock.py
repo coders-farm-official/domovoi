@@ -1,5 +1,5 @@
 """Settings → Satellites: Upgrade locks from the server's yes until the
-satellite is back (Kamron, 2026-10-13).
+satellite is back (the owner, 2026-10-13).
 
 The button stayed enabled after a successful upgrade request. Now, in a
 room's drawer (satellites.jsx OverviewBody):

@@ -161,7 +161,7 @@ def _fast(monkeypatch):
 
 
 def test_the_card_shows_both_attempts_of_a_mixed_network_in_order():
-    """What Kamron's card could not show: wpa-psk with PMF off was tried
+    """What the owner's card could not show: wpa-psk with PMF off was tried
     FIRST (and that is the error the page showed), then sae."""
     r = DiagRadio(JOURNAL_WRONG_KEY, security="WPA2 WPA3", router=("wpa-psk", "sae"),
                   psk="the-other-ap-key")
@@ -246,7 +246,7 @@ def test_choosing_nothing_is_said(portal):  # noqa: F811
 
 # ─── the password, byte for byte, from the phone to nmcli ────────────────
 
-# Shaped like Kamron's: about 33 characters, spaces (one leading, one
+# Shaped like the owner's: about 33 characters, spaces (one leading, one
 # trailing, a double), commas, full stops, digits.
 SPACEY = " Our house, 42 Elm St.  2nd floor. "
 

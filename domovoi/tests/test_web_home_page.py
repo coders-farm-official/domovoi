@@ -188,7 +188,7 @@ SHARED_LS = {"domovoi-device-token": "house-token", "domovoi-shared-screen": "1"
 
 
 def cfg(visibility: str = "everyone") -> dict:
-    return {"bot_name": "Kamron's house", "tts_voice": "v", "rooms": [], "web_version": "x",
+    return {"bot_name": "Alex's house", "tts_voice": "v", "rooms": [], "web_version": "x",
             "wake_word_min_clips": 3, "home_problems_visibility": visibility}
 
 

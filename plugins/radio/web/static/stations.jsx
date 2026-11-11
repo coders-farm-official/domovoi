@@ -1110,7 +1110,7 @@ const StationsPage = () => {
   // One play request in flight at a time. A tap that shows nothing for a
   // round trip gets tapped again, and every copy refused for want of a
   // credential waits on the SAME pair / sign-in prompt — so dismissing it
-  // once used to toast the refusal once per tap (Kamron's phone showed two
+  // once used to toast the refusal once per tap (the owner's phone showed two
   // identical "play failed: 401" toasts for one station). Later taps are
   // dropped until the first one settles; that is the one the prompt
   // answers and replays.

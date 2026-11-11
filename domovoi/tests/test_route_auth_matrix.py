@@ -161,7 +161,7 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
         "require_device_read, the conversion runs in its own capped process"
     ),
     # ── web: the video satellite's kiosk transport row (FE-3) ─────────
-    # Kamron's decision: the kiosk renders unattended, with nobody in the
+    # The owner's decision: the kiosk renders unattended, with nobody in the
     # room to hold a credential, so its four transport verbs stay open.
     # Pinned from the other side by
     # ``domovoi/tests/test_kiosk_surface_is_documented.py``.

@@ -303,9 +303,9 @@ async def test_the_table_stays_bounded(_db, fresh_lists, core_hops):  # noqa: F8
         await c.delete("/api/voice/pronunciations/Nguyen", headers=h)
         assert await _rows() == [("nguyen", None)]          # a removed default: one row
         await c.post("/api/voice/pronunciations", json={"word": "Domo", "say_like": "DOH-mo"}, headers=h)
-        await c.post("/api/voice/pronunciations", json={"word": "Kamron", "say_like": "CAM-ron"}, headers=h)
+        await c.post("/api/voice/pronunciations", json={"word": "Camryn", "say_like": "CAM-ron"}, headers=h)
         r = await c.post("/api/voice/pronunciations/defaults", headers=h)
-        assert await _rows() == [("kamron", "CAM-ron")]     # only the owner's own word is left
+        assert await _rows() == [("camryn", "CAM-ron")]     # only the owner's own word is left
 
         # A later release ships a different default: it reaches this box.
         from domovoi import voice_settings

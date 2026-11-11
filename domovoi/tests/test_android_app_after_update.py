@@ -4,7 +4,7 @@ that brings a new release.json (the old release serves until the new one is
 here), the automatic refresh's decision under each internet answer, and the
 admin tier on what starts a download.
 
-Kamron's Moto scanned the dashboard's room code and was told "the app isn't
+The owner's Moto scanned the dashboard's room code and was told "the app isn't
 on this server yet": the release in the cache was keyed by the OLD
 versionCode, so the new release.json made it count as missing. No DB, no
 network: the signed fixtures and the fake GitHub of test_android_app.py.
