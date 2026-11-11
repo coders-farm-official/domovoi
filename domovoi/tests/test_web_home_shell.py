@@ -469,11 +469,12 @@ def test_the_strip_reads_home_music_videos_chat(driven) -> None:
 
 
 def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
-    # (the household's AI switch rides on the capabilities manifest: the
-    # sidebar asks the shared store for it, which is not a badge poll)
-    assert driven["sidebar_polls_alone"]["gets"] == ["/api/plugins/radio/badge", "/api/capabilities"]
+    # (the household's AI switch rides on the capabilities manifest and the
+    # household's menu on /api/nav-layout: the sidebar asks the shared stores
+    # for them once, which is not a badge poll)
+    assert driven["sidebar_polls_alone"]["gets"] == ["/api/plugins/radio/badge", "/api/capabilities", "/api/nav-layout"]
     given = driven["sidebar_given_badges"]
-    assert given["gets"] == ["/api/capabilities"]
+    assert given["gets"] == ["/api/capabilities", "/api/nav-layout"]
     assert "4" in given["text"]
 
 

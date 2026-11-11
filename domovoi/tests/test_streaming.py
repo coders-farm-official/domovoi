@@ -127,6 +127,10 @@ def _patch_pipeline(
 ) -> None:
     monkeypatch.setattr("domovoi.streaming.get_whisper_client", lambda: whisper)
     monkeypatch.setattr("domovoi.streaming.session_scope", _fake_session_scope)
+    # These tests name their room streams test.local; a host *name* in
+    # MPD_HTTP_BASE is kept by send_music_start (an address would be swapped
+    # for the one the room dialed, fc182dbd), so say the house set one.
+    monkeypatch.setattr(settings, "mpd_http_base", "http://test.local")
     if tts is not None:
         monkeypatch.setattr("domovoi.streaming.get_tts_client", lambda: tts)
     if response is not None:
