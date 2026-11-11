@@ -1950,11 +1950,17 @@ class WakeWordsRepository:
             "source_room_id": r[8],
             "clip_count": int(r[9]),
             "error": r[10],
+            # Trains on the synthetic voices alone: no recordings, no
+            # minimum clip count (V047).
+            "synthetic_only": bool(r[11]),
+            # Recordings the CURRENT model was trained on (0 = synthetic
+            # voices only; None = no model, or one from before V047).
+            "trained_clips": None if r[12] is None else int(r[12]),
         }
 
     _COLS = (
         "id, name, slug, phrase, threshold, model_ref, is_default, "
-        "status, source_room_id, clip_count, error"
+        "status, source_room_id, clip_count, error, synthetic_only, trained_clips"
     )
 
     async def all(self) -> list[dict]:
@@ -2024,17 +2030,21 @@ class WakeWordsRepository:
         phrase: str,
         threshold: float = 0.5,
         source_room_id: str | None = None,
+        synthetic_only: bool = False,
     ) -> int:
         """Insert a fresh wake word in the ``recording`` status. A brand-new
         recording row is never the default (a model must reach ``ready``
         before it can be set default), so there is no default flag to clear
-        here. Raises ``IntegrityError`` on a name/slug collision — the caller
-        maps that to a 409."""
+        here. ``synthetic_only`` is fixed here for the word's life: it trains
+        on the synthetic voices alone and takes no recordings. Raises
+        ``IntegrityError`` on a name/slug collision — the caller maps that to
+        a 409."""
         row = await self.s.execute(
             text(
                 """
-                INSERT INTO wake_words (name, slug, phrase, threshold, source_room_id)
-                VALUES (:name, :slug, :phrase, :threshold, :source_room_id)
+                INSERT INTO wake_words (name, slug, phrase, threshold, source_room_id,
+                                        synthetic_only)
+                VALUES (:name, :slug, :phrase, :threshold, :source_room_id, :synthetic_only)
                 RETURNING id
                 """
             ),
@@ -2044,6 +2054,7 @@ class WakeWordsRepository:
                 "phrase": phrase,
                 "threshold": threshold,
                 "source_room_id": source_room_id,
+                "synthetic_only": bool(synthetic_only),
             },
         )
         return int(row.scalar_one())
@@ -2075,22 +2086,32 @@ class WakeWordsRepository:
         *,
         name: str | None = None,
         threshold: float | None = None,
+        phrase: str | None = None,
     ) -> bool:
         """Patch only the provided fields (default is set via
         :meth:`set_default`, status via the transition helpers). Returns True
-        if a row changed."""
+        if a row changed. ``phrase`` is how the trainer's voices say the
+        word (a respelling such as "alex sander" changes the synthetic clips
+        of the next training, never the slug the rooms know it by); the
+        caller refuses it while the word trains."""
         sets: list[str] = ["updated_at = NOW()"]
         params: dict[str, object] = {"id": wake_word_id}
         if name is not None:
             sets.append("name = :name")
             params["name"] = name
+        if phrase is not None:
+            sets.append("phrase = :phrase")
+            params["phrase"] = phrase
         if threshold is not None:
             sets.append("threshold = :threshold")
             params["threshold"] = threshold
         if len(sets) == 1:
             return False
+        # A training read the phrase when it started: never change it under
+        # one (atomically; the caller's earlier check names the reason).
+        guard = " AND (status <> 'training' OR phrase = :phrase)" if phrase is not None else ""
         row = await self.s.execute(
-            text(f"UPDATE wake_words SET {', '.join(sets)} WHERE id = :id"),
+            text(f"UPDATE wake_words SET {', '.join(sets)} WHERE id = :id{guard}"),
             params,
         )
         return bool(row.rowcount)
@@ -2174,14 +2195,14 @@ class WakeWordsRepository:
         ``training`` — only if it still holds enough captured clips
         (``clip_count >= min_clips``). Returns False if the row is missing,
         already training, or has too few clips, so the caller can surface a
-        409."""
+        409. A synthetic-voices-only word has no minimum: it uses no clips."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
                 SET status = 'training', error = NULL, updated_at = NOW()
                 WHERE id = :id AND status IN ('recording', 'failed', 'ready')
-                  AND clip_count >= :min
+                  AND (synthetic_only OR clip_count >= :min)
                 RETURNING id
                 """
             ),
@@ -2227,19 +2248,23 @@ class WakeWordsRepository:
         r = row.first()
         return self._row(r) if r else None
 
-    async def mark_ready(self, wake_word_id: int, model_ref: str) -> bool:
+    async def mark_ready(self, wake_word_id: int, model_ref: str,
+                         trained_clips: int | None = None) -> bool:
         """The trainer produced a model — flip to ``ready`` and record where
-        it landed. Returns True if a row changed."""
+        it landed and how many of the household's recordings it was trained
+        on (0 = synthetic voices only; None = not known). Returns True if a
+        row changed."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
                 SET status = 'ready', model_ref = :model_ref, error = NULL,
-                    updated_at = NOW()
+                    trained_clips = :trained_clips, updated_at = NOW()
                 WHERE id = :id
                 """
             ),
-            {"id": wake_word_id, "model_ref": model_ref},
+            {"id": wake_word_id, "model_ref": model_ref,
+             "trained_clips": None if trained_clips is None else max(0, int(trained_clips))},
         )
         return bool(row.rowcount)
 

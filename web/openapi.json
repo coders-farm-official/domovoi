@@ -8827,7 +8827,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PreviewBody"
+                "$ref": "#/components/schemas/web__backend__api__voice__PreviewBody"
               }
             }
           },
@@ -9190,6 +9190,158 @@
                 "schema": {
                   "$ref": "#/components/schemas/WakeWord"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/{wake_word_id}/synthetic-copy": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Synthetic Copy",
+        "description": "\"Train on synthetic voices only\" on a word that uses recordings: a\nnew word with the same phrase that trains on the trainer's synthetic\nvoices alone, queued for training at once. It is its own word, with its\nown model file, so the recorded word's model is never replaced and the\ntwo can be compared room by room. 409 when the copy exists already\n(train it from its own row) or the word is itself synthetic-only.",
+        "operationId": "synthetic_copy_api_wake_words__wake_word_id__synthetic_copy_post",
+        "parameters": [
+          {
+            "name": "wake_word_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Wake Word Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WakeWord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/preview": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Preview Status",
+        "description": "The current or last preview: state, phrase, elapsed seconds, the\ntrainer's last line, clip names; ``available`` false with the reason\nwhen the training voices can't speak here (training not turned on).",
+        "operationId": "preview_status_api_wake_words_preview_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Preview Start",
+        "description": "Speak the phrase with the trainer's own synthetic voices (a few\nclips). 409 with the reason when it can't run.",
+        "operationId": "preview_start_api_wake_words_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/web__backend__api__wake_words__PreviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/preview/{job}/{name}/audio": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Preview Audio",
+        "operationId": "preview_audio_api_wake_words_preview__job___name__audio_get",
+        "parameters": [
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{12}$",
+              "title": "Job"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^preview_[1-8]\\.wav$",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -23595,40 +23747,6 @@
         ],
         "title": "PresenceRequest"
       },
-      "PreviewBody": {
-        "properties": {
-          "word": {
-            "type": "string",
-            "maxLength": 48,
-            "minLength": 1,
-            "title": "Word"
-          },
-          "say_like": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Say Like"
-          },
-          "voice": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Voice"
-          }
-        },
-        "type": "object",
-        "required": [
-          "word",
-          "say_like"
-        ],
-        "title": "PreviewBody"
-      },
       "PrintBody": {
         "properties": {
           "library_id": {
@@ -27352,6 +27470,33 @@
             "type": "integer",
             "title": "New Clips",
             "default": 0
+          },
+          "synthetic_only": {
+            "type": "boolean",
+            "title": "Synthetic Only",
+            "default": false
+          },
+          "trained_clips": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trained Clips"
+          },
+          "trained_clips_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trained Clips From"
           }
         },
         "type": "object",
@@ -27406,6 +27551,11 @@
               }
             ],
             "title": "Source Room Id"
+          },
+          "synthetic_only": {
+            "type": "boolean",
+            "title": "Synthetic Only",
+            "default": false
           }
         },
         "type": "object",
@@ -27453,6 +27603,20 @@
               }
             ],
             "title": "Set Default"
+          },
+          "phrase": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9 ,.'-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phrase"
           }
         },
         "type": "object",
@@ -27735,6 +27899,56 @@
           "position_sec"
         ],
         "title": "PositionSave"
+      },
+      "web__backend__api__voice__PreviewBody": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "maxLength": 48,
+            "minLength": 1,
+            "title": "Word"
+          },
+          "say_like": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Say Like"
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "say_like"
+        ],
+        "title": "PreviewBody"
+      },
+      "web__backend__api__wake_words__PreviewBody": {
+        "properties": {
+          "phrase": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9 ,.'-]+$",
+            "title": "Phrase"
+          }
+        },
+        "type": "object",
+        "required": [
+          "phrase"
+        ],
+        "title": "PreviewBody"
       }
     }
   }

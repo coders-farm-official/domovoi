@@ -88,6 +88,7 @@ from domovoi.handlers import HANDLERS  # noqa: E402
 from domovoi import lifecycle  # noqa: E402
 from domovoi.lifecycle import install_signal_handlers, signal_shutdown  # noqa: E402
 from domovoi.models import MAX_CONFIG_CHANGES, MAX_ROOM_ID_CHARS  # noqa: E402
+from domovoi.models import MAX_WAKE_PHRASE_CHARS, WAKE_PHRASE_PATTERN  # noqa: E402
 from domovoi.models import (  # noqa: E402
     ConnectivityState,
     Context,
@@ -967,6 +968,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # step: a step that overruns is cancelled and left behind, so no
         # plugin or worker can hold the stop open (domovoi/lifecycle.py).
         signal_shutdown("lifespan teardown")  # no-op after a signal
+        from domovoi.wake_preview import shutdown as wake_preview_shutdown
         from domovoi.wake_trainer_setup import shutdown as wake_trainer_setup_shutdown
 
         teardown_started = asyncio.get_running_loop().time()
@@ -984,6 +986,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 # A "Turn on wake-word training" job still building or
                 # downloading: stop its docker child and container.
                 ("wake-word training setup", wake_trainer_setup_shutdown, 3.0),
+                # "Hear the training voices": its container stops too.
+                ("wake-word voice preview", wake_preview_shutdown, 3.0),
                 # Announcements still in flight stop here; their rows stay
                 # pending/sending and the next boot resumes them.
                 ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
@@ -3714,6 +3718,16 @@ async def admin_wake_record_start(
                         "finishes, or stop the training first."
                     ),
                 )
+            # A synthetic-voices-only word never trains on recordings, so
+            # nobody's voice is captured for it.
+            if row.get("synthetic_only"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{label} trains on synthetic voices only, so it takes no "
+                        "recordings. Record clips on a wake word that uses them."
+                    ),
+                )
             for other_room, sess in list(app.state.active_sessions.items()):
                 rec = getattr(sess, "wake_recording", None)
                 if rec is not None and rec.wake_word_id == body.wake_word_id:
@@ -4049,6 +4063,48 @@ async def admin_wake_train_stop(body: _AdminWakeWordIdBody) -> dict[str, Any]:
         await s.execute(text("SELECT pg_notify('wake_words_changed', :p)"),
                         {"p": str(body.wake_word_id)})
     return {"stopping": False, "stopped": stopped, "wake_word_id": body.wake_word_id}
+
+
+class _AdminWakePreviewBody(BaseModel):
+    # Bounded like a wake word's phrase (CORE-10): it becomes an argument
+    # of the trainer wrapper and an environment value of its container.
+    phrase: str = Field(..., min_length=1, max_length=MAX_WAKE_PHRASE_CHARS,
+                        pattern=WAKE_PHRASE_PATTERN)
+
+
+@app.get(
+    "/v1/admin/wake/preview",
+    # An admin READ: the phrase being previewed and the clip names.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_wake_preview_status() -> dict[str, Any]:
+    """"Hear the training voices": the current or last preview (state
+    running / done / failed, its phrase, elapsed seconds, the last line the
+    trainer printed, the clip file names), and whether previews can run
+    here at all with the reason when not (domovoi/wake_preview.py)."""
+    from domovoi import wake_preview
+
+    return await wake_preview.status()
+
+
+@app.post(
+    "/v1/admin/wake/preview",
+    # Admin tier, like Train: it runs the trainer image (on the CPU, no
+    # network, no recordings mounted).
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_wake_preview_start(body: _AdminWakePreviewBody) -> dict[str, Any]:
+    """Speak ``phrase`` with the wake-word trainer's own synthetic voices
+    (a few clips, different speakers), in the background; the page polls
+    the GET. 409 with the reason when it can't: training not turned on,
+    the command isn't the repo's trainer, a setup job or another preview
+    running."""
+    from domovoi import wake_preview
+
+    try:
+        return await wake_preview.start(body.phrase.strip())
+    except wake_preview.Refused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 class _AdminWakeForgetBody(BaseModel):

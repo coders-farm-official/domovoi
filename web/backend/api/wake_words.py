@@ -45,6 +45,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -89,6 +90,17 @@ class WakeWord(BaseModel):
     # Clips recorded since the last successful training (0 for a word never
     # trained): the row says "N new clips since the last training".
     new_clips: int = 0
+    # Trains on the synthetic voices alone: no recordings, no clip minimum.
+    synthetic_only: bool = False
+    # How many of the household's recordings the CURRENT model was trained
+    # on: 0 = synthetic voices only. None = no model, or a model trained
+    # before Domovoi kept count that the clips folder can't account for
+    # either (the page then says it may include recordings).
+    # ``trained_clips_from``: "model" (recorded when it was trained) or
+    # "marker" (the clips folder's note of its last training, for a model
+    # from before V047).
+    trained_clips: int | None = None
+    trained_clips_from: str | None = None
 
 
 class WakeWordCreate(BaseModel):
@@ -107,12 +119,28 @@ class WakeWordCreate(BaseModel):
     )
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     source_room_id: str | None = Field(default=None, max_length=120)
+    # Train on the synthetic voices only: no recordings, ever, for this word.
+    synthetic_only: bool = False
 
 
 class WakeWordPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     set_default: bool | None = None
+    # How the training voices say it (a respelling), bounded like create's.
+    # It changes the next training's synthetic clips, never the slug the
+    # rooms know the word by.
+    phrase: str | None = Field(
+        default=None, min_length=1, max_length=MAX_WAKE_PHRASE_CHARS,
+        pattern=WAKE_PHRASE_PATTERN,
+    )
+
+
+class PreviewBody(BaseModel):
+    # The phrase as typed, saved or not: the voices say what is in the box.
+    phrase: str = Field(
+        ..., min_length=1, max_length=MAX_WAKE_PHRASE_CHARS, pattern=WAKE_PHRASE_PATTERN,
+    )
 
 
 class RoomBody(BaseModel):
@@ -249,9 +277,30 @@ def _new_clips(row: dict) -> int:
         return 0
 
 
+def _trained_with(row: dict) -> tuple[int | None, str | None]:
+    """What the current model was trained on: the row's count (V047 on);
+    for an older model, the clips folder's training marker when it names a
+    count (its 0 can't be trusted: older trainings fell back to every clip
+    when none was selected); else unknown."""
+    if not row.get("model_ref"):
+        return None, None
+    if row.get("trained_clips") is not None:
+        return int(row["trained_clips"]), "model"
+    cdir = _guarded_clip_dir(row["slug"])
+    marker = wq.read_trained(cdir) if cdir is not None else None
+    try:
+        n = int((marker or {}).get("clips") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return (n, "marker") if n > 0 else (None, None)
+
+
 async def _with_new_clips(rows: list[dict]) -> list[WakeWord]:
-    counts = await asyncio.to_thread(lambda: [_new_clips(r) for r in rows])
-    return [_to_model(r, new_clips=n) for r, n in zip(rows, counts)]
+    def _read() -> list[tuple[int, tuple[int | None, str | None]]]:
+        return [(_new_clips(r), _trained_with(r)) for r in rows]
+
+    info = await asyncio.to_thread(_read)
+    return [_to_model(r, new_clips=n, trained=t) for r, (n, t) in zip(rows, info)]
 
 
 async def _resync_clip_count(wake_word_id: int, cdir: Path) -> int:
@@ -264,9 +313,17 @@ async def _resync_clip_count(wake_word_id: int, cdir: Path) -> int:
     return n
 
 
-def _to_model(row: dict, *, new_clips: int = 0) -> WakeWord:
+def _to_model(row: dict, *, new_clips: int = 0,
+              trained: tuple[int | None, str | None] | None = None) -> WakeWord:
+    if trained is None:
+        trained = ((int(row["trained_clips"]), "model")
+                   if row.get("model_ref") and row.get("trained_clips") is not None
+                   else (None, None))
     return WakeWord(
         new_clips=new_clips,
+        synthetic_only=bool(row.get("synthetic_only")),
+        trained_clips=trained[0],
+        trained_clips_from=trained[1],
         id=row["id"],
         name=row["name"],
         slug=row["slug"],
@@ -311,6 +368,7 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
                 phrase=phrase,
                 threshold=threshold,
                 source_room_id=payload.source_room_id,
+                synthetic_only=payload.synthetic_only,
             )
             row = await repo.get(new_id)
             await _notify(s)
@@ -323,7 +381,7 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
         "id": new_id, "name": name, "slug": slug, "phrase": phrase,
         "threshold": threshold, "model_ref": None, "is_default": False,
         "status": "recording", "source_room_id": payload.source_room_id,
-        "clip_count": 0, "error": None,
+        "clip_count": 0, "error": None, "synthetic_only": payload.synthetic_only,
     })
 
 
@@ -436,10 +494,11 @@ async def train_wake_word(wake_word_id: int) -> WakeWord:
     only the selected set)."""
     min_clips = settings.wake_word_min_clips
     row0 = await _row_or_404(wake_word_id)
-    # Gate on SELECTED clips — the curated set is what actually trains.
+    # Gate on SELECTED clips — the curated set is what actually trains. A
+    # synthetic-voices-only word uses no clips, so it has no minimum.
     cdir = _guarded_clip_dir(row0["slug"])
     selected = await asyncio.to_thread(wq.selected_count, cdir) if cdir else 0
-    if selected < min_clips:
+    if not row0.get("synthetic_only") and selected < min_clips:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -462,6 +521,115 @@ async def train_wake_word(wake_word_id: int) -> WakeWord:
     if row is None:
         raise HTTPException(status_code=404, detail=f"wake word {wake_word_id} not found")
     return _to_model(row)
+
+
+SYNTHETIC_SUFFIX = "_synthetic"
+
+
+def synthetic_copy_slug(slug: str) -> str:
+    """The slug of a word's synthetic-voices-only copy: its own model file
+    (``<slug>_synthetic.onnx``), so it sits beside the recorded word's model
+    and either can be pushed to a room. At most 80 characters, like every
+    slug the trainer takes."""
+    return slug[: 80 - len(SYNTHETIC_SUFFIX)] + SYNTHETIC_SUFFIX
+
+
+@router.post(
+    "/{wake_word_id}/synthetic-copy", response_model=WakeWord, status_code=201,
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def synthetic_copy(wake_word_id: int) -> WakeWord:
+    """"Train on synthetic voices only" on a word that uses recordings: a
+    new word with the same phrase that trains on the trainer's synthetic
+    voices alone, queued for training at once. It is its own word, with its
+    own model file, so the recorded word's model is never replaced and the
+    two can be compared room by room. 409 when the copy exists already
+    (train it from its own row) or the word is itself synthetic-only."""
+    src = await _row_or_404(wake_word_id)
+    if src.get("synthetic_only"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"“{src['name']}” already trains on synthetic voices only",
+        )
+    slug = synthetic_copy_slug(src["slug"])
+    name = f"{src['name']} (synthetic voices)"[:80]
+    try:
+        async with session_scope() as s:
+            repo = WakeWordsRepository(s)
+            new_id = await repo.create(
+                name=name, slug=slug, phrase=src["phrase"], threshold=src["threshold"],
+                synthetic_only=True,
+            )
+            await repo.mark_training(new_id, settings.wake_word_min_clips)
+            row = await repo.get(new_id)
+            await _notify(s)
+    except IntegrityError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"a synthetic-voices copy of “{src['name']}” already exists "
+                    f"(“{name}”): train it from its own row"),
+        ) from e
+    if row is None:
+        raise HTTPException(status_code=404, detail="the copy was not created")
+    return _to_model(row)
+
+
+# ─── "Hear the training voices" ────────────────────────────────────────────
+# The core owns Docker and runs the trainer image's preview mode
+# (domovoi/wake_preview.py); these proxy it, and the clips it wrote are
+# served from its folder like recorded clips are.
+
+_PREVIEW_JOB_RE = r"^[0-9a-f]{12}$"
+_PREVIEW_CLIP_RE = r"^preview_[1-8]\.wav$"
+
+
+@router.get("/preview", dependencies=[Depends(require_admin_read)])
+async def preview_status(request: Request):
+    """The current or last preview: state, phrase, elapsed seconds, the
+    trainer's last line, clip names; ``available`` false with the reason
+    when the training voices can't speak here (training not turned on)."""
+    status, payload = await get_admin(
+        "/v1/admin/wake/preview", timeout=15.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/preview", dependencies=[Depends(require_admin_mutation)])
+async def preview_start(body: PreviewBody, request: Request):
+    """Speak the phrase with the trainer's own synthetic voices (a few
+    clips). 409 with the reason when it can't run."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/preview", {"phrase": body.phrase.strip()}, timeout=30.0,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+def _preview_root() -> Path:
+    # wake_trainer_setup.state_dir()/preview, from the same setting the core
+    # uses (the two processes share the server's disk, as for clips).
+    return _models_dir().parent / "wake_trainer" / "preview"
+
+
+@router.get(
+    "/preview/{job}/{name}/audio",
+    # Device READ, like a recorded clip's audio: the <audio> element can't
+    # set a header. These are synthetic voices, nobody's recording.
+    dependencies=[Depends(require_device_read)],
+)
+async def preview_audio(
+    job: str = PathParam(..., pattern=_PREVIEW_JOB_RE),
+    name: str = PathParam(..., pattern=_PREVIEW_CLIP_RE),
+) -> FileResponse:
+    root = _preview_root().resolve()
+    target = (root / job / name).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail="no such clip") from e
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="no such clip (a newer preview replaced it)")
+    return FileResponse(target, media_type="audio/wav", filename=name)
 
 
 async def _row_or_404(wake_word_id: int) -> dict:
@@ -646,16 +814,35 @@ async def delete_all_clips(wake_word_id: int) -> dict:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def patch_wake_word(wake_word_id: int, payload: WakeWordPatch) -> WakeWord:
-    if payload.name is None and payload.threshold is None and not payload.set_default:
+    if (payload.name is None and payload.threshold is None and payload.phrase is None
+            and not payload.set_default):
         raise HTTPException(status_code=400, detail="no fields to patch")
+    phrase = payload.phrase.strip() if payload.phrase is not None else None
+    if phrase == "":
+        raise HTTPException(status_code=422, detail="the phrase can't be empty")
     try:
         async with session_scope() as s:
             repo = WakeWordsRepository(s)
-            if payload.name is not None or payload.threshold is not None:
+            if phrase is not None:
+                # A training reads the phrase when it starts and its clips
+                # are spoken from it: not mid-run.
+                current = await repo.get(wake_word_id)
+                if current is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"wake word {wake_word_id} not found"
+                    )
+                if current["status"] == "training" and current["phrase"] != phrase:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"“{current['name']}” is training; change how it's said "
+                               "after it finishes, or stop the training first",
+                    )
+            if payload.name is not None or payload.threshold is not None or phrase is not None:
                 updated = await repo.update(
                     wake_word_id,
                     name=payload.name.strip() if payload.name is not None else None,
                     threshold=payload.threshold,
+                    phrase=phrase,
                 )
                 if not updated:
                     raise HTTPException(
