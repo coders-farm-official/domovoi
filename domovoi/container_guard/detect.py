@@ -257,6 +257,39 @@ def image_verdict(e: Expected, obs: Observed, view: DockerView) -> str:
     return OUTDATED if from_registry else FOREIGN
 
 
+# What mpd_provisioner._create_container makes a room's music player with:
+# where its mounts land, and the restart policy. A stopped container that
+# differs is not started by the self-heal (it may be someone else's under
+# the room's name: engine._auto_start, mpd_provisioner.start_stopped_room).
+ROOM_PLAYER_MOUNTS = frozenset({"/var/lib/mpd", "/music", "/music/podcasts",
+                                "/music/audiobooks", "/etc/mpd.conf"})
+ROOM_PLAYER_REQUIRED_MOUNTS = frozenset({"/var/lib/mpd", "/music", "/etc/mpd.conf"})
+ROOM_PLAYER_RESTART = "unless-stopped"
+
+
+def room_player_shape(obs: Observed) -> str | None:
+    """Why ``obs`` is not shaped like a room's music player Domovoi made,
+    in words, or None when it is: the restart policy and the mounts (by
+    where they land in the container; their host paths are left alone:
+    Docker Desktop reports ``/run/desktop/mnt/host/c/...`` for ``C:/...``).
+    The image and the security settings are judged on their own
+    (:func:`image_verdict`, :meth:`Observed.security`)."""
+    if (obs.restart_policy or "") != ROOM_PLAYER_RESTART:
+        return f"its restart policy is {obs.restart_policy or 'none'!r}, not {ROOM_PLAYER_RESTART!r}"
+    dests = {(d or "").rstrip("/") or "/" for _s, d in obs.mounts}
+    extra = sorted(dests - ROOM_PLAYER_MOUNTS)
+    if extra:
+        return f"it mounts {', '.join(extra)}, which Domovoi's music players don't"
+    missing = sorted(ROOM_PLAYER_REQUIRED_MOUNTS - dests)
+    if missing:
+        return f"it lacks the {', '.join(missing)} mount(s) Domovoi's music players have"
+    for source, dest in obs.mounts:
+        if (dest or "").rstrip("/") == "/etc/mpd.conf" and \
+                not (source or "").replace("\\", "/").endswith("/mpd.conf"):
+            return "its /etc/mpd.conf is not Domovoi's mpd.conf"
+    return None
+
+
 def image_matches(e: Expected, obs: Observed, view: DockerView) -> bool:
     """True when :func:`image_verdict` finds nothing to report."""
     return image_verdict(e, obs, view) in (OK, NO_DATA)

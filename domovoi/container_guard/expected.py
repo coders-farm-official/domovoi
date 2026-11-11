@@ -229,6 +229,7 @@ def mpd_expectations(
                                    if image_id_previous and image_id_previous != image_id
                                    else None),
                 hold=hold,
+                room_id=room_id,
             )
         )
     return out

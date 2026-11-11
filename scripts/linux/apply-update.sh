@@ -173,6 +173,16 @@
 # /etc/domovoi/cache-trim.conf says otherwise). DOMOVOI_MANAGE_CACHE_TRIM=0
 # leaves all of it alone. Never fatal.
 #
+# Then Docker's order at boot (reconcile_docker_media_order): on a box
+# whose /etc/fstab has provision.sh's Domovoi media block (the Windows
+# installer's WSL distro), docker.service.d/50-domovoi-media.conf makes
+# Docker start after those folders are mounted (Wants= and After= their
+# mount units), so the rooms' music players it restores at boot find the
+# music folder instead of failing to start (incident 2026-11-11). Written
+# when missing or different, removed when the block is gone; systemctl
+# daemon-reload, never a Docker restart. provision.sh installs the same
+# file. Never fatal.
+#
 # Every run ends by writing last-result.json into DOMOVOI_UPDATE_DIR, which
 # the core serves as `last_update` from GET /v1/admin/version.
 #
@@ -311,6 +321,12 @@ JOURNALD_SRC=$SCRIPT_DIR/units/journald-domovoi.conf
 # script and its two units, under the harness's root in the tests.
 MANAGE_CACHE_TRIM=${DOMOVOI_MANAGE_CACHE_TRIM:-1}
 CACHE_TRIM_SRC=$SCRIPT_DIR/cache-trim.py
+# Docker after the media folders (reconcile_docker_media_order): read from
+# the box's /etc/fstab, the drop-in beside docker.service; the harness's
+# root in the tests.
+FSTAB_FILE=${DOMOVOI_FSTAB:-$TEST_ROOT/etc/fstab}
+DOCKER_DROPIN_DIR=${DOMOVOI_DOCKER_DROPIN_DIR:-$TEST_ROOT/etc/systemd/system/docker.service.d}
+DOCKER_MEDIA_DROPIN=$DOCKER_DROPIN_DIR/50-domovoi-media.conf
 CACHE_TRIM_LIB_DIR=$TEST_ROOT/usr/local/lib/domovoi-cache-trim
 CACHE_TRIM_LIB=$CACHE_TRIM_LIB_DIR/cache-trim.py
 CACHE_TRIM_UNIT_DIR=$TEST_ROOT/etc/systemd/system
@@ -2646,6 +2662,100 @@ reconcile_core_restart() {
   return 0
 }
 
+# >>> docker-media-order block >>>
+# The same text in scripts/linux/provision.sh and scripts/linux/apply-update.sh,
+# character for character (domovoi/tests/test_docker_media_order.py holds the
+# two together): provision.sh's units step installs the drop-in, and the
+# update unit installs it on a box provisioned before it existed.
+#
+# Docker starts after the media folders /etc/fstab's Domovoi block mounts
+# (a WSL install's drvfs folders). Their lines say nofail, which also takes
+# away their ordering before local-fs.target (systemd.mount(5)), so nothing
+# kept dockerd from restoring the rooms' music players before the music
+# folder was there. A start then fails (exit code 128: "make mountpoint
+# /music/podcasts: read-only file system" on the empty mount point) and
+# Docker never retries a failed start, restart policy or not: the failure
+# that kept every room of a house down for 14 hours on 2026-11-11 (there
+# from a placeholder folder gone from the music folder; this order closes
+# the other way to it). Wants=, not Requires=: a folder that is missing (a
+# USB drive unplugged) still never keeps Docker, and with it all of
+# Domovoi, from starting.
+
+# docker_media_mount_unit PATH: the mount unit systemd names for PATH
+# (systemd-escape --path --suffix=mount, without needing it).
+docker_media_mount_unit() {
+  local p=${1#/} out="" c i
+  p=${p%/}
+  for ((i = 0; i < ${#p}; i++)); do
+    c=${p:i:1}
+    case $c in
+      /) out+=- ;;
+      [A-Za-z0-9:_]) out+=$c ;;
+      .) if [ "$i" -eq 0 ]; then out+='\x2e'; else out+=.; fi ;;
+      *) out+=$(printf '\\x%02x' "'$c") ;;
+    esac
+  done
+  printf '%s.mount\n' "$out"
+}
+
+# docker_media_dropin_text FSTAB: the drop-in for docker.service, or
+# nothing when FSTAB has no Domovoi media block (bare metal, no folders).
+docker_media_dropin_text() {
+  local fstab=$1 t units=()
+  [ -f "$fstab" ] || return 0
+  while IFS= read -r t; do
+    [ -n "$t" ] && units+=("$(docker_media_mount_unit "$t")")
+  done < <(awk -v b="# BEGIN Domovoi media folders (scripts/linux/provision.sh rewrites this block)" \
+    -v e="# END Domovoi media folders" \
+    '$0==b{in_b=1; next} $0==e{in_b=0; next} in_b && NF>=2 && $1 !~ /^#/ {print $2}' "$fstab")
+  [ "${#units[@]}" -gt 0 ] || return 0
+  printf '%s\n' \
+    "# Written by Domovoi (scripts/linux/provision.sh, scripts/linux/apply-update.sh)." \
+    "# Docker starts after the media folders in /etc/fstab's Domovoi block, so" \
+    "# the rooms' music players it restores at boot find their music folder." \
+    "# Wants=, not Requires=: a missing folder never keeps Docker from starting." \
+    "[Unit]" \
+    "Wants=${units[*]}" \
+    "After=${units[*]}"
+}
+# <<< docker-media-order block <<<
+
+# See the header: docker.service ordered after the media folders, from
+# /etc/fstab's Domovoi block (the docker-media-order block above). A step
+# only when it wrote or removed the drop-in (ok) or could not (warn); one
+# already right is nothing to do. Never fatal, and Docker is not restarted:
+# the order matters at the next boot.
+reconcile_docker_media_order() {
+  local t0 want
+  want=$(docker_media_dropin_text "$FSTAB_FILE")
+  if [ -z "$want" ]; then
+    [ -e "$DOCKER_MEDIA_DROPIN" ] || return 0
+    t0=$(now_ms)
+    log "step docker-media: no media folders in $FSTAB_FILE any more; removing $DOCKER_MEDIA_DROPIN"
+    if rm -f "$DOCKER_MEDIA_DROPIN" && { ! command -v systemctl >/dev/null 2>&1 || systemctl daemon-reload; }; then
+      add_step docker-media ok "$t0" "$DOCKER_MEDIA_DROPIN removed: /etc/fstab has no Domovoi media folders for Docker to wait for"
+    else
+      add_step docker-media warn "$t0" "$DOCKER_MEDIA_DROPIN could not be removed"
+      log "step docker-media failed; not fatal, the run goes on"
+    fi
+    return 0
+  fi
+  want+=$'\n'
+  if [ -f "$DOCKER_MEDIA_DROPIN" ] && [ "$(cat "$DOCKER_MEDIA_DROPIN"; printf x)" = "${want}x" ]; then
+    return 0
+  fi
+  t0=$(now_ms)
+  log "step docker-media: Docker to start after the media folders ($DOCKER_MEDIA_DROPIN)"
+  if mkdir -p "$DOCKER_DROPIN_DIR" && write_atomic "$DOCKER_MEDIA_DROPIN" "$want" \
+      && { ! command -v systemctl >/dev/null 2>&1 || systemctl daemon-reload; }; then
+    add_step docker-media ok "$t0" "Docker starts after the media folders from the next boot on ($DOCKER_MEDIA_DROPIN), so the rooms' music players it restores find their music"
+  else
+    add_step docker-media warn "$t0" "$DOCKER_MEDIA_DROPIN could not be written, so Docker may still restore the rooms' music players before their music folder is mounted"
+    log "step docker-media failed; not fatal, the run goes on"
+  fi
+  return 0
+}
+
 # See the header. A step only when it installed the drop-in (ok) or could
 # not (warn); one already in place is nothing to do, whatever journald
 # made of it.
@@ -3209,6 +3319,7 @@ main() {
   reconcile_core_restart
   reconcile_journal
   reconcile_cache_trim
+  reconcile_docker_media_order
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
     plain_restart
