@@ -2443,7 +2443,7 @@
           "music"
         ],
         "summary": "Artist Detail",
-        "description": "One performer: albums A-Z (no album last) and every track id in\nalbum order (the files' order within an album), for play / shuffle.",
+        "description": "One performer: albums A-Z (no album last) and every track id in\nalbum order (the files' order within an album), for play / shuffle;\nwith ``album``, that album's ids only.",
         "operationId": "artist_detail_api_music_artist_get",
         "parameters": [
           {
@@ -2456,6 +2456,25 @@
               "maxLength": 500,
               "title": "Name"
             }
+          },
+          {
+            "name": "album",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this album's track ids ('' = their tracks with no album).",
+              "title": "Album"
+            },
+            "description": "Only this album's track ids ('' = their tracks with no album)."
           }
         ],
         "responses": {

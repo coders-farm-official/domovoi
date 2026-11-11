@@ -1,4 +1,4 @@
-/* Music page — Library / Player / Playlists / Stats / Jobs tabs.
+/* Music page — Library / Artists / Player / Playlists / Stats / Jobs tabs.
  * Provider-specific search & download UIs live on PLUGIN pages (design
  * §10.1) — this page stays generic: "Add music" enqueues rows in the
  * provider-agnostic media-acquisition queue, and the Jobs tab is a
@@ -13,6 +13,11 @@
  *                                                 drives q/source/sort/favorited;
  *                                                 q is debounced; every filter is
  *                                                 the server's.
+ *   * GET /api/music/artists · /api/music/artist — the Artists tab (performers,
+ *                                                 paged + searched by the server)
+ *                                                 and one artist's albums + track ids;
+ *                                                 their songs are GET /api/music/
+ *                                                 library?artist=&album=&sort=album.
  *   * GET /api/music/library/stats              — whole-library aggregates for the
  *                                                 Stats tab and the tab badge,
  *                                                 computed server-side so we never
@@ -753,6 +758,249 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
           <PagedListFooter list={list} noun="tracks"/>
         </div>
       )}
+    </>
+  );
+};
+
+/* ---- Artists tab ------------------------------------------ */
+/* The library by performer (owner, 2026-11-11): GET /api/music/artists,
+ * one page at a time like the Library tab, searched by the server (the
+ * library search's rules: "ti" finds T.I.) and sorted by name or track
+ * count. A credit naming several performers ("Jeezy, T.I.") counts for
+ * each of them. A row opens ArtistDrawer. */
+const ArtistsTab = ({ onOpen }) => {
+  const [q, setQ] = React.useState('');
+  const [sort, setSort] = React.useState('name');
+  const qDebounced = useDebouncedValue(q, 250);
+  const path = React.useMemo(() => {
+    const params = new URLSearchParams();
+    if (qDebounced) params.set('q', qDebounced);
+    params.set('sort', sort);
+    return `/api/music/artists?${params.toString()}`;
+  }, [qDebounced, sort]);
+  const list = usePagedList(path, {
+    pageSize: 50, key: (a) => a.name, eventTypes: ['library.indexer.changed'],
+  });
+  const items = list.items || [];
+  const total = list.total ?? 0;
+  const showLoading = list.loading && items.length === 0;
+  const showEmpty = !list.loading && items.length === 0;
+  return (
+    <>
+      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: 360 }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="search artists…"
+                 aria-label="search artists"
+                 style={{ font: 'inherit', fontSize: 13, width: '100%', height: 30, padding: '0 10px 0 28px',
+                          borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                          background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
+          <span style={{ position: 'absolute', left: 9, top: 8, color: 'var(--fg-subtle)', pointerEvents: 'none' }}>
+            <Icon name="search" size={13}/>
+          </span>
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
+          sort
+          <select value={sort} onChange={e => setSort(e.target.value)}
+            style={{ font: 'inherit', fontSize: 12, height: 26, padding: '0 8px', borderRadius: 'var(--r-sm)',
+                     border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
+            <option value="name">name</option>
+            <option value="tracks">most tracks</option>
+          </select>
+        </label>
+        <div style={{ marginLeft: 'auto' }} className="mono">
+          <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{total} artist{total === 1 ? '' : 's'}</span>
+        </div>
+      </div>
+      {showLoading ? (
+        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading artists…</div>
+      ) : showEmpty ? (
+        <Empty glyph="headphones" title={q ? 'no artists match' : 'no artists yet'}
+               sub={q ? `q = “${q}”` : 'tracks with an artist tag show up here'}
+               action={q ? <Button icon="x" onClick={() => setQ('')}>clear search</Button> : null}/>
+      ) : (
+        <div className="artist-list">
+          {items.map((a, i) => (
+            <button key={a.name} type="button" className="artist-row" onClick={() => onOpen(a)}
+                    style={{ display: 'grid', gridTemplateColumns: '40px 1fr auto', gap: 12, alignItems: 'center',
+                             width: '100%', padding: '8px 16px', font: 'inherit', textAlign: 'left',
+                             background: 'transparent', color: 'var(--fg)', border: 0, cursor: 'pointer',
+                             borderBottom: i === items.length - 1 ? 'none' : '1px solid var(--border-soft)' }}>
+              <CoverArt src={a.cover_track_id != null ? libraryCoverUrl(a.cover_track_id) : null} size={40}/>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                  {a.track_count} track{a.track_count === 1 ? '' : 's'}
+                  {a.album_count ? ` · ${a.album_count} album${a.album_count === 1 ? '' : 's'}` : ''}
+                </div>
+              </div>
+              <Icon name="chevron-right" size={14}/>
+            </button>
+          ))}
+        </div>
+      )}
+      {!showLoading && (
+        <div style={{ borderTop: '1px solid var(--border-soft)' }}>
+          <PagedListFooter list={list} noun="artists"/>
+        </div>
+      )}
+    </>
+  );
+};
+
+/* A random order of `ids` (Fisher-Yates), for "shuffle". */
+const shuffledIds = (ids) => {
+  const out = [...ids];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+};
+
+/* One artist (GET /api/music/artist): their albums as chips ("all songs"
+ * first), the songs of the chosen one in album order (the library list,
+ * ?artist=&album=&sort=album, loaded as it scrolls), and the same actions
+ * as a playlist: play / shuffle / add to a room's queue, and play or queue
+ * in this browser. A room gets every track id (the server's list, at
+ * most ROOM_TRACK_CAP at once); this browser the songs loaded so far. */
+const ROOM_TRACK_CAP = 500;
+const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoom,
+                        onBrowserPlayTracks, onBrowserQueueTracks, onSelectTrack, onBrowserPlay, onQueueTrack }) => {
+  const [room, setRoom] = React.useState(rooms[0] || null);
+  const [album, setAlbum] = React.useState(null);     // null = all songs; '' = no album
+  React.useEffect(() => { setRoom(rooms[0] || null); }, [artist?.name, rooms.join(',')]);
+  React.useEffect(() => { setAlbum(null); }, [artist?.name]);
+  const name = artist ? artist.name : null;
+  const detailPath = name
+    ? `/api/music/artist?${new URLSearchParams(album == null ? { name } : { name, album }).toString()}`
+    : null;
+  const { data: detail } = useApiObject(detailPath, { eventTypes: ['library.indexer.changed'] });
+  const songsPath = React.useMemo(() => {
+    if (!name) return null;
+    const p = new URLSearchParams({ artist: name, sort: 'album' });
+    if (album != null) p.set('album', album);
+    return `/api/music/library?${p.toString()}`;
+  }, [name, album]);
+  const songs = usePagedList(songsPath, { pageSize: 100, eventTypes: ['library.indexer.changed'] });
+  if (!artist) return null;
+  const ids = (detail && detail.track_ids) || [];
+  const albums = (detail && detail.albums) || [];
+  const loaded = songs.items || [];
+  const what = album == null ? artist.name : `${album || 'songs with no album'} · ${artist.name}`;
+  const roomIds = (shuffle) => (shuffle ? shuffledIds(ids) : ids).slice(0, ROOM_TRACK_CAP);
+  const capNote = ids.length > ROOM_TRACK_CAP
+    ? `a room takes ${ROOM_TRACK_CAP} at a time — the first ${ROOM_TRACK_CAP} (or a random ${ROOM_TRACK_CAP} when shuffled)`
+    : null;
+  const chip = (key, label, count, active, onClick) => (
+    <button key={key} type="button" onClick={onClick}
+      style={{ font: 'inherit', fontSize: 12, cursor: 'pointer', padding: '4px 10px',
+               borderRadius: 'var(--r-full)', border: '1px solid var(--border)',
+               background: active ? 'var(--brand-soft)' : 'var(--card)',
+               color: active ? 'var(--brand-ink)' : 'var(--fg)' }}>
+      {label}{count != null ? <span className="mono" style={{ marginLeft: 6, fontSize: 11, color: 'var(--fg-muted)' }}>{count}</span> : null}
+    </button>
+  );
+  return (
+    <>
+      <div onClick={onClose}
+           style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.16)',
+                    backdropFilter: 'blur(2px)', zIndex: 40 }}/>
+      <aside role="dialog" aria-label={`artist ${artist.name}`}
+             style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 460, maxWidth: '100%',
+                      background: 'var(--card)', borderLeft: '1px solid var(--border)',
+                      boxShadow: 'var(--shadow-md)', zIndex: 41,
+                      display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
+          <div className="eyebrow">artist</div>
+          <IconButton name="x" onClick={onClose} title="close"/>
+        </div>
+        <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
+          <CoverArt src={artist.cover_track_id != null ? libraryCoverUrl(artist.cover_track_id) : null} size={56}/>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>{artist.name}</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              {artist.track_count} track{artist.track_count === 1 ? '' : 's'}
+              {artist.album_count ? ` · ${artist.album_count} album${artist.album_count === 1 ? '' : 's'}` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <div className="label" style={{ marginBottom: 6 }}>albums</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {chip('*all', 'all songs', artist.track_count, album == null, () => setAlbum(null))}
+            {albums.map(al => chip(`a:${al.name ?? ''}`, al.name || 'no album', al.track_count,
+                                   album === (al.name ?? ''), () => setAlbum(al.name ?? '')))}
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <div className="label" style={{ marginBottom: 6 }}>play in room</div>
+          <RoomChips rooms={rooms} room={room} onPick={setRoom}/>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+            <Button variant="primary" icon="play" disabled={!room || ids.length === 0}
+                    onClick={() => { if (room) { onPlayTracks(roomIds(false), room, what, false); onClose(); } }}>
+              play
+            </Button>
+            <Button icon="shuffle" disabled={!room || ids.length === 0}
+                    onClick={() => { if (room) { onPlayTracks(roomIds(true), room, what, true); onClose(); } }}>
+              shuffle
+            </Button>
+            <Button icon="list-plus" disabled={!room || ids.length === 0}
+                    onClick={() => { if (room) onQueueTracksInRoom(roomIds(false), room, what); }}>
+              add to queue
+            </Button>
+          </div>
+          {capNote && <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8 }}>{capNote}</div>}
+          <div className="label" style={{ margin: '12px 0 6px' }}>this browser</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button icon="headphones" disabled={loaded.length === 0}
+                    onClick={() => onBrowserPlayTracks(loaded, what)}>play here</Button>
+            <Button icon="shuffle" disabled={loaded.length === 0}
+                    onClick={() => onBrowserPlayTracks(shuffledIds(loaded), what)}>shuffle here</Button>
+            <Button icon="list-plus" disabled={loaded.length === 0}
+                    onClick={() => onBrowserQueueTracks(loaded, what)}>queue here</Button>
+          </div>
+          {songs.hasMore && (
+            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8 }}>
+              this browser takes the {loaded.length} songs loaded so far — scroll the list for more
+            </div>
+          )}
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+          {songs.loading && loaded.length === 0 ? (
+            <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+          ) : loaded.length === 0 ? (
+            <Empty glyph="headphones" title="no songs" sub="nothing in the library for this choice"/>
+          ) : (
+            <div style={{ padding: '4px 0' }}>
+              {loaded.map((t, i) => (
+                <div key={t.id}
+                     style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8,
+                              padding: '8px 16px',
+                              borderBottom: i === loaded.length - 1 ? 'none' : '1px solid var(--border-soft)' }}>
+                  <button type="button" onClick={() => onSelectTrack(t)}
+                          style={{ minWidth: 0, font: 'inherit', textAlign: 'left', background: 'transparent',
+                                   border: 0, padding: 0, color: 'var(--fg)', cursor: 'pointer' }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {t.title || (t.file_path || '').split('/').pop()}
+                    </div>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {[t.album, t.artist !== artist.name ? t.artist : null].filter(Boolean).join(' · ') || '—'}
+                    </div>
+                  </button>
+                  <div style={{ display: 'flex', gap: 2 }}>
+                    <IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/>
+                    <IconButton name="list-plus" onClick={() => onQueueTrack(t)} title="add to browser queue"/>
+                  </div>
+                </div>
+              ))}
+              <PagedListFooter list={songs} noun="songs" compact/>
+            </div>
+          )}
+        </div>
+      </aside>
     </>
   );
 };
@@ -1704,7 +1952,7 @@ const BucketStat = ({ label, buckets }) => {
 // The lower section's tabs, by address: #music/<id> (useRouteTab,
 // components.jsx). The labels and counts are the page's `tabs` below.
 const MUSIC_PAGE_TABS = [
-  { id: 'library' }, { id: 'player' }, { id: 'queue' },
+  { id: 'library' }, { id: 'artists' }, { id: 'player' }, { id: 'queue' },
   { id: 'playlists' }, { id: 'stats' }, { id: 'jobs' },
 ];
 
@@ -1719,6 +1967,8 @@ const MusicPage = () => {
   // closing the library add drawer (rare, but cleaner).
   const [openPlaylist, setOpenPlaylist] = React.useState(null);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = React.useState(null);
+  // Artists tab: the artist whose drawer is open.
+  const [openArtist, setOpenArtist] = React.useState(null);
   const [tick, setTick] = React.useState(0);
   const [fire, toastNode] = useToast();
 
@@ -1744,6 +1994,23 @@ const MusicPage = () => {
     if (!player.available) { fire('browser player not available'); return; }
     player.enqueue([window.itemFromTrack(track)]);
     fire(`queued "${track.title || 'track'}"`);
+  };
+  // Many tracks at once (the Artists drawer's "play here" / "queue here").
+  const onBrowserPlayTracks = (tracks, label) => {
+    if (!player.available) { fire('browser player not available'); return; }
+    if (!tracks.length) return;
+    const playing = `playing ${label} in this browser`;
+    const left = player.playItems(tracks.map(t => window.itemFromTrack(t)), 0, {
+      onLeft: (room, paused) => fire(paused ? `${playing} · paused ${room}`
+        : `${playing} · couldn't pause ${room}, it may still be playing`),
+    });
+    if (!left) fire(playing);
+  };
+  const onBrowserQueueTracks = (tracks, label) => {
+    if (!player.available) { fire('browser player not available'); return; }
+    if (!tracks.length) return;
+    player.enqueue(tracks.map(t => window.itemFromTrack(t)));
+    fire(`queued ${tracks.length} song${tracks.length === 1 ? '' : 's'} by ${label}`);
   };
   const onPlayNextTrack = (track) => {
     if (!player.available) { fire('browser player not available'); return; }
@@ -1893,6 +2160,29 @@ const MusicPage = () => {
       const path = `/api/music/queue/${encodeURIComponent(room_id)}/add`;
       await (guest ? guestSend(path, body) : apiPost(path, body));
       fire(`added "${track.title || 'track'}" to ${room_id}'s queue`);
+      refreshNP();
+    } catch (e) {
+      if (guest) fire(guestRefusalText('add', e));
+      else reportMutationFailure(fire, 'add', e);
+    }
+  };
+  // The Artists drawer: a list of library tracks into a room — replacing
+  // what it plays (play / shuffle, POST /api/music/play-tracks) or after
+  // it (the room queue, as onQueueInRoom).
+  const onPlayTracks = (track_ids, room_id, label, shuffle) => playInRoom(
+    room_id, `tracks ${label}${shuffle ? ' shuffled' : ''}`, shuffle ? 'shuffle' : 'play',
+    `${shuffle ? 'shuffling' : 'playing'} ${label} in ${room_id}…`,
+    () => apiPost('/api/music/play-tracks', { room_id, track_ids, device_id: DeviceIdentity.id() }));
+  const onQueueTracksInRoom = async (track_ids, room_id, label) => {
+    if (guest && !activeRooms.has(room_id)) {
+      fire(`${room_id} isn't playing — connect this browser to start music there`);
+      return;
+    }
+    try {
+      const body = { track_ids, device_id: DeviceIdentity.id() };
+      const path = `/api/music/queue/${encodeURIComponent(room_id)}/add`;
+      await (guest ? guestSend(path, body) : apiPost(path, body));
+      fire(`added ${track_ids.length} song${track_ids.length === 1 ? '' : 's'} by ${label} to ${room_id}'s queue`);
       refreshNP();
     } catch (e) {
       if (guest) fire(guestRefusalText('add', e));
@@ -2181,6 +2471,7 @@ const MusicPage = () => {
   const sourceOptions = Object.keys(stats?.by_source || {}).sort();
   const tabs = [
     { id: 'library',   label: 'Library',   count: libraryTotal ?? undefined },
+    { id: 'artists',   label: 'Artists' },
     { id: 'player',    label: 'Player' },
     // Room queue: what the SPEAKERS play from, as opposed to Player (this
     // browser's own queue). Sits next to Player so the distinction is
@@ -2244,6 +2535,7 @@ const MusicPage = () => {
       <Card>
         <div style={{ padding: '0 8px' }}><Tabs tabs={tabs} value={tab} onChange={setTab}/></div>
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
+        {tab === 'artists'   && <ArtistsTab onOpen={setOpenArtist}/>}
         {tab === 'player'    && <NowPlayingPanel/>}
         {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} npError={npError} fire={fire}
                                           room={queueRoom} onRoom={setQueueRoom}/>}
@@ -2264,6 +2556,12 @@ const MusicPage = () => {
                       onDelete={onDeletePlaylist} onEdit={onEditPlaylist}
                       onReorder={onReorderPlaylist}
                       fire={fire}/>
+      <ArtistDrawer artist={openArtist} rooms={rooms}
+                    onClose={() => setOpenArtist(null)}
+                    onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
+                    onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}
+                    onSelectTrack={(t) => { setOpenArtist(null); setSelected(t); }}
+                    onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack}/>
       <LibraryAddDrawer track={addToPlaylistTrack}
                         onClose={() => setAddToPlaylistTrack(null)}
                         onMutated={() => { lib.refresh(); refreshPlaylists(); refreshNP(); }}

@@ -210,26 +210,35 @@ async def list_artists(
 @router.get("/artist", response_model=ArtistDetail)
 async def artist_detail(
     name: str = Query(..., min_length=1, max_length=500),
+    album: str | None = Query(
+        default=None, max_length=500,
+        description="Only this album's track ids ('' = their tracks with no album).",
+    ),
 ) -> ArtistDetail:
     """One performer: albums A-Z (no album last) and every track id in
-    album order (the files' order within an album), for play / shuffle."""
+    album order (the files' order within an album), for play / shuffle;
+    with ``album``, that album's ids only."""
     artists = await _load()
     a = artists.get(_key(name) or name.strip().lower())
     if a is None:
         raise HTTPException(status_code=404, detail="no artist by that name in the library")
+    params: dict = {"credits": list(a.credits), "cap": MAX_TRACK_IDS + 1}
+    only = ""
+    if album is not None:
+        only = " AND coalesce(album, '') = :album"
+        params["album"] = album
     async with session_scope() as s:
-        rows = (await s.execute(text(
-            "SELECT id, coalesce(album, '') AS album, min(id) OVER (PARTITION BY coalesce(album, ''))"
-            " FROM library_tracks WHERE artist = ANY(:credits)"
-            " ORDER BY LOWER(album) ASC NULLS LAST, file_path, id"
-            " LIMIT :cap"
-        ), {"credits": list(a.credits), "cap": MAX_TRACK_IDS + 1})).all()
-    ids = [int(r[0]) for r in rows]
-    covers = {r[1]: int(r[2]) for r in rows}
-    albums = sorted(
-        (al for al in a.albums),
-        key=lambda al: (al == "", al.lower()),
-    )
+        covers = {
+            str(al): int(first) for al, first in (await s.execute(text(
+                "SELECT coalesce(album, ''), min(id) FROM library_tracks"
+                " WHERE artist = ANY(:credits) GROUP BY coalesce(album, '')"
+            ), params)).all()
+        }
+        ids = [int(r[0]) for r in (await s.execute(text(
+            "SELECT id FROM library_tracks WHERE artist = ANY(:credits)" + only +
+            " ORDER BY LOWER(album) ASC NULLS LAST, file_path, id LIMIT :cap"
+        ), params)).all()]
+    albums = sorted(a.albums, key=lambda al: (al == "", al.lower()))
     return ArtistDetail(
         name=a.name, track_count=a.tracks,
         albums=[
