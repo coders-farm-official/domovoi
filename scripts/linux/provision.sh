@@ -1370,6 +1370,16 @@ FSTAB_END="# END Domovoi media folders"
 # account in the distro can change them; nofail lets the distro start when
 # a folder (a USB drive) is missing, and then the empty mount point is
 # root's, so the services can't write into it by mistake.
+#
+# No x-systemd.mount-timeout= (review 2026-11-11, N8): it bounds a mount
+# that hangs, and the music players' failures came from a placeholder
+# folder that was gone and from Docker's order at boot, which
+# docker.service.d/50-domovoi-media.conf covers (the docker-media-order
+# block). It is also systemd's option alone: with mountFsTab WSL's own init
+# may mount these lines first, and an x- option it passes to mount.drvfs is
+# not documented as accepted. And a changed line here remounts every media
+# folder on every existing install (do_media), which a room's player
+# holding the music folder open refuses until the distro restarts.
 fstab_lines() {
   local name uid gid
   [ "${#MEDIA_NAMES[@]}" -gt 0 ] || return 0
