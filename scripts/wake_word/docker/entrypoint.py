@@ -377,8 +377,63 @@ def real_clip_fingerprint(wavs: list[Path]) -> str:
     return h.hexdigest()
 
 
+def synthetic_only() -> bool:
+    """WAKE_SYNTHETIC_ONLY=1: a synthetic-voices-only word. No recorded clip
+    is used, even if a clips folder was mounted anyway (the host wrapper
+    mounts none for such a word)."""
+    return os.environ.get("WAKE_SYNTHETIC_ONLY", "") == "1"
+
+
 def real_wavs() -> list[Path]:
+    if synthetic_only():
+        return []
     return sorted(CLIPS_IN.glob("*.wav")) if CLIPS_IN.is_dir() else []
+
+
+# The run dir under the cache volume is kept per slug, and train.py's
+# --generate_clips skips a stage whose folder already holds ~n clips. So a
+# word whose phrase was respelled ("alex sander" for "alexander") trained
+# on the OLD spelling's synthetic clips and near misses. This records what
+# the synthetic clips were spoken from (the phrase and the household's
+# pronunciations, WAKE_SYNTH_IPA) and drops them when that changes.
+SPOKEN_FINGERPRINT = ".spoken_as.sha256"
+SYNTH_DIRS = ("positive_train", "positive_test", "negative_train", "negative_test")
+
+
+def spoken_fingerprint(phrase: str, synth_ipa: str, pronunciations: str = "") -> str:
+    import hashlib
+
+    return hashlib.sha256(
+        "\0".join((phrase.strip().lower(), synth_ipa.strip(), pronunciations.strip())
+                  ).encode("utf-8")).hexdigest()
+
+
+def reset_for_spoken_phrase(model_dir: Path, fingerprint: str) -> bool:
+    """Before generating: when the run dir's synthetic clips were spoken
+    from another phrase or pronunciation (or it predates this record and
+    holds clips), drop them and every feature computed from them, so this
+    run speaks the phrase as it is now. Writes the new fingerprint. Returns
+    True when anything was dropped."""
+    stamp = model_dir / SPOKEN_FINGERPRINT
+    before = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else None
+    dropped = False
+    if before != fingerprint:
+        for name in SYNTH_DIRS:
+            d = model_dir / name
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+                dropped = True
+        for name in FEATURE_FILES:
+            f = model_dir / name
+            if f.is_file():
+                f.unlink()
+                dropped = True
+        real = model_dir / REAL_FINGERPRINT
+        if real.is_file():
+            real.unlink()
+    model_dir.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(fingerprint + "\n", encoding="utf-8")
+    return dropped
 
 
 def reset_for_real_clips(model_dir: Path, wavs: list[Path]) -> bool:
@@ -496,6 +551,9 @@ def inject_real_clips(work: Path, slug: str) -> int:
     if reset_for_real_clips(work / slug, wavs):
         log("real clip set changed since the last run; dropped the old copies "
             "and computed features so augmentation runs again.")
+    if synthetic_only():
+        log("synthetic voices only (WAKE_SYNTHETIC_ONLY=1): no recorded clips are used.")
+        return 0
     if not CLIPS_IN.is_dir():
         log("no /data/clips mount; training on synthetic positives only.")
         return 0
@@ -645,11 +703,152 @@ def warm() -> int:
     return 0
 
 
+# ── --preview: hear the training voices ─────────────────────────────────
+#
+# A few clips of the phrase spoken exactly the way --generate_clips speaks
+# the synthetic positives: piper-sample-generator's own model, phonemizer
+# (espeak-ng, with the household's pronunciations from WAKE_SYNTH_IPA put
+# in by train_runner, as in training) and generate_audio, at the settings
+# train.py passes for the positives (slerp 0.5, noise 0.98/0.98, length
+# 0.75/1.0/1.25). Only the speaker pairs differ: training walks them in
+# order, the preview picks a few of the same pairs at random so each clip
+# is another voice. Nothing else speaks here: no Domovoi voice, ever.
+
+PSG_DIR = Path("/opt/piper-sample-generator")
+PREVIEW_OUT = Path("/data/preview")
+# What train.py passes generate_samples for the training positives.
+POSITIVE_SLERP = 0.5
+POSITIVE_NOISE = 0.98
+POSITIVE_NOISE_W = 0.98
+POSITIVE_LENGTHS = (0.75, 1.0, 1.25)
+PREVIEW_MAX = 8
+
+
+def preview_count(raw: str | None) -> int:
+    """WAKE_PREVIEW_COUNT, 1..PREVIEW_MAX (default 4)."""
+    try:
+        n = int(raw or "4")
+    except ValueError:
+        n = 4
+    return max(1, min(PREVIEW_MAX, n))
+
+
+def preview_voices(num_speakers: int, n_samples: int, batch: int, count: int,
+                   rng) -> list[tuple[int, int, float]]:
+    """``count`` (speaker_1, speaker_2, length_scale) the training's
+    positives use: generate_samples walks product(range(S), range(S)) in
+    order for the first ``n_samples`` clips, in batches of ``batch``, each
+    batch at the next length scale. Picks clips with different first
+    speakers where it can, so each sounds like another voice."""
+    num_speakers = max(1, int(num_speakers))
+    n_samples = max(1, int(n_samples))
+    batch = max(1, int(batch))
+    picks: list[int] = []
+    seen_first: set[int] = set()
+    pool = list(range(n_samples))
+    rng.shuffle(pool)
+    for k in pool:                      # a new first speaker each time
+        if len(picks) >= count:
+            break
+        if k // num_speakers not in seen_first:
+            seen_first.add(k // num_speakers)
+            picks.append(k)
+    for k in pool:                      # then any other clip
+        if len(picks) >= count:
+            break
+        if k not in picks:
+            picks.append(k)
+    return [(k // num_speakers % num_speakers, k % num_speakers,
+             POSITIVE_LENGTHS[(k // batch) % len(POSITIVE_LENGTHS)]) for k in picks]
+
+
+def _load_module(name: str, path: Path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def preview() -> int:
+    """``--preview``: write WAKE_PREVIEW_COUNT clips of WAKE_PHRASE to
+    /data/preview (preview_1.wav ...) and preview.json, then exit. Needs no
+    cache volume and no network: the generator and its model are in the
+    image."""
+    import random
+    import wave
+
+    phrase = os.environ.get("WAKE_PHRASE", "").strip()
+    if not phrase:
+        die("WAKE_PHRASE not set (host wrapper passes -e WAKE_PHRASE).", 2)
+    count = preview_count(os.environ.get("WAKE_PREVIEW_COUNT"))
+    out = Path(os.environ.get("WAKE_PREVIEW_OUT", str(PREVIEW_OUT)))
+    out.mkdir(parents=True, exist_ok=True)
+    device = detect_device()
+    log(f"preview: {count} clip(s) of {phrase!r} from the training voices")
+
+    # The household's pronunciations, exactly as the training applies them.
+    runner = _load_module("_train_runner", TRAIN_RUNNER)
+    synth, dropped = runner.usable_overrides(
+        runner.parse_synth_ipa(os.environ.get("WAKE_SYNTH_IPA", "")), runner.voice_symbols())
+    for word, missing in dropped.items():
+        log(f"preview: {word!r} left to espeak-ng: the voice has no symbol {missing!r}")
+    runner.install_synthesis_overrides(synth, say=lambda s: print(s, flush=True))
+
+    sys.path.insert(0, str(PSG_DIR))
+    import generate_samples as gs  # noqa: E402 - the trainer's own generator
+    import torch
+    import torchaudio
+
+    model_path = PSG_DIR / "models" / "en-us-libritts-high.pt"
+    config = json.loads(Path(f"{model_path}.json").read_text(encoding="utf-8"))
+    model = torch.load(model_path)
+    model.eval()
+    if device == "cuda":
+        model.cuda()
+    phonemizer = gs.Phonemizer(config["espeak"]["voice"])
+    # The resampler generate_samples builds (22.05 kHz -> 16 kHz, kaiser).
+    resampler = torchaudio.transforms.Resample(
+        22050, 16000, lowpass_filter_width=64, rolloff=0.9475937167399596,
+        resampling_method="kaiser_window", beta=14.769656459379492)
+    n_samples = int(os.environ.get("WAKE_N_SAMPLES", "5000") or "5000")
+    batch = int(os.environ.get("WAKE_TTS_BATCH", "50" if device == "cuda" else "16"))
+    voices = preview_voices(config["num_speakers"], n_samples, batch, count,
+                            random.Random())
+    phoneme_ids = gs.get_phonemes(phonemizer, config, phrase, False)
+    spoken = phonemizer.phonemize(phrase)
+    log(f"preview: spoken as {spoken}")
+    clips = []
+    for i, (s1, s2, length) in enumerate(voices, 1):
+        with torch.no_grad():
+            audio = gs.generate_audio(
+                model, torch.LongTensor([s1]), torch.LongTensor([s2]), [phoneme_ids],
+                POSITIVE_SLERP, POSITIVE_NOISE, POSITIVE_NOISE_W, length, None)
+            audio = resampler(audio.cpu()).numpy()
+        pcm = gs.remove_silence(gs.audio_float_to_int16(audio)[0].flatten())
+        name = f"preview_{i}.wav"
+        with wave.open(str(out / name), "wb") as w:
+            w.setframerate(16000)
+            w.setsampwidth(2)
+            w.setnchannels(1)
+            w.writeframes(pcm.tobytes())
+        clips.append({"file": name, "speakers": [s1, s2], "length_scale": length})
+        log(f"preview: wrote {name} (speakers {s1}+{s2}, length {length})")
+    (out / "preview.json").write_text(json.dumps(
+        {"phrase": phrase, "spoken_as": spoken, "clips": clips}, ensure_ascii=False),
+        encoding="utf-8")
+    log(f"DONE: {len(clips)} preview clip(s) in {out}")
+    return 0
+
+
 def main() -> int:
     install_stop_handlers()
     lower_priority()
     if "--warm" in sys.argv[1:]:
         return warm()
+    if "--preview" in sys.argv[1:]:
+        return preview()
     slug = os.environ.get("WAKE_SLUG", "").strip()
     phrase = os.environ.get("WAKE_PHRASE", "").strip()
     if not slug:
@@ -667,6 +866,11 @@ def main() -> int:
     scrub_real_copies(CACHE / "runs")
     work = CACHE / "runs" / slug
     work.mkdir(parents=True, exist_ok=True)
+    if reset_for_spoken_phrase(work / slug, spoken_fingerprint(
+            phrase, os.environ.get("WAKE_SYNTH_IPA", ""),
+            os.environ.get("WAKE_PRONUNCIATIONS", ""))):
+        log("the phrase (or how it is said) changed since the last run; dropped the "
+            "old synthetic clips so they are spoken again.")
 
     cfg = render_config(slug, phrase, device, work)
 

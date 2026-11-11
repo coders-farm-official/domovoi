@@ -152,8 +152,18 @@ PRONUNCIATIONS = os.environ.get("WAKE_PRONUNCIATIONS", "")
 # The same words as IPA in the voice's symbols ("domovoi=dˈoʊmoʊvˌɔɪ"): the
 # synthetic positives are spoken from these (train_runner.py).
 SYNTH_IPA = os.environ.get("WAKE_SYNTH_IPA", "")
+# "1" for a synthetic-voices-only word (the core's worker sets it from the
+# word): no clips folder is mounted at all, and the entrypoint uses no
+# recorded clip even if one were.
+SYNTHETIC_ONLY = os.environ.get("WAKE_SYNTHETIC_ONLY", "") == "1"
 
 LABEL = "org.domovoi.wake-train"
+# --preview ("Hear the training voices"): its own name and label, so a
+# training's clean-up never stops a preview's container and the other way
+# round.
+PREVIEW_CONTAINER = os.environ.get("WAKE_TRAINER_PREVIEW_CONTAINER", "domovoi-wake-preview")
+PREVIEW_LABEL = "org.domovoi.wake-preview"
+PREVIEW_MEMORY = "4g"
 
 _CPUSET_RE = re.compile(r"^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$")
 _MEMORY_RE = re.compile(r"^[0-9]+(\.[0-9]+)?[bkmg]?$", re.IGNORECASE)
@@ -396,10 +406,12 @@ def build_run_argv(
     gpu_flag: list[str],
     cuda_visible: str = "",
     limits: list[str] | tuple[str, ...] = (),
+    synthetic_only: bool = False,
 ) -> list[str]:
     """Assemble the full ``docker run`` argv. ``gpu_flag`` is e.g.
     ['--gpus', 'all'] or ['--gpus', 'device=1'] or [] (CPU); ``limits`` is
-    :func:`resource_limits`' flags.
+    :func:`resource_limits`' flags. ``synthetic_only``: no clips mount at
+    all, and ``WAKE_SYNTHETIC_ONLY=1`` for the entrypoint.
 
     ``cuda_visible`` (the chosen card's UUID) becomes CUDA_VISIBLE_DEVICES in
     the container. Under WSL2 (Docker Desktop, or Docker Engine in a distro
@@ -426,7 +438,13 @@ def build_run_argv(
         "--shm-size", SHM_SIZE,
         *limits,
         *gpu_flag,
-        "-v", f"{clips_src}:/data/clips:ro",
+    ]
+    if synthetic_only:
+        # Synthetic voices only: no recording reaches the container.
+        argv += ["-e", "WAKE_SYNTHETIC_ONLY=1"]
+    else:
+        argv += ["-v", f"{clips_src}:/data/clips:ro"]
+    argv += [
         "-v", f"{models_src}:/data/models",
         "-v", f"{CACHE_VOLUME}:/data/cache",
         # Pass the training parameters as env into the container's entrypoint.
@@ -558,10 +576,13 @@ def _ignore_signals() -> None:
                 pass
 
 
-def run_container(run_argv: list[str], deadline_sec: float | None) -> int:
+def run_container(run_argv: list[str], deadline_sec: float | None,
+                  cleanup=None) -> int:
     """Run ``docker run`` (output straight through) and return its exit
     code. On a stop signal or at the deadline the container is removed
-    first: 128+signal, or 124 at the deadline."""
+    first (``cleanup(reason)``; the training containers by default): 128+
+    signal, or 124 at the deadline."""
+    stop_containers = cleanup or remove_training_containers
     proc: subprocess.Popen | None = None
     try:
         proc = subprocess.Popen(run_argv)
@@ -573,13 +594,13 @@ def run_container(run_argv: list[str], deadline_sec: float | None) -> int:
             _ignore_signals()
             log(f"stopped after {int(deadline_sec)} s: the training time limit "
                 f"(Settings > Advanced > Wake words) ran out")
-            remove_training_containers("time limit")
+            stop_containers("time limit")
             _reap(proc)
             return 124
     except _Stopped as e:
         _ignore_signals()
         log(f"told to stop (signal {e.signum}); removing the training container")
-        remove_training_containers("stopped")
+        stop_containers("stopped")
         if proc is not None:
             _reap(proc)
         return 128 + e.signum
@@ -596,6 +617,71 @@ def _reap(proc: subprocess.Popen) -> None:
             pass
 
 
+# ── --preview: "Hear the training voices" ────────────────────────────────
+
+def remove_preview_containers(reason: str) -> int:
+    """Remove every preview container (never a training one). Never raises."""
+    r = _docker(["ps", "-aq", "--filter", f"label={PREVIEW_LABEL}"], 30)
+    ids = r.stdout.split() if r is not None and r.returncode == 0 else []
+    if ids:
+        _docker(["rm", "-f", *ids], 60)
+        log(f"removed {len(ids)} preview container(s) ({reason})")
+    return len(ids)
+
+
+def build_preview_argv(out_src: str, phrase: str, count: int,
+                       limits: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """The ``docker run`` of the image's ``--preview`` mode: the phrase
+    spoken by the trainer's own synthetic voices into ``out_src`` (mounted
+    at /data/preview). On the CPU (a few short clips; the GPU stays with
+    whatever is training), no cache volume and no network (the generator
+    and its model are in the image), and never a clips folder."""
+    argv: list[str] = [
+        *docker_argv(), "run", "--rm", "--init",
+        "--name", PREVIEW_CONTAINER,
+        "--label", f"{PREVIEW_LABEL}=1",
+        "--network", "none",
+        *limits,
+        "-v", f"{out_src}:/data/preview",
+        "-e", f"WAKE_PHRASE={phrase}",
+        "-e", f"WAKE_PREVIEW_COUNT={int(count)}",
+    ]
+    if SYNTH_IPA and _SYNTH_RE.match(SYNTH_IPA):
+        argv += ["-e", f"WAKE_SYNTH_IPA={SYNTH_IPA}"]
+    argv += [IMAGE, "--preview"]
+    return argv
+
+
+def run_preview(phrase: str, out: str, count: int, deadline: float | None) -> int:
+    """``--preview``: speak ``phrase`` ``count`` times with the training
+    voices into ``out`` (preview_1.wav ...). 0 on success, the container's
+    exit code otherwise; 3 when Docker or the image isn't there."""
+    out_dir = Path(out)
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log(f"ERROR: cannot create the preview folder {out_dir}: {e}")
+        return 2
+    if not docker_available():
+        log("ERROR: Docker is not available, so the training voices can't speak. "
+            "Start Docker (Docker Desktop on Windows/Mac).")
+        return 3
+    img = _docker(["image", "inspect", IMAGE], 30)
+    if img is None or img.returncode != 0:
+        log(f"ERROR: the trainer image {IMAGE!r} is not built. Turn on wake-word "
+            f"training in Settings > Wake words (it builds the image).")
+        return 3
+    remove_preview_containers("left over from an earlier preview")
+    ncpu, mem = docker_host_resources()
+    # Two CPUs at most and a small memory cap: a preview never competes
+    # with live voice (or a training) for more than that.
+    limits = resource_limits(ncpu, mem, cpus=str(min(2, max(1, ncpu - 2))) if ncpu else "2",
+                             cpu_shares=CPU_SHARES, cpuset=CPUSET, memory=PREVIEW_MEMORY)
+    argv = build_preview_argv(to_docker_mount_source(str(out_dir)), phrase, count, limits)
+    log("running: " + " ".join(argv))
+    return run_container(argv, deadline, cleanup=remove_preview_containers)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Portable openWakeWord docker trainer wrapper")
     ap.add_argument("--stop", action="store_true",
@@ -608,8 +694,39 @@ def main() -> int:
     ap.add_argument("--clips", help="host positive-clips dir ({clips_dir})")
     ap.add_argument("--phrase", help="wake phrase, e.g. 'hey domovoi' ({phrase})")
     ap.add_argument("--slug", help="model slug; output is <slug>.onnx ({slug})")
-    ap.add_argument("--out", help="host output path <...>/<slug>.onnx ({out})")
+    ap.add_argument("--out", help="host output path <...>/<slug>.onnx ({out}); with "
+                                  "--preview, the folder the clips go to")
+    ap.add_argument("--preview", action="store_true",
+                    help="speak --phrase with the training's synthetic voices into the "
+                         "--out folder (preview_1.wav ...) and exit; trains nothing")
+    ap.add_argument("--stop-preview", action="store_true",
+                    help="remove a running preview container and exit")
+    ap.add_argument("--count", type=int, default=4,
+                    help="with --preview: how many clips (1-8, default 4)")
     args = ap.parse_args()
+
+    if args.stop_preview:
+        remove_preview_containers("asked to stop")
+        return 0
+    if args.preview:
+        missing = [f"--{k}" for k in ("phrase", "out") if not getattr(args, k)]
+        if missing:
+            ap.error("--preview needs " + ", ".join(missing))
+        if not 1 <= args.count <= 8:
+            ap.error("--count must be 1-8")
+        _install_signal_handlers()
+        deadline: float | None = None
+        try:
+            deadline = float(DEADLINE_SEC) if DEADLINE_SEC else None
+        except ValueError:
+            deadline = None
+        try:
+            return run_preview(args.phrase, args.out, args.count,
+                               deadline if deadline and deadline > 0 else None)
+        except _Stopped as e:
+            _ignore_signals()
+            remove_preview_containers("stopped")
+            return 128 + e.signum
 
     if args.stop or args.forget or args.keep_only is not None:
         ok = True
@@ -657,7 +774,9 @@ def main() -> int:
             f"worker may not find {out_path.name}.")
 
     clips_dir = Path(args.clips)
-    if not clips_dir.is_dir():
+    if SYNTHETIC_ONLY:
+        log("synthetic voices only: no clips folder is mounted")
+    elif not clips_dir.is_dir():
         log(f"ERROR: clips dir does not exist: {clips_dir}. Record positive "
             f"clips first (Wake Words tab) — nothing to train on.")
         return 2
@@ -732,13 +851,14 @@ def main() -> int:
         clips_src = to_docker_mount_source(args.clips)
         models_src = to_docker_mount_source(str(models_dir))
         run_argv = build_run_argv(clips_src, models_src, args.phrase, slug, gpu_flag,
-                                  cuda_visible, limits)
+                                  cuda_visible, limits, synthetic_only=SYNTHETIC_ONLY)
 
         # (5) Log the chosen backend + the exact command (stderr).
         log(f"backend = {backend}")
         log(f"image   = {IMAGE}")
         log(f"limits  = {' '.join(limits) or 'none'} (Docker host: {ncpu} CPUs)")
-        log(f"clips   = {clips_src} -> /data/clips:ro")
+        log("clips   = none (synthetic voices only)" if SYNTHETIC_ONLY
+            else f"clips   = {clips_src} -> /data/clips:ro")
         log(f"models  = {models_src} -> /data/models  (expecting /data/models/{slug}.onnx)")
         log(f"cache   = {CACHE_VOLUME} -> /data/cache")
         log("running: " + " ".join(run_argv))

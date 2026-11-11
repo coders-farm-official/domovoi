@@ -2356,6 +2356,15 @@ const InternetPanel = () => {
  *   PATCH  /api/wake-words/{id}                    · rename / threshold / set_default
  *   POST   /api/wake-words/{id}/push               · push the ready model to a room {room_id}
  *   DELETE /api/wake-words/{id}                    · remove (refuses the default)
+ *   PATCH  /api/wake-words/{id} {phrase}           · respell how the training voices say it
+ *   POST   /api/wake-words/{id}/synthetic-copy     · a synthetic-voices-only twin, queued to train
+ *   GET/POST /api/wake-words/preview               · "Hear the training voices" (the trainer's own voices)
+ *   GET    /api/wake-words/preview/{job}/{clip}/audio · a preview clip
+ *
+ * Synthetic voices only (V047): such a word takes no recordings and has no
+ * clip minimum; its kind is fixed when it is made, so a model is never
+ * replaced by one of the other kind. Each row says what its model was made
+ * from ("synthetic voices only" / "synthetic voices + N of your recordings").
  */
 
 const WAKE_MIN_CLIPS = 15;   // mirrors settings.wake_word_min_clips (default)
@@ -2596,9 +2605,16 @@ const WakeClipGrid = ({ wid, wname, canScore, canDeleteAll = true, fire }) => {
 
 const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onRecordStop, onTrain,
                    onRename, onThreshold, onSetDefault, onPush, onDelete, internetOff = false,
-                   trainerOn = true, onTrainStop }) => {
+                   trainerOn = true, onTrainStop, preview, onPhrase, onSyntheticCopy,
+                   syntheticCopy = null }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(w.name);
+  // "How the voices say it": the phrase the trainer's synthetic voices
+  // speak, respelled here (the slug the rooms know the word by stays).
+  const [sayEditing, setSayEditing] = React.useState(false);
+  const [said, setSaid] = React.useState(w.phrase);
+  React.useEffect(() => { if (!sayEditing) setSaid(w.phrase); }, [w.phrase, sayEditing]);
+  const synthetic = !!w.synthetic_only;
   const [room, setRoom] = React.useState('');
   const [thr, setThr] = React.useState(w.threshold);
   const [showClips, setShowClips] = React.useState(false);
@@ -2668,8 +2684,16 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   // Every take adds clips. A failed word trains again on the clips it has; a
   // ready one trains again on all its selected clips, new ones included,
   // keeping its current model in use until the new one lands.
-  const canTrain = w.status !== 'training' && w.clip_count >= minClips;
+  // A synthetic-voices-only word uses no clips, so it has no minimum.
+  const canTrain = w.status !== 'training' && (synthetic || w.clip_count >= minClips);
   const retrain = w.status === 'ready';
+  const madeFrom = wakeModelMadeFrom(w);
+  const saveSaid = () => {
+    const t = said.trim();
+    if (!t || t === w.phrase) { setSayEditing(false); setSaid(w.phrase); return; }
+    onPhrase(w, t);
+    setSayEditing(false);
+  };
   const canPush = w.status === 'ready';
   const capturing = (recActive || capLive) && w.status !== 'training';
   const startRec = () => { setRecActive(true); onRecordStart(w, roomFor); };
@@ -2688,13 +2712,22 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
           <div style={{ fontSize: 14, fontWeight: 500 }}>{w.name}</div>
         )}
         <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>“{w.phrase}”</span>
+        {!sayEditing && (
+          <IconButton name="audio-lines" title="how the voices say it: respell, listen"
+                      disabled={w.status === 'training'}
+                      onClick={() => setSayEditing(true)}/>
+        )}
         <Pill tone={tone} live={capturing}>{w.status}</Pill>
-        <span style={{ fontSize: 13, fontWeight: bumped ? 700 : 600,
-                       color: bumped ? 'var(--brand-ink)'
-                                     : (w.clip_count >= minClips ? 'var(--ok)' : 'var(--fg-muted)'),
-                       transition: 'color .25s ease' }}>
-          {w.clip_count} / {minClips} clips
-        </span>
+        {synthetic ? (
+          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>synthetic voices only</span>
+        ) : (
+          <span style={{ fontSize: 13, fontWeight: bumped ? 700 : 600,
+                         color: bumped ? 'var(--brand-ink)'
+                                       : (w.clip_count >= minClips ? 'var(--ok-ink)' : 'var(--fg-muted)'),
+                         transition: 'color .25s ease' }}>
+            {w.clip_count} / {minClips} clips
+          </span>
+        )}
         {w.is_default && <Pill tone="live">default</Pill>}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>threshold</span>
@@ -2713,6 +2746,33 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
           in use) with the reason. */}
       {(w.status === 'failed' || w.status === 'ready') && w.error && (
         <div style={{ fontSize: 12, color: 'var(--err-ink)' }}>{w.error}</div>
+      )}
+
+      {/* What the model in use was made from: which models hold the
+          household's voices matters before one is ever shared. */}
+      {madeFrom && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{madeFrom}</div>
+      )}
+
+      {sayEditing && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px',
+                      border: '1px solid var(--border-soft)', borderRadius: 'var(--r-sm)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>how the voices say it</span>
+            <input value={said} onChange={(e) => setSaid(e.target.value)} autoFocus
+                   aria-label="how the voices say it"
+                   onKeyDown={(e) => { if (e.key === 'Enter') saveSaid();
+                                       if (e.key === 'Escape') { setSayEditing(false); setSaid(w.phrase); } }}
+                   style={{ ..._wakeFieldStyle, flex: 1, minWidth: 200 }}/>
+            <Button variant="primary" onClick={saveSaid}>Save</Button>
+            <Button variant="ghost" onClick={() => { setSayEditing(false); setSaid(w.phrase); }}>Cancel</Button>
+          </div>
+          <TrainingVoices phrase={said} preview={preview} fire={fire}/>
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+            The trainer’s voices say this spelling; the word keeps its name in the rooms.
+            {retrain ? ' Train again to use a new spelling.' : ''}
+          </div>
+        </div>
       )}
 
       {retrain && w.new_clips > 0 && (
@@ -2746,14 +2806,19 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
       {/* Action line — record on a room, train, push, set default */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <RoomSelect value={roomFor} onChange={setRoom} rooms={rooms}/>
-        <Button variant="secondary" icon="mic"
-                disabled={!haveRooms || w.status === 'training' || capturing || !canRecordHere}
-                title={!canRecordHere ? "this room's device doesn't record wake-word clips"
-                  : w.status === 'training' ? 'not while it trains'
-                  : 'adds clips to the ones already recorded'}
-                onClick={startRec}>Record</Button>
-        <Button variant="ghost" icon="square" disabled={!haveRooms}
-                onClick={stopRec}>Stop</Button>
+        {/* A synthetic-voices-only word takes no recordings. */}
+        {!synthetic && (
+          <React.Fragment>
+            <Button variant="secondary" icon="mic"
+                    disabled={!haveRooms || w.status === 'training' || capturing || !canRecordHere}
+                    title={!canRecordHere ? "this room's device doesn't record wake-word clips"
+                      : w.status === 'training' ? 'not while it trains'
+                      : 'adds clips to the ones already recorded'}
+                    onClick={startRec}>Record</Button>
+            <Button variant="ghost" icon="square" disabled={!haveRooms}
+                    onClick={stopRec}>Stop</Button>
+          </React.Fragment>
+        )}
         {/* Training downloads its data the first time: greyed under "No".
             Until training is turned on (the card above) a Train would only
             queue the word, so the button says why it waits. */}
@@ -2761,8 +2826,23 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                 title={internetOff ? NEEDS_INTERNET_TEXT
                   : !trainerOn ? 'turn on wake-word training first (above)'
                   : capturing ? 'stop recording first'
+                  : synthetic ? 'train on the synthetic voices only; none of your recordings'
                   : retrain ? 'train on all selected clips; the current model stays in use until then' : undefined}
                 onClick={() => onTrain(w)}>{retrain ? 'Train again' : 'Train'}</Button>
+        {/* A model without anybody's voice, beside this one: its own word
+            and model file, so neither replaces the other. */}
+        {!synthetic && !syntheticCopy && onSyntheticCopy && (
+          <Button variant="ghost" icon="audio-lines"
+                  disabled={internetOff || !trainerOn || capturing}
+                  title={!trainerOn ? 'turn on wake-word training first (above)'
+                    : 'a second wake word with this phrase, trained on synthetic voices only; '
+                      + 'this one and its model stay as they are'}
+                  onClick={() => onSyntheticCopy(w)}>Train on synthetic voices only</Button>
+        )}
+        {!synthetic && syntheticCopy && (
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+            synthetic-voices copy: {syntheticCopy.name}</span>
+        )}
         {internetOff && <NeedsInternetNote compact/>}
         {w.status === 'training' && onTrainStop && (
           <Button variant="secondary" icon="square" onClick={() => onTrainStop(w)}
@@ -2777,14 +2857,16 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                 onClick={() => onPush(w, roomFor)}>Push to room</Button>
         {canPush && !w.is_default &&
           <Button variant="ghost" onClick={() => onSetDefault(w)}>make default</Button>}
-        <Button variant="ghost" icon={showClips ? 'chevron-down' : 'chevron-right'}
-                onClick={() => setShowClips((s) => !s)}>
-          {showClips ? 'hide clips' : `clips (${w.clip_count})`}
-        </Button>
+        {!synthetic && (
+          <Button variant="ghost" icon={showClips ? 'chevron-down' : 'chevron-right'}
+                  onClick={() => setShowClips((s) => !s)}>
+            {showClips ? 'hide clips' : `clips (${w.clip_count})`}
+          </Button>
+        )}
       </div>
 
       {/* Expandable per-clip review: quality, auto-trim, playback, curation */}
-      {showClips && (
+      {showClips && !synthetic && (
         <div style={{ borderTop: '1px dashed var(--border-soft)', marginTop: 2 }}>
           <WakeClipGrid wid={w.id} wname={w.name} canScore={w.status === 'ready'}
                         canDeleteAll={w.status !== 'training'} fire={fire}/>
@@ -2794,27 +2876,138 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   );
 };
 
-const AddWakeWord = ({ onAdd }) => {
+/* ---- "Hear the training voices" (GET/POST /api/wake-words/preview) ----
+ * The phrase spoken by the SAME synthetic voices the trainer makes its
+ * examples with (the trainer image's own generator, run by the core in the
+ * trainer's container: domovoi/wake_preview.py). Never Domovoi's own voice:
+ * when training is off there are no training voices, so the control is
+ * replaced by the sentence saying what it needs. One preview at a time for
+ * the whole server; each control plays only the job it started. */
+
+const useWakePreview = () => {
+  const { data, refresh } = useApiObject('/api/wake-words/preview', { quiet: true, refetchOnAuth: true });
+  const running = !!(data && data.state === 'running');
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(refresh, 1500);
+    return () => clearInterval(t);
+  }, [running, refresh]);
+  const start = async (phrase) => {
+    const st = await apiPost('/api/wake-words/preview', { phrase });
+    await refresh();
+    return st && st.job;
+  };
+  return { status: data, start, refresh };
+};
+
+const TrainingVoices = ({ phrase, preview, fire }) => {
+  const st = preview.status;
+  const [job, setJob] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [playing, setPlaying] = React.useState(null);
+  const audioRef = React.useRef(null);
+  React.useEffect(() => () => { if (audioRef.current) audioRef.current.pause(); }, []);
+  if (!st) return null;
+  if (!st.available) {
+    return <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{st.unavailable_reason}</span>;
+  }
+  const said = (phrase || '').trim();
+  // Only the job this control started, and only while the box still says
+  // what those clips say: a clip of an older spelling would mislead.
+  const mine = job && st.job === job && st.phrase === said;
+  const running = st.state === 'running';
+  const play = (name) => {
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if (playing === name) { setPlaying(null); return; }
+    const a = new Audio(withDeviceToken(
+      `${API_BASE}/api/wake-words/preview/${st.job}/${encodeURIComponent(name)}/audio`));
+    audioRef.current = a;
+    setPlaying(name);
+    const done = () => { setPlaying(null); if (audioRef.current === a) audioRef.current = null; };
+    a.onended = done;
+    a.onerror = () => { fire('playback failed'); done(); };
+    a.play().catch(() => { fire('playback failed'); done(); });
+  };
+  const hear = async () => {
+    if (!said) return;
+    setBusy(true);
+    try { setJob(await preview.start(said)); }
+    catch (e) { fire(`failed: ${e.message || e}`); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <Button variant="secondary" icon="volume-2" disabled={!said || busy || running}
+              title={running && !mine ? 'the training voices are saying another phrase; one at a time'
+                : 'how the voices the trainer learns from say this spelling'}
+              onClick={hear}>Hear the training voices</Button>
+      {mine && running && (
+        <span style={{ fontSize: 12, color: 'var(--fg-muted)' }} role="status">
+          getting the voices ready… {st.elapsed_sec || 0} s
+          {st.last_line ? ` · ${st.last_line}` : ''}
+        </span>
+      )}
+      {mine && st.state === 'failed' && (
+        <span style={{ fontSize: 12, color: 'var(--err-ink)' }}>{st.error}</span>
+      )}
+      {mine && st.state === 'done' && (
+        <React.Fragment>
+          {(st.clips || []).map((c, i) => (
+            <Button key={c} variant="ghost" icon={playing === c ? 'square' : 'play'}
+                    title={st.spoken_as ? `spoken as ${st.spoken_as}` : undefined}
+                    onClick={() => play(c)}>voice {i + 1}</Button>
+          ))}
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+            not how you say it? Spell it the way it sounds and listen again
+          </span>
+        </React.Fragment>
+      )}
+    </div>
+  );
+};
+
+const AddWakeWord = ({ onAdd, preview, fire }) => {
   const [name, setName] = React.useState('');
   const [phrase, setPhrase] = React.useState('');
+  const [synthetic, setSynthetic] = React.useState(false);
   const submit = (e) => {
     e?.preventDefault?.();
     const n = name.trim(); const p = phrase.trim();
     if (!n || !p) return;
-    onAdd(n, p);
-    setName(''); setPhrase('');
+    onAdd(n, p, synthetic);
+    setName(''); setPhrase(''); setSynthetic(false);
   };
   return (
     <form onSubmit={submit}
-          style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Hey Domovoi)"
-             style={{ ..._wakeFieldStyle, width: 200 }}/>
-      <input value={phrase} onChange={(e) => setPhrase(e.target.value)}
-             placeholder="Spoken phrase (e.g. hey domovoi)"
-             style={{ ..._wakeFieldStyle, flex: 1, minWidth: 220 }}/>
-      <Button variant="primary" icon="plus" type="submit">Create</Button>
+          style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Hey Domovoi)"
+               style={{ ..._wakeFieldStyle, width: 200 }}/>
+        <input value={phrase} onChange={(e) => setPhrase(e.target.value)}
+               placeholder="Spoken phrase (e.g. hey domovoi)" aria-label="spoken phrase"
+               style={{ ..._wakeFieldStyle, flex: 1, minWidth: 220 }}/>
+        <Button variant="primary" icon="plus" type="submit">Create</Button>
+      </div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <input type="checkbox" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)}/>
+          Synthetic voices only
+          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>(no recordings: nobody’s voice is in the model)</span>
+        </label>
+        <TrainingVoices phrase={phrase} preview={preview} fire={fire}/>
+      </div>
     </form>
   );
+};
+
+// What the word's current model was trained on (shown next to the model).
+const wakeModelMadeFrom = (w) => {
+  if (!w.model_ref) return null;
+  if (w.trained_clips === 0) return 'model: synthetic voices only';
+  if (w.trained_clips > 0) {
+    return `model: synthetic voices + ${w.trained_clips} of your recording${w.trained_clips === 1 ? '' : 's'}`;
+  }
+  return 'model trained before Domovoi kept count: it may include your recordings';
 };
 
 /* ---- Turning training on (GET/POST /api/wake-words/trainer) ----------
@@ -3168,8 +3361,18 @@ const WakeWordsPanel = () => {
     }
   };
 
-  const add = (name, phrase) =>
-    guard(() => apiPost('/api/wake-words', { name, phrase }), 'wake word created');
+  // "Hear the training voices": one preview at a time for the server.
+  const preview = useWakePreview();
+  const add = (name, phrase, synthetic_only = false) =>
+    guard(() => apiPost('/api/wake-words', { name, phrase, synthetic_only }), 'wake word created');
+  const sayAs = (w, phrase) =>
+    guard(() => apiPatch(`/api/wake-words/${w.id}`, { phrase }),
+      `“${w.name}”: the next training speaks it as “${phrase}”`);
+  // "Train on synthetic voices only" on a recorded word: a second word,
+  // asked first (it starts a training).
+  const [copyAskFor, setCopyAskFor] = React.useState(null);
+  const syntheticCopy = (w) => setCopyAskFor(w);
+  const copyOf = (w) => (items || []).find((x) => x.synthetic_only && x.slug === `${w.slug}_synthetic`) || null;
   const recordStart = (w, room) => {
     if (!room) { fire('no room online to record in'); return; }
     return guard(() => apiPost(`/api/wake-words/${w.id}/record/start`, { room_id: room }),
@@ -3215,8 +3418,8 @@ const WakeWordsPanel = () => {
       <WakeTrainerCard status={trainer} error={trainerError} refresh={refreshTrainer} fire={fire}/>
 
       <Card title="Create a wake word"
-            sub="Name it, then record positive clips in a room and train an openWakeWord model.">
-        <AddWakeWord onAdd={add}/>
+            sub="Name it, then record clips in a room and train, or train on synthetic voices only.">
+        <AddWakeWord onAdd={add} preview={preview} fire={fire}/>
       </Card>
 
       <div style={{ padding: '0 2px 10px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
@@ -3237,11 +3440,30 @@ const WakeWordsPanel = () => {
                      onRecordStart={recordStart} onRecordStop={recordStop} onTrain={train}
                      onRename={rename} onThreshold={threshold} onSetDefault={setDefault}
                      onPush={push} onDelete={remove} internetOff={internetOff}
-                     trainerOn={trainerOn || !trainer} onTrainStop={trainStop}/>
+                     trainerOn={trainerOn || !trainer} onTrainStop={trainStop}
+                     preview={preview} onPhrase={sayAs} onSyntheticCopy={syntheticCopy}
+                     syntheticCopy={copyOf(w)}/>
           ))}
         </Card>
       )}
       {del.node}
+      {copyAskFor && (
+        <TrainerConfirmDialog title={`Train “${copyAskFor.name}” on synthetic voices only?`} busy={false}
+                              icon="audio-lines" confirmLabel="Create and train"
+                              onCancel={() => setCopyAskFor(null)}
+                              onConfirm={() => {
+                                const w = copyAskFor; setCopyAskFor(null);
+                                guard(() => apiPost(`/api/wake-words/${w.id}/synthetic-copy`, {}),
+                                  `training “${w.name} (synthetic voices)”…`);
+                              }}>
+          <div>A new wake word, “{copyAskFor.name} (synthetic voices)”, says the same phrase and trains
+            on the trainer’s synthetic voices alone: none of your recordings go into it.</div>
+          <div>“{copyAskFor.name}” and its model stay as they are, so you can push either one to a
+            room and compare.</div>
+          {cpuTrainer && <div>This server trains on the CPU: about {trainerEst.minutes_per_word} minutes,
+            and voice answers more slowly until it finishes.</div>}
+        </TrainerConfirmDialog>
+      )}
       {cpuAskFor && (
         <TrainerConfirmDialog title={`Train “${cpuAskFor.name}” on the CPU?`} busy={false}
                               confirmLabel="Train" onCancel={() => setCpuAskFor(null)}

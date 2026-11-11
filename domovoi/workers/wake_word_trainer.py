@@ -270,12 +270,14 @@ def _run_stop(stop_argv: list[str], env: dict[str, str]) -> None:
 
 def run_train_command(argv: list[str], *, env: dict[str, str], timeout: float,
                       cancel: threading.Event, log_path: Path | None = None,
-                      stop_argv: list[str] | None = None) -> TrainRun:
+                      stop_argv: list[str] | None = None,
+                      on_line=None) -> TrainRun:
     """Run the training command to the end, the time limit, or ``cancel``
     (blocking; the worker runs it in a thread). Its output goes to
-    ``log_path`` (whole) and the returned tail. When it has to be stopped:
-    SIGTERM, ``_STOP_GRACE_SEC``, a kill, then ``stop_argv`` (the wrapper's
-    ``--stop``) for anything it left running."""
+    ``log_path`` (whole), ``on_line`` (each line, as it comes) and the
+    returned tail. When it has to be stopped: SIGTERM, ``_STOP_GRACE_SEC``,
+    a kill, then ``stop_argv`` (the wrapper's ``--stop``) for anything it
+    left running."""
     tail: deque[str] = deque(maxlen=_OUTPUT_TAIL_LINES)
     logf = None
     if log_path is not None:
@@ -294,6 +296,11 @@ def run_train_command(argv: list[str], *, env: dict[str, str], timeout: float,
         assert proc.stdout is not None
         for line in proc.stdout:
             tail.append(line.rstrip("\r\n")[-2000:])
+            if on_line is not None:
+                try:
+                    on_line(tail[-1])
+                except Exception:  # noqa: BLE001 - a progress hook never stops the run
+                    pass
             if logf is not None:
                 try:
                     logf.write(line)
@@ -375,11 +382,13 @@ def _env_file_trainer_keys() -> dict[str, str]:
             if v is not None and k.upper().startswith("WAKE_TRAINER_")}
 
 
-def trainer_env(timeout: int, pronunciations: str = "", synth_ipa: str = "") -> dict[str, str]:
+def trainer_env(timeout: int, pronunciations: str = "", synth_ipa: str = "", *,
+                synthetic_only: bool = False) -> dict[str, str]:
     """The command's environment: the core's own, the trainer knobs from
     the settings and ``.env``, the wrapper's deadline and the phrase's
     pronunciations. The process environment wins over ``.env`` (as it does
-    for the settings themselves)."""
+    for the settings themselves), except ``WAKE_SYNTHETIC_ONLY``, which is
+    the word's own: "1" for a synthetic-voices-only word, absent otherwise."""
     env = dict(os.environ)
     for key, value in _env_file_trainer_keys().items():
         env.setdefault(key, value)
@@ -393,12 +402,41 @@ def trainer_env(timeout: int, pronunciations: str = "", synth_ipa: str = "") -> 
     if mem > 0:
         env["WAKE_TRAINER_MEMORY"] = f"{mem}g"
     env["WAKE_TRAINER_DEADLINE_SEC"] = str(max(60, int(timeout) - 60))
-    for key, value in (("WAKE_PRONUNCIATIONS", pronunciations), ("WAKE_SYNTH_IPA", synth_ipa)):
+    for key, value in (("WAKE_PRONUNCIATIONS", pronunciations), ("WAKE_SYNTH_IPA", synth_ipa),
+                       ("WAKE_SYNTHETIC_ONLY", "1" if synthetic_only else "")):
         if value:
             env[key] = value
         else:
             env.pop(key, None)
     return env
+
+
+def empty_clips_dir() -> Path:
+    """An empty folder to hand a synthetic-voices-only training as its
+    clips (``~/.domovoi/wake_trainer/no_clips``): the command template
+    always names a clips folder, and this one never holds a recording.
+    Anything found in it is removed first. Blocking."""
+    import shutil
+
+    d = Path(settings.wake_models_dir).parent / "wake_trainer" / "no_clips"
+    if d.is_dir():
+        for child in d.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def count_wavs(clips_dir: Path) -> int:
+    """The recordings a run hands the trainer: the ``*.wav`` files at the
+    top of its clips folder (what the container reads; the analysis and
+    training subfolders are not looked into)."""
+    try:
+        return sum(1 for p in Path(clips_dir).glob("*.wav") if p.is_file())
+    except OSError:
+        return 0
 
 
 _TOKEN_RE = re.compile(r"^[a-z0-9'.-]+$")
@@ -607,34 +645,53 @@ class WakeWordTrainer(Worker):
             log.info("wake-word trainer: slug=%s not trained: internet off", slug)
             return 1
 
-        # Hand the trainer ONLY the clips the operator selected. stage_selected
-        # rebuilds <slug>/.training/ with the selected raw clips (re-indexed);
-        # if nothing is selected / sidecars predate this feature (count 0), fall
-        # back to the raw slug dir so a queued word still trains on what's there.
+        synthetic_only = bool(row.get("synthetic_only"))
         raw_dir = Path(settings.wake_clips_dir) / slug
-        # The highest clip this run trains on, read BEFORE staging: a clip
-        # that lands after it (a take running on) is numbered above it and
-        # reads as "new since the last training" once this run succeeds.
-        try:
-            staged_upto = await asyncio.to_thread(wake_clip_quality.max_clip_number, raw_dir)
-        except Exception:  # noqa: BLE001 - the marker is best effort
-            staged_upto = 0
+        staged_upto = 0
         n_selected = 0
-        try:
-            staged, n_selected = await asyncio.to_thread(
-                wake_clip_quality.stage_selected_clips, raw_dir
-            )
-            clips_dir = staged if n_selected > 0 else raw_dir
-            log.info(
-                "wake-word trainer: slug=%s staged %d selected clip(s) → %s",
-                slug, n_selected, clips_dir,
-            )
-        except Exception as e:
-            log.warning(
-                "wake-word trainer: clip staging failed for slug=%s (%s); "
-                "training on the raw clip dir", slug, e,
-            )
-            clips_dir = raw_dir
+        if synthetic_only:
+            # Synthetic voices only: the command gets an EMPTY clips folder
+            # (never the word's own, whatever is in it), and the repo's
+            # wrapper, told by WAKE_SYNTHETIC_ONLY, mounts none at all.
+            try:
+                clips_dir = await asyncio.to_thread(empty_clips_dir)
+            except OSError as e:
+                await self._mark_failed(
+                    wake_word_id, f"could not prepare an empty clips folder: {e}")
+                return 1
+            log.info("wake-word trainer: slug=%s trains on synthetic voices only", slug)
+        else:
+            # Hand the trainer ONLY the clips the operator selected.
+            # stage_selected rebuilds <slug>/.training/ with the selected raw
+            # clips (re-indexed); if nothing is selected / sidecars predate
+            # this feature (count 0), fall back to the raw slug dir so a
+            # queued word still trains on what's there.
+            # The highest clip this run trains on, read BEFORE staging: a
+            # clip that lands after it (a take running on) is numbered above
+            # it and reads as "new since the last training" once this run
+            # succeeds.
+            try:
+                staged_upto = await asyncio.to_thread(wake_clip_quality.max_clip_number, raw_dir)
+            except Exception:  # noqa: BLE001 - the marker is best effort
+                staged_upto = 0
+            try:
+                staged, n_selected = await asyncio.to_thread(
+                    wake_clip_quality.stage_selected_clips, raw_dir
+                )
+                clips_dir = staged if n_selected > 0 else raw_dir
+                log.info(
+                    "wake-word trainer: slug=%s staged %d selected clip(s) → %s",
+                    slug, n_selected, clips_dir,
+                )
+            except Exception as e:
+                log.warning(
+                    "wake-word trainer: clip staging failed for slug=%s (%s); "
+                    "training on the raw clip dir", slug, e,
+                )
+                clips_dir = raw_dir
+        # How many recordings this run hands the trainer: what the model
+        # says it was made from ("synthetic + N of your recordings").
+        n_used = 0 if synthetic_only else await asyncio.to_thread(count_wavs, clips_dir)
         out_path = Path(settings.wake_models_dir) / f"{slug}.onnx"
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -662,7 +719,7 @@ class WakeWordTrainer(Worker):
         timeout = wake_trainer_setup.train_timeout_sec()
         pron = await asyncio.to_thread(phrase_pronunciations, phrase)
         synth = await asyncio.to_thread(synthesis_ipa, phrase)
-        env = trainer_env(timeout, pron, synth)
+        env = trainer_env(timeout, pron, synth, synthetic_only=synthetic_only)
         if wake_trainer_setup.recorded_gpu():
             # Set up for the GPU: refuse the CPU rather than train for over
             # an hour under a limit sized for the GPU (review, 2026-10-13).
@@ -751,14 +808,16 @@ class WakeWordTrainer(Worker):
             # equal it (the load-bearing slug invariant).
             # Which clips this model has seen: the row's "N new clips since
             # the last training" counts the ones numbered above it.
-            try:
-                await asyncio.to_thread(
-                    wake_clip_quality.record_trained, raw_dir,
-                    last_clip=staged_upto, clips=n_selected,
-                )
-            except Exception as e:  # noqa: BLE001 - never fails a trained word
-                log.warning("wake-word trainer: no training marker for slug=%s (%s)", slug, e)
-            await self._mark_ready(wake_word_id, slug)
+            if not synthetic_only:
+                try:
+                    await asyncio.to_thread(
+                        wake_clip_quality.record_trained, raw_dir,
+                        last_clip=staged_upto, clips=n_used,
+                    )
+                except Exception as e:  # noqa: BLE001 - never fails a trained word
+                    log.warning("wake-word trainer: no training marker for slug=%s (%s)",
+                                slug, e)
+            await self._mark_ready(wake_word_id, slug, trained_clips=n_used)
             log.info("wake-word trainer: slug=%s trained → %s", slug, out_path)
         else:
             # Surface the tail of the output so the dashboard shows
@@ -778,11 +837,12 @@ class WakeWordTrainer(Worker):
             log.warning("wake-word trainer: slug=%s failed: %s", slug, detail[:300])
         return 1
 
-    async def _mark_ready(self, wake_word_id: int, model_ref: str) -> None:
+    async def _mark_ready(self, wake_word_id: int, model_ref: str,
+                          trained_clips: int | None = None) -> None:
         async with session_scope() as s:
             from domovoi.db.repositories import WakeWordsRepository
 
-            await WakeWordsRepository(s).mark_ready(wake_word_id, model_ref)
+            await WakeWordsRepository(s).mark_ready(wake_word_id, model_ref, trained_clips)
             # Same session as the status flip so the dashboard's LISTEN task
             # sees 'ready' on the post-COMMIT delivery.
             await s.execute(

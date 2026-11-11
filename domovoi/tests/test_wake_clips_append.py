@@ -303,6 +303,21 @@ async def test_record_on_a_ready_word_keeps_its_clips_and_its_model(tmp_path, mo
 
 @requires_db
 @pytest.mark.asyncio
+async def test_record_refuses_a_synthetic_voices_only_word(tmp_path, monkeypatch):
+    """Such a word never trains on recordings: nobody's voice is captured
+    for it (V047)."""
+    await _truncate()
+    wid = await _create("Synthetic", "synthetic")
+    await _set(wid, synthetic_only=True)
+    monkeypatch.setattr(settings, "wake_clips_dir", str(tmp_path))
+    sat = _Sat("den")
+    r = await _record_start({"den": sat}, {"room_id": "den", "wake_word_id": wid})
+    assert r.status_code == 409 and "synthetic voices only" in r.json()["detail"]
+    assert sat.started == []
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_record_on_a_failed_word_goes_back_to_recording(tmp_path, monkeypatch):
     await _truncate()
     wid = await _create("Failing", "failing")
@@ -580,7 +595,7 @@ async def test_a_successful_training_records_which_clips_it_had(tmp_path, monkey
         async def next_training(self):
             return _Queue.rows.pop(0) if _Queue.rows else None
 
-        async def mark_ready(self, wid, ref):
+        async def mark_ready(self, wid, ref, trained_clips=None):
             ready.append(wid)
 
         async def mark_failed(self, wid, error):  # pragma: no cover - not expected
