@@ -551,6 +551,14 @@ static partial class Tests
             True(MediaPaths.Problem(@"C:\a\b.\c") != null, "a name ending in a dot");
             True(MediaPaths.Problem("C:\\a\tb") != null, "control character");
             True(MediaPaths.Problem("") != null && MediaPaths.Problem(null) != null, "empty");
+            // Security review 2026-11-11: 8.3 short names and device names.
+            True(MediaPaths.Problem(@"C:\PROGRA~3\Foo") != null, "a short name for ProgramData");
+            True(MediaPaths.Problem(@"C:\Users\DOMOVO~1") != null, "a short name for domovoi-svc's profile");
+            True(MediaPaths.Problem(@"D:\Media~2024") != null, "~ and a digit anywhere in a name");
+            True(MediaPaths.Problem(@"D:\Media~old") == null, "~ alone is a name like any other");
+            foreach (string dev in new[] { @"D:\CON", @"D:\Media\nul", @"D:\aux.txt", @"D:\COM1\x", @"D:\lpt9.tar.gz", @"D:\Media\PRN" })
+                True(MediaPaths.Problem(dev) != null, "a device name: " + dev);
+            True(MediaPaths.Problem(@"D:\CONSOLE") == null && MediaPaths.Problem(@"D:\COM10") == null, "only the device names themselves");
         });
         Run("media: the five folders under a root", delegate
         {
@@ -2384,11 +2392,14 @@ static partial class Tests
         public Domovoi.Windows.Tray.MediaOpenRequest Req;
         public bool ClaimOk = true;
         public int Claims;
-        public string Outcome, Detail;
+        public string Outcome, Detail, ReportedClaim;
         public Domovoi.Windows.Tray.MediaOpenRequest Pending() { return Req; }
-        public bool Claim(string id) { Claims++; return ClaimOk; }
-        public void Report(string id, string outcome, string detail) { Outcome = outcome; Detail = detail; }
+        public string Claim(string id) { Claims++; return ClaimOk ? "token-" + id : null; }
+        public void Report(string id, string claim, string outcome, string detail) { ReportedClaim = claim; Outcome = outcome; Detail = detail; }
     }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern uint GetShortPathNameW(string longPath, System.Text.StringBuilder shortPath, uint size);
 
     static void MediaFolderTests()
     {
@@ -2508,6 +2519,45 @@ static partial class Tests
             True(MediaFolders.RootProblem(@"D:\Media", sys, ntfs, @"D:\Media").Contains("link"), "a junction");
             True(MediaFolders.RootProblem(@"D:\" + new string('x', 210), sys, ntfs, null).Contains("longer"), "too long");
         });
+        Run("media folders: short names are checked by their long name (security review)", delegate
+        {
+            var sys = SystemFolders.Typical();
+            var ntfs = new MediaDrive { Ready = true, Type = System.IO.DriveType.Fixed, Format = "NTFS" };
+            True(MediaFolders.RootProblem(@"D:\Media", @"C:\ProgramData\Foo", sys, ntfs, null) != null, "a long name inside ProgramData");
+            True(MediaFolders.RootProblem(@"D:\Media", @"\\nas\x", sys, ntfs, null) != null, "resolves to a network folder");
+            True(MediaFolders.RootProblem(@"D:\Media", @"D:\Media", sys, ntfs, null) == null, "the same name");
+            True(MediaFolders.StoredProblem(@"D:\Media", sys, p => p, p => null) == null, "a stored root still fine");
+            True(MediaFolders.StoredProblem(@"D:\Media", sys, p => @"C:\Windows\x", p => null) != null, "a stored root that now resolves into Windows");
+            True(MediaFolders.StoredProblem(@"D:\Media", sys, p => p, p => p == @"D:\Media\Music" ? p : null).Contains("link"), "a junction put in for Music");
+            True(MediaFolders.StoredProblem(@"C:\PROGRA~3", sys, p => p, p => null) != null, "a stored short name");
+            // This PC: the short name Windows gives Program Files, if the
+            // volume keeps 8.3 names, resolves to the long one.
+            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var sb = new System.Text.StringBuilder(260);
+            if (GetShortPathNameW(pf, sb, 260) > 0 && sb.ToString().Contains("~"))
+            {
+                string shortName = sb.ToString();
+                Eq((pf + @"\NoSuch\Deeper").ToLowerInvariant(), MediaFolders.Canonical(shortName + @"\NoSuch\Deeper").ToLowerInvariant(), "expanded, the missing rest kept");
+                True(MediaFolders.RootProblem(shortName + @"\x", MediaFolders.Canonical(shortName + @"\x"), MediaFolders.SystemFoldersHere(), ntfs, null) != null, "refused here");
+            }
+            Eq(@"Z:\no\such", MediaFolders.Canonical(@"Z:\no\such\"), "nothing there: as written");
+            Eq(@"\\nas\x", MediaFolders.Canonical(@"\\nas\x"), "not a drive path: as written");
+        });
+        Run("media folders: an interrupted move does not lock the feature (security review)", delegate
+        {
+            var c = new MediaChange { State = "applying", RequestId = id };
+            True(MediaFolders.Interrupted(c, id), "applying, and its id recorded as done: interrupted");
+            True(!MediaFolders.Interrupted(c, "f" + id.Substring(1)), "another id: a move not started yet");
+            c.State = "done";
+            True(!MediaFolders.Interrupted(c, id), "done is done");
+            True(!MediaFolders.Interrupted(null, id), "nothing stored");
+        });
+        Run("media folders: a BEGIN with no END keeps the rest of fstab", delegate
+        {
+            True(MediaFolders.FstabKeepAwk.IndexOf('"') < 0, "no double quotes");
+            True(MediaFolders.FstabScript().Contains(MediaFolders.FstabKeepAwk), "the script uses it");
+            True(MediaFolders.FstabKeepAwk.Contains("END{if(s)"), "what followed a stray BEGIN is printed at the end");
+        });
         Run("media folders: the tray opens a kind, never a path", delegate
         {
             string mapText = MediaFolders.TrayMap(MediaPaths.Under(@"D:\Media"), DateTime.UtcNow);
@@ -2519,6 +2569,7 @@ static partial class Tests
                 FolderExists = p => p != @"D:\Media\Audiobooks",
                 LinkIn = p => p == @"D:\Media\Documents" ? p : null,
                 System = SystemFolders.Typical,
+                Canonical = p => p == @"D:\Media\Pictures" ? @"C:\ProgramData\Pictures" : p,
                 Open = p => opened.Add(p),
                 Log = s => { },
             };
@@ -2526,6 +2577,9 @@ static partial class Tests
             Eq("opened", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "opened");
             SeqEq(new[] { @"D:\Media\Music" }, opened, "the folder on the host's list");
             Eq("opened", srv.Outcome, "reported");
+            Eq("token-" + id, srv.ReportedClaim, "with the claim's token");
+            srv.Req.Kind = "pictures";
+            Eq("refused", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "a folder whose long name is a system folder");
             srv.Req.Kind = "audiobooks";
             Eq("missing", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "its drive unplugged");
             srv.Req.Kind = "documents";

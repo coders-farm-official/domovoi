@@ -37,8 +37,10 @@ namespace Domovoi.Windows.Tray
     public interface IMediaServer
     {
         MediaOpenRequest Pending();
-        bool Claim(string id);
-        void Report(string id, string outcome, string detail);
+        // The claim's token (its result must carry it), or null when
+        // another tray took it or it is gone.
+        string Claim(string id);
+        void Report(string id, string claim, string outcome, string detail);
     }
 
     // What the tray may look at on this PC (the tests fake it).
@@ -49,6 +51,8 @@ namespace Domovoi.Windows.Tray
         public Func<string, bool> FolderExists;
         public Func<string, string> LinkIn;
         public Func<SystemFolders> System;
+        // The folder's long, final name (MediaFolders.Canonical).
+        public Func<string, string> Canonical;
         public Action<string> Open;
         public Action<string> Log;
     }
@@ -84,7 +88,12 @@ namespace Domovoi.Windows.Tray
             }
             string link = env.LinkIn(path);
             if (link != null) { detail = link + " is a link; not opened"; return null; }
-            string why = MediaPaths.SystemProblem(path, env.System());
+            SystemFolders sys = env.System();
+            string why = MediaPaths.SystemProblem(path, sys);
+            // By its long, final name too (an 8.3 short name, a link).
+            string canonical = env.Canonical(path);
+            if (why == null && MediaPaths.Problem(canonical) != null) why = canonical + " is not a folder on a drive of this PC";
+            if (why == null) why = MediaPaths.SystemProblem(canonical, sys);
             if (why != null) { detail = why; return null; }
             outcome = Opened;
             return path;
@@ -97,7 +106,8 @@ namespace Domovoi.Windows.Tray
             if (!env.ActiveSession) return null;
             MediaOpenRequest req = server.Pending();
             if (req == null) return null;
-            if (!server.Claim(req.Id)) return null;
+            string claim = server.Claim(req.Id);
+            if (claim == null) return null;
             string outcome, detail;
             string path = Folder(req.Kind, env, out outcome, out detail);
             if (path != null)
@@ -115,7 +125,7 @@ namespace Domovoi.Windows.Tray
                 }
             }
             env.Log("media folders: " + outcome + " (" + (req.Kind ?? "?") + "): " + detail);
-            server.Report(req.Id, outcome, detail);
+            server.Report(req.Id, claim, outcome, detail);
             return outcome;
         }
 
@@ -155,6 +165,7 @@ namespace Domovoi.Windows.Tray
             };
             env.LinkIn = MediaFolders.LinkIn;
             env.System = MediaFolders.SystemFoldersHere;
+            env.Canonical = MediaFolders.Canonical;
             env.Open = delegate (string p)
             {
                 string explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
@@ -181,17 +192,20 @@ namespace Domovoi.Windows.Tray
             return req.Id == null || req.Id.Length > 64 ? null : req;
         }
 
-        public bool Claim(string id)
+        public string Claim(string id)
         {
             JsonReply r = Loopback.Send("POST", core + MediaOpen.ClaimPath, "{\"request_id\": " + Loopback.Quote(id) + "}", 5000);
-            return r != null && r.Status == 200;
+            if (r == null || r.Status != 200) return null;
+            string token = Json.Str(r.Body, "claim");
+            return token != null && token.Length <= 64 ? token : null;
         }
 
-        public void Report(string id, string outcome, string detail)
+        public void Report(string id, string claim, string outcome, string detail)
         {
             if (detail != null && detail.Length > 300) detail = detail.Substring(0, 300);
             Loopback.Send("POST", core + MediaOpen.ResultPath,
-                "{\"request_id\": " + Loopback.Quote(id) + ", \"outcome\": " + Loopback.Quote(outcome)
+                "{\"request_id\": " + Loopback.Quote(id) + ", \"claim\": " + Loopback.Quote(claim)
+                + ", \"outcome\": " + Loopback.Quote(outcome)
                 + ", \"detail\": " + (detail == null ? "null" : Loopback.Quote(detail)) + "}", 5000);
         }
     }

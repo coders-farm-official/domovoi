@@ -175,7 +175,13 @@ namespace Domovoi.Windows.Helper
             if (!drive.IsReady) throw new ArgumentException("media folder: drive " + drive.Name + " is not ready");
             if (drive.DriveType != DriveType.Fixed && drive.DriveType != DriveType.Removable)
                 throw new ArgumentException("media folder: pick a folder on a local drive (" + drive.Name + " is " + drive.DriveType + ")");
-            why = MediaPaths.SystemProblem(p, SystemFoldersHere());
+            SystemFolders sys = SystemFoldersHere();
+            why = MediaPaths.SystemProblem(p, sys);
+            // Its long, final name too: a short name or a different case
+            // must not slip past the list (security review 2026-11-11).
+            string canonical = MediaFolders.Canonical(p);
+            if (why == null && !string.Equals(canonical, p, StringComparison.OrdinalIgnoreCase))
+                why = MediaPaths.Problem(canonical) != null ? canonical + " is not a folder on a drive of this PC" : MediaPaths.SystemProblem(canonical, sys);
             if (why != null) throw new ArgumentException("media folder: " + why);
             // The folder, or the nearest part of its path that exists, must
             // be a real folder, not a link to somewhere else.

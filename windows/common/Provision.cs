@@ -532,6 +532,12 @@ namespace Domovoi.Windows
         };
 
         static readonly Regex Drive = new Regex(@"^[A-Za-z]:\\");
+        static readonly Regex ShortName = new Regex("~[0-9]");
+        static readonly HashSet<string> Reserved = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        };
 
         public static string Normalize(string path)
         {
@@ -557,6 +563,10 @@ namespace Domovoi.Windows
                 if (seg.Length == 0) return "the path has an empty folder name (\\\\)";
                 if (seg == "." || seg == "..") return "no . or .. in the path";
                 if (seg.EndsWith(" ", StringComparison.Ordinal) || seg.EndsWith(".", StringComparison.Ordinal)) return "a folder name can't end with a space or a dot";
+                // An 8.3 short name (PROGRA~1) can name a system folder the
+                // long-name checks don't recognise (security review 2026-11-11).
+                if (ShortName.IsMatch(seg)) return "write the folder's full name, not a short name with ~ and a digit";
+                if (Reserved.Contains(seg.Split('.')[0].Trim().ToUpperInvariant())) return seg + " is a name Windows keeps for a device";
             }
             return null;
         }

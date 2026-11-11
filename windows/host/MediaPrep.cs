@@ -24,12 +24,20 @@ namespace Domovoi.Windows.Host
         const InheritanceFlags Inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
         static readonly SecurityIdentifier UsersSid = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
 
+        // Why the dashboard's stored root can't be used any more (a link
+        // appeared, a system folder by its long name), or null.
+        public static string StoredProblem(string root)
+        {
+            return MediaFolders.StoredProblem(root, MediaFolders.SystemFoldersHere(), MediaFolders.Canonical, MediaFolders.LinkIn);
+        }
+
         // Null when root and its five folders are ready for Domovoi, else
         // why not in plain words. say: for the host's log.
         public static string Prepare(string root, Action<string> say)
         {
             string p = MediaPaths.Normalize(root);
-            string why = MediaFolders.RootProblem(p, MediaFolders.SystemFoldersHere(), MediaFolders.DriveOf(p), MediaFolders.LinkIn(p));
+            SystemFolders sys = MediaFolders.SystemFoldersHere();
+            string why = MediaFolders.RootProblem(p, MediaFolders.Canonical(p), sys, MediaFolders.DriveOf(p), MediaFolders.LinkIn(p));
             if (why != null) return why;
             SecurityIdentifier me = WindowsIdentity.GetCurrent().User;
             try
@@ -39,7 +47,10 @@ namespace Domovoi.Windows.Host
             }
             catch (UnauthorizedAccessException) { return "Domovoi's account may not make folders in " + Path.GetDirectoryName(p) + "; make " + p + " yourself, or pick another folder"; }
             catch (IOException e) { return "the folders could not be made: " + e.Message; }
-            // Made between the check and now: never use a link.
+            // Made between the check and now: never use a link, and the
+            // folder's final name is checked again.
+            why = MediaFolders.RootProblem(p, MediaFolders.Canonical(p), sys, MediaFolders.DriveOf(p), null);
+            if (why != null) return why;
             string link = MediaFolders.LinkIn(p);
             if (link != null) return link + " is a link (junction or symbolic link); pick the real folder";
             foreach (var m in MediaPaths.Under(p))

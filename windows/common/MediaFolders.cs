@@ -36,10 +36,17 @@
 //     a request older than HardwareLimits.RestartMaxAge, and only once its
 //     id is recorded as done (Decide). Files are never moved or deleted.
 //
-// The account gains nothing it couldn't already reach: drvfs mounts in the
-// distro run as domovoi-svc, so the distro can already reach any folder
-// that account can; the host refuses a folder the account can't write and
-// changes access rules only on folders it makes itself (it owns them).
+// The boundary, stated plainly (security review 2026-11-11): this lets the
+// Linux side's service user (anyone who can write its home, so a
+// compromised core too) choose WHICH folders domovoi-svc can reach get
+// mounted into the distro, with no Windows administrator approving it.
+// What it can't do: reach a folder domovoi-svc can't (the host refuses one
+// it can't write, and changes access rules only on folders it makes itself,
+// which it owns), mount a system, program or profile folder (checked on
+// the canonical long path, 8.3 short names refused), or follow a link.
+// The distro's root could already mount any folder domovoi-svc reaches
+// with drvfs; this makes that a dashboard choice, so the checks above are
+// the real line. docs/SECURITY_PRIVACY.md, "The media folders channel".
 //
 // Setup stays the owner of the choice it made: the dashboard's root is kept
 // with the root Setup's job named when it was made ("based_on"). A repair
@@ -51,9 +58,11 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 
 namespace Domovoi.Windows
 {
@@ -341,6 +350,11 @@ namespace Domovoi.Windows
             return sb.ToString();
         }
 
+        // /etc/fstab without the Domovoi block. A BEGIN with no END is a
+        // stray marker: the marker goes, every line after it stays (they are
+        // the household's, not a block) (review 2026-11-11, nit 14).
+        public const string FstabKeepAwk = "$0==b{s=1;k=z;next} s&&$0==e{s=0;k=z;next} s{k=k $0 RS;next} {print} END{if(s){ORS=z;print k}}";
+
         // As root: the Domovoi block of /etc/fstab rewritten from stdin, the
         // rest of the file kept, with the options provision.sh's
         // fstab_lines writes. No double quotes (wsl.exe's command line), no
@@ -349,7 +363,7 @@ namespace Domovoi.Windows
         {
             return "set -euf; umask 022; t=/etc/.fstab.domovoi.$$; trap 'rm -f $t' EXIT; "
                 + "u=$(id -u " + ServiceUser + "); g=$(id -g " + ServiceUser + "); "
-                + "{ awk -v b='" + FstabBegin + "' -v e='" + FstabEnd + "' '$0==b{s=1;next} $0==e{s=0;next} !s' /etc/fstab; "
+                + "{ awk -v b='" + FstabBegin + "' -v e='" + FstabEnd + "' '" + FstabKeepAwk + "' /etc/fstab; "
                 + "printf '%s\\n' '" + FstabBegin + "'; "
                 + "while read -r src mp; do "
                 + "case $mp in " + MountBase + "/music|" + MountBase + "/pictures|" + MountBase + "/videos|" + MountBase + "/documents|" + MountBase + "/audiobooks) ;; *) exit 3 ;; esac; "
@@ -432,6 +446,13 @@ namespace Domovoi.Windows
         // null.
         public static string RootProblem(string root, SystemFolders sys, MediaDrive drive, string link)
         {
+            return RootProblem(root, null, sys, drive, link);
+        }
+
+        // canonical: root's long, final form on this PC (Canonical), checked
+        // against the system folders too; null: root as written.
+        public static string RootProblem(string root, string canonical, SystemFolders sys, MediaDrive drive, string link)
+        {
             string why = ShapeProblem(root);
             if (why != null) return why;
             string p = MediaPaths.Normalize(root);
@@ -441,6 +462,8 @@ namespace Domovoi.Windows
             if (!string.Equals(drive.Format, "NTFS", StringComparison.OrdinalIgnoreCase))
                 return p.Substring(0, 2) + " is formatted " + (drive.Format ?? "unknown") + "; Domovoi needs an NTFS drive to keep its files' owners";
             why = MediaPaths.SystemProblem(p, sys);
+            if (why == null && canonical != null && !string.Equals(canonical, p, StringComparison.OrdinalIgnoreCase))
+                why = MediaPaths.Problem(canonical) != null ? canonical + " is not a folder on a drive of this PC" : MediaPaths.SystemProblem(canonical, sys);
             if (why != null) return why;
             if (link != null) return link + " is a link (junction or symbolic link); pick the real folder";
             return null;
@@ -503,6 +526,72 @@ namespace Domovoi.Windows
         }
 
         public const string ProfileListKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
+
+        // Why a stored dashboard root can no longer be used (its shape, a
+        // system folder by its long name, a link in its path or a folder's),
+        // or null. Never its drive: an unplugged USB drive keeps the choice.
+        public static string StoredProblem(string root, SystemFolders sys, Func<string, string> canonical, Func<string, string> linkIn)
+        {
+            string why = ShapeProblem(root);
+            if (why != null) return why;
+            string p = MediaPaths.Normalize(root);
+            why = MediaPaths.SystemProblem(p, sys) ?? MediaPaths.SystemProblem(canonical(p), sys);
+            if (why != null) return why;
+            string link = linkIn(p);
+            foreach (var m in MediaPaths.Under(p)) if (link == null) link = linkIn(m.Value);
+            return link == null ? null : link + " is a link (junction or symbolic link)";
+        }
+
+        // An "applying" whose request is recorded as done can only be one
+        // the host stopped in the middle of (a crash, a reboot): it would
+        // show forever and hold off every new move (review 2026-11-11, #2).
+        public static bool Interrupted(MediaChange c, string doneId)
+        {
+            return c != null && c.State == "applying" && c.RequestId != null && c.RequestId == doneId;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+
+        // The path's long, final form: the deepest part that exists resolved
+        // by Windows (8.3 short names expanded, the real case, a link
+        // followed), the rest as written. The path as written when Windows
+        // can't say (security review 2026-11-11, #1).
+        public static string Canonical(string path)
+        {
+            string p = MediaPaths.Normalize(path);
+            if (p.Length < 3 || p[1] != ':' || p[2] != '\\') return p;
+            string existing = p, rest = "";
+            while (existing != null && existing.Length > 3 && !Directory.Exists(existing))
+            {
+                rest = "\\" + Path.GetFileName(existing) + rest;
+                existing = Path.GetDirectoryName(existing);
+            }
+            if (existing == null) return p;
+            string final = FinalPath(existing);
+            if (final == null) return p;
+            return MediaPaths.Normalize(final.TrimEnd('\\') + (rest.Length == 0 && final.Length <= 3 ? "\\" : rest));
+        }
+
+        static string FinalPath(string dir)
+        {
+            // 0x02000000: FILE_FLAG_BACKUP_SEMANTICS (a folder); no access
+            // asked, every sharing mode: only its name is read.
+            using (SafeFileHandle h = CreateFileW(dir, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero))
+            {
+                if (h.IsInvalid) return null;
+                var sb = new StringBuilder(1024);
+                uint n = GetFinalPathNameByHandleW(h, sb, (uint)sb.Capacity, 0);
+                if (n == 0 || n >= sb.Capacity) return null;
+                string s = sb.ToString();
+                if (s.StartsWith(@"\\?\UNC\", StringComparison.Ordinal)) return @"\\" + s.Substring(8);
+                if (s.StartsWith(@"\\?\", StringComparison.Ordinal)) return s.Substring(4);
+                return s;
+            }
+        }
 
         // The first existing part of path (itself, or the nearest folder
         // above it) that is a link, or null.
