@@ -339,3 +339,37 @@ def test_another_setting_leaves_the_threshold_file_alone(monkeypatch, config_hom
     sat._apply_config_changes({"wake.patience_frames": 3})
     assert restarts == [1]
     assert side.read_text(encoding="utf-8") == "0.45\n"
+
+
+# ─── the tuning log: scores around a wake, and near misses (2026-11-11) ──
+
+
+def test_scores_format_oldest_first_two_decimals():
+    assert wake_gate.format_scores([0.04, 0.312, 0.9, 0.2]) == "0.04 0.31 0.90 0.20"
+    assert wake_gate.format_scores([]) == ""
+
+
+def test_a_run_that_never_reaches_the_threshold_is_a_near_miss_once():
+    nm = wake_gate.NearMiss(0.8)
+    seq = [0.1, 0.55, 0.72, 0.6, 0.1]
+    out = [nm.feed(s, float(i)) for i, s in enumerate(seq)]
+    assert out == [None, None, None, None, 0.72]
+
+
+def test_a_run_that_reaches_the_threshold_is_not_a_near_miss():
+    nm = wake_gate.NearMiss(0.8)
+    out = [nm.feed(s, float(i)) for i, s in enumerate([0.6, 0.85, 0.6, 0.1])]
+    assert out == [None, None, None, None]
+
+
+def test_near_misses_are_rate_limited():
+    nm = wake_gate.NearMiss(0.8)
+    assert [nm.feed(s, t) for s, t in [(0.6, 0.0), (0.1, 0.1)]] == [None, 0.6]
+    assert [nm.feed(s, t) for s, t in [(0.7, 2.0), (0.1, 2.1)]] == [None, None]
+    assert [nm.feed(s, t) for s, t in [(0.7, 20.0), (0.1, 20.1)]] == [None, 0.7]
+
+
+def test_a_low_threshold_never_has_a_floor_above_it():
+    nm = wake_gate.NearMiss(0.4)
+    assert nm.floor == 0.4
+    assert [nm.feed(s, float(i)) for i, s in enumerate([0.39, 0.1])] == [None, None]

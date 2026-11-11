@@ -5686,6 +5686,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
             getattr(self.cfg, "wake_patience_frames", wake_gate.PATIENCE_DEFAULT),
             getattr(self.cfg, "wake_cooldown_sec", wake_gate.COOLDOWN_SEC_DEFAULT),
         )
+        # The last few chunk scores and the near-miss tracker, for the log:
+        # what a real wake word looks like around its peak (one chunk or
+        # several), and how often a real attempt falls just short of the
+        # threshold, are what the threshold and the patience are tuned with
+        # (2026-11-10: a real far-field wake scored 0.90 on ONE chunk).
+        recent_scores: deque[float] = deque(maxlen=wake_gate.SCORE_WINDOW)
+        near = wake_gate.NearMiss(gate.threshold)
         quiet, self._quiet_next_wake = self._quiet_next_wake, False
         gate.quiet_for(time.monotonic(), None if quiet else 0.0)
         cooldown_logged = not quiet or gate.cooldown_sec <= 0
@@ -5755,7 +5762,19 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     gate.reset()
                     continue
                 chunk_at = time.monotonic()
-                fired = gate.feed(pred.get(self._wake_word, 0.0), chunk_at)
+                score = pred.get(self._wake_word, 0.0)
+                try:
+                    recent_scores.append(float(score))
+                except (TypeError, ValueError):
+                    recent_scores.append(0.0)
+                fired = gate.feed(score, chunk_at)
+                missed = near.feed(recent_scores[-1], chunk_at)
+                if missed is not None and not fired:
+                    log.info(
+                        "wake score peaked %.3f, under the threshold %.2f: not a wake "
+                        "(scores %s)",
+                        missed, gate.threshold, wake_gate.format_scores(recent_scores),
+                    )
                 if not cooldown_logged and not gate.in_cooldown(chunk_at):
                     cooldown_logged = True
                     swallowed = gate.take_cooldown_peak()
@@ -5768,8 +5787,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 short = gate.take_short_run()
                 if short is not None:
                     log.info(
-                        "wake score %.3f for %d chunk(s), %d needed in a row: not a wake",
+                        "wake score %.3f for %d chunk(s), %d needed in a row: not a wake "
+                        "(scores %s)",
                         short[0], short[1], gate.patience,
+                        wake_gate.format_scores(recent_scores),
                     )
                 if fired:
                     woke_at = chunk_at
@@ -5786,9 +5807,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     # the TV scored is the number a threshold is tuned with.
                     log.info(
                         "wake word detected (peak score %.3f over %d chunk(s); "
-                        "threshold %.2f, %d in a row needed)",
+                        "threshold %.2f, %d in a row needed; scores %s)",
                         gate.last_peak or 0.0, gate.last_run, gate.threshold, gate.patience,
+                        wake_gate.format_scores(recent_scores),
                     )
+                    near.reset()
                     # Network-degraded short-circuit — when the WS is
                     # genuinely down OR the watcher gave up on a
                     # reassociate, the server round-trip will

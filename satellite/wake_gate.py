@@ -75,6 +75,56 @@ def cooldown_setting(value: Any) -> float:
     return min(COOLDOWN_SEC_MAX, max(0.0, s))
 
 
+#: How many recent chunk scores the wake log lines show (the newest last).
+SCORE_WINDOW = 6
+#: A run of chunks at or above this, that never reaches the threshold, is
+#: logged once as a near miss: a real attempt the threshold turned away
+#: looks like this, background chatter mostly doesn't.
+NEAR_MISS_FLOOR = 0.5
+#: At most one near-miss line per this many seconds (a TV can hover).
+NEAR_MISS_EVERY_SEC = 10.0
+
+
+def format_scores(scores) -> str:
+    """The recent chunk scores for a log line, oldest first, two decimals:
+    ``0.04 0.31 0.90 0.22``."""
+    return " ".join(f"{float(s):.2f}" for s in scores)
+
+
+class NearMiss:
+    """Spots a run of scores over :data:`NEAR_MISS_FLOOR` that ends without
+    ever reaching the threshold. ``feed(score, now)`` returns the run's peak
+    on the chunk that ends it (rate-limited), else None. Log only: it never
+    changes whether the room wakes."""
+
+    def __init__(self, threshold: float) -> None:
+        self.threshold = float(threshold)
+        self.floor = min(NEAR_MISS_FLOOR, self.threshold)
+        self._peak = 0.0
+        self._hit = False          # this run reached the threshold: not a miss
+        self._last_logged = -math.inf
+
+    def reset(self) -> None:
+        self._peak = 0.0
+        self._hit = False
+
+    def feed(self, score: float, now: float) -> float | None:
+        score = float(score)
+        if score >= self.threshold:
+            self._hit = True
+            self._peak = 0.0
+            return None
+        if score >= self.floor:
+            if not self._hit:
+                self._peak = max(self._peak, score)
+            return None
+        peak, self._peak, self._hit = self._peak, 0.0, False
+        if peak <= 0.0 or now - self._last_logged < NEAR_MISS_EVERY_SEC:
+            return None
+        self._last_logged = now
+        return peak
+
+
 def floor_for(threshold: float) -> float:
     """The score a chunk must keep to count toward the patience run:
     ``max(0.3, threshold x 0.6)``, never above the threshold."""
