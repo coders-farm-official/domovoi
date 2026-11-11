@@ -116,7 +116,10 @@ _ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _AT_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:\\")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
-#: A path segment that looks like an 8.3 short name (MediaPaths.Problem).
+#: A name that may be an 8.3 short name (PROGRA~1). Asked only of a NEW
+#: move request ("type the full name"): a folder really named Music~2024
+#: is a folder like any other, so reports and fstab never use it, and
+#: DomovoiHost asks Windows which it is (MediaFolders.ShortNameProblem).
 _SHORT_RE = re.compile(r"~[0-9]")
 #: Names Windows keeps for devices, with or without an extension.
 _RESERVED = frozenset({"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)}
@@ -175,10 +178,6 @@ def windows_path_problem(path: object) -> str | None:
             return "no . or .. in the path"
         if seg.endswith(" ") or seg.endswith("."):
             return "a folder name can't end with a space or a dot"
-        # An 8.3 short name (PROGRA~1) could name a system folder the
-        # long-name checks don't recognise.
-        if _SHORT_RE.search(seg):
-            return "write the folder's full name, not a short name with ~ and a digit"
         if seg.split(".")[0].strip().upper() in _RESERVED:
             return f"{seg} is a name Windows keeps for a device"
     return None
@@ -638,6 +637,9 @@ def request_change(root: object, *, update_running=None) -> dict[str, Any]:
     if why:
         raise Refused(why)
     p = normalize_windows(root)  # type: ignore[arg-type]
+    if _SHORT_RE.search(p):
+        raise Refused("please type the folder's full name: a name with ~ and a digit looks like a short name "
+                      "(if the folder is really called that, run Domovoi Setup and choose it there)")
     if h["root"] and p.lower() == h["root"].lower():
         raise Refused("the media folders are already there")
     if st["state"] in ("busy", "applying") or (st["state"] == "waiting" and not st["waiting_for_host"]):

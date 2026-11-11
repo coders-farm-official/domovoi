@@ -180,6 +180,7 @@ namespace Domovoi.Windows.Helper
             // Its long, final name too: a short name or a different case
             // must not slip past the list (security review 2026-11-11).
             string canonical = MediaFolders.Canonical(p);
+            if (why == null) why = MediaFolders.ShortNameProblem(p, canonical);
             if (why == null && !string.Equals(canonical, p, StringComparison.OrdinalIgnoreCase))
                 why = MediaPaths.Problem(canonical) != null ? canonical + " is not a folder on a drive of this PC" : MediaPaths.SystemProblem(canonical, sys);
             if (why != null) throw new ArgumentException("media folder: " + why);

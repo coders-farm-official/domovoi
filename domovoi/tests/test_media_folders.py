@@ -114,6 +114,23 @@ def test_an_older_host_still_shows_the_folders_from_fstab(host) -> None:
     assert s["change"]["available"] is False and "Setup" in s["change"]["why"]
 
 
+def test_a_legacy_root_named_like_a_short_name_still_reads(host) -> None:
+    # Review round 2: a Setup root really called Music~2024 is a folder
+    # like any other wherever the core reads it; only a NEW move request
+    # with ~ and a digit is asked for the full name.
+    legacy = "D:\\Music~2024"
+    folders = {k: v.replace(ROOT, legacy) for k, v in FOLDERS.items()}
+    host["write"]({**REPORT, "root": legacy, "folders": folders})
+    h = mf.host()
+    assert h["kind"] == "windows" and h["root"] == legacy and h["folders"]["music"] == legacy + "\\Music"
+    host["report"].unlink()
+    host["fstab"].write_text(FSTAB_TEXT.replace("C:/Users/Public/Domovoi/Music", "D:/Music~2024/Music"),
+                             encoding="utf-8")
+    assert mf.read_fstab_folders()["music"] == legacy + "\\Music"
+    assert mf.host()["kind"] == "windows"
+    assert mf.windows_path_problem(legacy) is None
+
+
 def test_a_begin_with_no_end_is_no_block(host) -> None:
     host["report"].unlink()
     host["fstab"].write_text(FSTAB_TEXT.replace("# END Domovoi media folders\n", ""), encoding="utf-8")
@@ -261,8 +278,8 @@ def test_a_move_writes_the_bounded_request(host) -> None:
     ("D:\\a?b", "valid"),
     ("D:\\a\nb", "control"),
     ("D:\\" + "x" * 300, "longer"),
-    ("C:\\PROGRA~3\\Foo", "short name"),
-    ("C:\\Users\\DOMOVO~1", "short name"),
+    ("C:\\PROGRA~3\\Foo", "full name"),
+    ("C:\\Users\\DOMOVO~1", "full name"),
     ("D:\\Media\\CON", "device"),
     ("D:\\nul.txt\\x", "device"),
     ("D:\\com1", "device"),

@@ -92,6 +92,7 @@ namespace Domovoi.Windows.Tray
             string why = MediaPaths.SystemProblem(path, sys);
             // By its long, final name too (an 8.3 short name, a link).
             string canonical = env.Canonical(path);
+            if (why == null) why = MediaFolders.ShortNameProblem(path, canonical);
             if (why == null && MediaPaths.Problem(canonical) != null) why = canonical + " is not a folder on a drive of this PC";
             if (why == null) why = MediaPaths.SystemProblem(canonical, sys);
             if (why != null) { detail = why; return null; }

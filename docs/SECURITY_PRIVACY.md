@@ -2261,9 +2261,11 @@ dashboard choice.
   of another shape, or a root that fails the shape rules is refused and
   reported. The shape rules (`MediaPaths.Problem`, the same in the core and
   Setup): a drive letter path, not a whole drive, not a network folder, no
-  `.` or `..`, no reserved characters, no 8.3 short name (a segment with
-  `~` and a digit), no device name (`CON`, `NUL`, `COM1`, ...), at most 200
-  characters.
+  `.` or `..`, no reserved characters, no device name (`CON`, `NUL`,
+  `COM1`, ...), at most 200 characters. A new move whose path has `~` and a
+  digit is asked for the full name by the core; DomovoiHost refuses an 8.3
+  short name only when Windows gives the path another long name (so a
+  folder really called `Music~2024`, chosen in Setup, keeps working).
 - **What it reaches on Windows** (`windows/host/MediaPrep.cs`), in order:
   - **a path check**: a local (fixed or removable) drive formatted NTFS; not
     a system, program, ProgramData or profile folder, a profile's AppData,

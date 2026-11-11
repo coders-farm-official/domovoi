@@ -552,9 +552,9 @@ static partial class Tests
             True(MediaPaths.Problem("C:\\a\tb") != null, "control character");
             True(MediaPaths.Problem("") != null && MediaPaths.Problem(null) != null, "empty");
             // Security review 2026-11-11: 8.3 short names and device names.
-            True(MediaPaths.Problem(@"C:\PROGRA~3\Foo") != null, "a short name for ProgramData");
-            True(MediaPaths.Problem(@"C:\Users\DOMOVO~1") != null, "a short name for domovoi-svc's profile");
-            True(MediaPaths.Problem(@"D:\Media~2024") != null, "~ and a digit anywhere in a name");
+            // A name with ~ and a digit is a name (Music~2024); whether it is
+            // an 8.3 short name only Windows can say (ShortNameProblem).
+            True(MediaPaths.Problem(@"D:\Music~2024") == null, "a folder really named Music~2024");
             True(MediaPaths.Problem(@"D:\Media~old") == null, "~ alone is a name like any other");
             foreach (string dev in new[] { @"D:\CON", @"D:\Media\nul", @"D:\aux.txt", @"D:\COM1\x", @"D:\lpt9.tar.gz", @"D:\Media\PRN" })
                 True(MediaPaths.Problem(dev) != null, "a device name: " + dev);
@@ -2529,7 +2529,9 @@ static partial class Tests
             True(MediaFolders.StoredProblem(@"D:\Media", sys, p => p, p => null) == null, "a stored root still fine");
             True(MediaFolders.StoredProblem(@"D:\Media", sys, p => @"C:\Windows\x", p => null) != null, "a stored root that now resolves into Windows");
             True(MediaFolders.StoredProblem(@"D:\Media", sys, p => p, p => p == @"D:\Media\Music" ? p : null).Contains("link"), "a junction put in for Music");
-            True(MediaFolders.StoredProblem(@"C:\PROGRA~3", sys, p => p, p => null) != null, "a stored short name");
+            True(MediaFolders.StoredProblem(@"C:\PROGRA~3", sys, p => @"C:\ProgramData", p => null) != null, "a stored short name");
+            True(MediaFolders.StoredProblem(@"D:\MYMEDI~1", sys, p => @"D:\My Media", p => null).Contains("full name"), "any real short name");
+            True(MediaFolders.StoredProblem(@"D:\Music~2024", sys, p => p, p => null) == null, "a legacy root really named Music~2024 (GuardStoredMedia keeps it)");
             // This PC: the short name Windows gives Program Files, if the
             // volume keeps 8.3 names, resolves to the long one.
             string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
@@ -2542,6 +2544,37 @@ static partial class Tests
             }
             Eq(@"Z:\no\such", MediaFolders.Canonical(@"Z:\no\such\"), "nothing there: as written");
             Eq(@"\\nas\x", MediaFolders.Canonical(@"\\nas\x"), "not a drive path: as written");
+        });
+        Run("media folders: a folder really named Music~2024 keeps working (review round 2)", delegate
+        {
+            var sys = SystemFolders.Typical();
+            var ntfs = new MediaDrive { Ready = true, Type = System.IO.DriveType.Fixed, Format = "NTFS" };
+            const string legacy = @"D:\Music~2024";
+            True(MediaPaths.Problem(legacy) == null && MediaFolders.ShapeProblem(legacy) == null, "its shape");
+            True(MediaFolders.RootProblem(legacy, legacy, sys, ntfs, null) == null, "Setup's repair and the host: it is its own long name");
+            True(MediaFolders.RootProblem(@"C:\PROGRA~3\Foo", @"C:\ProgramData\Foo", sys, ntfs, null) != null, "PROGRA~3 still refused");
+            True(MediaFolders.RootProblem(@"D:\MYMEDI~1", @"D:\My Media", sys, ntfs, null).Contains("full name"), "a real short name: type the full name");
+            string fstab = MediaFolders.FstabInput(MediaPaths.Under(legacy));
+            True(fstab.StartsWith("D:/Music~2024/Music /srv/media/music\n", StringComparison.Ordinal), "into fstab: " + fstab);
+            Eq(@"D:\Music~2024\Videos", MediaFolders.ParseTrayMap(MediaFolders.TrayMap(MediaPaths.Under(legacy), DateTime.UtcNow))["videos"], "on the tray's list");
+            var d = Json.ParseObject(MediaFolders.Report(MediaPaths.Under(legacy), "setup", null, true, true, DateTime.UtcNow));
+            Eq(legacy, Json.Str(d, "root"), "in the report");
+            MediaRequest r = MediaFolders.Parse("{\"v\":1,\"root\":\"D:\\\\Music~2024\",\"id\":\"" + id + "\",\"at\":\"2026-11-11T05:00:00Z\"}");
+            Eq("ok", r.State, "a request's shape (the host then asks Windows)");
+            // A real folder of that name on this PC is its own long name.
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-tests-" + Guid.NewGuid().ToString("N"), "Music~2024");
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                string c = MediaFolders.Canonical(dir);
+                True(MediaFolders.ShortNameProblem(dir, c) == null, "a real Music~2024 folder: " + c);
+                Eq(dir.ToLowerInvariant(), c.ToLowerInvariant(), "resolves to itself");
+            }
+            finally { System.IO.Directory.Delete(System.IO.Path.GetDirectoryName(dir), true); }
+            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var sb = new System.Text.StringBuilder(260);
+            if (GetShortPathNameW(pf, sb, 260) > 0 && sb.ToString().Contains("~"))
+                True(MediaFolders.ShortNameProblem(sb + @"\Foo", MediaFolders.Canonical(sb + @"\Foo")) != null, "this PC's real short name refused");
         });
         Run("media folders: an interrupted move does not lock the feature (security review)", delegate
         {

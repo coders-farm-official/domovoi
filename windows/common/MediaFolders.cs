@@ -451,6 +451,18 @@ namespace Domovoi.Windows
 
         // canonical: root's long, final form on this PC (Canonical), checked
         // against the system folders too; null: root as written.
+        // Why a path is refused as a short name: it has a segment with ~ and
+        // a digit AND Windows gives it another long name (canonical), so it
+        // IS an 8.3 short name (PROGRA~3). A folder really named Music~2024
+        // resolves to itself and passes (review round 2, 2026-11-11).
+        public static string ShortNameProblem(string path, string canonical)
+        {
+            string p = MediaPaths.Normalize(path);
+            if (p == null || !MediaPaths.ShortName.IsMatch(p)) return null;
+            if (canonical == null || string.Equals(MediaPaths.Normalize(canonical), p, StringComparison.OrdinalIgnoreCase)) return null;
+            return "write the folder's full name (" + canonical + "), not a short name with ~ and a digit";
+        }
+
         public static string RootProblem(string root, string canonical, SystemFolders sys, MediaDrive drive, string link)
         {
             string why = ShapeProblem(root);
@@ -461,7 +473,7 @@ namespace Domovoi.Windows
                 return "pick a folder on a local drive of this PC (" + p.Substring(0, 2) + " is a " + drive.Type.ToString().ToLowerInvariant() + " drive)";
             if (!string.Equals(drive.Format, "NTFS", StringComparison.OrdinalIgnoreCase))
                 return p.Substring(0, 2) + " is formatted " + (drive.Format ?? "unknown") + "; Domovoi needs an NTFS drive to keep its files' owners";
-            why = MediaPaths.SystemProblem(p, sys);
+            why = MediaPaths.SystemProblem(p, sys) ?? ShortNameProblem(p, canonical);
             if (why == null && canonical != null && !string.Equals(canonical, p, StringComparison.OrdinalIgnoreCase))
                 why = MediaPaths.Problem(canonical) != null ? canonical + " is not a folder on a drive of this PC" : MediaPaths.SystemProblem(canonical, sys);
             if (why != null) return why;
@@ -535,7 +547,8 @@ namespace Domovoi.Windows
             string why = ShapeProblem(root);
             if (why != null) return why;
             string p = MediaPaths.Normalize(root);
-            why = MediaPaths.SystemProblem(p, sys) ?? MediaPaths.SystemProblem(canonical(p), sys);
+            string c = canonical(p);
+            why = MediaPaths.SystemProblem(p, sys) ?? MediaPaths.SystemProblem(c, sys) ?? ShortNameProblem(p, c);
             if (why != null) return why;
             string link = linkIn(p);
             foreach (var m in MediaPaths.Under(p)) if (link == null) link = linkIn(m.Value);
