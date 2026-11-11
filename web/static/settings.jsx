@@ -4935,7 +4935,7 @@ const SETTINGS_SECTIONS = [
   // media_folders.jsx registers it (2026-11-11): where the media really
   // is (the Windows folder on the Windows install), open, copy, move.
   { id: 'media-folders', label: 'Media folders', optional: true,
-    sub: 'Where your music, videos, pictures, documents and audiobooks are kept, and moving them.',
+    sub: 'Where your music, videos, pictures, documents, audiobooks and podcasts are kept, and moving them.',
     words: 'media folder folders music videos pictures photos documents audiobooks podcasts path paths directory location where drive move explorer open copy' },
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',

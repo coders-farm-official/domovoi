@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — Podcasts gets its own folder on Windows
+
+**Windows install: downloaded podcast episodes now live in a `Podcasts`
+folder beside Music and the others** (default
+`C:\Users\Public\Domovoi\Podcasts`), which you can open in Explorer and
+which Settings → Household → Media folders shows, opens and moves with the
+rest. Until now they stayed inside Domovoi's Linux system, out of reach
+and growing its virtual disk. The next Setup or update makes the folder
+(no existing folder moves) and moves the episodes in: copied, checked file
+by file, and only then used; the old copies are removed by Domovoi once it
+plays from the new folder and each matches its copy byte for byte. If the
+move can't happen (the folder missing, a full drive), Domovoi keeps
+playing them from where they are, the setup log says why, and the next
+Setup or repair tries again. A `PODCASTS_DIR` set by hand is kept. A Linux
+server is unchanged. Details: docs/WINDOWS_HOST.md, "Media folders".
+
 ## 2026-11-11 — the right artist, a forgiving search, an Artists tab
 
 **A song the library has only by another artist is never played in its

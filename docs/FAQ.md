@@ -450,7 +450,7 @@ All on machines you own:
 | Printers, and the print and scan job log (document titles, 90 days) | Postgres |
 | Satellite config & caches | `~/.domovoi/` on each Pi |
 
-**On the Windows installer,** "the server" is its private Linux: `~/.domovoi/`, the database and `domovoi/.env` live inside it, out of Explorer's reach. The media folder you chose in Setup (by default `C:\Users\Public\Domovoi`, with `Music`, `Pictures`, `Videos`, `Documents` and `Audiobooks` inside) is an ordinary Windows folder: uninstalling Domovoi never deletes a file in it.
+**On the Windows installer,** "the server" is its private Linux: `~/.domovoi/`, the database and `domovoi/.env` live inside it, out of Explorer's reach. The media folder you chose in Setup (by default `C:\Users\Public\Domovoi`, with `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks` and `Podcasts` inside) is an ordinary Windows folder: uninstalling Domovoi never deletes a file in it.
 
 **These directories are created for you on first boot.** Every media library
 above is created (`mkdir -p`, ordinary permissions) when the dashboard starts,

@@ -1,6 +1,6 @@
 // The Windows half of moving the media folders from the dashboard
 // (common\MediaFolders.cs has the rules and the request): the new root
-// checked on this PC, its five folders made where missing, each proved
+// checked on this PC, its six folders made where missing, each proved
 // writable by this account, and the tray's list of folders written where
 // the household's accounts can read it.
 //
@@ -31,7 +31,7 @@ namespace Domovoi.Windows.Host
             return MediaFolders.StoredProblem(root, MediaFolders.SystemFoldersHere(), MediaFolders.Canonical, MediaFolders.LinkIn);
         }
 
-        // Null when root and its five folders are ready for Domovoi, else
+        // Null when root and its six folders are ready for Domovoi, else
         // why not in plain words. say: for the host's log.
         public static string Prepare(string root, Action<string> say)
         {
@@ -61,6 +61,27 @@ namespace Domovoi.Windows.Host
                 if (why != null) return why;
             }
             return null;
+        }
+
+        // Before provision.sh mounts a dashboard root: a kind folder added
+        // since the root was chosen (Podcasts, 2026-11-11) is made in it,
+        // as a move would have. Only in a root that is there and still
+        // passes StoredProblem (checked by the caller); never the root
+        // itself (an unplugged drive is left alone). Best effort: what
+        // can't be made is logged, and provision.sh then keeps that kind
+        // where it was (its media step tolerates a new podcasts line that
+        // doesn't mount).
+        public static void EnsureUnder(string root, Action<string> say)
+        {
+            string p = MediaPaths.Normalize(root);
+            if (!Directory.Exists(p) || MediaFolders.LinkIn(p) != null) return;
+            SecurityIdentifier me = WindowsIdentity.GetCurrent().User;
+            foreach (var m in MediaPaths.Under(p))
+            {
+                try { Make(m.Value, me, false, say); }
+                catch (UnauthorizedAccessException e) { say("could not make " + m.Value + ": " + e.Message); }
+                catch (IOException e) { say("could not make " + m.Value + ": " + e.Message); }
+            }
         }
 
         // The folder, made if missing (true when this made it, and then its

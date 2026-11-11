@@ -482,6 +482,9 @@ UNITS_CHANGED_FILE=$STATE_DIR/units-changed
 ENV_RECORD=$STATE_DIR/env-written
 ENV_STAMP=$STATE_DIR/env-stamp
 ENV_CREATING=$STATE_DIR/env-creating
+# Present while the podcast episodes could not be moved into their Windows
+# folder (move_podcasts): the env step then runs again on the next run.
+PODCASTS_HELD=$STATE_DIR/podcasts-move-held
 # The images step's record of the music player image it last built (the
 # image ID, the tag, Dockerfile.mpd's hash, when): root's, 0644, read by the
 # core's container guard as the evidence that the new image is Domovoi's own
@@ -1502,6 +1505,15 @@ do_media() {
       # next start. A folder new to the list has to be there.
       if [ -n "${old_line[$name]}" ] && [ "${old_line[$name]}" = "$(fstab_block_line "$mp")" ]; then
         warn "could not mount ${MEDIA_SRC[$name]} at $mp (is the folder there, its drive connected?); Domovoi runs without it until then. It mounts at the distro's next start, or now with: mount $mp"
+        continue
+      fi
+      # Podcasts joined the list after the first Windows installs
+      # (2026-11-11): an update adds its line to a box that kept the
+      # episodes inside the distro. A Podcasts folder that won't mount
+      # must not stop that update: the env step then leaves PODCASTS_DIR
+      # where it was (move_podcasts), and the next run tries again.
+      if [ "$name" = podcasts ] && [ -n "$old" ] && [ -z "${old_line[$name]}" ]; then
+        warn "could not mount ${MEDIA_SRC[$name]} at $mp (is the folder there?); the podcast episodes stay inside Domovoi's Linux system for now, and the next Setup or repair tries again"
         continue
       fi
       die "could not mount ${MEDIA_SRC[$name]} at $mp: does the Windows folder exist?"
@@ -2914,7 +2926,7 @@ inputs_env() {
   echo "internet=$INTERNET"
   echo "$CHECKOUT"
 }
-check_env() { [ -f "$CHECKOUT/domovoi/.env" ]; }
+check_env() { [ -f "$CHECKOUT/domovoi/.env" ] && [ ! -e "$PODCASTS_HELD" ]; }
 plan_env() {
   if [ -n "$TIER_EFF" ]; then
     echo "tier $TIER_EFF (MemTotal ${MEM_MIB} MiB)"
@@ -2926,6 +2938,87 @@ plan_env() {
     echo "(the keys depend on the pin manifest, read after the clone)"
   fi
   [ -z "$INTERNET" ] || echo "INTERNET_ACCESS=$INTERNET (a new .env only)"
+}
+
+# ─── podcasts into their Windows folder ─────────────────────────────────
+#
+# The first Windows installs kept podcast episodes inside the distro, in
+# the core's default PODCASTS_DIR (~/.domovoi/podcasts), with no Podcasts
+# folder among the media folders. Since 2026-11-11 Podcasts is one of them
+# (/srv/media/podcasts), so an update has to bring the episodes along
+# before PODCASTS_DIR may point there: copy, verify, and only then switch.
+# Anything short of a verified copy leaves PODCASTS_DIR as it was (the
+# episodes play from where they are) and the next run tries again.
+#
+# The copy is the service user's (the files are its own, and drvfs gives
+# them to it through the mount's uid=): every regular file under SRC, by
+# its path below SRC, into DST through a temporary name; a file already in
+# DST at the same size counts as copied (a run stopped half-way picks up
+# where it was), one at another size stops the copy (never overwritten).
+# Then every file of the list is checked again in DST at its size. Prints
+# "COPIED KEPT BYTES" last; a reason and status 1 on any failure. The old
+# files are never deleted here: the core still runs on them until the start
+# step restarts it, and may still be downloading into them. The core
+# removes them itself once it runs on the new folder, each only after a
+# byte-for-byte comparison with its copy (domovoi/podcast_relocate.py).
+PODCASTS_COPY_SH='set -u
+src=$1 dst=$2 n=0 kept=0 bytes=0
+cd -- "$src" || { echo "can not read $src"; exit 1; }
+list=$(mktemp) || { echo "no temporary file"; exit 1; }
+trap "rm -f -- \"$list\"" EXIT
+find . -type f -print0 >"$list" || { echo "can not list every file in $src"; exit 1; }
+while IFS= read -r -d "" f; do
+  f=${f#./}
+  s=$(stat -c %s -- "$f") || { echo "can not read $src/$f"; exit 1; }
+  if [ -e "$dst/$f" ] || [ -L "$dst/$f" ]; then
+    if [ -f "$dst/$f" ] && [ ! -L "$dst/$f" ] && [ "$(stat -c %s -- "$dst/$f")" = "$s" ]; then kept=$((kept + 1))
+    else echo "$dst/$f is already there and is not the same file"; exit 1; fi
+  else
+    mkdir -p -- "$(dirname -- "$dst/$f")" || { echo "can not make a folder for $f in $dst"; exit 1; }
+    if ! cp --preserve=timestamps -- "$f" "$dst/$f.domovoi-copy" || ! mv -f -- "$dst/$f.domovoi-copy" "$dst/$f"; then
+      rm -f -- "$dst/$f.domovoi-copy"
+      echo "copying $f into $dst failed (is the drive full?)"; exit 1
+    fi
+    n=$((n + 1))
+  fi
+  bytes=$((bytes + s))
+done <"$list"
+while IFS= read -r -d "" f; do
+  f=${f#./}
+  [ -f "$dst/$f" ] && [ "$(stat -c %s -- "$dst/$f")" = "$(stat -c %s -- "$f")" ] \
+    || { echo "$dst/$f is missing or not the same size after the copy"; exit 1; }
+done <"$list"
+echo "$n $kept $bytes"'
+
+# move_podcasts OLD NEW: the episodes in OLD (PODCASTS_DIR as domovoi/.env
+# has it now, empty: the core's default) copied into NEW (the mounted
+# Podcasts folder) and checked. Status 0: PODCASTS_DIR may be NEW; 1: keep
+# it as it is (said in a warning).
+move_podcasts() {
+  local old=$1 new=$2 out n kept bytes
+  [ -n "$old" ] || old=$SVC_HOME/.domovoi/podcasts
+  case $old in "~") old=$SVC_HOME ;; "~/"*) old=$SVC_HOME/${old#"~/"} ;; esac
+  [ "$old" = / ] || old=${old%/}
+  [ "$old" != "$new" ] || return 0
+  if ! mountpoint -q "$new"; then
+    warn "podcasts: $new is not connected to its Windows folder, so the episodes stay in $old (PODCASTS_DIR unchanged); the next Setup or repair tries again"
+    return 1
+  fi
+  if ! as_svc test -w "$ROOT$new"; then
+    warn "podcasts: $SVC_USER can't write to $new, so the episodes stay in $old (PODCASTS_DIR unchanged); the next Setup or repair tries again"
+    return 1
+  fi
+  if [[ $old != /?* ]] || [ ! -d "$ROOT$old" ] || [ -z "$(find "$ROOT$old" -type f -print -quit 2>/dev/null)" ]; then
+    log "podcasts: no episodes to move from ${old:-?}; PODCASTS_DIR becomes $new"
+    return 0
+  fi
+  if ! out=$(as_svc bash -c "$PODCASTS_COPY_SH" podcasts-copy "$ROOT$old" "$ROOT$new" 2>&1); then
+    warn "podcasts: copying the episodes from $old into $new failed ($(printf '%s' "$out" | tail -n 1)); they stay in $old and PODCASTS_DIR is unchanged, so Domovoi keeps playing them from there. The files already copied stay in $new; the next Setup or repair goes on from them"
+    return 1
+  fi
+  read -r n kept bytes <<<"$(printf '%s\n' "$out" | tail -n 1)"
+  log "podcasts: $((n + kept)) episode files ($bytes bytes) are in $new ($n copied now, $kept already there), each checked at its size; PODCASTS_DIR becomes $new. The old copies in $old stay until Domovoi runs on the new folder, which then removes each one that matches its copy byte for byte"
+  return 0
 }
 
 # env_py SNIPPET VAR=VALUE...: one of the snippets above, as the service
@@ -2944,7 +3037,7 @@ write_env_record() {
 do_env() {
   local envf=$CHECKOUT/domovoi/.env policy existed=0 before after line k w out
   local -A want=() have=() last=()
-  local -a order=() write=() same=() kept=()
+  local -a order=() write=() same=() kept=() others=()
   [ ! -f "$envf" ] || existed=1
   before=$(file_sig "$envf")
   # A NEW .env with a random Postgres password and helper secrets, and the
@@ -2997,6 +3090,17 @@ do_env() {
     else kept+=("$k")
     fi
   done
+  # PODCASTS_DIR to the Windows Podcasts folder: only after the episodes
+  # are copied there and checked (move_podcasts); else it is held as it is.
+  # Bare metal is never moved: there --media podcasts=PATH is the folder.
+  rm -f "$PODCASTS_HELD"
+  if [ "$WSL" = 1 ] && [[ " ${write[*]} " == *" PODCASTS_DIR "* ]] \
+      && ! move_podcasts "${have[PODCASTS_DIR]-}" "${want[PODCASTS_DIR]}"; then
+    others=()
+    for k in "${write[@]}"; do [ "$k" = PODCASTS_DIR ] || others+=("$k"); done
+    write=("${others[@]}")
+    printf 'PODCASTS_DIR=%s\n' "${want[PODCASTS_DIR]}" >"$PODCASTS_HELD"
+  fi
   if [ "${#write[@]}" -gt 0 ]; then
     printf 'pending\n' >"$ENV_STAMP"
     env_py "$PY_ENV_WRITE" PROVISION_ENV_KEYS="$(for k in "${write[@]}"; do printf '%s=%s\n' "$k" "${want[$k]}"; done)" \

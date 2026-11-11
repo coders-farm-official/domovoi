@@ -45,7 +45,7 @@ which the host reads AS the service user and treats as data only):
   move the media root. Checked here for shape, then again by DomovoiHost,
   which validates the folder on Windows (a local NTFS drive, not a system
   or profile folder, no links, Domovoi's account can write there), makes
-  the five folders, rewrites the distro's media block in ``/etc/fstab``
+  the six folders, rewrites the distro's media block in ``/etc/fstab``
   and restarts Domovoi's Linux system so the mounts and the rooms' music
   players pick it up (at most one restart per 10 minutes, never during an
   update: the hardware-limits rules). Files are never moved: the old
@@ -85,8 +85,11 @@ LINUX_EDITABLE = ("music_dir", "videos_dir")
 
 #: The folders under a Windows media root (windows/common/Provision.cs
 #: MediaPaths.Folders), by kind.
+#: Podcasts joined on 2026-11-11 (before, the episodes stayed inside the
+#: distro; an install whose episodes haven't moved yet still shows Podcasts
+#: as "internal", because its ``podcasts_dir`` is not under MOUNT_BASE).
 HOST_FOLDERS = {"music": "Music", "pictures": "Pictures", "videos": "Videos",
-                "documents": "Documents", "audiobooks": "Audiobooks"}
+                "documents": "Documents", "audiobooks": "Audiobooks", "podcasts": "Podcasts"}
 
 #: Where each host kind's report is. The Mac adds ("mac", "/var/lib/domovoi-mac/media.json").
 REPORT_FILES: tuple[tuple[str, str], ...] = (("windows", "/var/lib/domovoi-windows/media.json"),)

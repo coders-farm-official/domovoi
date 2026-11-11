@@ -692,7 +692,7 @@ begin
   else
     S := S + IntToStr(N) + '. No firewall rules: this PC has no private home-network address, so Domovoi answers on this PC only.' + #13#10#13#10;
   N := N + 1;
-  S := S + IntToStr(N) + '. A media folder you can open in Explorer (you choose it next; default C:\Users\Public\Domovoi) with Music, Pictures, Videos, Documents and Audiobooks inside. domovoi-svc may read and write it; if Setup makes the folder, every user of this PC (Users) may too.' + #13#10#13#10;
+  S := S + IntToStr(N) + '. A media folder you can open in Explorer (you choose it next; default C:\Users\Public\Domovoi) with Music, Pictures, Videos, Documents, Audiobooks and Podcasts inside. domovoi-svc may read and write it; if Setup makes the folder, every user of this PC (Users) may too.' + #13#10#13#10;
   N := N + 1;
   S := S + IntToStr(N) + '. C:\Program Files\Domovoi (this program) and C:\ProgramData\Domovoi (Domovoi''s Linux system, logs and settings; only administrators and domovoi-svc can open it). Setup won''t use a C:\ProgramData\Domovoi it didn''t make.' + #13#10#13#10;
   N := N + 1;
@@ -1513,7 +1513,7 @@ begin
     'Domovoi runs a small Linux system on this PC, as its own hidden account. To set that up, Setup makes these changes:', '');
   CreateInternetPage(ConsentPage.ID);
   MediaPage := CreateInputDirPage(InternetPage.ID, 'Your media folder', 'Where your music, pictures and videos live',
-    'Domovoi keeps your media in a Windows folder you can open in Explorer and copy files into. Setup makes Music, Pictures, Videos, Documents and Audiobooks inside it. Pick a folder on a drive of this PC.',
+    'Domovoi keeps your media in a Windows folder you can open in Explorer and copy files into. Setup makes Music, Pictures, Videos, Documents, Audiobooks and Podcasts inside it. Pick a folder on a drive of this PC.',
     False, '');
   MediaPage.Add('Media folder:');
   Root := ExpandConstant('{param:mediaroot|}');

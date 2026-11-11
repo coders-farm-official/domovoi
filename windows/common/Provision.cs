@@ -458,7 +458,7 @@ namespace Domovoi.Windows
 
     public static class ProvisionArgs
     {
-        public static readonly string[] MediaNames = { "music", "pictures", "videos", "documents", "audiobooks" };
+        public static readonly string[] MediaNames = { "music", "pictures", "videos", "documents", "audiobooks", "podcasts" };
 
         static readonly Regex Sha = new Regex(@"^[0-9a-f]{40}\z");
         static readonly Regex RepoUrl = new Regex(@"^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~+-]+)+\z");
@@ -529,6 +529,12 @@ namespace Domovoi.Windows
             new[] { "videos", "Videos" },
             new[] { "documents", "Documents" },
             new[] { "audiobooks", "Audiobooks" },
+            // Since 2026-11-11: downloaded podcast episodes, until then kept
+            // inside the distro (~/.domovoi/podcasts). A repair or update
+            // makes it under the same root as the others (helper Steps.Media,
+            // MediaPrep.EnsureUnder for a dashboard root); provision.sh copies
+            // the episodes over before it points PODCASTS_DIR at it.
+            new[] { "podcasts", "Podcasts" },
         };
 
         static readonly Regex Drive = new Regex(@"^[A-Za-z]:\\");

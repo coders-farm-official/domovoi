@@ -399,9 +399,22 @@ async def _ensure_container(
         # Only at the core's start (warm_known_rooms), never on the
         # on-demand or healing paths, which leave a running player alone.
         source = await _music_mount_source(name)
+        why = None
         if source is not None and not _same_dir(source, music_dir):
-            log.warning("MPD container %s plays %s, but the music folder is now %s; recreating it "
-                        "(data volume kept)", name, source, music_dir)
+            why = f"plays {source}, but the music folder is now {music_dir}"
+        else:
+            # The same for the nested spoken-audio mounts: on the Windows
+            # install the podcasts folder moved from inside the distro to
+            # /srv/media/podcasts (2026-11-11), and a player made before
+            # would go on serving the old one at /music/podcasts.
+            nested = await _nested_mount_sources(name)
+            for host_path, sub in await asyncio.to_thread(_nested_mountpoints, music_dir):
+                had = nested.get(f"/music/{sub}")
+                if had is not None and not _same_dir(had, host_path.as_posix()):
+                    why = f"has {had} at /music/{sub}, but that folder is now {host_path.as_posix()}"
+                    break
+        if why is not None:
+            log.warning("MPD container %s %s; recreating it (data volume kept)", name, why)
             rc, _, err = await _run_docker("rm", "-f", name, timeout=30.0)
             if rc != 0:
                 raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
@@ -441,6 +454,26 @@ async def _music_mount_source(name: str) -> str | None:
         timeout=10.0,
     )
     return (out.strip() or None) if rc == 0 else None
+
+
+async def _nested_mount_sources(name: str) -> dict[str, str]:
+    """The host folder container ``name`` has at each mount below /music
+    (``/music/podcasts``, ``/music/audiobooks``), by destination; {} when
+    docker can't say (then nothing is recreated on its word). A mount it
+    lacks is not "another folder" either: only a different one is."""
+    rc, out, _ = await _run_docker(
+        "inspect", "-f",
+        '{{range .Mounts}}{{if ne .Destination "/music"}}{{.Destination}}\t{{.Source}}\n{{end}}{{end}}', name,
+        timeout=10.0,
+    )
+    if rc != 0:
+        return {}
+    found: dict[str, str] = {}
+    for line in out.splitlines():
+        dest, sep, src = line.partition("\t")
+        if sep and dest.startswith("/music/") and src.strip():
+            found[dest.strip()] = src.strip()
+    return found
 
 
 #: How Docker Desktop names a Windows drive's folder on the host side of a

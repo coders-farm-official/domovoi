@@ -133,7 +133,8 @@ signature, before it runs it.
    change it later in **Settings > Privacy > Internet**.
 5. **Asks for the media folder** (default `C:\Users\Public\Domovoi`), the
    Windows folder you open in Explorer and copy music, pictures, videos,
-   documents and audiobooks into (Settings → Household → Media folders
+   documents and audiobooks into, and where downloaded podcast episodes go
+   (Settings → Household → Media folders
    shows it later, and can move it: [Media folders](#media-folders)). It must be a folder of your own on a
    drive of this PC: Windows, Program Files, ProgramData, the Users folder,
    a profile folder itself (a folder inside it, like your Music, is fine;
@@ -237,7 +238,7 @@ signature, before it runs it.
 | WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
-| The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
+| The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`, `Podcasts`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
 | `C:\Program Files\Domovoi` (`DomovoiHost.exe`, `DomovoiSetupHelper.exe`, `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `domovoi.ico`, the uninstaller) and its Apps entry. | Deleted, after everything above is gone. |
 | The tray icon's start at every account's sign-in: value `DomovoiTray` under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` (`"C:\Program Files\Domovoi\DomovoiTray.exe" --autostart`), and **Domovoi** in the Start menu (opens the dashboard, and brings a hidden icon back). Setup starts the icon for the account that ran it once the install has worked. | Every account's running icon is ended first (before the uninstall's other steps, and before Setup replaces the file on a repair); then the value and the Start menu entry are removed. |
 | Written by the icon itself, per account (not by Setup): `HKCU\Software\Domovoi\Tray` (`KeepAwake`, `StartWithWindows`) and its log, `%LOCALAPPDATA%\Domovoi\tray.log`. | The uninstalling account's settings are removed; other accounts' two values and the logs stay (they hold nothing of Domovoi's data). |
@@ -575,19 +576,40 @@ machine with nothing Domovoi manages, and the card isn't shown there.
 Inside Domovoi's Linux system the media folders are mounts such as
 `/srv/media/music`: lines in the distro's `/etc/fstab` that `provision.sh`
 writes from the folder chosen in Setup (default `C:\Users\Public\Domovoi`,
-with `Music`, `Pictures`, `Videos`, `Documents` and `Audiobooks` in it).
+with `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks` and
+`Podcasts` in it).
 Nobody can open those Linux paths, so **Settings → Household → Media
 folders** shows the Windows folders instead (`domovoi/media_folders.py`,
 `windows/common/MediaFolders.cs`):
 
 - **Where they are.** Each kind's Windows folder, with **copy path**.
-  Podcasts are kept inside Domovoi's own Linux system and say so. DomovoiHost
-  tells the Linux side the folders every 30 s
+  DomovoiHost tells the Linux side the folders every 30 s
   (`/var/lib/domovoi-windows/media.json`, written as root; the core believes
   it only while root alone owns it and its folder, like `limits.json`). With
   a DomovoiHost from before this (an install not yet updated by a newer
   Setup), the page reads the same folders from the distro's `/etc/fstab`
   and offers neither of the two actions below.
+- **Podcasts on an install from before them.** The first Windows installs
+  had no `Podcasts` folder: downloaded episodes stayed inside Domovoi's
+  Linux system (`~/.domovoi/podcasts`, growing its virtual disk, which
+  never shrinks). The Setup or update that brings this version makes
+  `Podcasts` beside the other folders (in the media folder Setup knows, or
+  in the one chosen from the dashboard; no other folder moves), and
+  `provision.sh` moves the episodes before Domovoi uses it: it copies them
+  into the folder as Domovoi's account (a file already there at the same
+  size counts as copied; one there at another size is never overwritten),
+  checks every file arrived at its size, and only then points
+  `PODCASTS_DIR` at `/srv/media/podcasts`. If the folder isn't connected,
+  isn't writable or the copy fails (a full drive, say), `PODCASTS_DIR` stays
+  where it was, the episodes keep playing from there, the setup log says
+  why, and the next Setup or repair tries again (from the files already
+  copied). A `PODCASTS_DIR` you set yourself is kept, with a warning, and
+  nothing is copied. At its next start the core points each episode's
+  record at its copy (the database keeps full paths), copies over an
+  episode it finished downloading after the move, and removes an old copy
+  only once the new folder holds the same bytes and no record names it
+  (`domovoi/podcast_relocate.py`). Until the move has happened the page
+  shows Podcasts as kept inside Domovoi.
 - **Open on the Domovoi PC**, shown only in a browser on that PC while
   Domovoi's icon runs there. DomovoiHost runs as a hidden account and
   can't open a window on your desktop, so the tray does: the page names a
@@ -606,7 +628,7 @@ folders** shows the Windows folders instead (`domovoi/media_folders.py`,
   formatted NTFS, not a network folder, not inside Windows, Program Files,
   ProgramData, a profile's AppData, not the Users folder or a profile
   itself, nothing holding one of those, no link in its path, at most 200
-  characters. It makes the five folders where missing (a root it makes
+  characters. It makes the six folders where missing (a root it makes
   lets the household read and write it, as Setup's does), proves its
   account can write each, rewrites the media block of the distro's
   `/etc/fstab`, and restarts Domovoi's Linux system so the mounts and the

@@ -2,7 +2,7 @@
 // requests it can make about them (owner, 2026-11-11; docs/WINDOWS_HOST.md,
 // "Media folders"; domovoi/media_folders.py on the Linux side).
 //
-// The distro reaches the media root's five folders through drvfs lines in
+// The distro reaches the media root's six folders through drvfs lines in
 // its /etc/fstab, mounted at /srv/media/<name>: the core only ever sees
 // those Linux paths. So DomovoiHost tells it, and the tray, which Windows
 // folders they are, and carries out a move:
@@ -24,7 +24,7 @@
 //     anything else, and the root must pass MediaPaths.Problem. Then
 //     (MediaPrep.cs, the host's side) the folder is checked on this PC
 //     (RootProblem: a local NTFS drive, not a system or profile folder, no
-//     link in its path, not longer than MaxRootLength), the five folders
+//     link in its path, not longer than MaxRootLength), the six folders
 //     are made where missing (Domovoi's account and, on a root it made,
 //     the household may read and write them, as Setup does), each is
 //     proved writable by this account, the choice is kept in host-state.json
@@ -366,7 +366,7 @@ namespace Domovoi.Windows
                 + "{ awk -v b='" + FstabBegin + "' -v e='" + FstabEnd + "' '" + FstabKeepAwk + "' /etc/fstab; "
                 + "printf '%s\\n' '" + FstabBegin + "'; "
                 + "while read -r src mp; do "
-                + "case $mp in " + MountBase + "/music|" + MountBase + "/pictures|" + MountBase + "/videos|" + MountBase + "/documents|" + MountBase + "/audiobooks) ;; *) exit 3 ;; esac; "
+                + "case $mp in " + MountBase + "/music|" + MountBase + "/pictures|" + MountBase + "/videos|" + MountBase + "/documents|" + MountBase + "/audiobooks|" + MountBase + "/podcasts) ;; *) exit 3 ;; esac; "
                 + "case $src in [A-Z]:/?*) ;; *) exit 3 ;; esac; "
                 + "[ -d $mp ] || install -d -m 0755 -o root -g root $mp; "
                 + "printf '%s %s drvfs metadata,uid=%s,gid=%s,umask=022,fmask=133,noatime,nofail 0 0\\n' $src $mp $u $g; "

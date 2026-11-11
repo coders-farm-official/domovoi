@@ -248,6 +248,7 @@ static partial class Tests
                 "--media", @"videos=C:\Users\Public\Domovoi\Videos",
                 "--media", @"documents=C:\Users\Public\Domovoi\Documents",
                 "--media", @"audiobooks=C:\Users\Public\Domovoi\Audiobooks",
+                "--media", @"podcasts=C:\Users\Public\Domovoi\Podcasts",
                 "--health-timeout", "900",
             }, ProvisionArgs.Build(Opts()), "args");
         });
@@ -309,8 +310,12 @@ static partial class Tests
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "public LAN IP");
             o = Opts(); o.Media.Add(new KeyValuePair<string, string>("music", @"D:\Music"));
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "music twice");
-            o = Opts(); o.Media.Add(new KeyValuePair<string, string>("podcasts", @"D:\Podcasts"));
+            o = Opts(); o.Media.Add(new KeyValuePair<string, string>("radio", @"D:\Radio"));
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "unknown name");
+            // Podcasts is a media folder like the others since 2026-11-11.
+            o = Opts(); o.Media = MediaPaths.Under(@"D:\Media");
+            var withPodcasts = ProvisionArgs.Build(o);
+            True(withPodcasts.Contains(@"podcasts=D:\Media\Podcasts"), "podcasts is a known name");
             o = Opts(); o.Media = new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("music", @"\\nas\music") };
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "network folder");
         });
@@ -412,7 +417,7 @@ static partial class Tests
             var refused = Domovoi.Windows.Helper.Steps.JobOptions(l, repo, sha, "stable", OldUsage);
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(refused); }, "No to an older script");
             Eq("never", o.Internet, "internet from the record too");
-            Eq(5, o.Media.Count, "media folders from the record");
+            Eq(6, o.Media.Count, "media folders from the record");
         });
         Run("ai: a changed answer is a new job (the host provisions again)", delegate
         {
@@ -560,11 +565,13 @@ static partial class Tests
                 True(MediaPaths.Problem(dev) != null, "a device name: " + dev);
             True(MediaPaths.Problem(@"D:\CONSOLE") == null && MediaPaths.Problem(@"D:\COM10") == null, "only the device names themselves");
         });
-        Run("media: the five folders under a root", delegate
+        Run("media: the six folders under a root", delegate
         {
             var u = MediaPaths.Under(@"E:\Domovoi\");
-            SeqEq(new[] { "music", "pictures", "videos", "documents", "audiobooks" }, u.Select(x => x.Key), "names");
+            SeqEq(new[] { "music", "pictures", "videos", "documents", "audiobooks", "podcasts" }, u.Select(x => x.Key), "names");
             Eq(@"E:\Domovoi\Audiobooks", u[4].Value, "path");
+            Eq(@"E:\Domovoi\Podcasts", u[5].Value, "podcasts beside the others");
+            SeqEq(MediaPaths.Folders.Select(f => f[0]), ProvisionArgs.MediaNames, "provision.sh is given every folder Setup makes");
         });
     }
 
@@ -1142,7 +1149,7 @@ static partial class Tests
             var l = FullLedger();
             var back = Ledger.FromJson(Json.ParseObject(Json.Serialize(l.ToJson())));
             Eq(l.AccountSid, back.AccountSid, "sid");
-            Eq(6, back.Media.Count, "media records");
+            Eq(7, back.Media.Count, "media records");
             True(back.Media[0].Created && back.Media[0].AddedSids.Count == 2, "media record fields");
             SeqEq(l.FirewallRules, back.FirewallRules, "rules");
         });
@@ -1230,8 +1237,8 @@ static partial class Tests
             SeqEq(new[]
             {
                 "StopService", "RotatePassword", "UnregisterDistro", "DeleteService", "StopAccountProcesses", "RemoveFirewallRules",
-                "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess",
-                "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty",
+                "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess",
+                "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty",
                 "RemoveRights", "UnhideAccount", "DeleteAccount", "DeleteProfile", "DeleteProgramData", "RemoveRecord",
             }, kinds, "steps");
             SeqEq(new[] { "StopService", "RotatePassword", "UnregisterDistro" }, plan.Where(s => s.Critical).Select(s => s.Kind.ToString()), "critical steps");
@@ -2446,8 +2453,13 @@ static partial class Tests
         Run("media folders: the job's folders and the dashboard's", delegate
         {
             var job = MediaFolders.MediaArgs(setupArgs);
-            Eq(5, job.Count, "five folders");
+            Eq(6, job.Count, "six folders");
             Eq(MediaPaths.DefaultRoot, MediaFolders.RootOf(job), "Setup's root");
+            // A job from a Setup before Podcasts (five folders): the same
+            // root, so a dashboard choice made over it is kept.
+            var oldJob = job.Where(m => m.Key != "podcasts").ToList();
+            Eq(5, oldJob.Count, "an older Setup's five");
+            Eq(MediaPaths.DefaultRoot, MediaFolders.RootOf(oldJob), "an older job's root");
             True(MediaFolders.RootOf(new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("music", @"D:\Songs") }) == null, "not <root>\\Music: no root");
             var ov = new MediaOverride { Root = @"D:\Media", BasedOn = MediaPaths.DefaultRoot };
             bool drop;
@@ -2472,7 +2484,9 @@ static partial class Tests
             Eq(@"D:/My\040Media/Videos", MediaFolders.FstabSource(@"D:\My Media\Videos"), "blanks escaped");
             string input = MediaFolders.FstabInput(MediaPaths.Under(@"D:\My Media"));
             True(input.StartsWith(@"D:/My\040Media/Music /srv/media/music" + "\n", StringComparison.Ordinal), "one line per folder: " + input);
-            Eq(5, input.Split('\n').Length - 1, "five lines");
+            Eq(6, input.Split('\n').Length - 1, "six lines");
+            True(input.Contains(@"D:/My\040Media/Podcasts /srv/media/podcasts" + "\n"), "podcasts mounted like the others");
+            True(MediaFolders.FstabScript().Contains("/srv/media/podcasts)"), "the script takes the podcasts line");
             Throws<ArgumentException>(delegate { MediaFolders.FstabInput(new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("etc", @"D:\x") }); }, "an unknown name");
             Throws<ArgumentException>(delegate { MediaFolders.FstabInput(new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("music", @"\\nas\x") }); }, "a bad folder");
             string s = MediaFolders.FstabScript();
@@ -2497,7 +2511,8 @@ static partial class Tests
             string script = MediaFolders.ReportScript();
             True(script.Contains("chown root:root /var/lib/domovoi-windows") && script.Contains("/var/lib/domovoi-windows/media.json"), "root's file");
             var map = MediaFolders.ParseTrayMap(MediaFolders.TrayMap(media, DateTime.UtcNow));
-            Eq(5, map.Count, "five folders");
+            Eq(6, map.Count, "six folders");
+            Eq(@"D:\Media\Podcasts", map["podcasts"], "podcasts on the tray's list");
             Eq(@"D:\Media\Pictures", map["pictures"], "a folder");
             var bad = MediaFolders.ParseTrayMap("{\"schema\":1,\"folders\":{\"music\":\"\\\\\\\\nas\\\\x\",\"etc\":\"D:\\\\x\",\"videos\":\"D:\\\\V\"}}");
             True(!bad.ContainsKey("music") && !bad.ContainsKey("etc") && bad.ContainsKey("videos"), "only known names and drive folders");
@@ -2617,7 +2632,11 @@ static partial class Tests
             Eq("missing", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "its drive unplugged");
             srv.Req.Kind = "documents";
             Eq("refused", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "a link");
-            foreach (string k in new[] { "podcasts", @"C:\Windows", "..", null })
+            srv.Req.Kind = "podcasts";
+            Eq("opened", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "podcasts opens like the others");
+            Eq(@"D:\Media\Podcasts", opened[1], "its folder");
+            opened.RemoveAt(1);
+            foreach (string k in new[] { "radio", @"C:\Windows", "..", null })
             {
                 srv.Req.Kind = k;
                 Eq("refused", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "not on the list: " + (k ?? "null"));

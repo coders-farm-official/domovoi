@@ -736,6 +736,14 @@ namespace Domovoi.Windows.Host
                 log.Write("the dashboard's media folder can't be used any more (" + why + "); provisioning with Setup's");
                 return job.ProvisionArgs;
             }
+            // Setup's media step made any new kind folder (Podcasts) in
+            // Setup's root; the dashboard's root gets it here.
+            try { MediaPrep.EnsureUnder(MediaFolders.RootOf(media), delegate (string m) { log.Write(m); }); }
+            catch (Exception e)
+            {
+                if (e is OutOfMemoryException || e is StackOverflowException) throw;
+                log.Write("could not check the folders in the dashboard's media folder: " + e.Message);
+            }
             return MediaFolders.WithMedia(job.ProvisionArgs, media);
         }
 
@@ -889,7 +897,7 @@ namespace Domovoi.Windows.Host
                 SetChange(change);
                 ReportMedia(job, change);
                 string why = setupRoot == null
-                    ? "Setup's media folders aren't the usual five under one folder; run Domovoi Setup again to choose the folder"
+                    ? "Setup's media folders aren't the usual ones under one folder; run Domovoi Setup again to choose the folder"
                     : MediaPrep.Prepare(req.Root, delegate (string m) { log.Write(m); });
                 if (why != null) return Refuse(change, "refused", why);
                 var ov = new MediaOverride { Root = MediaPaths.Normalize(req.Root), BasedOn = setupRoot };

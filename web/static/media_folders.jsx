@@ -154,7 +154,7 @@ const MediaFoldersMove = ({ data, fire, refresh }) => {
       <div style={{ fontWeight: 500, marginBottom: 4 }}>Move the media folders</div>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 8, lineHeight: 1.5 }}>
         Pick another folder on the Domovoi PC, for example on a bigger drive. Domovoi makes Music, Pictures,
-        Videos, Documents and Audiobooks in it, restarts (a couple of minutes offline) and uses them from then on.
+        Videos, Documents, Audiobooks and Podcasts in it, restarts (a couple of minutes offline) and uses them from then on.
         Your files aren’t moved: copy them into the new folder first, then move. Switching to a half-copied
         folder makes Domovoi forget audiobook places and queued songs whose files it can’t find.
       </div>

@@ -2274,7 +2274,7 @@ dashboard choice.
     on its long, final form from Windows (`GetFinalPathNameByHandle` on the
     deepest part that exists), so a short name or another case can't slip
     past; no junction or symbolic link anywhere in the path.
-  - **folder creation**: the root and its five folders, made by
+  - **folder creation**: the root and its six folders, made by
     `domovoi-svc` where missing; it can make folders only where any
     standard account may.
   - **access rules**: only on a folder it has just made (it owns it):

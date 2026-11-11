@@ -176,6 +176,45 @@ def test_windows_page_shows_the_windows_folders(host) -> None:
     assert s["open"]["available"] is True and s["change"]["available"] is True
 
 
+PODCASTS_REPORT = {**REPORT, "folders": {**FOLDERS, "podcasts": ROOT + "\\Podcasts"}}
+
+
+def test_podcasts_moved_into_their_folder_is_a_host_row(host, monkeypatch) -> None:
+    # 2026-11-11: Podcasts is a media folder like the others once
+    # provision.sh moved the episodes (PODCASTS_DIR=/srv/media/podcasts).
+    host["write"](PODCASTS_REPORT)
+    monkeypatch.setattr(settings, "podcasts_dir", "/srv/media/podcasts")
+    rows = {r["kind"]: r for r in mf.status()["kinds"]}
+    assert rows["podcasts"]["where"] == "host" and rows["podcasts"]["location"] == ROOT + "\\Podcasts"
+    r = mf.request_open("podcasts")
+    assert json.loads((host["dir"] / "open.json").read_text())["kind"] == "podcasts" and r["ok"]
+    assert mf.pending_open()["kind"] == "podcasts"
+
+
+def test_podcasts_not_moved_yet_stay_internal(host) -> None:
+    # The host has the folder, but provision.sh could not move the episodes
+    # (the folder didn't mount, the copy failed): PODCASTS_DIR is still
+    # inside the distro, and the page says so.
+    host["write"](PODCASTS_REPORT)
+    s = mf.status()
+    assert s["root"] == ROOT, "a report with the sixth folder is believed"
+    rows = {r["kind"]: r for r in s["kinds"]}
+    assert rows["podcasts"]["where"] == "internal" and rows["podcasts"]["location"] is None
+    with pytest.raises(mf.Refused, match="kept inside Domovoi"):
+        mf.request_open("podcasts")
+
+
+def test_the_host_folders_are_setups() -> None:
+    # windows/common/Provision.cs MediaPaths.Folders: the same kinds and names.
+    import re
+
+    cs = (Path(__file__).resolve().parents[2] / "windows" / "common" / "Provision.cs").read_text(encoding="utf-8")
+    block = cs[cs.index("public static readonly string[][] Folders"):]
+    block = block[:block.index("};")]
+    assert dict(re.findall(r'new\[\] \{ "([a-z]+)", "([A-Za-z]+)" \}', block)) == mf.HOST_FOLDERS
+    assert mf._common_root(PODCASTS_REPORT["folders"]) == ROOT
+
+
 def test_a_subfolder_of_a_mount_maps_inside_its_folder(host, monkeypatch) -> None:
     monkeypatch.setattr(settings, "videos_dir", "/srv/media/videos/films/new")
     rows = {r["kind"]: r for r in mf.status()["kinds"]}
@@ -213,7 +252,7 @@ def test_open_names_a_kind_never_a_path(host) -> None:
     assert mf.pending_open()["kind"] == "music"
 
 
-@pytest.mark.parametrize("kind", ["podcasts", "C:\\Windows", "../music", ""])
+@pytest.mark.parametrize("kind", ["podcasts", "radio", "C:\\Windows", "../music", ""])
 def test_open_refuses_anything_without_a_host_folder(host, kind) -> None:
     with pytest.raises(mf.Refused):
         mf.request_open(kind)
@@ -462,6 +501,65 @@ async def test_a_player_on_another_music_folder_is_made_again(monkeypatch) -> No
     await mp._ensure_container(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
                                music_dir="/srv/old-music", volume_name="v", check_music_mount=True)
     assert created == [] and not any(c[0] == "rm" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_a_player_on_the_old_podcasts_folder_is_made_again(monkeypatch, tmp_path) -> None:
+    # The Windows install's podcasts moved from inside the distro to the
+    # mounted /srv/media/podcasts (2026-11-11): a room's player made before
+    # still has the old folder at /music/podcasts, so the start recreates it.
+    from domovoi import mpd_provisioner as mp
+
+    music = tmp_path / "music"
+    (music / "podcasts").mkdir(parents=True)
+    pods = tmp_path / "srv-media-podcasts"
+    pods.mkdir()
+    monkeypatch.setattr(settings, "podcasts_dir", str(pods))
+    monkeypatch.setattr(settings, "audiobooks_dir", str(tmp_path / "no-books"))
+    nested = {"src": "/home/domovoi/.domovoi/podcasts"}
+    calls: list[tuple] = []
+
+    async def docker(*args, **kw):
+        calls.append(args)
+        if args[0] == "inspect" and "ne .Destination" in args[2]:
+            return 0, f"/music/podcasts\t{nested['src']}\n", ""
+        if args[0] == "inspect" and ".Mounts" in args[2]:
+            return 0, f"{music.as_posix()}\n", ""
+        return 0, "", ""
+
+    async def state(name):
+        return "running"
+
+    async def ip(name):
+        return mp._CONTROL_BIND
+
+    created: list[str] = []
+
+    async def create(**kw):
+        created.append(kw["music_dir"])
+
+    async def after(room_id, port):
+        return None
+
+    monkeypatch.setattr(mp, "_run_docker", docker)
+    monkeypatch.setattr(mp, "_container_state", state)
+    monkeypatch.setattr(mp, "_control_port_host_ip", ip)
+    monkeypatch.setattr(mp, "_create_container", create)
+    monkeypatch.setattr(mp, "_after_start", after)
+    kw = dict(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
+              music_dir=music.as_posix(), volume_name="v")
+    await mp._ensure_container(**kw)
+    assert created == [], "the on-demand path leaves a running player alone"
+    await mp._ensure_container(**kw, check_music_mount=True)
+    assert ("rm", "-f", "domovoi-mpd-x") in calls and created == [music.as_posix()]
+    calls.clear()
+    created.clear()
+    nested["src"] = pods.as_posix()
+    await mp._ensure_container(**kw, check_music_mount=True)
+    assert created == [] and not any(c[0] == "rm" for c in calls), "already on the new folder"
+    nested["src"] = ""
+    await mp._ensure_container(**kw, check_music_mount=True)
+    assert created == [] and not any(c[0] == "rm" for c in calls), "docker can't say: nothing recreated"
 
 
 @pytest.mark.parametrize("source,music_dir,same", [

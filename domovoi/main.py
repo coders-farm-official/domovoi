@@ -486,6 +486,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             Path(_spoken_dir).expanduser().mkdir(parents=True, exist_ok=True)
         except OSError as e:
             log.warning("could not create spoken-audio dir %s: %s", _spoken_dir, e)
+    # Episodes provision.sh moved into the Windows Podcasts folder: their
+    # rows pointed at the copies, the old copies removed once identical
+    # (domovoi/podcast_relocate.py; a no-op everywhere else). In the
+    # background: a start never waits on the file comparisons.
+    from domovoi import podcast_relocate
+
+    app.state.podcast_relocate_task = asyncio.create_task(
+        podcast_relocate.relocate_episodes(), name="podcast-relocate"
+    )
 
     # Ensure the wake-word artifact dirs exist (Feature 5) so the
     # /v1/wake-models channel can serve an empty manifest, the streaming

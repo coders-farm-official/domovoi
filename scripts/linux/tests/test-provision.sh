@@ -2049,6 +2049,135 @@ case_media_mount_failure_stops() {
   end_case
 }
 
+# Podcasts into their Windows folder (2026-11-11): a box installed before
+# Podcasts was a media folder kept the episodes in the core's default
+# ~/.domovoi/podcasts. The run that adds --media podcasts copies them into
+# the mounted folder, checks the copy, and only then writes PODCASTS_DIR;
+# the old files stay (the core removes them once it runs on the new folder).
+old_media_args=(--media 'music=C:\D\Music' --media 'audiobooks=C:\D\Audiobooks')
+podcasts_episodes() {
+  local d=$ROOT/home/domovoi/.domovoi/podcasts
+  mkdir -p "$d/show-a" "$d/show-b"
+  printf 'episode one' >"$d/show-a/ep-one-1.mp3"
+  printf 'episode two, longer' >"$d/show-a/ep-two-2.mp3"
+  printf 'b' >"$d/show-b/first-3.m4a"
+}
+case_podcasts_move_copies_then_switches() {
+  new_case podcasts_move_copies_then_switches
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}"
+  check "the old install: exit 0" eq "$RC" 0
+  check "no PODCASTS_DIR yet" eq "$(grep -c '^PODCASTS_DIR=' "$CHECKOUT/domovoi/.env")" 0
+  podcasts_episodes
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "exit 0" eq "$RC" 0
+  check "the podcasts line" has_line "$ROOT/etc/fstab" 'C:/D/Podcasts /srv/media/podcasts drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
+  check "copied" eq "$(cat "$ROOT/srv/media/podcasts/show-a/ep-two-2.mp3" 2>/dev/null)" 'episode two, longer'
+  check "every file" eq "$(cd "$ROOT/srv/media/podcasts" && find . -type f | LC_ALL=C sort | tr '\n' ' ')" './show-a/ep-one-1.mp3 ./show-a/ep-two-2.mp3 ./show-b/first-3.m4a '
+  check "no temporary copy left" eq "$(find "$ROOT/srv/media/podcasts" -name '*.domovoi-copy' | wc -l | tr -d ' ')" 0
+  check "as the service user" grep -q '^runuser -u domovoi -- .* bash -c ' "$STATE/calls.log"
+  check "then PODCASTS_DIR" has_line "$CHECKOUT/domovoi/.env" 'PODCASTS_DIR=/srv/media/podcasts'
+  check "recorded as the script's" has_line "$ROOT/var/lib/domovoi-provision/env-written" 'PODCASTS_DIR=/srv/media/podcasts'
+  check "the old copies kept" test -f "$ROOT/home/domovoi/.domovoi/podcasts/show-b/first-3.m4a"
+  check "said so" said "3 episode files (31 bytes) are in /srv/media/podcasts (3 copied now, 0 already there)"
+  check "the core restarted for it" called "systemctl restart domovoi-core"
+  # A copy that stopped half-way (a file already there at its size) goes on.
+  rm -f "$ROOT/srv/media/podcasts/show-a/ep-one-1.mp3"
+  sed -i '/^PODCASTS_DIR=/d' "$CHECKOUT/domovoi/.env" "$ROOT/var/lib/domovoi-provision/env-written"
+  : >"$ROOT/var/lib/domovoi-provision/podcasts-move-held"
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "resumed: exit 0" eq "$RC" 0
+  check "resumed: only the missing one copied" said "(1 copied now, 2 already there)"
+  check "resumed: switched" has_line "$CHECKOUT/domovoi/.env" 'PODCASTS_DIR=/srv/media/podcasts'
+  check "nothing held" absent "$ROOT/var/lib/domovoi-provision/podcasts-move-held"
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "next run: exit 0" eq "$RC" 0
+  check "next run: env skipped" eq "$(state_of env)" skip
+  check "next run: nothing copied" not_called "bash -c set -u"
+  end_case
+}
+
+# A fresh install with Podcasts: nothing to move, PODCASTS_DIR at once.
+case_podcasts_fresh_install_points_at_the_folder() {
+  new_case podcasts_fresh_install_points_at_the_folder
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "exit 0" eq "$RC" 0
+  check "PODCASTS_DIR" has_line "$CHECKOUT/domovoi/.env" 'PODCASTS_DIR=/srv/media/podcasts'
+  check "said so" said "no episodes to move"
+  end_case
+}
+
+# The Podcasts folder doesn't mount (gone, its drive unplugged) on the run
+# that adds it: the update goes on, PODCASTS_DIR stays, and the next run
+# (the folder there again) moves them.
+case_podcasts_not_mounted_keeps_the_episodes_inside() {
+  new_case podcasts_not_mounted_keeps_the_episodes_inside
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}"
+  podcasts_episodes
+  touch "$STATE/mount-silent-fail"
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "exit 0: the update goes on" eq "$RC" 0
+  check "warned about the mount" said "the podcast episodes stay inside Domovoi's Linux system for now"
+  check "warned about the move" said "podcasts: /srv/media/podcasts is not connected to its Windows folder"
+  check "PODCASTS_DIR unchanged" eq "$(grep -c '^PODCASTS_DIR=' "$CHECKOUT/domovoi/.env")" 0
+  check "held" test -f "$ROOT/var/lib/domovoi-provision/podcasts-move-held"
+  check "nothing written into the empty mount point" eq "$(find "$ROOT/srv/media/podcasts" -type f | wc -l | tr -d ' ')" 0
+  check "the episodes where they were" test -f "$ROOT/home/domovoi/.domovoi/podcasts/show-a/ep-one-1.mp3"
+  rm -f "$STATE/mount-silent-fail"
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "next run: exit 0" eq "$RC" 0
+  check "next run: env ran again" eq "$(state_of env)" done
+  check "next run: moved" has_line "$CHECKOUT/domovoi/.env" 'PODCASTS_DIR=/srv/media/podcasts'
+  check "next run: copied" test -f "$ROOT/srv/media/podcasts/show-b/first-3.m4a"
+  check "next run: no longer held" absent "$ROOT/var/lib/domovoi-provision/podcasts-move-held"
+  end_case
+}
+
+# A failed copy (a file already in the folder that isn't the same, which
+# is never overwritten): PODCASTS_DIR stays, the old files stay, the files
+# already copied stay; the next run, the clash gone, picks up from them.
+case_podcasts_copy_failure_keeps_the_dir() {
+  new_case podcasts_copy_failure_keeps_the_dir
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}"
+  podcasts_episodes
+  mkdir -p "$ROOT/srv/media/podcasts/show-b"
+  printf 'something else of the household' >"$ROOT/srv/media/podcasts/show-b/first-3.m4a"
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "exit 0" eq "$RC" 0
+  check "said why" said "show-b/first-3.m4a is already there and is not the same file"
+  check "said they stay" said "they stay in /home/domovoi/.domovoi/podcasts and PODCASTS_DIR is unchanged"
+  check "PODCASTS_DIR unchanged" eq "$(grep -c '^PODCASTS_DIR=' "$CHECKOUT/domovoi/.env")" 0
+  check "not recorded" eq "$(grep -c '^PODCASTS_DIR=' "$ROOT/var/lib/domovoi-provision/env-written")" 0
+  check "the household's file untouched" eq "$(cat "$ROOT/srv/media/podcasts/show-b/first-3.m4a")" 'something else of the household'
+  check "the old files kept" eq "$(find "$ROOT/home/domovoi/.domovoi/podcasts" -type f | wc -l | tr -d ' ')" 3
+  check "held" test -f "$ROOT/var/lib/domovoi-provision/podcasts-move-held"
+  check "the core not restarted for nothing" not_said "domovoi/.env: set PODCASTS_DIR"
+  rm -f "$ROOT/srv/media/podcasts/show-b/first-3.m4a"
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "next run: exit 0" eq "$RC" 0
+  check "next run: moved" has_line "$CHECKOUT/domovoi/.env" 'PODCASTS_DIR=/srv/media/podcasts'
+  check "next run: every episode there" said "3 episode files (31 bytes) are in /srv/media/podcasts"
+  # A file the stopped copy had made counts as copied (find's order is
+  # the file system's, so which ones did is not fixed).
+  check "next run: the old files still kept" eq "$(find "$ROOT/home/domovoi/.domovoi/podcasts" -type f | wc -l | tr -d ' ')" 3
+  end_case
+}
+
+# A PODCASTS_DIR the household set by hand is theirs: kept, with the
+# usual warning, and nothing copied.
+case_podcasts_hand_set_dir_is_kept() {
+  new_case podcasts_hand_set_dir_is_kept
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}"
+  podcasts_episodes
+  echo 'PODCASTS_DIR=/data/pods' >>"$CHECKOUT/domovoi/.env"
+  run_prov "${wsl_args[@]}" --skip-models "${old_media_args[@]}" --media 'podcasts=C:\D\Podcasts'
+  check "exit 0" eq "$RC" 0
+  check "kept" has_line "$CHECKOUT/domovoi/.env" 'PODCASTS_DIR=/data/pods'
+  check "warned" said "domovoi/.env: PODCASTS_DIR holds a value this script did not write"
+  check "nothing copied" eq "$(find "$ROOT/srv/media/podcasts" -type f | wc -l | tr -d ' ')" 0
+  check "not held" absent "$ROOT/var/lib/domovoi-provision/podcasts-move-held"
+  end_case
+}
+
 case_bare_metal() {
   new_case bare_metal --bare
   run_prov --internet sometimes --media music=/srv/music --media documents=/data/docs
@@ -4687,6 +4816,11 @@ CASES=(
   case_docker_waits_for_the_media_folders_on_wsl
   case_docker_media_order_not_on_bare_metal
   case_media_mount_failure_stops
+  case_podcasts_move_copies_then_switches
+  case_podcasts_fresh_install_points_at_the_folder
+  case_podcasts_not_mounted_keeps_the_episodes_inside
+  case_podcasts_copy_failure_keeps_the_dir
+  case_podcasts_hand_set_dir_is_kept
   case_image_pull_failure_stops
   case_bare_metal
   case_internet_never_keeps_searxng_off
