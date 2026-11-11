@@ -311,6 +311,7 @@ async def _ensure_container(
     http_port: int,
     music_dir: str,
     volume_name: str,
+    check_music_mount: bool = False,
 ) -> None:
     """Make sure container ``name`` exists and is running. Idempotent."""
     state = await _container_state(name)
@@ -332,10 +333,12 @@ async def _ensure_container(
             if rc != 0:
                 raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
             state = None
-    if state is not None:
+    if state is not None and check_music_mount:
         # The music folder is bound when the container is CREATED: one made
         # on another music_dir (Settings changed it, then a restart) would
         # go on playing the old folder. Recreate it on today's (volume kept).
+        # Only at the core's start (warm_known_rooms), never on the
+        # on-demand or healing paths, which leave a running player alone.
         source = await _music_mount_source(name)
         if source is not None and not _same_dir(source, music_dir):
             log.warning("MPD container %s plays %s, but the music folder is now %s; recreating it "
@@ -640,6 +643,7 @@ async def warm_known_rooms() -> int:
                     http_port=int(http),
                     music_dir=settings.music_dir,
                     volume_name=_volume_name(room_id),
+                    check_music_mount=True,
                 )
             rooms_warmed += 1
         except Exception as e:

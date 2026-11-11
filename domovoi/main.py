@@ -6752,13 +6752,19 @@ class MediaOpenBody(BaseModel):
 
 
 @app.post("/v1/admin/media-folders/open", dependencies=[Depends(require_admin_mutation)])
-async def admin_media_folders_open(body: MediaOpenBody) -> dict[str, Any]:
+async def admin_media_folders_open(body: MediaOpenBody, request: Request) -> dict[str, Any]:
     """Ask the tray on the Domovoi PC to open a media KIND's folder in File
     Explorer there (never a path: the tray maps the kind to a folder from
     the Windows side's own list). 400 with the reason where it can't (a
-    Linux server, an older Windows side, no tray running)."""
+    Linux server, an older Windows side, no tray running). 403 unless the
+    caller is on this PC: the dashboard on this PC (it relays its caller
+    as a loopback X-Forwarded-For), or a loopback caller directly
+    (local_peer.relayed_from_this_pc): a window opens where nobody else
+    is looking otherwise."""
     from domovoi import media_folders
 
+    if not local_peer.relayed_from_this_pc(request):
+        raise HTTPException(status_code=403, detail="only a browser on the Domovoi PC can open its folders")
     try:
         return await asyncio.to_thread(media_folders.request_open, body.kind)
     except media_folders.Refused as e:
@@ -6820,22 +6826,24 @@ class _TrayOpenClaimBody(BaseModel):
 
 @app.post("/v1/windows/media/open/claim")
 async def windows_media_open_claim(body: _TrayOpenClaimBody, request: Request) -> JSONResponse:
-    """One tray takes an open request (``{ok}``); another gets 409
+    """One tray takes an open request (``{ok, claim}``: a token its
+    result must carry); another gets 409
     ``claimed``, a gone one 404. Loopback only."""
     if not local_peer.from_this_pc(request):
         return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
     from domovoi import media_folders
 
-    got = await asyncio.to_thread(media_folders.claim_open, body.request_id)
+    got, token = await asyncio.to_thread(media_folders.claim_open, body.request_id)
     if got != "ok":
         return JSONResponse({"detail": "that request is gone" if got == "gone" else "another tray took it",
                              "reason": got}, status_code=404 if got == "gone" else 409,
                             headers={"Cache-Control": "no-store"})
-    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True, "claim": token}, headers={"Cache-Control": "no-store"})
 
 
 class _TrayOpenResultBody(BaseModel):
     request_id: str = Field(..., max_length=64)
+    claim: str | None = Field(default=None, max_length=64)
     outcome: str = Field(..., max_length=20)
     detail: str | None = Field(default=None, max_length=1000)
 
@@ -6850,7 +6858,7 @@ async def windows_media_open_result(body: _TrayOpenResultBody, request: Request)
     from domovoi import media_folders
 
     try:
-        await asyncio.to_thread(media_folders.record_open_result, body.request_id, body.outcome, body.detail)
+        await asyncio.to_thread(media_folders.record_open_result, body.request_id, body.claim, body.outcome, body.detail)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:

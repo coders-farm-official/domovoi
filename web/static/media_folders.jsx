@@ -155,7 +155,8 @@ const MediaFoldersMove = ({ data, fire, refresh }) => {
       <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 8, lineHeight: 1.5 }}>
         Pick another folder on the Domovoi PC, for example on a bigger drive. Domovoi makes Music, Pictures,
         Videos, Documents and Audiobooks in it, restarts (a couple of minutes offline) and uses them from then on.
-        Your files stay where they are: move them across in File Explorer when you like.
+        Your files aren’t moved: copy them into the new folder first, then move. Switching to a half-copied
+        folder makes Domovoi forget audiobook places and queued songs whose files it can’t find.
       </div>
       {words && change.state !== 'none' && (
         <div className="media-folders-move-state" role="status"
@@ -180,7 +181,8 @@ const MediaFoldersMove = ({ data, fire, refresh }) => {
           <div style={{ fontSize: 13, marginBottom: 8, lineHeight: 1.5 }}>
             Move the media folders to <span className="mono" style={{ fontFamily: 'var(--ff-mono)' }}>{target}</span>?
             Domovoi restarts once to use them. The files in{' '}
-            <span className="mono" style={{ fontFamily: 'var(--ff-mono)' }}>{data.root || 'the old folders'}</span> stay there.
+            <span className="mono" style={{ fontFamily: 'var(--ff-mono)' }}>{data.root || 'the old folders'}</span> stay there:
+            copy them across first if you haven’t.
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Button variant="primary" icon="check" onClick={ask} disabled={busy}>{busy ? 'asking…' : 'move and restart'}</Button>

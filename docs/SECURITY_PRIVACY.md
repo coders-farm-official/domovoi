@@ -2232,6 +2232,92 @@ hidden `domovoi-svc` account and writes that account's `.wslconfig`.
   new fact about the Windows PC the Linux side learns, and only an admin
   reads it.
 
+## The media folders channel (Windows install)
+
+Settings → Household → Media folders ([WINDOWS_HOST.md](WINDOWS_HOST.md#media-folders))
+adds two requests from the core to the Windows side, and one report back.
+Like the ceiling above, it is a channel from the Linux side into what
+DomovoiHost (the hidden `domovoi-svc` account) does on Windows, and it is
+wider: **the request names a path**. Read this before changing it.
+
+**The boundary, plainly.** This feature lets the Linux service user (an
+admin through the dashboard, or anything that can write that user's home,
+a compromised core included) choose which folders `domovoi-svc` can reach
+are mounted into the distro. No Windows administrator approves a move. What
+stops it going further is DomovoiHost's own checks, listed below. The
+distro's root could already mount any folder `domovoi-svc` reaches with
+drvfs, so the account gains no new reach; the move makes that reach a
+dashboard choice.
+
+- **Who can ask**: a move, an admin at the **security tier** at both hops
+  (`POST /v1/admin/media-folders/location`, Bearer only, 501 before setup);
+  "open on the Domovoi PC", an admin from a browser on that PC (the web's
+  loopback rule, and the core's: `local_peer.relayed_from_this_pc`). Reads
+  are admin reads.
+- **The move request**: `~/.domovoi/media_folders/request.json` (0600),
+  `{"v": 1, "root": "<Windows folder>", "id": 32 hex, "at": UTC time}`,
+  read by DomovoiHost every 30 s **as the service user** (`head -c 2049`
+  under `timeout`), as the ceiling's is. Anything else in it, an id or time
+  of another shape, or a root that fails the shape rules is refused and
+  reported. The shape rules (`MediaPaths.Problem`, the same in the core and
+  Setup): a drive letter path, not a whole drive, not a network folder, no
+  `.` or `..`, no reserved characters, no 8.3 short name (a segment with
+  `~` and a digit), no device name (`CON`, `NUL`, `COM1`, ...), at most 200
+  characters.
+- **What it reaches on Windows** (`windows/host/MediaPrep.cs`), in order:
+  - **a path check**: a local (fixed or removable) drive formatted NTFS; not
+    a system, program, ProgramData or profile folder, a profile's AppData,
+    the Users folder, nor anything holding one of them (Setup's own list,
+    `MediaFolders.SystemFoldersHere`), checked on the path as written **and**
+    on its long, final form from Windows (`GetFinalPathNameByHandle` on the
+    deepest part that exists), so a short name or another case can't slip
+    past; no junction or symbolic link anywhere in the path.
+  - **folder creation**: the root and its five folders, made by
+    `domovoi-svc` where missing; it can make folders only where any
+    standard account may.
+  - **access rules**: only on a folder it has just made (it owns it):
+    `domovoi-svc` Modify and, on a root it made, Users Modify, as Setup's
+    media step does. An existing folder's rules are never changed; a folder
+    the account can't write (it proves each with a test file) is refused.
+  - **root's `/etc/fstab`**: the Domovoi block rewritten as root with the
+    exact lines `provision.sh` writes, from lines DomovoiHost composed
+    itself; the script refuses any mount point but the five and any source
+    but a drive path, runs with globbing off and keeps every line outside
+    the block (a BEGIN marker with no END drops only that marker).
+  - **a restart** of Domovoi's Linux system, under the ceiling's rules: at
+    most one per 10 minutes for both (kept across DomovoiHost restarts),
+    never during an update, never for a request older than 15 minutes, and
+    only once the request's id is recorded as done.
+  - Last looks: the path checks run again after the folders are made, just
+    before the restart, before every `provision.sh` run, and at every
+    start of DomovoiHost; a stored choice that fails them is dropped and
+    the distro goes back to Setup's folders.
+- **What DomovoiHost tells the core**: `/var/lib/domovoi-windows/media.json`
+  as root (believed only while root owns it and its folder alone): the
+  folders and how the last move went. The core shows what `/etc/fstab`
+  (root's) actually mounts when the two disagree.
+- **What it tells the tray**: `host\out\media-folders.json`, the same
+  folders, with one extra rule: the household's accounts (Users) may read
+  it. It holds folder paths only. The tray treats it as a list, not as an
+  instruction (below).
+- **"Open on the Domovoi PC"**: the core writes `open.json` naming a media
+  **kind**, never a path (dropped after 60 s). Three routes answer the tray,
+  each to a loopback peer with no forwarding header only:
+  `GET /v1/windows/media/open` (the request), `POST .../claim` (first tray
+  only, O_EXCL, returns a token) and `POST .../result` (only with that
+  token). The tray acts only in the session at the PC's screen, looks the
+  kind up in DomovoiHost's list, and starts `explorer.exe` with the folder
+  as its one argument only for a folder that exists on a local drive, with
+  no link in its path and not a system or profile folder by its long name.
+  Any program on the PC can reach loopback (the shared-PC boundary above),
+  so the most a local program can do is open or not open a media folder's
+  window.
+- **Not covered**: a household member with an administrator account can do
+  all of this, and more, by hand. A downgrade (an older Setup run after a
+  move) puts Setup's own folders back at its repair; until the newer Windows
+  side runs again its report is stale and the page shows what is mounted,
+  with neither action.
+
 ## Printers and scanners
 
 Domovoi prints to network printers (IPP Everywhere, AirPrint, Mopria) and

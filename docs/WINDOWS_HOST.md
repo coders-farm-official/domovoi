@@ -619,20 +619,40 @@ folders** shows the Windows folders instead (`domovoi/media_folders.py`,
   nothing changes.
 
   **Your files are not moved.** The old folder stays exactly as it is, and
-  the page says where it is; move what you want across in File Explorer
-  (or copy, then delete). A copy-then-switch inside Domovoi would mean a
+  the page says where it is. Copy your files into the new folder first,
+  then switch: Domovoi forgets an audiobook's place and a queued song
+  whose file it can't find when it next looks, so switching to a folder
+  that is only half copied loses those. Delete the old folder's files
+  once Domovoi plays from the new one. A copy-then-switch inside Domovoi would mean a
   long, unattended copy of possibly hundreds of gigabytes by a service
   account, with a full drive or a removed USB disk halfway through, and a
   choice about every file that is in both places: a household can do that
   more safely by hand, and nothing is ever lost by leaving the old folder
   alone.
 
-  **What it changes on Windows.** Domovoi's account can only make folders
-  where any standard account may, and it changes access rules only on
-  folders it has just made. A folder it can't write is refused (run Setup
-  again and choose it there: Setup, as administrator, gives Domovoi
-  access). The account gains nothing it could not already reach: the
-  distro's mounts run as that account anyway. The choice is kept in
+  **What it changes on Windows, and the boundary.** This lets Domovoi's
+  Linux side (an admin in the dashboard, or a compromised Domovoi) choose
+  which of the folders Domovoi's account can reach get mounted, with no
+  Windows administrator approving it. What it can't do is the checks
+  above: no system, program or profile folder (by its long name too; short
+  names like `PROGRA~1` are refused), no link, nothing the account can't
+  write. Domovoi's account can only make folders where any standard
+  account may, and it changes access rules only on folders it has just
+  made. A folder it can't write is refused (run Setup again and choose it
+  there: Setup, as administrator, gives Domovoi access). The distro's
+  mounts run as that account anyway, so it reaches nothing new.
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-media-folders-channel-windows-install)
+  has the whole channel.
+
+  **If a move is cut off** (Windows restarts in the middle, say), the page
+  says it was interrupted and you can ask again; a folder that becomes a
+  link, or turns out to be a system folder, is dropped at DomovoiHost's
+  next start and Domovoi goes back to Setup's folder.
+
+  **Going back to an older Domovoi for Windows** (running an older
+  `DomovoiSetup.exe`) puts Setup's own folder back at its repair. The page
+  then shows what is mounted and offers neither action until the newer
+  Windows side runs again. The choice is kept in
   `C:\ProgramData\Domovoi\host\out\host-state.json`; a repair from Setup
   that keeps Setup's own answer keeps it, while a Setup run where you pick
   another folder wins. Uninstall leaves folders made this way and their

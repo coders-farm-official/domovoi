@@ -54,6 +54,8 @@ which the host reads AS the service user and treats as data only):
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -114,6 +116,11 @@ _ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _AT_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:\\")
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+#: A path segment that looks like an 8.3 short name (MediaPaths.Problem).
+_SHORT_RE = re.compile(r"~[0-9]")
+#: Names Windows keeps for devices, with or without an extension.
+_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)}
+                      | {f"LPT{i}" for i in range(1, 10)})
 
 _now = time.time
 
@@ -168,6 +175,12 @@ def windows_path_problem(path: object) -> str | None:
             return "no . or .. in the path"
         if seg.endswith(" ") or seg.endswith("."):
             return "a folder name can't end with a space or a dot"
+        # An 8.3 short name (PROGRA~1) could name a system folder the
+        # long-name checks don't recognise.
+        if _SHORT_RE.search(seg):
+            return "write the folder's full name, not a short name with ~ and a digit"
+        if seg.split(".")[0].strip().upper() in _RESERVED:
+            return f"{seg} is a name Windows keeps for a device"
     return None
 
 
@@ -308,12 +321,18 @@ def read_fstab_folders(path: str | None = None) -> dict[str, str]:
     if data is None:
         return {}
     out: dict[str, str] = {}
+    held: dict[str, str] = {}
     inside = False
     for line in data.decode("utf-8", errors="replace").splitlines():
         if line == FSTAB_BEGIN:
             inside = True
+            held = {}
             continue
         if line == FSTAB_END:
+            # Only a block that ends counts: a BEGIN with no END is a
+            # stray marker, not a list of media folders.
+            if inside:
+                out.update(held)
             inside = False
             continue
         if not inside:
@@ -326,7 +345,7 @@ def read_fstab_folders(path: str | None = None) -> dict[str, str]:
             continue
         src = normalize_windows(_fstab_unescape(f[0]))
         if windows_path_problem(src) is None:
-            out[name] = src
+            held[name] = src
     return out
 
 
@@ -348,16 +367,25 @@ def _common_root(folders: dict[str, str]) -> str | None:
 def host() -> dict[str, Any]:
     """What kind of host this is and what it says of the media folders."""
     report = read_report()
-    if report is not None:
-        return {"kind": report["host_kind"], "report": report, "folders": report["folders"],
-                "root": report["root"], "can_open": report["can_open"], "can_change": report["can_change"],
-                "source": "report"}
     folders = read_fstab_folders()
+    if report is not None:
+        # What is mounted wins over a report that says otherwise: a report
+        # left behind by a newer DomovoiHost after an older Setup ran (a
+        # downgrade puts Setup's own folders back and writes no report).
+        mounted = {k: v.lower() for k, v in folders.items()}
+        reported = {k: v.lower() for k, v in report["folders"].items()}
+        if report["host_kind"] != "windows" or not folders or mounted == reported:
+            return {"kind": report["host_kind"], "report": report, "folders": report["folders"],
+                    "root": report["root"], "can_open": report["can_open"], "can_change": report["can_change"],
+                    "source": "report", "stale": False}
+        log.warning("media folders: DomovoiHost's report doesn't match /etc/fstab; showing what is mounted")
+        return {"kind": "windows", "report": None, "folders": folders, "root": _common_root(folders),
+                "can_open": False, "can_change": False, "source": "fstab", "stale": True}
     if folders:
         return {"kind": "windows", "report": None, "folders": folders, "root": _common_root(folders),
-                "can_open": False, "can_change": False, "source": "fstab"}
+                "can_open": False, "can_change": False, "source": "fstab", "stale": False}
     return {"kind": "linux", "report": None, "folders": {}, "root": None,
-            "can_open": False, "can_change": False, "source": None}
+            "can_open": False, "can_change": False, "source": None, "stale": False}
 
 
 def location_for(linux_path: str, h: dict[str, Any]) -> str | None:
@@ -435,10 +463,16 @@ def _tray_running() -> bool:
         return False
 
 
+_STALE = ("DomovoiHost's report doesn't match what is mounted (an older Domovoi Setup ran since?); "
+          "run the newest Domovoi Setup, or the tray's Update Domovoi, to bring it back")
+
+
 def open_state(h: dict[str, Any]) -> dict[str, Any]:
     """Whether "Open on the Domovoi PC" can work, and why not."""
     if h["kind"] == "linux":
         return {"available": False, "why": "a Linux server opens no windows; copy the path instead"}
+    if h.get("stale"):
+        return {"available": False, "why": _STALE}
     if not h["can_open"]:
         return {"available": False,
                 "why": "this PC's Domovoi for Windows is from before folders could be opened from here; "
@@ -489,27 +523,36 @@ def pending_open() -> dict[str, Any] | None:
     return {"id": doc["id"], "kind": doc["kind"], "at": doc["at"]}
 
 
-def claim_open(request_id: object) -> str:
-    """One tray takes the request: ``ok``, ``claimed`` (another tray took
-    it) or ``gone``. The claim is made with O_EXCL, so two signed-in
-    accounts' trays never both open a window."""
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def claim_open(request_id: object) -> tuple[str, str | None]:
+    """One tray takes the request: ``("ok", token)``, ``("claimed",
+    None)`` (another tray took it) or ``("gone", None)``. The claim is made
+    with O_EXCL, so two signed-in accounts' trays never both open a window;
+    its result must carry the token (only its hash is kept), as the
+    Windows update's claim does."""
     req = pending_open()
     if req is None or req["id"] != request_id:
-        return "gone"
+        return "gone", None
     d = state_dir()
     try:
         fd = os.open(d / "open-claim.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     except FileExistsError:
-        return "claimed"
+        return "claimed", None
+    token = secrets.token_hex(16)
     with os.fdopen(fd, "wb") as f:
-        f.write((json.dumps({"id": req["id"], "at": _at()}) + "\n").encode("utf-8"))
+        f.write((json.dumps({"id": req["id"], "hash": _token_hash(token), "at": _at()}) + "\n").encode("utf-8"))
     _remove("open.json")
-    return "ok"
+    return "ok", token
 
 
-def record_open_result(request_id: object, outcome: object, detail: object) -> dict[str, Any]:
+def record_open_result(request_id: object, claim_token: object, outcome: object, detail: object) -> dict[str, Any]:
     claim = _read("open-claim.json")
-    if not claim or claim.get("id") != request_id:
+    if (not claim or claim.get("id") != request_id or not isinstance(claim_token, str)
+            or not isinstance(claim.get("hash"), str)
+            or not hmac.compare_digest(claim["hash"], _token_hash(claim_token))):
         raise PermissionError("not the request this tray claimed")
     if outcome not in OPEN_OUTCOMES:
         raise ValueError("unknown outcome")
@@ -557,6 +600,9 @@ def change_state(h: dict[str, Any]) -> dict[str, Any]:
                            "requested_root": None, "previous_root": None, "waiting_for_host": False}
     if h["kind"] == "linux":
         out["why"] = "on a Linux server, change each folder's path below"
+        return out
+    if h.get("stale"):
+        out["why"] = _STALE
         return out
     if not h["can_change"]:
         out["why"] = ("this PC's Domovoi for Windows is from before the media folders could be moved from here; "
@@ -712,7 +758,12 @@ def moved_since_last_boot() -> bool:
     h = host()
     if h["kind"] == "linux":
         return False
-    now = {k: v.lower() for k, v in sorted(h["folders"].items())}
+    # /etc/fstab, root's, is rewritten BEFORE the Linux system restarts
+    # (by DomovoiHost's move, or provision.sh when Setup picks another
+    # folder), so it is right at this start; DomovoiHost's report is
+    # written only once Domovoi is up again.
+    folders = read_fstab_folders() or h["folders"]
+    now = {k: v.lower() for k, v in sorted(folders.items())}
     seen = _read("seen.json")
     try:
         _write("seen.json", {"folders": now})

@@ -114,6 +114,25 @@ def test_an_older_host_still_shows_the_folders_from_fstab(host) -> None:
     assert s["change"]["available"] is False and "Setup" in s["change"]["why"]
 
 
+def test_a_begin_with_no_end_is_no_block(host) -> None:
+    host["report"].unlink()
+    host["fstab"].write_text(FSTAB_TEXT.replace("# END Domovoi media folders\n", ""), encoding="utf-8")
+    assert mf.read_fstab_folders() == {}
+
+
+def test_a_report_that_disagrees_with_what_is_mounted_loses(host) -> None:
+    # A newer DomovoiHost moved the folders, then an older Setup put its
+    # own back (it writes no report): what is mounted is the truth.
+    host["write"]({**REPORT, "root": "D:\\Media",
+                   "folders": {k: v.replace(ROOT, "D:\\Media") for k, v in FOLDERS.items()}})
+    host["fstab"].write_text(FSTAB_TEXT, encoding="utf-8")
+    h = mf.host()
+    assert h["source"] == "fstab" and h["stale"] and h["folders"]["music"] == ROOT + "\\Music"
+    s = mf.status()
+    assert not s["open"]["available"] and not s["change"]["available"]
+    assert "older Domovoi Setup" in s["change"]["why"]
+
+
 def test_fstab_lines_outside_the_block_or_not_drvfs_are_ignored(host) -> None:
     host["report"].unlink()
     host["fstab"].write_text(
@@ -191,22 +210,28 @@ def test_open_is_refused_on_linux(host) -> None:
 
 def test_one_tray_claims_and_reports(host) -> None:
     rid = mf.request_open("videos")["id"]
-    assert mf.claim_open("0" * 32) == "gone"
-    assert mf.claim_open(rid) == "ok"
+    assert mf.claim_open("0" * 32) == ("gone", None)
+    got, token = mf.claim_open(rid)
+    assert got == "ok" and len(token) == 32
+    assert token not in (host["dir"] / "open-claim.json").read_text(), "only the token's hash is kept"
     assert mf.pending_open() is None
-    assert mf.claim_open(rid) == "gone"
+    assert mf.claim_open(rid) == ("gone", None)
     with pytest.raises(PermissionError):
-        mf.record_open_result("0" * 32, "opened", None)
+        mf.record_open_result("0" * 32, token, "opened", None)
+    with pytest.raises(PermissionError):
+        mf.record_open_result(rid, "f" * 32, "opened", None)
+    with pytest.raises(PermissionError):
+        mf.record_open_result(rid, None, "opened", None)
     with pytest.raises(ValueError):
-        mf.record_open_result(rid, "exploded", None)
-    mf.record_open_result(rid, "opened", "C:\\Users\\Public\\Domovoi\\Videos")
+        mf.record_open_result(rid, token, "exploded", None)
+    mf.record_open_result(rid, token, "opened", "C:\\Users\\Public\\Domovoi\\Videos")
     assert mf.status()["open"]["last"]["outcome"] == "opened"
 
 
 def test_a_second_claim_while_one_is_held_loses(host) -> None:
     rid = mf.request_open("music")["id"]
     (host["dir"] / "open-claim.json").write_text("{}")
-    assert mf.claim_open(rid) == "claimed"
+    assert mf.claim_open(rid) == ("claimed", None)
 
 
 def test_an_old_open_request_is_dropped(host, monkeypatch) -> None:
@@ -236,6 +261,12 @@ def test_a_move_writes_the_bounded_request(host) -> None:
     ("D:\\a?b", "valid"),
     ("D:\\a\nb", "control"),
     ("D:\\" + "x" * 300, "longer"),
+    ("C:\\PROGRA~3\\Foo", "short name"),
+    ("C:\\Users\\DOMOVO~1", "short name"),
+    ("D:\\Media\\CON", "device"),
+    ("D:\\nul.txt\\x", "device"),
+    ("D:\\com1", "device"),
+    ("D:\\LPT9.tar.gz", "device"),
     (ROOT.lower(), "already"),
 ])
 def test_a_move_to_a_bad_folder_is_refused(host, root, words) -> None:
@@ -353,6 +384,16 @@ def test_moved_since_last_boot(host) -> None:
     assert mf.moved_since_last_boot() is False
 
 
+def test_moved_is_read_from_fstab_before_the_report_catches_up(host) -> None:
+    # Setup (or DomovoiHost's move) rewrote /etc/fstab before the core
+    # started; DomovoiHost's report is still the old one at this start.
+    host["fstab"].write_text(FSTAB_TEXT, encoding="utf-8")
+    assert mf.moved_since_last_boot() is False
+    host["fstab"].write_text(FSTAB_TEXT.replace("C:/Users/Public/Domovoi/Music", "E:/New/Music"), encoding="utf-8")
+    assert mf.moved_since_last_boot() is True, "the players move at this start, not the next"
+    assert mf.moved_since_last_boot() is False
+
+
 def test_never_moved_on_linux(host) -> None:
     host["report"].unlink()
     assert mf.moved_since_last_boot() is False
@@ -395,11 +436,14 @@ async def test_a_player_on_another_music_folder_is_made_again(monkeypatch) -> No
     monkeypatch.setattr(mp, "_pin_startup_volume", pin)
     await mp._ensure_container(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
                                music_dir="/srv/new-music", volume_name="v")
+    assert created == [] and not any(c[0] == "rm" for c in calls), "the on-demand path leaves it running"
+    await mp._ensure_container(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
+                               music_dir="/srv/new-music", volume_name="v", check_music_mount=True)
     assert ("rm", "-f", "domovoi-mpd-x") in calls and created == ["/srv/new-music"]
     calls.clear()
     created.clear()
     await mp._ensure_container(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
-                               music_dir="/srv/old-music", volume_name="v")
+                               music_dir="/srv/old-music", volume_name="v", check_music_mount=True)
     assert created == [] and not any(c[0] == "rm" for c in calls)
 
 
@@ -444,9 +488,14 @@ async def test_the_trays_routes_answer_loopback_only(host) -> None:
         assert r.status_code == 403
         r = await c.get("/v1/windows/media/open")
         assert r.status_code == 200 and r.json()["request"]["kind"] == "music"
-        assert (await c.post("/v1/windows/media/open/claim", json={"request_id": rid})).status_code == 200
+        r = await c.post("/v1/windows/media/open/claim", json={"request_id": rid})
+        assert r.status_code == 200
+        token = r.json()["claim"]
         assert (await c.post("/v1/windows/media/open/claim", json={"request_id": rid})).status_code == 404
         r = await c.post("/v1/windows/media/open/result", json={"request_id": rid, "outcome": "opened"})
+        assert r.status_code == 403, "no claim token"
+        r = await c.post("/v1/windows/media/open/result",
+                         json={"request_id": rid, "claim": token, "outcome": "opened"})
         assert r.status_code == 200
 
 
@@ -472,6 +521,45 @@ async def test_the_core_move_endpoint(host, monkeypatch) -> None:
         assert r.status_code == 400
         r = await c.post("/v1/admin/media-folders/location", json={"root": "E:\\x"})
         assert r.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_the_core_open_route_answers_this_pc_only(host, monkeypatch) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    from domovoi.main import app as core_app
+    from domovoi.tests.auth_testkit import bearer, install_fake_db
+
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
+    far = ASGITransport(app=core_app, raise_app_exceptions=False, client=("192.168.1.30", 5000))
+    async with AsyncClient(transport=far, base_url="http://test") as c:
+        r = await c.post("/v1/admin/media-folders/open", json={"kind": "music"}, headers=bearer("admin-token"))
+        assert r.status_code == 403
+    near = ASGITransport(app=core_app, raise_app_exceptions=False, client=("127.0.0.1", 5000))
+    async with AsyncClient(transport=near, base_url="http://test") as c:
+        # Through the dashboard for a phone on the LAN: the web relays it.
+        r = await c.post("/v1/admin/media-folders/open", json={"kind": "music"},
+                         headers={**bearer("admin-token"), "X-Forwarded-For": "192.168.1.30"})
+        assert r.status_code == 403
+        r = await c.post("/v1/admin/media-folders/open", json={"kind": "music"},
+                         headers={**bearer("admin-token"), "X-Forwarded-For": "127.0.0.1"})
+        assert r.status_code == 200 and r.json()["ok"]
+
+
+def test_relayed_from_this_pc() -> None:
+    from types import SimpleNamespace
+
+    from domovoi import local_peer
+
+    def req(peer, **headers):
+        return SimpleNamespace(client=SimpleNamespace(host=peer), headers={k.lower(): v for k, v in headers.items()})
+
+    assert local_peer.relayed_from_this_pc(req("127.0.0.1"))
+    assert local_peer.relayed_from_this_pc(req("::1", **{"X-Forwarded-For": "127.0.0.1"}))
+    assert not local_peer.relayed_from_this_pc(req("192.168.1.30"))
+    assert not local_peer.relayed_from_this_pc(req("127.0.0.1", **{"X-Forwarded-For": "127.0.0.1, 192.168.1.30"}))
+    assert not local_peer.relayed_from_this_pc(req("127.0.0.1", **{"X-Forwarded-For": "nonsense"}))
+    assert not local_peer.relayed_from_this_pc(req("127.0.0.1", Forwarded="for=127.0.0.1"))
 
 
 # ─── the Windows side reads the same paths ──────────────────────────────
