@@ -1381,7 +1381,8 @@ fstab_lines() {
 # The block's current line for mount point $1, or nothing.
 fstab_block_line() {
   [ -f "$FSTAB" ] || return 0
-  awk -v b="$FSTAB_BEGIN" -v e="$FSTAB_END" -v mp="$1" '$0==b{in_b=1; next} $0==e{in_b=0; next} in_b && $2==mp {print; exit}' "$FSTAB"
+  # Only a block that ends counts (a BEGIN with no END is a stray marker).
+  awk -v b="$FSTAB_BEGIN" -v e="$FSTAB_END" -v mp="$1" '$0==b{in_b=1; f=""; next} in_b && $0==e{in_b=0; if (f != "") {print f; exit} next} in_b && $2==mp && f=="" {f=$0}' "$FSTAB"
 }
 
 # /etc/fstab with this script's block replaced by CONTENT on stdin (no
@@ -1390,7 +1391,10 @@ fstab_with_block() {
   local block
   block=$(cat)
   if [ -f "$FSTAB" ]; then
-    awk -v b="$FSTAB_BEGIN" -v e="$FSTAB_END" '$0==b{skip=1; next} $0==e{skip=0; next} !skip' "$FSTAB"
+    # A BEGIN with no END drops only that marker: every line after it is
+    # the household's and stays (security review 2026-11-11; the same awk
+    # as DomovoiHost's, windows/common/MediaFolders.cs FstabKeepAwk).
+    awk -v b="$FSTAB_BEGIN" -v e="$FSTAB_END" '$0==b{s=1;k=z;next} s&&$0==e{s=0;k=z;next} s{k=k $0 RS;next} {print} END{if(s){ORS=z;print k}}' "$FSTAB"
   fi
   if [ -n "$block" ]; then
     printf '%s\n%s\n%s\n' "$FSTAB_BEGIN" "$block" "$FSTAB_END"
@@ -1400,7 +1404,7 @@ fstab_with_block() {
 # Mount points of the block now in /etc/fstab.
 fstab_block_targets() {
   [ -f "$FSTAB" ] || return 0
-  awk -v b="$FSTAB_BEGIN" -v e="$FSTAB_END" '$0==b{in_b=1; next} $0==e{in_b=0; next} in_b && NF>=2 {print $2}' "$FSTAB"
+  awk -v b="$FSTAB_BEGIN" -v e="$FSTAB_END" '$0==b{in_b=1; t=z; next} in_b && $0==e{in_b=0; printf "%s", t; next} in_b && NF>=2 {t=t $2 RS}' "$FSTAB"
 }
 
 skip_media() {
