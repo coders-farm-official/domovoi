@@ -2654,8 +2654,12 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   };
 
   const tone = _WAKE_STATUS_TONE[w.status] || 'idle';
-  // The chosen room defaults to the first online one if none picked yet.
-  const roomFor = room || (rooms[0] && rooms[0].room_id) || '';
+  // The chosen room defaults to the first online one if none picked yet,
+  // and again when the chosen one drops out of the list (a satellite
+  // restarting after a push): the menu then shows the first room, so
+  // Record, Push and Stop must act on that one, not the hidden old pick.
+  const roomFor = (room && rooms.some((r) => r.room_id === room) ? room : '')
+    || (rooms[0] && rooms[0].room_id) || '';
   const haveRooms = rooms.length > 0;
   // What the chosen room's device declared (S0): a Pi takes both.
   const chosen = rooms.find((r) => r.room_id === roomFor);
