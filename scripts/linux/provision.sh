@@ -101,7 +101,10 @@
 #                /usr/local/lib/domovoi-cache-trim/cache-trim.py, its
 #                domovoi-cache-trim.service and .timer, the timer enabled;
 #                it trims inside WSL only; DOMOVOI_MANAGE_CACHE_TRIM=0
-#                leaves it alone)
+#                leaves it alone); on WSL with media folders, Docker
+#                ordered after their mounts
+#                (docker.service.d/50-domovoi-media.conf, Wants= and
+#                After=, a daemon-reload, never a Docker restart)
 #   timezone     bare metal: --timezone, through timedatectl. WSL: the zone
 #                follows Windows (WSL rewrites /etc/localtime and
 #                /etc/timezone at every distro start), so --timezone is
@@ -3913,11 +3916,73 @@ media_dropin_text() {
   printf '[Service]\n# Written by scripts/linux/provision.sh for --media folders.\nReadWritePaths=%s\n' "${extra[*]}"
 }
 
+# >>> docker-media-order block >>>
+# The same text in scripts/linux/provision.sh and scripts/linux/apply-update.sh,
+# character for character (domovoi/tests/test_docker_media_order.py holds the
+# two together): provision.sh's units step installs the drop-in, and the
+# update unit installs it on a box provisioned before it existed.
+#
+# Docker starts after the media folders /etc/fstab's Domovoi block mounts
+# (a WSL install's drvfs folders). Their lines say nofail, which also takes
+# away their ordering before local-fs.target (systemd.mount(5)), so nothing
+# kept dockerd from restoring the rooms' music players before the music
+# folder was there. A start then fails (exit code 128: "make mountpoint
+# /music/podcasts: read-only file system" on the empty mount point) and
+# Docker never retries a failed start, restart policy or not: the failure
+# that kept every room of a house down for 14 hours on 2026-11-11 (there
+# from a placeholder folder gone from the music folder; this order closes
+# the other way to it). Wants=, not Requires=: a folder that is missing (a
+# USB drive unplugged) still never keeps Docker, and with it all of
+# Domovoi, from starting.
+
+# docker_media_mount_unit PATH: the mount unit systemd names for PATH
+# (systemd-escape --path --suffix=mount, without needing it).
+docker_media_mount_unit() {
+  local p=${1#/} out="" c i
+  p=${p%/}
+  for ((i = 0; i < ${#p}; i++)); do
+    c=${p:i:1}
+    case $c in
+      /) out+=- ;;
+      [A-Za-z0-9:_]) out+=$c ;;
+      .) if [ "$i" -eq 0 ]; then out+='\x2e'; else out+=.; fi ;;
+      *) out+=$(printf '\\x%02x' "'$c") ;;
+    esac
+  done
+  printf '%s.mount\n' "$out"
+}
+
+# docker_media_dropin_text FSTAB: the drop-in for docker.service, or
+# nothing when FSTAB has no Domovoi media block (bare metal, no folders).
+docker_media_dropin_text() {
+  local fstab=$1 t units=()
+  [ -f "$fstab" ] || return 0
+  while IFS= read -r t; do
+    [ -n "$t" ] && units+=("$(docker_media_mount_unit "$t")")
+  done < <(awk -v b="# BEGIN Domovoi media folders (scripts/linux/provision.sh rewrites this block)" \
+    -v e="# END Domovoi media folders" \
+    '$0==b{in_b=1; next} $0==e{in_b=0; next} in_b && NF>=2 && $1 !~ /^#/ {print $2}' "$fstab")
+  [ "${#units[@]}" -gt 0 ] || return 0
+  printf '%s\n' \
+    "# Written by Domovoi (scripts/linux/provision.sh, scripts/linux/apply-update.sh)." \
+    "# Docker starts after the media folders in /etc/fstab's Domovoi block, so" \
+    "# the rooms' music players it restores at boot find their music folder." \
+    "# Wants=, not Requires=: a missing folder never keeps Docker from starting." \
+    "[Unit]" \
+    "Wants=${units[*]}" \
+    "After=${units[*]}"
+}
+# <<< docker-media-order block <<<
+
+# Where the units step puts it (beside any drop-in of the household's own).
+DOCKER_MEDIA_DROPIN=$UNIT_DIR/docker.service.d/50-domovoi-media.conf
+
 inputs_units() {
   local u
   for u in "${SHIPPED_UNITS[@]}"; do unit_text "$u"; done
   restart_grant
   media_dropin_text
+  docker_media_dropin_text "$FSTAB"
   printf '%s\n' "${SLEEP_TARGETS[@]}"
   if manage_journal; then cat "$(journald_dropin_src)" 2>/dev/null; else echo "journal: left alone"; fi
   cache_trim_inputs
@@ -3931,6 +3996,9 @@ check_units() {
     if [ -n "$d" ]; then printf '%s\n' "$d" | cmp -s - "$UNIT_DIR/$u.d/domovoi-media.conf" || return 1
     else [ ! -e "$UNIT_DIR/$u.d/domovoi-media.conf" ] || return 1; fi
   done
+  d=$(docker_media_dropin_text "$FSTAB")
+  if [ -n "$d" ]; then printf '%s\n' "$d" | cmp -s - "$DOCKER_MEDIA_DROPIN" || return 1
+  else [ ! -e "$DOCKER_MEDIA_DROPIN" ] || return 1; fi
   masks_in_place "${SLEEP_TARGETS[@]}" || return 1
   if manage_journal; then cmp -s "$(journald_dropin_src)" "$JOURNALD_DROPIN" || return 1; fi
   cache_trim_in_place || return 1
@@ -3938,13 +4006,16 @@ check_units() {
 plan_units() {
   printf '%s\n' "${SHIPPED_UNITS[@]/#//etc/systemd/system/}"
   restart_grant
+  if [ -n "$(docker_media_dropin_text "$FSTAB")" ]; then
+    echo "/etc/systemd/system/docker.service.d/50-domovoi-media.conf: Docker starts after the media folders"
+  fi
   if manage_journal; then echo "/etc/systemd/journald.conf.d/50-domovoi.conf (the journal on disk), then restart systemd-journald"
   else echo "the journal left as it is (DOMOVOI_MANAGE_JOURNAL in /etc/default/domovoi-update)"; fi
   if manage_cache_trim; then echo "/usr/local/lib/domovoi-cache-trim/cache-trim.py and domovoi-cache-trim.{service,timer} (the file-cache trim), the timer enabled"
   else echo "the file-cache trim left as it is (DOMOVOI_MANAGE_CACHE_TRIM in /etc/default/domovoi-update)"; fi
 }
 do_units() {
-  local u d out changed=()
+  local u d out changed=() reload=0
   [ -x "$ROOT/usr/bin/docker" ] || die "/usr/bin/docker is missing; domovoi-db.service names that path"
   for u in "${SHIPPED_UNITS[@]}"; do
     [ -f "$(src_file "scripts/linux/units/$u")" ] || die "the checkout has no scripts/linux/units/$u"
@@ -3959,6 +4030,21 @@ do_units() {
       changed+=("$u")
     fi
   done
+  # Docker after the media folders (the docker-media-order block above).
+  # Not a unit this step restarts: the order matters at the next boot, and
+  # restarting Docker would stop every container now.
+  d=$(docker_media_dropin_text "$FSTAB")
+  if [ -n "$d" ]; then
+    mkdir -p "${DOCKER_MEDIA_DROPIN%/*}"
+    if write_if_changed "$DOCKER_MEDIA_DROPIN" 0644 < <(printf '%s\n' "$d"); then
+      reload=1
+      log "installed /etc/systemd/system/docker.service.d/50-domovoi-media.conf: Docker starts after the media folders"
+    fi
+  elif [ -e "$DOCKER_MEDIA_DROPIN" ]; then
+    rm -f "$DOCKER_MEDIA_DROPIN"
+    reload=1
+    log "removed /etc/systemd/system/docker.service.d/50-domovoi-media.conf: no media folders to wait for"
+  fi
   # docs/LINUX_HOST.md 2b: the plain restart grant, checked by visudo
   # before it goes in. The update unit's grant comes with the update-unit step.
   restart_grant >"$TMP_DIR/sudoers"
@@ -3977,6 +4063,8 @@ do_units() {
   install_cache_trim
   if [ "${#changed[@]}" -gt 0 ]; then
     printf '%s\n' "${changed[@]}" >>"$UNITS_CHANGED_FILE"
+    systemctl daemon-reload
+  elif [ "$reload" = 1 ]; then
     systemctl daemon-reload
   fi
   as_svc sudo -n -l "$SYSTEMCTL_PATH" --no-block restart domovoi-core.service domovoi-web.service >/dev/null 2>&1 \
