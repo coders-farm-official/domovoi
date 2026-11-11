@@ -151,6 +151,12 @@ namespace Domovoi.Windows
             return LimitsRestart.Go;
         }
 
+        // domovoi-update.service's ActiveState says nothing runs.
+        public static bool UpdateIdle(string updateState)
+        {
+            return updateState != null && Array.IndexOf(UpdateBusyStates, updateState.Trim()) < 0;
+        }
+
         public static string[] UpdateStateArgs(string distro)
         {
             return new[] { "-d", distro, "-u", "root", "--cd", "/", "--exec", "/usr/bin/systemctl", "show", "-p", "ActiveState",

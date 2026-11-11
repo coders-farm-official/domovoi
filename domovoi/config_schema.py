@@ -87,6 +87,21 @@ FieldType = Literal["int", "float", "bool", "str", "choice"]
 QUIET_CLOCK_PATTERN = r"([01]\d|2[0-3]):[0-5]\d"
 
 
+def _media_dir_problem(value: str) -> str | None:
+    """music_dir / videos_dir: the folder must be there and readable by the
+    service user on a Linux server; on the Windows install it isn't a path
+    to edit here at all (domovoi/media_folders.py)."""
+    from domovoi.media_folders import linux_dir_problem
+
+    return linux_dir_problem(value)
+
+
+def _videos_dir_problem(value: str) -> str | None:
+    from domovoi.media_folders import linux_dir_problem
+
+    return linux_dir_problem(value, made_in_home=True)
+
+
 @dataclass(frozen=True)
 class FieldSpec:
     name: str                       # must be a Settings.model_fields key
@@ -906,9 +921,11 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "music_dir", "Music directory", "Paths",
         "Folder the library is indexed from and downloads are written to. "
-        "Wrong path = an empty library and failed downloads. Takes effect "
-        "after a restart.",
-        "str", section="advanced", tier="restart",
+        "It must exist and Domovoi's service user must be able to read it. "
+        "Takes effect after a restart (the rooms' music players are made "
+        "again on the new folder). On the Windows install the folder is "
+        "moved in Settings → Household → Media folders instead.",
+        "str", section="advanced", tier="restart", check=_media_dir_problem,
     ),
     FieldSpec(
         "videos_dir", "Videos directory", "Paths",
@@ -916,13 +933,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Created at startup when it is inside the home folder; a folder "
         "anywhere else (an external drive) must already exist. Wrong path = "
         "the Videos library disappears from Files. Takes effect after a "
-        "restart (the dashboard reads it when it starts).",
-        "str", section="advanced", tier="restart",
+        "restart (the dashboard reads it when it starts). On the Windows "
+        "install the folder is moved in Settings → Household → Media "
+        "folders instead.",
+        "str", section="advanced", tier="restart", check=_videos_dir_problem,
     ),
     FieldSpec(
-        "sounds_dir", "Sounds directory", "Paths",
-        "Where rendered greeting/notification clips are stored and served "
-        "from. Takes effect after a restart.",
+        "sounds_dir", "Sounds directory", "Domovoi's own files",
+        "Where Domovoi keeps the greeting and notification clips it renders "
+        "and serves (its own working files, not a household folder). Takes "
+        "effect after a restart.",
         "str", section="advanced", tier="restart",
     ),
     FieldSpec(

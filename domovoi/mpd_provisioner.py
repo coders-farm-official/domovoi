@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -365,6 +366,7 @@ async def _ensure_container(
     http_port: int,
     music_dir: str,
     volume_name: str,
+    check_music_mount: bool = False,
     room_id: str | None = None,
 ) -> None:
     """Make sure container ``name`` exists and is running. Idempotent.
@@ -386,6 +388,20 @@ async def _ensure_container(
                 "recreating it bound to %s (data volume kept)",
                 name, host_ip or "0.0.0.0", _CONTROL_BIND,
             )
+            rc, _, err = await _run_docker("rm", "-f", name, timeout=30.0)
+            if rc != 0:
+                raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
+            state = None
+    if state is not None and check_music_mount:
+        # The music folder is bound when the container is CREATED: one made
+        # on another music_dir (Settings changed it, then a restart) would
+        # go on playing the old folder. Recreate it on today's (volume kept).
+        # Only at the core's start (warm_known_rooms), never on the
+        # on-demand or healing paths, which leave a running player alone.
+        source = await _music_mount_source(name)
+        if source is not None and not _same_dir(source, music_dir):
+            log.warning("MPD container %s plays %s, but the music folder is now %s; recreating it "
+                        "(data volume kept)", name, source, music_dir)
             rc, _, err = await _run_docker("rm", "-f", name, timeout=30.0)
             if rc != 0:
                 raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
@@ -415,6 +431,88 @@ async def _ensure_container(
     # return above skips already-running daemons, leaving their live volume
     # — possibly a user's deliberate setvol — untouched).
     await _after_start(room_id, control_port)
+
+
+async def _music_mount_source(name: str) -> str | None:
+    """The host folder container ``name`` has at /music, or None when
+    docker can't say (then nothing is recreated on its word)."""
+    rc, out, _ = await _run_docker(
+        "inspect", "-f", '{{range .Mounts}}{{if eq .Destination "/music"}}{{.Source}}{{end}}{{end}}', name,
+        timeout=10.0,
+    )
+    return (out.strip() or None) if rc == 0 else None
+
+
+#: How Docker Desktop names a Windows drive's folder on the host side of a
+#: bind mount (``docker inspect`` .Source): /run/desktop/mnt/host/c/...,
+#: older releases /host_mnt/c/....
+_DESKTOP_SOURCE = re.compile(r"^/(?:run/desktop/mnt/host|host_mnt)/([A-Za-z])(/.*)?$")
+_DRIVE_PATH = re.compile(r"^[A-Za-z]:(/.*)?$")
+
+
+def _mount_key(path: str) -> str | None:
+    """A form two names of one folder share: a Windows folder as ``c:/...``
+    (lower case: Windows doesn't tell case apart), a Linux path normalized.
+    None for a Docker Desktop source of a shape this doesn't know, which
+    then never counts as a different folder."""
+    p = path.strip().replace("\\", "/")
+    m = _DESKTOP_SOURCE.match(p)
+    if m:
+        p = f"{m.group(1)}:{m.group(2) or '/'}"
+    elif p.startswith(("/run/desktop/", "/host_mnt/")):
+        return None
+    if _DRIVE_PATH.match(p):
+        p = p.lower().rstrip("/") or p.lower()
+        return p if len(p) > 2 else p + "/"
+    return os.path.normpath(p)
+
+
+def _same_dir(source: str, music_dir: str) -> bool:
+    """Whether a container's /music source is ``music_dir``. Unsure counts
+    as the same: a player is recreated only when the folder is surely
+    another, never on every start because Docker spells it its own way."""
+    a, b = _mount_key(source), _mount_key(music_dir)
+    if a is None or b is None or a == b:
+        return True
+    try:
+        return os.path.realpath(source) == os.path.realpath(music_dir)
+    except OSError:
+        return False
+
+
+async def recreate_rooms(why: str) -> list[dict]:
+    """Every room's player made again from its ``mpd_rooms`` row (same data
+    volume: playlists and queue survive), so its mounts are taken afresh:
+    after the media folders moved on a Windows install, where the Linux
+    path stays /srv/media/music but the folder behind it changed
+    (domovoi/media_folders.py). Each room is held for the container guard
+    while it is replaced. A room that fails is named in the answer."""
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        rows = (await s.execute(text(
+            "SELECT room_id, control_port, http_port, container_name FROM mpd_rooms ORDER BY created_at"
+        ))).all()
+    out: list[dict] = []
+    for room_id, ctrl, http, container in rows:
+        entry = {"room": room_id, "error": None}
+        try:
+            with _room_hold(room_id, why):
+                rc, _, err = await _run_docker("rm", "-f", container, timeout=30.0)
+                if rc != 0 and "No such container" not in err:
+                    raise RuntimeError(f"docker rm -f {container}: {err.strip()[:200]}")
+                await _ensure_container(
+                    name=container, image=settings.mpd_image_tag, control_port=int(ctrl), http_port=int(http),
+                    music_dir=settings.music_dir, volume_name=_volume_name(room_id),
+                    room_id=room_id,
+                )
+        except Exception as e:  # noqa: BLE001 - the other rooms still move
+            log.warning("music player for room=%s not recreated (%s): %s", room_id, why, e)
+            entry["error"] = str(e)[:300]
+        out.append(entry)
+    if rows:
+        log.info("recreated %d MPD room(s): %s", len(rows), why)
+    return out
 
 
 # What MPD says first on every control connection: "OK MPD <version>".
@@ -638,6 +736,7 @@ async def warm_known_rooms() -> int:
                     http_port=int(http),
                     music_dir=settings.music_dir,
                     volume_name=_volume_name(room_id),
+                    check_music_mount=True,
                     room_id=room_id,
                 )
             rooms_warmed += 1

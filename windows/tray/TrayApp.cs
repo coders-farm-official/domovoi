@@ -23,6 +23,9 @@ namespace Domovoi.Windows.Tray
         readonly System.Windows.Forms.Timer poll = new System.Windows.Forms.Timer();
         readonly Control ui = new Control();
         readonly Probe probe;
+        // "Open on the Domovoi PC" for the media folders (MediaOpen.cs),
+        // asked with each status poll.
+        readonly IMediaServer media;
         readonly ReadyClock clock = new ReadyClock();
         readonly Notifier notifier = new Notifier();
         // wsl.exe's version when Domovoi was last up (Status.WslVerdict).
@@ -51,6 +54,7 @@ namespace Domovoi.Windows.Tray
             this.exe = exe;
             ui.CreateControl();
             probe = new Probe(opt.Service, opt.WebUrl, opt.CoreUrl);
+            media = new HttpMediaServer(opt.CoreUrl);
             menu.Opening += delegate { Build(menu.Items, verdict, Addresses.Pick(Addresses.FromWindows()), Awake.CurrentSignedOutLine()); };
             menu.Items.Add("...");
             icon.ContextMenuStrip = menu;
@@ -90,6 +94,11 @@ namespace Domovoi.Windows.Tray
                 Facts f;
                 try { f = probe.Gather(); }
                 catch (Exception e) { f = new Facts(); log.Write("probe failed: " + e.Message); }
+                if (f.CoreReachable && !Program.Snapshotting)
+                {
+                    try { MediaOpen.Run(media, MediaOpen.Here(log.Write)); }
+                    catch (Exception e) { log.Write("opening a media folder failed: " + e.Message); }
+                }
                 try { ui.BeginInvoke(new Action(delegate { Apply(f); })); }
                 catch (InvalidOperationException) { }
                 finally { Interlocked.Exchange(ref probing, 0); }

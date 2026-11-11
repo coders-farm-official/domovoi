@@ -532,6 +532,15 @@ namespace Domovoi.Windows
         };
 
         static readonly Regex Drive = new Regex(@"^[A-Za-z]:\\");
+        // A name with ~ and a digit: maybe an 8.3 short name (PROGRA~1),
+        // maybe a real folder's name (Music~2024). Only Windows can tell:
+        // MediaFolders.ShortNameProblem asks it (review round 2, 2026-11-11).
+        public static readonly Regex ShortName = new Regex("~[0-9]");
+        static readonly HashSet<string> Reserved = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        };
 
         public static string Normalize(string path)
         {
@@ -557,6 +566,7 @@ namespace Domovoi.Windows
                 if (seg.Length == 0) return "the path has an empty folder name (\\\\)";
                 if (seg == "." || seg == "..") return "no . or .. in the path";
                 if (seg.EndsWith(" ", StringComparison.Ordinal) || seg.EndsWith(".", StringComparison.Ordinal)) return "a folder name can't end with a space or a dot";
+                if (Reserved.Contains(seg.Split('.')[0].Trim().ToUpperInvariant())) return seg + " is a name Windows keeps for a device";
             }
             return null;
         }

@@ -159,61 +159,11 @@ namespace Domovoi.Windows.Helper
 
         // -- media ------------------------------------------------------
 
-        // The folders a media root may not be, be inside or hold, on this PC.
+        // The folders a media root may not be, be inside or hold, on this PC
+        // (shared with DomovoiHost's move: common\MediaFolders.cs).
         public static SystemFolders SystemFoldersHere()
         {
-            var s = new SystemFolders();
-            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            string sysDrive = Path.GetPathRoot(win).TrimEnd('\\');
-            foreach (string t in new[]
-            {
-                win,
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                Environment.GetEnvironmentVariable("ProgramW6432"),
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                sysDrive + @"\$Recycle.Bin", sysDrive + @"\System Volume Information", sysDrive + @"\Recovery",
-            })
-                if (!string.IsNullOrEmpty(t) && !s.Trees.Contains(t)) s.Trees.Add(t);
-            string profiles = null, defaultProfile = null, publicProfile = null;
-            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
-            using (var k = hklm.OpenSubKey(Account.ProfileListKey))
-            {
-                if (k != null)
-                {
-                    profiles = Environment.ExpandEnvironmentVariables(k.GetValue("ProfilesDirectory") as string ?? "");
-                    defaultProfile = Environment.ExpandEnvironmentVariables(k.GetValue("Default") as string ?? "");
-                    publicProfile = Environment.ExpandEnvironmentVariables(k.GetValue("Public") as string ?? "");
-                    foreach (string sid in k.GetSubKeyNames())
-                    {
-                        using (var p = k.OpenSubKey(sid))
-                        {
-                            string img = p == null ? null : p.GetValue("ProfileImagePath") as string;
-                            if (string.IsNullOrEmpty(img)) continue;
-                            img = Environment.ExpandEnvironmentVariables(img);
-                            s.Exact.Add(img);
-                            s.Trees.Add(Path.Combine(img, "AppData"));
-                        }
-                    }
-                }
-            }
-            if (string.IsNullOrEmpty(profiles)) profiles = sysDrive + @"\Users";
-            s.Exact.Add(profiles);
-            s.Exact.Add(string.IsNullOrEmpty(publicProfile) ? Path.Combine(profiles, "Public") : publicProfile);
-            s.Trees.Add(Path.Combine(publicProfile ?? Path.Combine(profiles, "Public"), "AppData"));
-            s.Trees.Add(string.IsNullOrEmpty(defaultProfile) ? Path.Combine(profiles, "Default") : defaultProfile);
-            s.Trees.Add(Path.Combine(profiles, Paths.AccountName));
-            // Folders under the profiles folder with no profile entry (old,
-            // half-deleted ones) are still someone's.
-            if (Directory.Exists(profiles))
-                foreach (string d in Directory.GetDirectories(profiles))
-                {
-                    if (!s.Exact.Contains(d)) s.Exact.Add(d);
-                    // domovoi-svc.<name>: Windows' name for the account's profile
-                    // when an old domovoi-svc folder was still there.
-                    if (UninstallFacts.IsDomovoiProfilePath(d) && !s.Trees.Contains(d)) s.Trees.Add(d);
-                }
-            return s;
+            return MediaFolders.SystemFoldersHere();
         }
 
         public static void CheckMediaRoot(string root)
@@ -225,7 +175,14 @@ namespace Domovoi.Windows.Helper
             if (!drive.IsReady) throw new ArgumentException("media folder: drive " + drive.Name + " is not ready");
             if (drive.DriveType != DriveType.Fixed && drive.DriveType != DriveType.Removable)
                 throw new ArgumentException("media folder: pick a folder on a local drive (" + drive.Name + " is " + drive.DriveType + ")");
-            why = MediaPaths.SystemProblem(p, SystemFoldersHere());
+            SystemFolders sys = SystemFoldersHere();
+            why = MediaPaths.SystemProblem(p, sys);
+            // Its long, final name too: a short name or a different case
+            // must not slip past the list (security review 2026-11-11).
+            string canonical = MediaFolders.Canonical(p);
+            if (why == null) why = MediaFolders.ShortNameProblem(p, canonical);
+            if (why == null && !string.Equals(canonical, p, StringComparison.OrdinalIgnoreCase))
+                why = MediaPaths.Problem(canonical) != null ? canonical + " is not a folder on a drive of this PC" : MediaPaths.SystemProblem(canonical, sys);
             if (why != null) throw new ArgumentException("media folder: " + why);
             // The folder, or the nearest part of its path that exists, must
             // be a real folder, not a link to somewhere else.

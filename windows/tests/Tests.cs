@@ -98,6 +98,7 @@ static partial class Tests
         LeftoverProfileTests();
         TrayTests();
         SatelliteSetupTests();
+        MediaFolderTests();
         UpdateTests();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
@@ -550,6 +551,14 @@ static partial class Tests
             True(MediaPaths.Problem(@"C:\a\b.\c") != null, "a name ending in a dot");
             True(MediaPaths.Problem("C:\\a\tb") != null, "control character");
             True(MediaPaths.Problem("") != null && MediaPaths.Problem(null) != null, "empty");
+            // Security review 2026-11-11: 8.3 short names and device names.
+            // A name with ~ and a digit is a name (Music~2024); whether it is
+            // an 8.3 short name only Windows can say (ShortNameProblem).
+            True(MediaPaths.Problem(@"D:\Music~2024") == null, "a folder really named Music~2024");
+            True(MediaPaths.Problem(@"D:\Media~old") == null, "~ alone is a name like any other");
+            foreach (string dev in new[] { @"D:\CON", @"D:\Media\nul", @"D:\aux.txt", @"D:\COM1\x", @"D:\lpt9.tar.gz", @"D:\Media\PRN" })
+                True(MediaPaths.Problem(dev) != null, "a device name: " + dev);
+            True(MediaPaths.Problem(@"D:\CONSOLE") == null && MediaPaths.Problem(@"D:\COM10") == null, "only the device names themselves");
         });
         Run("media: the five folders under a root", delegate
         {
@@ -2373,6 +2382,258 @@ static partial class Tests
             foreach (string m in new[] { UninstallMessages.AtRestart(new[] { profile, files }), UninstallMessages.Leftovers(left), UninstallMessages.StillThere(left) })
                 foreach (string tech in new[] { "error 32", "DomovoiRemoveProfile", "startup task", "C:\\", "\n", "\r" })
                     True(m.IndexOf(tech, StringComparison.OrdinalIgnoreCase) < 0, "message has " + tech + ": " + m);
+        });
+    }
+
+    // -- the media folders from the dashboard (MediaFolders.cs, MediaOpen.cs)
+
+    sealed class FakeMediaServer : Domovoi.Windows.Tray.IMediaServer
+    {
+        public Domovoi.Windows.Tray.MediaOpenRequest Req;
+        public bool ClaimOk = true;
+        public int Claims;
+        public string Outcome, Detail, ReportedClaim;
+        public Domovoi.Windows.Tray.MediaOpenRequest Pending() { return Req; }
+        public string Claim(string id) { Claims++; return ClaimOk ? "token-" + id : null; }
+        public void Report(string id, string claim, string outcome, string detail) { ReportedClaim = claim; Outcome = outcome; Detail = detail; }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern uint GetShortPathNameW(string longPath, System.Text.StringBuilder shortPath, uint size);
+
+    static void MediaFolderTests()
+    {
+        const string id = "0123456789abcdef0123456789abcdef";
+        Func<string, string, string> reqText = (root, at) =>
+            "{\"v\":1,\"root\":" + Domovoi.Windows.Loopback.Quote(root) + ",\"id\":\"" + id + "\",\"at\":\"" + at + "\"}";
+        Run("media folders: a move request", delegate
+        {
+            MediaRequest r = MediaFolders.Parse(reqText("D:/Media/", "2026-11-11T05:00:00Z"));
+            Eq("ok", r.State, "taken");
+            Eq(@"D:\Media", r.Root, "normalized");
+            Eq(id, r.Id, "its id");
+            Eq("none", MediaFolders.Parse(null).State, "no file");
+            foreach (string bad in new[]
+            {
+                "not json", "[]", "{\"v\":2,\"root\":\"D:\\\\M\",\"id\":\"" + id + "\",\"at\":\"2026-11-11T05:00:00Z\"}",
+                "{\"v\":1,\"root\":\"D:\\\\M\",\"id\":\"" + id + "\",\"at\":\"2026-11-11T05:00:00Z\",\"run\":\"calc\"}",
+                "{\"v\":1,\"root\":\"D:\\\\M\",\"id\":\"xyz\",\"at\":\"2026-11-11T05:00:00Z\"}",
+                reqText(@"\\nas\share", "2026-11-11T05:00:00Z"), reqText(@"D:\", "2026-11-11T05:00:00Z"),
+                reqText(@"D:\a\..\Windows", "2026-11-11T05:00:00Z"), reqText("D:\\" + new string('x', 250), "2026-11-11T05:00:00Z"),
+                reqText(@"D:\Media", "yesterday"), new string(' ', 3000),
+            })
+                Eq("invalid", MediaFolders.Parse(bad).State, "refused: " + (bad.Length > 60 ? bad.Substring(0, 60) : bad));
+        });
+        Run("media folders: which requests move them", delegate
+        {
+            DateTime now = new DateTime(2026, 11, 11, 5, 10, 0, DateTimeKind.Utc);
+            DateTime never = DateTime.MinValue;
+            Func<string, MediaRequest> req = at => MediaFolders.Parse(reqText(@"D:\Media", at));
+            Eq(MediaMove.Go, MediaFolders.Decide(req("2026-11-11T05:09:00Z"), null, true, now, never, "inactive"), "fresh, nothing running");
+            Eq(MediaMove.None, MediaFolders.Decide(req("2026-11-11T05:09:00Z"), id, true, now, never, "inactive"), "already done");
+            Eq(MediaMove.None, MediaFolders.Decide(req("2026-11-11T05:09:00Z"), null, false, now, never, "inactive"), "host-state.json unreadable");
+            Eq(MediaMove.Busy, MediaFolders.Decide(req("2026-11-11T05:09:00Z"), null, true, now, never, "activating"), "an update runs");
+            Eq(MediaMove.Busy, MediaFolders.Decide(req("2026-11-11T05:09:00Z"), null, true, now, never, null), "can't tell: wait");
+            Eq(MediaMove.TooSoon, MediaFolders.Decide(req("2026-11-11T05:09:00Z"), null, true, now, now.AddMinutes(-3), "inactive"), "one restart per 10 minutes, limits' included");
+            Eq(MediaMove.Stale, MediaFolders.Decide(req("2026-11-11T04:30:00Z"), null, true, now, never, "inactive"), "older than 15 minutes");
+            Eq(MediaMove.Stale, MediaFolders.Decide(req("2026-11-11T07:00:00Z"), null, true, now, never, "inactive"), "from the future");
+            Eq(MediaMove.Invalid, MediaFolders.Decide(MediaFolders.Parse(reqText(@"\\nas\x", "2026-11-11T05:09:00Z")), null, true, now, never, "inactive"), "a bad folder: refused, reported");
+            Eq(MediaMove.None, MediaFolders.Decide(MediaFolders.Parse(null), null, true, now, never, "inactive"), "nothing asked");
+        });
+        var setupArgs = new List<string> { "--repo-url", "https://example.org/x", "--internet", "never" };
+        foreach (var m in MediaPaths.Under(MediaPaths.DefaultRoot)) { setupArgs.Add("--media"); setupArgs.Add(m.Key + "=" + m.Value); }
+        setupArgs.Add("--health-timeout"); setupArgs.Add("900");
+        Run("media folders: the job's folders and the dashboard's", delegate
+        {
+            var job = MediaFolders.MediaArgs(setupArgs);
+            Eq(5, job.Count, "five folders");
+            Eq(MediaPaths.DefaultRoot, MediaFolders.RootOf(job), "Setup's root");
+            True(MediaFolders.RootOf(new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("music", @"D:\Songs") }) == null, "not <root>\\Music: no root");
+            var ov = new MediaOverride { Root = @"D:\Media", BasedOn = MediaPaths.DefaultRoot };
+            bool drop;
+            var eff = MediaFolders.Effective(setupArgs, ov, out drop);
+            True(!drop, "kept while Setup's root is the same");
+            Eq(@"D:\Media\Music", eff[0].Value, "the dashboard's folders");
+            var newer = MediaFolders.WithMedia(setupArgs, MediaPaths.Under(@"E:\Other"));
+            eff = MediaFolders.Effective(newer, ov, out drop);
+            True(drop, "Setup picked another folder since: Setup wins");
+            Eq(@"E:\Other\Music", eff[0].Value, "Setup's folders");
+            var replaced = MediaFolders.WithMedia(setupArgs, MediaPaths.Under(@"D:\Media"));
+            Eq(setupArgs.Count, replaced.Count, "same number of arguments");
+            Eq("--internet", replaced[2], "the rest untouched");
+            Eq("--media", replaced[4], "in the same place");
+            Eq(@"music=D:\Media\Music", replaced[5], "the new folder");
+            Eq("--health-timeout", replaced[replaced.Count - 2], "the end untouched");
+            True(MediaOverride.FromJson(Json.ParseObject("{\"root\":\"\\\\\\\\nas\\\\x\"}")) == null, "a stored root of the wrong shape is ignored");
+        });
+        Run("media folders: the distro's fstab block", delegate
+        {
+            Eq("C:/Users/Public/Domovoi/Music", MediaFolders.FstabSource(@"c:\Users\Public\Domovoi\Music\"), "as provision.sh writes it");
+            Eq(@"D:/My\040Media/Videos", MediaFolders.FstabSource(@"D:\My Media\Videos"), "blanks escaped");
+            string input = MediaFolders.FstabInput(MediaPaths.Under(@"D:\My Media"));
+            True(input.StartsWith(@"D:/My\040Media/Music /srv/media/music" + "\n", StringComparison.Ordinal), "one line per folder: " + input);
+            Eq(5, input.Split('\n').Length - 1, "five lines");
+            Throws<ArgumentException>(delegate { MediaFolders.FstabInput(new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("etc", @"D:\x") }); }, "an unknown name");
+            Throws<ArgumentException>(delegate { MediaFolders.FstabInput(new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>("music", @"\\nas\x") }); }, "a bad folder");
+            string s = MediaFolders.FstabScript();
+            True(s.IndexOf('"') < 0, "no double quotes (wsl.exe's command line)");
+            True(s.Contains("set -euf"), "no globbing, stops on errors");
+            True(s.Contains("'" + MediaFolders.FstabBegin + "'") && s.Contains("'" + MediaFolders.FstabEnd + "'"), "provision.sh's markers");
+            True(s.Contains("drvfs metadata,uid=%s,gid=%s,umask=022,fmask=133,noatime,nofail 0 0"), "provision.sh's options");
+            True(s.Contains("*) exit 3"), "each line checked again");
+        });
+        Run("media folders: the report and the tray's list", delegate
+        {
+            var media = MediaPaths.Under(@"D:\Media");
+            var ch = new MediaChange { State = "done", RequestId = id, Root = @"D:\Media", PreviousRoot = MediaPaths.DefaultRoot };
+            var d = Json.ParseObject(MediaFolders.Report(media, "dashboard", ch, true, true, new DateTime(2026, 11, 11, 5, 0, 0, DateTimeKind.Utc)));
+            Eq(1, Json.Int(d, "schema") ?? 0, "schema");
+            Eq("windows", Json.Str(d, "host_kind"), "host kind");
+            Eq(@"D:\Media", Json.Str(d, "root"), "root");
+            Eq("/srv/media", Json.Str(d, "mount_base"), "mount base");
+            Eq(@"D:\Media\Videos", Json.Str(Json.Obj(d, "folders"), "videos"), "a folder");
+            Eq("dashboard", Json.Str(d, "source"), "source");
+            Eq("done", Json.Str(Json.Obj(d, "change"), "state"), "the move");
+            string script = MediaFolders.ReportScript();
+            True(script.Contains("chown root:root /var/lib/domovoi-windows") && script.Contains("/var/lib/domovoi-windows/media.json"), "root's file");
+            var map = MediaFolders.ParseTrayMap(MediaFolders.TrayMap(media, DateTime.UtcNow));
+            Eq(5, map.Count, "five folders");
+            Eq(@"D:\Media\Pictures", map["pictures"], "a folder");
+            var bad = MediaFolders.ParseTrayMap("{\"schema\":1,\"folders\":{\"music\":\"\\\\\\\\nas\\\\x\",\"etc\":\"D:\\\\x\",\"videos\":\"D:\\\\V\"}}");
+            True(!bad.ContainsKey("music") && !bad.ContainsKey("etc") && bad.ContainsKey("videos"), "only known names and drive folders");
+            Eq(0, MediaFolders.ParseTrayMap("{\"schema\":2,\"folders\":{}}").Count, "another schema");
+            Eq(0, MediaFolders.ParseTrayMap(null).Count, "no file");
+        });
+        Run("media folders: the root on this PC", delegate
+        {
+            var sys = SystemFolders.Typical();
+            var ntfs = new MediaDrive { Ready = true, Type = System.IO.DriveType.Fixed, Format = "NTFS" };
+            True(MediaFolders.RootProblem(@"D:\Media", sys, ntfs, null) == null, "a folder on an NTFS drive");
+            True(MediaFolders.RootProblem(@"C:\Users\alex\Music\Domovoi", sys, ntfs, null) == null, "inside a profile's Music");
+            True(MediaFolders.RootProblem(@"D:\Media", sys, new MediaDrive { Ready = true, Type = System.IO.DriveType.Removable, Format = "exFAT" }, null).Contains("NTFS"), "exFAT");
+            True(MediaFolders.RootProblem(@"Z:\Media", sys, new MediaDrive { Ready = true, Type = System.IO.DriveType.Network, Format = "NTFS" }, null).Contains("local drive"), "a mapped network drive");
+            True(MediaFolders.RootProblem(@"E:\Media", sys, new MediaDrive { Ready = false }, null).Contains("ready"), "no disc in it");
+            True(MediaFolders.RootProblem(@"C:\Windows\Media", sys, ntfs, null).Contains("system folder"), "Windows");
+            True(MediaFolders.RootProblem(@"C:\Users\alex", sys, ntfs, null) != null, "a profile itself");
+            True(MediaFolders.RootProblem(@"C:\Users\alex\AppData\x", sys, ntfs, null) != null, "AppData");
+            True(MediaFolders.RootProblem(@"D:\Media", sys, ntfs, @"D:\Media").Contains("link"), "a junction");
+            True(MediaFolders.RootProblem(@"D:\" + new string('x', 210), sys, ntfs, null).Contains("longer"), "too long");
+        });
+        Run("media folders: short names are checked by their long name (security review)", delegate
+        {
+            var sys = SystemFolders.Typical();
+            var ntfs = new MediaDrive { Ready = true, Type = System.IO.DriveType.Fixed, Format = "NTFS" };
+            True(MediaFolders.RootProblem(@"D:\Media", @"C:\ProgramData\Foo", sys, ntfs, null) != null, "a long name inside ProgramData");
+            True(MediaFolders.RootProblem(@"D:\Media", @"\\nas\x", sys, ntfs, null) != null, "resolves to a network folder");
+            True(MediaFolders.RootProblem(@"D:\Media", @"D:\Media", sys, ntfs, null) == null, "the same name");
+            True(MediaFolders.StoredProblem(@"D:\Media", sys, p => p, p => null) == null, "a stored root still fine");
+            True(MediaFolders.StoredProblem(@"D:\Media", sys, p => @"C:\Windows\x", p => null) != null, "a stored root that now resolves into Windows");
+            True(MediaFolders.StoredProblem(@"D:\Media", sys, p => p, p => p == @"D:\Media\Music" ? p : null).Contains("link"), "a junction put in for Music");
+            True(MediaFolders.StoredProblem(@"C:\PROGRA~3", sys, p => @"C:\ProgramData", p => null) != null, "a stored short name");
+            True(MediaFolders.StoredProblem(@"D:\MYMEDI~1", sys, p => @"D:\My Media", p => null).Contains("full name"), "any real short name");
+            True(MediaFolders.StoredProblem(@"D:\Music~2024", sys, p => p, p => null) == null, "a legacy root really named Music~2024 (GuardStoredMedia keeps it)");
+            // This PC: the short name Windows gives Program Files, if the
+            // volume keeps 8.3 names, resolves to the long one.
+            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var sb = new System.Text.StringBuilder(260);
+            if (GetShortPathNameW(pf, sb, 260) > 0 && sb.ToString().Contains("~"))
+            {
+                string shortName = sb.ToString();
+                Eq((pf + @"\NoSuch\Deeper").ToLowerInvariant(), MediaFolders.Canonical(shortName + @"\NoSuch\Deeper").ToLowerInvariant(), "expanded, the missing rest kept");
+                True(MediaFolders.RootProblem(shortName + @"\x", MediaFolders.Canonical(shortName + @"\x"), MediaFolders.SystemFoldersHere(), ntfs, null) != null, "refused here");
+            }
+            Eq(@"Z:\no\such", MediaFolders.Canonical(@"Z:\no\such\"), "nothing there: as written");
+            Eq(@"\\nas\x", MediaFolders.Canonical(@"\\nas\x"), "not a drive path: as written");
+        });
+        Run("media folders: a folder really named Music~2024 keeps working (review round 2)", delegate
+        {
+            var sys = SystemFolders.Typical();
+            var ntfs = new MediaDrive { Ready = true, Type = System.IO.DriveType.Fixed, Format = "NTFS" };
+            const string legacy = @"D:\Music~2024";
+            True(MediaPaths.Problem(legacy) == null && MediaFolders.ShapeProblem(legacy) == null, "its shape");
+            True(MediaFolders.RootProblem(legacy, legacy, sys, ntfs, null) == null, "Setup's repair and the host: it is its own long name");
+            True(MediaFolders.RootProblem(@"C:\PROGRA~3\Foo", @"C:\ProgramData\Foo", sys, ntfs, null) != null, "PROGRA~3 still refused");
+            True(MediaFolders.RootProblem(@"D:\MYMEDI~1", @"D:\My Media", sys, ntfs, null).Contains("full name"), "a real short name: type the full name");
+            string fstab = MediaFolders.FstabInput(MediaPaths.Under(legacy));
+            True(fstab.StartsWith("D:/Music~2024/Music /srv/media/music\n", StringComparison.Ordinal), "into fstab: " + fstab);
+            Eq(@"D:\Music~2024\Videos", MediaFolders.ParseTrayMap(MediaFolders.TrayMap(MediaPaths.Under(legacy), DateTime.UtcNow))["videos"], "on the tray's list");
+            var d = Json.ParseObject(MediaFolders.Report(MediaPaths.Under(legacy), "setup", null, true, true, DateTime.UtcNow));
+            Eq(legacy, Json.Str(d, "root"), "in the report");
+            MediaRequest r = MediaFolders.Parse("{\"v\":1,\"root\":\"D:\\\\Music~2024\",\"id\":\"" + id + "\",\"at\":\"2026-11-11T05:00:00Z\"}");
+            Eq("ok", r.State, "a request's shape (the host then asks Windows)");
+            // A real folder of that name on this PC is its own long name.
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-tests-" + Guid.NewGuid().ToString("N"), "Music~2024");
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                string c = MediaFolders.Canonical(dir);
+                True(MediaFolders.ShortNameProblem(dir, c) == null, "a real Music~2024 folder: " + c);
+                Eq(dir.ToLowerInvariant(), c.ToLowerInvariant(), "resolves to itself");
+            }
+            finally { System.IO.Directory.Delete(System.IO.Path.GetDirectoryName(dir), true); }
+            string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var sb = new System.Text.StringBuilder(260);
+            if (GetShortPathNameW(pf, sb, 260) > 0 && sb.ToString().Contains("~"))
+                True(MediaFolders.ShortNameProblem(sb + @"\Foo", MediaFolders.Canonical(sb + @"\Foo")) != null, "this PC's real short name refused");
+        });
+        Run("media folders: an interrupted move does not lock the feature (security review)", delegate
+        {
+            var c = new MediaChange { State = "applying", RequestId = id };
+            True(MediaFolders.Interrupted(c, id), "applying, and its id recorded as done: interrupted");
+            True(!MediaFolders.Interrupted(c, "f" + id.Substring(1)), "another id: a move not started yet");
+            c.State = "done";
+            True(!MediaFolders.Interrupted(c, id), "done is done");
+            True(!MediaFolders.Interrupted(null, id), "nothing stored");
+        });
+        Run("media folders: a BEGIN with no END keeps the rest of fstab", delegate
+        {
+            True(MediaFolders.FstabKeepAwk.IndexOf('"') < 0, "no double quotes");
+            True(MediaFolders.FstabScript().Contains(MediaFolders.FstabKeepAwk), "the script uses it");
+            True(MediaFolders.FstabKeepAwk.Contains("END{if(s)"), "what followed a stray BEGIN is printed at the end");
+        });
+        Run("media folders: the tray opens a kind, never a path", delegate
+        {
+            string mapText = MediaFolders.TrayMap(MediaPaths.Under(@"D:\Media"), DateTime.UtcNow);
+            var opened = new List<string>();
+            Func<Domovoi.Windows.Tray.MediaOpenEnv> env = () => new Domovoi.Windows.Tray.MediaOpenEnv
+            {
+                ActiveSession = true,
+                ReadMap = () => mapText,
+                FolderExists = p => p != @"D:\Media\Audiobooks",
+                LinkIn = p => p == @"D:\Media\Documents" ? p : null,
+                System = SystemFolders.Typical,
+                Canonical = p => p == @"D:\Media\Pictures" ? @"C:\ProgramData\Pictures" : p,
+                Open = p => opened.Add(p),
+                Log = s => { },
+            };
+            var srv = new FakeMediaServer { Req = new Domovoi.Windows.Tray.MediaOpenRequest { Id = id, Kind = "music" } };
+            Eq("opened", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "opened");
+            SeqEq(new[] { @"D:\Media\Music" }, opened, "the folder on the host's list");
+            Eq("opened", srv.Outcome, "reported");
+            Eq("token-" + id, srv.ReportedClaim, "with the claim's token");
+            srv.Req.Kind = "pictures";
+            Eq("refused", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "a folder whose long name is a system folder");
+            srv.Req.Kind = "audiobooks";
+            Eq("missing", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "its drive unplugged");
+            srv.Req.Kind = "documents";
+            Eq("refused", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "a link");
+            foreach (string k in new[] { "podcasts", @"C:\Windows", "..", null })
+            {
+                srv.Req.Kind = k;
+                Eq("refused", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "not on the list: " + (k ?? "null"));
+            }
+            Eq(1, opened.Count, "nothing else opened");
+            var e = env();
+            e.ActiveSession = false;
+            srv.Claims = 0;
+            True(Domovoi.Windows.Tray.MediaOpen.Run(srv, e) == null && srv.Claims == 0, "another session's tray leaves it alone");
+            srv.ClaimOk = false;
+            srv.Req.Kind = "music";
+            True(Domovoi.Windows.Tray.MediaOpen.Run(srv, env()) == null, "another tray claimed it");
+            Eq(1, opened.Count, "and nothing opened");
+            mapText = "{\"schema\":1,\"folders\":{\"music\":\"C:\\\\Windows\\\\System32\"}}";
+            srv.ClaimOk = true;
+            Eq("refused", Domovoi.Windows.Tray.MediaOpen.Run(srv, env()), "a system folder on the list is still refused");
         });
     }
 }

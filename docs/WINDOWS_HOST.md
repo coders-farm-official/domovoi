@@ -133,7 +133,8 @@ signature, before it runs it.
    change it later in **Settings > Privacy > Internet**.
 5. **Asks for the media folder** (default `C:\Users\Public\Domovoi`), the
    Windows folder you open in Explorer and copy music, pictures, videos,
-   documents and audiobooks into. It must be a folder of your own on a
+   documents and audiobooks into (Settings → Household → Media folders
+   shows it later, and can move it: [Media folders](#media-folders)). It must be a folder of your own on a
    drive of this PC: Windows, Program Files, ProgramData, the Users folder,
    a profile folder itself (a folder inside it, like your Music, is fine;
    its AppData isn't), anything holding one of those, and links (junctions)
@@ -568,6 +569,103 @@ Setup: it comes with the next Domovoi update.
 
 **A Linux server** has no such ceiling in Domovoi: its programs share the
 machine with nothing Domovoi manages, and the card isn't shown there.
+
+## Media folders
+
+Inside Domovoi's Linux system the media folders are mounts such as
+`/srv/media/music`: lines in the distro's `/etc/fstab` that `provision.sh`
+writes from the folder chosen in Setup (default `C:\Users\Public\Domovoi`,
+with `Music`, `Pictures`, `Videos`, `Documents` and `Audiobooks` in it).
+Nobody can open those Linux paths, so **Settings → Household → Media
+folders** shows the Windows folders instead (`domovoi/media_folders.py`,
+`windows/common/MediaFolders.cs`):
+
+- **Where they are.** Each kind's Windows folder, with **copy path**.
+  Podcasts are kept inside Domovoi's own Linux system and say so. DomovoiHost
+  tells the Linux side the folders every 30 s
+  (`/var/lib/domovoi-windows/media.json`, written as root; the core believes
+  it only while root alone owns it and its folder, like `limits.json`). With
+  a DomovoiHost from before this (an install not yet updated by a newer
+  Setup), the page reads the same folders from the distro's `/etc/fstab`
+  and offers neither of the two actions below.
+- **Open on the Domovoi PC**, shown only in a browser on that PC while
+  Domovoi's icon runs there. DomovoiHost runs as a hidden account and
+  can't open a window on your desktop, so the tray does: the page names a
+  kind (never a path), the tray (polling the core over loopback every
+  5 s, in the session at the PC's screen only, one tray claiming it) looks
+  it up in DomovoiHost's own list (`host\out\media-folders.json`, which
+  DomovoiHost lets the household's accounts read) and opens File Explorer
+  there, but only for a folder that exists, on a drive of this PC, with no
+  link (junction or symbolic link) in its path and not a system or profile
+  folder. From another device the page shows the path to copy and says
+  the folders are on the Domovoi PC.
+- **Move the media folders** (admin, the security tier). Type another
+  folder on the Domovoi PC (say `D:\Media`) and confirm. Within 30 s
+  DomovoiHost reads the request (as the service user, a bounded file it
+  treats as data) and checks the folder on Windows: a local drive
+  formatted NTFS, not a network folder, not inside Windows, Program Files,
+  ProgramData, a profile's AppData, not the Users folder or a profile
+  itself, nothing holding one of those, no link in its path, at most 200
+  characters. It makes the five folders where missing (a root it makes
+  lets the household read and write it, as Setup's does), proves its
+  account can write each, rewrites the media block of the distro's
+  `/etc/fstab`, and restarts Domovoi's Linux system so the mounts and the
+  rooms' music players use the new folders (a couple of minutes offline;
+  the core makes each room's player again after the move). The same rules
+  as the limits' restart apply: at most one restart every 10 minutes
+  (limits and folders together), never while an update or Restart of
+  Domovoi runs (it waits), and a request older than 15 minutes is dropped.
+  A folder that fails a check is refused with the reason on the page, and
+  nothing changes.
+
+  **Your files are not moved.** The old folder stays exactly as it is, and
+  the page says where it is. Copy your files into the new folder first,
+  then switch: Domovoi forgets an audiobook's place and a queued song
+  whose file it can't find when it next looks, so switching to a folder
+  that is only half copied loses those. Delete the old folder's files
+  once Domovoi plays from the new one. A copy-then-switch inside Domovoi would mean a
+  long, unattended copy of possibly hundreds of gigabytes by a service
+  account, with a full drive or a removed USB disk halfway through, and a
+  choice about every file that is in both places: a household can do that
+  more safely by hand, and nothing is ever lost by leaving the old folder
+  alone.
+
+  **What it changes on Windows, and the boundary.** This lets Domovoi's
+  Linux side (an admin in the dashboard, or a compromised Domovoi) choose
+  which of the folders Domovoi's account can reach get mounted, with no
+  Windows administrator approving it. What it can't do is the checks
+  above: no system, program or profile folder (by its long name too; short
+  names like `PROGRA~1` are refused), no link, nothing the account can't
+  write. Domovoi's account can only make folders where any standard
+  account may, and it changes access rules only on folders it has just
+  made. A folder it can't write is refused (run Setup again and choose it
+  there: Setup, as administrator, gives Domovoi access). The distro's
+  mounts run as that account anyway, so it reaches nothing new.
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-media-folders-channel-windows-install)
+  has the whole channel.
+
+  **If a move is cut off** (Windows restarts in the middle, say), the page
+  says it was interrupted and you can ask again; a folder that becomes a
+  link, or turns out to be a system folder, is dropped at DomovoiHost's
+  next start and Domovoi goes back to Setup's folder.
+
+  **Going back to an older Domovoi for Windows** (running an older
+  `DomovoiSetup.exe`) puts Setup's own folder back at its repair. The page
+  then shows what is mounted and offers neither action until the newer
+  Windows side runs again. The choice is kept in
+  `C:\ProgramData\Domovoi\host\out\host-state.json`; a repair from Setup
+  that keeps Setup's own answer keeps it, while a Setup run where you pick
+  another folder wins. Uninstall leaves folders made this way and their
+  rule for the deleted account in place (harmless once the account is
+  gone, like the ones in the table above), and never deletes a file.
+- **Linux servers** show each folder's path with **copy path**; Music
+  and Videos change in place, and the server refuses a folder that isn't
+  there or that its service user can't read. The rooms' music players are
+  made again on the new music folder at the next restart.
+
+These are changes to DomovoiHost and the tray: they reach a PC with a
+Setup built from this code (the tray's **Update Domovoi**, or running the
+newer `DomovoiSetup.exe`), not with the dashboard's update alone.
 
 ## The trust boundary on a shared PC
 

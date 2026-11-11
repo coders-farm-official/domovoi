@@ -7731,6 +7731,126 @@
         }
       }
     },
+    "/api/config/media-folders": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders",
+        "description": "Where each media folder really is (the core's\n``/v1/admin/media-folders``), plus ``on_this_pc``: whether this browser\nruns on the Domovoi server itself (the loopback rule the tray's routes\nuse, domovoi/local_peer.py). \"Open on the Domovoi PC\" is offered only\nthere; another device gets the path to copy.",
+        "operationId": "media_folders_api_config_media_folders_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/media-folders/open": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders Open",
+        "description": "Open a media kind's folder in File Explorer on the Domovoi PC (the\ntray does it). Refused (403) from any browser but one on that PC: the\nwindow would open where nobody is looking.",
+        "operationId": "media_folders_open_api_config_media_folders_open_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaOpenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/media-folders/location": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders Move",
+        "description": "Move the media folders to another folder on the Domovoi PC (security\ntier at both hops: it changes what Domovoi's account reads and writes,\nand restarts Domovoi's Linux system).",
+        "operationId": "media_folders_move_api_config_media_folders_location_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaMoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/media-folders/location/cancel": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders Move Cancel",
+        "description": "Withdraw a move the Domovoi PC hasn't started on.",
+        "operationId": "media_folders_move_cancel_api_config_media_folders_location_cancel_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/version/channel": {
       "post": {
         "tags": [
@@ -22042,6 +22162,34 @@
         ],
         "title": "LyricsStatus",
         "description": "``GET /api/music/lyrics/status`` \u2014 the Music page's Jobs card. Counts\nand states only, never a lyric or a title."
+      },
+      "MediaMoveRequest": {
+        "properties": {
+          "root": {
+            "type": "string",
+            "maxLength": 260,
+            "title": "Root"
+          }
+        },
+        "type": "object",
+        "required": [
+          "root"
+        ],
+        "title": "MediaMoveRequest"
+      },
+      "MediaOpenRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "MediaOpenRequest"
       },
       "Memory": {
         "properties": {

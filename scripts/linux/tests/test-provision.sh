@@ -1947,6 +1947,25 @@ case_manifest_unknown_key_stops() {
   end_case
 }
 
+# Security review 2026-11-11 (nit 14): a BEGIN marker with no END (a hand
+# edit, a crash mid-write) must not cost the household the lines after it.
+case_media_unterminated_block_keeps_the_rest() {
+  new_case media_unterminated_block_keeps_the_rest
+  printf '%s\n' '# UNCONFIGURED FSTAB FOR BASE SYSTEM' \
+    '# BEGIN Domovoi media folders (scripts/linux/provision.sh rewrites this block)' \
+    'C:/Old /srv/media/old drvfs defaults 0 0' \
+    'tmpfs /scratch tmpfs defaults 0 0' >"$ROOT/etc/fstab"
+  run_prov "${wsl_args[@]}" --media 'music=C:\M'
+  check "exit 0" eq "$RC" 0
+  check "the line after the stray marker stays" has_line "$ROOT/etc/fstab" 'tmpfs /scratch tmpfs defaults 0 0'
+  check "the base system's line stays" has_line "$ROOT/etc/fstab" '# UNCONFIGURED FSTAB FOR BASE SYSTEM'
+  check "one block, ended" eq "$(grep -c '^# END Domovoi media folders' "$ROOT/etc/fstab")" 1
+  check "one BEGIN" eq "$(grep -c '^# BEGIN Domovoi media folders' "$ROOT/etc/fstab")" 1
+  check "the new music line" has_line "$ROOT/etc/fstab" 'C:/M /srv/media/music drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
+  check "nothing outside a block is unmounted" not_called "umount /srv/media/old"
+  end_case
+}
+
 # Docker starts after the media folders (incident 2026-11-11): on WSL the
 # units step orders docker.service after the drvfs mounts of /etc/fstab's
 # Domovoi block (Wants=/After=, never Requires=), with a daemon-reload and
@@ -4664,6 +4683,7 @@ CASES=(
   case_manifest_unknown_key_stops
   case_lock_without_build_tools_stops
   case_media_list_change_rewrites_the_block
+  case_media_unterminated_block_keeps_the_rest
   case_docker_waits_for_the_media_folders_on_wsl
   case_docker_media_order_not_on_bare_metal
   case_media_mount_failure_stops

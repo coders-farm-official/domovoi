@@ -45,3 +45,33 @@ def from_this_pc(request: Any) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return ip.is_loopback
+
+
+def _loopback(host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(host.strip())
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback
+
+
+def relayed_from_this_pc(request: Any) -> bool:
+    """True when the caller is on this machine, directly or through the
+    dashboard on it: the TCP peer is loopback (after uvicorn has taken a
+    loopback peer's X-Forwarded-For as the client) and every address an
+    X-Forwarded-For names is loopback too. The web process relays its
+    caller's address that way, so a phone on the LAN reaching the core
+    through the dashboard is not "this PC". Any other forwarding header
+    refuses. Only as strong as the shared-PC boundary: any program on this
+    PC can claim to relay for 127.0.0.1."""
+    if any(request.headers.get(h) for h in ("forwarded", "x-real-ip", "x-forwarded-host")):
+        return False
+    host = request.client.host if request.client else ""
+    if not _loopback(host):
+        return False
+    xff = request.headers.get("x-forwarded-for")
+    if xff and not all(_loopback(part) for part in xff.split(",")):
+        return False
+    return True
