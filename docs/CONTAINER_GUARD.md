@@ -342,6 +342,40 @@ conservative about what counts and loud about what does
   never pages anyone. Docker itself not answering needs **5 minutes**
   (`CONTAINER_GUARD_DAEMON_GRACE_SEC`): Docker restarting (Docker Desktop, or
   the engine in the Windows install's distro) is not an outage.
+* **A room's music player found stopped** (exited or never started) is
+  started again once before anyone is told: Docker's `unless-stopped`
+  never retries a start that failed, so a room could otherwise stay down
+  for good after a restart (2026-11-11). If the start works, no incident
+  opens and no phone is notified; the guard logs it and keeps a short note
+  (`guard.restarted` in `GET /v1/admin/containers`). If it fails, the incident
+  opens on the usual 2 minutes with Docker's reason added ("Starting it
+  again failed: …"), and the guard tries again after 1 minute, doubling to
+  at most 15, while the room stays down; a start that works then resolves
+  the incident by itself.
+  * **Only Domovoi's own player is started**, by its container ID: the
+    music player image the guard recorded, none of the risky settings
+    (privileged mode, the host's network or processes, the Docker socket,
+    the host's root), the restart policy and the mounts the provisioner
+    gives it. A container under a room's name with another image or a
+    risky setting is never started and is reported as tampering, as it
+    would be if it ran; one of another shape keeps its "stopped" incident
+    with the reason ("Not started: …").
+  * **A player that keeps stopping** is started at most 3 times in 30
+    minutes, then reported ("Domovoi started it 3 times in the last 30
+    minutes; it keeps stopping").
+  * **Never** while a tamper incident is open (the freeze, below) or the
+    freeze can't be read, never while something else is working on the
+    room (a start, a removal, the image rebuild), never for a paused
+    player, and never for any other container: a stopped database or
+    plugin is reported, not started.
+  * **When you hear of it.** A room that won't start is reported about 2
+    minutes after the guard first sees it down; right after the core
+    starts, that is at least 5 minutes in (the 3-minute boot grace, during
+    which the core's own start retries the room, then the 2 minutes).
+  * **Keeping a room's music off on purpose:** a player stopped with
+    `docker stop` is started again by the guard (and by the next music
+    command for that room). Only a paused player (`docker pause`) stays
+    down; to be rid of a room for good, retire it on Settings → Satellites.
 * **Tampering** opens after two checks in a row at least 25 seconds apart
   (`CONTAINER_GUARD_TAMPER_CONFIRM_SEC`).
 * A failure **resolves** after two clean checks in a row, or at once when

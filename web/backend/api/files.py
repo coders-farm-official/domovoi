@@ -1464,6 +1464,29 @@ def _make_upload_folder(root: Path, path: str) -> tuple[Path, bool]:
     return made, created
 
 
+# The music folder's ``podcasts`` and ``audiobooks`` folders: each room's
+# music player mounts the podcast and audiobook folders THERE (nested under
+# its read-only /music, domovoi/mpd_provisioner.py _nested_mountpoints), and
+# Docker can't start a room whose folder is gone. They look like empty
+# clutter, so deleting one is refused with the reason, rather than hidden:
+# a hidden folder still shows in Windows Explorer and over the network,
+# where it can be deleted with no word of why it is there (the core makes
+# it again at the next start anyway). Refused for delete and for moving it
+# away; what is inside a real folder of that name stays the household's.
+_ROOM_MOUNT_FOLDERS = {
+    "podcasts": "Domovoi needs this folder; it's where podcasts show up in your music.",
+    "audiobooks": "Domovoi needs this folder; it's where audiobooks show up in your music.",
+}
+
+
+def room_mount_folder_refusal(library_id: str, root: Path, target: Path) -> str | None:
+    """The plain-words refusal when ``target`` is one of the music folder's
+    room-player mountpoints, else None."""
+    if library_id != "core:music" or target.parent != root:
+        return None
+    return _ROOM_MOUNT_FOLDERS.get(target.name.lower())
+
+
 # ─── POST /delete ────────────────────────────────────────────────────────────
 @router.post(
     "/delete", response_model=DeleteResponse, dependencies=[Depends(require_admin_mutation)]
@@ -1492,6 +1515,10 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
             continue
         if target == root:
             failed.append(f"{rel}: refusing to delete library root")
+            continue
+        refusal = room_mount_folder_refusal(lib.id, root, target)
+        if refusal is not None:
+            failed.append(f"{rel}: {refusal}")
             continue
         try:
             if target.is_symlink() or target.is_file():
@@ -1685,6 +1712,10 @@ async def move(request: Request, req: MoveRequest) -> MoveResponse:
             continue
         if src == source.root_path:
             failed.append(f"{rel}: refusing to move a library root")
+            continue
+        held = room_mount_folder_refusal(source.id, source.root_path, src)
+        if held is not None:
+            failed.append(f"{rel}: {held}")
             continue
         if not src.exists() and not src.is_symlink():
             failed.append(f"{rel}: not found")

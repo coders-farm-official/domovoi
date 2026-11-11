@@ -426,14 +426,14 @@ async def test_a_player_on_another_music_folder_is_made_again(monkeypatch) -> No
     async def create(**kw):
         created.append(kw["music_dir"])
 
-    async def pin(port):
+    async def after(room_id, port):
         return None
 
     monkeypatch.setattr(mp, "_run_docker", docker)
     monkeypatch.setattr(mp, "_container_state", state)
     monkeypatch.setattr(mp, "_control_port_host_ip", ip)
     monkeypatch.setattr(mp, "_create_container", create)
-    monkeypatch.setattr(mp, "_pin_startup_volume", pin)
+    monkeypatch.setattr(mp, "_after_start", after)
     await mp._ensure_container(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
                                music_dir="/srv/new-music", volume_name="v")
     assert created == [] and not any(c[0] == "rm" for c in calls), "the on-demand path leaves it running"
@@ -445,6 +445,50 @@ async def test_a_player_on_another_music_folder_is_made_again(monkeypatch) -> No
     await mp._ensure_container(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
                                music_dir="/srv/old-music", volume_name="v", check_music_mount=True)
     assert created == [] and not any(c[0] == "rm" for c in calls)
+
+
+@pytest.mark.parametrize("source,music_dir,same", [
+    # Docker Desktop names a Windows folder its own way: the same folder.
+    ("/run/desktop/mnt/host/c/Users/alex/Music", "C:/Users/alex/Music", True),
+    ("/run/desktop/mnt/host/c/Users/alex/Music", r"C:\Users\alex\Music", True),
+    ("/run/desktop/mnt/host/c/Users/alex/Music", "c:/users/ALEX/music/", True),
+    ("/host_mnt/d/Media/Music", "D:/Media/Music", True),
+    ("/run/desktop/something/new/c/x", "C:/x", True),      # a shape not known: never "another folder"
+    ("/run/desktop/mnt/host/d/Media/Music", "C:/Users/alex/Music", False),
+    ("/srv/media/music", "/srv/media/music/", True),
+    ("/srv/old-music", "/srv/new-music", False),
+])
+def test_music_mount_names_one_folder_one_way(source, music_dir, same) -> None:
+    from domovoi import mpd_provisioner as mp
+
+    assert mp._same_dir(source, music_dir) is same
+
+
+@pytest.mark.asyncio
+async def test_docker_desktop_sources_recreate_nothing_at_start(monkeypatch) -> None:
+    from domovoi import mpd_provisioner as mp
+
+    calls: list[tuple] = []
+
+    async def docker(*args, **kw):
+        calls.append(args)
+        if args[0] == "inspect" and ".Mounts" in args[2]:
+            return 0, "/run/desktop/mnt/host/c/Users/alex/Music\n", ""
+        return 0, "", ""
+
+    async def state(name):
+        return "running"
+
+    async def ip(name):
+        return mp._CONTROL_BIND
+
+    monkeypatch.setattr(mp, "_run_docker", docker)
+    monkeypatch.setattr(mp, "_container_state", state)
+    monkeypatch.setattr(mp, "_control_port_host_ip", ip)
+    await mp._ensure_container(name="domovoi-mpd-x", image="img", control_port=6650, http_port=8050,
+                               music_dir="C:/Users/alex/Music", volume_name="v", check_music_mount=True,
+                               room_id="kitchen")
+    assert not any(c[0] in ("rm", "run") for c in calls), calls
 
 
 # ─── the HTTP hops ───────────────────────────────────────────────────────

@@ -138,6 +138,9 @@ class Expected:
     # Why checks of this container wait right now (a room starting, a
     # plugin upgrading or recreating it). None: it is checked.
     hold: str | None = None
+    # The ``mpd_rooms`` room a music player belongs to (role ``mpd``): the
+    # guard starts a stopped one again by its room (engine._auto_start).
+    room_id: str | None = None
     compose_service: str | None = None
     # Compare the repository only (and that it came from a registry): a
     # disabled plugin's container, whose applied tag Domovoi can't know
@@ -200,6 +203,7 @@ class Observed:
     network_mode: str = ""
     pid_mode: str = ""
     mounts: tuple[tuple[str, str], ...] = ()   # (source, destination)
+    restart_policy: str = ""       # HostConfig.RestartPolicy.Name ("unless-stopped", "no", ...)
     labels: dict[str, str] = field(default_factory=dict, hash=False, compare=False)
 
     def security(self) -> list[str]:

@@ -1514,6 +1514,60 @@ case_core_restart_overridden_drop_in_is_a_warn() {
   end_case
 }
 
+# Docker after the media folders on a box provisioned before provision.sh
+# wrote the drop-in (incident 2026-11-11): the update unit reads /etc/fstab's
+# Domovoi block and writes docker.service.d/50-domovoi-media.conf once,
+# reloads systemd and never restarts Docker; a second run has nothing to do;
+# a box without the block gets nothing; a block that is gone takes the
+# drop-in with it.
+docker_media_fstab() {
+  mkdir -p "$OSROOT/etc"
+  printf '%s\n' \
+    'UUID=1234 / ext4 defaults 0 1' \
+    '# BEGIN Domovoi media folders (scripts/linux/provision.sh rewrites this block)' \
+    'C:/Users/Public/Domovoi/Music /srv/media/music drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0' \
+    'C:/Users/Public/Domovoi/Audiobooks /srv/media/audiobooks drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0' \
+    '# END Domovoi media folders' >"$OSROOT/etc/fstab"
+}
+
+case_docker_media_order_written_once() {
+  new_case docker_media_order_written_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  docker_media_fstab
+  run_update
+  local f=$OSROOT/etc/systemd/system/docker.service.d/50-domovoi-media.conf
+  check "status ok" eq "$(field status)" '"ok"'
+  check "wants the mounts" grep -qxF 'Wants=srv-media-music.mount srv-media-audiobooks.mount' "$f"
+  check "after them" grep -qxF 'After=srv-media-music.mount srv-media-audiobooks.mount' "$f"
+  check "never Requires" bash -c '! grep -q "^Requires" "$1"' _ "$f"
+  check "systemd reloaded" called "systemctl daemon-reload"
+  check "Docker not restarted" not_called "systemctl restart docker"
+  check "an ok step" step_is docker-media ok
+  check "where it sits" eq "$(step_names)" "signature docker-media stop-services start-services health searxng"
+  : >"$STATE/calls.log"
+  run_update
+  check "second run ok" eq "$(field status)" '"ok"'
+  check "no step the second time" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "no reload the second time" not_called "systemctl daemon-reload"
+  # The household dropped every media folder: the drop-in goes too.
+  printf 'UUID=1234 / ext4 defaults 0 1\n' >"$OSROOT/etc/fstab"
+  run_update
+  check "removed" test ! -e "$f"
+  check "an ok step for it" step_is docker-media ok
+  end_case
+}
+
+case_docker_media_order_nothing_without_the_block() {
+  new_case docker_media_order_nothing_without_the_block
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  mkdir -p "$OSROOT/etc" && printf 'UUID=1234 / ext4 defaults 0 1\n' >"$OSROOT/etc/fstab"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no drop-in" test ! -e "$OSROOT/etc/systemd/system/docker.service.d/50-domovoi-media.conf"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
 # The journal kept on disk, so the core's account of why it stopped
 # survives a power cycle (incident 2026-10-14).
 case_journal_made_persistent_once() {
@@ -5185,6 +5239,8 @@ CASES=(
   case_core_restart_overridden_drop_in_is_a_warn
   case_starts_do_not_wait_for_the_cores_ready
   case_journal_made_persistent_once
+  case_docker_media_order_written_once
+  case_docker_media_order_nothing_without_the_block
   case_journal_a_changed_drop_in_is_replaced
   case_journal_restart_failure_is_a_warn
   case_journal_opt_out

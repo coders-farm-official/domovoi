@@ -1966,6 +1966,44 @@ case_media_unterminated_block_keeps_the_rest() {
   end_case
 }
 
+# Docker starts after the media folders (incident 2026-11-11): on WSL the
+# units step orders docker.service after the drvfs mounts of /etc/fstab's
+# Domovoi block (Wants=/After=, never Requires=), with a daemon-reload and
+# no Docker restart; a second run leaves it; a changed list rewrites it.
+case_docker_waits_for_the_media_folders_on_wsl() {
+  new_case docker_waits_for_the_media_folders_on_wsl
+  local f=$ROOT/etc/systemd/system/docker.service.d/50-domovoi-media.conf
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M' --media 'my-books=C:\B'
+  check "exit 0" eq "$RC" 0
+  check "the drop-in" test -f "$f"
+  check "wants the mounts" has_line "$f" 'Wants=srv-media-music.mount srv-media-my\x2dbooks.mount'
+  check "after them" has_line "$f" 'After=srv-media-music.mount srv-media-my\x2dbooks.mount'
+  check "a [Unit] section" has_line "$f" '[Unit]'
+  check "never Requires" bash -c '! grep -q "^Requires" "$1"' _ "$f"
+  check "systemd reloaded" called "systemctl daemon-reload"
+  check "Docker not restarted for it" not_called "systemctl restart docker"
+  check "said so" said "Docker starts after the media folders"
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M' --media 'my-books=C:\B'
+  check "second run: units skipped" eq "$(state_of units)" skip
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M'
+  check "a shorter list: units ran again" eq "$(state_of units)" done
+  check "only music now" has_line "$f" 'After=srv-media-music.mount'
+  printf '[Unit]\nAfter=nothing.mount\n' >"$f"
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M'
+  check "an edited drop-in: units ran again" eq "$(state_of units)" done
+  check "and put back" has_line "$f" 'Wants=srv-media-music.mount'
+  end_case
+}
+
+# Bare metal has no fstab block of Domovoi's: no drop-in.
+case_docker_media_order_not_on_bare_metal() {
+  new_case docker_media_order_not_on_bare_metal --bare
+  run_prov --internet sometimes --skip-models --media music=/srv/music
+  check "exit 0" eq "$RC" 0
+  check "no drop-in" test ! -e "$ROOT/etc/systemd/system/docker.service.d/50-domovoi-media.conf"
+  end_case
+}
+
 case_media_list_change_rewrites_the_block() {
   new_case media_list_change_rewrites_the_block
   run_prov "${wsl_args[@]}" --media 'music=C:\M' --media 'pictures=C:\P'
@@ -4646,6 +4684,8 @@ CASES=(
   case_lock_without_build_tools_stops
   case_media_list_change_rewrites_the_block
   case_media_unterminated_block_keeps_the_rest
+  case_docker_waits_for_the_media_folders_on_wsl
+  case_docker_media_order_not_on_bare_metal
   case_media_mount_failure_stops
   case_image_pull_failure_stops
   case_bare_metal

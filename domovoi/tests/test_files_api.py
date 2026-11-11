@@ -351,6 +351,47 @@ def test_delete_refuses_library_root(registry):
 
 
 @requires_db
+@pytest.mark.parametrize("name", ["audiobooks", "podcasts", "Audiobooks"])
+def test_the_music_folder_s_room_mountpoints_are_never_deleted(registry, roots, name):
+    """Each room's music player mounts the podcast and audiobook folders on
+    these (2026-11-11: one deleted, no room would start again). Refused in
+    plain words, the folder kept."""
+    (roots["music"] / name).mkdir()
+    with _client() as c:
+        r = c.post("/api/files/delete",
+                   json={"library_id": "core:music", "paths": [name], "recursive": True})
+    body = r.json()
+    assert body["deleted"] == []
+    (why,) = body["failed"]
+    assert why.startswith(f"{name}: Domovoi needs this folder; it's where ")
+    assert "show up in your music" in why
+    assert (roots["music"] / name).is_dir()
+
+
+@requires_db
+def test_a_folder_of_that_name_deeper_down_is_the_household_s(registry, roots):
+    (roots["music"] / "Show" / "podcasts").mkdir(parents=True)
+    (roots["music"] / "audiobooks.mp3").write_bytes(b"x")
+    with _client() as c:
+        r = c.post("/api/files/delete", json={
+            "library_id": "core:music", "paths": ["Show/podcasts", "audiobooks.mp3"],
+            "recursive": True})
+    assert sorted(r.json()["deleted"]) == ["Show/podcasts", "audiobooks.mp3"]
+
+
+@requires_db
+def test_the_room_mountpoints_are_never_moved_away(registry, roots):
+    (roots["music"] / "audiobooks").mkdir()
+    (roots["music"] / "Beatles").mkdir()
+    with _client() as c:
+        r = c.post("/api/files/move", json=_move_body("browser-test", paths=["audiobooks"]))
+    assert r.status_code == 200, r.text
+    assert r.json()["moved"] == []
+    assert "Domovoi needs this folder" in r.json()["failed"][0]
+    assert (roots["music"] / "audiobooks").is_dir()
+
+
+@requires_db
 def test_delete_recursive_does_not_follow_symlink_out(registry, roots, tmp_path):
     outside = tmp_path / "keepme"
     outside.mkdir()

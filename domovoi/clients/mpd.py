@@ -411,16 +411,37 @@ def _is_ack(exc: BaseException) -> bool:
 class RealMPDClient:
     """Real MPD connection manager. Connects per-command."""
 
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(self, host: str, port: int, *, room_id: str | None = None) -> None:
         self.host = host
         self.port = port
+        # The provisioned room this daemon belongs to. With one, a connect
+        # that fails asks the provisioner to start the room's stopped
+        # player once (mpd_provisioner.heal_room) and then connects again;
+        # without one (the provisioner's own volume pin) a failure is final.
+        self.room_id = room_id
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[Any]:
-        from domovoi.clients.mpd_protocol import MPDConnection
+        from domovoi.clients.mpd_protocol import MPDConnection, MPDConnectionError
 
         c = MPDConnection()
-        await c.connect(self.host, self.port)
+        try:
+            await c.connect(self.host, self.port)
+        except MPDConnectionError as first:
+            # A room whose container stopped and stayed stopped ("could not
+            # connect to MPD at 127.0.0.1:6653: Connection refused" after a
+            # restart Docker didn't recover from): start it, then try once
+            # more. Nothing started -> the original error, unchanged.
+            if not self.room_id:
+                raise
+            from domovoi import mpd_provisioner
+
+            if not await mpd_provisioner.heal_room(self.room_id):
+                raise
+            log.info("MPD for room=%s answered after its player was started again (%s)",
+                     self.room_id, first)
+            c = MPDConnection()
+            await c.connect(self.host, self.port)
         try:
             yield c
         finally:
@@ -1139,7 +1160,7 @@ def get_mpd_client_for(room_id: str | None) -> MPDClient:
     if cached is not None:
         return cached
     port, _http = _room_ports[key]
-    client = RealMPDClient(settings.mpd_host, port)
+    client = RealMPDClient(settings.mpd_host, port, room_id=key)
     _clients[key] = client
     return client
 

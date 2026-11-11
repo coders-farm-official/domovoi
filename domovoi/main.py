@@ -523,8 +523,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not settings.use_stubs:
         from domovoi.mpd_provisioner import ensure_image, warm_known_rooms
 
+        # Don't block domovoi startup — non-music handlers (timer, QA,
+        # library metadata) should still work even if docker is
+        # misbehaving. Two tries, not one: an image check that fails
+        # (Docker slow to answer at boot) must not also skip starting the
+        # rooms that already exist, nor filling their port map. Rooms the
+        # warm can't start are tried again in the background
+        # (mpd_provisioner.schedule_warm_retry).
         try:
             await ensure_image()
+        except Exception as e:
+            log.warning("MPD image check at startup failed: %s", e)
+        try:
             await warm_known_rooms()
             # The media folders moved on the host (Settings → Media
             # folders, or Setup): the Linux path is the same, the folder
@@ -536,9 +546,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
                 await recreate_rooms("the media folders moved")
         except Exception as e:
-            # Don't block domovoi startup — non-music handlers
-            # (timer, QA, library metadata) should still work even if
-            # docker is misbehaving.
             log.warning("MPD startup warm failed: %s", e)
         # Under INTERNET_ACCESS=never: a room's MPD resumes whatever its
         # state file holds after a container restart, internet stations
