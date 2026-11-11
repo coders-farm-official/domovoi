@@ -49,7 +49,10 @@ return row.map((el) => ({ text: el.text.replace(/\s+/g, ' ').trim(),
   dot: (h.findAll((x) => x.type === 'StatusDot' || (x.props && x.props.className === 'dot'))
         .filter((x) => h.ancestors(x).includes(el)).length),
   info: h.findAll((x) => x.type === 'Icon' && x.props.name === 'info')
-        .filter((x) => h.ancestors(x).includes(el)).length }));
+        .filter((x) => h.ancestors(x).includes(el)).length,
+  folded: h.ancestors(el).some((a) => a.type === 'details'),
+  refreshFolded: ((bs) => bs.length > 0 && bs.every((b) => h.ancestors(b).some((a) => a.type === 'details')))(
+        h.findAll((x) => x.type === 'button' && /Refresh caches/.test(x.text || ''))) }));
 """
 
 
@@ -120,3 +123,14 @@ def test_empty_reads_only_on_what_the_refresh_fills(rows) -> None:
     done = rows["refreshed"]
     assert {"wheels (41)", "debs (9)", "oww_models (3)"} <= set(done)
     assert not any("(empty)" in t for t in done), done
+
+
+def test_the_rows_and_refresh_are_folded_away_on_every_host(rows) -> None:
+    """Owner, 2026-11-11 (mac-installer Train 1 finding 11): the caches are
+    a detail for a household; they sit under the closed "details", with
+    Refresh caches, on every host."""
+    for name, texts in rows.items():
+        assert texts, name
+        for t, r in texts.items():
+            assert r["folded"], (name, t)
+            assert r["refreshFolded"], name
