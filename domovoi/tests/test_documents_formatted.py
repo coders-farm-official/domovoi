@@ -580,7 +580,7 @@ def test_the_page_is_paper_in_every_theme_and_a_tap_anywhere_types():
     assert ".doc { box-sizing: border-box;" in STYLE and "background: #fff; color: #1d1d1f;" in STYLE
     assert "h1, h2, h3, h4, h5, h6 { color: #1d1d1f; }" in STYLE
     # a tap on the page focuses inside the tap itself, not a frame later
-    assert 'onClick={(e) => pageTap(editor, e)}' in jsx
+    assert 'onClick={(e) => pageTap(editor, e, downAt.current)}' in jsx
     assert "view.focus();" in jsx and "Selection.atEnd(doc)" in jsx
     assert "t.closest('.de-fig, a, button, input, label, select, textarea, .de-pop')" in jsx
     assert "!editor.isEditable" in jsx
