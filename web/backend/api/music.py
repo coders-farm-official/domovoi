@@ -35,7 +35,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
-from web.backend.api import paging
+from web.backend.api import music_search, paging
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.api.paging import SortKey
 # The guest gate (owner decision 2026-10-10): the previous button takes a
@@ -112,6 +112,10 @@ _SORT_KEYS: dict[str, list[SortKey]] = {
     "title": [SortKey("LOWER(title)", nulls_last=True), *_ADDED_DESC],
     "artist": [SortKey("LOWER(artist)", nulls_last=True), *_ADDED_DESC],
     "duration": [SortKey("duration_sec", desc=True, nulls_last=True, kind="int"), *_ADDED_DESC],
+    # An album in its own order (the files' order in the folder), albums
+    # A-Z, no album last: how the Artists view lists one performer's songs.
+    "album": [SortKey("LOWER(album)", nulls_last=True), SortKey("file_path"),
+              SortKey("id", kind="int")],
 }
 
 _TRACK_COLUMNS = """id, file_path, title, artist, album, duration_sec,
@@ -123,9 +127,21 @@ _TRACK_COLUMN_COUNT = 13
 @router.get("/library", response_model=LibraryPage)
 async def list_library(
     q: str | None = Query(
-        default=None,
-        description="Substring filter against title/artist/album and the library-relative "
-                    "file_path (the path a client is shown, never the server's absolute one)",
+        default=None, max_length=200,
+        description="Search: every word (case, accents, apostrophes, dots and hyphens "
+                    "ignored) somewhere in title/artist/album, best match first; or a "
+                    "substring of the library-relative file_path (the path a client is "
+                    "shown, never the server's absolute one). When nothing holds every "
+                    "word, the tracks most like the query (typos).",
+    ),
+    artist: str | None = Query(
+        default=None, max_length=500,
+        description="Only this performer's tracks, as GET /api/music/artists names "
+                    "them: every credit naming them ('Jeezy, T.I.' counts for T.I.).",
+    ),
+    album: str | None = Query(
+        default=None, max_length=500,
+        description="With artist: only this album of theirs ('' = tracks with no album).",
     ),
     source: str | None = Query(
         default=None,
@@ -139,7 +155,7 @@ async def list_library(
                     "omitted → no filter. The dashboard's 'favorites only' "
                     "checkbox sends True or omits.",
     ),
-    sort: Literal["added_desc", "added_asc", "title", "artist", "duration"] = Query(default="added_desc"),
+    sort: Literal["added_desc", "added_asc", "title", "artist", "duration", "album"] = Query(default="added_desc"),
     limit: int = Query(default=paging.DEFAULT_LIMIT, ge=1, le=paging.MAX_LIMIT,
                        description=paging.LIMIT_DOC),
     offset: int = Query(default=0, ge=0, description=paging.OFFSET_DOC),
@@ -156,18 +172,38 @@ async def list_library(
 
     Sort options are whitelisted (the ORDER BY can't be user-supplied)
     so a malformed ``sort`` returns 422 rather than a SQL error.
+
+    ``q`` (web/backend/api/music_search.py, owner 2026-11-11): every word,
+    punctuation-, accent- and case-blind, somewhere in the title, artist
+    or album — best match first, ``sort`` ordering the rows that match
+    equally well; when no row holds every word, the rows most like the
+    query (typos). ``artist`` (the Artists view): only that performer's
+    tracks, every credit that names them ("Jeezy, T.I." is T.I.'s too);
+    ``album`` narrows that to one of their albums.
     """
     where_parts: list[str] = []
     params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
+    search_where: str | None = None
+    tokens = music_search.search_tokens(q) if q else []
     if q:
         # The path half of the search sees what a client is SHOWN (WEB-16):
         # matching the stored absolute path let an open caller recover the
         # operator's username a character at a time (``q=/home/k`` ...).
-        where_parts.append(
-            "(title ILIKE :q OR artist ILIKE :q OR album ILIKE :q"
-            f" OR {_shown_path_sql(params)} ILIKE :q)"
-        )
+        path_clause = f"{_shown_path_sql(params)} ILIKE :q"
         params["q"] = f"%{q}%"
+        search_where = (
+            f"({music_search.token_filter(tokens, params)} OR {path_clause})"
+            if tokens else f"({path_clause})"
+        )
+    if artist is not None:
+        from web.backend.api import music_artists
+
+        credits = await music_artists.credits_for(artist)
+        params["artist_credits"] = list(credits)
+        where_parts.append("artist = ANY(:artist_credits)")
+        if album is not None:
+            where_parts.append("album IS NOT DISTINCT FROM :artist_album")
+            params["artist_album"] = album or None
     if source:
         if source == "manual":
             where_parts.append("source IS NULL")
@@ -177,21 +213,44 @@ async def list_library(
     if favorited is not None:
         where_parts.append("favorited = :favorited")
         params["favorited"] = favorited
-    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-    keys = _SORT_KEYS[sort]
-    page_where = where
-    if cursor is not None:
-        after = paging.keyset_where(keys, cursor, sort, params)
-        page_where = f"{where} AND {after}" if where else f"WHERE {after}"
-        params["offset"] = 0
+    def where_of(parts: list[str]) -> str:
+        return f"WHERE {' AND '.join(parts)}" if parts else ""
 
     async with session_scope() as s:
-        total_row = await s.execute(
-            text(f"SELECT COUNT(*) FROM library_tracks {where}"),
-            params,
-        )
-        total = int(total_row.scalar_one())
+        keys = _SORT_KEYS[sort]
+        cursor_sort: str = sort
+        if search_where is None:
+            where = where_of(where_parts)
+            total = int((await s.execute(
+                text(f"SELECT COUNT(*) FROM library_tracks {where}"), params,
+            )).scalar_one())
+        else:
+            # Best match first; the requested sort orders equal matches. A
+            # cursor names the search mode too, so one cut for the plain
+            # list (or the other mode) is refused rather than misread.
+            where = where_of([*where_parts, search_where])
+            total = int((await s.execute(
+                text(f"SELECT COUNT(*) FROM library_tracks {where}"), params,
+            )).scalar_one())
+            rank = music_search.rank_sql(tokens, params) if tokens else "0"
+            cursor_sort = f"{sort}~q"
+            if total == 0 and len(" ".join(tokens)) >= music_search.FUZZY_MIN_CHARS:
+                params["sq"] = " ".join(tokens)
+                await s.execute(text(music_search.fuzzy_threshold_sql()))
+                where = where_of([*where_parts, music_search.fuzzy_filter(params)])
+                total = int((await s.execute(
+                    text(f"SELECT COUNT(*) FROM library_tracks {where}"), params,
+                )).scalar_one())
+                rank = music_search.fuzzy_rank_sql()
+                cursor_sort = f"{sort}~near"
+            keys = [SortKey(rank, desc=True, kind="int"), *keys]
+
+        page_where = where
+        if cursor is not None:
+            after = paging.keyset_where(keys, cursor, cursor_sort, params)
+            page_where = f"{where} AND {after}" if where else f"WHERE {after}"
+            params["offset"] = 0
 
         rows = await s.execute(
             text(
@@ -206,7 +265,7 @@ async def list_library(
             params,
         )
         page, has_more, next_cursor = paging.db_page(
-            rows.all(), keys, limit=limit, sort=sort, key_offset=_TRACK_COLUMN_COUNT,
+            rows.all(), keys, limit=limit, sort=cursor_sort, key_offset=_TRACK_COLUMN_COUNT,
         )
         return LibraryPage(
             total=total, items=[_row_to_track(r) for r in page],

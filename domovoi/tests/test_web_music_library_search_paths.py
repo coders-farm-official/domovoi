@@ -31,6 +31,7 @@ from web.backend.main import app
 pytestmark = requires_db
 
 RUN = uuid.uuid4().hex[:10]
+TITLE = "b2 path search fixture"
 
 
 async def _insert(paths: list[str]) -> None:
@@ -48,7 +49,11 @@ async def _insert(paths: list[str]) -> None:
                     "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM library_tracks), "
                     ":fp, :title, 'manual')"
                 ),
-                {"fp": fp, "title": f"b2-search-{RUN}"},
+                # The title holds no piece of the run id: the search's typo
+                # fallback finds a title SIMILAR to a probe ("zzoracle<id>"
+                # is like "b2-search-<id>"), which says nothing about the
+                # path this file checks.
+                {"fp": fp, "title": TITLE},
             )
 
 
@@ -57,8 +62,8 @@ async def _remove() -> None:
 
     async with session_scope() as s:
         await s.execute(
-            text("DELETE FROM library_tracks WHERE title = :title"),
-            {"title": f"b2-search-{RUN}"},
+            text("DELETE FROM library_tracks WHERE title = :title AND file_path LIKE :run"),
+            {"title": TITLE, "run": f"%{RUN}%"},
         )
 
 

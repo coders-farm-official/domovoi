@@ -536,6 +536,66 @@ def split_credit(credit: str | None) -> list[str]:
     return list(parts) or [raw]
 
 
+#: The English names of the letters, as a transcript writes a spelled-out
+#: name ("tee eye" for T.I.). A sound written as two words ("double you")
+#: is joined first.
+_LETTER_NAMES = {
+    "ay": "a", "bee": "b", "be": "b", "see": "c", "cee": "c", "sea": "c",
+    "dee": "d", "ee": "e", "ef": "f", "eff": "f", "gee": "g", "aitch": "h",
+    "eye": "i", "jay": "j", "kay": "k", "el": "l", "ell": "l", "em": "m",
+    "en": "n", "oh": "o", "pee": "p", "cue": "q", "queue": "q", "ar": "r",
+    "are": "r", "es": "s", "ess": "s", "tee": "t", "tea": "t", "you": "u",
+    "vee": "v", "doubleyou": "w", "ex": "x", "why": "y", "wye": "y",
+    "zee": "z", "zed": "z",
+}
+
+
+def spelled_letters(text: str | None) -> str | None:
+    """A name said letter by letter in words — "tee eye", "dee jay kay" —
+    as its letters ("t i", "d j k"), which match the library's "T.I." /
+    "DJK" the way "T I" already does. None unless EVERY word (two or more)
+    is a letter's name or a lone letter, with at least one name among them
+    (so "let em know" is never read as letters, and "t i" needs no help)."""
+    words = _clean(fold(text)).replace("double you", "doubleyou").split()
+    if len(words) < 2:
+        return None
+    letters: list[str] = []
+    named = False
+    for w in words:
+        if len(w) == 1 and w.isalpha():
+            letters.append(w)
+        elif w in _LETTER_NAMES:
+            letters.append(_LETTER_NAMES[w])
+            named = True
+        else:
+            return None
+    return " ".join(letters) if named else None
+
+
+def names_performer(named: str | None, credit: str | None) -> bool:
+    """True when ``named`` — the artist a request named ("T.I.", "tiller",
+    "the beatles") — plausibly names ``credit`` (a library artist credit)
+    or one of its performers: a shared spoken form, a name that
+    :func:`sounds_like` it, or whole words of it ("Tiller" for Bryson
+    Tiller). "ti" does NOT name Bryson Tiller: a substring inside a word is
+    not the name. Nothing named, or a credit with nothing sayable, is not a
+    contradiction (True)."""
+    named_forms = spoken_forms(named or "")
+    if not named_forms or not (credit or "").strip():
+        return True
+    parts = [credit or "", *split_credit(credit)]
+    if not any(spoken_forms(p) for p in parts):
+        return True
+    for p in parts:
+        if same_name(named or "", p) or sounds_like(named or "", p):
+            return True
+        for pf in spoken_forms(p):
+            padded = f" {pf} "
+            if any(f" {nf} " in padded for nf in named_forms):
+                return True
+    return False
+
+
 def entity_names(
     title: str | None, artist: str | None, album: str | None
 ) -> list[tuple[str, str]]:
@@ -580,10 +640,12 @@ __all__ = [
     "int_to_ordinal_words",
     "int_to_words",
     "lyric_words",
+    "names_performer",
     "phonetic_key",
     "same_name",
     "sounds_like",
     "speakable",
+    "spelled_letters",
     "split_credit",
     "spoken_forms",
 ]

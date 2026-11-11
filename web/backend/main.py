@@ -54,6 +54,7 @@ from web.backend.api import images as images_api
 from web.backend.api import models as models_api
 from web.backend.api import music as music_api
 from web.backend.api import music_aliases as music_aliases_api
+from web.backend.api import music_artists as music_artists_api
 from web.backend.api import lyrics as lyrics_api
 from web.backend.api import music_queue as music_queue_api
 from web.backend.api import nav_layout as nav_layout_api
@@ -400,6 +401,7 @@ app.include_router(music_api.router)
 # "Also called" names (V019): its own module so /api/music/aliases/* stays
 # clear of music_api's /library/{track_id} matchers.
 app.include_router(music_aliases_api.router)
+app.include_router(music_artists_api.router)
 # Lyrics (V021): the household tier's synced-lyrics reads. Its own module,
 # like the names above, so /api/music/lyrics/* and the /lyrics leaves stay
 # clear of music_api's /library/{track_id} matchers.
