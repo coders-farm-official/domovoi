@@ -133,6 +133,15 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
         "one tray takes the admin's request: loopback peer only with no forwarding headers, "
         "first caller only (O_EXCL), the token it gets is what its result must carry (test_windows_side.py)"
     ),
+    ("core", "POST", "/v1/windows/media/open/claim"): (
+        "the tray on the Domovoi PC takes an admin's open request (it names a media kind, never a "
+        "path): loopback peer only with no forwarding headers, first caller only (O_EXCL) "
+        "(test_media_folders.py)"
+    ),
+    ("core", "POST", "/v1/windows/media/open/result"): (
+        "how the tray's open went, for the page: loopback peer only with no forwarding headers, only "
+        "for the request this tray claimed, known outcomes only (test_media_folders.py)"
+    ),
     ("web", "DELETE", "/api/auth/sessions/{token_hash}"): "checks the Bearer inside the handler",
     ("web", "POST", "/api/auth/password"): "checks the Bearer inside the handler",
     # ── web: proxies whose gate is applied by the core (auth forwarded) ─

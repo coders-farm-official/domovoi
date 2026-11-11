@@ -5550,7 +5550,7 @@
           "satellites"
         ],
         "summary": "List Recently Played",
-        "description": "Everything this room has played \u2014 library, playlist, and\nprovider-plugin picks (``source`` is an open enum) \u2014 newest first.\nAn external play that isn't yet in the library carries\n``can_add=True`` so the drawer can offer \"+ add to library\", which\nenqueues a generic media acquisition (design \u00a74.8/\u00a710.1); the\nfrontend shows the button only while a fulfiller capability is\nregistered.",
+        "description": "Everything this room has played \u2014 library, playlist, and\nprovider-plugin picks (``source`` is an open enum) \u2014 newest first.\nAn external play that isn't yet in the library carries\n``can_add=True`` so the drawer can offer \"+ add to library\", which\nenqueues a generic media acquisition (design \u00a74.8/\u00a710.1).\n\n``can_add`` asks whether anything can fulfil it (D55, owner decision\n2026-11-03: \"no fulfiller means no button and no error\"). It used to\nbe a property of the ROW alone, so with nothing installed to act on\nthe queue every phone drew a button whose only outcome was the\nqueue's graceful-absence sentence \u2014 a control that cannot do what it\nsays. The answer comes from the same place add-by-query and\nadd-by-url get theirs (``_availability``, which reads the core's\n``GET /v1/acquisitions`` \u2192 ``ACQUISITIONS.availability()``,\ndomovoi/main.py:5874), so one answer cannot disagree with another.\nA core that does not answer leaves availability ``None`` \u2014 not a\npositive answer, so no button, and no error for anyone to read\neither.\n\nWhich flag decides is **per row**, because the add a client makes is:\na row with a stored ``url`` is added by add-by-url\n(``can_fulfill_url``), and a row with only a title is added by\nadd-by-query (``can_fulfill_query``) \u2014 the dashboard's own fork\n(``web/static/satellites.jsx:1752-1764``). One flag for both rows\nwould have withdrawn the dashboard's title-only add on a house whose\ninstalled fulfiller takes queries and not URLs.\n\nA URL row also needs the internet to be ON: add-by-url refuses with\n409 under the \"never\" answer (``domovoi/main.py:5790-5791``), where\nadd-by-query still queues the row for later, so the switch only takes\nthe URL button away. ``egress.policy()`` is read from the\nenvironment and the env file, so this process sees the same answer\nthe core does (``web/backend/api/chat.py:1822`` reads it the same\nway).\n\n**The answer is per CALLER as well as per row.** For a caller that is\nnot an admin session the core's gate is narrower: the URL must match a\nregistered fulfiller's ``url_matcher`` allowlist\n(``ACQUISITIONS.url_allowed_by_fulfillers``, domovoi/main.py:5785-5789,\nand a fulfiller registered without a matcher never allowlists). That\nis live core-registry state, so this route asks the core for it \u2014\n``POST /v1/acquisitions/url-allowed``, batched over the page's URLs,\nadded for this decision \u2014 and a URL the installed provider does not\nrecognise gets no button rather than a button whose press returns the\ncore's 403 (\"adding by URL requires an admin session, or a URL\nmatching an installed media provider\"). An admin session skips that\nquestion, because its add passes whatever the matchers say: gating it\non the allowlist would have withdrawn the dashboard's add on a house\nwhose fulfiller registered no matcher at all.\n\nTwo things it still does not promise, both of them about the moment\nof the press rather than the state of the house: a non-admin caller\nalso meets a per-source rate limit (429 after\n``URL_FETCH_MAX_PER_WINDOW`` in the window), and the URL must still\npass ``net_safety.check_outbound_url`` \u2014 a loopback or private-address\nhost is a 400. Neither can be answered honestly for a row the person\nhas not pressed yet.",
         "operationId": "list_recently_played_api_satellites__room_id__recently_played_get",
         "parameters": [
           {
@@ -7496,6 +7496,126 @@
         "summary": "Cancel Windows Step",
         "description": "Withdraw the request for the Windows step.",
         "operationId": "cancel_windows_step_api_config_version_windows_request_cancel_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/media-folders": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders",
+        "description": "Where each media folder really is (the core's\n``/v1/admin/media-folders``), plus ``on_this_pc``: whether this browser\nruns on the Domovoi server itself (the loopback rule the tray's routes\nuse, domovoi/local_peer.py). \"Open on the Domovoi PC\" is offered only\nthere; another device gets the path to copy.",
+        "operationId": "media_folders_api_config_media_folders_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/media-folders/open": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders Open",
+        "description": "Open a media kind's folder in File Explorer on the Domovoi PC (the\ntray does it). Refused (403) from any browser but one on that PC: the\nwindow would open where nobody is looking.",
+        "operationId": "media_folders_open_api_config_media_folders_open_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaOpenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/media-folders/location": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders Move",
+        "description": "Move the media folders to another folder on the Domovoi PC (security\ntier at both hops: it changes what Domovoi's account reads and writes,\nand restarts Domovoi's Linux system).",
+        "operationId": "media_folders_move_api_config_media_folders_location_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaMoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config/media-folders/location/cancel": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Media Folders Move Cancel",
+        "description": "Withdraw a move the Domovoi PC hasn't started on.",
+        "operationId": "media_folders_move_cancel_api_config_media_folders_location_cancel_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -21657,6 +21777,34 @@
         ],
         "title": "LyricsStatus",
         "description": "``GET /api/music/lyrics/status`` \u2014 the Music page's Jobs card. Counts\nand states only, never a lyric or a title."
+      },
+      "MediaMoveRequest": {
+        "properties": {
+          "root": {
+            "type": "string",
+            "maxLength": 260,
+            "title": "Root"
+          }
+        },
+        "type": "object",
+        "required": [
+          "root"
+        ],
+        "title": "MediaMoveRequest"
+      },
+      "MediaOpenRequest": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "MediaOpenRequest"
       },
       "Memory": {
         "properties": {

@@ -526,6 +526,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             await ensure_image()
             await warm_known_rooms()
+            # The media folders moved on the host (Settings → Media
+            # folders, or Setup): the Linux path is the same, the folder
+            # behind it isn't, so the rooms' players are made again.
+            from domovoi import media_folders
+
+            if await asyncio.to_thread(media_folders.moved_since_last_boot):
+                from domovoi.mpd_provisioner import recreate_rooms
+
+                await recreate_rooms("the media folders moved")
         except Exception as e:
             # Don't block domovoi startup — non-music handlers
             # (timer, QA, library metadata) should still work even if
@@ -6721,6 +6730,132 @@ async def admin_set_host_limits(body: HostLimitsBody) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except host_limits.Refused as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ─── Media folders (domovoi/media_folders.py) ────────────────────────────
+
+
+@app.get("/v1/admin/media-folders", dependencies=[Depends(require_admin_read)])
+async def admin_media_folders() -> dict[str, Any]:
+    """Where each media folder really is: the host kind (``linux``,
+    ``windows``), each kind's Linux path and its location a person can
+    open (the Windows folder on the Windows install), whether "open on the
+    Domovoi PC" and "move" can work here and why not, and how the last
+    move went."""
+    from domovoi import media_folders
+
+    return await asyncio.to_thread(media_folders.status)
+
+
+class MediaOpenBody(BaseModel):
+    kind: str = Field(..., max_length=32)
+
+
+@app.post("/v1/admin/media-folders/open", dependencies=[Depends(require_admin_mutation)])
+async def admin_media_folders_open(body: MediaOpenBody) -> dict[str, Any]:
+    """Ask the tray on the Domovoi PC to open a media KIND's folder in File
+    Explorer there (never a path: the tray maps the kind to a folder from
+    the Windows side's own list). 400 with the reason where it can't (a
+    Linux server, an older Windows side, no tray running)."""
+    from domovoi import media_folders
+
+    try:
+        return await asyncio.to_thread(media_folders.request_open, body.kind)
+    except media_folders.Refused as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+class MediaMoveBody(BaseModel):
+    root: str = Field(..., max_length=260)
+
+
+@app.post(
+    "/v1/admin/media-folders/location",
+    # Security tier: it changes which Windows folder Domovoi's account
+    # reads and writes, and restarts Domovoi's Linux system.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_media_folders_move(body: MediaMoveBody) -> dict[str, Any]:
+    """Move the media root to another folder on the host (the Windows
+    install): DomovoiHost checks and makes the folder, points the mounts at
+    it and restarts Domovoi's Linux system (a couple of minutes offline).
+    Files stay where they are. 400 when refused, 409 while an update or
+    Restart of Domovoi runs."""
+    from domovoi import media_folders
+
+    try:
+        return await asyncio.to_thread(media_folders.request_change, body.root)
+    except media_folders.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except media_folders.Refused as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/v1/admin/media-folders/location/cancel", dependencies=[Depends(require_admin_security)])
+async def admin_media_folders_move_cancel() -> dict[str, Any]:
+    """Withdraw a move the host hasn't started on."""
+    from domovoi import media_folders
+
+    try:
+        return await asyncio.to_thread(media_folders.cancel_change)
+    except media_folders.Refused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@app.get("/v1/windows/media/open")
+async def windows_media_open_poll(request: Request) -> JSONResponse:
+    """The tray's poll for "open on the Domovoi PC": ``{request: {id,
+    kind, at} | null}``. Loopback only, like the update poll."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
+    from domovoi import media_folders
+
+    req = await asyncio.to_thread(media_folders.pending_open)
+    return JSONResponse({"request": req}, headers={"Cache-Control": "no-store"})
+
+
+class _TrayOpenClaimBody(BaseModel):
+    request_id: str = Field(..., max_length=64)
+
+
+@app.post("/v1/windows/media/open/claim")
+async def windows_media_open_claim(body: _TrayOpenClaimBody, request: Request) -> JSONResponse:
+    """One tray takes an open request (``{ok}``); another gets 409
+    ``claimed``, a gone one 404. Loopback only."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
+    from domovoi import media_folders
+
+    got = await asyncio.to_thread(media_folders.claim_open, body.request_id)
+    if got != "ok":
+        return JSONResponse({"detail": "that request is gone" if got == "gone" else "another tray took it",
+                             "reason": got}, status_code=404 if got == "gone" else 409,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+class _TrayOpenResultBody(BaseModel):
+    request_id: str = Field(..., max_length=64)
+    outcome: str = Field(..., max_length=20)
+    detail: str | None = Field(default=None, max_length=1000)
+
+
+@app.post("/v1/windows/media/open/result")
+async def windows_media_open_result(body: _TrayOpenResultBody, request: Request) -> JSONResponse:
+    """How the claimed open went (``opened``, ``missing``, ``refused``,
+    ``failed``), for the page. Loopback only, and only for the request
+    this tray claimed."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
+    from domovoi import media_folders
+
+    try:
+        await asyncio.to_thread(media_folders.record_open_result, body.request_id, body.outcome, body.detail)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/v1/admin/hardware")

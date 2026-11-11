@@ -175,6 +175,10 @@ async def test_ensure_container_leaves_a_loopback_bound_running_container_alone(
             return 0, "running\n", ""
         if args[0] == "inspect" and "{{json .HostConfig.PortBindings}}" in args:
             return 0, '{"6600/tcp":[{"HostIp":"127.0.0.1","HostPort":"6650"}],"8001/tcp":[{"HostIp":"","HostPort":"8050"}]}\n', ""
+        # Its music folder is today's (media_folders: a container on
+        # another folder is recreated, test_media_folders.py).
+        if args[0] == "inspect" and ".Mounts" in args[2]:
+            return 0, "/music\n", ""
         raise AssertionError(f"unexpected docker call {args}")
 
     monkeypatch.setattr(mpd_provisioner, "_run_docker", fake_run_docker)

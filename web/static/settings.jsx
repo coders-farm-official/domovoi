@@ -1839,8 +1839,18 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
   };
 
   const renderGroups = (list) => {
-    const grouped = _groupBy(list.filter((f) => f.group !== 'Internet'));
-    return Object.keys(grouped).map(group => (
+    // The media paths have their own section (media_folders.jsx), which
+    // shows the folder a person can open on every kind of install.
+    const paths = list.some((f) => f.group === 'Paths');
+    const grouped = _groupBy(list.filter((f) => f.group !== 'Internet' && f.group !== 'Paths'));
+    const pointer = paths && (
+      <div key="media-folders-pointer" className="config-media-pointer" style={{ fontSize: 13, padding: '6px 0 12px' }}>
+        <span style={{ fontWeight: 500 }}>Media folders: </span>
+        <span style={{ color: 'var(--fg-muted)' }}>where music, videos and the rest are kept, in </span>
+        <a href="#settings/media-folders" className="home-link">Settings → Household → Media folders</a>
+      </div>
+    );
+    return [pointer, ...Object.keys(grouped).map(group => (
       <div key={group} style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em',
                       color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 2 }}>{group}</div>
@@ -1850,7 +1860,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
           : <ConfigField key={f.name} f={f} value={valueOf(f)} internetOff={internetOff}
                          onChange={v => setEdit(f.name, v)}/>))}
       </div>
-    ));
+    ))];
   };
   const internetLine = internetField && (
     <div className="config-internet-line" style={{ fontSize: 13, padding: '6px 0 12px' }}>
@@ -4901,7 +4911,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'printers'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'media-folders', 'printers'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history'] },
@@ -4922,6 +4932,11 @@ const SETTINGS_SECTIONS = [
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
     words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
+  // media_folders.jsx registers it (2026-11-11): where the media really
+  // is (the Windows folder on the Windows install), open, copy, move.
+  { id: 'media-folders', label: 'Media folders', optional: true,
+    sub: 'Where your music, videos, pictures, documents and audiobooks are kept, and moving them.',
+    words: 'media folder folders music videos pictures photos documents audiobooks podcasts path paths directory location where drive move explorer open copy' },
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
@@ -5055,6 +5070,12 @@ const settingsSearchIndex = (groups, fields) => {
   if (shown.has('advanced')) {
     (fields || []).forEach((f) => {
       if (!f || !f.name || !f.label || f.group === 'Internet') return;
+      // The media paths are edited in Household → Media folders.
+      if (f.group === 'Paths' && shown.has('media-folders')) {
+        out.push({ key: `media-folders/${f.name}`, label: f.label, where: shown.get('media-folders'),
+                   route: 'settings/media-folders', words: `${f.name.replace(/_/g, ' ')} media folders` });
+        return;
+      }
       out.push({ key: `advanced/${f.name}`, label: f.label, where: shown.get('advanced'),
                  route: `settings/advanced/${f.name}`, words: `${f.name.replace(/_/g, ' ')} ${f.group || ''}` });
     });

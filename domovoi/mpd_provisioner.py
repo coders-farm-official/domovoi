@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -331,6 +332,18 @@ async def _ensure_container(
             if rc != 0:
                 raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
             state = None
+    if state is not None:
+        # The music folder is bound when the container is CREATED: one made
+        # on another music_dir (Settings changed it, then a restart) would
+        # go on playing the old folder. Recreate it on today's (volume kept).
+        source = await _music_mount_source(name)
+        if source is not None and not _same_dir(source, music_dir):
+            log.warning("MPD container %s plays %s, but the music folder is now %s; recreating it "
+                        "(data volume kept)", name, source, music_dir)
+            rc, _, err = await _run_docker("rm", "-f", name, timeout=30.0)
+            if rc != 0:
+                raise RuntimeError(f"docker rm -f {name}: {err.strip()[:200]}")
+            state = None
     if state == "running":
         return
     if state is None:
@@ -353,6 +366,59 @@ async def _ensure_container(
     # return above skips already-running daemons, leaving their live volume
     # — possibly a user's deliberate setvol — untouched).
     await _pin_startup_volume(control_port)
+
+
+async def _music_mount_source(name: str) -> str | None:
+    """The host folder container ``name`` has at /music, or None when
+    docker can't say (then nothing is recreated on its word)."""
+    rc, out, _ = await _run_docker(
+        "inspect", "-f", '{{range .Mounts}}{{if eq .Destination "/music"}}{{.Source}}{{end}}{{end}}', name,
+        timeout=10.0,
+    )
+    return (out.strip() or None) if rc == 0 else None
+
+
+def _same_dir(a: str, b: str) -> bool:
+    if os.path.normpath(a) == os.path.normpath(b):
+        return True
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except OSError:
+        return False
+
+
+async def recreate_rooms(why: str) -> list[dict]:
+    """Every room's player made again from its ``mpd_rooms`` row (same data
+    volume: playlists and queue survive), so its mounts are taken afresh:
+    after the media folders moved on a Windows install, where the Linux
+    path stays /srv/media/music but the folder behind it changed
+    (domovoi/media_folders.py). Each room is held for the container guard
+    while it is replaced. A room that fails is named in the answer."""
+    from domovoi.db.session import session_scope
+
+    async with session_scope() as s:
+        rows = (await s.execute(text(
+            "SELECT room_id, control_port, http_port, container_name FROM mpd_rooms ORDER BY created_at"
+        ))).all()
+    out: list[dict] = []
+    for room_id, ctrl, http, container in rows:
+        entry = {"room": room_id, "error": None}
+        try:
+            with _room_hold(room_id, why):
+                rc, _, err = await _run_docker("rm", "-f", container, timeout=30.0)
+                if rc != 0 and "No such container" not in err:
+                    raise RuntimeError(f"docker rm -f {container}: {err.strip()[:200]}")
+                await _ensure_container(
+                    name=container, image=settings.mpd_image_tag, control_port=int(ctrl), http_port=int(http),
+                    music_dir=settings.music_dir, volume_name=_volume_name(room_id),
+                )
+        except Exception as e:  # noqa: BLE001 - the other rooms still move
+            log.warning("music player for room=%s not recreated (%s): %s", room_id, why, e)
+            entry["error"] = str(e)[:300]
+        out.append(entry)
+    if rows:
+        log.info("recreated %d MPD room(s): %s", len(rows), why)
+    return out
 
 
 # What MPD says first on every control connection: "OK MPD <version>".

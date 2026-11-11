@@ -458,6 +458,61 @@ async def cancel_windows_step(request: Request):
     )
 
 
+# ─── Media folders (domovoi/media_folders.py) ─────────────────────────────
+
+
+@router.get("/config/media-folders", dependencies=[Depends(require_admin_read)])
+async def media_folders(request: Request):
+    """Where each media folder really is (the core's
+    ``/v1/admin/media-folders``), plus ``on_this_pc``: whether this browser
+    runs on the Domovoi server itself (the loopback rule the tray's routes
+    use, domovoi/local_peer.py). "Open on the Domovoi PC" is offered only
+    there; another device gets the path to copy."""
+    status, body = await get_admin("/v1/admin/media-folders", headers=auth_forward_headers(request))
+    if status == 200 and isinstance(body, dict):
+        body = {**body, "on_this_pc": local_peer.from_this_pc(request)}
+    return bridge_response(status, body)
+
+
+class MediaOpenRequest(BaseModel):
+    kind: str = Field(..., max_length=32)
+
+
+@router.post("/config/media-folders/open", dependencies=[Depends(require_admin_mutation)])
+async def media_folders_open(request: Request, body: MediaOpenRequest):
+    """Open a media kind's folder in File Explorer on the Domovoi PC (the
+    tray does it). Refused (403) from any browser but one on that PC: the
+    window would open where nobody is looking."""
+    if not local_peer.from_this_pc(request):
+        raise HTTPException(status_code=403, detail="only a browser on the Domovoi PC can open its folders")
+    return bridge_response(
+        *await post_admin("/v1/admin/media-folders/open", body.model_dump(), headers=auth_forward_headers(request))
+    )
+
+
+class MediaMoveRequest(BaseModel):
+    root: str = Field(..., max_length=260)
+
+
+@router.post("/config/media-folders/location", dependencies=[Depends(require_admin_security)])
+async def media_folders_move(request: Request, body: MediaMoveRequest):
+    """Move the media folders to another folder on the Domovoi PC (security
+    tier at both hops: it changes what Domovoi's account reads and writes,
+    and restarts Domovoi's Linux system)."""
+    return bridge_response(
+        *await post_admin("/v1/admin/media-folders/location", body.model_dump(),
+                          headers=auth_forward_headers(request))
+    )
+
+
+@router.post("/config/media-folders/location/cancel", dependencies=[Depends(require_admin_security)])
+async def media_folders_move_cancel(request: Request):
+    """Withdraw a move the Domovoi PC hasn't started on."""
+    return bridge_response(
+        *await post_admin("/v1/admin/media-folders/location/cancel", {}, headers=auth_forward_headers(request))
+    )
+
+
 class VersionChannelRequest(BaseModel):
     channel: str = Field(..., max_length=40)
 
