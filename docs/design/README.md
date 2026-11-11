@@ -63,7 +63,7 @@ Day to day, the product talks like a competent, slightly dry sysadmin who knows 
 
 **Naming**
 - Rooms are lowercase single words: `kitchen`, `garage`, `office`. They appear in the UI inside hairline rounded chips with a leading dot.
-- People are first-name only: `Kamron`, `Sarah`, `Alex`. Never "User #1."
+- People are first-name only: `Alex`, `Sarah`, `Priya`. Never "User #1."
 - Statuses: `online` / `offline` / `idle` / `running` / `pending` / `done` / `failed`. Lowercase; backed by a status dot.
 - Times are relative wherever possible (`2m ago`, `just now`, `yesterday`), with the absolute time on hover.
 
