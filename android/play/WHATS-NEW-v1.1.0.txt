@@ -1,0 +1,9 @@
+Domovoi 1.1.0
+
+- A simpler menu: Media and Tools groups, People in Settings under Household
+- A clear screen when your Domovoi isn't set up yet
+- Room history shows when a request is waiting, got no answer or wasn't made out
+- Calendar events keep the right time when your phone is in another time zone
+- Documents follow your phone's text size
+- Buttons a phone can't use are gone instead of failing
+- Fewer "offline?" messages that weren't about your network

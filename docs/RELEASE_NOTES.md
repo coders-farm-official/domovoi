@@ -4,6 +4,56 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — 1.1.0
+
+Version 1.1.0 (the app 1.1.0, versionCode 26111001; the Windows Setup
+1.1.0). It holds every entry between this one and "1.0.0" (2026-10-28);
+nothing else changed in the release commit itself. The update applies
+three migrations by itself, **V043** (a history entry for every turn),
+**V044** (the wake score) and **V045** (the household's menu); there is
+nothing to run by hand. The plain-language summary is
+`docs/release/v1.1.0.md`.
+
+What a household notices:
+
+* **A simpler menu:** Home · Chat · Media ▸ · Tools ▸ · Plugins on the
+  dashboard and in the app; People is under Settings → Household, and App
+  layout under System. An admin can rearrange the dashboard's menu for
+  every browser (Settings → System → App layout → Menu).
+* **A new Domovoi welcomes you:** the dashboard holds the claim and then
+  shows the household token; the app shows "this Domovoi isn't set up
+  yet" instead of a workspace; an unconnected browser is asked for the
+  household token.
+* **No more rooms stuck "thinking":** time limits on every stage before a
+  reply, a spoken apology and a fresh listen when one runs out, satellites
+  that stop waiting on a silent server (**Reply deadline**, **Reply
+  backstop**), and a Health warning when speech recognition is stuck.
+* **Room history records every turn:** waiting for an answer, no answer,
+  couldn't make out what was said, ignored as background talk. Scripts
+  reading `GET /api/satellites/<room>/conversations` get `status`,
+  `no_answer_reason` and `audio_ms`.
+* **Fewer false wakes:** a long capture that sounds like a TV is ignored,
+  with **Wake confirmation** and **Wake pause after a turn** per room.
+* **Wake-word training:** takes add to a word's clips instead of replacing
+  them, **Delete all clips**, and **Train again** on a ready word.
+* **Memory:** Health says what uses the server's memory; a Windows install
+  trims WSL's file cache, has a smaller default share of the PC, and an
+  admin sets how much of the PC Domovoi may use (Health → **This PC**,
+  needs this release's Windows side). DomovoiHost now survives Windows
+  updating WSL.
+* **Music:** satellites hold 3 s before the first note (**Music buffer**),
+  a song you don't have streams or offers its artist, and rooms keep
+  playing after the router moves the server to a new address.
+* **Also:** notifications at the top of the page, sliders and sensible
+  steps for settings, selecting across lines in Documents, plugin upgrades
+  that bump their own packages, and Android fixes (calendar times, a
+  documents text size that follows the phone, controls removed where a
+  phone can't use them).
+* **Windows, from 1.0.0:** update with the dashboard's **Update Domovoi**
+  (Settings → System → About & updates). The tray menu's **Update
+  Domovoi...** on a 1.0.0 Windows side stops before changing anything; this
+  release's Windows side fixes it.
+
 ## 2026-11-10 — one menu for every browser (optional)
 
 Dashboard. One database migration (V045, `household_settings`), applied by
