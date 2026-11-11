@@ -342,6 +342,18 @@ conservative about what counts and loud about what does
   never pages anyone. Docker itself not answering needs **5 minutes**
   (`CONTAINER_GUARD_DAEMON_GRACE_SEC`): Docker restarting (Docker Desktop, or
   the engine in the Windows install's distro) is not an outage.
+* **A room's music player found stopped** (exited or never started) is
+  started again once before anyone is told: Docker's `unless-stopped`
+  never retries a start that failed, so a room could otherwise stay down
+  for good after a restart (2026-11-11). If the start works, no incident
+  opens and no phone is notified; the guard logs it and keeps a short note
+  (`guard.restarted` in `GET /v1/admin/containers`). If it fails, the incident
+  opens on the usual 2 minutes with Docker's reason added ("Starting it
+  again failed: …"), and the guard tries again after 1 minute, doubling to
+  at most 15, while the room stays down; a start that works then resolves
+  the incident by itself. Never while a tamper incident is open (the
+  freeze, below), never for a paused player, and never for any other
+  container: a stopped database or plugin is reported, not started.
 * **Tampering** opens after two checks in a row at least 25 seconds apart
   (`CONTAINER_GUARD_TAMPER_CONFIRM_SEC`).
 * A failure **resolves** after two clean checks in a row, or at once when

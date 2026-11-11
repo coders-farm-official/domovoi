@@ -237,6 +237,58 @@ async def _pin_startup_volume(control_port: int) -> None:
         log.warning("MPD startup volume pin on port %d failed: %s", control_port, e)
 
 
+def _nested_mountpoints(music_dir: str) -> list[tuple[Path, str]]:
+    """The spoken-audio folders mounted NESTED under /music, as
+    ``(host path, subfolder)``, each with its placeholder folder made in
+    ``music_dir`` (see below). One whose host path is missing, or whose
+    placeholder can't be made, is left out (logged).
+
+    /music is itself a read-only bind mount, and Docker cannot make a
+    mountpoint inside a read-only parent, so ``music_dir/podcasts`` and
+    ``music_dir/audiobooks`` must exist in the /music SOURCE: empty folders,
+    the real content comes from the overlaid mount. Without them ``docker
+    run`` and every later ``docker start`` fail with exit code 128::
+
+        make mountpoint "/music/audiobooks": mkdirat ...: read-only file system
+
+    Called before every create AND every start: a placeholder removed while
+    the room ran (it looks like an empty folder in the music library, and
+    the Files page deletes folders) keeps every later start failing
+    otherwise. On 2026-11-11 a house's ``Music/audiobooks`` was gone; the
+    rooms ran on until an update restarted the VM, then none would start
+    again for 14 hours, until a recreate made the folder. A music folder
+    that isn't mounted yet is root's empty mount point, so the folder
+    can't be made there (the service user can't write it): the start then
+    fails as before, and a later retry, once the folder is mounted, works.
+    """
+    found: list[tuple[Path, str]] = []
+    music_root = Path(music_dir)
+    for host_dir, container_sub in (
+        (settings.podcasts_dir, "podcasts"),
+        (settings.audiobooks_dir, "audiobooks"),
+    ):
+        host_path = Path(host_dir).expanduser()
+        # Docker Desktop on Windows refuses a bind mount whose host path
+        # doesn't exist; the lifespan creates these lazily, but guard here
+        # too so a stale config can't wedge MPD provisioning entirely.
+        if not host_path.exists():
+            continue
+        placeholder = music_root / container_sub
+        try:
+            if not placeholder.is_dir():
+                placeholder.mkdir(parents=True, exist_ok=True)
+                log.info("made %s: the mountpoint the rooms' music players mount %s on",
+                         placeholder, container_sub)
+        except OSError as e:
+            log.warning(
+                "could not create mountpoint %s for nested MPD mount; "
+                "skipping %s: %s", placeholder, container_sub, e
+            )
+            continue
+        found.append((host_path, container_sub))
+    return found
+
+
 async def _create_container(
     *,
     name: str,
@@ -254,32 +306,8 @@ async def _create_container(
     # works for spoken audio identically to music. Read-only like /music —
     # the web/worker processes own writes into these host dirs.
     extra_mounts: list[str] = []
-    music_root = Path(music_dir)
-    for host_dir, container_sub in (
-        (settings.podcasts_dir, "podcasts"),
-        (settings.audiobooks_dir, "audiobooks"),
-    ):
-        host_path = Path(host_dir).expanduser()
-        # Docker Desktop on Windows refuses a bind mount whose host path
-        # doesn't exist; the lifespan creates these lazily, but guard here
-        # too so a stale config can't wedge MPD provisioning entirely.
-        if host_path.exists():
-            # These are NESTED bind mounts under /music, which is itself a
-            # read-only bind mount. Docker cannot mkdir the mountpoint inside
-            # a read-only parent, so the target dir must already exist in the
-            # /music SOURCE (music_dir on the host). Create an empty placeholder
-            # there — the real content comes from the overlaid mount. Without
-            # this, `docker run`/`docker start` fails with:
-            #   make mountpoint "/music/podcasts": mkdirat ...: read-only file system
-            try:
-                (music_root / container_sub).mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                log.warning(
-                    "could not create mountpoint %s for nested MPD mount; "
-                    "skipping %s: %s", music_root / container_sub, container_sub, e
-                )
-                continue
-            extra_mounts += ["-v", f"{host_path.as_posix()}:/music/{container_sub}:ro"]
+    for host_path, container_sub in _nested_mountpoints(music_dir):
+        extra_mounts += ["-v", f"{host_path.as_posix()}:/music/{container_sub}:ro"]
 
     rc, _, err = await _run_docker(
         "run", "-d",
@@ -346,6 +374,9 @@ async def _ensure_container(
         # exited / paused / created — bring it back up. Configuration changes
         # (volume / port) would require a recreate, but the only field that
         # ever changes between starts is the image tag, which we keep stable.
+        # The nested mounts' placeholders first: one removed since the
+        # container was made fails the start (_nested_mountpoints).
+        _nested_mountpoints(music_dir)
         await _start_container(name)
     # The container was just created or (re)started — re-assert the mixer
     # volume so a room booting from wiped/stale MPD state isn't silently
@@ -563,6 +594,7 @@ async def warm_known_rooms() -> int:
         )
         rows = result.all()
 
+    failed: list[tuple[str, int, int, str]] = []
     for room_id, ctrl, http, container in rows:
         mpd_module._room_ports[room_id] = (int(ctrl), int(http))
         try:
@@ -578,9 +610,219 @@ async def warm_known_rooms() -> int:
             rooms_warmed += 1
         except Exception as e:
             log.warning("failed to warm MPD for room=%s: %s", room_id, e)
+            failed.append((str(room_id), int(ctrl), int(http), str(container)))
     if rows:
         log.info("warmed %d/%d MPD rooms", rooms_warmed, len(rows))
+    if failed:
+        schedule_warm_retry(failed)
     return rooms_warmed
+
+
+# ─── self-heal: rooms whose player stopped and stayed stopped ─────────────
+#
+# ``--restart unless-stopped`` does not cover a start that FAILS: when the
+# Docker daemon restores its containers at boot and one won't start (a
+# nested mount's placeholder folder gone from the music folder, see
+# _nested_mountpoints; a music folder not mounted yet), Docker records exit
+# code 128 and never tries that container again (2026-11-11: every room of
+# a house stayed down for 14 hours after an update restarted its WSL VM,
+# its Music/audiobooks placeholder gone). Each start below remakes the
+# placeholders first. Three places start
+# such a room again, all through the functions below and all refusing while
+# a tamper incident freezes the house's risky operations (docs/
+# CONTAINER_GUARD.md, "The freeze"): the core's start (a bounded retry, in
+# the background, of the rooms its warm couldn't start), a music command
+# that can't reach its room's player (clients/mpd.py, once, then the command
+# again) and the container guard (engine.py, one start with backoff before
+# it reports the room).
+
+# When the start's background retry looks again at the rooms its warm could
+# not start: about ten minutes in all, then the guard takes over.
+WARM_RETRY_DELAYS: tuple[float, ...] = (10.0, 20.0, 40.0, 80.0, 160.0, 300.0)
+# How long after one self-heal attempt for a room a music command may try
+# another: a dashboard polling a dead room doesn't run `docker start` every
+# few seconds.
+HEAL_COOLDOWN_SEC = 60.0
+
+_warm_retry_task: asyncio.Task | None = None
+_heal_last: dict[str, float] = {}
+_heal_tasks: dict[str, asyncio.Future] = {}
+
+
+def reset_self_heal() -> None:
+    """Forget cooldowns and in-flight heals (tests)."""
+    global _warm_retry_task
+    _heal_last.clear()
+    _heal_tasks.clear()
+    _warm_retry_task = None
+
+
+async def frozen_by() -> str | None:
+    """The tamper incident that freezes risky operations right now, in
+    words ("incident #12"), or None. A database it can't read is not a
+    freeze (freeze.frozen_incidents fails open the same way)."""
+    try:
+        from domovoi.container_guard import freeze
+
+        rows = await freeze.frozen_incidents()
+    except Exception as e:  # noqa: BLE001
+        log.debug("music player self-heal: freeze state unreadable: %s", e)
+        return None
+    return f"incident #{rows[0].get('id')}" if rows else None
+
+
+async def start_stopped_room(room_id: str, container: str | None = None, *, why: str) -> str:
+    """``docker start`` a provisioned room's music player that exists but
+    isn't running, held for the container guard while it starts. Never
+    creates or recreates anything. Returns what it found and did:
+    ``"started"``, ``"running"`` (nothing to do), ``"missing"``, ``"frozen"``
+    (a tamper incident is open: left alone), or the state it leaves alone
+    (``"paused"``, ``"restarting"``, ``"removing"``). Raises RuntimeError
+    when Docker refuses the start (its words: a bind mount whose source is
+    missing, a port another program holds)."""
+    name = container or _container_name(room_id)
+    incident = await frozen_by()
+    if incident is not None:
+        log.warning(
+            "music player for room=%s not started: %s freezes risky operations "
+            "until an admin clears it", room_id, incident,
+        )
+        return "frozen"
+    state = await _container_state(name)
+    if state is None:
+        return "missing"
+    if state in ("running", "paused", "restarting", "removing"):
+        return state
+    with _room_hold(room_id, "starting again"):
+        _nested_mountpoints(settings.music_dir)
+        await _start_container(name)
+    log.warning("music player for room=%s was %s; started it again (%s)", room_id, state, why)
+    return "started"
+
+
+async def _reconcile_room(room_id: str, ctrl: int, http: int, container: str) -> str:
+    """One more go at what the start's warm does for a room: make sure its
+    container exists and runs (``_ensure_container``), unless frozen.
+    Returns ``"running"``, ``"started"`` or ``"frozen"``; raises when it
+    still can't."""
+    incident = await frozen_by()
+    if incident is not None:
+        return "frozen"
+    before = await _container_state(container)
+    with _room_hold(room_id, "starting again"):
+        await _ensure_container(
+            name=container,
+            image=settings.mpd_image_tag,
+            control_port=ctrl,
+            http_port=http,
+            music_dir=settings.music_dir,
+            volume_name=_volume_name(room_id),
+        )
+    return "running" if before == "running" else "started"
+
+
+async def retry_warm(
+    rooms: list[tuple[str, int, int, str]],
+    delays: tuple[float, ...] = WARM_RETRY_DELAYS,
+) -> list[str]:
+    """Look again, after each of ``delays``, at the rooms the start's warm
+    couldn't start, until each runs or the delays run out. Logs every
+    outcome; returns the rooms still down at the end (the container guard
+    reports those)."""
+    pending = list(rooms)
+    for attempt, delay in enumerate(delays, start=1):
+        if not pending:
+            break
+        await asyncio.sleep(delay)
+        still: list[tuple[str, int, int, str]] = []
+        for room in pending:
+            room_id, ctrl, http, container = room
+            try:
+                outcome = await _reconcile_room(room_id, ctrl, http, container)
+            except Exception as e:  # noqa: BLE001 — try again after the next delay
+                log.warning(
+                    "music player for room=%s still won't start (try %d of %d): %s",
+                    room_id, attempt, len(delays), e,
+                )
+                still.append(room)
+                continue
+            if outcome == "frozen":
+                log.warning(
+                    "music player for room=%s not started: a tamper incident freezes "
+                    "risky operations (try %d of %d)", room_id, attempt, len(delays),
+                )
+                still.append(room)
+            elif outcome == "started":
+                log.warning("music player for room=%s started on try %d after the core's start",
+                            room_id, attempt)
+        pending = still
+    if pending:
+        log.warning(
+            "music players still down after the start's retries: %s (the container guard reports them)",
+            ", ".join(r[0] for r in pending),
+        )
+    return [r[0] for r in pending]
+
+
+def schedule_warm_retry(rooms: list[tuple[str, int, int, str]]) -> asyncio.Task | None:
+    """Run :func:`retry_warm` in the background (never awaited by the
+    start). One at a time: a second warm while one runs leaves it be."""
+    global _warm_retry_task
+    if _warm_retry_task is not None and not _warm_retry_task.done():
+        return _warm_retry_task
+    try:
+        _warm_retry_task = asyncio.get_running_loop().create_task(retry_warm(rooms))
+    except RuntimeError:  # no loop: nothing to schedule on
+        return None
+    log.info("music players %s didn't start with the core; trying again in the background",
+             ", ".join(r[0] for r in rooms))
+    return _warm_retry_task
+
+
+async def heal_room(room_id: str) -> bool:
+    """A music command couldn't reach ``room_id``'s player: start it again
+    if its container exists and is stopped (or create it when it is
+    missing), then wait for MPD's greeting. True when it did and the player
+    now answers, so the caller tries its command once more. At most one
+    attempt per room per :data:`HEAL_COOLDOWN_SEC`; commands arriving while
+    one runs share it. Never raises."""
+    task = _heal_tasks.get(room_id)
+    if task is None or task.done():
+        loop = asyncio.get_running_loop()
+        last = _heal_last.get(room_id)
+        if last is not None and loop.time() - last < HEAL_COOLDOWN_SEC:
+            return False
+        _heal_last[room_id] = loop.time()
+        task = loop.create_task(_heal(room_id))
+        _heal_tasks[room_id] = task
+    try:
+        return bool(await asyncio.shield(task))
+    except Exception:  # noqa: BLE001 — _heal never raises; belt and braces
+        return False
+
+
+async def _heal(room_id: str) -> bool:
+    from domovoi.clients import mpd as mpd_module
+
+    ports = mpd_module._room_ports.get(room_id)
+    if ports is None:
+        return False
+    ctrl, http = ports
+    container = _container_name(room_id)
+    try:
+        if await _container_state(container) == "running":
+            return False
+        outcome = await _reconcile_room(room_id, int(ctrl), int(http), container)
+    except Exception as e:  # noqa: BLE001
+        log.warning("music player for room=%s could not be started for a music command: %s",
+                    room_id, e)
+        return False
+    if outcome != "started":
+        return False
+    log.warning("music player for room=%s was stopped; started it for a music command", room_id)
+    # _ensure_container pinned the volume, which waited for the greeting;
+    # wait once more, briefly, in case that wait gave up early.
+    return await _wait_for_mpd(settings.mpd_host, int(ctrl), timeout=5.0)
 
 
 async def remove_room(room_id: str) -> dict[str, bool]:
