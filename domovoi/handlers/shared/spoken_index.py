@@ -66,9 +66,11 @@ from domovoi.handlers.shared.spoken_names import (
     clean_title,
     compact,
     entity_names,
+    names_performer,
     phonetic_key,
     sounds_like,
     speakable,
+    spelled_letters,
     spoken_forms,
 )
 
@@ -940,6 +942,8 @@ def resolve_by(
         side, side_kinds = carried
     side_kinds = side_kinds & kinds
     combos: dict[int, Hit] = {}
+    sides: dict[int, Hit] = {}
+    artists: dict[int, Hit] = {}
     if side_kinds and a:
         sides = score_reading(index, side, side_kinds, phrase=False, cap=cap)
         artists = score_reading(index, a, ARTIST_KINDS, phrase=False, cap=cap)
@@ -964,6 +968,18 @@ def resolve_by(
         score_reading(index, a, ARTIST_KINDS, phrase=False, cap=cap) if a else {}
     )
     ents = index.entities
+    # The mirror case (owner, 2026-11-11): a song the whole phrase finds no
+    # better than its title words alone found it is just the title named
+    # again, and the artist words must then name ITS artist. "let em know
+    # by t.i." against the library's "Let Em' Know" by Bryson Tiller is a
+    # song the library doesn't have by T.I., never a near miss of Bryson
+    # Tiller's (it used to play his at 0.90 on how the phrase sounds).
+    def named_by_another(i: int, h: Hit) -> bool:
+        alone = sides.get(i)
+        if alone is None or alone.score < h.score:
+            return False
+        return not credits_named(index, i, a, artists)
+
     for phrase_text in (f"{t} by {a}", f"{t} {a}"):
         ranked, heard = resolve_any(index, phrase_text, kinds, cap=cap)
         ranked = [
@@ -973,6 +989,7 @@ def resolve_by(
                 and i in artist_alone
                 and artist_alone[i].score >= h.score
             )
+            and not (ents[i].type not in ARTIST_KINDS and named_by_another(i, h))
         ]
         top = ranked[0][1].score if ranked else -1.0
         if top > whole_top:
@@ -980,6 +997,59 @@ def resolve_by(
     if by_ranked and by_ranked[0][1].score >= whole_top - BY_SPLIT_MARGIN:
         return by_ranked, f"{side} by {a}"
     return whole
+
+
+def credits_named(index: Index, i: int, artist: str, artists: Mapping[int, Hit]) -> bool:
+    """True when ``artist`` (a request's "by …" words, normalized) may name
+    a performer credited on entity ``i``: ``artists`` (its scores against
+    every artist) holds one of them at all — exact, an alias (household
+    and MusicBrainz, so "Tip" names T.I. once the house says so), or any
+    spelling or sound match over the cutoffs, so a MISHEARD artist still
+    reaches its own song — or it plainly names one
+    (:func:`spoken_names.names_performer`: "tiller" for Bryson Tiller).
+    "ti" names nobody on Bryson Tiller's songs (short names match exactly
+    only)."""
+    ents = index.entities
+    credited = ents[i].credited
+    if any(c in artists for c in credited):
+        return True
+    labels = [ents[c].label for c in credited]
+    if ents[i].artist_label:
+        labels.append(ents[i].artist_label)
+    if not labels:
+        return True
+    return any(names_performer(artist, lab) for lab in labels)
+
+
+def other_artist_versions(
+    index: Index, title: str, artist: str, kinds: frozenset[str], *,
+    play: float, ask: float, cap: float,
+) -> Ranked:
+    """"<X> by <Y>" where the library HAS X — a sure title match — but
+    only by other artists: those songs, best first (empty when any sure
+    match is Y's, or Y names nobody's credit on them). The music handler
+    treats the request as a song the library doesn't have (it streams, or
+    offers these: "I have one by Bryson Tiller. Want that instead?")."""
+    t, a = norm(title), norm(artist)
+    if not t or not a or t in CARRIER_TITLES:
+        return []
+    side, side_kinds = t, TITLE_KINDS
+    carried = leading_carrier(t)
+    if carried is not None and carried[1] in (ALBUM_KINDS, TITLE_KINDS):
+        side, side_kinds = carried
+    side_kinds = side_kinds & kinds
+    if not side_kinds:
+        return []
+    sure = {
+        i: h for i, h in score_reading(index, side, side_kinds, phrase=False, cap=cap).items()
+        if h.score >= play
+    }
+    if not sure:
+        return []
+    artists = score_reading(index, a, ARTIST_KINDS, phrase=False, cap=cap)
+    if any(credits_named(index, i, a, artists) for i in sure):
+        return []
+    return rank(index, sure)
 
 
 def decide(
@@ -1046,15 +1116,52 @@ def resolve(
         return Resolution.none("too_long", " ".join((free or title or artist).split()[:MAX_QUERY_WORDS]))
     play, ask = float(play_threshold), float(ask_threshold)
     cap = play - 0.01
+    if not (free or title or artist):
+        return Resolution.none("empty_query")
+    # An artist spelled out in letter names ("tee eye") is also read as
+    # its letters ("t i", which names T.I.); the better answer wins.
+    spelled = spelled_letters(artist) if artist and not free else None
+    best: Resolution | None = None
+    for a in (artist, spelled) if spelled else (artist,):
+        res = _resolve_one(index, free, title, a, allowed, play=play, ask=ask, cap=cap)
+        if best is None or _strength(res) > _strength(best):
+            best = res
+    assert best is not None
+    return best
+
+
+#: How good an answer is, for picking between two readings of a request.
+_DECISION_RANK = {"play": 3, "ask": 2}
+
+
+def _strength(res: Resolution) -> tuple[int, float]:
+    rank_ = _DECISION_RANK.get(res.decision, 1 if res.reason == "other_artist" else 0)
+    return rank_, (res.best.score if res.best else 0.0)
+
+
+def _resolve_one(
+    index: Index, free: str, title: str, artist: str, allowed: frozenset[str], *,
+    play: float, ask: float, cap: float,
+) -> Resolution:
     if title and artist:
         ranked, heard = resolve_by(index, title, artist, allowed, play=play, ask=ask, cap=cap)
     elif free or title:
         ranked, heard = resolve_any(index, free or title, allowed, cap=cap)
-    elif artist:
-        ranked, heard = resolve_artist(index, artist, allowed, play=play, ask=ask, cap=cap)
     else:
-        return Resolution.none("empty_query")
-    return decide(index, ranked, heard, play=play, ask=ask)
+        ranked, heard = resolve_artist(index, artist, allowed, play=play, ask=ask, cap=cap)
+    res = decide(index, ranked, heard, play=play, ask=ask)
+    if res.decision == "none" and title and artist:
+        # The song exists, but only by someone else: never played or
+        # offered as a near miss — the caller treats it as a song the
+        # library doesn't have, and may offer these in its place.
+        others = other_artist_versions(index, title, artist, allowed, play=play, ask=ask, cap=cap)
+        if others:
+            return Resolution(
+                decision="none",
+                candidates=tuple(index.candidate(i, h.score, h.via) for i, h in others[:MAX_ASK]),
+                heard=f"{norm(title)} by {norm(artist)}", reason="other_artist",
+            )
+    return res
 
 
 def _reply_score(index: Index, i: int, text: str, *, cap: float) -> tuple[float, float]:
