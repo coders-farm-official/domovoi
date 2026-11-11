@@ -254,7 +254,7 @@ const MediaFoldersPanel = () => {
   return (
     <React.Fragment>
       {toastNode}
-      <Card title="Media folders" sub={sub}>
+      <Card title="Where they are" sub={sub}>
         <div style={{ padding: '4px 16px 14px' }}>
           {where && <div className="media-folders-where" style={{ fontSize: 12, color: 'var(--fg-muted)', padding: '6px 0 4px', lineHeight: 1.5 }}>{where}</div>}
           {(data.kinds || []).map((row) => (
