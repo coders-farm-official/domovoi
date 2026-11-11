@@ -430,8 +430,6 @@ const PrepareMediaCard = ({ fire }) => {
               ))}
             </select>
             <Button variant="primary" icon="hammer" disabled={busy} onClick={prepare}>Prepare</Button>
-            <Button icon="refresh-cw" disabled={busy || internetOff} onClick={refreshCache}
-                    title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Refresh caches</Button>
             {internetOff && <NeedsInternetNote compact/>}
           </div>
 
@@ -461,19 +459,31 @@ const PrepareMediaCard = ({ fire }) => {
             </div>
           )}
 
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8,
-                                         display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {smCacheRows(cache, status?.docker_available).map(r => (
-              <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                {r.tone ? <StatusDot tone={r.tone}/> : <Icon name="info" size={11}/>}
-                {r.text}
+          {/* The download caches are a detail for every household (owner,
+              2026-11-11, after the Mac installer's Train 1 finding 11):
+              Prepare fills what it needs. Folded away, with Refresh caches. */}
+          <details className="sm-cache-details" style={{ marginTop: 8 }}>
+            <summary style={{ fontSize: 11, color: 'var(--fg-muted)', cursor: 'pointer' }}>
+              details: what is kept for building cards
+            </summary>
+            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8,
+                                           display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {smCacheRows(cache, status?.docker_available).map(r => (
+                <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {r.tone ? <StatusDot tone={r.tone}/> : <Icon name="info" size={11}/>}
+                  {r.text}
+                </span>
+              ))}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <StatusDot tone={status?.docker_available ? 'ok' : 'warn'}/>
+                docker {status?.docker_available ? 'available' : 'unavailable — deb cache skipped'}
               </span>
-            ))}
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <StatusDot tone={status?.docker_available ? 'ok' : 'warn'}/>
-              docker {status?.docker_available ? 'available' : 'unavailable — deb cache skipped'}
-            </span>
-          </div>
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <Button icon="refresh-cw" disabled={busy || internetOff} onClick={refreshCache}
+                      title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Refresh caches</Button>
+            </div>
+          </details>
 
           {plugins.length > 0 && (
             <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
