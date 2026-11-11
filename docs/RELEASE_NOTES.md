@@ -4,6 +4,34 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — the right artist, a forgiving search, an Artists tab
+
+**A song the library has only by another artist is never played in its
+place.** "Play Let E.M. Know by T.I." used to play Bryson Tiller's "Let
+Em' Know" because the whole request sounded close to his title. A request
+that names an artist now treats a title found only under other artists as
+a song the library doesn't have: it streams through a media provider when
+one is installed and Domovoi is online; otherwise "I don't have Let Em'
+Know by T.I. I have one by Bryson Tiller. Want that instead?" ("yes"
+plays that one). The artist is matched however it is written or said
+("T.I.", "TI", "T I", "tee eye", a household "also called" name), and a
+search hit inside another word ("ti" in "Tiller") no longer counts. On a
+phone the answer stays "I couldn't find … in your library."
+
+**Music search** (the Music page's and the app's library search) matches
+every word, whatever the case, accents, apostrophes, dots or hyphens, in
+the title, artist or album, best match first: "em know" finds "Let Em'
+Know", "ti" finds T.I. When nothing holds every word it shows the closest
+titles (typos). One migration, **V046** (a normalized search column on
+`library_tracks`), applied by the update itself; on a large library it
+takes a moment while the table is rewritten.
+
+**Music → Artists** lists every performer with track and album counts;
+an artist opens to their albums and songs with play, shuffle and queue. A
+credit naming several performers ("Jeezy, T.I.") counts for each when
+one of them is also credited alone. The Android app has no Artists tab
+yet.
+
 ## 2026-11-11 — 1.1.0
 
 Version 1.1.0 (the app 1.1.0, versionCode 26111001; the Windows Setup

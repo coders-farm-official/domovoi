@@ -252,4 +252,9 @@ def test_one_artist_their_albums_and_tracks(client) -> None:
     one = client.get("/api/music/library",
                      params={"artist": "T.I.", "album": f"Paper {M}", "limit": 50}).json()
     assert {t["title"] for t in one["items"]} == {"Whatever You Like", "Live Your Life"}
+    # One album's ids, for "play" on an album chip; '' = the album-less ones.
+    paper = client.get("/api/music/artist", params={"name": "T.I.", "album": f"Paper {M}"}).json()
+    assert sorted(paper["track_ids"]) == sorted(t["id"] for t in one["items"])
+    loose = client.get("/api/music/artist", params={"name": "T.I.", "album": ""}).json()
+    assert len(loose["track_ids"]) == 1 and len(paper["albums"]) == len(d["albums"])
     assert client.get("/api/music/artist", params={"name": f"nobody {M}"}).status_code == 404
