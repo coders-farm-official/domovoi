@@ -27,7 +27,7 @@ credit × album rows: a few thousand on a big library), nothing cached.
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Literal
 
