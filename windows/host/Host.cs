@@ -26,6 +26,12 @@
 //      Linux system once for a new restart id, and tell the Linux side
 //      this PC's RAM, processors and the limits
 //      (/var/lib/domovoi-windows/limits.json, as root);
+//   6d. the media folders (MediaFolders.cs, MediaPrep.cs): every 30 s,
+//      tell the Linux side (/var/lib/domovoi-windows/media.json, as root)
+//      and the tray (host\out\media-folders.json) which Windows folders
+//      Domovoi uses, and carry out a move the dashboard asked for: the
+//      folder checked and made, the distro's fstab block rewritten, the
+//      Linux system restarted (the limits' restart rules);
 //   7. with the start parameter "unregister": unregister the distro, end
 //      this account's own WSL session (wsl --shutdown as domovoi-svc, which
 //      leaves every other account's WSL alone), and stop (the uninstaller's
@@ -79,8 +85,16 @@ namespace Domovoi.Windows.Host
         DateTime limitsNext = DateTime.MinValue;
         string limitsLastReport;
         string limitsLastProblem;
-        DateTime limitsLastRestart = DateTime.MinValue;
+        // The last restart of Domovoi's Linux system for new limits or new
+        // media folders: at most one per HardwareLimits.RestartGap.
+        DateTime lastLinuxRestart = DateTime.MinValue;
         string limitsRestartState = "none";
+        // The media folders (MediaFolders.cs): when the move request is next
+        // read, and the report and tray list last written.
+        DateTime mediaNext = DateTime.MinValue;
+        string mediaLastReport;
+        string mediaLastTrayMap;
+        string mediaLastProblem;
 
         public Host(ManualResetEvent stop)
         {
@@ -270,6 +284,15 @@ namespace Domovoi.Windows.Host
                         if (!ready && !Stopping)
                         {
                             DomovoiDown("Domovoi didn't come up after the restart for its new limits", WslGoneNow());
+                            continue;
+                        }
+                    }
+                    if (ready)
+                    {
+                        ready = PollMedia(job);
+                        if (!ready && !Stopping)
+                        {
+                            DomovoiDown("Domovoi didn't come up after the restart for its new media folders", WslGoneNow());
                             continue;
                         }
                     }
@@ -570,7 +593,7 @@ namespace Domovoi.Windows.Host
             bool ready = true;
             Dictionary<string, object> st = Store.ReadStrict();
             string done = st == null ? null : Json.Str(st, "limits_restart_id");
-            LimitsRestart decision = HardwareLimits.DecideRestart(req, done, st != null, DateTime.UtcNow, limitsLastRestart,
+            LimitsRestart decision = HardwareLimits.DecideRestart(req, done, st != null, DateTime.UtcNow, lastLinuxRestart,
                 req.RestartId != null && st != null ? UpdateUnitState() : null);
             switch (decision)
             {
@@ -595,8 +618,9 @@ namespace Domovoi.Windows.Host
                         limitsRestartState = "failed";
                         break;
                     }
-                    limitsLastRestart = DateTime.UtcNow;
-                    ready = RestartForLimits(job);
+                    lastLinuxRestart = DateTime.UtcNow;
+                    ready = RestartLinux(job, "its new limits (" + HardwareLimits.Describe(StoredLimits()) + ")",
+                        "Restarting Domovoi so it starts with its new limits");
                     limitsRestartState = ready ? "done" : "failed";
                     limitsNext = DateTime.MinValue;
                     break;
@@ -645,13 +669,13 @@ namespace Domovoi.Windows.Host
         }
 
         // Domovoi's Linux system restarted so the VM starts again with the
-        // new limits: the units stopped cleanly, the distro terminated, this
+        // new limits, or mounts the new media folders: the units stopped cleanly, the distro terminated, this
         // account's WSL shut down (the household's own WSL and Docker run
         // on: ReleaseWsl), then the usual bring-up.
-        bool RestartForLimits(HostJob job)
+        bool RestartLinux(HostJob job, string why, string line)
         {
-            log.Write("restarting Domovoi's Linux system for its new limits (" + HardwareLimits.Describe(StoredLimits()) + ")");
-            Status("restarting", HostProgress.PhaseRestart, 0, "Restarting Domovoi so it starts with its new limits");
+            log.Write("restarting Domovoi's Linux system for " + why);
+            Status("restarting", HostProgress.PhaseRestart, 0, line);
             WslResult s = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/usr/bin/systemctl", "stop", "domovoi-web", "domovoi-core", "domovoi-db" }, 40000, null, 8192);
             log.Write("systemctl stop exit " + Inv.S(s.ExitCode) + (s.TimedOut ? " (timed out)" : ""));
             KillHolder();
@@ -662,6 +686,225 @@ namespace Domovoi.Windows.Host
             holderBackoffSec = 5;
             lock (statusGate) status.Percent = 0;
             return BringUp(job);
+        }
+
+        // -- the media folders (MediaFolders.cs, MediaPrep.cs) -----------
+
+        // The folders Domovoi uses now, and whether they are the
+        // dashboard's; a dashboard choice Setup has since overruled (a new
+        // folder picked in Setup) is dropped from host-state.json.
+        List<KeyValuePair<string, string>> EffectiveMedia(HostJob job, out bool fromDashboard)
+        {
+            Dictionary<string, object> st = Store.ReadStrict();
+            MediaOverride ov = MediaOverride.FromJson(Json.Obj(st ?? new Dictionary<string, object>(), "media"));
+            bool drop;
+            List<KeyValuePair<string, string>> media = MediaFolders.Effective(job.ProvisionArgs, ov, out drop);
+            if (drop && st != null)
+            {
+                log.Write("Setup chose the media folder " + (MediaFolders.RootOf(MediaFolders.MediaArgs(job.ProvisionArgs)) ?? "(none)")
+                    + "; the dashboard's choice (" + ov.Root + ") no longer applies");
+                UpdateState("media", null);
+            }
+            fromDashboard = ov != null && !drop;
+            return media;
+        }
+
+        // provision.sh's arguments with the folders Domovoi uses now, so a
+        // repair keeps a move made from the dashboard.
+        List<string> ProvisionArgsFor(HostJob job)
+        {
+            bool fromDashboard;
+            List<KeyValuePair<string, string>> media = EffectiveMedia(job, out fromDashboard);
+            return fromDashboard ? MediaFolders.WithMedia(job.ProvisionArgs, media) : job.ProvisionArgs;
+        }
+
+        MediaChange StoredChange()
+        {
+            return MediaChange.FromJson(Json.Obj(ReadState(), "media_change"));
+        }
+
+        void SetChange(MediaChange c)
+        {
+            if (Json.Serialize(c.ToJson()) == Json.Serialize(StoredChange().ToJson())) return;
+            UpdateState("media_change", c.ToJson());
+        }
+
+        // Every HardwareLimits.Every while Domovoi runs: read the core's move
+        // request as the service user, act on a new one (MediaFolders.Decide),
+        // and tell the Linux side and the tray which folders Domovoi uses.
+        // Returns whether Domovoi is up (false only after a restart that
+        // didn't come back).
+        bool PollMedia(HostJob job)
+        {
+            if (DateTime.UtcNow < mediaNext) return true;
+            mediaNext = DateTime.UtcNow + HardwareLimits.Every;
+            if (holder == null || SafeExited(holder)) return true;
+            WslResult r;
+            try { r = Wsl.Run(MediaFolders.ReadArgs(Paths.DistroName), HardwareLimits.TimeoutMs, null, MediaFolders.MaxRequestBytes + 64); }
+            catch (System.ComponentModel.Win32Exception e) { log.Write("can't read the media-folders request: " + e.Message); return true; }
+            if (r.TimedOut) return true;
+            MediaRequest req = MediaFolders.Parse(r.ExitCode == 0 ? r.Stdout : null);
+            if (req.State == "invalid" && req.Problem != mediaLastProblem) log.Write("the media-folders request is refused: " + req.Problem);
+            mediaLastProblem = req.State == "invalid" ? req.Problem : null;
+            Dictionary<string, object> st = Store.ReadStrict();
+            string done = st == null ? null : Json.Str(st, "media_request_id");
+            bool pending = req.Id != null && req.Id != done && req.State == "ok" && st != null;
+            MediaMove decision = MediaFolders.Decide(req, done, st != null, DateTime.UtcNow, lastLinuxRestart,
+                pending ? UpdateUnitState() : null);
+            bool ready = true;
+            var change = new MediaChange { RequestId = req.Id, Root = req.Root };
+            switch (decision)
+            {
+                case MediaMove.Invalid:
+                    UpdateState("media_request_id", req.Id);
+                    change.State = "refused";
+                    change.Problem = req.Problem;
+                    SetChange(change);
+                    break;
+                case MediaMove.Stale:
+                    UpdateState("media_request_id", req.Id);
+                    change.State = "stale";
+                    change.Problem = "the request waited too long; ask again";
+                    SetChange(change);
+                    break;
+                case MediaMove.TooSoon:
+                    change.State = "waiting";
+                    SetChange(change);
+                    break;
+                case MediaMove.Busy:
+                    if (StoredChange().State != "busy") log.Write("moving the media folders waits: an update or restart of Domovoi is running");
+                    change.State = "busy";
+                    SetChange(change);
+                    break;
+                case MediaMove.Go:
+                    ready = MoveMedia(job, req, change);
+                    mediaNext = DateTime.MinValue;
+                    break;
+            }
+            if (ready && holder != null && !SafeExited(holder)) ReportMedia(job, null);
+            return ready;
+        }
+
+        // A new media root: checked and made on Windows, kept, the distro's
+        // mounts rewritten, then Domovoi's Linux system restarted.
+        bool MoveMedia(HostJob job, MediaRequest req, MediaChange change)
+        {
+            // Recorded first, and only then acted on: an id that can't be
+            // recorded would run again at every poll.
+            if (!UpdateState("media_request_id", req.Id))
+            {
+                log.Write("the media folders are not moved: the request's id could not be recorded");
+                return true;
+            }
+            bool wasDashboard;
+            List<KeyValuePair<string, string>> before = EffectiveMedia(job, out wasDashboard);
+            change.PreviousRoot = MediaFolders.RootOf(before);
+            string setupRoot = MediaFolders.RootOf(MediaFolders.MediaArgs(job.ProvisionArgs));
+            log.Write("moving the media folders to " + req.Root + " (asked from the dashboard)");
+            change.State = "applying";
+            SetChange(change);
+            ReportMedia(job, change);
+            string why = setupRoot == null
+                ? "Setup's media folders aren't the usual five under one folder; run Domovoi Setup again to choose the folder"
+                : MediaPrep.Prepare(req.Root, delegate (string m) { log.Write(m); });
+            if (why != null)
+            {
+                log.Write("the media folders stay where they are: " + why);
+                change.State = "refused";
+                change.Problem = why.Length > 290 ? why.Substring(0, 290) : why;
+                SetChange(change);
+                return true;
+            }
+            Dictionary<string, object> old = Json.Obj(ReadState(), "media");
+            var ov = new MediaOverride { Root = MediaPaths.Normalize(req.Root), BasedOn = setupRoot };
+            // Back to Setup's own root: nothing of the dashboard's to keep.
+            bool toSetup = string.Equals(ov.Root, setupRoot, StringComparison.OrdinalIgnoreCase);
+            if (!UpdateState("media", toSetup ? null : ov.ToJson()))
+            {
+                change.State = "failed";
+                change.Problem = "host-state.json could not be written";
+                SetChange(change);
+                return true;
+            }
+            string fstabError = WriteFstab(MediaPaths.Under(ov.Root));
+            if (fstabError != null)
+            {
+                UpdateState("media", old);
+                log.Write("the media folders stay where they are: " + fstabError);
+                change.State = "failed";
+                change.Problem = "the Linux system's mounts could not be changed: " + fstabError;
+                if (change.Problem.Length > 290) change.Problem = change.Problem.Substring(0, 290);
+                SetChange(change);
+                return true;
+            }
+            lastLinuxRestart = DateTime.UtcNow;
+            change.State = "done";
+            SetChange(change);
+            bool ready = RestartLinux(job, "its new media folders (" + ov.Root + ")", "Restarting Domovoi so it uses the new media folders");
+            if (!ready)
+            {
+                change.State = "failed";
+                change.Problem = "Domovoi didn't come up after the restart; it starts again by itself";
+                SetChange(change);
+            }
+            return ready;
+        }
+
+        // null, or why the distro's /etc/fstab could not be rewritten.
+        string WriteFstab(List<KeyValuePair<string, string>> media)
+        {
+            try
+            {
+                byte[] body = new UTF8Encoding(false).GetBytes(MediaFolders.FstabInput(media));
+                WslResult w = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", MediaFolders.FstabScript() }, 60000, body, 4096);
+                if (w.ExitCode == 0) { log.Write("rewrote the media block of the distro's /etc/fstab"); return null; }
+                return "exit " + Inv.S(w.ExitCode) + ": " + FirstLine(w.Stderr + w.Stdout);
+            }
+            catch (System.ComponentModel.Win32Exception e) { return e.Message; }
+            catch (ArgumentException e) { return e.Message; }
+        }
+
+        // media.json for the core and the tray's list, when either changed.
+        void ReportMedia(HostJob job, MediaChange change)
+        {
+            bool fromDashboard;
+            List<KeyValuePair<string, string>> media = EffectiveMedia(job, out fromDashboard);
+            if (media.Count == 0) return;
+            MediaChange c = change ?? StoredChange();
+            string source = fromDashboard ? "dashboard" : "setup";
+            string key = MediaFolders.Report(media, source, c, true, true, DateTime.MinValue);
+            if (key != mediaLastReport)
+            {
+                string text = MediaFolders.Report(media, source, c, true, true, DateTime.UtcNow);
+                byte[] body = new UTF8Encoding(false).GetBytes(text);
+                string sha;
+                using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(body));
+                try
+                {
+                    WslResult w = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", MediaFolders.ReportScript() }, 60000, body, 4096);
+                    if (w.ExitCode == 0 && w.Stdout.StartsWith(sha, StringComparison.Ordinal))
+                    {
+                        mediaLastReport = key;
+                        log.Write("told the Linux side its media folders (" + (MediaFolders.RootOf(media) ?? "several folders") + ", " + source + ")");
+                    }
+                    else log.Write("could not tell the Linux side its media folders (exit " + Inv.S(w.ExitCode) + "): " + FirstLine(w.Stderr + w.Stdout));
+                }
+                catch (System.ComponentModel.Win32Exception e) { log.Write("could not tell the Linux side its media folders: " + e.Message); }
+            }
+            string map = MediaFolders.TrayMap(media, DateTime.MinValue);
+            if (map != mediaLastTrayMap || !File.Exists(MediaFolders.TrayMapPath))
+            {
+                try
+                {
+                    MediaPrep.WriteTrayMap(MediaFolders.TrayMap(media, DateTime.UtcNow));
+                    mediaLastTrayMap = map;
+                }
+                catch (Exception e)
+                {
+                    if (!(e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException)) throw;
+                    log.Write("could not write the tray's list of media folders: " + e.Message);
+                }
+            }
         }
 
         bool Import(HostJob job)
@@ -873,7 +1116,7 @@ namespace Domovoi.Windows.Host
             while (!Stopping)
             {
                 ProvisionLine final;
-                int code = RunProvision(job, verifying, gate.Args(job.ProvisionArgs), out final);
+                int code = RunProvision(job, verifying, gate.Args(ProvisionArgsFor(job)), out final);
                 if (Stopping) return false;
                 if (final != null)
                 {
