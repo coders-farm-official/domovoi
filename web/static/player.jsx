@@ -124,6 +124,69 @@ const itemFromTrack = (t) => ({
 });
 
 /* ═══════════════════════════════════════════════════════════════════════
+ * Up next (V053, phase P3, 2026-11-12): when a library song plays here, the
+ * server keeps a session that hands out songs like it
+ * (/api/music/up-next, web/backend/api/up_next.py). Its picks join the
+ * queue as AUTO items, after every song somebody asked for:
+ *   origin       'explicit' (asked for) | 'list' (a whole list played on
+ *                purpose) | 'auto' (an Up next pick)
+ *   upNextSeq    the pick's number in its session
+ *   reasonLabel  why it was picked ("same artist", "90s", "from road trip")
+ *   sessionId    the session the song belongs to (the listening history
+ *                carries it back, which is how skips and finishes feed it)
+ * The queue panels show auto items in their own "up next" section
+ * (PlayerUpNext) with the Autoplay switch. Autoplay is remembered per
+ * browser; off, nothing more is added and the queue stops at its end
+ * (a song clicked inside a list still plays the rest of that list).
+ * ═══════════════════════════════════════════════════════════════════════ */
+const UP_NEXT_REFILL_AT = 5;          // ask for more when this few songs are left
+const UP_NEXT_AUTOPLAY_KEY = 'domovoi-upnext-autoplay';
+const UP_NEXT_IDS_CAP = 500;
+const upNextAutoplayPref = () => {
+  try { return localStorage.getItem(UP_NEXT_AUTOPLAY_KEY) !== '0'; } catch { return true; }
+};
+const _upNextSetAutoplayPref = (on) => {
+  try { localStorage.setItem(UP_NEXT_AUTOPLAY_KEY, on ? '1' : '0'); } catch {}
+};
+/* A pick as a queue item. */
+const itemFromPick = (pick, sessionId) => Object.assign(
+  itemFromTrack({ id: pick.track_id, title: pick.title, artist: pick.artist, album: pick.album,
+                  duration_sec: pick.duration_sec }),
+  { origin: 'auto', upNextSeq: pick.seq, reasonLabel: pick.reason_label || '', sessionId });
+/* The Up next header's "why": what the mix is built from. */
+const upNextBasis = (u) => {
+  if (!u || !u.seed) return '';
+  const list = u.seed.list && u.seed.list.name;
+  if (u.mode === 'list' && list) return `shuffled from ${list}`;
+  if (u.mode === 'continue' && list) return `more like ${list}`;
+  if (u.seed.title) return `based on ${u.seed.title}`;
+  return '';
+};
+/* Up next's calls that nobody pressed a button for (the start that rides
+ * on a play, a refill, a removed pick): `noPrompt`, so a refused sign-in
+ * never opens a prompt over the music. */
+const _upNextCall = (method, path, body) => apiFetch(path, {
+  method, body: JSON.stringify(body || {}), noPrompt: true });
+/* This browser may ask for Up next: it is paired, or signed in (and the
+ * page has its data layer: a test harness without one asks nothing). */
+const _upNextPaired = () => {
+  if (typeof apiFetch !== 'function') return false;
+  try { return typeof Auth === 'undefined' || !!(Auth.isPaired ? Auth.isPaired() : false) || !!(Auth.isLoggedIn && Auth.isLoggedIn()); }
+  catch { return false; }
+};
+/* A session from the server, as the provider keeps it. */
+const _upNextFrom = (s) => ({
+  id: s.id, mode: s.mode, autoplay: !!s.autoplay, person: s.person || null, seed: s.seed || null,
+  haveThrough: s.have_through_seq || 0, ended: !!s.ended, loading: false, offline: false,
+});
+/* Where an explicit "add to queue" lands: after the last song somebody
+ * asked for, before the first Up next pick still to come. */
+const _upNextAddAt = (q, index) => {
+  for (let i = Math.max(0, index + 1); i < q.length; i++) if (q[i] && q[i].origin === 'auto') return i;
+  return q.length;
+};
+
+/* ═══════════════════════════════════════════════════════════════════════
  * Offline cache manager (PWA). Stores audio blobs in Cache Storage under a
  * named cache, and pin/LRU metadata in localStorage. Manual pins never
  * evict; auto-cached (recent/favorite) entries evict LRU under a budget.
@@ -394,8 +457,11 @@ const ListenLog = (() => {
     if (!lib) return;
     if (!cur) {
       cur = { uid: lib.uid, trackId: lib.trackId, startedAt: new Date().toISOString(),
-              played: 0, since: null, duration: lib.durationSec || null, skipped: false };
+              played: 0, since: null, duration: lib.durationSec || null, skipped: false,
+              origin: lib.origin || 'explicit', sessionId: lib.sessionId || null };
     }
+    // Up next: the session can arrive after the song started.
+    if (lib.sessionId && !cur.sessionId) cur.sessionId = lib.sessionId;
     if (durationSec > 0 && Number.isFinite(durationSec)) cur.duration = durationSec;
     if (playing && cur.since == null) cur.since = Date.now();
     if (!playing && cur.since != null) { cur.played = playedNow(); cur.since = null; }
@@ -415,6 +481,9 @@ const ListenLog = (() => {
       played_sec: Math.round(played), outcome: outcome(played, duration, cur.skipped && !natural),
     };
     if (duration > 0) row.duration_sec = Math.round(duration);
+    // An Up next session's song: the server feeds it back to the session.
+    if (cur.sessionId) row.session_id = cur.sessionId;
+    if (cur.origin === 'auto' || cur.origin === 'list') row.origin = cur.origin;
     // A shared screen's songs are the household's (the server says so too).
     let shared = false;
     try { shared = !!(DeviceIdentity.sharedScreen && DeviceIdentity.sharedScreen() === true); } catch {}
@@ -623,6 +692,8 @@ const PlaybackContext = React.createContext({
   playSpoken: _noop, jumpToChapter: _noop,
   itemFromEpisode: (x) => x, itemFromBook: (x) => x, itemsFromBook: (x) => [x],
   playItems: _noop, enqueue: _noop, playNext: _noop,
+  upNext: null, autoplay: true, playFromList: _noop, playList: _noop,
+  setAutoplay: _noop, lessLikeThis: _noop, setUpNextListener: _noop,
   removeAt: _noop, moveItem: _noop, clearQueue: _noop, jumpTo: _noop,
   toggle: _noop, play: _noop, pause: _noop, stop: _noop, closePlayer: _noop,
   next: _noop, prev: _noop, seek: _noop, seekBy: _noop,
@@ -713,6 +784,25 @@ const PlaybackProvider = ({ children }) => {
   }, []);
 
   const current = index >= 0 && index < queue.length ? queue[index] : null;
+
+  // ── Up next (the session this browser's queue is following) ─────────
+  // null: none. Else { id, mode, autoplay, person, seed, haveThrough,
+  // ended, loading, offline, failedAt }. The ref is read by callbacks made
+  // once; every change goes through setUpNext. upNextGenRef counts the
+  // plays that started (or dropped) a session: an answer for an older one
+  // is ignored.
+  const [upNext, setUpNextState] = React.useState(null);
+  const upNextRef = React.useRef(null);
+  const setUpNext = (v) => {
+    const nv = typeof v === 'function' ? v(upNextRef.current) : v;
+    upNextRef.current = nv;
+    setUpNextState(nv);
+  };
+  const upNextGenRef = React.useRef(0);
+  const refillingRef = React.useRef(false);
+  const [autoplayPref, setAutoplayPrefState] = React.useState(upNextAutoplayPref);
+  const autoplayPrefRef = React.useRef(autoplayPref); autoplayPrefRef.current = autoplayPref;
+  const dropUpNext = () => { upNextGenRef.current += 1; refillingRef.current = false; setUpNext(null); };
 
   // ── Web Audio graph (lazily built on first play — needs a user gesture) ──
   const graphRef = React.useRef(null);   // { ctx, els:[A,B], gains, eq, analyser, master, active }
@@ -949,7 +1039,7 @@ const PlaybackProvider = ({ children }) => {
   React.useEffect(() => {
     if (target.kind !== 'browser') { ListenLog.follow(null, false); return; }
     ListenLog.follow(current, status === 'playing', durationSec);
-  }, [currentUid, status, target.kind, durationSec]); // eslint-disable-line
+  }, [currentUid, current ? current.sessionId : null, status, target.kind, durationSec]); // eslint-disable-line
 
   /* ── position ticker (rAF) + crossfade trigger ────────────────────── */
   React.useEffect(() => {
@@ -1058,6 +1148,7 @@ const PlaybackProvider = ({ children }) => {
     const at = Math.max(0, Math.min(startIndex, items.length - 1));
     playHereGenRef.current += 1;
     const left = leaveRoom(onLeft);
+    dropUpNext();
     setQueue(items);
     setIndex(at);
     loadAndPlay(items[at]);
@@ -1080,6 +1171,7 @@ const PlaybackProvider = ({ children }) => {
     items.forEach((it, i) => { if (resumeSec >= offsetOf(it)) at = i; });
     playHereGenRef.current += 1;
     leaveRoom();
+    dropUpNext();
     setQueue(items);
     setIndex(at);
     if (speed && speed !== playbackRate) setPlaybackRateState(Math.max(0.5, Math.min(3, speed)));
@@ -1089,10 +1181,12 @@ const PlaybackProvider = ({ children }) => {
   const enqueue = React.useCallback((items) => {
     const add = Array.isArray(items) ? items : [items];
     setQueue((q) => {
-      const nq = [...q, ...add];
+      // After the songs somebody asked for, before Up next's picks.
+      const at = _upNextAddAt(q, index);
+      const nq = [...q.slice(0, at), ...add, ...q.slice(at)];
       // If nothing is playing, start at the first appended item.
       if (index < 0 && target.kind === 'browser') {
-        setIndex(q.length);
+        setIndex(at);
         loadAndPlay(add[0]);
       }
       return nq;
@@ -1109,6 +1203,13 @@ const PlaybackProvider = ({ children }) => {
   }, [index, loadAndPlay, target]);
 
   const removeAt = React.useCallback((i) => {
+    // An Up next pick taken out: the session hears it (best-effort).
+    const gone = queueRef.current[i];
+    const un = upNextRef.current;
+    if (gone && gone.origin === 'auto' && un && un.id && gone.sessionId === un.id && gone.upNextSeq) {
+      _upNextCall('POST', `/api/music/up-next/sessions/${un.id}/feedback`, { seq: gone.upNextSeq, kind: 'remove' })
+        .catch(() => {});
+    }
     setQueue((q) => {
       const nq = q.filter((_, idx) => idx !== i);
       setIndex((cur) => {
@@ -1144,7 +1245,196 @@ const PlaybackProvider = ({ children }) => {
     });
   }, []);
 
-  const clearQueue = React.useCallback(() => { stop(); setQueue([]); setIndex(-1); }, []);
+  const clearQueue = React.useCallback(() => { stop(); dropUpNext(); setQueue([]); setIndex(-1); }, []);
+
+  /* ── Up next: starting, refilling, the switch, "less like this" ──────
+   * `start` is the body's start ({track_id, context?} or {context,
+   * whole_list}); the queue is already playing. The first batch joins it
+   * as auto items when the server answers; a play made meanwhile wins. */
+  const startUpNext = (start) => {
+    if (!_upNextPaired()) return null;
+    const gen = upNextGenRef.current;
+    setUpNext({ loading: true, autoplay: autoplayPrefRef.current, mode: null, seed: null });
+    const body = { target: { kind: 'device', device_id: DeviceIdentity.id() }, start,
+                   autoplay: autoplayPrefRef.current };
+    let shared = false;
+    try { shared = !!(DeviceIdentity.sharedScreen && DeviceIdentity.sharedScreen() === true); } catch {}
+    const picked = SpokenAudio.explicitPerson();
+    if (picked === 'none') body.as_household = true;
+    else if (picked !== undefined) body.listener_person_id = picked;
+    else if (shared) body.as_household = true;
+    return _upNextCall('POST', '/api/music/up-next/sessions', body).then((s) => {
+      if (gen !== upNextGenRef.current || !s || !s.id) return;
+      setUpNext(_upNextFrom(s));
+      const picks = Array.isArray(s.picks) ? s.picks : [];
+      setQueue((q) => [
+        // The songs this start played are the session's too (listens feed it).
+        ...q.map((it) => (it && it.upNextGen === gen ? Object.assign({}, it, { sessionId: s.id }) : it)),
+        ...picks.map((pk) => itemFromPick(pk, s.id)),
+      ]);
+    }).catch((e) => {
+      if (gen !== upNextGenRef.current) return;
+      // Refused (a song the library lost, a sign-in): no Up next for this
+      // play, quietly. Unreachable or failing: say Up next needs the home
+      // server, and try again when the song changes.
+      const st = e && e.status;
+      if (st && st < 500) setUpNext({ refused: true, autoplay: autoplayPrefRef.current });
+      else {
+        // failedAt is filled in by the refill effect, on the song playing then.
+        setUpNext({ loading: false, offline: true, autoplay: autoplayPrefRef.current, start,
+                    failedAt: null });
+      }
+    });
+  };
+
+  /* Items for a start, tagged with the generation the start's playItems
+   * makes, so the session id can be put on them when it comes. */
+  const _startItems = (tracks, origin) => {
+    const gen = upNextGenRef.current + 1;
+    return tracks.map((t) => Object.assign(itemFromTrack(t), { origin, upNextGen: gen }));
+  };
+  /* A song clicked inside a list (`tracks`, `at`): it plays here, and Up
+   * next goes on with the rest of the list (and round again while autoplay
+   * is on). `context` names the list: {kind, ref?, name}; an `ids` list
+   * takes its songs from `tracks`. No context: the song on its own,
+   * similar songs from the whole library. */
+  const playFromList = (tracks, at = 0, context = null, opts = {}) => {
+    const list = (tracks || []).filter(Boolean);
+    const track = list[Math.max(0, Math.min(at, list.length - 1))];
+    if (!track) return null;
+    const left = playItems(_startItems([track], 'explicit'), 0, opts);
+    const start = { track_id: track.id };
+    if (context) {
+      start.context = Object.assign({}, context);
+      if (context.kind === 'ids') {
+        start.context.track_ids = list.map((t) => t.id).filter((x) => x != null).slice(0, UP_NEXT_IDS_CAP);
+      }
+    }
+    startUpNext(start);
+    return left;
+  };
+  /* A whole list played (or shuffled) on purpose: the list is the queue,
+   * as it is; Up next carries on with similar songs when it is nearly
+   * over, while autoplay is on. */
+  const playList = (tracks, context = null, opts = {}) => {
+    const list = (tracks || []).filter(Boolean);
+    if (!list.length) return null;
+    const left = playItems(_startItems(list, 'list'), 0, opts);
+    const ctx = context ? Object.assign({}, context) : { kind: 'ids', name: 'this list' };
+    if (ctx.kind === 'ids') ctx.track_ids = list.map((t) => t.id).filter((x) => x != null).slice(-UP_NEXT_IDS_CAP);
+    startUpNext({ context: ctx, whole_list: true, track_id: list[0].id });
+    return left;
+  };
+
+  /* Ask for more once this few songs are left after the one playing. The
+   * same call again (have_through_seq) returns the same batch, so a retry
+   * never skips one. Picks the session took back ("less like this", two
+   * early skips of one artist) leave the queue. A queue of library songs
+   * with no session (added from search, handed back from a room) gets one
+   * when it is nearly over, built from the queue itself, while autoplay is
+   * on. Only while playing HERE: a room keeps its own queue. */
+  const refill = () => {
+    const u = upNextRef.current;
+    const gen = upNextGenRef.current;
+    refillingRef.current = true;
+    const at = indexRef.current;
+    return _upNextCall('POST', `/api/music/up-next/sessions/${u.id}/next`, { have_through_seq: u.haveThrough })
+      .then((r) => {
+        if (gen !== upNextGenRef.current || !r) return;
+        const gone = new Set(r.removed || []);
+        const picks = (r.picks || []).filter((pk) => pk.seq > u.haveThrough && !gone.has(pk.seq));
+        const top = (r.picks || []).reduce((m, pk) => Math.max(m, pk.seq), u.haveThrough);
+        setQueue((q) => {
+          const cur = indexRef.current;
+          const kept = q.filter((it, i) => !(i > cur && it && it.origin === 'auto'
+            && it.sessionId === u.id && gone.has(it.upNextSeq)));
+          return [...kept, ...picks.map((pk) => itemFromPick(pk, u.id))];
+        });
+        // Nothing new and not over: ask again when the song changes, not in a loop.
+        const idle = !picks.length && !r.ended;
+        setUpNext((x) => (x && x.id === u.id
+          ? Object.assign({}, x, { haveThrough: top, ended: !!r.ended, offline: false,
+                                   failedAt: idle ? at : null }) : x));
+      })
+      .catch(() => {
+        if (gen !== upNextGenRef.current) return;
+        // Tried again when the song changes.
+        setUpNext((x) => (x && x.id === u.id ? Object.assign({}, x, { offline: true, failedAt: at }) : x));
+      })
+      .finally(() => { if (gen === upNextGenRef.current) refillingRef.current = false; });
+  };
+  React.useEffect(() => {
+    if (target.kind !== 'browser' || index < 0 || refillingRef.current) return;
+    const left = queue.length - 1 - index;
+    if (left > UP_NEXT_REFILL_AT) return;
+    const u = upNextRef.current;
+    if (!u) {
+      if (!autoplayPref || !_upNextPaired()) return;
+      const lib = queue.filter((it) => it && it.kind === 'library' && it.trackId != null);
+      if (!lib.length) return;
+      const gen = upNextGenRef.current + 1;
+      upNextGenRef.current = gen;
+      setQueue((q) => q.map((it) => (it && it.kind === 'library' ? Object.assign({}, it, { upNextGen: gen }) : it)));
+      startUpNext({ context: { kind: 'ids', name: 'this queue',
+                               track_ids: lib.map((it) => it.trackId).slice(-UP_NEXT_IDS_CAP) },
+                    whole_list: true, track_id: lib[0].trackId });
+      return;
+    }
+    if (u.failedAt === index) return;
+    if (!u.id) {
+      if (u.offline && u.start && !u.loading) {
+        if (u.failedAt == null) setUpNext(Object.assign({}, u, { failedAt: index }));
+        else startUpNext(u.start);
+      }
+      return;
+    }
+    if (u.loading || u.ended) return;
+    if (!u.autoplay && u.mode !== 'list') return;
+    refill();
+  }, [index, queue.length, upNext, target.kind, autoplayPref]); // eslint-disable-line
+
+  /* The Autoplay switch. Off: the waiting picks of a mix leave the queue
+   * and nothing more is added (a list keeps the rest of itself, then
+   * stops). Remembered for this browser. Rejects when the server didn't
+   * take it (the switch still says what this browser does). */
+  const setAutoplay = async (on) => {
+    _upNextSetAutoplayPref(!!on);
+    setAutoplayPrefState(!!on);
+    autoplayPrefRef.current = !!on;
+    const u = upNextRef.current;
+    if (!u) return;
+    setUpNext(Object.assign({}, u, { autoplay: !!on, ended: on ? false : u.ended, failedAt: null }));
+    if (!on && u.mode !== 'list') {
+      setQueue((q) => q.filter((it, i) => !(i > indexRef.current && it && it.origin === 'auto')));
+    }
+    if (u.id) await apiPatch(`/api/music/up-next/sessions/${u.id}`, { autoplay: !!on });
+  };
+  /* "Less like this" on the pick at queue row `i`: that artist is out of
+   * the mix for the rest of the session, their waiting picks with it. */
+  const lessLikeThis = async (i) => {
+    const it = queueRef.current[i];
+    const u = upNextRef.current;
+    if (!it || it.origin !== 'auto' || !u || !u.id || it.sessionId !== u.id) return [];
+    const r = await apiPost(`/api/music/up-next/sessions/${u.id}/feedback`,
+      { seq: it.upNextSeq, kind: 'less_like_this' });
+    const gone = new Set((r && r.removed) || []);
+    gone.add(it.upNextSeq);
+    setQueue((q) => q.filter((x, j) => !(j > indexRef.current && x && x.origin === 'auto'
+      && x.sessionId === u.id && gone.has(x.upNextSeq))));
+    return [...gone];
+  };
+  /* Whose taste the mix follows (the "for" selector): the same "listening
+   * as" the rest of the player uses; the session follows it from its next
+   * batch. */
+  const setUpNextListener = async (pid) => {
+    setListenerPersonId(pid);
+    const u = upNextRef.current;
+    if (!u || !u.id) return;
+    const s = await apiPatch(`/api/music/up-next/sessions/${u.id}`, { listener_person_id: pid == null ? null : pid });
+    if (s && upNextRef.current && upNextRef.current.id === u.id) {
+      setUpNext(Object.assign({}, upNextRef.current, { person: s.person || null }));
+    }
+  };
 
   const jumpTo = React.useCallback((i) => {
     if (i < 0 || i >= queue.length) return;
@@ -1585,6 +1875,8 @@ const PlaybackProvider = ({ children }) => {
     volume, muted, eqBands, eqEnabled, playbackRate,
     target, remoteNp, sleepRemainingSec, recent,
     playItems, enqueue, playNext, removeAt, moveItem, clearQueue, jumpTo,
+    // Up next.
+    upNext, autoplay: autoplayPref, playFromList, playList, setAutoplay, lessLikeThis, setUpNextListener,
     toggle, play, pause, stop, closePlayer, next, prev, seek, seekBy,
     setVolume, toggleMute,
     setEqBand, resetEq, setEqEnabled, setPlaybackRate,
@@ -2224,13 +2516,14 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed }) => {
       {tab === 'queue' && (
         <>
           <div className="mp-sheet-sec-head">
-            <span>queue · {p.queue.length}</span>
+            <span>queue · {playerQueueCount(p.queue, p.index)}</span>
             <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue" aria-label="clear queue"/>
           </div>
           <div className="mp-q-list">
             <PlayerQueueRows queue={p.queue} index={p.index}
                              jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
           </div>
+          <PlayerUpNext p={p}/>
           <PlayerQueueAdd p={p}/>
         </>
       )}
@@ -2345,9 +2638,11 @@ const CoverTile = ({ item, size = 44, radius = 'var(--r-sm)' }) => {
  * position ticker re-rendering the player doesn't re-render every row. */
 const PlayerQueueRows = React.memo(function PlayerQueueRows({ queue, index, jumpTo, removeAt, moveItem }) {
   const dragFrom = React.useRef(null);
+  // Up next's picks still to come have their own section (PlayerUpNext).
+  const shown = queue.filter((it, i) => !_upNextWaiting(it, i, index));
   return (
     <>
-      {queue.map((it, i) => (
+      {queue.map((it, i) => (_upNextWaiting(it, i, index) ? null : (
         <div key={it.uid} className={`mp-q-row${i === index ? ' cur' : ''}`}
              draggable onDragStart={() => { dragFrom.current = i; }}
              onDragOver={(e) => e.preventDefault()}
@@ -2361,11 +2656,137 @@ const PlayerQueueRows = React.memo(function PlayerQueueRows({ queue, index, jump
           </div>
           <IconButton name="x" onClick={() => removeAt(i)} title="remove" aria-label={`remove ${it.title}`}/>
         </div>
-      ))}
-      {queue.length === 0 && <div className="mp-q-empty">queue is empty</div>}
+      )))}
+      {shown.length === 0 && <div className="mp-q-empty">queue is empty</div>}
     </>
   );
 });
+
+/* An Up next pick still to come (after the song playing). */
+const _upNextWaiting = (it, i, index) => !!(it && it.origin === 'auto' && i > index);
+/* The queue's count: what plays and what somebody asked for, not the picks. */
+const playerQueueCount = (queue, index) => (queue || []).filter((it, i) => !_upNextWaiting(it, i, index)).length;
+
+/* ── The queue's "up next" section (both queue panels) ──────────────────
+ * Below the songs somebody asked for: what Up next will play after them,
+ * each with why it was picked, a "less like this" (that artist is out of
+ * the mix for the rest of the session) and remove. Its head says what the
+ * mix is built from ("based on <song>", "shuffled from <list>") and holds
+ * the Autoplay switch; "for <name>" picks whose taste it follows when the
+ * household has two people or more. Tap a row to play it now.
+ *
+ * No misleading controls: nothing at all when the queue has no library
+ * song (streams, podcasts, books), for a browser that isn't paired (a
+ * guest), or when the server refused this play's Up next. "up next needs
+ * the home server" when it couldn't be reached, instead of picks that
+ * won't come. */
+const PlayerUpNext = ({ p }) => {
+  const [note, setNote] = React.useState('');
+  const [busy, setBusy] = React.useState(null);      // the row whose "less like this" is on its way
+  const u = p.upNext || null;
+  const paired = _upNextPaired();
+  const library = (p.queue || []).some((it) => it && it.kind === 'library' && it.trackId != null);
+  const show = !!(p.available && paired && library && !(u && u.refused));
+  // The roster is a household read; quiet, so it never opens a prompt.
+  const { items: people } = useApiList(show ? '/api/people' : null,
+    { eventTypes: ['people.last_seen.changed'], quiet: true });
+  if (!show) return null;
+  const casting = !!(p.target && p.target.kind === 'room');
+  const on = u ? !!u.autoplay : !!p.autoplay;
+  const listMode = !!(u && u.mode === 'list');
+  const listName = u && u.seed && u.seed.list ? u.seed.list.name : null;
+  const rows = [];
+  (p.queue || []).forEach((it, i) => { if (_upNextWaiting(it, i, p.index)) rows.push({ it, i }); });
+  const basis = upNextBasis(u);
+  const roster = (people || []).filter((x) => x && x.id != null);
+  const showFor = roster.length >= 2 && !!(u && u.id);
+  const forValue = u && u.person ? String(u.person.id) : '';
+  const toggle = async (next) => {
+    setNote('');
+    try { await p.setAutoplay(next); }
+    catch (e) { if (!isAuthFailure(e)) setNote(`Couldn't tell the home server: ${apiErrorText(e)}`); }
+  };
+  const lessLike = async (row) => {
+    setNote(''); setBusy(row.it.uid);
+    try {
+      const gone = await p.lessLikeThis(row.i);
+      const n = Math.max(0, (gone || []).length - 1);
+      setNote(`No more ${row.it.artist || 'of that'} in this mix${n ? ` (${n} more taken out)` : ''}.`);
+    } catch (e) {
+      if (!isAuthFailure(e)) setNote(`Couldn't change the mix: ${apiErrorText(e)}`);
+    } finally { setBusy(null); }
+  };
+  const pickFor = async (v) => {
+    setNote('');
+    try { await p.setUpNextListener(v === '' ? null : Number(v)); }
+    catch (e) { if (!isAuthFailure(e)) setNote(`Couldn't change whose mix this is: ${apiErrorText(e)}`); }
+  };
+  let line = null;
+  if (u && u.offline) line = 'up next needs the home server';
+  else if (!on) {
+    // A list keeps the rest of itself: say where it stops.
+    line = listMode && rows.length ? `autoplay is off — stops after the last song of ${listName || 'this list'}`
+      : 'autoplay is off — the queue stops at the end';
+  }
+  else if (u && u.loading) line = 'finding songs like this one…';
+  else if (!rows.length && on) line = 'similar songs join here when the queue is nearly over';
+  return (
+    <section className="mp-un" aria-label="up next">
+      <div className="mp-un-head">
+        <div className="mp-un-what">
+          <span className="mp-un-name">up next</span>
+          {basis && <span className="mp-un-basis">{basis}</span>}
+        </div>
+        <label className="mp-un-auto" title="keep playing similar songs when the queue ends">
+          <input type="checkbox" role="switch" checked={on} aria-checked={on}
+                 aria-label="autoplay: keep playing similar songs when the queue ends"
+                 onChange={(e) => toggle(!!e.target.checked)}/>
+          <span>autoplay</span>
+        </label>
+      </div>
+      {showFor && (
+        <label className="mp-un-for">
+          <span>for</span>
+          <select value={forValue} aria-label="whose taste this mix follows"
+                  onChange={(e) => pickFor(e.target.value)}>
+            <option value="">household</option>
+            {roster.map((x) => <option key={x.id} value={String(x.id)}>{x.name}</option>)}
+          </select>
+        </label>
+      )}
+      {line && <div className="mp-un-line" role="status">{line}</div>}
+      {rows.length > 0 && (
+        <div className="mp-q-list mp-un-list">
+          {rows.map((row) => (
+            <div key={row.it.uid} className="mp-q-row mp-un-row">
+              <div className="mp-q-num mono" aria-hidden="true"><Icon name="sparkles" size={12}/></div>
+              <div className="mp-q-main" role="button" tabIndex={0} title="play now"
+                   onClick={() => p.jumpTo(row.i)}
+                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); p.jumpTo(row.i); } }}>
+                <div className="mp-q-title">{row.it.title}</div>
+                <div className="mp-un-sub">
+                  <span className="mp-q-sub mono">{row.it.artist || '—'}</span>
+                  {row.it.reasonLabel && <span className="mp-un-why">{row.it.reasonLabel}</span>}
+                </div>
+              </div>
+              <div className="mp-un-acts">
+                <IconButton name="thumbs-down" onClick={() => lessLike(row)} disabled={busy === row.it.uid}
+                            title={`less like this: no more ${row.it.artist || 'of this artist'} in this mix`}
+                            aria-label={`less like this: ${row.it.artist || row.it.title}`}/>
+                <IconButton name="x" onClick={() => p.removeAt(row.i)} title="remove"
+                            aria-label={`remove ${row.it.title}`}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {casting && rows.length > 0 && (
+        <div className="mp-un-line">{p.target.roomId} plays these as they were sent; up next adds more while it plays here</div>
+      )}
+      <div className="mp-q-note" role="status" aria-live="polite">{note}</div>
+    </section>
+  );
+};
 
 /* "Save queue as playlist" — the library tracks in the queue, in order.
  * A secondary control under the queue's search: a button that opens a small
@@ -2601,7 +3022,7 @@ const QueuePanel = ({ p, onClose }) => (
                   background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                   boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>queue · {p.queue.length}</div>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>queue · {playerQueueCount(p.queue, p.index)}</div>
         <div style={{ display: 'flex', gap: 4 }}>
           <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue"/>
           <IconButton name="x" onClick={onClose}/>
@@ -2610,6 +3031,7 @@ const QueuePanel = ({ p, onClose }) => (
       <div className="mp-q-list" style={{ overflowY: 'auto', flex: 1 }}>
         <PlayerQueueRows queue={p.queue} index={p.index}
                          jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
+        <PlayerUpNext p={p}/>
       </div>
       <PlayerQueueAdd p={p}/>
     </div>
@@ -2738,4 +3160,5 @@ Object.assign(window, {
   resolveSourceStreamUrl,
   playerUrls, OfflineCache, SpokenAudio,
   CoverTile, EQ_BANDS, EQ_LABELS, EQ_MIN_DB, EQ_MAX_DB,
+  ListenLog, PlayerUpNext, playerQueueCount, upNextBasis,
 });

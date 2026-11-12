@@ -1634,6 +1634,14 @@
        "only": "dashboard"
       },
       {
+       "text": "**Up next** keeps the music going in this browser. Play a song from a list (a playlist, an artist, an album, a genre, search results) and the rest of that list follows it, shuffled toward songs like the ones you let play, then round again. Play a song on its own and similar songs from your library follow it. Play or shuffle a whole list and it plays as it is; similar songs join when it is nearly over. They show in the **Queue** panel under **up next**, below the songs you asked for, each with why it was picked (\"same artist\", \"90s\", \"from road trip\", \"wildcard\"). Tap one to play it now, the thumbs-down for **less like this** (no more of that artist for this mix), or the x to remove it. Songs you add always go before them. Skipping a song in its first 30 seconds plays that artist less.",
+       "only": "dashboard"
+      },
+      {
+       "text": "The **autoplay** switch at the top of **up next** turns it off: the queue then stops at its end (a song played from a list still plays the rest of that list). This browser remembers it. With two people or more in the household, **for** picks whose taste the mix follows (**household** for everyone); it starts at the person this browser is (\"this is me\" on People) and is **household** on a shared screen.",
+       "only": "dashboard"
+      },
+      {
        "text": "A MilkDrop visualizer: in the player, switch on **milkdrop visualizer**. It draws what this browser is playing (not a room), behind the panel. Its bar has previous and next preset, random, lock, the preset list, **panel** (how much the panel covers the picture, 30 to 100 %) and full screen (the picture alone; Esc leaves). The arrow keys change preset while the picture has the focus. Full screen and playing, the screen stays on.",
        "only": "dashboard"
       },
