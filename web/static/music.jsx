@@ -1638,10 +1638,11 @@ const PlaylistsTab = ({ playlists, loading, onSelect, onPlay, onCreate, fire }) 
  * library_tracks.favorited, for real playlists it deletes from
  * playlist_tracks (the backend handles the routing).
  *
- * Footer holds Play / Shuffle buttons (both POST
+ * "play here" / "shuffle here" play the whole list (the tracks route is
+ * unpaged) in this browser. Footer holds Play / Shuffle buttons (both POST
  * /v1/admin/music/play-playlist with shuffle=false/true), Rename,
  * and Delete — the last two are disabled for Favorites. */
-const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveTrack, onDelete, onEdit, onReorder, fire }) => {
+const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowserPlayTracks, onRemoveTrack, onDelete, onEdit, onReorder, fire }) => {
   const [room, setRoom] = React.useState(rooms[0] || null);
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState({ name: '', description: '', cover_color: '', cover_emoji: '' });
@@ -1722,6 +1723,13 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
                 {editing ? 'cancel' : 'edit'}
               </Button>
             )}
+          </div>
+          <div className="label" style={{ margin: '12px 0 6px' }}>this browser</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button icon="headphones" disabled={items.length === 0}
+                    onClick={() => { onBrowserPlayTracks(items, playlist.name); onClose(); }}>play here</Button>
+            <Button icon="shuffle" disabled={items.length === 0}
+                    onClick={() => { onBrowserPlayTracks(shuffledIds(items), playlist.name); onClose(); }}>shuffle here</Button>
           </div>
           {editing && !playlist.is_virtual && (
             <div style={{ marginTop: 12 }}>
@@ -2579,6 +2587,7 @@ const MusicPage = () => {
       <PlaylistDrawer playlist={openPlaylist} rooms={rooms}
                       onClose={() => setOpenPlaylist(null)}
                       onPlay={onPlayPlaylist} onShuffle={onShufflePlaylist}
+                      onBrowserPlayTracks={onBrowserPlayTracks}
                       onRemoveTrack={onRemoveFromPlaylist}
                       onDelete={onDeletePlaylist} onEdit={onEditPlaylist}
                       onReorder={onReorderPlaylist}

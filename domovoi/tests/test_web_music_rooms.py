@@ -98,6 +98,15 @@ SCENARIOS = {
         "script": ("h.render(); const btns = h.findAll({ type: 'button' }).map(h.plain);"
                    " return { texts: h.text(), btns };"),
     },
+    "playlist_drawer_browser": {
+        "files": FILES, "component": "PlaylistDrawer",
+        "props": {"playlist": PLAYLIST, "rooms": []},
+        "fnProps": ["onClose", "onPlay", "onShuffle", "onBrowserPlayTracks", "onRemoveTrack", "onDelete",
+                    "onEdit", "onReorder", "fire"],
+        "api": {"GET /api/playlists/2/tracks": [TRACK, {**TRACK, "id": 7, "title": "Cold Embers"}]},
+        "script": ("h.render(); const btns = h.findAll({ type: 'button' }).map(h.plain);"
+                   " return { btns };"),
+    },
     "add_music_no_rooms": {
         "files": FILES, "component": "AddMusicBar",
         "props": {"rooms": [], "canFulfillQuery": True}, "fnProps": ["fire", "onQueued"],
@@ -157,6 +166,15 @@ def test_drawers_say_no_rooms_and_disable_play(driven):
     for label in ("play", "shuffle"):
         btn = next(b for b in p["btns"] if b["text"] == label)
         assert btn["props"].get("disabled") is True, label
+
+
+def test_playlist_drawer_offers_play_here_without_rooms(driven):
+    btns = driven["playlist_drawer_browser"]["btns"]
+    for label in ("play here", "shuffle here"):
+        btn = next(b for b in btns if b["text"] == label)
+        assert not btn["props"].get("disabled"), label
+    empty = driven["playlist_drawer_no_rooms"]["btns"]
+    assert next(b for b in empty if b["text"] == "play here")["props"].get("disabled") is True
 
 
 def test_drawer_with_a_room_still_plays_there(driven):
