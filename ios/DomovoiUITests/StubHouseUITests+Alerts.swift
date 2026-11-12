@@ -227,6 +227,30 @@ extension StubHouseUITests {
         !finding.hasSuffix("| element: nil")
     }
 
+    /// The element frame `auditIssues` wrote into a finding, or nil when the
+    /// finding has none (an anonymous one, or a format this cannot read).
+    static func alertsFrame(_ finding: String) -> CGRect? {
+        guard let start = finding.range(of: " frame=(") else { return nil }
+        let rest = finding[start.upperBound...]
+        guard let end = rest.firstIndex(of: ")") else { return nil }
+        let parts = rest[..<end].split(separator: ",").map {
+            Double($0.trimmingCharacters(in: .whitespaces))
+        }
+        guard parts.count == 4, let x = parts[0], let y = parts[1],
+              let w = parts[2], let h = parts[3] else { return nil }
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    /// The box the alerts row draws in: its sentence and its two buttons.
+    @MainActor
+    func alertsRowBox(in app: XCUIApplication) -> CGRect {
+        [Self.alertsOffRow, Self.alertsNotNow, Self.alertsTurnOn]
+            .map { app.descendants(matching: .any)[$0].firstMatch }
+            .filter { $0.exists }
+            .map(\.frame)
+            .reduce(CGRect.null) { $0.union($1) }
+    }
+
     /// Findings per headline (`Contrast failed`, `Dynamic Type…`), which is
     /// what can be compared between two audits of the same screen when the
     /// element cannot.
@@ -607,8 +631,32 @@ extension StubHouseUITests {
         //     them than the same screen had without the row. This is not a
         //     tolerance and it is not a pinned total: it is the same screen
         //     twice, and one extra `Contrast failed` of any kind fails it.
-        let added = Set(rest.filter(Self.alertsIsAttributed).map(Self.alertsSignature))
-            .subtracting(baseFound)
+        //
+        // I030 flipped S012: the baseline's one `Contrast failed` came back
+        // `element: nil` and the run with the row named the now-playing line
+        // (32.0, 762.6), far below the row. A named finding is therefore left
+        // out of this half only when all three hold: it sits outside the
+        // row's box, the baseline had an anonymous finding under the same
+        // headline, and that headline did not grow (the second half still
+        // asserts that). Anything named inside the row, or any extra finding,
+        // still fails.
+        let rowBox = alertsRowBox(in: app)
+        let baseHeadsAnon = Self.alertsHeadlineCounts(
+            baseRest.filter { !Self.alertsIsAttributed($0) }
+        )
+        let nowHeads = Self.alertsHeadlineCounts(rest)
+        let reattributed: (String) -> Bool = { finding in
+            guard let frame = Self.alertsFrame(finding), !rowBox.isNull,
+                  !frame.intersects(rowBox) else { return false }
+            let head = Self.alertsHeadlineCounts([finding]).keys.first ?? finding
+            return (baseHeadsAnon[head] ?? 0) > 0
+                && (nowHeads[head] ?? 0) <= (baseHeads[head] ?? 0)
+        }
+        print("alerts: row box=\(rowBox)")
+        let added = Set(
+            rest.filter(Self.alertsIsAttributed).filter { !reattributed($0) }
+                .map(Self.alertsSignature)
+        ).subtracting(baseFound)
         XCTAssertEqual(
             [], added.sorted(),
             "the alerts row added these named findings to Home's audit "
