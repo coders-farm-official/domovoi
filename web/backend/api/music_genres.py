@@ -5,7 +5,8 @@
   limit / cursor / offset, ``total``, ``next_cursor``). Every answer also
   says how far the genre read has got (``tags_read`` of ``tags_total``,
   ``reading``) and how many read tracks have no genre (``untagged_count``),
-  so a list that is still filling in can say so.
+  of which how many are waiting for a MusicBrainz genre
+  (``musicbrainz_pending``), so a list that is still filling in can say so.
 * ``GET /api/music/genre?key=`` — one genre: its name, track count and
   every track id (artist order) for "play" and "shuffle" in a room. Its
   tracks as rows come from ``GET /api/music/library?genre=<key>`` (paged,
@@ -18,7 +19,12 @@ with two genres counts under both. Genres come from the files' own tags,
 read by the indexer for new files and by the core's tag backfill
 (``domovoi/workers/library_tag_backfill.py``) for the tracks that were
 already there; until that pass is done the list is partial and
-``reading`` is true.
+``reading`` is true. A track whose file names no genre but which song
+recognition matched gets one from MusicBrainz (V052,
+``domovoi/workers/library_year_fetch.py``): until it has been asked it is
+in the "no genre" row AND counted in ``musicbrainz_pending``, which is 0
+whenever that lookup cannot run (song recognition off, Internet "never"),
+so a wait that would never end is never shown as one.
 
 Open reads, like ``GET /api/music/library`` and the Artists list: names of
 music only. Worked out from one grouped query per request (one row per
@@ -33,6 +39,8 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from domovoi import egress
+from domovoi.config import settings as core_settings
 from domovoi.library_genres import genre_label
 from domovoi.library_genres import TAGS_VERSION
 from web.backend.api import music_search, paging
@@ -65,8 +73,11 @@ class GenrePage(BaseModel):
     tags_read: int = 0
     tags_total: int = 0
     reading: bool = False
-    # Read tracks that have no genre in their tags.
+    # Read tracks that have no genre (the "no genre" row).
     untagged_count: int = 0
+    # Of those, the ones waiting for a MusicBrainz genre (a recording id,
+    # not asked yet); 0 when the lookup can't run.
+    musicbrainz_pending: int = 0
 
 
 class GenreDetail(BaseModel):
@@ -77,14 +88,24 @@ class GenreDetail(BaseModel):
     track_ids_truncated: bool = False
 
 
-async def _progress(s) -> tuple[int, int, int]:
+def musicbrainz_lookup_possible() -> bool:
+    """Whether the core's MusicBrainz genre lookup can ever run here: song
+    recognition on and the Internet answer not "never" (being offline for
+    now is a wait, not a never)."""
+    return bool(core_settings.library_enricher_enabled) and egress.internet_allowed()
+
+
+async def _progress(s) -> tuple[int, int, int, int]:
     row = (await s.execute(text(
         "SELECT count(*) FILTER (WHERE tags_version >= :v),"
         " count(*),"
-        " count(*) FILTER (WHERE tags_version >= :v AND coalesce(cardinality(genre_keys), 0) = 0)"
+        " count(*) FILTER (WHERE tags_version >= :v AND coalesce(cardinality(genre_keys), 0) = 0),"
+        " count(*) FILTER (WHERE tags_version >= :v AND coalesce(cardinality(genre_keys), 0) = 0"
+        "                  AND musicbrainz_recording_id IS NOT NULL AND genre_checked_at IS NULL)"
         " FROM library_tracks"
     ), {"v": TAGS_VERSION})).one()
-    return int(row[0]), int(row[1]), int(row[2])
+    pending = int(row[3]) if musicbrainz_lookup_possible() else 0
+    return int(row[0]), int(row[1]), int(row[2]), pending
 
 
 def genre_where(key: str, params: dict) -> str:
@@ -117,7 +138,7 @@ async def list_genres(
             " WHERE genre_keys IS NOT NULL"
             " GROUP BY k"
         ))).all()
-        read, total_tracks, untagged = await _progress(s)
+        read, total_tracks, untagged, mb_pending = await _progress(s)
     tokens = music_search.search_tokens(q) if q else []
     ranked: list[tuple[tuple, GenreRow]] = []
     for key, n, first_id in rows:
@@ -140,7 +161,7 @@ async def list_genres(
     return GenrePage(
         items=page, **fields,
         tags_read=read, tags_total=total_tracks, reading=read < total_tracks,
-        untagged_count=untagged,
+        untagged_count=untagged, musicbrainz_pending=mb_pending,
     )
 
 

@@ -627,7 +627,11 @@ MPD text search that was always there.
   `first-release-date` of a track that has a recording id and no year:
   the id only, through the same paced client, under `library_enricher_enabled`,
   never under Internet "never" and only while online; a tag year always
-  wins.
+  wins. Since V052 the same request (`inc=genres+artist-credits+releases+
+  release-groups`) also gives a track whose file names no genre the
+  top-voted MusicBrainz genres (recording, else release group, else
+  artist; `clients/musicbrainz.py` `recording_genres`), `genre_source =
+  'musicbrainz'`; the backfill's read of a file genre replaces it.
 * **The gate** (`scripts/eval_spoken_match.py`, test `spoken_gate`): the
   frozen held-out request set, parsed as production parses it, measures the
   resolver — and is never used to tune it. It reports every group over all

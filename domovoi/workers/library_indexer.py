@@ -321,9 +321,11 @@ async def _insert_track(session: Any, path: Path, *, known_new: bool = False) ->
             """
             INSERT INTO library_tracks
               (file_path, title, artist, album, duration_sec, added_via,
-               genre, genre_keys, year, year_source, tags_version)
+               genre, genre_keys, genre_source, year, year_source, tags_version)
             SELECT :fp, :t, :a, :al, :d, 'manual',
-                   :g, CAST(:gk AS text[]), CAST(:y AS smallint),
+                   :g, CAST(:gk AS text[]),
+                   CASE WHEN CAST(:gk AS text[]) IS NULL THEN NULL ELSE 'tag' END,
+                   CAST(:y AS smallint),
                    CASE WHEN CAST(:y AS smallint) IS NULL THEN NULL ELSE 'tag' END, :tv
             WHERE NOT EXISTS (
               SELECT 1 FROM library_tracks WHERE file_path = :fp

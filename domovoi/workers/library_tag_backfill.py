@@ -20,7 +20,9 @@ the pass is about two and a half minutes for 6,000 tracks and three
 quarters of an hour for 100,000 (slower on a network share).
 
 **What a read changes.** ``genre`` and ``genre_keys`` are set to what the
-file says (NULL when it says nothing); ``year`` only when the file gives
+file says (``genre_source = 'tag'``, V052), replacing a genre MusicBrainz
+gave; when the file says nothing they are NULL, except that a MusicBrainz
+genre stays (``library_year_fetch.py``); ``year`` only when the file gives
 one (``year_source = 'tag'``) — a year MusicBrainz gave earlier stays when
 the file has none. Title, artist and album are never touched: the
 household may have edited them. Each row is written under its own
@@ -110,10 +112,19 @@ _PENDING_SQL = text(
     "SELECT id, file_path FROM library_tracks WHERE tags_version < :v AND id > :after "
     "ORDER BY id LIMIT :n"
 )
-# year / year_source change only when the file gives a year; the
-# tags_version guard makes a row another writer already read a no-op.
+# year / year_source change only when the file gives a year; genre /
+# genre_keys are the file's, except that a MusicBrainz genre (V052) stays
+# when the file names none (the CASEs read the row as it was before this
+# UPDATE); the tags_version guard makes a row another writer already read
+# a no-op.
 _WRITE_SQL = text(
-    "UPDATE library_tracks SET genre = :g, genre_keys = CAST(:gk AS text[]), "
+    "UPDATE library_tracks SET "
+    "genre = CASE WHEN CAST(:gk AS text[]) IS NULL AND genre_source = 'musicbrainz' "
+    "THEN genre ELSE CAST(:g AS text) END, "
+    "genre_keys = CASE WHEN CAST(:gk AS text[]) IS NULL AND genre_source = 'musicbrainz' "
+    "THEN genre_keys ELSE CAST(:gk AS text[]) END, "
+    "genre_source = CASE WHEN CAST(:gk AS text[]) IS NOT NULL THEN 'tag' "
+    "WHEN genre_source = 'musicbrainz' THEN genre_source ELSE NULL END, "
     "year = COALESCE(CAST(:y AS smallint), year), "
     "year_source = CASE WHEN CAST(:y AS smallint) IS NULL THEN year_source ELSE 'tag' END, "
     "tags_version = :v "

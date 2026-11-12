@@ -52,6 +52,7 @@ import com.domovoi.app.update.AppUpdateCard
 import com.domovoi.app.update.rememberAppUpdateNotice
 import com.domovoi.app.ui.screens.manual.ManualRepository
 import com.domovoi.app.ui.screens.manual.startPhrase
+import com.domovoi.app.ui.screens.music.RoomQueueSheet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -128,6 +129,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     // only schedules the re-read of it (below), so a fresh read never
     // renders against a stale second.
     var tick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var queueRoom by remember { mutableStateOf<String?>(null) }
     val nowMs = maxOf(tick, System.currentTimeMillis())
 
     // ── reads (all open) ──
@@ -429,6 +431,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             onOpenRoom = { navigate(Route.Satellites) },
             onAct = onAct,
             onStopAll = onStopAll,
+            onOpenQueue = { queueRoom = it },
         )
     }
     val announceSec: @Composable () -> Unit = {
@@ -506,6 +509,8 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             }
         }
     }
+    // A room row's queue button: that room's queue (batch 2 §2).
+    queueRoom?.let { r -> RoomQueueSheet(r) { queueRoom = null } }
 }
 
 /** The manual read on a first run: [manual] is null when it failed. */

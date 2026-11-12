@@ -67,6 +67,8 @@ internal fun NowPlayingStrip(
     onPlayRandom: (String) -> Unit,
     transport: RoomTransport,
     onFavorite: (String) -> Unit,
+    /** The room's queue button ([RoomQueueSheet]); null: none. */
+    onOpenQueue: ((String) -> Unit)? = null,
 ) {
     if (nowPlaying.isEmpty()) {
         DomovoiCard(Modifier.fillMaxWidth()) {
@@ -88,6 +90,7 @@ internal fun NowPlayingStrip(
                     NPCard(
                         np, tick, Modifier.weight(1f),
                         onPlayRandom = onPlayRandom, transport = transport, onFavorite = onFavorite,
+                        onOpenQueue = onOpenQueue,
                     )
                 }
                 repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
@@ -104,6 +107,7 @@ private fun NPCard(
     onPlayRandom: (String) -> Unit,
     transport: RoomTransport,
     onFavorite: (String) -> Unit,
+    onOpenQueue: ((String) -> Unit)?,
 ) {
     val context = LocalContext.current
     val playing = np.state == "play" && np.song != null
@@ -114,6 +118,7 @@ private fun NPCard(
 
     DomovoiCard(modifier = modifier, padding = 14) {
         Row(
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -137,6 +142,11 @@ private fun NPCard(
                         toneForSlug(caps.toneFor(np.source)),
                     )
                 }
+            }
+            // The room's queue, one tap from its card (batch 2 §2).
+            if (onOpenQueue != null) {
+                Spacer(Modifier.weight(1f))
+                RoomQueueButton(np.roomId) { onOpenQueue(np.roomId) }
             }
         }
         Spacer(Modifier.height(8.dp))

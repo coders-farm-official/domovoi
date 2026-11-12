@@ -1270,7 +1270,7 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        log.info("heard name %r sounds like person_id=%d %r: asking", heard, person_id, name)
+        log.info("heard name %r sounds like person_id=%d %r: asking", said(heard), person_id, name)
         return Response(
             text=f"Did you mean {name}? I already know someone called {name}.",
             session_id=ctx.session_id,

@@ -20,7 +20,9 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -70,6 +72,7 @@ internal fun PlaylistDrawer(
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
+    val queueSong = rememberSongQueue()
     // The app's scope, not this drawer's: "play" closes the drawer before
     // the server answers, and a back gesture can close it mid-request
     // (ServerAction.kt says why). [open] keeps a late answer off a drawer
@@ -393,6 +396,9 @@ internal fun PlaylistDrawer(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
+                            // This phone's queue, or the room it casts to (batch 2 §2).
+                            SmallIconButton(Icons.Filled.SubdirectoryArrowRight, "play next") { queueSong(t, true) }
+                            SmallIconButton(Icons.Filled.QueueMusic, "add to queue") { queueSong(t, false) }
                             if (!playlist.isVirtual) {
                                 SmallIconButton(
                                     Icons.Filled.KeyboardArrowUp, "move up",
