@@ -40,7 +40,7 @@ final class NavGroupsTests: XCTestCase {
             [
                 .item(.chat),
                 .group(media, [.music, .podcasts, .audiobooks, .videos, .stations, .images]),
-                .group(tools, [.news, .calendar, .files]),
+                .group(tools, [.news, .calendar, .lists, .files]),
             ],
             navTree(visible(both, shared: false))
         )
@@ -60,7 +60,7 @@ final class NavGroupsTests: XCTestCase {
         XCTAssertEqual([.stations: "media", .images: "media"], pluginNavGroups)
         let tree = navTree(visible(both, shared: false), pluginGroups: [.stations: "tools"])
         // Members keep the default order: Stations (position 5) leads News (7).
-        XCTAssertEqual([.stations, .news, .calendar, .files], try XCTUnwrap(group(tree, "tools")).routes)
+        XCTAssertEqual([.stations, .news, .calendar, .lists, .files], try XCTUnwrap(group(tree, "tools")).routes)
         // A page whose group no group is: top level, at its position.
         XCTAssertTrue(tree.contains(.item(.images)))
     }
@@ -76,7 +76,7 @@ final class NavGroupsTests: XCTestCase {
                 .item(.chat),
                 .group(media, [.music, .podcasts, .audiobooks, .videos, .images]),
                 .item(.stations),
-                .group(tools, [.news, .calendar, .files]),
+                .group(tools, [.news, .calendar, .lists, .files]),
             ],
             navTree(visible(both, shared: false), pluginGroups: [.stations: "foo", .images: "media"])
         )
@@ -92,11 +92,13 @@ final class NavGroupsTests: XCTestCase {
     /// `aSharedScreenDropsPeopleNewsFilesAndChat`
     func testASharedScreenDropsNewsFilesAndChat() throws {
         let media = try XCTUnwrap(info("media"))
+        let tools = try XCTUnwrap(info("tools"))
         XCTAssertEqual(
             [
                 .group(media, [.music, .podcasts, .audiobooks, .videos, .stations, .images]),
-                // Tools keeps only Calendar: one item, so flat.
-                .item(.calendar),
+                // Tools keeps Calendar and Lists (the kitchen tablet's
+                // shopping list is the point of it) — `RoutesTest.kt`, 3a3b6422.
+                .group(tools, [.calendar, .lists]),
             ],
             navTree(visible(both, shared: true))
         )
@@ -121,7 +123,7 @@ final class NavGroupsTests: XCTestCase {
         XCTAssertEqual(media.systemImage, renamed.info.systemImage)
         XCTAssertTrue(renamed.info.openByDefault)
         let tools = try XCTUnwrap(group(tree, "tools"))
-        XCTAssertEqual([.news, .calendar], tools.routes)
+        XCTAssertEqual([.news, .calendar, .lists], tools.routes)
         XCTAssertEqual(
             [.item(.chat), .group(renamed.info, renamed.routes), .group(tools.info, tools.routes)],
             tree
@@ -146,7 +148,7 @@ final class NavGroupsTests: XCTestCase {
         let media = try XCTUnwrap(group(tree, "media"))
         XCTAssertEqual([.music, .podcasts, .audiobooks, .images], media.routes)
         let tools = try XCTUnwrap(group(tree, "tools"))
-        XCTAssertEqual([.news, .files], tools.routes)
+        XCTAssertEqual([.news, .lists, .files], tools.routes)
         // Sorted by default position: chat 0, media (music 1), kids
         // (videos 4), tools (news 7), calendar 8.
         XCTAssertEqual(
@@ -172,7 +174,7 @@ final class NavGroupsTests: XCTestCase {
             [
                 .item(.chat),
                 .group(media, [.music, .podcasts, .audiobooks, .videos, .stations, .images]),
-                .item(.news), .item(.calendar), .item(.files),
+                .item(.news), .item(.calendar), .item(.lists), .item(.files),
             ],
             navTree(visible(both, shared: false), override: override)
         )
@@ -232,6 +234,77 @@ final class NavGroupsTests: XCTestCase {
         XCTAssertEqual(none, NavGroupsOpen.openedFor(.chat, tree: tree, state: none))
     }
 
+    // MARK: - Lists (LISTS-MOBILE-HANDOFF.md §4, §7.5; Android 3a3b6422)
+
+    /// `listsIsInToolsAfterCalendarByDefault`
+    func testListsIsInToolsAfterCalendarByDefault() throws {
+        XCTAssertEqual("lists", navKeys[.lists])
+        XCTAssertEqual(.lists, routeForNavKey("lists"))
+        XCTAssertEqual("tools", defaultNav.groupOf[.lists])
+        XCTAssertEqual([.news, .calendar, .lists, .files], Array(workspaceRoutes.suffix(4)))
+        XCTAssertEqual(
+            [.news, .calendar, .lists, .files],
+            try XCTUnwrap(group(navTree(visible(.empty, shared: false)), "tools")).routes
+        )
+        // A bar choice, as Calendar is, and kept on a saved bar.
+        XCTAssertTrue(PhoneBar.choices.contains(.calendar))
+        XCTAssertTrue(PhoneBar.choices.contains(.lists))
+        let saved: [Route] = [.home, .lists, .music]
+        let seen = RouteVisibility(capabilities: .empty, sharedScreen: false, phoneCanChat: false)
+        XCTAssertEqual(saved, PhoneBar.routes(saved: saved, visibility: seen))
+        // On no launcher of the local shell — no server, or the phone's own
+        // assistant with none: nothing to read the lists from.
+        for chat in [true, false] {
+            for shared in [true, false] {
+                XCTAssertFalse(
+                    localTabs(phoneCanChat: chat, sharedScreen: shared, savedBooks: true).contains(.lists),
+                    "a local tab for Lists (chat \(chat), shared \(shared))"
+                )
+            }
+        }
+        XCTAssertNil(Route.lists.requiredCapability)
+        // A shared screen keeps it: the kitchen tablet's shopping list.
+        XCTAssertTrue(Route.lists.visibleOn(RouteVisibility(capabilities: .empty, sharedScreen: true, phoneCanChat: false)))
+        XCTAssertNil(settingsTabFor(.lists), "Lists is a screen of its own, not a Settings section")
+    }
+
+    /// `aSavedLayoutThatNeverNamedListsStillShowsIt`: a layout saved before
+    /// Lists existed never names it. With a Tools group it lands there, after
+    /// the pages the layout lists (the web's `resolveNavTree`); without one,
+    /// top level at its default place.
+    func testASavedLayoutThatNeverNamedListsStillShowsIt() throws {
+        let withTools = NavOverride(groups: [
+            NavOverrideGroup(id: "media", label: "Media", items: ["music", "videos"]),
+            NavOverrideGroup(id: "tools", label: "Things", items: ["files", "calendar"]),
+        ])
+        let tree = navTree(visible(.empty, shared: false), override: withTools)
+        let tools = try XCTUnwrap(group(tree, "tools"))
+        XCTAssertEqual([.files, .calendar, .news, .lists], tools.routes)
+        XCTAssertEqual("Things", tools.info.label)
+
+        let noTools = NavOverride(
+            groups: [NavOverrideGroup(id: "media", label: "Media", items: ["music", "videos", "files"])],
+            top: ["calendar", "news"]
+        )
+        let flat = navTree(visible(.empty, shared: false), override: noTools)
+        XCTAssertFalse(
+            flat.contains { entry in
+                if case .group(_, let routes) = entry { return routes.contains(.lists) }
+                return false
+            },
+            "Lists went into a group the layout has"
+        )
+        let media = try XCTUnwrap(group(flat, "media"))
+        XCTAssertEqual(
+            [
+                .item(.chat),
+                .group(media.info, media.routes),
+                .item(.news), .item(.calendar), .item(.lists),
+            ],
+            flat
+        )
+    }
+
     /// `HomeModelsTest.theGridIsGroupedAsTheDrawerIs`
     func testTheGridIsGroupedAsTheSidebarIs() throws {
         let media = try XCTUnwrap(info("media"))
@@ -244,7 +317,7 @@ final class NavGroupsTests: XCTestCase {
         XCTAssertEqual(
             [
                 TileRun(group: media, routes: [.podcasts, .audiobooks]),
-                TileRun(group: tools, routes: [.news, .calendar, .files]),
+                TileRun(group: tools, routes: [.news, .calendar, .lists, .files]),
                 TileRun(group: nil, routes: [.settings, .manual]),
             ],
             tileRuns(tiles)
@@ -266,7 +339,7 @@ final class NavGroupsTests: XCTestCase {
     func testTheGridHasNoPeopleTile() {
         let seen = RouteVisibility(capabilities: .empty, sharedScreen: false, phoneCanChat: true)
         XCTAssertEqual(
-            [.podcasts, .audiobooks, .news, .calendar, .files, .settings, .manual],
+            [.podcasts, .audiobooks, .news, .calendar, .lists, .files, .settings, .manual],
             everythingTiles(seen, bar: PhoneBar.routes(saved: nil, visibility: seen))
         )
     }
