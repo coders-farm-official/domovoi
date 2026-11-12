@@ -34,6 +34,7 @@ CORE_BANDS = {
     "timer": 160,
     "clock": 170,
     "calendar": 175,
+    "lists": 178,
     "repeat": 180,
     "double_check": 190,
     "dropin": 200,
@@ -239,6 +240,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
             "core.printer_pick", "core.scan_ready", "core.scan_more", "core.scan_read", "core.print_test",
         },
         "help_desk": {"core.help_send", "core.help_who"},
+        "lists": {"core.lists_create", "core.lists_clear", "core.lists_delete"},
         "documents": {
             "core.doc_pick", "core.doc_length", "core.doc_more", "core.doc_paused",
             "core.letter_author", "core.letter_dictation",

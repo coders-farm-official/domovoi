@@ -52,6 +52,7 @@ CORE_HANDLER_DISPLAY: list[dict[str, str]] = [
     {"name": "timer",         "label": "Timers",         "tone": "info"},
     {"name": "clock",         "label": "Clock",          "tone": "info"},
     {"name": "calendar",      "label": "Calendar",       "tone": "info"},
+    {"name": "lists",         "label": "Lists",          "tone": "info"},
     {"name": "repeat",        "label": "Repeat",         "tone": "info"},
     {"name": "double_check",  "label": "Double-Check",   "tone": "info"},
     {"name": "dropin",        "label": "Drop-In",        "tone": "comms"},

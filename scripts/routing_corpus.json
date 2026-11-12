@@ -1288,9 +1288,10 @@
     },
     {
       "utterance": "read me my shopping list",
-      "handler": null,
-      "tags": ["review-d7", "documents"],
-      "note": "2026-10-21 D7 review r1"
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["review-d7", "documents", "lists"],
+      "note": "2026-10-21 D7 review r1; the Lists handler (V048, 2026-11-11) owns it now"
     },
     {
       "utterance": "read me the calendar",
@@ -1518,6 +1519,55 @@
       "path": "fast",
       "tags": ["action", "rooms", "rooms-wording"],
       "note": "2026-10-23 rooms wording: the old word after a room's name is still dropped"
+    },
+    {
+      "utterance": "Add tarp the trailer to my to-do list.",
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["action", "lists"],
+      "note": "2026-11-11 live: no handler, Q&A said it was added and nothing was kept"
+    },
+    {
+      "utterance": "put milk on the shopping list",
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["action", "lists"],
+      "note": "2026-11-11 lists: music's 'put on' must not take it"
+    },
+    {
+      "utterance": "add milk, eggs and bread to the grocery list",
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["action", "lists"],
+      "note": "2026-11-11 lists: grocery is the Shopping list; commas split items"
+    },
+    {
+      "utterance": "what's on my to-do list",
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["action", "lists"],
+      "note": "2026-11-11 lists"
+    },
+    {
+      "utterance": "cross milk off the shopping list",
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["action", "lists"],
+      "note": "2026-11-11 lists"
+    },
+    {
+      "utterance": "what lists do I have",
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["action", "lists"],
+      "note": "2026-11-11 lists"
+    },
+    {
+      "utterance": "add this to my road trip playlist",
+      "handler": "playlist",
+      "path": "fast",
+      "tags": ["action", "lists"],
+      "note": "2026-11-11 lists: a playlist is never a list"
     }
   ]
 }

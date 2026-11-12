@@ -84,6 +84,9 @@ GATED = {
     # offered only when the turn says letter or dictate, or reads a named
     # kind of document (handlers/documents.py)
     "documents",
+    # offered only when the turn says list, to-do, shopping or groceries
+    # (handlers/lists.py)
+    "lists",
     # help_desk never: its fast path takes how-to questions about Domovoi
     # (or hands a how-to-worded command to its handler); its tool would be
     # bait for every other "how do I" question.
@@ -546,7 +549,7 @@ def test_every_registered_handler_is_offered_for_a_plain_command() -> None:
     music_alias's on-request tool) in it must see every tool."""
     names = _offered(
         "double check the latest news about the 3 timers i set and their other names"
-        " on my calendar for the printer and write a letter"
+        " on my calendar for the printer and write a letter on my list"
     )
     assert set(names) == {h.name for h in HANDLERS} - NEVER_OFFERED
 
