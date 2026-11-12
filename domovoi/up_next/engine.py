@@ -73,8 +73,11 @@ async def next_batch(
             # library like a list played on purpose that ended (below). The
             # clicked song joins the no-repeat memory beside the list's picks.
             sess.mode = "continue"
-            known_picked = set(sess.picked)
-            sess.picked.extend(i for i in sess.list_cycle.done if i not in known_picked)
+            # The list's songs go to the newest end, so they are the last
+            # ones a short library's hold-back relaxing lets back in.
+            done = list(sess.list_cycle.done)
+            done_set = set(done)
+            sess.picked[:] = [i for i in sess.picked if i not in done_set] + done
     if sess.mode == "list":
         assert members is not None
         weights = drift_weights(sess.recent_listened, sess.seed.track_id)

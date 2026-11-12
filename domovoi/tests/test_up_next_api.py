@@ -349,7 +349,10 @@ async def test_feedback_remove_less_like_this_and_skip(_db, clean) -> None:
 @requires_db
 @pytest.mark.asyncio
 async def test_autoplay_switch(_db, clean) -> None:
-    d = await _seed()
+    # 120 tracks: enough that the library mix never has to relax its
+    # no-repeat memory (that needs 2 x batch eligible), so the short list's
+    # songs can't come back.
+    d = await _seed(120)
     _, token = await _household()
     async with _dev(token, "browser-a1") as c:
         lib = (await c.post(f"{BASE}/sessions", json=_start("browser-a1", track_id=d["ids"][0]))).json()

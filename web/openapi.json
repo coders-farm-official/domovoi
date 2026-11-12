@@ -3154,7 +3154,7 @@
           "music"
         ],
         "summary": "Next Picks",
-        "description": "``{batch_no, picks, ended, removed}``. Asked again with the same\n``have_through_seq``, the same batch comes back.",
+        "description": "``{batch_no, picks, ended, removed, mode}``. Asked again with the\nsame ``have_through_seq``, the same batch comes back. ``mode`` is the\nsession's now: a short list played out goes on as ``continue``.",
         "operationId": "next_picks_api_music_up_next_sessions__session_id__next_post",
         "parameters": [
           {
