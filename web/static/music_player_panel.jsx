@@ -1,10 +1,10 @@
-/* Expanded "now playing" view — the Music page's big-player surface, bound
- * to the same app-level PlaybackContext the docked mini-player uses. Adds
- * the visualizer, the 10-band EQ, the sleep timer, the cast target, and the
- * offline-pin control. Rendered by music.jsx as its "Player" tab. The
- * np-* classes are its phone layout (styles.css): cover above the title,
- * wrapping rows. The phone's own expanded player is PlayerSheet in
- * player.jsx, opened from the docked bar.
+/* The expanded player's parts, bound to the same app-level PlaybackContext
+ * the docked mini-player uses: the frequency bars, the 10-band EQ, the
+ * sleep timer, the offline-pin control, the spoken-audio skips and speed,
+ * chapters, and "listening as". PlayerSheet (player.jsx) puts them
+ * together; the Music page's Player tab that used to (NowPlayingPanel) is
+ * gone since 2026-11-12. The np-* classes are their phone layout
+ * (styles.css, "The expanded player").
  *
  * Loaded via Babel; uses React.* hooks (shared-scope rule — see player.jsx).
  */
@@ -15,7 +15,7 @@ const Visualizer = ({ p, height = 120 }) => {
   const rafRef = React.useRef(0);
   React.useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || typeof canvas.getContext !== 'function') return undefined;
     const ctx = canvas.getContext('2d');
     const draw = () => {
       const analyser = p.getAnalyser && p.getAnalyser();
@@ -61,13 +61,13 @@ const EqPanel = ({ p }) => {
   return (
     <div style={{ padding: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+        <label className="np-check" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
           <input type="checkbox" checked={p.eqEnabled} onChange={(e) => p.setEqEnabled(e.target.checked)}/>
           equalizer
         </label>
         <div className="np-eq-presets" style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
           {Object.keys(presets).map((name) => (
-            <button key={name} onClick={() => applyPreset(name)}
+            <button key={name} className="np-chip" onClick={() => applyPreset(name)}
                     style={{ font: 'inherit', fontSize: 11, padding: '3px 9px', borderRadius: 'var(--r-full)',
                              border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg-muted)', cursor: 'pointer' }}>
               {name}
@@ -76,7 +76,9 @@ const EqPanel = ({ p }) => {
           <Button icon="rotate-ccw" onClick={p.resetEq}>reset</Button>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${EQ_BANDS.length}, 1fr)`, gap: 6, opacity: p.eqEnabled ? 1 : 0.45 }}>
+      {/* Off, only the sliders are disabled (the browser greys them): the
+          numbers and band names stay readable, so the grid isn't faded. */}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${EQ_BANDS.length}, 1fr)`, gap: 6 }}>
         {EQ_BANDS.map((f, i) => (
           <div key={f} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>
@@ -100,23 +102,23 @@ const SleepTimerControl = ({ p }) => {
   const opts = [15, 30, 45, 60];
   const active = p.sleepRemainingSec != null;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+    <div className="np-sleep" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
       <Icon name="moon" size={14}/>
       <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>sleep</span>
       {opts.map((m) => (
-        <button key={m} onClick={() => p.setSleep(m)}
+        <button key={m} className="np-chip" onClick={() => p.setSleep(m)}
                 style={{ font: 'inherit', fontSize: 11, padding: '3px 9px', borderRadius: 'var(--r-full)',
                          border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg-muted)', cursor: 'pointer' }}>
           {m}m
         </button>
       ))}
-      <button onClick={() => p.setSleep('end-of-track')}
+      <button className="np-chip" onClick={() => p.setSleep('end-of-track')}
               style={{ font: 'inherit', fontSize: 11, padding: '3px 9px', borderRadius: 'var(--r-full)',
                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg-muted)', cursor: 'pointer' }}>
         end of track
       </button>
       {p.current && p.current.meta && p.current.meta.itemType && (
-        <button onClick={() => p.setSleep('end-of-chapter')}
+        <button className="np-chip" onClick={() => p.setSleep('end-of-chapter')}
                 style={{ font: 'inherit', fontSize: 11, padding: '3px 9px', borderRadius: 'var(--r-full)',
                          border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg-muted)', cursor: 'pointer' }}>
           end of chapter
@@ -163,12 +165,14 @@ const OfflineControl = ({ p }) => {
 };
 
 /* ── Spoken-audio transport: ±15/30s skip + speed ─────────────────────── */
-const SpokenControls = ({ p }) => {
+// `bare`: no padding or rule of its own (inside a section that has them).
+const SpokenControls = ({ p, bare = false }) => {
   const it = p.current;
   if (!it || !(it.meta && it.meta.itemType)) return null;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', flexWrap: 'wrap',
-                  borderTop: '1px solid var(--border-soft)' }}>
+    <div className="np-spoken"
+         style={{ display: 'flex', alignItems: 'center', gap: 8, padding: bare ? 0 : '10px 20px', flexWrap: 'wrap',
+                  borderTop: bare ? 'none' : '1px solid var(--border-soft)' }}>
       <Button icon="rotate-ccw" onClick={() => p.seekBy(-30)}>30s</Button>
       <Button icon="rotate-ccw" onClick={() => p.seekBy(-15)}>15s</Button>
       <Button icon="rotate-cw" onClick={() => p.seekBy(15)}>15s</Button>
@@ -185,7 +189,7 @@ const SpokenControls = ({ p }) => {
 };
 
 /* ── Chapter list + jump (podcasts / audiobooks) ──────────────────────── */
-const ChapterList = ({ p }) => {
+const ChapterList = ({ p, bare = false }) => {
   const it = p.current;
   const chapters = it && Array.isArray(it.chapters) ? it.chapters : [];
   if (!chapters.length) return null;
@@ -193,7 +197,8 @@ const ChapterList = ({ p }) => {
   let cur = 0;
   chapters.forEach((c, i) => { if ((p.positionSec || 0) >= (c.start_sec || 0)) cur = i; });
   return (
-    <div style={{ borderTop: '1px solid var(--border-soft)', maxHeight: 240, overflowY: 'auto' }}>
+    <div className="np-chapters"
+         style={{ borderTop: bare ? 'none' : '1px solid var(--border-soft)', maxHeight: 240, overflowY: 'auto' }}>
       <div style={{ padding: '8px 20px', fontSize: 12, fontWeight: 600, color: 'var(--fg-muted)' }}>
         chapters · {chapters.length}
       </div>
@@ -236,132 +241,7 @@ const ListeningAsSelector = () => {
   );
 };
 
-/* ── The full expanded now-playing panel ──────────────────────────────── */
-const NowPlayingPanel = () => {
-  const p = usePlayback();
-  // The lyrics section (lyrics.jsx): open unless someone closed it in this
-  // browser.
-  const [lyrOpen, setLyrOpen] = React.useState(() => {
-    try { return localStorage.getItem('domovoi-lyrics-panel-open') !== '0'; } catch { return true; }
-  });
-  const toggleLyr = () => {
-    const next = !lyrOpen;
-    setLyrOpen(next);
-    try { localStorage.setItem('domovoi-lyrics-panel-open', next ? '1' : '0'); } catch {}
-  };
-  if (!p.available) {
-    return <Empty glyph="headphones" title="player unavailable"
-                  sub="the playback provider isn't mounted — see INTEGRATION_music.md"/>;
-  }
-  const it = p.current;
-  if (!it) {
-    return <Empty glyph="headphones" title="nothing queued"
-                  sub="play a library track in the browser from the Library tab to start"/>;
-  }
-  const dur = p.durationSec || it.durationSec || 0;
-  const pct = dur > 0 ? Math.min(100, (p.positionSec / dur) * 100) : 0;
-  const remote = p.target.kind === 'room';
-  // A library song here or in the room being cast to (none for radio,
-  // podcasts, audiobooks). A lyrics.jsx that failed to load shows nothing.
-  const lyrId = typeof lyricsTrackIdFor === 'function' && typeof LyricsView === 'function'
-    ? lyricsTrackIdFor(p) : null;
-  return (
-    <div style={{ padding: 0 }}>
-      <div className="np-head">
-        <CoverTile item={it} size={220} radius="var(--r-md)"/>
-        <div style={{ minWidth: 0 }}>
-          {remote && <Pill tone="live" live>casting to {p.target.roomId}</Pill>}
-          <h2 className="h2" style={{ margin: '6px 0 2px' }}>{it.title}</h2>
-          <div style={{ fontSize: 15, color: 'var(--fg-muted)' }}>{it.artist || '—'}</div>
-          {it.album && <div style={{ fontSize: 13, color: 'var(--fg-faint)' }}>{it.album}</div>}
-
-          {/* progress */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '18px 0 10px' }}>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', width: 40, textAlign: 'right' }}>{fmtDur(p.positionSec)}</span>
-            <div onClick={(e) => { if (!it.seekable) return; const r = e.currentTarget.getBoundingClientRect(); p.seek(((e.clientX - r.left) / r.width) * dur); }}
-                 style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--sunken)', overflow: 'hidden', cursor: it.seekable ? 'pointer' : 'default' }}>
-              <div style={{ height: '100%', width: `${pct}%`, background: 'var(--brand)' }}/>
-            </div>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', width: 40 }}>{it.seekable ? fmtDur(dur) : 'live'}</span>
-          </div>
-
-          {/* transport */}
-          <div className="np-transport" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <IconButton name="skip-back" onClick={p.prev}/>
-            <button className="btn btn-primary btn-icon" onClick={p.toggle} style={{ width: 44, height: 44, borderRadius: '50%' }}>
-              <Icon name={p.status === 'playing' ? 'pause' : 'play'} size={20}/>
-            </button>
-            <IconButton name="skip-forward" onClick={p.next}/>
-            <IconButton name="square" onClick={p.stop}/>
-            {!remote && (
-              <>
-                <IconButton name={p.muted || p.volume === 0 ? 'volume-x' : 'volume-2'} onClick={p.toggleMute}/>
-                <input type="range" min={0} max={1} step={0.01} value={p.muted ? 0 : p.volume}
-                       onChange={(e) => p.setVolume(Number(e.target.value))} style={{ width: 110 }}/>
-              </>
-            )}
-            {!remote && (
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--fg-muted)', marginLeft: 8 }}>
-                speed
-                <select value={p.playbackRate} onChange={(e) => p.setPlaybackRate(Number(e.target.value))}
-                        style={{ font: 'inherit', fontSize: 12, height: 26, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
-                  {[0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r}×</option>)}
-                </select>
-              </label>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* lyrics — followed line by line when they are timed */}
-      {lyrId != null && (
-        <section className="lyr-panel" aria-label="lyrics">
-          <button type="button" className="lyr-sec-toggle" aria-expanded={lyrOpen} onClick={toggleLyr}>
-            <span>lyrics</span>
-            <Icon name={lyrOpen ? 'chevron-up' : 'chevron-down'} size={14}/>
-          </button>
-          {lyrOpen && (
-            <LyricsView trackId={lyrId} height={320}
-                        follow={remote ? { kind: 'room', roomId: p.target.roomId } : { kind: 'local' }}/>
-          )}
-        </section>
-      )}
-
-      {/* visualizer: MilkDrop or the bars (visualizer.jsx); while casting,
-          a quiet line says it needs this browser's own playback */}
-      {typeof NowPlayingVisualizer === 'function' ? (
-        <div style={{ padding: '0 20px 12px' }}>
-          <NowPlayingVisualizer p={p} remote={remote}/>
-        </div>
-      ) : !remote && (
-        <div style={{ padding: '0 20px 12px' }}>
-          <Visualizer p={p} height={120}/>
-        </div>
-      )}
-
-      {/* spoken-audio skip + speed */}
-      {!remote && <SpokenControls p={p}/>}
-
-      {/* controls row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '12px 20px', borderTop: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
-        <SleepTimerControl p={p}/>
-        <div style={{ marginLeft: 'auto' }}><OfflineControl p={p}/></div>
-      </div>
-
-      {/* chapter list (podcasts / audiobooks) */}
-      {!remote && <ChapterList p={p}/>}
-
-      {/* EQ */}
-      {!remote && (
-        <div style={{ borderTop: '1px solid var(--border-soft)' }}>
-          <EqPanel p={p}/>
-        </div>
-      )}
-    </div>
-  );
-};
-
 Object.assign(window, {
-  NowPlayingPanel, Visualizer, EqPanel, SleepTimerControl, OfflineControl,
+  Visualizer, EqPanel, SleepTimerControl, OfflineControl,
   SpokenControls, ChapterList, ListeningAsSelector,
 });

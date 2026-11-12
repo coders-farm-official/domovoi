@@ -215,6 +215,10 @@ def test_every_dashboard_route_exists() -> None:
         assert parts[0] in pages, f"{rid}: no dashboard page #{parts[0]}"
         if parts[0] == "settings":
             assert len(parts) == 2 and parts[1] in slugs, f"{rid}: no Settings tab {parts[1:]}"
+        elif parts == ["music", "player"]:
+            # Not a tab since 2026-11-12: the expanded player's address,
+            # which opens it over Music (player.jsx PLAYER_SHEET_ROUTE).
+            assert "const PLAYER_SHEET_ROUTE = 'music/player';" in (STATIC / "player.jsx").read_text(encoding="utf-8")
         elif parts[0] == "music" and len(parts) > 1:
             assert parts[1] in music, f"{rid}: no Music tab {parts[1]}"
         else:

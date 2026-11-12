@@ -1390,12 +1390,14 @@ const PlaybackProvider = ({ children }) => {
  *
  * One bar, two layouts (styles.css, "Docked player"):
  *   desktop  cover and title | transport over a seek bar | sleep timer,
- *            volume, queue, cast target, and "open full player" (the Music
- *            page). The queue and the cast target float above the bar.
+ *            volume, queue, cast target, and "open full player" (the
+ *            expanded player, PlayerSheet). The queue and the cast target
+ *            float above the bar.
  *   phone    (760px and below) one 64px row of what a thumb needs: cover,
  *            title/artist, play/pause, next, and "open player" — which
- *            opens PlayerSheet, where everything else went. A 2px line on
- *            the bar's top edge keeps the position visible.
+ *            opens the same PlayerSheet, where everything else went. A 2px
+ *            line on the bar's top edge keeps the position visible.
+ * The cover and title are a button too: it opens PlayerSheet at any width.
  * `mp-desk` marks what only a desktop shows and `mp-phone` what only a
  * phone shows, so the phone never gets a squeezed copy of the desktop row.
  * ═══════════════════════════════════════════════════════════════════════ */
@@ -1409,12 +1411,45 @@ const _mpOnMediaChange = (mq, fn) => {
   if (mq.addListener) { mq.addListener(fn); return () => mq.removeListener(fn); }
   return () => {};
 };
+/* The expanded player's address. The Music page's Player tab was
+ * #music/player until 2026-11-12; the player is now a sheet over any page,
+ * and that address (a bookmark, the manual, an old link) opens it over
+ * Music. The address is rewritten to #music in place before anything reads
+ * it — at load, and first among the hashchange listeners (this file's is
+ * added before the shell's and the pages') — so the Music page never sees
+ * a tab it doesn't have, and the sheet's own history entry (pushed by
+ * MiniPlayer) sits on top of #music: Back closes the sheet, then leaves. */
+const PLAYER_SHEET_ROUTE = 'music/player';
+const _mpSheetHub = { openers: new Set(), atLoad: false };
+/* Open the expanded player from anywhere (a link, another page). False
+ * when there is nothing to show (nothing queued) or no player mounted. */
+const openPlayerSheet = () => {
+  let opened = false;
+  _mpSheetHub.openers.forEach((fn) => { if (fn()) opened = true; });
+  return opened;
+};
+const _mpTakeSheetRoute = () => {
+  let route = '';
+  try { route = String(window.location.hash || '').replace(/^#/, '').toLowerCase().replace(/\/+$/, ''); } catch { return false; }
+  if (route !== PLAYER_SHEET_ROUTE) return false;
+  try { window.history.replaceState(window.history.state, '', '#music'); } catch { /* the old address stays */ }
+  return true;
+};
+try {
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    _mpSheetHub.atLoad = _mpTakeSheetRoute();
+    window.addEventListener('hashchange', () => { if (_mpTakeSheetRoute()) openPlayerSheet(); });
+  }
+} catch { /* no window: nothing to route */ }
+
 const MiniPlayer = () => {
   const p = usePlayback();
   const [showQueue, setShowQueue] = React.useState(false);
   const [showCast, setShowCast] = React.useState(false);
   const [showLyrics, setShowLyrics] = React.useState(false);
-  const [sheetOpen, setSheetOpen] = React.useState(false);
+  // 'closed' | 'open' | 'closing' (the shrink back into the bar is running).
+  const [sheet, setSheet] = React.useState('closed');
+  const sheetOpen = sheet !== 'closed';
   const hasItem = !!(p.available && p.current);
   // A failed "Stop and close" is said here, in the page's usual toast.
   const [fire, toastNode] = (typeof useToast === 'function' ? useToast : () => [null, null])();
@@ -1438,30 +1473,71 @@ const MiniPlayer = () => {
   (typeof useLyrics === 'function' ? useLyrics : () => null)(lyrId);
   React.useEffect(() => { if (lyrId == null) setShowLyrics(false); }, [lyrId]);
 
-  // The sheet is a history entry of its own, so the phone's back gesture
-  // closes it instead of leaving the page it was opened over. Closing it
-  // any other way pops that entry again — unless something else (a tab in
-  // the strip) has already pushed past it, which closes the sheet too.
-  // Closing it in place (chevron, Escape, back) hands focus back to "open
-  // player"; a close that came with a new page leaves focus to that page.
-  const expandRef = React.useRef(null);
+  // The expanded player (PlayerSheet) is a history entry of its own, so
+  // Back (the phone's gesture, the browser's button) closes it instead of
+  // leaving the page it was opened over. Closing it any other way pops that
+  // entry again — unless something else (a tab in the strip, a link) has
+  // already pushed past it, which closes the sheet too. Closing it in place
+  // (chevron, Escape, Back, a swipe down) hands focus back to the bar
+  // control that opened it; a close that came with a new page leaves focus
+  // to that page. Opening and closing animate in PlayerSheet: it grows out
+  // of the bar (barRef) and shrinks back into it, then says onClosed.
+  const barRef = React.useRef(null);
+  const infoRef = React.useRef(null);     // the cover and title (every width)
+  const deskOpenRef = React.useRef(null); // the desktop's chevron
+  const expandRef = React.useRef(null);   // the phone's "open player"
+  const openerRef = React.useRef('expand');
   const refocusRef = React.useRef(false);
   const openHashRef = React.useRef('');
-  const openSheet = () => {
+  const sheetRef = React.useRef('closed');
+  sheetRef.current = sheet;
+  const openSheet = (from) => {
+    if (sheetRef.current !== 'closed') return;
     setShowQueue(false);
     setShowCast(false);
     setShowLyrics(false);
+    openerRef.current = from || 'expand';
     openHashRef.current = window.location.hash;
     try { window.history.pushState({ domovoiPlayerSheet: true }, ''); } catch {}
-    setSheetOpen(true);
+    sheetRef.current = 'open';
+    setSheet('open');
   };
-  const closeSheet = React.useCallback((refocus) => {
+  // `instant`: no shrink (the bar itself is going away).
+  const closeSheet = React.useCallback((refocus, instant) => {
+    if (sheetRef.current === 'closed') return;
     refocusRef.current = refocus !== false;
-    setSheetOpen(false);
+    sheetRef.current = instant ? 'closed' : 'closing';
+    setSheet(instant ? 'closed' : 'closing');
     try {
       const st = window.history.state;
       if (st && st.domovoiPlayerSheet) window.history.back();
     } catch {}
+  }, []);
+  // A step in history already happened: just close (no back of our own).
+  const sheetGone = React.useCallback((refocus) => {
+    if (sheetRef.current !== 'open') return;
+    refocusRef.current = refocus;
+    sheetRef.current = 'closing';
+    setSheet('closing');
+  }, []);
+  const sheetClosed = React.useCallback(() => {
+    sheetRef.current = 'closed';
+    setSheet('closed');
+  }, []);
+  // openPlayerSheet() and #music/player reach this bar through the hub.
+  const openRef = React.useRef(null);
+  openRef.current = () => {
+    if (!hasItem) return false;
+    if (sheetRef.current === 'closed') openSheet('info');
+    return true;
+  };
+  React.useEffect(() => {
+    const fn = () => (openRef.current ? openRef.current() : false);
+    _mpSheetHub.openers.add(fn);
+    // An address that asked for the player as the page loaded: open it if
+    // something is already queued, else Music is where it lands.
+    if (_mpSheetHub.atLoad) { _mpSheetHub.atLoad = false; fn(); }
+    return () => { _mpSheetHub.openers.delete(fn); };
   }, []);
   React.useEffect(() => {
     if (!sheetOpen) return undefined;
@@ -1469,46 +1545,52 @@ const MiniPlayer = () => {
     // back gesture, or a tab's new hash. (Not only a step to a state-less
     // entry: after a tab and back again, the entry behind this sheet's can
     // be an older sheet's, and back must still close this one.)
-    const onPop = () => {
-      refocusRef.current = window.location.hash === openHashRef.current;
-      setSheetOpen(false);
+    const onPop = () => sheetGone(window.location.hash === openHashRef.current);
+    // A new address closes it — except #music/player rewritten to the
+    // #music it was opened over (the link asked for what is showing).
+    const onHash = () => {
+      if (window.location.hash === openHashRef.current) return;
+      sheetGone(false);
     };
-    const onHash = () => { refocusRef.current = false; setSheetOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') closeSheet(); };
-    // A tab in the strip closes it — the tab already showing too, which
-    // changes no hash. React has handled the tap at its root before it
-    // bubbles up to the document, so a tab that navigated has already
-    // pushed past the sheet's entry and closeSheet doesn't go back.
+    // Escape: unless something inside took it (the visualizer's preset
+    // list), or the visualizer is full screen (Escape leaves that first).
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      try { if (document.fullscreenElement || document.webkitFullscreenElement) return; } catch {}
+      closeSheet();
+    };
+    // A page in the sidebar or the phone's strip closes it — the one
+    // already showing too, which changes no hash. React has handled the tap
+    // at its root before it bubbles up to the document, so a page that
+    // navigated has already pushed past the sheet's entry and closeSheet
+    // doesn't go back.
     const onTap = (e) => {
       const t = e && e.target;
       if (t && t.closest && t.closest('.sidebar .nav-item')) closeSheet(false);
     };
-    // A phone turned sideways can be wider than 760px, where the sheet is
-    // never shown: close it rather than leave it open, unseen, holding a
-    // history entry the next back would silently spend.
-    const mq = typeof window.matchMedia === 'function' ? window.matchMedia(_MP_PHONE) : null;
-    const onWide = () => { if (mq && !mq.matches) closeSheet(false); };
     window.addEventListener('popstate', onPop);
     window.addEventListener('hashchange', onHash);
     window.addEventListener('keydown', onKey);
     document.addEventListener('click', onTap);
-    const unWide = _mpOnMediaChange(mq, onWide);
     return () => {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('hashchange', onHash);
       window.removeEventListener('keydown', onKey);
       document.removeEventListener('click', onTap);
-      unWide();
     };
-  }, [sheetOpen, closeSheet]);
+  }, [sheetOpen, closeSheet, sheetGone]);
   React.useEffect(() => {
     if (sheetOpen || !refocusRef.current) return;
     refocusRef.current = false;
-    const b = expandRef.current;
+    // Back to what opened it; a control the width now hides can't take
+    // focus, so the cover-and-title button (shown at every width) does.
+    const want = { info: infoRef, desk: deskOpenRef, expand: expandRef }[openerRef.current] || expandRef;
+    const shown = (r) => r.current && r.current.focus && (r.current.offsetParent !== null || r.current.offsetParent === undefined);
+    const b = shown(want) ? want.current : (infoRef.current || want.current);
     if (b && b.focus) { try { b.focus({ preventScroll: true }); } catch {} }
   }, [sheetOpen]);
   // Clearing the queue from the sheet empties the player out from under it.
-  React.useEffect(() => { if (sheetOpen && !hasItem) closeSheet(false); }, [sheetOpen, hasItem, closeSheet]);
+  React.useEffect(() => { if (sheetOpen && !hasItem) closeSheet(false, true); }, [sheetOpen, hasItem, closeSheet]);
   // While the bar shows, <html> carries .mp-docked: styles.css turns it
   // into --player-h, which toasts and notices add to their offset so they
   // float above the bar instead of over its play button.
@@ -1546,24 +1628,30 @@ const MiniPlayer = () => {
                      follow={remote ? { kind: 'room', roomId: p.target.roomId } : { kind: 'local' }}
                      onClose={() => setShowLyrics(false)}/>
       )}
-      {sheetOpen && <PlayerSheet p={p} onClose={() => closeSheet()}/>}
+      {sheetOpen && <PlayerSheet p={p} closing={sheet === 'closing'} originRef={barRef}
+                                 onClose={() => closeSheet()} onClosed={sheetClosed}/>}
       {toastNode}
       {/* `--dock-bottom` is 0 on a desktop and the phone strip's height at
           760px and below (styles.css), so on a phone the player docks ON
           TOP of the five tabs instead of covering them. */}
-      <div className="mini-player">
+      {/* Hidden (not removed) while the expanded player covers it: on a
+          desktop its left end, under the sidebar, would show beside the
+          sheet. It is back as the sheet shrinks into it. */}
+      <div className={`mini-player${sheet === 'open' ? ' under-sheet' : ''}`} ref={barRef}>
         <div className="mp-line mp-phone" aria-hidden="true"><span style={{ width: `${pct}%` }}/></div>
-        {/* left: cover + title */}
-        <div className="mp-info">
+        {/* left: cover + title — a button: click, Enter or Space opens the
+            expanded player, at every width */}
+        <button type="button" className="mp-info" ref={infoRef} onClick={() => openSheet('info')}
+                title="open player" aria-haspopup="dialog" aria-expanded={sheet === 'open'}>
           <CoverTile item={it} size={44}/>
-          <div className="mp-text">
-            <div className="mp-title">{it.title}</div>
-            <div className="mp-sub mono">
+          <span className="mp-text">
+            <span className="mp-title">{it.title}</span>
+            <span className="mp-sub mono">
               {remote && <span style={{ color: 'var(--brand-ink)' }}>◆ {p.target.roomId} · </span>}
               {it.artist || (it.seekable === false ? 'live stream' : '—')}
-            </div>
-          </div>
-        </div>
+            </span>
+          </span>
+        </button>
         {/* center: transport + progress */}
         <div className="mp-center">
           <div className="mp-transport">
@@ -1618,21 +1706,17 @@ const MiniPlayer = () => {
                         onClick={() => { setShowLyrics(false); setShowCast((s) => !s); }}
                         title="cast target"
                         style={remote ? { color: 'var(--brand-ink)' } : undefined}/>
-            {/* The Music page's Player tab (#music/player), not the page's
-               * default tab: '#music' landed on Library, and on #music itself
-               * it did nothing at all (2026-11-12). Already there: bring the
-               * tab into view. */}
-            <IconButton name="chevron-up" title="open full player"
-                        onClick={() => {
-                          if (window.location.hash.replace(/^#/, '') === 'music/player') {
-                            const main = document.querySelector('.main');
-                            if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
-                          } else window.location.hash = 'music/player';
-                        }}/>
+            {/* The expanded player, over this page (2026-11-12: it was the
+                Music page's Player tab). */}
+            <button ref={deskOpenRef} type="button" className="btn btn-ghost btn-icon"
+                    onClick={() => openSheet('desk')} title="open full player" aria-label="open full player"
+                    aria-haspopup="dialog" aria-expanded={sheet === 'open'}>
+              <Icon name="chevron-up" size={14}/>
+            </button>
           </div>
-          <button ref={expandRef} className="btn btn-ghost btn-icon mp-phone mp-expand" onClick={openSheet}
+          <button ref={expandRef} className="btn btn-ghost btn-icon mp-phone mp-expand" onClick={() => openSheet('expand')}
                   title="open player" aria-label="open player"
-                  aria-haspopup="dialog" aria-expanded={sheetOpen}>
+                  aria-haspopup="dialog" aria-expanded={sheet === 'open'}>
             <Icon name="chevron-up" size={16}/>
           </button>
           <button className="btn btn-ghost btn-icon mp-close" onClick={closeBar}
@@ -1646,114 +1730,277 @@ const MiniPlayer = () => {
 };
 
 /* ═══════════════════════════════════════════════════════════════════════
- * The phone's expanded player. Opened from the compact dock at 760px and
- * below (styles.css never shows it wider), it covers the screen above the
- * tab strip and carries everything the dock leaves out: the seek bar,
- * previous, volume, the sleep-timer countdown, where it plays (this
- * browser or a room) and the queue. Same actions as the desktop bar and
- * its two floating panels — only the layout is the phone's. Closes with
- * the chevron, Escape, the back gesture, or a tab in the strip.
+ * The expanded player (2026-11-12; it was the Music page's Player tab and,
+ * on a phone, a sheet of its own). One component for every width, opened
+ * from the docked bar — its cover and title, the desktop's chevron, the
+ * phone's "open player", or #music/player — and grown out of it.
+ *
+ * Where it sits (styles.css, "The expanded player"): over everything but
+ * the navigation. On a desktop that is the column right of the sidebar,
+ * top to bottom, the topbar and the docked bar included; on a phone the
+ * screen above the tab strip. The sidebar stays live so another page is
+ * still one click away (a page there closes the sheet).
+ *
+ * What it carries: the cover, title and artist, the seek bar, previous /
+ * play / next, volume and speed, where it plays, the sleep timer, offline
+ * download, the spoken-audio skips and chapters — and a stage: the MilkDrop
+ * visualizer (visualizer.jsx) drawn BEHIND a panel with three tabs, Lyrics
+ * · Equalizer · Queue, plus Hide (no panel: the picture alone). The panel
+ * is see-through by the amount the visualizer's own bar sets. With the
+ * visualizer off, unsupported or casting, the panel is a plain card.
+ *
+ * Motion: opening animates the sheet's clip from the bar's box to its own
+ * (280 ms) while the content fades up; closing runs it back (240 ms) and
+ * unmounts after. The house ease, cubic-bezier(0.2, 0, 0, 1). With
+ * prefers-reduced-motion: a 120 ms fade, nothing grows.
+ *
+ * A dialog (aria-modal): focus moves to its close chevron, Tab stays
+ * inside, and closing hands focus back to the bar (MiniPlayer). Closes
+ * with the chevron, Escape, Back, a swipe down on its header (touch), or a
+ * page in the sidebar / strip.
  * ═══════════════════════════════════════════════════════════════════════ */
-const PlayerSheet = ({ p, onClose }) => {
+const _MP_OPEN_MS = 280;
+const _MP_CLOSE_MS = 240;
+const _MP_FADE_MS = 120;
+const _MP_EASE = 'cubic-bezier(0.2, 0, 0, 1)';
+const _MP_CLIP_FULL = 'inset(0px 0px 0px 0px)';
+const _mpReducedMotion = () => {
+  try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+  catch { return false; }
+};
+const _mpRect = (el) => {
+  try { return el && typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null; }
+  catch { return null; }
+};
+// The clip that leaves only `f` (the bar's box) of `s` (the sheet's box).
+const _mpClipTo = (s, f) => `inset(${Math.max(0, f.top - s.top)}px ${Math.max(0, s.right - f.right)}px `
+  + `${Math.max(0, s.bottom - f.bottom)}px ${Math.max(0, f.left - s.left)}px)`;
+
+/* The panel the person picked last, kept for this browser tab's session
+ * (sessionStorage, and in memory when that is refused). */
+const _MP_TAB_KEY = 'domovoi-player-tab';
+const _mpTabMem = { v: null };
+const _mpTabGet = () => {
+  try { const v = sessionStorage.getItem(_MP_TAB_KEY); if (v) return v; } catch { /* memory below */ }
+  return _mpTabMem.v;
+};
+const _mpTabSet = (v) => {
+  _mpTabMem.v = v;
+  try { sessionStorage.setItem(_MP_TAB_KEY, v); } catch { /* kept in memory */ }
+};
+
+/* Which panel shows. `here`: the tab picked for THIS song (it stays, even
+ * Lyrics on a song with none found: the person asked to look). Else the
+ * session's pick while it still applies — Hide and Queue always do, the
+ * Equalizer while this browser plays (not casting), Lyrics while the song
+ * has some (or they are still loading) — else the default: Lyrics when
+ * the song has them, otherwise the Equalizer, otherwise the Queue. */
+const playerSheetTab = ({ here, picked, lyricsTab, lyricsFound, lyricsLoading, eqTab }) => {
+  const usable = (t) => t === 'hide' || t === 'queue' || (t === 'eq' && eqTab) || (t === 'lyrics' && lyricsTab);
+  if (here && usable(here)) return here;
+  const withLyrics = lyricsTab && (lyricsFound || lyricsLoading);
+  if (picked === 'hide' || picked === 'queue') return picked;
+  if (picked === 'eq' && eqTab) return 'eq';
+  if (picked === 'lyrics' && withLyrics) return 'lyrics';
+  if (withLyrics) return 'lyrics';
+  return eqTab ? 'eq' : 'queue';
+};
+
+const _MP_TAB_LABELS = { lyrics: 'Lyrics', eq: 'Equalizer', queue: 'Queue', hide: 'Hide' };
+
+const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed }) => {
+  const sheetRef = React.useRef(null);
+  const innerRef = React.useRef(null);
   const closeRef = React.useRef(null);
+  const drag = React.useRef(null);
+  const onClosedRef = React.useRef(onClosed);
+  onClosedRef.current = onClosed;
+
+  // Focus moves in, to the close chevron.
   React.useEffect(() => {
     const b = closeRef.current;
     if (b && b.focus) { try { b.focus({ preventScroll: true }); } catch {} }
   }, []);
-  // The lyrics section (lyrics.jsx): closed until someone opens it, and
-  // remembered in this browser either way.
-  const [lyrOpen, setLyrOpen] = React.useState(() => {
-    try { return localStorage.getItem('domovoi-lyrics-sheet-open') === '1'; } catch { return false; }
-  });
-  const toggleLyr = () => {
-    const next = !lyrOpen;
-    setLyrOpen(next);
-    try { localStorage.setItem('domovoi-lyrics-sheet-open', next ? '1' : '0'); } catch {}
+
+  // Grow out of the bar. (No Web Animations — an old browser, the test
+  // harness — : it just appears.)
+  React.useLayoutEffect(() => {
+    const el = sheetRef.current;
+    if (!el || typeof el.animate !== 'function') return;
+    const inner = innerRef.current;
+    const fade = (ms) => el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: ms, easing: 'linear' });
+    if (_mpReducedMotion()) { fade(_MP_FADE_MS); return; }
+    const s = _mpRect(el);
+    const f = _mpRect(originRef && originRef.current);
+    if (!s || !f || !f.width || !f.height) { fade(_MP_FADE_MS); return; }
+    el.animate([{ clipPath: _mpClipTo(s, f) }, { clipPath: _MP_CLIP_FULL }],
+               { duration: _MP_OPEN_MS, easing: _MP_EASE });
+    if (inner && typeof inner.animate === 'function') {
+      inner.animate([{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }],
+                    { duration: _MP_OPEN_MS, easing: _MP_EASE });
+    }
+  }, []);
+
+  // Shrink back into the bar, then let MiniPlayer unmount it.
+  React.useEffect(() => {
+    if (!closing) return undefined;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (onClosedRef.current) onClosedRef.current();
+    };
+    const el = sheetRef.current;
+    if (!el || typeof el.animate !== 'function') { finish(); return undefined; }
+    try { if (el.getAnimations) el.getAnimations({ subtree: true }).forEach((a) => a.cancel()); } catch {}
+    const inner = innerRef.current;
+    const d = drag.current;
+    let anim;
+    if (_mpReducedMotion()) {
+      anim = el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: _MP_FADE_MS, easing: 'linear', fill: 'forwards' });
+    } else if (d && d.dy > 0) {
+      // A swipe down carries on down, off the screen.
+      anim = el.animate([{ transform: `translateY(${d.dy}px)` }, { transform: 'translateY(100%)' }],
+                        { duration: 200, easing: _MP_EASE, fill: 'forwards' });
+    } else {
+      const s = _mpRect(el);
+      const f = _mpRect(originRef && originRef.current);
+      if (s && f && f.width && f.height) {
+        anim = el.animate([{ clipPath: _MP_CLIP_FULL }, { clipPath: _mpClipTo(s, f) }],
+                          { duration: _MP_CLOSE_MS, easing: _MP_EASE, fill: 'forwards' });
+        if (inner && typeof inner.animate === 'function') {
+          inner.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(24px)' }],
+                        { duration: _MP_CLOSE_MS, easing: _MP_EASE, fill: 'forwards' });
+        }
+      } else {
+        anim = el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: _MP_FADE_MS, easing: 'linear', fill: 'forwards' });
+      }
+    }
+    anim.onfinish = finish;
+    anim.oncancel = finish;
+    // A hidden browser tab may never run it: close all the same.
+    const t = setTimeout(finish, _MP_CLOSE_MS + 400);
+    return () => clearTimeout(t);
+  }, [closing]);
+
+  // A swipe down on the header (touch) closes it; a short one springs back.
+  const onTouchStart = (e) => {
+    const t = e.touches && e.touches[0];
+    if (!t || closing) return;
+    drag.current = { y0: t.clientY, t0: Date.now(), dy: 0 };
   };
-  const lyrId = typeof lyricsTrackIdFor === 'function' && typeof LyricsView === 'function'
-    ? lyricsTrackIdFor(p) : null;
+  const onTouchMove = (e) => {
+    const d = drag.current;
+    const t = e.touches && e.touches[0];
+    const el = sheetRef.current;
+    if (!d || !t || !el || closing) return;
+    d.dy = Math.max(0, t.clientY - d.y0);
+    el.style.transform = d.dy ? `translateY(${d.dy}px)` : '';
+  };
+  const onTouchEnd = () => {
+    const d = drag.current;
+    const el = sheetRef.current;
+    if (!d || !el || closing) return;
+    const fast = d.dy > 32 && d.dy / Math.max(1, Date.now() - d.t0) > 0.6;
+    if (d.dy > 96 || fast) { onClose(); return; }
+    drag.current = null;
+    const from = el.style.transform;
+    el.style.transform = '';
+    if (from && typeof el.animate === 'function' && !_mpReducedMotion()) {
+      el.animate([{ transform: from }, { transform: 'none' }], { duration: 180, easing: _MP_EASE });
+    }
+  };
+
+  // Tab and Shift+Tab stay inside.
+  const onKeyDown = (e) => {
+    if (e.key !== 'Tab') return;
+    const el = sheetRef.current;
+    if (!el || typeof el.querySelectorAll !== 'function') return;
+    const list = Array.from(el.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), '
+      + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )).filter((x) => x.offsetParent !== null);
+    if (!list.length) return;
+    const a = document.activeElement;
+    const first = list[0];
+    const last = list[list.length - 1];
+    if (e.shiftKey && (a === first || !el.contains(a))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (a === last || !el.contains(a))) { e.preventDefault(); first.focus(); }
+  };
+
   const it = p.current;
   const dur = p.durationSec || it.durationSec || 0;
   const pct = dur > 0 ? Math.min(100, (p.positionSec / dur) * 100) : 0;
   const remote = p.target.kind === 'room';
   const playing = p.status === 'playing';
+  const spoken = !!(it.meta && it.meta.itemType);
   const seekAt = (e) => {
     if (!it.seekable) return;
     const r = e.currentTarget.getBoundingClientRect();
     p.seek(((e.clientX - r.left) / r.width) * dur);
   };
-  return (
-    // Not aria-modal: the tab strip below it stays live (a tab closes it).
-    <div className="mp-sheet" role="dialog" aria-label="now playing">
-      <div className="mp-sheet-head">
-        <button ref={closeRef} className="btn btn-ghost btn-icon" onClick={onClose}
-                title="close" aria-label="close player">
-          <Icon name="chevron-down" size={18}/>
+
+  // ── the panel's tabs ───────────────────────────────────────────────
+  // lyrics.jsx, music_player_panel.jsx and visualizer.jsx load after this
+  // file; one that failed to load takes its part away, not the player.
+  // (Which of them exist is fixed for the life of the page, so the hooks
+  // below always run in the same order.)
+  const lyrId = typeof lyricsTrackIdFor === 'function' && typeof LyricsView === 'function'
+    ? lyricsTrackIdFor(p) : null;
+  const lyr = (typeof useLyrics === 'function' ? useLyrics : () => null)(lyrId);
+  const lyrDoc = lyr && lyr.state === 'ready' ? lyr.doc : null;
+  const lyricsFound = !!(lyrDoc && ((lyrDoc.status === 'synced' && Array.isArray(lyrDoc.lines) && lyrDoc.lines.length)
+    || (lyrDoc.text && (lyrDoc.status === 'plain' || lyrDoc.status === 'synced'))));
+  const eqTab = !remote && typeof EqPanel === 'function';
+  const songKey = remote && p.remoteNp ? `room:${p.remoteNp.track_id ?? ''}:${it.uid}` : it.uid;
+  const [here, setHere] = React.useState(null);           // { song, tab }
+  const [picked, setPicked] = React.useState(_mpTabGet);
+  const tab = playerSheetTab({
+    here: here && here.song === songKey ? here.tab : null, picked,
+    lyricsTab: lyrId != null, lyricsFound, lyricsLoading: !!(lyr && lyr.state === 'loading'), eqTab,
+  });
+  const tabs = [lyrId != null && 'lyrics', eqTab && 'eq', 'queue', 'hide'].filter(Boolean);
+  const pickTab = (t) => {
+    setHere({ song: songKey, tab: t });
+    setPicked(t);
+    _mpTabSet(t);
+  };
+  const tabKey = (e) => {
+    const i = tabs.indexOf(tab);
+    const to = e.key === 'ArrowRight' ? tabs[(i + 1) % tabs.length]
+      : e.key === 'ArrowLeft' ? tabs[(i - 1 + tabs.length) % tabs.length]
+      : e.key === 'Home' ? tabs[0] : e.key === 'End' ? tabs[tabs.length - 1] : null;
+    if (!to) return;
+    if (e.preventDefault) e.preventDefault();
+    pickTab(to);
+    try {
+      const b = typeof document.getElementById === 'function' ? document.getElementById(`mp-tab-${to}`) : null;
+      if (b && b.focus) b.focus();
+    } catch {}
+  };
+  const tabStrip = (
+    <div className="mp-tabs" role="tablist" aria-label="player panel" onKeyDown={tabKey}>
+      {tabs.map((t) => (
+        <button key={t} id={`mp-tab-${t}`} type="button" role="tab"
+                className={`mp-tab${t === tab ? ' on' : ''}`} aria-selected={t === tab}
+                aria-controls={t === 'hide' ? undefined : 'mp-tabpanel'} tabIndex={t === tab ? 0 : -1}
+                title={t === 'hide' ? 'hide the panel' : undefined}
+                onClick={() => pickTab(t)}>
+          {_MP_TAB_LABELS[t]}
         </button>
-        <span className="mp-sheet-title">now playing</span>
-      </div>
-      <div className="mp-sheet-body">
-        <div className="mp-sheet-now">
-          <CoverTile item={it} size={200} radius="var(--r-md)"/>
-          <div className="mp-sheet-meta">
-            {remote && <Pill tone="live" live>casting to {p.target.roomId}</Pill>}
-            <div className="mp-sheet-name">{it.title}</div>
-            <div className="mp-sheet-by">{it.artist || (it.seekable === false ? 'live stream' : '—')}</div>
-          </div>
-        </div>
-        <div className="mp-sheet-seek">
-          <span className="mono">{fmtDur(p.positionSec)}</span>
-          <div className="mp-sheet-track" onClick={seekAt} style={{ cursor: it.seekable ? 'pointer' : 'default' }}>
-            <div><span style={{ width: `${pct}%` }}/></div>
-          </div>
-          <span className="mono">{it.seekable ? fmtDur(dur) : 'live'}</span>
-        </div>
-        <div className="mp-sheet-transport">
-          <button className="btn btn-ghost btn-icon" onClick={p.prev} title="previous" aria-label="previous">
-            <Icon name="skip-back" size={20}/>
-          </button>
-          <button className="btn btn-primary btn-icon mp-sheet-play" onClick={p.toggle}
-                  title={playing ? 'pause' : 'play'} aria-label={playing ? 'pause' : 'play'}>
-            <Icon name={playing ? 'pause' : 'play'} size={20}/>
-          </button>
-          <button className="btn btn-ghost btn-icon" onClick={p.next} title="next" aria-label="next">
-            <Icon name="skip-forward" size={20}/>
-          </button>
-        </div>
-        {!remote && (
-          <div className="mp-sheet-vol">
-            <button className="btn btn-ghost btn-icon" onClick={p.toggleMute}
-                    title={p.muted ? 'unmute' : 'mute'} aria-label={p.muted ? 'unmute' : 'mute'}>
-              <Icon name={p.muted || p.volume === 0 ? 'volume-x' : 'volume-2'} size={16}/>
-            </button>
-            <input type="range" min={0} max={1} step={0.01} value={p.muted ? 0 : p.volume}
-                   aria-label="volume" onChange={(e) => p.setVolume(Number(e.target.value))}/>
-          </div>
-        )}
-        {p.sleepRemainingSec != null && (
-          <div className="mp-sheet-sleep mono" title="sleep timer">
-            <Icon name="moon" size={12}/>
-            sleep · {p.sleepRemainingSec < 0 ? 'at the end' : fmtDur(p.sleepRemainingSec)}
-          </div>
-        )}
-        {lyrId != null && (
-          <section className="mp-sheet-sec" aria-label="lyrics">
-            <button type="button" className="mp-sheet-sec-head lyr-sec-toggle" aria-expanded={lyrOpen}
-                    onClick={toggleLyr}>
-              <span>lyrics</span>
-              <Icon name={lyrOpen ? 'chevron-up' : 'chevron-down'} size={16}/>
-            </button>
-            {lyrOpen && (
-              <LyricsView trackId={lyrId} height={240} compact
-                          follow={remote ? { kind: 'room', roomId: p.target.roomId } : { kind: 'local' }}/>
-            )}
-          </section>
-        )}
-        <section className="mp-sheet-sec" aria-label="play on">
-          <div className="mp-sheet-sec-head">play on</div>
-          <PlayerCastTargets p={p} big/>
-        </section>
-        <section className="mp-sheet-sec" aria-label="queue">
+      ))}
+    </div>
+  );
+  const panel = tab === 'hide' ? null : (
+    <div className={`mp-panel mp-panel-${tab}`} id="mp-tabpanel" role="tabpanel"
+         aria-labelledby={`mp-tab-${tab}`}>
+      {tab === 'lyrics' && (
+        <LyricsView trackId={lyrId} height={480}
+                    follow={remote ? { kind: 'room', roomId: p.target.roomId } : { kind: 'local' }}/>
+      )}
+      {tab === 'eq' && <EqPanel p={p}/>}
+      {tab === 'queue' && (
+        <>
           <div className="mp-sheet-sec-head">
             <span>queue · {p.queue.length}</span>
             <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue" aria-label="clear queue"/>
@@ -1763,7 +2010,95 @@ const PlayerSheet = ({ p, onClose }) => {
                              jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
           </div>
           <PlayerQueueSave queue={p.queue}/>
-        </section>
+        </>
+      )}
+    </div>
+  );
+  const stage = typeof NowPlayingVisualizer === 'function'
+    ? <NowPlayingVisualizer p={p} remote={remote} head={tabStrip} panel={panel}/>
+    : (
+      <div className="mp-stage-solid">
+        <div className="viz-head">{tabStrip}</div>
+        {panel}
+      </div>
+    );
+
+  return (
+    <div ref={sheetRef} className="mp-sheet" role="dialog" aria-modal="true" aria-label="now playing"
+         onKeyDown={onKeyDown}>
+      <div ref={innerRef} className="mp-sheet-inner">
+        <div className="mp-sheet-head" onTouchStart={onTouchStart} onTouchMove={onTouchMove}
+             onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}>
+          <button ref={closeRef} className="btn btn-ghost btn-icon" onClick={onClose}
+                  title="close" aria-label="close player">
+            <Icon name="chevron-down" size={18}/>
+          </button>
+          <span className="mp-sheet-title">now playing</span>
+          <span className="mp-sheet-grip" aria-hidden="true"/>
+        </div>
+        <div className="mp-sheet-body">
+          <div className="mp-sheet-grid">
+            <div className="mp-sheet-now">
+              <CoverTile item={it} size={200} radius="var(--r-md)"/>
+              <div className="mp-sheet-meta">
+                {remote && <Pill tone="live" live>casting to {p.target.roomId}</Pill>}
+                <div className="mp-sheet-name">{it.title}</div>
+                <div className="mp-sheet-by">{it.artist || (it.seekable === false ? 'live stream' : '—')}</div>
+                {it.album && <div className="mp-sheet-album">{it.album}</div>}
+              </div>
+              <div className="mp-sheet-seek">
+                <span className="mono">{fmtDur(p.positionSec)}</span>
+                <div className="mp-sheet-track" onClick={seekAt} style={{ cursor: it.seekable ? 'pointer' : 'default' }}>
+                  <div><span style={{ width: `${pct}%` }}/></div>
+                </div>
+                <span className="mono">{it.seekable ? fmtDur(dur) : 'live'}</span>
+              </div>
+              <div className="mp-sheet-transport">
+                <button className="btn btn-ghost btn-icon" onClick={p.prev} title="previous" aria-label="previous">
+                  <Icon name="skip-back" size={20}/>
+                </button>
+                <button className="btn btn-primary btn-icon mp-sheet-play" onClick={p.toggle}
+                        title={playing ? 'pause' : 'play'} aria-label={playing ? 'pause' : 'play'}>
+                  <Icon name={playing ? 'pause' : 'play'} size={20}/>
+                </button>
+                <button className="btn btn-ghost btn-icon" onClick={p.next} title="next" aria-label="next">
+                  <Icon name="skip-forward" size={20}/>
+                </button>
+              </div>
+              {!remote && (
+                <div className="mp-sheet-vol">
+                  <button className="btn btn-ghost btn-icon" onClick={p.toggleMute}
+                          title={p.muted ? 'unmute' : 'mute'} aria-label={p.muted ? 'unmute' : 'mute'}>
+                    <Icon name={p.muted || p.volume === 0 ? 'volume-x' : 'volume-2'} size={16}/>
+                  </button>
+                  <input type="range" min={0} max={1} step={0.01} value={p.muted ? 0 : p.volume}
+                         aria-label="volume" onChange={(e) => p.setVolume(Number(e.target.value))}/>
+                  {/* Spoken audio has its own speeds in SpokenControls. */}
+                  {!spoken && typeof p.setPlaybackRate === 'function' && (
+                    <select className="mp-sheet-speed" value={p.playbackRate ?? 1} aria-label="speed"
+                            title="speed" onChange={(e) => p.setPlaybackRate(Number(e.target.value))}>
+                      {[0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r}×</option>)}
+                    </select>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="mp-sheet-stage">{stage}</div>
+            {(typeof SleepTimerControl === 'function' || typeof OfflineControl === 'function'
+              || (!remote && spoken)) && (
+              <section className="mp-sheet-sec mp-sheet-more" aria-label="more">
+                {!remote && typeof SpokenControls === 'function' && <SpokenControls p={p} bare/>}
+                {typeof SleepTimerControl === 'function' && <SleepTimerControl p={p}/>}
+                {typeof OfflineControl === 'function' && <OfflineControl p={p}/>}
+                {!remote && typeof ChapterList === 'function' && <ChapterList p={p} bare/>}
+              </section>
+            )}
+            <section className="mp-sheet-sec mp-sheet-on" aria-label="play on">
+              <div className="mp-sheet-sec-head">play on</div>
+              <PlayerCastTargets p={p} big/>
+            </section>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1976,7 +2311,7 @@ const _castRow = (active, big = false) => ({
 
 /* expose to other Babel scripts */
 Object.assign(window, {
-  PlaybackProvider, MiniPlayer, PlaybackContext, usePlayback,
+  PlaybackProvider, MiniPlayer, PlaybackContext, usePlayback, openPlayerSheet, playerSheetTab,
   itemFromTrack, itemFromSource, itemFromEpisode, itemFromBook, itemsFromBook,
   resolveSourceStreamUrl,
   playerUrls, OfflineCache, SpokenAudio,

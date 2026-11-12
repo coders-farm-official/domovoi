@@ -1,4 +1,4 @@
-"""The docked player on a phone: a compact bar, and a sheet for the rest.
+"""The docked player, and the expanded player it opens, at both widths.
 
 At 375px the docked MiniPlayer (web/static/player.jsx) used to squeeze the
 whole desktop bar into one row — cover, title, three transport buttons, a
@@ -9,15 +9,22 @@ player", every button 30px. At 760px and below it is now:
   "open player", each a 44px target, with a 2px position line on its top
   edge. What only a desktop shows is marked ``mp-desk`` and what only a
   phone shows ``mp-phone``; styles.css hides each at the other width.
-* PlayerSheet, opened from that row: covers the screen above the tab strip
-  and carries seek, previous, volume, the sleep countdown, where it plays
-  (this browser or a room) and the queue. It closes with its chevron,
-  Escape, the back gesture (it is a history entry of its own) or a tab in
-  the strip (the one already showing too), when the queue it shows is
-  cleared, and when the screen grows past 760px (a phone turned
-  sideways). Focus goes to its close button when it opens and back to
-  "open player" when it closes in place.
 * the desktop bar and its floating queue / cast target are unchanged.
+
+The expanded player (PlayerSheet, 2026-11-12) is one component for every
+width — it replaced the Music page's Player tab and the phone-only sheet.
+It opens from the bar's cover and title (a button at every width), the
+desktop's chevron, the phone's "open player", and #music/player (rewritten
+to #music, the sheet over it). It covers the screen above the tab strip on
+a phone and the column right of the sidebar on a desktop, carries seek,
+previous, volume, where it plays and a panel (Lyrics · Equalizer · Queue ·
+Hide) over the visualizer. It is a modal dialog and a history entry of its
+own: it closes with its chevron, Escape, Back, a page in the sidebar /
+strip (the one already showing too) and when the queue it shows is
+cleared — not when the window changes width. Focus goes to its close
+button when it opens and back to the control that opened it when it closes
+in place. In a browser it grows out of the bar (Web Animations; the
+harness has none, so it opens and closes at once here).
 
 The components run in domovoi/tests/jsx_interact_harness.js (the
 dashboard's own Babel, a small stateful React) against a scripted playback
@@ -78,11 +85,13 @@ window.matchMedia = (q) => {
 };
 window.__resize = (phone) => { window.__phone = phone; window.__mqFns.slice().forEach((fn) => fn()); };
 window.__pushes = [];
+window.__replaces = [];
 window.__backs = 0;
 window.__stack = [];
 window.history = {
   state: null,
   pushState(s) { window.__stack.push(this.state); this.state = s; window.__pushes.push(s); },
+  replaceState(s, t, url) { this.state = s; window.__replaces.push(url); if (url) window.location.hash = url; },
   back() { window.__backs += 1; this.state = window.__stack.length ? window.__stack.pop() : null; },
 };
 window.__acts = [];
@@ -129,14 +138,19 @@ const sheet = () => h.find(cls('mp-sheet'));
 const inSheet = (e) => h.inside(e, cls('mp-sheet'));
 const bar = () => h.find(cls('mini-player'));
 const inBar = (e) => h.inside(e, cls('mini-player'));
-const controls = (pred) => h.findAll((e) => (e.type === 'button' || e.type === 'input') && pred(e))
+const controls = (pred) => h.findAll((e) => ['button', 'input', 'select'].includes(e.type) && pred(e))
   .map((e) => ({ type: e.type, icon: iconOf(e), title: e.props.title || null,
                  aria: e.props['aria-label'] || null, cls: String(e.props.className || ''),
                  minHeight: (e.props.style || {}).minHeight ?? null,
                  inSave: h.inside(e, cls('mp-q-save')), text: e.text,
                  phone: shownOn(e, 'mp-desk'), desk: shownOn(e, 'mp-phone') }));
 const openSheet = () => h.click(cls('mp-expand'));
-const focused = () => h.focused().map((e) => e.props['aria-label']);
+const focused = () => h.focused().map((e) => e.props['aria-label']
+  || (has(e, 'mp-info') ? 'cover and title' : e.props.title));
+// The listeners the components added (player.jsx's module-level hashchange
+// listener, for #music/player, is there before anything renders).
+const BASE = W().__listeners.length;
+const added = () => W().__listeners.slice(BASE).map((l) => l.t);
 const acts = () => W().__acts.slice();
 """
 
@@ -158,6 +172,16 @@ def _scenario(script: str, *, p: dict | None = None, api: dict | None = None,
 
 ROOMS = {"GET /api/music/now-playing": [{"room_id": "kitchen"}, {"room_id": "office"}]}
 KITCHEN = {"target": {"kind": "room", "roomId": "kitchen"}}
+# MilkDrop turned on in this browser, and a browser that has WebGL 2.
+VIZ_ON = r"""
+window.__store = { 'domovoi-viz-milkdrop': '1' };
+localStorage = {
+  getItem: (k) => (k in window.__store ? window.__store[k] : null),
+  setItem: (k, v) => { window.__store[k] = String(v); },
+  removeItem: (k) => { delete window.__store[k]; },
+};
+document.createElement = () => ({ getContext: () => ({ getExtension: () => null }), setAttribute() {}, style: {} });
+"""
 
 SCENARIOS = {
     # The bar: which control each width shows.
@@ -189,11 +213,11 @@ SCENARIOS = {
         " expanded: h.find(cls('mp-expand')).props['aria-expanded'],"
         " heads: h.findAll(cls('mp-sheet-sec-head')).map((e) => e.text || h.findAll((x) => x.type === 'span'"
         "   && h.inside(x, (a) => a === e)).map((x) => x.text).join('')),"
-        " listeners: W().__listeners.map((l) => l.t).sort(), media: W().__mqFns.length,"
+        " listeners: added().sort(), media: W().__mqFns.length,"
         " asked: W().__mqAsked.slice(), focused: focused() };"
         "await h.click((e) => e.type === 'button' && e.props['aria-label'] === 'close player');"
         "return { opened, closed: !sheet(), backs: W().__backs, state: W().history.state,"
-        " listeners: W().__listeners.map((l) => l.t), media: W().__mqFns.length,"
+        " listeners: added(), media: W().__mqFns.length,"
         " focused: focused() };",
     ),
     "sheet_back_gesture": _scenario(
@@ -214,7 +238,7 @@ SCENARIOS = {
     ),
     "sheet_route_change": _scenario(
         "h.render(); await openSheet();"
-        "W().__fire('hashchange'); h.rerender();"
+        "W().location.hash = '#calendar'; W().__fire('hashchange'); h.rerender();"
         "return { closed: !sheet(), backs: W().__backs, focused: focused() };",
     ),
     # A tab that navigates: by the time the tap reaches the document the
@@ -240,13 +264,68 @@ SCENARIOS = {
         "W().__fire('keydown', { key: 'Escape' }); h.rerender();"
         "return { stillOpen, closed: !sheet(), backs: W().__backs, focused: focused() };",
     ),
-    # A phone turned sideways past 760px, where the sheet never shows.
+    # A phone turned sideways past 760px: the expanded player is the same
+    # at every width, so it stays.
     "sheet_screen_grows_past_a_phone": _scenario(
         "h.render(); await openSheet();"
-        "W().__resize(true); h.rerender(); const openOnPhone = !!sheet();"
         "W().__resize(false); h.rerender();"
-        "return { openOnPhone, closed: !sheet(), backs: W().__backs, state: W().history.state,"
-        " media: W().__mqFns.length, focused: focused() };",
+        "return { open: !!sheet(), backs: W().__backs, state: W().history.state,"
+        " media: W().__mqFns.length };",
+    ),
+    # Desktop: the chevron and the cover-and-title button open the same
+    # sheet; focus goes back to whichever opened it.
+    "desktop_chevron_opens_the_sheet": _scenario(
+        "W().__phone = false; h.render();"
+        "await h.click((e) => e.type === 'button' && e.props.title === 'open full player');"
+        "const opened = { sheet: !!sheet(), pushes: W().__pushes.slice(), hash: W().location.hash,"
+        " expanded: h.find((e) => e.type === 'button' && e.props.title === 'open full player').props['aria-expanded'] };"
+        "W().__fire('keydown', { key: 'Escape' }); h.rerender();"
+        "return { opened, closed: !sheet(), backs: W().__backs, focused: focused() };",
+    ),
+    "cover_and_title_open_the_sheet": _scenario(
+        "h.render(); const b = h.find(cls('mp-info'));"
+        "const info = { type: b.type, haspopup: b.props['aria-haspopup'], title: b.props.title };"
+        "await h.click(cls('mp-info')); const open = !!sheet();"
+        "await h.click((e) => e.type === 'button' && e.props['aria-label'] === 'close player');"
+        "return { info, open, closed: !sheet(), focused: focused() };",
+    ),
+    # Escape that something inside already took (the visualizer's preset
+    # list), or while the visualizer is full screen, leaves it open.
+    "sheet_escape_taken_or_full_screen": _scenario(
+        "h.render(); await openSheet();"
+        "W().__fire('keydown', { key: 'Escape', defaultPrevented: true }); h.rerender(); const taken = !!sheet();"
+        "h.global('document').fullscreenElement = {};"
+        "W().__fire('keydown', { key: 'Escape' }); h.rerender(); const fs = !!sheet();"
+        "h.global('document').fullscreenElement = null;"
+        "W().__fire('keydown', { key: 'Escape' }); h.rerender();"
+        "return { taken, fs, closed: !sheet() };",
+    ),
+    # #music/player: the old Player tab's address opens the sheet over Music.
+    "route_at_load_with_something_queued": _scenario(
+        "h.render(); return { sheet: !!sheet(), hash: W().location.hash, replaces: W().__replaces.slice(),"
+        " pushes: W().__pushes.slice() };",
+        setup=" window.location.hash = '#music/player';",
+    ),
+    "route_at_load_with_nothing_queued": _scenario(
+        "h.render(); const P = W().__P; P.current = P.queue[0]; h.rerender();"
+        "return { sheet: !!sheet(), hash: W().location.hash, pushes: W().__pushes.slice() };",
+        p={"current": None, "queue": [], "index": -1},
+        setup=" window.location.hash = '#music/player/';",
+    ),
+    "route_link_while_closed_and_open": _scenario(
+        "h.render(); W().location.hash = '#music'; W().__fire('hashchange'); h.rerender();"
+        "const plain = !!sheet();"
+        "W().location.hash = '#music/player'; W().__fire('hashchange'); h.rerender();"
+        "const opened = { sheet: !!sheet(), hash: W().location.hash, pushes: W().__pushes.length };"
+        # The same link again, while open over #music: it stays open.
+        "W().location.hash = '#music/player'; W().__fire('hashchange'); h.rerender();"
+        "const again = { sheet: !!sheet(), hash: W().location.hash, pushes: W().__pushes.length };"
+        "const api = { open: W().openPlayerSheet(), shown: !!sheet() };"
+        "return { plain, opened, again, api };",
+    ),
+    "open_player_sheet_with_nothing_queued": _scenario(
+        "h.render(); return { opened: W().openPlayerSheet(), tree: h.tree().length };",
+        p={"current": None, "queue": [], "index": -1},
     ),
     # A desktop window narrowed to a phone: the floating panels close.
     "desktop_panels_close_on_a_phone": _scenario(
@@ -322,8 +401,10 @@ SCENARIOS = {
            "durationSec": 0, "positionSec": 12},
     ),
     "sheet_sleep_end": _scenario(
-        "h.render(); await openSheet(); return h.find(cls('mp-sheet-sleep')).text;",
-        p={"sleepRemainingSec": -1},
+        "h.render(); await openSheet();"
+        "return h.findAll((e) => h.inside(e, cls('mp-sheet-more'))).map((e) => e.text).filter(Boolean);",
+        p={"sleepRemainingSec": -1, "eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1},
+        files=FILES + ["web/static/music_player_panel.jsx"],
     ),
     # The desktop bar's own panels still work as they did.
     "desktop_panels": _scenario(
@@ -372,14 +453,37 @@ SCENARIOS = {
         component="(window.__vols = [null, '', '  ', '0', '0.4', ' 0.25 ', '1', '1.5', '-1', 'abc']"
                   ".map(_playerStartVolume), MiniPlayer)",
     ),
-    # The Music page's Player tab carries its phone classes.
-    "now_playing_panel": _scenario(
-        "h.render(); return { head: !!h.find(cls('np-head')), transport: !!h.find(cls('np-transport')),"
-        " presets: !!h.find(cls('np-eq-presets')) };",
-        p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1},
-        component="NowPlayingPanel",
+    # With music_player_panel.jsx (as in the browser): the Equalizer tab
+    # first (no lyrics here), the sleep timer and offline, speed; every
+    # control a 44px target on a phone.
+    "sheet_full": _scenario(
+        "h.render(); await openSheet(); await h.settle(); h.rerender();"
+        "const tabs = h.findAll(cls('mp-tab')).map((e) => ({ text: e.text, on: e.props['aria-selected'],"
+        "  role: e.props.role, tabIndex: e.props.tabIndex }));"
+        "const panel = h.find(cls('mp-panel'));"
+        "return { tabs, panel: { cls: panel.props.className, role: panel.props.role, id: panel.props.id,"
+        "  by: panel.props['aria-labelledby'] }, presets: !!h.find(cls('np-eq-presets')),"
+        " controls: controls(inSheet), sections: h.findAll((e) => e.type === 'section' && inSheet(e))"
+        "  .map((e) => e.props['aria-label']) };",
+        p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1, "setPlaybackRate": None},
         files=FILES + ["web/static/music_player_panel.jsx"],
-        refs=False,
+        setup=" window.__P.setPlaybackRate = __rec('setPlaybackRate'); window.__P.setSleep = __rec('setSleep');",
+    ),
+    "sheet_tabs_pick_and_keys": _scenario(
+        "h.render(); await openSheet();"
+        "await h.click((e) => has(e, 'mp-tab') && e.text === 'Hide');"
+        "const hidden = { panel: !!h.find(cls('mp-panel')), on: h.find((e) => has(e, 'mp-tab') && e.props['aria-selected']).text };"
+        "await h.key(cls('mp-tabs'), 'ArrowLeft');"
+        "const left = h.find((e) => has(e, 'mp-tab') && e.props['aria-selected']).text;"
+        "await h.key(cls('mp-tabs'), 'Home');"
+        "const home = h.find((e) => has(e, 'mp-tab') && e.props['aria-selected']).text;"
+        "await h.key(cls('mp-tabs'), 'End');"
+        "const end = h.find((e) => has(e, 'mp-tab') && e.props['aria-selected']).text;"
+        "await h.click((e) => has(e, 'mp-tab') && e.text === 'Queue');"
+        "const queue = { rows: h.findAll(cls('mp-q-row')).length, head: !!h.find(cls('mp-sheet-sec-head')) };"
+        "return { hidden, left, home, end, queue };",
+        p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1},
+        files=FILES + ["web/static/music_player_panel.jsx"],
     ),
     # While casting, previous is the room's (2026-10-01): every previous
     # button stays live and calls the player's prev, which posts the room's
@@ -395,14 +499,52 @@ SCENARIOS = {
         "return { bar: inBarBtns, sheet: inSheetBtns, acts: acts() };",
         p=KITCHEN, api=ROOMS,
     ),
-    "casting_previous_panel": _scenario(
-        "h.render(); const btn = h.find((e) => e.type === 'button' && iconOf(e) === 'skip-back');"
-        "const disabled = !!btn.props.disabled; await h.click((e) => e === btn);"
-        "return { disabled, acts: acts() };",
+    # The visualizer as the panel's backdrop (visualizer.jsx). Node has no
+    # WebGL 2 unless a probe canvas says so; refs off (the stage measures
+    # itself through its ref).
+    "viz_backdrop": _scenario(
+        "h.render(); await openSheet(); await h.settle(); h.rerender();"
+        "const over = h.find(cls('viz-over'));"
+        "return { stage: String(h.find(cls('viz-stage')).props.className),"
+        " opacity: over ? over.props.style.opacity : null,"
+        " panelInOver: !!h.find((e) => has(e, 'mp-panel') && h.inside(e, cls('viz-over'))),"
+        " tabsInHead: !!h.find((e) => has(e, 'mp-tabs') && h.inside(e, cls('viz-head'))),"
+        " halves: h.findAll(cls('viz-half')).length, waiting: h.find(cls('viz-name')).text };",
+        p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1},
+        files=FILES + ["web/static/music_player_panel.jsx", "web/static/visualizer.jsx"],
+        setup=VIZ_ON + " window.__store['domovoi-viz-panel-opacity'] = '0.5';", refs=False,
+    ),
+    "viz_backdrop_hidden": _scenario(
+        "h.render(); await openSheet();"
+        "await h.click((e) => has(e, 'mp-tab') && e.text === 'Hide');"
+        "return { over: !!h.find(cls('viz-over')), panel: !!h.find(cls('mp-panel')),"
+        " stage: !!h.find(cls('viz-stage')) };",
+        p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1},
+        files=FILES + ["web/static/music_player_panel.jsx", "web/static/visualizer.jsx"],
+        setup=VIZ_ON, refs=False,
+    ),
+    # Off, or casting: the panel is a plain card, the honest line stays.
+    "viz_off_plain_card": _scenario(
+        "h.render(); await openSheet();"
+        "return { solid: !!h.find((e) => has(e, 'mp-panel') && h.inside(e, cls('viz-solid'))),"
+        " over: !!h.find(cls('viz-over')), bars: !!h.find(cls('viz-bars')) };",
+        p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1},
+        files=FILES + ["web/static/music_player_panel.jsx", "web/static/visualizer.jsx"], refs=False,
+    ),
+    "viz_casting_plain_card": _scenario(
+        "h.render(); await openSheet(); await h.settle(); h.rerender();"
+        "return { solid: !!h.find((e) => has(e, 'mp-panel') && h.inside(e, cls('viz-solid'))),"
+        " over: !!h.find(cls('viz-over')), note: h.find(cls('viz-note')).text,"
+        " tabs: h.findAll(cls('mp-tab')).map((e) => e.text) };",
         p={"eqBands": [0] * 10, "eqEnabled": False, "playbackRate": 1, **KITCHEN},
-        component="NowPlayingPanel",
-        files=FILES + ["web/static/music_player_panel.jsx"],
-        refs=False,
+        files=FILES + ["web/static/music_player_panel.jsx", "web/static/visualizer.jsx"],
+        setup=VIZ_ON, refs=False, api=ROOMS,
+    ),
+    "viz_opacity_values": _scenario(
+        "return W().__vals;",
+        component="(window.__vals = [null, '', 'abc', '0', '0.1', '0.3', '0.55', '0.8', '1', '1.5']"
+                  ".map(vizPanelOpacity), MiniPlayer)",
+        files=FILES + ["web/static/music_player_panel.jsx", "web/static/visualizer.jsx"],
     ),
 }
 
@@ -444,13 +586,24 @@ def _block(css: str, start: int) -> str:
 
 
 def _player_css() -> tuple[str, str]:
-    """(the player's rules outside any media block, its 760px block)."""
+    """(the docked bar's rules outside any media block, its 760px block)."""
     css = _src("styles.css")
     start = css.index("Docked player (player.jsx")
-    end = css.index("The Music page's Player tab")
+    end = css.index("The expanded player (player.jsx PlayerSheet)")
     section = css[start:end]
     phone = _block(section, section.index("@media (max-width: 760px) {"))
     return section.replace(phone, ""), phone
+
+
+def _sheet_css() -> tuple[str, str, str]:
+    """The expanded player's rules: (outside any media block, its 1100px
+    block, its 760px block)."""
+    css = _src("styles.css")
+    start = css.index("The expanded player (player.jsx PlayerSheet)")
+    section = css[start:css.index("The visualizer (visualizer.jsx)")]
+    one = _block(section, section.index("@media (max-width: 1100px) {"))
+    phone = _block(section, section.index("@media (max-width: 760px) {"))
+    return section.replace(one, "").replace(phone, ""), one, phone
 
 
 def _rule(css: str, selector: str) -> str:
@@ -472,9 +625,10 @@ def _px(decl: str, prop: str) -> list[int]:
 
 def test_the_phone_bar_is_cover_title_play_next_and_open(driven) -> None:
     bar = driven["bar"]
-    phone = [(c["icon"], c["aria"]) for c in bar["controls"] if c["phone"]]
-    assert phone == [("pause", "pause"), ("skip-forward", "next"), ("chevron-up", "open player"),
-                     ("x", "Stop and close")], phone
+    phone = [(c["icon"], c["aria"] or c["title"]) for c in bar["controls"] if c["phone"]]
+    # The cover and title are one button ("open player") at every width.
+    assert phone == [(None, "open player"), ("pause", "pause"), ("skip-forward", "next"),
+                     ("chevron-up", "open player"), ("x", "Stop and close")], phone
     # Title and artist stay in the row (ellipsized in CSS); the seek bar,
     # the sleep countdown and the rest are desktop-only.
     assert bar["title"] == "Track 1" and bar["sub"] == "Artist 1"
@@ -487,6 +641,7 @@ def test_the_phone_bar_is_cover_title_play_next_and_open(driven) -> None:
 def test_the_desktop_bar_keeps_every_control_it_had(driven) -> None:
     desk = [(c["icon"] or c["type"], c["title"]) for c in driven["bar"]["controls"] if c["desk"]]
     assert desk == [
+        ("button", "open player"),
         ("skip-back", "previous"), ("pause", "pause"), ("skip-forward", "next"),
         ("volume-2", None), ("input", None), ("list-music", "queue"),
         ("monitor-speaker", "cast target"), ("chevron-up", "open full player"),
@@ -495,7 +650,7 @@ def test_the_desktop_bar_keeps_every_control_it_had(driven) -> None:
     # One element per control: nothing the phone shows is a second copy of
     # a desktop control, except the phone's own "open player".
     both = [c["icon"] for c in driven["bar"]["controls"] if c["desk"] and c["phone"]]
-    assert both == ["pause", "skip-forward", "x"]
+    assert both == [None, "pause", "skip-forward", "x"]
 
 
 def test_every_phone_bar_control_is_a_44px_target(driven) -> None:
@@ -503,8 +658,22 @@ def test_every_phone_bar_control_is_a_44px_target(driven) -> None:
     assert _px(_rule(phone, ".mini-player .btn-icon"), "width") == [44]
     assert _px(_rule(phone, ".mini-player .btn-icon"), "height") == [44]
     for c in driven["bar"]["controls"]:
-        if c["phone"]:
+        if c["phone"] and c["cls"] != "mp-info":
             assert "btn-icon" in c["cls"].split(), c
+    # The cover-and-title button is as tall as its 44px cover, and wider.
+    assert 'className="mp-info"' in _src("player.jsx")
+    assert "<CoverTile item={it} size={44}/>" in _src("player.jsx")
+
+
+def test_the_cover_and_title_are_a_plain_button() -> None:
+    desktop, _ = _player_css()
+    r = _rule(desktop, "button.mp-info")
+    for want in ("font: inherit;", "color: inherit;", "background: none;", "border: 0;", "padding: 0;",
+                 "cursor: pointer;", "max-width: 100%;"):
+        assert want in r, want
+    # Inside a button only phrasing content: the title lines are spans.
+    assert "display: block; min-width: 0;" in _rule(desktop, ".mp-text")
+    assert "display: block;" in _rule(desktop, ".mp-title, .mp-sub")
 
 
 def test_the_bar_is_styled_in_css_so_a_phone_can_restyle_it(driven) -> None:
@@ -581,15 +750,17 @@ def test_each_width_hides_the_others_controls() -> None:
 def test_open_player_opens_the_sheet_as_a_history_entry(driven) -> None:
     o = driven["sheet_open_close"]["opened"]
     assert o["plain"]["props"]["role"] == "dialog"
-    # ...but not a modal one: the strip below it stays live.
-    assert "aria-modal" not in o["plain"]["props"]
+    # A modal one: Tab stays inside (the sidebar and strip still take a
+    # tap, which closes it).
+    assert o["plain"]["props"]["aria-modal"] == "true"
     assert o["pushes"] == [{"domovoiPlayerSheet": True}]
     assert o["state"] == {"domovoiPlayerSheet": True}
     assert o["expanded"] is True
+    # Only the queue is in the panel here (no lyrics.jsx, no equalizer).
     assert sorted(o["heads"]) == ["play on", "queue · 3"]
     assert o["listeners"] == ["document:click", "hashchange", "keydown", "popstate"]
-    # It watches the phone breakpoint (styles.css's) while it is open.
-    assert o["media"] == 1 and o["asked"] == ["(max-width: 760px)"]
+    # It no longer watches the width: it is the same sheet at every width.
+    assert o["media"] == 0 and o["asked"] == []
     # Focus lands on its close button.
     assert o["focused"] == ["close player"]
 
@@ -635,12 +806,31 @@ def test_escape_closes_the_sheet(driven) -> None:
                                       "focused": ["close player", "open player"]}
 
 
-def test_a_screen_grown_past_a_phone_closes_the_sheet(driven) -> None:
-    """Past 760px styles.css never shows the sheet: left open, it would sit
-    unseen on a history entry the next back spends doing nothing."""
+def test_a_screen_grown_past_a_phone_keeps_the_sheet(driven) -> None:
+    """One expanded player for every width (2026-11-12): a phone turned
+    sideways keeps it open, on its history entry."""
     g = driven["sheet_screen_grows_past_a_phone"]
-    assert g == {"openOnPhone": True, "closed": True, "backs": 1, "state": None,
-                 "media": 0, "focused": ["close player"]}
+    assert g == {"open": True, "backs": 0, "state": {"domovoiPlayerSheet": True}, "media": 0}
+
+
+def test_the_desktop_chevron_opens_the_same_sheet(driven) -> None:
+    d = driven["desktop_chevron_opens_the_sheet"]
+    # Over this page: no address of its own, a history entry for Back.
+    assert d["opened"] == {"sheet": True, "pushes": [{"domovoiPlayerSheet": True}], "hash": "",
+                           "expanded": True}
+    assert d["closed"] is True and d["backs"] == 1
+    assert d["focused"] == ["close player", "open full player"]
+
+
+def test_the_cover_and_title_open_it_and_take_the_focus_back(driven) -> None:
+    c = driven["cover_and_title_open_the_sheet"]
+    assert c["info"] == {"type": "button", "haspopup": "dialog", "title": "open player"}
+    assert c["open"] is True and c["closed"] is True
+    assert c["focused"] == ["close player", "cover and title"]
+
+
+def test_escape_taken_inside_or_in_full_screen_leaves_it_open(driven) -> None:
+    assert driven["sheet_escape_taken_or_full_screen"] == {"taken": True, "fs": True, "closed": True}
 
 
 def test_a_desktop_narrowed_to_a_phone_closes_the_floating_panels(driven) -> None:
@@ -675,21 +865,30 @@ def test_the_sheet_carries_everything_the_bar_left_out(driven) -> None:
     assert s["pill"] == 0 and s["sleep"] is None
 
 
+def _big_on_a_phone(c: dict) -> bool:
+    k = c["cls"].split()
+    return ("btn-icon" in k or c["minHeight"] == 48 or "mp-tab" in k or "np-chip" in k
+            or "mp-sheet-speed" in k or (c["inSave"] and "btn" in k) or "btn" in k)
+
+
 def test_every_sheet_control_is_a_44px_target(driven) -> None:
-    _, phone = _player_css()
+    base, _, phone = _sheet_css()
     assert _px(_rule(phone, ".mp-sheet .btn-icon"), "width") == [44]
-    assert _px(_rule(phone, ".mp-sheet .mp-sheet-play"), "width") == [56]
-    assert _px(_rule(phone, ".mp-sheet .mp-q-save .btn"), "height") == [44]
-    assert _px(_rule(phone, ".mp-sheet .mp-q-save input"), "height") == [44]
+    assert _px(_rule(base, ".mp-sheet .mp-sheet-play"), "width") == [56]
+    assert _px(_rule(base, ".mp-sheet .mp-q-save .btn"), "height") == [44]
+    assert _px(_rule(base, ".mp-sheet .mp-q-save input"), "height") == [44]
     assert _px(_rule(phone, '.mp-sheet-vol input[type="range"]'), "height") == [44]
-    assert _px(_rule(phone, ".mp-sheet-track"), "height") == [44]
-    assert _px(_rule(phone, ".mp-sheet .mp-q-row"), "min-height") == [48]
-    for c in driven["sheet_contents"]["controls"]:
-        if c["type"] == "input":
+    assert _px(_rule(base, ".mp-sheet-track"), "height") == [44]
+    assert _px(_rule(base, ".mp-sheet .mp-q-row"), "min-height") == [48]
+    assert _px(_rule(phone, ".mp-tab"), "min-height") == [44]
+    assert _px(_rule(phone, ".mp-sheet .np-chip"), "min-height") == [44]
+    assert _px(_rule(phone, ".mp-sheet .mp-sheet-more .btn"), "height") == [44]
+    assert _px(_rule(phone, ".mp-sheet .mp-sheet-speed"), "height") == [44]
+    assert "height: 44px !important;" in _rule(phone, ".mp-sheet .mp-sheet-more select, .mp-sheet .mp-panel select")
+    for c in driven["sheet_contents"]["controls"] + driven["sheet_full"]["controls"]:
+        if c["type"] in ("input", "select"):
             continue
-        big = ("btn-icon" in c["cls"].split() or c["minHeight"] == 48
-               or (c["inSave"] and "btn" in c["cls"].split()))
-        assert big, c
+        assert _big_on_a_phone(c), c
 
 
 def test_the_sheet_does_what_the_bar_and_its_panels_did(driven) -> None:
@@ -723,29 +922,64 @@ def test_a_live_stream_in_the_sheet_does_not_seek(driven) -> None:
     assert lv["cursor"] == "default"
 
 
-def test_the_sleep_countdown_moves_into_the_sheet(driven) -> None:
-    assert "at the end" in driven["sheet_sleep_end"]
+def test_the_sleep_timer_and_offline_are_in_the_sheet(driven) -> None:
+    texts = driven["sheet_sleep_end"]
+    assert texts[:6] == ["sleep", "15m", "30m", "45m", "60m", "end of track"]
+    assert "ends after track" in texts and "offline cache unavailable" in texts
 
 
-def test_the_sheet_covers_the_screen_above_the_strip_and_only_on_a_phone() -> None:
-    desktop, phone = _player_css()
-    assert ".mp-sheet { display: none; }" in desktop
-    sheet = _rule(phone, ".mp-sheet")
-    assert "position: fixed; left: 0; right: 0; top: 0; bottom: var(--dock-bottom, 0px); z-index: 48;" in sheet
-    assert "display: flex;" in sheet
+def test_the_sheet_covers_all_but_the_navigation_at_every_width() -> None:
+    base, one, phone = _sheet_css()
+    desktop, _ = _player_css()
+    sheet = _rule(base, ".mp-sheet")
+    # Desktop: right of the sidebar, top to bottom (topbar and bar under it).
+    assert "position: fixed; left: var(--sidebar-w); right: 0; top: 0; bottom: 0; z-index: 48;" in sheet
+    assert "display: flex;" in sheet and "background: var(--surface);" in sheet
+    # Phone: the screen above the tab strip.
+    assert "left: 0; bottom: var(--dock-bottom, 0px);" in _rule(phone, ".mp-sheet")
+    # No longer hidden at any width.
+    assert "display: none" not in sheet
     # Above the bar (45) and its floating panels (46/47), below drawers (60).
     assert "z-index: 45;" in _rule(desktop, ".mini-player")
-    ladder = _src("styles.css")
-    assert re.search(r"^\s+48\s+its phone sheet$", ladder, re.M)
+    assert re.search(r"^\s+48\s+the expanded player \(PlayerSheet\)$", _src("styles.css"), re.M)
     # Its body scrolls; nothing in it widens the screen.
-    body = _rule(phone, ".mp-sheet-body")
+    body = _rule(base, ".mp-sheet-body")
     assert "overflow-y: auto;" in body and "min-height: 0;" in body
-    assert "flex: none; min-width: 0;" in _rule(phone, ".mp-sheet-body > *")
+    assert "min-width: 0;" in _rule(base, ".mp-sheet-grid > *")
     for sel in (".mp-sheet-seek", ".mp-sheet-vol", ".mp-sheet .mp-q-row"):
-        assert "minmax(0, 1fr)" in _rule(phone, sel), sel
+        assert "minmax(0, 1fr)" in _rule(base, sel), sel
     assert "min-width: 0;" in _rule(desktop, ".mp-q-save input")
-    assert re.search(r"@media \(max-width: 760px\) and \(prefers-reduced-motion: reduce\) \{\s*"
-                     r"\.mp-sheet \{ animation: none; \}", _src("styles.css"))
+    # Wide: player | stage; narrower: one column, the stage under the transport.
+    grid = _rule(base, ".mp-sheet-grid")
+    assert "grid-template-columns: 320px minmax(0, 1fr);" in grid
+    assert 'grid-template-areas: "now stage" "more stage" "on stage";' in grid
+    assert 'grid-template-areas: "now" "stage" "more" "on";' in _rule(one, ".mp-sheet-grid")
+    # The phone's swipe handle on the header.
+    assert "touch-action: none;" in _rule(base, ".mp-sheet-head")
+    # The bar hides under it while it is open (its left end would show
+    # under the sidebar on a desktop), and is back as it shrinks.
+    assert "visibility: hidden;" in _rule(desktop, ".mini-player.under-sheet")
+    assert "display: block;" in _rule(phone, ".mp-sheet-grip")
+
+
+def test_the_sheet_grows_out_of_the_bar_and_back() -> None:
+    """The motion, in player.jsx: the sheet's clip-path runs from the bar's
+    box to its own (280 ms) and back (240 ms) on the house ease, never past
+    300 ms (docs/design/README.md); prefers-reduced-motion gets a 120 ms
+    fade and no growth."""
+    src = _src("player.jsx")
+    assert "const _MP_OPEN_MS = 280;" in src and "const _MP_CLOSE_MS = 240;" in src
+    assert "const _MP_FADE_MS = 120;" in src
+    assert "const _MP_EASE = 'cubic-bezier(0.2, 0, 0, 1)';" in src
+    assert "_mpClipTo(s, f) }, { clipPath: _MP_CLIP_FULL }" in src
+    assert "{ clipPath: _MP_CLIP_FULL }, { clipPath: _mpClipTo(s, f) }" in src
+    assert src.count("if (_mpReducedMotion())") == 2
+    assert "matchMedia('(prefers-reduced-motion: reduce)')" in src
+    # Unmounted only after the shrink (or at once without Web Animations,
+    # or after a timeout in a hidden tab where it never runs).
+    assert "anim.onfinish = finish;" in src and "setTimeout(finish, _MP_CLOSE_MS + 400)" in src
+    # No CSS keyframe of its own any more.
+    assert "@keyframes mp-sheet-in" not in _src("styles.css")
 
 
 # ─── the desktop panels, unchanged ───────────────────────────────────────
@@ -758,7 +992,8 @@ def test_the_desktop_queue_and_cast_panels_still_work(driven) -> None:
     assert d["cast"]["rows"] == [["This browser", None], ["kitchen", None], ["office", None]]
     assert d["castClosed"] is True          # a successful pick closes the menu
     assert d["acts"] == [["castTo", '{"kind":"room","roomId":"office"}']]
-    assert d["hash"] == "music/player" and d["sheet"] is False
+    # "open full player" opens the expanded player over this page.
+    assert d["hash"] == "" and d["sheet"] is True
     player = _src("player.jsx")
     # The floating panels move with the bar, as before.
     assert player.count("bottom: 'calc(var(--dock-bottom, 0px) + 76px)'") == 2
@@ -789,22 +1024,104 @@ def test_the_bar_volume_slider_is_amber() -> None:
     assert "accent-color: var(--brand);" in _rule(desktop, '.mini-player input[type="range"]')
 
 
-# ─── the Music page's Player tab ─────────────────────────────────────────
+# ─── #music/player, the old Player tab's address ─────────────────────────
 
 
-def test_the_player_tab_stacks_on_a_phone(driven) -> None:
-    assert driven["now_playing_panel"] == {"head": True, "transport": True, "presets": True}
-    css = _src("styles.css")
-    start = css.index("The Music page's Player tab")
-    section = css[start:css.index("Calendar page")]
-    phone = _block(section, section.index("@media (max-width: 760px) {"))
-    desktop = section.replace(phone, "")
-    assert "grid-template-columns: 220px 1fr;" in _rule(desktop, ".np-head")
-    assert "grid-template-columns: minmax(0, 1fr);" in _rule(phone, ".np-head")
-    assert "flex-wrap: wrap;" in _rule(phone, ".np-transport")
-    assert "flex-wrap: wrap;" in _rule(phone, ".np-eq-presets")
-    assert _px(_rule(phone, ".np-transport .btn-icon"), "width") == [44]
-    assert "gridTemplateColumns: '220px 1fr'" not in _src("music_player_panel.jsx")
+def test_music_player_at_load_opens_the_sheet_over_music(driven) -> None:
+    d = driven["route_at_load_with_something_queued"]
+    # Rewritten in place (no extra entry), then the sheet's own entry on top.
+    assert d == {"sheet": True, "hash": "#music", "replaces": ["#music"],
+                 "pushes": [{"domovoiPlayerSheet": True}]}
+
+
+def test_music_player_at_load_with_nothing_queued_lands_on_music(driven) -> None:
+    # A trailing slash is the same address; nothing pops up later when
+    # something is queued.
+    assert driven["route_at_load_with_nothing_queued"] == {"sheet": False, "hash": "#music", "pushes": []}
+
+
+def test_a_link_to_music_player_opens_it_and_leaves_an_open_one_open(driven) -> None:
+    d = driven["route_link_while_closed_and_open"]
+    assert d["plain"] is False
+    assert d["opened"] == {"sheet": True, "hash": "#music", "pushes": 1}
+    assert d["again"] == {"sheet": True, "hash": "#music", "pushes": 1}
+    assert d["api"] == {"open": True, "shown": True}
+    assert driven["open_player_sheet_with_nothing_queued"] == {"opened": False, "tree": 0}
+
+
+def test_the_music_page_has_no_player_tab() -> None:
+    music = _src("music.jsx")
+    tabs = music[music.index("const MUSIC_PAGE_TABS = ["):music.index("];", music.index("const MUSIC_PAGE_TABS = ["))]
+    assert "{ id: 'player' }" not in tabs and "'library'" in tabs and "'queue'" in tabs
+    assert "NowPlayingPanel" not in music
+    assert "const NowPlayingPanel" not in _src("music_player_panel.jsx")
+    assert "label: 'Player'" not in music
+    # The listener that rewrites the address is added as player.jsx loads,
+    # before the shell's and the pages' own hashchange listeners.
+    player = _src("player.jsx")
+    assert "const PLAYER_SHEET_ROUTE = 'music/player';" in player
+    assert "window.history.replaceState(window.history.state, '', '#music')" in player
+    assert "\nconst openPlayerSheet = () => {" in player
+
+
+# ─── the panel: tabs over the visualizer ─────────────────────────────────
+
+
+def test_the_panel_is_a_tab_set_equalizer_first_without_lyrics(driven) -> None:
+    f = driven["sheet_full"]
+    assert f["tabs"] == [{"text": "Equalizer", "on": True, "role": "tab", "tabIndex": 0},
+                         {"text": "Queue", "on": False, "role": "tab", "tabIndex": -1},
+                         {"text": "Hide", "on": False, "role": "tab", "tabIndex": -1}]
+    assert f["panel"] == {"cls": "mp-panel mp-panel-eq", "role": "tabpanel", "id": "mp-tabpanel",
+                          "by": "mp-tab-eq"}
+    assert f["presets"] is True
+    assert f["sections"] == ["more", "play on"]
+    # Speed, for music played here (spoken audio has its own).
+    assert any(c["type"] == "select" and c["aria"] == "speed" for c in f["controls"])
+
+
+def test_hide_and_the_arrow_keys(driven) -> None:
+    t = driven["sheet_tabs_pick_and_keys"]
+    assert t["hidden"] == {"panel": False, "on": "Hide"}
+    assert (t["left"], t["home"], t["end"]) == ("Queue", "Equalizer", "Hide")
+    assert t["queue"] == {"rows": 3, "head": True}
+
+
+def test_the_visualizer_is_the_panels_backdrop(driven) -> None:
+    v = driven["viz_backdrop"]
+    assert v["stage"] == "viz-stage with-panel"
+    # The stored 50 % from the visualizer's slider.
+    assert v["opacity"] == 0.5
+    assert v["panelInOver"] is True and v["tabsInHead"] is True
+    # No clickable halves any more; the waiting line is in the name chip.
+    assert v["halves"] == 0
+    assert v["waiting"] == "starts when music plays in this browser"
+    # Hide: the picture alone.
+    assert driven["viz_backdrop_hidden"] == {"over": False, "panel": False, "stage": True}
+
+
+def test_off_or_casting_the_panel_is_a_plain_card(driven) -> None:
+    assert driven["viz_off_plain_card"] == {"solid": True, "over": False, "bars": True}
+    c = driven["viz_casting_plain_card"]
+    assert c["solid"] is True and c["over"] is False
+    assert c["note"] == "visualizer shows when playing in this browser"
+    # No equalizer while a room plays it.
+    assert c["tabs"] == ["Queue", "Hide"]
+
+
+def test_the_panel_opacity_is_kept_between_30_and_100_percent(driven) -> None:
+    #                                  null  ''   abc  '0'  .1   .3   .55   .8   1   1.5
+    assert driven["viz_opacity_values"] == [0.8, 0.8, 0.8, 0.3, 0.3, 0.3, 0.55, 0.8, 1, 1]
+    viz = _src("visualizer.jsx")
+    assert "const VIZ_PANEL_KEY = 'domovoi-viz-panel-opacity';" in viz
+    assert 'aria-label="panel opacity"' in viz and "min={VIZ_PANEL_MIN * 100} max={100}" in viz
+    # Previous / next preset are buttons in the bar; the arrow keys only
+    # while the picture itself has the focus.
+    assert 'aria-label="previous preset"' in viz and 'aria-label="next preset"' in viz
+    assert "viz-half" not in viz and "viz-half" not in _src("styles.css")
+    assert "if (e.target !== stageRef.current) return;" in viz
+    # Full screen shows the picture alone.
+    assert "const showPanel = panel != null && !isFs;" in viz
 
 
 # ─── previous while casting ──────────────────────────────────────────────
@@ -814,9 +1131,6 @@ def test_every_previous_button_works_while_casting(driven) -> None:
     out = driven["casting_previous_buttons"]
     assert out["bar"] == [False] and out["sheet"] == [False], out
     assert out["acts"] == [["prev"], ["prev"]], out["acts"]
-    panel = driven["casting_previous_panel"]
-    assert panel["disabled"] is False
-    assert panel["acts"] == [["prev"]]
 
 
 def test_stop_and_close_saves_stops_the_room_then_clears() -> None:

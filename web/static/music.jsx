@@ -1,4 +1,4 @@
-/* Music page — Library / Artists / Player / Playlists / Stats / Jobs tabs.
+/* Music page — Library / Artists / Room queue / Playlists / Stats / Jobs tabs.
  * Provider-specific search & download UIs live on PLUGIN pages (design
  * §10.1) — this page stays generic: "Add music" enqueues rows in the
  * provider-agnostic media-acquisition queue, and the Jobs tab is a
@@ -1122,7 +1122,7 @@ const JobsTab = ({ jobs, availability, loading, rooms, onCancel, fire, refresh }
  * The room's LIVE queue, editable: reorder by drag (a mouse) or by the
  * row's tap controls (move up / down, play next — a finger), drop an
  * entry, clear it.
- * Unlike the Player tab (this browser's own queue) this is the queue the
+ * Unlike the expanded player's queue (this browser's own queue) this is the queue the
  * room's speaker plays from — MPD's — so every client sees the same list and
  * edits land for everyone.
  *
@@ -1405,7 +1405,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
                action={<Button icon="link" onClick={pairPhone}>connect this browser</Button>}/>
       ) : items.length === 0 ? (
         <Empty glyph="headphones" title="queue is empty"
-               sub={`cast from the Player tab, or say "play something" in ${room}`}/>
+               sub={`cast from the player, or say "play something" in ${room}`}/>
       ) : (
         <div>
           {items.map((item, idx) => {
@@ -1960,7 +1960,9 @@ const BucketStat = ({ label, buckets }) => {
 // The lower section's tabs, by address: #music/<id> (useRouteTab,
 // components.jsx). The labels and counts are the page's `tabs` below.
 const MUSIC_PAGE_TABS = [
-  { id: 'library' }, { id: 'artists' }, { id: 'player' }, { id: 'queue' },
+  // No 'player' since 2026-11-12: #music/player opens the expanded player
+  // over this page (player.jsx PLAYER_SHEET_ROUTE).
+  { id: 'library' }, { id: 'artists' }, { id: 'queue' },
   { id: 'playlists' }, { id: 'stats' }, { id: 'jobs' },
 ];
 
@@ -1991,8 +1993,8 @@ const MusicPage = () => {
   const [fire, toastNode] = useToast();
 
   // App-level browser playback context (docked mini-player lives in the
-  // shell; here we drive it from library rows and render the expanded
-  // "now playing" view as the Player tab). Degrades gracefully when the
+  // shell, its expanded view opens from the bar; here we drive it from
+  // library rows). Degrades gracefully when the
   // provider isn't mounted (available === false).
   const player = usePlayback();
   const onBrowserPlay = (track) => {
@@ -2490,10 +2492,8 @@ const MusicPage = () => {
   const tabs = [
     { id: 'library',   label: 'Library',   count: libraryTotal ?? undefined },
     { id: 'artists',   label: 'Artists' },
-    { id: 'player',    label: 'Player' },
-    // Room queue: what the SPEAKERS play from, as opposed to Player (this
-    // browser's own queue). Sits next to Player so the distinction is
-    // visible rather than explained.
+    // Room queue: what the SPEAKERS play from, as opposed to the player's
+    // queue (this browser's own, in the expanded player).
     { id: 'queue',     label: 'Room queue' },
     { id: 'playlists', label: 'Playlists', count: playlists.length || undefined },
     { id: 'stats',     label: 'Stats' },
@@ -2571,7 +2571,6 @@ const MusicPage = () => {
         <div style={{ padding: '0 8px' }}><Tabs tabs={tabs} value={tab} onChange={setTab}/></div>
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
         {tab === 'artists'   && <ArtistsTab onOpen={setOpenArtist}/>}
-        {tab === 'player'    && <NowPlayingPanel/>}
         {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} npError={npError} fire={fire}
                                           room={queueRoom} onRoom={setQueueRoom}/>}
         {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={onPlayPlaylistInFirstRoom} onCreate={onCreatePlaylist} fire={fire}/>}

@@ -411,7 +411,7 @@ def test_casting_shows_one_quiet_line_and_no_toggle_and_no_webgl2_keeps_the_bars
         "local_no_webgl": {**base, "props": {"p": {"status": "playing"}, "remote": False}},
     })
     remote = out["remote"]
-    assert [e["text"] for e in remote] == ["visualizer shows when playing in this browser"]
+    assert [e["text"] for e in remote if e["text"]] == ["visualizer shows when playing in this browser"]
     assert not any(e["type"] == "input" for e in remote), "no toggle while casting"
     local = out["local_no_webgl"]
     texts = " ".join(e["text"] for e in local)

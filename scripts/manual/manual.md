@@ -401,12 +401,20 @@ Your music library, on the server, played in any room or in the browser.
   in the library puts it next in the room's queue.
 - Playlists and favorites: [Music → Playlists](#music/playlists).
 - Each queued song says which device added it.
-- **Dashboard:** a MilkDrop visualizer: [Music → Player](#music/player),
-  switch on **milkdrop visualizer**. It draws what this browser is
-  playing (not a room). Click the left or right half for the previous or
-  next preset, or use the arrow keys; the bar over it picks a random
-  preset, locks the one on screen, lists them all, and goes full screen
-  (Esc leaves). Full screen and playing, the screen stays on.
+- **Dashboard:** the [player](#music/player) opens from the player bar at
+  the bottom of any page: click the song's cover or title, the up chevron,
+  or **open player** on a phone. The down chevron, Esc, Back or a swipe
+  down on its header closes it. Under the controls, a panel shows
+  **Lyrics**, the **Equalizer** or the **Queue**, or nothing (**Hide**);
+  it starts on Lyrics when the song has words, and a tab you pick stays
+  picked for the visit.
+- **Dashboard:** a MilkDrop visualizer: in the player, switch on
+  **milkdrop visualizer**. It draws what this browser is playing (not a
+  room), behind the panel. Its bar has previous and next preset, random,
+  lock, the preset list, **panel** (how much the panel covers the
+  picture, 30 to 100 %) and full screen (the picture alone; Esc leaves).
+  The arrow keys change preset while the picture has the focus. Full
+  screen and playing, the screen stays on.
 - **Dashboard:** add presets for the whole house *(admin)*: the preset
   list → **add presets**, a classic `.milk` file or a Butterchurn 3
   `.json`. A `.milk` file's custom shaders aren't converted, so it may
@@ -424,8 +432,8 @@ playing. See [Guests, household, admin](#node:guests).
 
 ### Lyrics
 
-The **lyrics** button in the player shows a song's words, timed when it
-has them. Words come from the song file, or, if your household allows the
+The **lyrics** button in the player bar, and the player's **Lyrics** tab,
+show a song's words, timed when it has them. Words come from the song file, or, if your household allows the
 internet, from LRCLIB.
 
 **Try saying:** "play the song that goes …".

@@ -388,7 +388,7 @@ def test_the_mini_player_docks_above_the_strip_on_a_phone() -> None:
     bar = re.search(r"^\.mini-player \{(.*?)\}", css, re.S | re.M).group(1)
     assert "position: fixed; left: 0; right: 0; bottom: var(--dock-bottom, 0px); z-index: 45;" in bar
     player = _src("player.jsx")
-    assert '<div className="mini-player">' in player
+    assert "<div className={`mini-player${sheet === 'open' ? ' under-sheet' : ''}`} ref={barRef}>" in player
     # The queue panel and cast menu float above the player, so they move with it.
     assert player.count("bottom: 'calc(var(--dock-bottom, 0px) + 76px)'") == 2
     assert "bottom: 76," not in player
