@@ -323,4 +323,78 @@ class RoomUpNextTest {
         )
         assertTrue("the drawer's play in room skips the Up next body", calls.isNotEmpty())
     }
+
+    // ── a playlist in a room: the whole playlist is the room's queue ────
+
+    @Test fun aPlaylistInARoomSendsTheListenerLikePlayInRoom() {
+        assertEquals(
+            """{"room_id":"office","playlist_id":7,"shuffle":true,"device_id":"phone-7","listener_person_id":3}""",
+            roomPlayPlaylistBody("office", 7, shuffle = true, deviceId = "phone-7", pick = "3", shared = false).toString(),
+        )
+        assertEquals(
+            """{"room_id":"office","playlist_id":7,"shuffle":false,"device_id":"phone-7","as_household":true}""",
+            roomPlayPlaylistBody("office", 7, false, "phone-7", ListenerPicks.HOUSEHOLD, shared = false).toString(),
+        )
+        // A shared screen names nobody; autoplay is never sent (the server's default) until P8.
+        assertEquals(
+            """{"room_id":"office","playlist_id":7,"shuffle":false,"device_id":"phone-7"}""",
+            roomPlayPlaylistBody("office", 7, false, "phone-7", "3", shared = true).toString(),
+        )
+    }
+
+    @Test fun bothPlaylistPlayButtonsGoThroughThatBody() {
+        for (facade in listOf("MusicScreenKt", "PlaylistDrawerKt")) {
+            val calls = Bytecode.callers(
+                fileFacade = "com.domovoi.app.ui.screens.music.$facade",
+                owner = "com/domovoi/app/ui/screens/music/RoomUpNextKt",
+                names = setOf("playPlaylistInRoom"),
+            )
+            assertTrue("$facade plays a playlist in a room without the listener", calls.isNotEmpty())
+        }
+    }
+
+    @Test fun thePlaylistAnswerIsReadNewOrOld() {
+        // The contract's answer (API_REFERENCE §3.5 / the core's play-playlist).
+        val now = playPlaylistAnswer(DomovoiJson.parseToJsonElement(
+            """{"played":true,"playlist_id":7,"playlist_name":"road trip","mode":"playlist","track_id":12,
+               "title":"Lantern","artist":"Kettle Band","latency_ms":41,"total":180,"queued":50,"skipped":2,
+               "loading":true,"up_next":{"session_id":"7c1e2a90-1b7f-4f3a-9d0e-5a2b3c4d5e6f"}}""",
+        ))!!
+        assertEquals(180, now.total)
+        assertEquals(50, now.queued)
+        assertEquals(2, now.skipped)
+        assertTrue(now.loading)
+        assertEquals("7c1e2a90-1b7f-4f3a-9d0e-5a2b3c4d5e6f", now.upNext?.sessionId)
+        // An older server: none of it, nothing loading.
+        val old = playPlaylistAnswer(DomovoiJson.parseToJsonElement(
+            """{"played":true,"playlist_id":7,"playlist_name":"road trip","mode":"playlist","track_id":12,"title":"Lantern","artist":"Kettle Band","latency_ms":41}""",
+        ))!!
+        assertFalse(old.loading)
+        assertNull(old.total)
+        assertNull(old.upNext)
+        assertFalse(playPlaylistAnswer(DomovoiJson.parseToJsonElement("""{"loading":null,"up_next":null}"""))!!.loading)
+        assertNull(playPlaylistAnswer(kotlinx.serialization.json.JsonNull))
+    }
+
+    @Test fun aLoadingPlaylistIsReadAgainAFewTimesThenNever() = runBlocking {
+        val slept = mutableListOf<Long>()
+        val asked = mutableListOf<Pair<String, String>>()
+        val loading = PlayPlaylistAnswer(total = 180, queued = 50, loading = true)
+        val n = followPlaylistLoading(loading, "a", "office", { "a" }, { slept += it }, { s, r -> asked += s to r })
+        assertEquals(3, n)
+        assertEquals(listOf(2_000L, 4_000L, 9_000L), slept)
+        assertEquals(List(3) { "a" to "office" }, asked)
+
+        // Not loading (or an older server): never.
+        asked.clear()
+        assertEquals(0, followPlaylistLoading(loading.copy(loading = false), "a", "office", { "a" }, { }, { s, r -> asked += s to r }))
+        assertEquals(0, followPlaylistLoading(null, "a", "office", { "a" }, { }, { s, r -> asked += s to r }))
+        assertTrue(asked.isEmpty())
+
+        // The app moved to another server: that house's queue is not asked.
+        var serverNow = "a"
+        val moved = followPlaylistLoading(loading, "a", "office", { serverNow }, { serverNow = "b" }, { s, r -> asked += s to r })
+        assertEquals(0, moved)
+        assertTrue(asked.isEmpty())
+    }
 }

@@ -330,13 +330,8 @@ fun MusicScreen() {
             ?: return@play toast("no rooms online — set up a room to play ${p.name}")
         toast("playing ${p.name} in $room…")
         scope.launchAction(
-            action = {
-                app.api.post("/api/music/play-playlist", buildJsonObject {
-                    put("room_id", room)
-                    put("playlist_id", p.id)
-                    put("shuffle", false)
-                })
-            },
+            // The whole playlist becomes the room's queue, Up next armed after it.
+            action = { playPlaylistInRoom(app, room, p.id, shuffle = false) },
             onSuccess = { nowPlaying.refresh() },
             onFailure = { toast("play failed: ${it.message}") },
         )

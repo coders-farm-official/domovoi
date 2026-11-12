@@ -102,13 +102,8 @@ internal fun PlaylistDrawer(
         val room = room ?: return
         toast((if (shuffle) "shuffling" else "playing") + " ${playlist.name} in $room…")
         scope.launchAction(
-            action = {
-                app.api.post("/api/music/play-playlist", buildJsonObject {
-                    put("room_id", room)
-                    put("playlist_id", playlist.id)
-                    put("shuffle", shuffle)
-                })
-            },
+            // The whole playlist becomes the room's queue, Up next armed after it.
+            action = { playPlaylistInRoom(app, room, playlist.id, shuffle) },
             onSuccess = { refreshNP() },
             onFailure = { toast((if (shuffle) "shuffle" else "play") + " failed: ${it.message}") },
         )

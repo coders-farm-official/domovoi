@@ -1,8 +1,13 @@
 package com.domovoi.app.ui.screens.music
 
 import com.domovoi.app.listens.ListenerPicks
+import com.domovoi.app.net.DomovoiJson
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.add
@@ -271,4 +276,118 @@ internal fun roomPlayTrackBody(
     context?.let { put("context", it.toJson()) }
     listenerFields(pick, shared)
     if (!autoplay) put("autoplay", false)
+}
+
+// ── A playlist in a room: the whole playlist becomes the room's queue ────
+
+/**
+ * `POST /api/music/play-playlist`'s body: the room loads the whole playlist
+ * as its queue and arms a `continue` Up next with it as the source. The
+ * listener fields as for "play in <room>" ([listenerFields]); autoplay is
+ * left at the server's default (on) until the phone has its own switch.
+ */
+internal fun roomPlayPlaylistBody(
+    room: String,
+    playlistId: Long,
+    shuffle: Boolean,
+    deviceId: String,
+    pick: String?,
+    shared: Boolean,
+): JsonObject = buildJsonObject {
+    put("room_id", room)
+    put("playlist_id", playlistId)
+    put("shuffle", shuffle)
+    put("device_id", deviceId)
+    listenerFields(pick, shared)
+}
+
+/**
+ * What a playlist played in a room answers (2026-11-12): `total` songs,
+ * `queued` in the queue at the answer, `skipped` so far, `loading` while a
+ * long playlist is still filling in, and the room's session. Every field
+ * optional: an older server answers without them.
+ */
+@Serializable
+data class PlayPlaylistAnswer(
+    val total: Int? = null,
+    val queued: Int? = null,
+    val skipped: Int? = null,
+    val loading: Boolean = false,
+    @SerialName("up_next") val upNext: RoomUpNext? = null,
+)
+
+/** The answer, read leniently: null for anything that isn't the object. */
+internal fun playPlaylistAnswer(answer: JsonElement?): PlayPlaylistAnswer? = runCatching {
+    (answer as? JsonObject)?.let { DomovoiJson.decodeFromJsonElement(PlayPlaylistAnswer.serializer(), it) }
+}.getOrNull()
+
+/**
+ * Asks an open room queue view to read its room again ([rememberRoomQueue]
+ * listens): the rest of a long playlist arrives after the play's answer.
+ */
+internal object RoomQueueNudges {
+    private val flow = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 8)
+    val nudges: SharedFlow<Pair<String, String>> = flow
+    fun nudge(server: String, room: String) {
+        flow.tryEmit(server to room)
+    }
+}
+
+/** When an open room queue reads again after a playlist answered `loading`: a few times, then never. */
+internal val PLAYLIST_LOADING_REFETCH_MS = listOf(2_000L, 6_000L, 15_000L)
+
+/**
+ * After a playlist answered `loading: true` for [room] on [server]: the
+ * open room queue view reads again at each of [PLAYLIST_LOADING_REFETCH_MS]
+ * — a fixed few, never a loop — and not at all once the app talks to
+ * another server. Returns how many reads it asked for.
+ */
+internal suspend fun followPlaylistLoading(
+    answer: PlayPlaylistAnswer?,
+    server: String,
+    room: String,
+    serverNow: () -> String,
+    sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    nudge: (String, String) -> Unit = RoomQueueNudges::nudge,
+): Int {
+    if (answer?.loading != true) return 0
+    var asked = 0
+    var waited = 0L
+    for (at in PLAYLIST_LOADING_REFETCH_MS) {
+        sleep(at - waited)
+        waited = at
+        if (serverNow() != server) break
+        nudge(server, room)
+        asked++
+    }
+    return asked
+}
+
+/**
+ * Plays playlist [playlistId] in [room] (Play / Shuffle on a playlist):
+ * sent only to the server current at the tap, with that server's
+ * "listening as". When the room is still filling in a long playlist, an
+ * open room queue view reads it again a few times ([followPlaylistLoading]).
+ * Nothing more is said than the web says: its toast is the caller's.
+ */
+internal suspend fun playPlaylistInRoom(
+    app: com.domovoi.app.AppContainer,
+    room: String,
+    playlistId: Long,
+    shuffle: Boolean,
+): PlayPlaylistAnswer? {
+    val server = app.prefs.serverUrl.value
+    val body = roomPlayPlaylistBody(
+        room = room,
+        playlistId = playlistId,
+        shuffle = shuffle,
+        deviceId = app.prefs.deviceId,
+        pick = app.prefs.listenerPickFor(server),
+        shared = app.prefs.sharedHere(server),
+    )
+    val answer = playPlaylistAnswer(app.api.post("/api/music/play-playlist", body, onlyTo = server))
+    if (answer?.loading == true) {
+        app.scope.launch { followPlaylistLoading(answer, server, room, { app.prefs.serverUrl.value }) }
+    }
+    return answer
 }

@@ -36,6 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -158,6 +159,12 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
     val queueState = rememberApi(room, eventTypes = setOf("music.now_playing.changed")) {
         val r = room ?: return@rememberApi RoomQueue()
         rq.read(r)
+    }
+    // The rest of a long playlist arrives after the play's answer: read
+    // again when asked ([RoomQueueNudges], a few times at most).
+    val refreshNow by rememberUpdatedState(queueState.refresh)
+    LaunchedEffect(room, server) {
+        RoomQueueNudges.nudges.collect { (s, r) -> if (s == server && r == room) refreshNow() }
     }
     // One per room and server: a name typed for one room's queue is not
     // saved as another's.
