@@ -1624,6 +1624,10 @@
        "only": "dashboard"
       },
       {
+       "text": "Add to the queue from the queue itself: under the songs in the **Queue** panel (in the player and in the bar's queue), the search box finds songs by title, artist, album or genre. **Enter** adds the highlighted result, **Shift+Enter** plays it next, the arrow keys move, **Esc** clears. A genre result adds up to 25 of its songs, shuffled. While playing in a room, an add goes to the room's queue too (and **play next** is not offered). **Save as playlist** is the smaller button below: it asks for a name and keeps the queue's songs.",
+       "only": "dashboard"
+      },
+      {
        "text": "A MilkDrop visualizer: in the player, switch on **milkdrop visualizer**. It draws what this browser is playing (not a room), behind the panel. Its bar has previous and next preset, random, lock, the preset list, **panel** (how much the panel covers the picture, 30 to 100 %) and full screen (the picture alone; Esc leaves). The arrow keys change preset while the picture has the focus. Full screen and playing, the screen stays on.",
        "only": "dashboard"
       },

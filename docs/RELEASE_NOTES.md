@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — add to the queue from the queue
+
+The Queue panel in the web player (the player's Queue tab and the bar's
+queue) now ends in a search box instead of "save queue as playlist": type
+a song, artist, album or genre and press **Enter** to add it,
+**Shift+Enter** to play it next (or use the buttons on each result). A
+genre result adds up to 25 of its songs, shuffled. While casting to a room
+an add goes to the room's queue as well. **Save as playlist** is now a
+smaller button under the search that asks for a name. No server change.
+
 ## 2026-11-12 — podcast episodes show their details
 
 Open a show on the Podcasts page and each episode now shows when it was
