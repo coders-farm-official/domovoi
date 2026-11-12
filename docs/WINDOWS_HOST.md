@@ -237,6 +237,7 @@ signature, before it runs it.
 | Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on no other service: it waits for WSL itself, see *Windows updated WSL* under [When something goes wrong](#when-something-goes-wrong); restarted by Windows after any failure, after 10 s, 30 s, then every 60 s), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
 | WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
+| Windows Defender Firewall rule **`Domovoi-mDNS-5353`**: inbound UDP 5353 for `C:\Program Files\Domovoi\DomovoiHost.exe` only, from the local subnet, on **Private and Domain** networks (not Public), so other devices on your home network find this PC as `domovoi.local` ([The network name](#the-network-name)). Not added when the PC has no private address. | Removed with the Hyper-V rules (`Remove-NetFirewallRule -Name 'Domovoi-mDNS-5353'`); DomovoiHost's goodbye went out when the service stopped. |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
 | The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`, `Podcasts`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
 | `C:\Program Files\Domovoi` (`DomovoiHost.exe`, `DomovoiSetupHelper.exe`, `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `domovoi.ico`, the uninstaller) and its Apps entry. | Deleted, after everything above is gone. |
@@ -435,6 +436,40 @@ how the last look found printers ("by multicast", "by unicast", "by
 sweep"); if it never says any "by multicast", multicast doesn't reach the
 server on your network, and **Look again** and **Add by address** (which
 needs no multicast) still work.
+
+## The network name
+
+DomovoiHost answers to **`domovoi.local`** on your home network, so a
+browser on another computer opens `http://domovoi.local:6369` instead of
+an address. Domovoi's Linux system can't do it itself (its distro isn't the
+one on the network), so DomovoiHost does, from the moment the service
+starts, also while Domovoi restarts or updates: our own small mDNS
+responder (`windows/common/MdnsResponder.cs`, the same rules and packets as
+the Linux core's `domovoi/lan_name/`) on UDP 5353, beside Windows' own
+responder, on the adapter that leads to your router only (never a
+vEthernet, Hyper-V, WSL, VPN or Docker adapter). Setup's firewall rule
+`Domovoi-mDNS-5353` lets the questions in, on Private and Domain networks
+only: if Windows calls your home network **Public**, other devices won't
+find the name (the address still works).
+
+- If something else already answers to `domovoi.local` (another Domovoi,
+  a PC called DOMOVOI elsewhere), DomovoiHost takes `domovoi2.local`, then
+  `domovoi3.local`, and keeps it after restarts (`host\out\host-state.json`,
+  `lan_name`), so bookmarks and rooms don't move about. A PC that is itself
+  named DOMOVOI already answers to the name: that counts as Domovoi's.
+- **Settings > System > About & updates** shows the name and its state; an
+  admin changes it or turns it off there. The core writes the request
+  `~/.domovoi/lan_name/request.json`; DomovoiHost reads it as the service
+  user every 5 s, checks it again, probes the new name, and reports to
+  `/var/lib/domovoi-windows/lan_name.json` (written as root; the core
+  believes it only while root owns it). A name you type that another device
+  holds is never changed: the row says `taken` and the previous name stays.
+- Setup's last page and the tray's **Open as domovoi.local** show the name.
+  **Copy address** and the phone code keep the address: a phone keeps the
+  server it paired with, and a name on the network is no proof of whose
+  server it is. Rooms resolve the name and still check the server's key.
+- A DomovoiHost from before this feature announces nothing; Settings says
+  `not announced` until Setup repairs it.
 
 ## Give the PC a fixed address (DHCP reservation)
 

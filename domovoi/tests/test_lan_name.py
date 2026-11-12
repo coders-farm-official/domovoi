@@ -651,3 +651,11 @@ async def test_the_core_endpoint_202_400_and_refuses_strangers(host, monkeypatch
         r = await c.get("/v1/lan-name", headers=bearer("admin-token"))
         assert r.status_code == 200 and r.json()["state"] in ("no_host", "checking")
 
+
+def test_the_windows_side_reads_the_same_paths() -> None:
+    cs = (Path(__file__).resolve().parents[2] / "windows" / "common" / "MdnsResponder.cs").read_text(encoding="utf-8")
+    assert '"/.domovoi/lan_name/request.json"' in cs and svc.REQUEST_NAME == "request.json"
+    assert 'ReportDir + "/lan_name.json"' in cs and svc.REPORT_FILES[0][1] == "/var/lib/domovoi-windows/lan_name.json"
+    assert "Every = TimeSpan.FromSeconds(" + str(svc.HOST_POLL_SEC) + ")" in cs
+    for state in rmod.STATES:
+        assert '"' + state + '"' in cs

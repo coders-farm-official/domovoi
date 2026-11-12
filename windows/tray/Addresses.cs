@@ -62,6 +62,27 @@ namespace Domovoi.Windows.Tray
             return u.Scheme + "://" + address + ":" + Inv.S(u.Port);
         }
 
+        // "http://domovoi2.local:6369": the dashboard by the network name.
+        public static string NameUrl(string localUrl, string fqdn)
+        {
+            var u = new Uri(localUrl);
+            return u.Scheme + "://" + fqdn + ":" + Inv.S(u.Port);
+        }
+
+        // The name DomovoiHost holds now (host\out\lan-name.json, written
+        // for the household's accounts), or null: none, or not believable.
+        public static string NetworkName()
+        {
+            try
+            {
+                var fi = new System.IO.FileInfo(System.IO.Path.Combine(Paths.HostOut, LanNameFiles.TrayName));
+                if (!fi.Exists || fi.Length > 1024) return null;
+                return LanNameFiles.TrayFqdn(System.IO.File.ReadAllText(fi.FullName));
+            }
+            catch (System.IO.IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+        }
+
         public static List<AdapterFacts> FromWindows()
         {
             var list = new List<AdapterFacts>();

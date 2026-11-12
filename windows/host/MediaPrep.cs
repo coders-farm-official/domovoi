@@ -122,7 +122,13 @@ namespace Domovoi.Windows.Host
         // so it may set its rules.
         public static void WriteTrayMap(string text)
         {
-            string path = MediaFolders.TrayMapPath;
+            WriteForUsers(MediaFolders.TrayMapPath, text);
+        }
+
+        // A file in host\out the tray reads (it runs as the signed-in
+        // person): the media folders, the network name.
+        public static void WriteForUsers(string path, string text)
+        {
             AtomicFile.WriteAllText(path, text);
             FileSecurity s = File.GetAccessControl(path, AccessControlSections.Access);
             s.AddAccessRule(new FileSystemAccessRule(UsersSid, FileSystemRights.ReadAndExecute, AccessControlType.Allow));

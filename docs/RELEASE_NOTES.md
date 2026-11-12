@@ -17,6 +17,14 @@ If another device already answers to `domovoi.local`, the server takes
 state, and an admin can change it or turn it off there; a typed name that
 another device already holds is not changed or numbered: it says `taken`
 and the previous name stays.
+
+**On the Windows install, DomovoiHost announces it** (docs/WINDOWS_HOST.md,
+"The network name"), once a Setup with this change has repaired the
+install: Setup adds one Windows firewall rule, `Domovoi-mDNS-5353` (inbound
+UDP 5353 for DomovoiHost.exe, from the local subnet, Private and Domain
+networks only; the uninstaller removes it). Until then Settings says
+`not announced`. Setup's last page and the tray's **Open as domovoi.local**
+show the name; **Copy address** and the phone code keep the address.
 Satellites now try the name the server tells them first, then
 `domovoi.local`; they still check the server's key wherever a name leads.
 A name is never proof of identity.

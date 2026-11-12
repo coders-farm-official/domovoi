@@ -96,14 +96,50 @@ namespace Domovoi.Windows
             return "$domovoiRules = @(Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "
                 + Q(RulePrefix + "*") + " -and ([string]$_.VMCreatorId -replace '[{}]', '') -eq "
                 + Q(WslVmCreatorId.Trim('{', '}')) + " })\n"
-                + "foreach ($r in $domovoiRules) { Remove-NetFirewallHyperVRule -Name $r.Name; Write-Output ('removed ' + $r.Name) }\n";
+                + "foreach ($r in $domovoiRules) { Remove-NetFirewallHyperVRule -Name $r.Name; Write-Output ('removed ' + $r.Name) }\n"
+                + MdnsRemoveBody();
         }
 
         public static string ListScript()
         {
             return "$ErrorActionPreference = 'Stop'\n"
                 + "Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "
-                + Q(RulePrefix + "*") + " } | ForEach-Object { Write-Output ('rule ' + $_.Name) }\n";
+                + Q(RulePrefix + "*") + " } | ForEach-Object { Write-Output ('rule ' + $_.Name) }\n"
+                + "Get-NetFirewallRule -Name " + Q(MdnsRuleName) + " -ErrorAction SilentlyContinue | ForEach-Object { Write-Output ('rule ' + $_.Name) }\n";
+        }
+
+        // -- the network name's rule (MdnsResponder.cs) ------------------
+        //
+        // Not a Hyper-V rule: DomovoiHost.exe itself answers mDNS on the
+        // Windows side (LanNameHost.cs), and inbound UDP to a program is
+        // blocked unless a rule allows it (the built-in "mDNS (UDP-In)" rule
+        // covers Windows' own dnscache only; the spike's finding 7). One
+        // Windows Defender Firewall rule: inbound UDP 5353, that program only,
+        // from the local subnet, on Private and Domain networks (owner,
+        // 2026-11-11: a network marked Public isn't trusted with it).
+        public const string MdnsRuleName = "Domovoi-mDNS-5353";
+        public const string MdnsProfiles = "Private,Domain";
+
+        // Add (or put back) the rule for the DomovoiHost.exe at hostExe.
+        public static string MdnsAddScript(string hostExe)
+        {
+            if (hostExe == null || hostExe.Length > 260 || !System.IO.Path.IsPathRooted(hostExe)
+                || !hostExe.EndsWith("\\DomovoiHost.exe", StringComparison.OrdinalIgnoreCase)
+                || hostExe.IndexOfAny(new[] { '\'', '"', '`', '\r', '\n', '$' }) >= 0)
+                throw new ArgumentException("refusing an unexpected program path: " + hostExe);
+            return "$ErrorActionPreference = 'Stop'\n"
+                + MdnsRemoveBody()
+                + "New-NetFirewallRule -Name " + Q(MdnsRuleName)
+                + " -DisplayName " + Q("Domovoi: network name (mDNS, UDP 5353)")
+                + " -Description " + Q("Lets other devices on your home network find this PC as domovoi.local. Added by Domovoi Setup; removed when Domovoi is uninstalled.")
+                + " -Direction Inbound -Protocol UDP -LocalPort 5353 -Program " + Q(hostExe)
+                + " -RemoteAddress LocalSubnet -Profile " + MdnsProfiles + " -Action Allow -Enabled True | Out-Null\n"
+                + "Write-Output " + Q("added " + MdnsRuleName) + "\n";
+        }
+
+        static string MdnsRemoveBody()
+        {
+            return "foreach ($r in @(Get-NetFirewallRule -Name " + Q(MdnsRuleName) + " -ErrorAction SilentlyContinue)) { Remove-NetFirewallRule -Name $r.Name; Write-Output ('removed ' + $r.Name) }\n";
         }
     }
 }

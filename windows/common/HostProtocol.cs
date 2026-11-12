@@ -155,6 +155,9 @@ namespace Domovoi.Windows
         // questions on (true) or left out (false); null: unknown (no run
         // yet, or one that didn't say).
         public bool? Ai;
+        // The network name DomovoiHost holds ("domovoi2.local"), for Setup's
+        // last page; null when none (MdnsResponder.cs).
+        public string LanName;
         public string Updated;
         public string Holder = "stopped";
         public int HostPid;
@@ -178,6 +181,7 @@ namespace Domovoi.Windows
             d["tier"] = Tier;
             d["gpu"] = GpuKnown && Gpu != null ? (object)Gpu.ToArray() : null;
             d["ai"] = Ai == null ? null : (object)Ai.Value;
+            d["lan_name"] = LanName;
             d["updated"] = Updated;
             d["holder"] = Holder;
             d["host_pid"] = HostPid;
@@ -203,6 +207,9 @@ namespace Domovoi.Windows
             s.Gpu = Json.StrList(d, "gpu");
             s.GpuKnown = s.Gpu != null;
             s.Ai = Json.Bool(d, "ai");
+            string ln = Json.Str(d, "lan_name");
+            s.LanName = ln != null && ln.EndsWith(".local", StringComparison.Ordinal)
+                && Domovoi.Windows.LanName.Exact(ln.Substring(0, ln.Length - 6)) != null ? ln : null;
             s.Updated = Json.Str(d, "updated");
             s.Holder = Json.Str(d, "holder") ?? "";
             s.HostPid = Json.Int(d, "host_pid") ?? 0;

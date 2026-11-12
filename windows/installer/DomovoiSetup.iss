@@ -204,6 +204,9 @@ var
   UndoOnExit: Boolean;
   SetupCodeText: String;
   GpuRaw, TierText: String;
+  { The network name DomovoiHost holds (domovoi.local, or domovoi2.local ...),
+    from host-status's lan_name; empty when none (docs/WINDOWS_HOST.md). }
+  LanName: String;
   CodeTitle, CodeHint, LanText: TNewStaticText;
   CodeEdit: TNewEdit;
   CopyButton, OpenButton, CopyLogsButton: TNewButton;
@@ -688,7 +691,7 @@ begin
   S := S + IntToStr(N) + '. A private WSL distro named "domovoi" (Ubuntu 26.04) that belongs to domovoi-svc, stored in C:\ProgramData\Domovoi. WSL settings for domovoi-svc alone: mirrored networking, memory up to ' + WslMemGb + ' GB. Your own WSL distros, your .wslconfig and Docker Desktop are not touched.' + #13#10#13#10;
   N := N + 1;
   if LanPrivate = '1' then
-    S := S + IntToStr(N) + '. Six Hyper-V firewall rules for WSL, named Domovoi-..., so phones and rooms on your home network (' + LanSubnet + ') reach Domovoi: TCP 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins). They apply to every WSL VM on this PC, your own WSL distros and Docker Desktop''s included: anything of yours listening on those ports in mirrored mode becomes reachable from your home network too.' + #13#10#13#10
+    S := S + IntToStr(N) + '. Six Hyper-V firewall rules for WSL, named Domovoi-..., so phones and rooms on your home network (' + LanSubnet + ') reach Domovoi: TCP 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins). They apply to every WSL VM on this PC, your own WSL distros and Docker Desktop''s included: anything of yours listening on those ports in mirrored mode becomes reachable from your home network too. And one Windows firewall rule, Domovoi-mDNS-5353: DomovoiHost.exe may receive UDP 5353 (mDNS) from your home network on Private and Domain networks, so other devices find this PC as domovoi.local.' + #13#10#13#10
   else
     S := S + IntToStr(N) + '. No firewall rules: this PC has no private home-network address, so Domovoi answers on this PC only.' + #13#10#13#10;
   N := N + 1;
@@ -1074,8 +1077,11 @@ begin
     CodeEdit.Text := SetupCodeText;
     if SetupCodeText = '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup could not read the setup code. Restarting the DomovoiHost service writes a fresh one (see docs/WINDOWS_HOST.md).';
-    LanText.Caption := 'Phones and rooms reach Domovoi at http://' + LanIp + ':6369. If it changes, rooms look for Domovoi again by themselves; to keep it fixed, reserve it for this PC in your router (DHCP reservation for ' + LanMac + ').' + #13#10 +
-      ModelsText(GpuRaw, TierText);
+    LanText.Caption := 'Phones and rooms reach Domovoi at http://' + LanIp + ':6369. If it changes, rooms look for Domovoi again by themselves; to keep it fixed, reserve it for this PC in your router (DHCP reservation for ' + LanMac + ').' + #13#10;
+    { The network name is for browsers; a phone pairs with the address. }
+    if LanName <> '' then
+      LanText.Caption := LanText.Caption + 'In a browser on your home network you can also type http://' + LanName + ':6369.' + #13#10;
+    LanText.Caption := LanText.Caption + ModelsText(GpuRaw, TierText);
   end
   else
   begin
@@ -1210,6 +1216,7 @@ begin
     if State = 'ready' then
     begin
       GpuRaw := KvValue(Lines, 'gpu');
+      LanName := KvValue(Lines, 'lan_name');
       TierText := KvValue(Lines, 'tier');
       { AI chat and questions as provision.sh settled them (its options,
         or the household's domovoi/.env): the last page says that, and the
