@@ -298,7 +298,10 @@ def test_the_queue_read_is_quiet() -> None:
     src = MUSIC.read_text(encoding="utf-8")
     start = src.index("const QueueTab = ")
     body = src[start:src.index("/* ---- Playlists tab")]
-    assert "{ eventTypes: ['music.now_playing.changed'], quiet: true }" in body
+    assert "{ quiet: true }," in body
+    # Re-read on this room's own now-playing change only
+    # (test_web_room_queue_add.py pins which events re-read).
+    assert "useStateEvents(['music.now_playing.changed']" in body
 
 
 def test_a_guest_rereads_what_has_no_socket_to_push_it(driven) -> None:
