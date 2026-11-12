@@ -346,8 +346,10 @@ def test_a_typed_key_is_tested_then_saved_trimmed(driven) -> None:
     patches = [c for c in o["calls"] if c["method"] == "PATCH"]
     assert patches == [{"method": "PATCH", "path": "/api/config/editable",
                         "body": {"changes": {"acoustid_api_key": "  Zq7Key42 "}}}]
-    # The restart line names song recognition in words, not its setting name.
-    assert "restart the Domovoi server to apply: song recognition" in o["saved"]
+    # The restart question names song recognition in words, not its setting name.
+    said = " ".join(o["saved"].split())
+    assert "Song recognition" in said and "It takes effect after Domovoi restarts" in said, said
+    assert "Restart now" in said and "Later" in said
 
 
 def test_a_saved_key_is_tested_as_saved_and_a_refusal_names_the_likely_cause(driven) -> None:

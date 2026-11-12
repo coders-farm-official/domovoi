@@ -984,6 +984,8 @@ const ModelsPanel = () => {
   // `compute` (STT catalog rows only) goes with the model, so a row that
   // says int8 really runs int8. The core refuses a pair the device can't
   // run and lists it in `rejected` — say that rather than "switched".
+  // A switch that only a restart applies asks "Restart now?" (RestartAfterSave).
+  const [restartAsk, setRestartAsk] = React.useState(null);
   const switchModel = (r, model, compute) =>
     guard(async () => {
       const body = { role: r.role, model };
@@ -1000,7 +1002,8 @@ const ModelsPanel = () => {
         const why = rejected.map(([k, v]) => `${k} (${v})`).join('; ');
         return { error: restart ? `saved ${model}, but not: ${why}` : `not saved: ${why}` };
       }
-      return restart ? `saved — restart the Domovoi server to apply ${model}` : `switched to ${model}`;
+      if (restart) setRestartAsk((n) => ({ n: (n ? n.n : 0) + 1, role: r.role, model }));
+      return restart ? `saved ${model} — it takes effect after the restart below` : `switched to ${model}`;
     }, { verb: `Switch to ${model}`, key: `switch:${r.role}` });
 
   // The job the server answers with is watched until it ends (above).
@@ -1071,6 +1074,10 @@ const ModelsPanel = () => {
       <SttStatusBanner stt={hwData && hwData.stt}/>
       <HardwarePanel data={hw} loading={hwLoading}/>
 
+      {restartAsk && (
+        <RestartAfterSave key={restartAsk.n} fire={fire}
+                          words={[`the ${restartAsk.role === 'stt' ? 'speech-to-text' : restartAsk.role} model (${restartAsk.model})`]}/>
+      )}
       <Card title="Active models" sub={aiOn
               ? 'One model per role. Switching writes config — Ollama applies instantly; Whisper needs a restart.'
               : 'Speech-to-text: voice control needs it, so it stays with AI off. Switching needs a restart.'}>

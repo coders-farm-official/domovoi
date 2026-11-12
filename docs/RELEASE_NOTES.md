@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — saving a setting that needs a restart asks to restart
+
+After you save a setting that only a restart applies (the AcoustID key, a
+speech model, some internet answers), the dashboard now says so and asks
+**Restart now** or **Later**. Restart now is the same restart as
+**Settings → About & updates → Restart Domovoi** (about 30 seconds; music and
+voice pause briefly, rooms reconnect on their own). Later leaves a notice
+with the same button. A room's settings already restart the room when you
+save, so they ask nothing.
+
 ## 2026-11-12 — a playlist plays in this browser
 
 The playlist dialog (Music → Playlists) now has **play here** and **shuffle

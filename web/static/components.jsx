@@ -1413,6 +1413,111 @@ const RestartByHandHint = ({ version, style }) => {
   );
 };
 
+/* "Restart now?" after a save that only a restart applies (OWNER REQUEST
+ * 2026-11-12: after adding the AcoustID key there was no hint where the
+ * restart button was). Every place that gets a restart_required answer
+ * from a save renders this under the save: Settings → Advanced, Internet,
+ * the model switch.
+ *
+ *   words  what the save touched, in words ("song recognition key"); the
+ *          caller's own labels, as it showed them before
+ *   asked  true right after a save: the question, with Restart now and
+ *          Later. false (a page read that still lists names): only the
+ *          standing notice, since nobody has just saved anything
+ *   fire   the page's toast, else this card's own
+ *
+ * Restart now is restartDomovoiServer, the same restart About & updates'
+ * "Restart Domovoi" runs (same Bearer, same wait for the server to come
+ * back, same "one at a time"); the card IS the question, so the first
+ * confirm is skipped — except where the update unit would run its full
+ * update, which is still asked as that. Later leaves the notice, and the
+ * restart stays at Settings → About & updates. Not signed in as an admin:
+ * the button signs in first. A host that can't restart itself (no sudoers
+ * grant, no systemd) gets the command to run instead of a button that
+ * can't work. */
+const RestartAfterSave = ({ words = [], asked = true, fire: fireProp = null }) => {
+  const [ownFire, toastNode] = useToast();
+  const fire = fireProp || ownFire;
+  const admin = useAdminSignedIn();
+  const [core, setCore] = React.useState(null);
+  const [later, setLater] = React.useState(!asked);
+  const [runs, setRuns] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [done, setDone] = React.useState(false);
+  React.useEffect(() => {
+    let live = true;
+    apiGet('/api/config/version', { quiet: true })
+      .then((v) => { if (live && v && typeof v === 'object') setCore(v); })
+      .catch(() => { /* the restart reads it again at the press */ });
+    return () => { live = false; };
+  }, []);
+  const list = (words || []).filter(Boolean).join(', ');
+  const many = (words || []).filter(Boolean).length > 1;
+  const capable = !(core && core.restart_capable === false);
+  const go = async () => {
+    if (!admin) { try { Auth.openModal(); } catch { /* auth.js absent */ } return; }
+    setBusy(true);
+    try {
+      const ok = await restartDomovoiServer({
+        core, fire, plain: true, confirmed: !restartRunsFullUpdate(core),
+        onStart: (how) => setRuns(how || { plain: true }),
+        onUnderway: (how) => setRuns(how || { plain: true }),
+        onSettled: () => {},
+      });
+      if (ok) setDone(true);
+      return !!ok;
+    } finally {
+      setBusy(false); setRuns(null);
+    }
+  };
+  if (done) {
+    return (
+      <div className="restart-after-save restart-done" style={{ fontSize: 12, color: 'var(--ok-ink)', marginBottom: 8 }}>
+        restarted ✓{list ? ` — ${list} ${many ? 'are' : 'is'} in effect now` : ''}
+        {toastNode}
+      </div>
+    );
+  }
+  const button = !capable ? null : (
+    <Button variant={later ? 'secondary' : 'primary'} icon="rotate-cw" onClick={go} disabled={busy}>
+      {busy ? 'Restarting…' : admin ? 'Restart now' : 'Sign in to restart'}
+    </Button>
+  );
+  const note = busy && runs ? <RestartUnderwayNote updating={!!runs.updating} plain={!!runs.plain}/> : null;
+  const byHand = !capable ? <RestartByHandHint version={core} style={{ marginTop: 6 }}/> : null;
+  if (later && !busy) {
+    return (
+      <div className="restart-after-save restart-notice"
+           style={{ fontSize: 12, color: 'var(--warn-ink)', marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span>saved — restart the Domovoi server to apply{list ? `: ${list}` : ''}</span>
+        {button}
+        {byHand}
+        {toastNode}
+      </div>
+    );
+  }
+  return (
+    <div className="restart-after-save restart-prompt" role="group" aria-label="Restart Domovoi now?"
+         style={{ padding: '10px 12px', marginBottom: 8, borderRadius: 'var(--r-sm)',
+                  background: 'oklch(0.8 0.16 60 / 0.12)', border: '1px solid var(--warn)',
+                  fontSize: 13, lineHeight: 1.5 }}>
+      <div className="restart-prompt-text">
+        {list
+          ? <>{many ? 'Saved: ' : ''}<strong>{many ? list : list.charAt(0).toUpperCase() + list.slice(1)}</strong>{many ? '. ' : ' saved. '}</>
+          : 'Saved. '}
+        {many ? 'They take' : 'It takes'} effect after Domovoi restarts (about 30 seconds; music and voice pause briefly).
+      </div>
+      {note}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        {button}
+        {!busy && <Button variant="ghost" onClick={() => setLater(true)}>Later</Button>}
+      </div>
+      {byHand}
+      {toastNode}
+    </div>
+  );
+};
+
 /* ---- a core that doesn't answer (incident 2026-10-14) ------------------
  * Every other restart in the dashboard asks the CORE to restart itself,
  * which a frozen core can't do: on 2026-10-14 the dashboard was up, the

@@ -160,7 +160,7 @@ SCENARIOS["panel_unanswered_save"] = {
       await w.__settle(h);
       return { before, picked, calls: h.calls.filter((c) => c.method !== 'GET'), events: w.__events,
                store: w.__store.get(),
-               restart: w.__byClass(h, 'internet-restart').map((e) => w.__deep(e)) };
+               restart: w.__byClass(h, 'restart-after-save').map((e) => w.__deep(e)) };
     """,
 }
 
@@ -200,7 +200,7 @@ SCENARIOS["panel_never_features"] = {
         .map((e) => ({ name: e.props['data-feature'], text: w.__deep(e) }));
       const out = { rows, status: w.__byClass(h, 'internet-status').map((e) => w.__deep(e)),
                     hint: w.__byClass(h, 'internet-searxng-hint').length,
-                    restart: w.__byClass(h, 'internet-restart').map((e) => w.__deep(e)),
+                    restart: w.__byClass(h, 'restart-after-save').map((e) => w.__deep(e)),
                     follow: h.findAll({ type: 'button', text: 'follow the answer again' }).length };
       await h.click({ type: 'button', text: 'follow the answer again' });
       out.calls = h.calls.filter((c) => c.method !== 'GET');
@@ -516,7 +516,7 @@ SCENARIOS["panel_never_warnings_and_note"] = {
       await h.change((e) => e.type === 'input' && e.props.type === 'radio' && e.props.value === 'never', true);
       await h.click({ type: 'button', text: 'Save' });
       await w.__settle(h);
-      return { before, texts: h.text(), restart: w.__byClass(h, 'internet-restart').map((e) => w.__deep(e)) };
+      return { before, texts: h.text(), restart: w.__byClass(h, 'restart-after-save').map((e) => w.__deep(e)) };
     """,
 }
 
@@ -564,8 +564,9 @@ def test_saving_an_answer_patches_it_and_tells_the_page(driven) -> None:
                            "body": {"changes": {"internet_access": "sometimes"}}}]
     assert o["events"] == [{"type": "domovoi:internet-changed", "detail": {"access": "sometimes"}}]
     assert o["store"] == {"access": "sometimes", "loaded": True}
-    assert any("saved — restart the Domovoi server to apply: Automatic podcast downloads" in t
-               for t in o["restart"])
+    # A save that needs a restart asks "Restart now?" (RestartAfterSave).
+    assert any("Automatic podcast downloads saved. It takes effect after Domovoi restarts" in t
+               and "Restart now" in t and "Later" in t for t in o["restart"]), o["restart"]
 
 
 def test_an_answer_pinned_in_the_environment_is_read_only(driven) -> None:
