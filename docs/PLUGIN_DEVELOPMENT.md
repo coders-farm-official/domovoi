@@ -375,7 +375,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.8.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.9.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -908,7 +908,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.8.0"` — 1.3 added
+`domovoi.sdk.API_VERSION` (currently `"1.9.0"` — 1.3 added
 `device_endpoint`; 1.4 added `egress`, the internet-access gate, and
 `connectivity.policy` / `.reason` / `.internet_allowed`, and made
 `sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
@@ -917,7 +917,8 @@ the `[[containers]]` table and `ctx.add_container` /
 1.7 added `sdk.core_config.ai_features` and made `sdk.http` refuse a model
 request to this box's Ollama while the household's AI features are off,
 §4.14; 1.8 added lookup sources, `ctx.add_lookup_source`, §4.19, and the
-manifest's optional `help` file) is
+manifest's optional `help` file; 1.9 added `sdk.speech.render`, §4.17, and
+`core_config.ollama_url` / `ollama_model`) is
 the semver your `domovoi_api` range is checked against. Ask for `">=1.4"`
 if you use the 1.4 names; for 1.5's, either ask for `">=1.5"` or call
 `ctx.add_container` only `if hasattr(ctx, "add_container")` so an older
@@ -1358,8 +1359,11 @@ variables shadow the file**.
 `sdk.core_config` is a read-only whitelist of core facts: `bot_name`,
 `music_dir`, `podcasts_dir`, `audiobooks_dir`, `mpd_host`,
 `mpd_port_base_control`, `mpd_port_base_http`, `mpd_http_base`, `use_stubs`,
-`log_level`, and since SDK 1.7 `ai_features` (the household's AI switch,
-live: false means nothing may ask a language model). Anything else raises
+`log_level`, since SDK 1.7 `ai_features` (the household's AI switch,
+live: false means nothing may ask a language model), and since SDK 1.9
+`ollama_url` and `ollama_model` (the house's Ollama and the model its
+answers come from; send requests through `sdk.http` so the AI switch
+still applies). Anything else raises
 — and it's read-only. `mpd_http_base`
 reads back as a usable URL prefix (`http://<host>`) even when the setting
 is `auto`, which the core resolves to its current LAN address.
@@ -1635,6 +1639,20 @@ at all (it used to count as reached with nothing heard). It stays
 best-effort. Don't spam it: an
 announcement interrupts the household; reserve it for things a person
 asked for or needs to know now.
+
+```python
+wav = await sdk.speech.render(passage, room_id="bedroom")   # SDK 1.9
+```
+
+`render` turns text into audio without playing it: one mono 16-bit WAV,
+in the voice `room_id` speaks in (picked the way that room's own replies
+pick it), or in the server's voice when `room_id` is None, for audio a
+browser plays itself. Long text is rendered a sentence at a time and
+joined, so there is no length cap. Where the audio goes is up to you:
+write it into the music library and queue it in the room's player, or
+serve it to the dashboard. Rendering takes real CPU on a box without a
+GPU; render ahead of playback rather than in a request handler. Empty
+text raises `ValueError`. Core process only.
 
 ---
 

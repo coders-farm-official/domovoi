@@ -448,7 +448,7 @@ def test_a_plugin_registers_one_source_through_its_context() -> None:
 def test_the_sdk_exports_it_at_1_8() -> None:
     import domovoi.sdk as sdk
 
-    assert sdk.API_VERSION == "1.8.0"
+    assert tuple(int(p) for p in sdk.API_VERSION.split(".")) >= (1, 8, 0)
     assert sdk.LookupSource is lookup.LookupSource and sdk.LOOKUP_SOURCE == "lookup-source"
 
 

@@ -648,6 +648,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.sdk import speech as _sdk_speech
 
     _sdk_speech.bind_active_sessions(lambda: app.state.active_sessions)
+    # sdk.speech.render reads each room's voice from here (SDK 1.9).
+    _sdk_speech.bind_room_voices(lambda: app.state.satellite_voice)
 
     # "Read me …" (documents plan D7) decides from an in-memory index of
     # Documents' titles: walk it once now, in a worker thread, so the

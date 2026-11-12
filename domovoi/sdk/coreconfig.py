@@ -27,6 +27,11 @@ CORE_CONFIG_WHITELIST: tuple[str, ...] = (
     "mpd_http_base",
     "use_stubs",
     "log_level",
+    # The house's Ollama and its Q&A model (SDK 1.9), for a plugin that
+    # writes with the same model the household's answers come from.
+    # Requests go through sdk.http so the AI switch still applies.
+    "ollama_url",
+    "ollama_model",
     # The household's AI switch, live (domovoi/ai_features.py): False means
     # nothing may ask a language model, and sdk.http refuses requests that
     # would (SDK 1.7). Read it to skip a summary step up front.

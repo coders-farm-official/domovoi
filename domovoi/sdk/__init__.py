@@ -37,7 +37,10 @@ from __future__ import annotations
 #        fetch and a class of local, api or web; ctx.add_lookup_source;
 #        the core orders them by class) and the manifest's optional
 #        [plugin] help file, indexed by Domovoi's help desk.
-API_VERSION = "1.8.0"
+# 1.9.0: added speech.render(text, room_id=None): text to a WAV in the
+#        room's voice (no room: the server's voice), nothing played; and
+#        core_config.ollama_url / ollama_model (the house Q&A model).
+API_VERSION = "1.9.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
