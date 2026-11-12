@@ -306,6 +306,15 @@ _EP_SORT_KEYS: dict[str, list[SortKey]] = {
 _EP_COLUMNS = """id, subscription_id, guid, title, description,
                  published_at, duration_sec, chapters, download_status,
                  downloaded_at, file_path, (file_path IS NOT NULL) AS has_file"""
+# The asking listener's place in each episode (the same (device, person) slot
+# the resume position uses). A correlated subquery, not a join: the paging
+# keys name bare columns that a joined table would make ambiguous.
+_EP_POSITION_COLUMNS = """,
+    (SELECT pp.position_sec FROM playback_positions pp
+      WHERE pp.item_type = :pp_type AND pp.item_id = podcast_episodes.id
+        AND pp.device_id = :pp_dev
+        AND pp.person_id IS NOT DISTINCT FROM CAST(:pp_pid AS BIGINT)) AS position_sec"""
+_EP_NO_POSITION_COLUMNS = ", CAST(NULL AS INTEGER) AS position_sec"
 
 
 def _episode_row(r: Any) -> dict[str, Any]:
@@ -325,6 +334,11 @@ async def list_episodes(
     downloaded: Optional[bool] = Query(
         None, description="true → only episodes with a file here; false → only those without"),
     sort: EpisodeSort = Query("newest", description="newest (default) · oldest"),
+    device_id: Optional[str] = Query(
+        None, max_length=200,
+        description="With this, each row carries the listener's place (position_sec) "
+                    "for that device (and person_id); without it position_sec is null"),
+    person_id: Optional[int] = Query(None, description="The person listening, with device_id"),
     limit: Optional[int] = paging.limit_query(),
     cursor: Optional[str] = paging.cursor_query(),
     offset: Optional[int] = paging.offset_query(),
@@ -335,6 +349,11 @@ async def list_episodes(
     before, for a client that sends none of them."""
     keys = _EP_SORT_KEYS[sort]
     params: dict[str, Any] = {"sid": sub_id}
+    if device_id:
+        cols = _EP_COLUMNS + _EP_POSITION_COLUMNS
+        params.update({"pp_type": sa.ITEM_PODCAST, "pp_dev": device_id, "pp_pid": person_id})
+    else:
+        cols = _EP_COLUMNS + _EP_NO_POSITION_COLUMNS
     where_parts = ["subscription_id = :sid"]
     if q and q.strip():
         where_parts.append("title ILIKE :q")
@@ -347,7 +366,7 @@ async def list_episodes(
         async with session_scope() as s:
             rows = (
                 await s.execute(
-                    text(f"SELECT {_EP_COLUMNS} FROM podcast_episodes {where}"
+                    text(f"SELECT {cols} FROM podcast_episodes {where}"
                          f" ORDER BY {paging.order_sql(keys)}"),
                     params,
                 )
@@ -365,7 +384,7 @@ async def list_episodes(
         rows = (
             await s.execute(
                 text(
-                    f"SELECT {_EP_COLUMNS}, {paging.key_columns(keys)} FROM podcast_episodes"
+                    f"SELECT {cols}, {paging.key_columns(keys)} FROM podcast_episodes"
                     f" {page_where} ORDER BY {paging.order_sql(keys)}"
                     " LIMIT :limit OFFSET :offset"
                 ),

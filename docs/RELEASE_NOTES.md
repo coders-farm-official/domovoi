@@ -4,6 +4,17 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — podcast episodes show their details
+
+Open a show on the Podcasts page and each episode now shows when it was
+published ("today", "yesterday", "3 days ago", then "12 Oct" or "12 Oct 2025"),
+how long it is, how far you are in it ("24 min left", "played", or a dot for
+one you haven't started), whether it is downloaded, its chapters, and the
+first lines of its description (click to read all). The top of the drawer
+shows the show's description, its episode count and when it was last checked.
+Progress follows the **listening as** person. The episode list API takes
+optional `device_id` / `person_id` and adds `position_sec` to each row.
+
 ## 2026-11-12 — saving a setting that needs a restart asks to restart
 
 After you save a setting that only a restart applies (the AcoustID key, a
