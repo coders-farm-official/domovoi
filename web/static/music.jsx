@@ -1,4 +1,4 @@
-/* Music page — Library / Artists / Room queue / Playlists / Stats / Jobs tabs.
+/* Music page — Library / Artists / Genres / Room queue / Playlists / Stats / Jobs tabs.
  * Provider-specific search & download UIs live on PLUGIN pages (design
  * §10.1) — this page stays generic: "Add music" enqueues rows in the
  * provider-agnostic media-acquisition queue, and the Jobs tab is a
@@ -18,6 +18,11 @@
  *                                                 and one artist's albums + track ids;
  *                                                 their songs are GET /api/music/
  *                                                 library?artist=&album=&sort=album.
+ *   * GET /api/music/genres · /api/music/genre  — the Genres tab (V050: genres from
+ *                                                 the files' tags, with how far the
+ *                                                 read has got) and one genre's
+ *                                                 track ids; its songs are GET
+ *                                                 /api/music/library?genre=&sort=artist.
  *   * GET /api/music/library/stats              — whole-library aggregates for the
  *                                                 Stats tab and the tab badge,
  *                                                 computed server-side so we never
@@ -885,12 +890,7 @@ const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoo
   if (!artist) return null;
   const ids = (detail && detail.track_ids) || [];
   const albums = (detail && detail.albums) || [];
-  const loaded = songs.items || [];
   const what = album == null ? artist.name : `${album || 'songs with no album'} · ${artist.name}`;
-  const roomIds = (shuffle) => (shuffle ? shuffledIds(ids) : ids).slice(0, ROOM_TRACK_CAP);
-  const capNote = ids.length > ROOM_TRACK_CAP
-    ? `a room takes ${ROOM_TRACK_CAP} at a time — the first ${ROOM_TRACK_CAP} (or a random ${ROOM_TRACK_CAP} when shuffled)`
-    : null;
   const chip = (key, label, count, active, onClick) => (
     <button key={key} type="button" onClick={onClick}
       style={{ font: 'inherit', fontSize: 12, cursor: 'pointer', padding: '4px 10px',
@@ -934,72 +934,263 @@ const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoo
           </div>
         </div>
 
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
-          <div className="label" style={{ marginBottom: 6 }}>play in room</div>
-          <RoomChips rooms={rooms} room={room} onPick={setRoom}/>
-          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            <Button variant="primary" icon="play" disabled={!room || ids.length === 0}
-                    onClick={() => { if (room) { onPlayTracks(roomIds(false), room, what, false); onClose(); } }}>
-              play
-            </Button>
-            <Button icon="shuffle" disabled={!room || ids.length === 0}
-                    onClick={() => { if (room) { onPlayTracks(roomIds(true), room, what, true); onClose(); } }}>
-              shuffle
-            </Button>
-            <Button icon="list-plus" disabled={!room || ids.length === 0}
-                    onClick={() => { if (room) onQueueTracksInRoom(roomIds(false), room, what); }}>
-              add to queue
-            </Button>
-          </div>
-          {capNote && <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8 }}>{capNote}</div>}
-          <div className="label" style={{ margin: '12px 0 6px' }}>this browser</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Button icon="headphones" disabled={loaded.length === 0}
-                    onClick={() => onBrowserPlayTracks(loaded, what)}>play here</Button>
-            <Button icon="shuffle" disabled={loaded.length === 0}
-                    onClick={() => onBrowserPlayTracks(shuffledIds(loaded), what)}>shuffle here</Button>
-            <Button icon="list-plus" disabled={loaded.length === 0}
-                    onClick={() => onBrowserQueueTracks(loaded, what)}>queue here</Button>
-          </div>
-          {songs.hasMore && (
-            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8 }}>
-              this browser takes the {loaded.length} songs loaded so far — scroll the list for more
-            </div>
-          )}
-        </div>
+        <TrackSetActions rooms={rooms} room={room} onRoom={setRoom} ids={ids} songs={songs} what={what}
+                         onClose={onClose} onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
+                         onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}/>
+        <TrackSetSongs songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
+                       onQueueTrack={onQueueTrack}
+                       sub={(t) => [t.album, t.artist !== artist.name ? t.artist : null].filter(Boolean).join(' · ')}/>
+      </aside>
+    </>
+  );
+};
 
-        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          {songs.loading && loaded.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
-          ) : loaded.length === 0 ? (
-            <Empty glyph="headphones" title="no songs" sub="nothing in the library for this choice"/>
-          ) : (
-            <div style={{ padding: '4px 0' }}>
-              {loaded.map((t, i) => (
-                <div key={t.id}
-                     style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8,
-                              padding: '8px 16px',
-                              borderBottom: i === loaded.length - 1 ? 'none' : '1px solid var(--border-soft)' }}>
-                  <button type="button" onClick={() => onSelectTrack(t)}
-                          style={{ minWidth: 0, font: 'inherit', textAlign: 'left', background: 'transparent',
-                                   border: 0, padding: 0, color: 'var(--fg)', cursor: 'pointer' }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {t.title || (t.file_path || '').split('/').pop()}
-                    </div>
-                    <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {[t.album, t.artist !== artist.name ? t.artist : null].filter(Boolean).join(' · ') || '—'}
-                    </div>
-                  </button>
-                  <div style={{ display: 'flex', gap: 2 }}>
-                    <IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/>
-                    <IconButton name="list-plus" onClick={() => onQueueTrack(t)} title="add to browser queue"/>
-                  </div>
-                </div>
-              ))}
-              <PagedListFooter list={songs} noun="songs" compact/>
-            </div>
-          )}
+/* The actions of a drawer of many songs (Artists, Genres): play / shuffle /
+ * add to queue in a room, which gets every track id the server gave (`ids`,
+ * at most ROOM_TRACK_CAP at once), and play / shuffle / queue in this
+ * browser, which takes the songs loaded so far (`songs`, a paged list). */
+const TrackSetActions = ({ rooms, room, onRoom, ids, songs, what, onClose, onPlayTracks,
+                           onQueueTracksInRoom, onBrowserPlayTracks, onBrowserQueueTracks }) => {
+  const loaded = songs.items || [];
+  const roomIds = (shuffle) => (shuffle ? shuffledIds(ids) : ids).slice(0, ROOM_TRACK_CAP);
+  const capNote = ids.length > ROOM_TRACK_CAP
+    ? `a room takes ${ROOM_TRACK_CAP} at a time — the first ${ROOM_TRACK_CAP} (or a random ${ROOM_TRACK_CAP} when shuffled)`
+    : null;
+  return (
+    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6 }}>play in room</div>
+      <RoomChips rooms={rooms} room={room} onPick={onRoom}/>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+        <Button variant="primary" icon="play" disabled={!room || ids.length === 0}
+                onClick={() => { if (room) { onPlayTracks(roomIds(false), room, what, false); onClose(); } }}>
+          play
+        </Button>
+        <Button icon="shuffle" disabled={!room || ids.length === 0}
+                onClick={() => { if (room) { onPlayTracks(roomIds(true), room, what, true); onClose(); } }}>
+          shuffle
+        </Button>
+        <Button icon="list-plus" disabled={!room || ids.length === 0}
+                onClick={() => { if (room) onQueueTracksInRoom(roomIds(false), room, what); }}>
+          add to queue
+        </Button>
+      </div>
+      {capNote && <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8 }}>{capNote}</div>}
+      <div className="label" style={{ margin: '12px 0 6px' }}>this browser</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Button icon="headphones" disabled={loaded.length === 0}
+                onClick={() => onBrowserPlayTracks(loaded, what)}>play here</Button>
+        <Button icon="shuffle" disabled={loaded.length === 0}
+                onClick={() => onBrowserPlayTracks(shuffledIds(loaded), what)}>shuffle here</Button>
+        <Button icon="list-plus" disabled={loaded.length === 0}
+                onClick={() => onBrowserQueueTracks(loaded, what)}>queue here</Button>
+      </div>
+      {songs.hasMore && (
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8 }}>
+          this browser takes the {loaded.length} songs loaded so far — scroll the list for more
         </div>
+      )}
+    </div>
+  );
+};
+
+/* The songs of such a drawer, loaded as they scroll: a tap opens the track
+ * drawer, the buttons play or queue one in this browser. `sub(t)` is the
+ * line under the title. */
+const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack }) => {
+  const loaded = songs.items || [];
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      {songs.loading && loaded.length === 0 ? (
+        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+      ) : loaded.length === 0 ? (
+        <Empty glyph="headphones" title="no songs" sub="nothing in the library for this choice"/>
+      ) : (
+        <div style={{ padding: '4px 0' }}>
+          {loaded.map((t, i) => (
+            <div key={t.id}
+                 style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8,
+                          padding: '8px 16px',
+                          borderBottom: i === loaded.length - 1 ? 'none' : '1px solid var(--border-soft)' }}>
+              <button type="button" onClick={() => onSelectTrack(t)}
+                      style={{ minWidth: 0, font: 'inherit', textAlign: 'left', background: 'transparent',
+                               border: 0, padding: 0, color: 'var(--fg)', cursor: 'pointer' }}>
+                <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {t.title || (t.file_path || '').split('/').pop()}
+                </div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {sub(t) || '—'}
+                </div>
+              </button>
+              <div style={{ display: 'flex', gap: 2 }}>
+                <IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/>
+                <IconButton name="list-plus" onClick={() => onQueueTrack(t)} title="add to browser queue"/>
+              </div>
+            </div>
+          ))}
+          <PagedListFooter list={songs} noun="songs" compact/>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ---- Genres tab (owner, 2026-11-12) ------------------------- */
+/* The library by genre: GET /api/music/genres, one page at a time like
+ * Artists, searched and sorted by the server. Genres come from the files'
+ * own tags. For tracks that were in the library before genres were read,
+ * the server reads them in the background; until it is done the tab says
+ * so ("reading genres from your files… N of M") and re-reads itself every
+ * GENRE_READ_POLL_MS, rather than passing a partial list off as the whole
+ * one. Read tracks whose tags name no genre are one last row, "no genre",
+ * so nothing is hidden. A row opens GenreDrawer. */
+const GENRE_READ_POLL_MS = 10000;
+const genreReadingLine = (page) => (page && page.reading
+  ? `reading genres from your files… ${fmtCount(page.tags_read)} of ${fmtCount(page.tags_total)}`
+  : null);
+const GenresTab = ({ onOpen }) => {
+  const [q, setQ] = React.useState('');
+  const [sort, setSort] = React.useState('name');
+  const qDebounced = useDebouncedValue(q, 250);
+  const path = React.useMemo(() => {
+    const params = new URLSearchParams();
+    if (qDebounced) params.set('q', qDebounced);
+    params.set('sort', sort);
+    return `/api/music/genres?${params.toString()}`;
+  }, [qDebounced, sort]);
+  const list = usePagedList(path, {
+    pageSize: 50, key: (g) => g.key, eventTypes: ['library.indexer.changed'],
+  });
+  const page = list.extra;
+  const reading = !!(page && page.reading);
+  const reload = list.reload;
+  React.useEffect(() => {
+    if (!reading) return undefined;
+    const t = setInterval(() => reload({ quietRead: true }), GENRE_READ_POLL_MS);
+    return () => clearInterval(t);
+  }, [reading, reload]);
+  const items = list.items || [];
+  const total = list.total ?? 0;
+  const untagged = (page && page.untagged_count) || 0;
+  const showLoading = list.loading && items.length === 0 && !page;
+  const showNoGenre = !q && !list.hasMore && untagged > 0;
+  const showEmpty = !list.loading && items.length === 0 && !showNoGenre;
+  const readingLine = genreReadingLine(page);
+  const row = (g, last, muted) => (
+    <button key={`g:${g.key}`} type="button" className="artist-row" onClick={() => onOpen(g)}
+            style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'center',
+                     width: '100%', padding: '10px 16px', font: 'inherit', textAlign: 'left',
+                     background: 'transparent', color: muted ? 'var(--fg-muted)' : 'var(--fg)',
+                     border: 0, cursor: 'pointer',
+                     borderBottom: last ? 'none' : '1px solid var(--border-soft)' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+          {g.track_count} track{g.track_count === 1 ? '' : 's'}
+        </div>
+      </div>
+      <Icon name="chevron-right" size={14}/>
+    </button>
+  );
+  return (
+    <>
+      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+        <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: 360 }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="search genres…"
+                 aria-label="search genres"
+                 style={{ font: 'inherit', fontSize: 13, width: '100%', height: 30, padding: '0 10px 0 28px',
+                          borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                          background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
+          <span style={{ position: 'absolute', left: 9, top: 8, color: 'var(--fg-subtle)', pointerEvents: 'none' }}>
+            <Icon name="search" size={13}/>
+          </span>
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
+          sort
+          <select value={sort} onChange={e => setSort(e.target.value)}
+            style={{ font: 'inherit', fontSize: 12, height: 26, padding: '0 8px', borderRadius: 'var(--r-sm)',
+                     border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
+            <option value="name">name</option>
+            <option value="tracks">most tracks</option>
+          </select>
+        </label>
+        <div style={{ marginLeft: 'auto' }} className="mono">
+          <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{total} genre{total === 1 ? '' : 's'}</span>
+        </div>
+      </div>
+      {readingLine && (
+        <div role="status" style={{ padding: '8px 16px', fontSize: 12, color: 'var(--fg-muted)',
+                                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                                    borderBottom: '1px solid var(--border-soft)' }}>
+          <StatusDot tone="brand" live/>
+          <span>{readingLine}</span>
+          <span>· the list fills in as it goes</span>
+        </div>
+      )}
+      {showLoading ? (
+        <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading genres…</div>
+      ) : showEmpty ? (
+        <Empty glyph="headphones"
+               title={q ? 'no genres match' : reading ? 'no genres found yet' : 'no genres yet'}
+               sub={q ? `q = “${q}”` : reading ? 'genres show up here as your files are read'
+                 : 'songs whose tags name a genre show up here'}
+               action={q ? <Button icon="x" onClick={() => setQ('')}>clear search</Button> : null}/>
+      ) : (
+        <div className="artist-list">
+          {items.map((g, i) => row(g, i === items.length - 1 && !showNoGenre, false))}
+          {showNoGenre && row({ key: '', name: 'no genre', track_count: untagged }, true, true)}
+        </div>
+      )}
+      {!showLoading && (
+        <div style={{ borderTop: '1px solid var(--border-soft)' }}>
+          <PagedListFooter list={list} noun="genres"/>
+        </div>
+      )}
+    </>
+  );
+};
+
+/* One genre (GET /api/music/genre): its songs by artist (the library list,
+ * ?genre=&sort=artist, loaded as it scrolls) with the Artists drawer's
+ * actions. `genre.key` '' is the tracks whose tags name no genre. */
+const GenreDrawer = ({ genre, rooms, onClose, onPlayTracks, onQueueTracksInRoom,
+                       onBrowserPlayTracks, onBrowserQueueTracks, onSelectTrack, onBrowserPlay, onQueueTrack }) => {
+  const [room, setRoom] = React.useState(rooms[0] || null);
+  React.useEffect(() => { setRoom(rooms[0] || null); }, [genre?.key, rooms.join(',')]);
+  const key = genre ? genre.key : null;
+  const detailPath = key != null ? `/api/music/genre?${new URLSearchParams({ key }).toString()}` : null;
+  const { data: detail } = useApiObject(detailPath, { eventTypes: ['library.indexer.changed'] });
+  const songsPath = React.useMemo(() => (key == null ? null
+    : `/api/music/library?${new URLSearchParams({ genre: key, sort: 'artist' }).toString()}`), [key]);
+  const songs = usePagedList(songsPath, { pageSize: 100, eventTypes: ['library.indexer.changed'] });
+  if (!genre) return null;
+  const ids = (detail && detail.track_ids) || [];
+  const count = detail ? detail.track_count : genre.track_count;
+  return (
+    <>
+      <div onClick={onClose}
+           style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.16)',
+                    backdropFilter: 'blur(2px)', zIndex: 40 }}/>
+      <aside role="dialog" aria-label={`genre ${genre.name}`}
+             style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 460, maxWidth: '100%',
+                      background: 'var(--card)', borderLeft: '1px solid var(--border)',
+                      boxShadow: 'var(--shadow-md)', zIndex: 41,
+                      display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
+          <div className="eyebrow">genre</div>
+          <IconButton name="x" onClick={onClose} title="close"/>
+        </div>
+        <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{genre.name}</div>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            {count} track{count === 1 ? '' : 's'}{genre.key === '' ? ' · their tags name no genre' : ''}
+          </div>
+        </div>
+        <TrackSetActions rooms={rooms} room={room} onRoom={setRoom} ids={ids} songs={songs} what={genre.name}
+                         onClose={onClose} onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
+                         onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}/>
+        <TrackSetSongs songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
+                       onQueueTrack={onQueueTrack}
+                       sub={(t) => [t.artist, t.album].filter(Boolean).join(' · ')}/>
       </aside>
     </>
   );
@@ -1962,7 +2153,7 @@ const BucketStat = ({ label, buckets }) => {
 const MUSIC_PAGE_TABS = [
   // No 'player' since 2026-11-12: #music/player opens the expanded player
   // over this page (player.jsx PLAYER_SHEET_ROUTE).
-  { id: 'library' }, { id: 'artists' }, { id: 'queue' },
+  { id: 'library' }, { id: 'artists' }, { id: 'genres' }, { id: 'queue' },
   { id: 'playlists' }, { id: 'stats' }, { id: 'jobs' },
 ];
 
@@ -1989,6 +2180,8 @@ const MusicPage = () => {
   const [addToPlaylistTrack, setAddToPlaylistTrack] = React.useState(null);
   // Artists tab: the artist whose drawer is open.
   const [openArtist, setOpenArtist] = React.useState(null);
+  // Genres tab: the genre whose drawer is open.
+  const [openGenre, setOpenGenre] = React.useState(null);
   const [tick, setTick] = React.useState(0);
   const [fire, toastNode] = useToast();
 
@@ -2030,7 +2223,7 @@ const MusicPage = () => {
     if (!player.available) { fire('browser player not available'); return; }
     if (!tracks.length) return;
     player.enqueue(tracks.map(t => window.itemFromTrack(t)));
-    fire(`queued ${tracks.length} song${tracks.length === 1 ? '' : 's'} by ${label}`);
+    fire(`queued ${tracks.length} song${tracks.length === 1 ? '' : 's'} · ${label}`);
   };
   const onPlayNextTrack = (track) => {
     if (!player.available) { fire('browser player not available'); return; }
@@ -2492,6 +2685,7 @@ const MusicPage = () => {
   const tabs = [
     { id: 'library',   label: 'Library',   count: libraryTotal ?? undefined },
     { id: 'artists',   label: 'Artists' },
+    { id: 'genres',    label: 'Genres' },
     // Room queue: what the SPEAKERS play from, as opposed to the player's
     // queue (this browser's own, in the expanded player).
     { id: 'queue',     label: 'Room queue' },
@@ -2571,6 +2765,7 @@ const MusicPage = () => {
         <div style={{ padding: '0 8px' }}><Tabs tabs={tabs} value={tab} onChange={setTab}/></div>
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
         {tab === 'artists'   && <ArtistsTab onOpen={setOpenArtist}/>}
+        {tab === 'genres'    && <GenresTab onOpen={setOpenGenre}/>}
         {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} npError={npError} fire={fire}
                                           room={queueRoom} onRoom={setQueueRoom}/>}
         {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={onPlayPlaylistInFirstRoom} onCreate={onCreatePlaylist} fire={fire}/>}
@@ -2597,6 +2792,12 @@ const MusicPage = () => {
                     onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}
                     onSelectTrack={(t) => { setOpenArtist(null); setSelected(t); }}
                     onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack}/>
+      <GenreDrawer genre={openGenre} rooms={rooms}
+                   onClose={() => setOpenGenre(null)}
+                   onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
+                   onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}
+                   onSelectTrack={(t) => { setOpenGenre(null); setSelected(t); }}
+                   onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack}/>
       <LibraryAddDrawer track={addToPlaylistTrack}
                         onClose={() => setAddToPlaylistTrack(null)}
                         onMutated={() => { lib.refresh(); refreshPlaylists(); refreshNP(); }}

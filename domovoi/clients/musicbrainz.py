@@ -8,6 +8,13 @@ Two callers, one client:
   provider download pipelines call this after a successful download to
   enrich metadata, and never replace the existing row when the lookup
   fails — the user always gets *some* metadata.
+* **Recording date** (:meth:`HttpMusicBrainzClient.recording_year`) feeds
+  the library's year fallback (``domovoi/workers/library_year_fetch.py``):
+  one recording id in, its ``first-release-date`` year out. It raises like
+  the artist search, so the fetch backs off rather than recording "no
+  year" for an outage. The recording lookup above keeps the same date
+  from its search answer (:attr:`MusicBrainzMatch.first_release_date`),
+  so a new enrichment carries the year with no extra request.
 * **Artist search** (:meth:`HttpMusicBrainzClient.search_artists`) feeds the
   opt-in "also called" fetch (``domovoi/workers/library_alias_fetch.py``):
   the spoken names people use for an artist ("Tec 9" for Tech N9ne).
@@ -55,6 +62,33 @@ class MusicBrainzMatch:
     title: str
     artist: str
     album: str | None
+    # The recording's first release ("1997", "1997-05-21"), as MusicBrainz
+    # gives it; None when it gives none. ``year`` is its year.
+    first_release_date: str | None = None
+
+    @property
+    def year(self) -> int | None:
+        return year_of_date(self.first_release_date)
+
+
+# A MusicBrainz id: a UUID, lower-case hex as MusicBrainz writes it. Only
+# such a string is ever put into a request path.
+_MBID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def is_mbid(value: object) -> bool:
+    return isinstance(value, str) and _MBID_RE.fullmatch(value) is not None
+
+
+def year_of_date(value: object) -> int | None:
+    """The year of a MusicBrainz date ("1997", "1997-05", "1997-05-21");
+    None for a missing, empty or implausible one (the library's year rules,
+    ``domovoi.library_genres.parse_year``)."""
+    from domovoi.library_genres import parse_year
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return parse_year(value.strip()[:4]) if value.strip()[:4].isdigit() else None
 
 
 @dataclass(frozen=True)
@@ -104,6 +138,8 @@ class MusicBrainzClient(Protocol):
 
     async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]: ...
 
+    async def recording_year(self, recording_id: str) -> int | None: ...
+
 
 class MusicBrainzStubClient:
     """Always returns nothing — used in USE_STUBS mode."""
@@ -113,6 +149,9 @@ class MusicBrainzStubClient:
 
     async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]:
         return []
+
+    async def recording_year(self, recording_id: str) -> int | None:
+        return None
 
 
 _NOISE_PATTERNS = [
@@ -217,6 +256,9 @@ class HttpMusicBrainzClient:
     # The search endpoint is slower than a lookup under load.
     SEARCH_TIMEOUT_SEC = 10.0
     MIN_SCORE = 80  # MB score is 0–100; below 80 is not reliable enough to overwrite metadata
+    # Largest answer read (a search page is a few KB, a recording a few
+    # hundred bytes); a longer body is "no proper answer", not a verdict.
+    MAX_BODY_BYTES = 2 * 1024 * 1024
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -272,7 +314,35 @@ class HttpMusicBrainzClient:
             title=rec.get("title") or cleaned_title,
             artist=artist_name or artist or "",
             album=album,
+            first_release_date=_opt_str(rec.get("first-release-date")),
         )
+
+    async def recording_year(self, recording_id: str) -> int | None:
+        """The year of one recording's ``first-release-date``
+        (``GET /ws/2/recording/<id>?fmt=json``): None when MusicBrainz
+        answered and gives no date, or answered 404 (no such recording any
+        more — a verdict too). Raises :class:`MusicBrainzRateLimited` on
+        503/429, :class:`MusicBrainzUnavailable` when there was no proper
+        answer (including internet access turned off), and
+        :class:`MusicBrainzRejected` on another 4xx. ``recording_id`` must
+        be a MusicBrainz id (:func:`is_mbid`); anything else is refused
+        before a request is made. Only the id leaves the house."""
+        if not is_mbid(recording_id):
+            raise MusicBrainzRejected("not a MusicBrainz id")
+        status, data = await self._rate_limited_fetch(
+            f"recording/{recording_id}", {"fmt": "json"}, timeout=self.REQUEST_TIMEOUT_SEC,
+        )
+        if status in (429, 503):
+            raise MusicBrainzRateLimited(f"HTTP {status}")
+        if status == 404:
+            return None
+        if status >= 500:
+            raise MusicBrainzUnavailable(f"HTTP {status}")
+        if status != 200:
+            raise MusicBrainzRejected(f"HTTP {status}")
+        if not isinstance(data, Mapping):
+            raise MusicBrainzUnavailable("not JSON")
+        return year_of_date(data.get("first-release-date"))
 
     async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]:
         """Artists whose name matches ``name`` (MusicBrainz ranks them; the
@@ -342,7 +412,14 @@ class HttpMusicBrainzClient:
         """(HTTP status, parsed JSON or None). Raises
         :class:`MusicBrainzUnavailable` when no answer came back —
         including when internet access is turned off for this box, so the
-        alias fetch backs off instead of recording a verdict."""
+        alias fetch backs off instead of recording a verdict — and when the
+        body is longer than :attr:`MAX_BODY_BYTES`.
+
+        Redirects are not followed (the API answers in place): a 3xx comes
+        back as its status, which every caller treats as no answer, so a
+        request can never be sent on to a host ``egress`` did not check."""
+        import json
+
         import requests
 
         url = f"{self.BASE}/{path}"
@@ -356,15 +433,30 @@ class HttpMusicBrainzClient:
                 params=params,
                 headers={"User-Agent": self.USER_AGENT, "Accept": "application/json"},
                 timeout=timeout,
+                allow_redirects=False,
+                stream=True,
             )
         except Exception as e:
             raise MusicBrainzUnavailable(type(e).__name__) from e
-        if r.status_code != 200:
-            return r.status_code, None
         try:
-            return 200, r.json()
-        except ValueError:
-            return 200, None
+            if r.status_code != 200:
+                return r.status_code, None
+            body = bytearray()
+            try:
+                for chunk in r.iter_content(64 * 1024):
+                    body += chunk
+                    if len(body) > self.MAX_BODY_BYTES:
+                        raise MusicBrainzUnavailable("answer too large")
+            except MusicBrainzUnavailable:
+                raise
+            except Exception as e:
+                raise MusicBrainzUnavailable(type(e).__name__) from e
+            try:
+                return 200, json.loads(bytes(body))
+            except (ValueError, RecursionError):
+                return 200, None
+        finally:
+            r.close()
 
 
 _client: MusicBrainzClient | None = None

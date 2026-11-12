@@ -400,6 +400,14 @@ Your music library, on the server, played in any room or in the browser.
   down** and **remove from queue** on each song. **play next** on a song
   in the library puts it next in the room's queue.
 - Playlists and favorites: [Music → Playlists](#music/playlists).
+- **Dashboard:** browse by genre: [Music → Genres](#music/genres). Each
+  genre opens its songs, with **play**, **shuffle** and **add to queue**
+  for a room, and **play here** / **shuffle here** for this browser. The
+  genres come from your files' own tags ("Rock; Indie" counts under both;
+  "Hip-Hop" and "Rap" are one). Songs whose tags name no genre are the
+  **no genre** row at the end. Right after an update the server reads the
+  genres of the songs already in your library in the background; until it
+  is done the tab says "reading genres from your files… N of M".
 - Each queued song says which device added it.
 - **Dashboard:** the [player](#music/player) opens from the player bar at
   the bottom of any page: click the song's cover or title, the up chevron,

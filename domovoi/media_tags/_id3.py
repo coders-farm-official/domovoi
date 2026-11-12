@@ -651,7 +651,50 @@ def read_id3v2_at(f: BinaryIO, offset: int = 0) -> tuple[ID3Tags | None, int]:
 
 # ─── ID3v1 ───────────────────────────────────────────────────────────────
 
-GENRES_COUNT = 192
+#: The ID3v1 genre list, by number: 0-79 from the ID3v1 specification,
+#: 80-191 the extensions every tagger since Winamp reads. Data, written
+#: from the published list. 133 is listed here by the name current taggers
+#: use for it. An ID3v1 tag's genre byte, an ID3v2.3 "(17)" reference and
+#: an MP4 ``gnre`` atom (the number plus one) all name an entry here.
+ID3V1_GENRES: tuple[str, ...] = (
+    "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop",
+    "Jazz", "Metal", "New Age", "Oldies", "Other", "Pop", "R&B", "Rap",
+    "Reggae", "Rock", "Techno", "Industrial", "Alternative", "Ska", "Death Metal", "Pranks",
+    "Soundtrack", "Euro-Techno", "Ambient", "Trip-Hop", "Vocal", "Jazz+Funk", "Fusion", "Trance",
+    "Classical", "Instrumental", "Acid", "House", "Game", "Sound Clip", "Gospel", "Noise",
+    "Alternative Rock", "Bass", "Soul", "Punk", "Space", "Meditative", "Instrumental Pop",
+    "Instrumental Rock",
+    "Ethnic", "Gothic", "Darkwave", "Techno-Industrial", "Electronic", "Pop-Folk", "Eurodance",
+    "Dream",
+    "Southern Rock", "Comedy", "Cult", "Gangsta", "Top 40", "Christian Rap", "Pop/Funk", "Jungle",
+    "Native American", "Cabaret", "New Wave", "Psychedelic", "Rave", "Showtunes", "Trailer",
+    "Lo-Fi",
+    "Tribal", "Acid Punk", "Acid Jazz", "Polka", "Retro", "Musical", "Rock & Roll", "Hard Rock",
+    # 80-191: the extensions.
+    "Folk", "Folk-Rock", "National Folk", "Swing", "Fast Fusion", "Bebop", "Latin", "Revival",
+    "Celtic", "Bluegrass", "Avantgarde", "Gothic Rock", "Progressive Rock", "Psychedelic Rock",
+    "Symphonic Rock", "Slow Rock",
+    "Big Band", "Chorus", "Easy Listening", "Acoustic", "Humour", "Speech", "Chanson", "Opera",
+    "Chamber Music", "Sonata", "Symphony", "Booty Bass", "Primus", "Porn Groove", "Satire",
+    "Slow Jam",
+    "Club", "Tango", "Samba", "Folklore", "Ballad", "Power Ballad", "Rhythmic Soul", "Freestyle",
+    "Duet", "Punk Rock", "Drum Solo", "A Cappella", "Euro-House", "Dance Hall", "Goa",
+    "Drum & Bass",
+    "Club-House", "Hardcore Techno", "Terror", "Indie", "Britpop", "Afro-Punk", "Polsk Punk",
+    "Beat",
+    "Christian Gangsta Rap", "Heavy Metal", "Black Metal", "Crossover", "Contemporary Christian",
+    "Christian Rock", "Merengue", "Salsa",
+    "Thrash Metal", "Anime", "J-Pop", "Synthpop", "Abstract", "Art Rock", "Baroque", "Bhangra",
+    "Big Beat", "Breakbeat", "Chillout", "Downtempo", "Dub", "EBM", "Eclectic", "Electro",
+    "Electroclash", "Emo", "Experimental", "Garage", "Global", "IDM", "Illbient", "Industro-Goth",
+    "Jam Band", "Krautrock", "Leftfield", "Lounge", "Math Rock", "New Romantic", "Nu-Breakz",
+    "Post-Punk",
+    "Post-Rock", "Psytrance", "Shoegaze", "Space Rock", "Trop Rock", "World Music",
+    "Neoclassical", "Audiobook",
+    "Audio Theatre", "Neue Deutsche Welle", "Podcast", "Indie Rock", "G-Funk", "Dubstep",
+    "Garage Rock", "Psybient",
+)
+GENRES_COUNT = len(ID3V1_GENRES)
 
 
 def _v1_text(b: bytes) -> str:
@@ -676,6 +719,10 @@ def parse_id3v1(block: bytes) -> list[Frame]:
     text = _v1_text(comment)
     if text:
         frames.append(CommentFrame("COMM", 0, "eng", "ID3v1 Comment", text))
+    # The genre byte: an entry of ID3V1_GENRES, or 255 (and anything past
+    # the list) for none.
+    if block[127] < GENRES_COUNT:
+        frames.append(TextFrame("TCON", 0, [ID3V1_GENRES[block[127]]]))
     return frames
 
 

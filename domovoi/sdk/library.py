@@ -94,7 +94,13 @@ class LibraryAPI:
         5. ``pg_notify('library_changed', ...)`` on the caller's session
            (commit-coupled) + ``core.library_track_added`` bus event.
 
-        ``metadata`` may carry ``album`` / ``duration_sec``. ``added_via``
+        ``metadata`` may carry ``album`` / ``duration_sec``, and ``year``
+        (an int, e.g. ``MusicBrainzMatch.year`` from the lookup the
+        pipeline already made): kept as the track's year with
+        ``year_source='musicbrainz'`` until the file's own tags give one.
+        The row's tags are read again for genre and year by the tag
+        backfill (``tags_version`` back to 0), since the file may be new.
+        ``added_via``
         must satisfy the core CHECK ('voice' | 'manual'); ``source`` is an
         open enum, registered here on first use (§6.4).
         """
@@ -102,6 +108,9 @@ class LibraryAPI:
         meta = dict(metadata or {})
         album = meta.get("album")
         duration_sec = meta.get("duration_sec")
+        from domovoi.library_genres import parse_year
+
+        year = parse_year(meta.get("year"))
 
         # 1 — sanitize-before-insert.
         final_path = self._move_to_canonical(Path(file_path), title, artist)
@@ -126,7 +135,11 @@ class LibraryAPI:
                         UPDATE library_tracks
                         SET file_path = :fp, title = :title, artist = :artist,
                             album = COALESCE(:album, album),
-                            duration_sec = COALESCE(:dur, duration_sec)
+                            duration_sec = COALESCE(:dur, duration_sec),
+                            year = COALESCE(year, CAST(:year AS smallint)),
+                            year_source = CASE WHEN year IS NULL AND CAST(:year AS smallint) IS NOT NULL
+                                               THEN 'musicbrainz' ELSE year_source END,
+                            tags_version = 0
                         WHERE id = :id
                         RETURNING {_TRACK_COLUMNS}
                         """
@@ -138,6 +151,7 @@ class LibraryAPI:
                         "artist": artist,
                         "album": album,
                         "dur": duration_sec,
+                        "year": year,
                     },
                 )
             ).first()
@@ -148,17 +162,24 @@ class LibraryAPI:
                         f"""
                         INSERT INTO library_tracks
                             (file_path, title, artist, album, duration_sec,
-                             source, source_id, added_via)
+                             source, source_id, added_via, year, year_source)
                         VALUES
                             (:fp, :title, :artist, :album, :dur,
-                             :src, :sid, :via)
+                             :src, :sid, :via, CAST(:year AS smallint),
+                             CASE WHEN CAST(:year AS smallint) IS NULL THEN NULL
+                                  ELSE 'musicbrainz' END)
                         ON CONFLICT (file_path) DO UPDATE SET
                             title = EXCLUDED.title,
                             artist = EXCLUDED.artist,
                             album = EXCLUDED.album,
                             duration_sec = EXCLUDED.duration_sec,
                             source = EXCLUDED.source,
-                            source_id = EXCLUDED.source_id
+                            source_id = EXCLUDED.source_id,
+                            year = COALESCE(library_tracks.year, EXCLUDED.year),
+                            year_source = CASE WHEN library_tracks.year IS NULL
+                                               THEN EXCLUDED.year_source
+                                               ELSE library_tracks.year_source END,
+                            tags_version = 0
                         RETURNING {_TRACK_COLUMNS}
                         """
                     ),
@@ -171,6 +192,7 @@ class LibraryAPI:
                         "src": source,
                         "sid": source_id,
                         "via": added_via,
+                        "year": year,
                     },
                 )
             ).first()

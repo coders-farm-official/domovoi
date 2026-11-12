@@ -1065,7 +1065,7 @@
           "music"
         ],
         "summary": "List Library",
-        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active ``q`` / ``source`` / ``favorited`` filters.\n\nAlways paged (default 50, max 200), as it always was. ``cursor`` (from\nthe previous page's ``next_cursor``) pages by keyset \u2014 rows added,\nremoved or re-sorted while somebody scrolls are neither repeated nor\nskipped \u2014 and is what both clients now send; ``offset`` still works\nfor the installed Android app (web/backend/api/paging.py).\n\nSort options are whitelisted (the ORDER BY can't be user-supplied)\nso a malformed ``sort`` returns 422 rather than a SQL error.\n\n``q`` (web/backend/api/music_search.py, owner 2026-11-11): every word,\npunctuation-, accent- and case-blind, somewhere in the title, artist\nor album \u2014 best match first, ``sort`` ordering the rows that match\nequally well; when no row holds every word, the rows most like the\nquery (typos). ``artist`` (the Artists view): only that performer's\ntracks, every credit that names them (\"Jeezy, T.I.\" is T.I.'s too);\n``album`` narrows that to one of their albums.",
+        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active ``q`` / ``source`` / ``favorited`` filters.\n\nAlways paged (default 50, max 200), as it always was. ``cursor`` (from\nthe previous page's ``next_cursor``) pages by keyset \u2014 rows added,\nremoved or re-sorted while somebody scrolls are neither repeated nor\nskipped \u2014 and is what both clients now send; ``offset`` still works\nfor the installed Android app (web/backend/api/paging.py).\n\nSort options are whitelisted (the ORDER BY can't be user-supplied)\nso a malformed ``sort`` returns 422 rather than a SQL error.\n\n``q`` (web/backend/api/music_search.py, owner 2026-11-11): every word,\npunctuation-, accent- and case-blind, somewhere in the title, artist\nor album \u2014 best match first, ``sort`` ordering the rows that match\nequally well; when no row holds every word, the rows most like the\nquery (typos). ``artist`` (the Artists view): only that performer's\ntracks, every credit that names them (\"Jeezy, T.I.\" is T.I.'s too);\n``album`` narrows that to one of their albums. ``genre`` (the Genres\nview, V050): only that genre's tracks.",
         "operationId": "list_library_api_music_library_get",
         "parameters": [
           {
@@ -1124,6 +1124,25 @@
               "title": "Album"
             },
             "description": "With artist: only this album of theirs ('' = tracks with no album)."
+          },
+          {
+            "name": "genre",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only tracks of this genre, a key as GET /api/music/genres names it (a track with several genres is under each); '' = tracks whose tags have been read and have no genre.",
+              "title": "Genre"
+            },
+            "description": "Only tracks of this genre, a key as GET /api/music/genres names it (a track with several genres is under each); '' = tracks whose tags have been read and have no genre."
           },
           {
             "name": "source",
@@ -2625,6 +2644,171 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ArtistDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/genres": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Genres",
+        "description": "One page of the library's genres (module docstring), with the read's\nprogress. With ``q``, best match first, then ``sort``.",
+        "operationId": "list_genres_api_music_genres_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search genre names (the library search's rules).",
+              "title": "Q"
+            },
+            "description": "Search genre names (the library search's rules)."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "name",
+                "tracks"
+              ],
+              "type": "string",
+              "default": "name",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenrePage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/genre": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Genre Detail",
+        "description": "One genre: its name, track count and every track id (artist order,\nas ``GET /api/music/library?genre=&sort=artist`` lists them), for play\n/ shuffle in a room.",
+        "operationId": "genre_detail_api_music_genre_get",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "description": "A genre key from GET /api/music/genres; '' = tracks with no genre.",
+              "title": "Key"
+            },
+            "description": "A genre key from GET /api/music/genres; '' = tracks with no genre."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenreDetail"
                 }
               }
             }
@@ -21599,6 +21783,149 @@
           "rel_path"
         ],
         "title": "FromDocument"
+      },
+      "GenreDetail": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "track_count": {
+            "type": "integer",
+            "title": "Track Count"
+          },
+          "track_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Track Ids"
+          },
+          "track_ids_truncated": {
+            "type": "boolean",
+            "title": "Track Ids Truncated",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "track_count",
+          "track_ids"
+        ],
+        "title": "GenreDetail"
+      },
+      "GenrePage": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GenreRow"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "tags_read": {
+            "type": "integer",
+            "title": "Tags Read",
+            "default": 0
+          },
+          "tags_total": {
+            "type": "integer",
+            "title": "Tags Total",
+            "default": 0
+          },
+          "reading": {
+            "type": "boolean",
+            "title": "Reading",
+            "default": false
+          },
+          "untagged_count": {
+            "type": "integer",
+            "title": "Untagged Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items",
+          "limit"
+        ],
+        "title": "GenrePage"
+      },
+      "GenreRow": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "track_count": {
+            "type": "integer",
+            "title": "Track Count"
+          },
+          "cover_track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Track Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "track_count"
+        ],
+        "title": "GenreRow"
       },
       "Greeting": {
         "properties": {

@@ -95,7 +95,8 @@ def test_the_worker_order_comment_matches_the_registrations() -> None:
         registered.extend([direct] if direct else printing)
     names = [getattr(importlib.import_module(modules[cls]), cls).name for cls in registered]
     assert said == names
-    assert names[-3:] == ["library_alias_fetch", "lyrics_scan", "lyrics_fetch"]
+    assert names[-5:-2] == ["library_alias_fetch", "lyrics_scan", "lyrics_fetch"]
+    assert names[-2:] == ["library_tag_backfill", "library_year_fetch"]  # V050
     assert names[names.index("memory_extractor") + 1] == "lyrics_index"
 
 

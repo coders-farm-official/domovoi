@@ -41,7 +41,10 @@ no rooms and that is a no-op; the upload asks the core instead.
 Metadata strategy:
 
   1. ID3 / Vorbis / MP4 / ASF tags via ``domovoi.media_tags`` (title,
-     artist, album, duration in seconds).
+     artist, album, duration in seconds; since V050 also genre and year,
+     by ``domovoi.library_genres``' rules, with the reader's
+     ``TAGS_VERSION`` stamped on the row — rows already there get theirs
+     from ``workers/library_tag_backfill.py``).
   2. If title or artist is empty, parse the filename. Reuses the core
      ``library_naming.parse_title_artist`` so the "Artist - Title.mp3"
      parsing rules are consistent across every ingest path (this
@@ -75,10 +78,15 @@ from sqlalchemy import text
 from domovoi import executors
 from domovoi.config import settings
 from domovoi.db.session import session_scope
+from domovoi.library_genres import TAGS_VERSION
 from domovoi.library_naming import parse_title_artist as _parse_title_artist
 from domovoi.mpd_library_sync import update_rooms_for
 
 log = logging.getLogger(__name__)
+
+
+# TAGS_VERSION (domovoi/library_genres.py): the version of what
+# _read_tags reads, stamped on every row it wrote genre and year for.
 
 
 # Extensions the tag reader (domovoi.media_tags) reads. We skip everything else to avoid
@@ -90,8 +98,82 @@ _AUDIO_EXTENSIONS = frozenset({
 })
 
 
+#: Where each format keeps the genre: ID3 TCON, Vorbis / APE GENRE, MP4
+#: ©gen (text) and gnre (an ID3v1 number plus one), ASF WM/Genre.
+_GENRE_KEYS = ("TCON", "genre", "©gen", "WM/Genre", "Genre")
+#: The original year first (a remaster's own date is not the song's era),
+#: then the date: ID3v2.4 TDOR, ID3v2.3 TORY, the TXXX / Vorbis / APE /
+#: MP4 freeform originaldate and originalyear taggers write, ASF
+#: WM/OriginalReleaseYear; then TDRC, TYER, Vorbis DATE / YEAR, MP4 ©day,
+#: ASF WM/Year.
+_ORIGINAL_YEAR_KEYS = (
+    "TDOR", "TORY", "TXXX:originalyear", "TXXX:ORIGINALYEAR", "TXXX:originaldate",
+    "TXXX:ORIGINALDATE", "originaldate", "originalyear",
+    "----:com.apple.iTunes:ORIGINALDATE", "----:com.apple.iTunes:originaldate",
+    "----:com.apple.iTunes:ORIGINALYEAR", "WM/OriginalReleaseYear",
+)
+_YEAR_KEYS = ("TDRC", "TYER", "date", "year", "©day", "WM/Year", "Year")
+
+
+def _text_values(tags: Any, *keys: str) -> list[str]:
+    """Every value of ``keys``, in order, as text: an ID3 TXXX frame's
+    texts, an MP4 freeform item's UTF-8 bytes, an ASF value's text; an MP4
+    ``gnre`` number is never here (see :func:`_genre_values`)."""
+    out: list[str] = []
+    for key in keys:
+        for value in tags.get(key):
+            if value is None:
+                continue
+            texts = getattr(value, "text", None)
+            if isinstance(texts, list):
+                out.extend(str(t) for t in texts)
+            elif isinstance(value, (bytes, bytearray)):
+                out.append(bytes(value).decode("utf-8", "replace").rstrip("\x00"))
+            else:
+                out.append(str(value))
+    return [t.strip() for t in out if t and t.strip()]
+
+
+def _genre_values(tags: Any) -> list[str]:
+    """The file's genre values as text; an MP4 ``gnre`` atom (a big-endian
+    ID3v1 number plus one) becomes the number, which genre_keys reads."""
+    values = _text_values(tags, *_GENRE_KEYS)
+    for raw in tags.get("gnre"):
+        n: int | None = None
+        if isinstance(raw, (bytes, bytearray)) and 1 <= len(raw) <= 2:
+            n = int.from_bytes(bytes(raw), "big")
+        elif isinstance(raw, int) and not isinstance(raw, bool):
+            n = raw
+        if n is not None and n >= 1:
+            values.append(str(n - 1))
+    return values
+
+
+def _year_of(tags: Any) -> int | None:
+    from domovoi.library_genres import bounded, parse_year
+
+    for keys in (_ORIGINAL_YEAR_KEYS, _YEAR_KEYS):
+        for value in bounded(_text_values(tags, *keys)):
+            year = parse_year(value)
+            if year is not None:
+                return year
+    return None
+
+
+def _no_nul(text: str | None) -> str | None:
+    """A tag value without NUL characters, which Postgres refuses in text
+    (one in a title would abort the whole sweep's transaction); None when
+    nothing else is left."""
+    if text is None:
+        return None
+    cleaned = text.replace("\x00", "").strip()
+    return cleaned or None
+
+
 def _read_tags(path: Path) -> dict[str, Any]:
-    """Pull title / artist / album / duration_sec from a file's tags.
+    """Pull title / artist / album / duration_sec / genre / genre_keys /
+    year from a file's tags (genre and year since V050; the rules are
+    ``domovoi.library_genres``).
 
     Returns a dict with whatever was present; missing keys map to None.
     Best-effort: a corrupt file or a format the reader doesn't know just
@@ -116,7 +198,8 @@ def _read_tags(path: Path) -> dict[str, Any]:
     if f is None:
         return {}
 
-    out: dict[str, Any] = {"title": None, "artist": None, "album": None, "duration_sec": None}
+    out: dict[str, Any] = {"title": None, "artist": None, "album": None, "duration_sec": None,
+                           "genre": None, "genre_keys": None, "year": None}
 
     if f.duration is not None and f.duration > 0:
         out["duration_sec"] = int(f.duration)
@@ -125,12 +208,22 @@ def _read_tags(path: Path) -> dict[str, Any]:
     if tags is None:
         return out
 
-    out["title"] = tags.first("TIT2", "title", "©nam", "Title")
+    out["title"] = _no_nul(tags.first("TIT2", "title", "©nam", "Title"))
     # WMA keeps the artist in Author and the album in WM/AlbumTitle, and
     # MP4 the album artist in aART (read since 2026-10-15).
-    out["artist"] = tags.first("TPE1", "artist", "©ART", "Artist", "Author", "albumartist",
-                               "TPE2", "aART", "WM/AlbumArtist")
-    out["album"] = tags.first("TALB", "album", "©alb", "Album", "WM/AlbumTitle")
+    out["artist"] = _no_nul(tags.first("TPE1", "artist", "©ART", "Artist", "Author", "albumartist",
+                                       "TPE2", "aART", "WM/AlbumArtist"))
+    out["album"] = _no_nul(tags.first("TALB", "album", "©alb", "Album", "WM/AlbumTitle"))
+    # A file whose genre or date is malformed still gives its title.
+    try:
+        from domovoi.library_genres import display_genre, genre_keys
+
+        values = _genre_values(tags)
+        out["genre"] = display_genre(values)
+        out["genre_keys"] = genre_keys(values) or None
+        out["year"] = _year_of(tags)
+    except Exception as e:  # noqa: BLE001 — best-effort, like the read itself
+        log.debug("genre/year read failed for %s: %s", path, e)
     return out
 
 
@@ -166,6 +259,9 @@ def _resolve_metadata_for(path: Path) -> dict[str, Any]:
         "artist": artist,
         "album": tags.get("album"),
         "duration_sec": tags.get("duration_sec"),
+        "genre": tags.get("genre"),
+        "genre_keys": tags.get("genre_keys"),
+        "year": tags.get("year"),
     }
 
 
@@ -224,8 +320,11 @@ async def _insert_track(session: Any, path: Path, *, known_new: bool = False) ->
         text(
             """
             INSERT INTO library_tracks
-              (file_path, title, artist, album, duration_sec, added_via)
-            SELECT :fp, :t, :a, :al, :d, 'manual'
+              (file_path, title, artist, album, duration_sec, added_via,
+               genre, genre_keys, year, year_source, tags_version)
+            SELECT :fp, :t, :a, :al, :d, 'manual',
+                   :g, CAST(:gk AS text[]), CAST(:y AS smallint),
+                   CASE WHEN CAST(:y AS smallint) IS NULL THEN NULL ELSE 'tag' END, :tv
             WHERE NOT EXISTS (
               SELECT 1 FROM library_tracks WHERE file_path = :fp
             )
@@ -237,6 +336,10 @@ async def _insert_track(session: Any, path: Path, *, known_new: bool = False) ->
             "a": meta["artist"],
             "al": meta["album"],
             "d": meta["duration_sec"],
+            "g": meta.get("genre"),
+            "gk": meta.get("genre_keys"),
+            "y": meta.get("year"),
+            "tv": TAGS_VERSION,
         },
     )
     return (result.rowcount or 0) > 0

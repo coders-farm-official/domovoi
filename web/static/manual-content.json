@@ -107,6 +107,12 @@
     "screen": "Music"
    }
   },
+  "music/genres": {
+   "dashboard": "#music/genres",
+   "app": {
+    "dashboard": true
+   }
+  },
   "podcasts": {
    "dashboard": "#podcasts",
    "app": {
@@ -1565,6 +1571,7 @@
     "upload",
     "library",
     "favorites",
+    "genre",
     "visualizer",
     "milkdrop",
     "preset",
@@ -1604,6 +1611,10 @@
       },
       {
        "text": "Playlists and favorites: [Music → Playlists](route:music/playlists)."
+      },
+      {
+       "text": "Browse by genre: [Music → Genres](route:music/genres). Each genre opens its songs, with **play**, **shuffle** and **add to queue** for a room, and **play here** / **shuffle here** for this browser. The genres come from your files' own tags (\"Rock; Indie\" counts under both; \"Hip-Hop\" and \"Rap\" are one). Songs whose tags name no genre are the **no genre** row at the end. Right after an update the server reads the genres of the songs already in your library in the background; until it is done the tab says \"reading genres from your files… N of M\".",
+       "only": "dashboard"
       },
       {
        "text": "Each queued song says which device added it."

@@ -10,6 +10,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Constant Rate",
@@ -28,6 +33,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Xiph",
@@ -46,6 +56,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Raw",
@@ -64,6 +79,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Aiff Artist",
@@ -79,6 +99,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -94,6 +119,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -124,6 +154,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -165,6 +200,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -191,6 +231,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -206,6 +251,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -227,6 +277,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -267,6 +322,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -298,6 +358,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -329,6 +394,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -360,6 +430,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -388,6 +463,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": 2024
+   },
    "library": {
     "album": "River Door",
     "artist": "The Example Band",
@@ -406,6 +486,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Ärtist",
@@ -424,6 +509,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "VBR",
@@ -441,6 +531,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": "Ape Album",
     "artist": null,
@@ -462,6 +557,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": "Asf Album",
     "artist": "Asf Author",
@@ -495,6 +595,11 @@
     }
    ],
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -526,6 +631,11 @@
     }
    ],
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -539,6 +649,11 @@
    "audiobook": {},
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {},
    "lyrics": null,
    "pictures": []
@@ -552,6 +667,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Chunk Artist",
@@ -574,6 +694,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Hidden",
@@ -595,6 +720,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": "Legacy",
     "artist": "Old iTunes",
@@ -626,6 +756,11 @@
     "216381b5dad6fd5c",
     "image/png"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": "Atom Album",
     "artist": "Album Artist Atom",
@@ -650,6 +785,11 @@
    "audiobook": {},
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {},
    "lyrics": null,
    "pictures": []
@@ -663,6 +803,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -691,6 +836,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -725,6 +875,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -755,6 +910,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -768,6 +928,11 @@
    "audiobook": {},
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {},
    "lyrics": null,
    "pictures": []
@@ -781,6 +946,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": "V1 Album",
     "artist": "V1 Artist",
@@ -799,6 +969,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Zlib",
@@ -824,6 +999,11 @@
     "c49a2099cb1d4733",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Tag Wide",
@@ -855,6 +1035,11 @@
     "c49a2099cb1d4733",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Compressed Artist",
@@ -879,6 +1064,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": "Split",
     "artist": "First Artist",
@@ -897,6 +1087,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "iTunes Seven",
@@ -922,6 +1117,11 @@
     "c49a2099cb1d4733",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": null,
@@ -949,6 +1149,11 @@
     "0caa0399aa3eea03",
     "image/jpeg"
    ],
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Only Album Artist",
@@ -995,6 +1200,11 @@
    },
    "chapters": null,
    "cover": null,
+   "genre_year": {
+    "genre": null,
+    "genre_keys": null,
+    "year": null
+   },
    "library": {
     "album": null,
     "artist": "Ape Artist",

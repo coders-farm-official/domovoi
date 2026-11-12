@@ -168,11 +168,18 @@ class _Resp:
             raise ValueError("no json")
         return self._data
 
+    # The client streams the body (capped) since the V050 review.
+    def iter_content(self, _size: int = 1):
+        yield b"<html>not json</html>" if self._data is None else json.dumps(self._data).encode()
+
+    def close(self) -> None:
+        pass
+
 
 def _fake_get(monkeypatch, answers: list[Any], calls: list[dict]) -> None:
     import requests
 
-    def fake_get(url, params=None, headers=None, timeout=None):
+    def fake_get(url, params=None, headers=None, timeout=None, **_kw):
         calls.append({"url": url, "params": dict(params or {}), "headers": dict(headers or {}),
                       "timeout": timeout, "at": time.monotonic()})
         answer = answers.pop(0) if answers else _Resp(200, {"artists": []})
