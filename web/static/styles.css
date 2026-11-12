@@ -590,22 +590,22 @@ table.tbl .actions { text-align: right; }
 }
 
 /* ================================================================
-   Docked player (player.jsx MiniPlayer, PlayerSheet)
+   Docked player (player.jsx MiniPlayer)
    Desktop: one 64px bar — cover and title | transport over a seek bar |
    sleep timer, volume, queue, cast target and "open full player". The
    queue and cast target float above it (inline styles in player.jsx).
+   The cover and title are one button: it opens the expanded player
+   (below) at every width, as "open full player" and "open player" do.
    Phone (760px and below): the same bar keeps only cover, title/artist,
    play/pause, next and "open player" (.mp-desk hides the rest, .mp-phone
    is what only a phone shows), every control a 44px target, with a 2px
-   position line on its top edge. "open player" brings up .mp-sheet over
-   the whole screen above the tab strip: seek, transport, volume, sleep,
-   play on, queue.
+   position line on its top edge. "open player" brings up the expanded
+   player (.mp-sheet, below) over the screen above the tab strip.
    Designed for 320, 375, 414 and 760px wide. The bar's fixed parts are
    200px (12 + 4 padding, two 4px gaps, play + next 88, open 44, close 44),
    so the title column gets W - 200 and its text W - 254 after the cover
    and its gap: 66 / 121 / 160 / 506px at 320 / 375 / 414 / 760 (106 at
-   360), ellipsized. The sheet's content column
-   is W - 32: 288 / 343 / 382 / 728px, the 200px cover fits all four.
+   360), ellipsized.
    ================================================================ */
 .mini-player {
   position: fixed; left: 0; right: 0; bottom: var(--dock-bottom, 0px); z-index: 45;
@@ -615,8 +615,15 @@ table.tbl .actions { text-align: right; }
   gap: 12px; padding: 8px 14px; height: 64px;
 }
 .mini-player .mp-phone { display: none; }
+.mini-player.under-sheet { visibility: hidden; }
 .mp-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.mp-text { min-width: 0; }
+button.mp-info {
+  font: inherit; color: inherit; text-align: left; background: none; border: 0; padding: 0; margin: 0;
+  cursor: pointer; justify-self: start; max-width: 100%; border-radius: var(--r-sm);
+}
+button.mp-info:hover .mp-title { text-decoration: underline; }
+.mp-text { display: block; min-width: 0; }
+.mp-title, .mp-sub { display: block; }
 .mp-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-sub { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-center { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 280px; }
@@ -637,7 +644,7 @@ html.mp-docked { --player-h: 64px; }
 .mp-line { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--border-soft); pointer-events: none; }
 .mp-line > span { display: block; height: 100%; background: var(--brand); }
 
-/* queue rows (the desktop's floating queue and the phone sheet) */
+/* queue rows (the desktop's floating queue and the expanded player) */
 .mp-q-row {
   display: grid; grid-template-columns: 20px 1fr 22px; gap: 8px; align-items: center;
   padding: 7px 12px; cursor: grab; border-bottom: 1px solid var(--border-soft);
@@ -654,10 +661,6 @@ html.mp-docked { --player-h: 64px; }
   border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg);
 }
 
-/* the phone sheet — never shown wider than a phone */
-.mp-sheet { display: none; }
-@keyframes mp-sheet-in { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
-
 @media (max-width: 760px) {
   .mini-player { grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; padding: 0 4px 0 12px; }
   .mini-player .mp-desk { display: none; }
@@ -667,127 +670,222 @@ html.mp-docked { --player-h: 64px; }
   .mini-player .mp-side { gap: 0; }
   .mini-player .mp-transport { gap: 0; }
   .mini-player .btn-icon { width: 44px; height: 44px; }
-
-  .mp-sheet {
-    position: fixed; left: 0; right: 0; top: 0; bottom: var(--dock-bottom, 0px); z-index: 48;
-    display: flex; flex-direction: column;
-    background: var(--surface);   /* the strip's own top border edges it */
-    animation: mp-sheet-in var(--dur-slow) var(--ease);
-  }
-  .mp-sheet .btn-icon { width: 44px; height: 44px; }
-  .mp-sheet-head {
-    flex: none; display: flex; align-items: center; gap: 4px;
-    height: var(--topbar-h); padding: 0 12px 0 4px;
-    border-bottom: 1px solid var(--border);
-  }
-  .mp-sheet-title { font-size: 13px; font-weight: 600; }
-  .mp-sheet-body {
-    flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-    display: flex; flex-direction: column; gap: 16px;
-    padding: 16px 16px 24px;
-  }
-  /* The body scrolls; its sections keep their height (a section's
-     overflow:hidden would otherwise let the column squash it). */
-  .mp-sheet-body > * { flex: none; min-width: 0; }
-  .mp-sheet-now { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-  .mp-sheet-meta { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
-  .mp-sheet-name {
-    width: 100%; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  }
-  .mp-sheet-by { width: 100%; font-size: 13px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mp-sheet-seek { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
-  .mp-sheet-seek .mono { min-width: 40px; font-size: 11px; color: var(--fg-muted); }
-  .mp-sheet-seek .mono:first-child { text-align: right; }
-  /* A 44px band to tap, around a 4px bar. */
-  .mp-sheet-track { height: 44px; display: flex; align-items: center; }
-  .mp-sheet-track > div { flex: 1; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; }
-  .mp-sheet-track > div > span { display: block; height: 100%; background: var(--brand); }
-  .mp-sheet-transport { display: flex; align-items: center; justify-content: center; gap: 24px; }
-  .mp-sheet .mp-sheet-play { width: 56px; height: 56px; border-radius: 50%; }
-  .mp-sheet-vol { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; }
-  .mp-sheet-vol input[type="range"] { width: 100%; height: 44px; margin: 0; accent-color: var(--brand); }
-  .mp-sheet-sleep { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; color: var(--brand-ink); }
-  .mp-sheet-sec {
-    background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
-    box-shadow: var(--inner-highlight); overflow: hidden;
-  }
-  .mp-sheet-sec-head {
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    min-height: 44px; padding: 0 0 0 14px;
-    font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border);
-  }
-  .mp-sheet .mp-q-row { grid-template-columns: 24px minmax(0, 1fr) 44px; min-height: 48px; padding: 2px 0 2px 12px; }
-  .mp-sheet .mp-q-list > .mp-q-row:last-child { border-bottom: none; }
-  .mp-sheet .mp-q-main { align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
-  .mp-sheet .mp-q-title { font-size: 13px; }
-  .mp-sheet .mp-q-sub { font-size: 11px; }
-  .mp-sheet .mp-q-save { padding: 12px; gap: 8px; }
-  .mp-sheet .mp-q-save input { height: 44px; font-size: 13px; }
-  .mp-sheet .mp-q-save .btn { height: 44px; }
-}
-@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
-  .mp-sheet { animation: none; }
 }
 
-/* The Music page's Player tab (music_player_panel.jsx NowPlayingPanel).
-   On a phone the 220px cover sits above the title instead of beside it
-   (beside it left the title 63px at 375px), and the transport and EQ
-   preset rows wrap instead of running off the card. */
-.np-head { display: grid; grid-template-columns: 220px 1fr; gap: 20px; padding: 20px; align-items: center; }
+/* ================================================================
+   The expanded player (player.jsx PlayerSheet) — every width
+   Since 2026-11-12 (it was the Music page's Player tab, and a phone-only
+   sheet). It covers everything but the navigation: on a desktop the
+   column right of the sidebar, top to bottom (the topbar and the docked
+   bar under it), so another page stays one click away; on a phone the
+   screen above the tab strip. It grows out of the docked bar: player.jsx
+   animates its clip-path from the bar's box to its own (280 ms in, 240 ms
+   out, var(--ease)), a fade with prefers-reduced-motion.
+   Desktop (wider than 1100px): the player on the left (320px: cover,
+   title, seek, transport, volume and speed; then sleep / offline / spoken
+   skips / chapters; then "play on"), the stage on the right. Narrower: one
+   column, at most 720px, the stage under the transport. The stage is the
+   panel's tabs (Lyrics · Equalizer · Queue · Hide) over the visualizer
+   (visualizer.jsx: the MilkDrop picture behind the panel, which is
+   see-through by the visualizer bar's "panel" slider), or the panel as a
+   plain card with the visualizer off. --mp-stage-h is its height.
+   On a phone every control is a 44px target (the play button 56px), the
+   header carries a grip and takes a swipe down. The content column is
+   W - 32: 288 / 343 / 382 / 728px at 320 / 375 / 414 / 760; the 200px
+   cover fits all four.
+   ================================================================ */
+.mp-sheet {
+  position: fixed; left: var(--sidebar-w); right: 0; top: 0; bottom: 0; z-index: 48;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  --mp-stage-h: max(420px, calc(var(--app-h) - var(--topbar-h) - 120px));
+}
+.mp-sheet-inner { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mp-sheet-head {
+  position: relative; flex: none; display: flex; align-items: center; gap: 4px;
+  height: var(--topbar-h); padding: 0 16px 0 12px;
+  border-bottom: 1px solid var(--border); touch-action: none;
+}
+.mp-sheet-title { font-size: 13px; font-weight: 600; }
+.mp-sheet-grip { display: none; }
+.mp-sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.mp-sheet-grid {
+  display: grid; grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-areas: "now stage" "more stage" "on stage";
+  grid-template-rows: auto auto 1fr;
+  gap: 16px 24px; align-items: start;
+  max-width: 1400px; margin: 0 auto; padding: 24px;
+}
+/* Its parts keep their height; nothing in them widens the screen. */
+.mp-sheet-grid > * { min-width: 0; }
+.mp-sheet-now { grid-area: now; display: flex; flex-direction: column; gap: 12px; }
+.mp-sheet-now > :first-child { align-self: center; }
+.mp-sheet-stage { grid-area: stage; }
+.mp-sheet-more { grid-area: more; }
+.mp-sheet-on { grid-area: on; }
+.mp-sheet-meta { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.mp-sheet-name {
+  width: 100%; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.mp-sheet-by { width: 100%; font-size: 13px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-sheet-album { width: 100%; font-size: 13px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-sheet-seek { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.mp-sheet-seek .mono { min-width: 40px; font-size: 11px; color: var(--fg-muted); }
+.mp-sheet-seek .mono:first-child { text-align: right; }
+/* A 44px band to tap, around a 4px bar. */
+.mp-sheet-track { height: 44px; display: flex; align-items: center; }
+.mp-sheet-track > div { flex: 1; height: 4px; border-radius: 2px; background: var(--sunken); overflow: hidden; }
+.mp-sheet-track > div > span { display: block; height: 100%; background: var(--brand); }
+.mp-sheet-transport { display: flex; align-items: center; justify-content: center; gap: 24px; }
+.mp-sheet .mp-sheet-transport .btn-icon { width: 44px; height: 44px; }
+.mp-sheet .mp-sheet-play { width: 56px; height: 56px; border-radius: 50%; }
+.mp-sheet-vol { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.mp-sheet-vol .btn-icon { width: 44px; height: 44px; }
+.mp-sheet-vol input[type="range"] { width: 100%; height: 32px; margin: 0; accent-color: var(--brand); }
+.mp-sheet-speed {
+  font: inherit; font-size: 12px; height: 32px; padding: 0 6px;
+  border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg);
+}
+.mp-sheet-sec {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--inner-highlight); overflow: hidden;
+}
+.mp-sheet-sec-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 44px; padding: 0 4px 0 14px;
+  font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border);
+}
+.mp-sheet-more { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
+.mp-sheet-more:empty { display: none; }
+.mp-sheet .mp-q-row { grid-template-columns: 24px minmax(0, 1fr) 44px; min-height: 48px; padding: 2px 0 2px 12px; }
+.mp-sheet .mp-q-row .btn-icon { width: 44px; height: 44px; }
+.mp-sheet .mp-q-list > .mp-q-row:last-child { border-bottom: none; }
+.mp-sheet .mp-q-main { align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
+.mp-sheet .mp-q-title { font-size: 13px; }
+.mp-sheet .mp-q-sub { font-size: 11px; }
+.mp-sheet .mp-q-save { padding: 12px; gap: 8px; }
+.mp-sheet .mp-q-save input { height: 44px; font-size: 13px; }
+.mp-sheet .mp-q-save .btn { height: 44px; }
+.mp-sheet .np-eq-presets { flex-wrap: wrap; }
+
+/* The panel's tabs: Lyrics · Equalizer · Queue · Hide. */
+.mp-tabs { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.mp-tabs::-webkit-scrollbar { display: none; }
+.mp-tab {
+  font: inherit; font-size: 13px; font-weight: 500; color: var(--fg-muted);
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  min-height: 40px; padding: 0 14px; cursor: pointer; white-space: nowrap; flex: none;
+}
+.mp-tab:hover { color: var(--fg); }
+.mp-tab.on { color: var(--fg); border-bottom-color: var(--brand); }
+/* The panel: a card as tall as the stage; its content scrolls inside it
+   (the lyric list scrolls itself). Over the visualizer it fills what the
+   visualizer's bar leaves and takes the bar's opacity. */
+.mp-panel {
+  display: flex; flex-direction: column; min-height: 0; height: var(--mp-stage-h);
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--inner-highlight); overflow-y: auto; overscroll-behavior: contain;
+}
+.mp-panel > * { flex: none; }
+.mp-panel-lyrics { overflow: hidden; }
+
+.viz-over .mp-panel { flex: 1 1 auto; height: auto; }
+
+@media (max-width: 1100px) {
+  .mp-sheet-grid {
+    grid-template-columns: minmax(0, 1fr); grid-template-areas: "now" "stage" "more" "on";
+    grid-template-rows: none; max-width: 720px;
+  }
+  .mp-sheet { --mp-stage-h: max(360px, min(70vh, 560px)); }
+}
 @media (max-width: 760px) {
-  .np-head { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .np-head > :first-child { justify-self: center; }
-  .np-transport { flex-wrap: wrap; }
-  .np-transport .btn-icon { width: 44px; height: 44px; }
-  .np-eq-presets { flex-wrap: wrap; }
+  .mp-sheet { left: 0; bottom: var(--dock-bottom, 0px); --mp-stage-h: max(320px, min(65vh, 520px)); }
+  .mp-sheet-head { padding: 0 12px 0 4px; }
+  .mp-sheet-grip {
+    display: block; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px;
+    margin-left: -18px; border-radius: var(--r-full); background: var(--border);
+  }
+  .mp-sheet-grid { padding: 16px 16px 24px; gap: 16px; }
+  .mp-sheet .btn-icon { width: 44px; height: 44px; }
+  .mp-sheet-vol input[type="range"] { height: 44px; }
+  .mp-sheet .mp-sheet-speed { height: 44px; }
+  .mp-tab { min-height: 44px; padding: 0 12px; }
+  .mp-sheet .np-chip { min-height: 44px; padding: 0 14px !important; }
+  .mp-sheet .mp-sheet-more .btn { height: 44px; }
+  .mp-sheet .mp-sheet-more select, .mp-sheet .mp-panel select { height: 44px !important; }
+  .mp-sheet .np-check, .mp-sheet .viz-toggle { min-height: 44px; }
 }
 
-/* The Now Playing visualizer (visualizer.jsx). The stage is 16:9, no taller
-   than 60% of the window; full screen it is the whole screen. The picture is
-   user-content imagery (the preset draws it); the chrome over it (the name,
-   the bar, the preset list) sits on overlay chips so it reads in both themes
-   over any picture. The two halves are transparent buttons: previous / next
-   preset. The bar shows on hover or focus, and always on a touch screen. */
-.viz-head { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 8px; }
+/* The visualizer (visualizer.jsx): the expanded player's stage. The
+   MilkDrop picture fills the stage (--mp-stage-h tall), BEHIND the panel;
+   full screen it is the whole screen, alone. The picture is user-content
+   imagery (the preset draws it); the chrome over it (the name, the bar, the
+   preset list) sits on overlay chips so it reads in both themes over any
+   picture. The bar (previous / next preset, random, lock, the list, the
+   panel's opacity, full screen) sits under the panel; full screen it shows
+   on hover or focus, and always on a touch screen. */
+.viz-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.viz-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; min-height: 40px; }
+.viz-head > .viz-toggle, .viz-head > .viz-note, .viz-head > .viz-note-inline { margin-left: auto; }
 .viz-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); cursor: pointer; }
 .viz-note, .viz-note-inline { font-size: 12px; color: var(--fg-muted); }
 .viz-note { padding: 4px 0; }
+.viz-bars { padding: 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--sunken); }
+/* The stage: the picture fills it, under the panel (.viz-over) and the
+   visualizer's own row (.viz-ctl: the preset's name, then the bar). */
 .viz-stage {
-  position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: 60vh; overflow: hidden;
+  position: relative; width: 100%; height: var(--mp-stage-h, 420px); overflow: hidden;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
   border-radius: var(--r-md); border: 1px solid var(--border); background: var(--sunken);
   outline: none;
 }
 .viz-stage:focus-visible { box-shadow: 0 0 0 2px var(--brand-ring); }
-.viz-stage.fs, .viz-stage:fullscreen { max-height: none; aspect-ratio: auto; width: 100vw; height: 100vh; border: 0; border-radius: 0; }
+.viz-stage.fs, .viz-stage:fullscreen { width: 100vw; height: 100vh; padding: 0; border: 0; border-radius: 0; }
 .viz-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.viz-wait {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 13px; color: var(--fg-muted); padding: 16px; text-align: center;
+.viz-over { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* See-through, the panel's quieter text moves toward --fg so it still reads
+   at 4.5:1 at the default 80 % over ANY picture, black to white (worst
+   case, 2026-11-12, light / dark: muted 5.6 / 5.9, faint 4.9 / 5.3; with
+   the plain tokens faint fell to 3.5). Below 80 % it is the person's
+   choice (30 % at least). The base values are read on .viz-over so the
+   panel's own definitions don't refer to themselves. */
+.viz-over {
+  --mp-base-muted: var(--fg-muted); --mp-base-subtle: var(--fg-subtle); --mp-base-faint: var(--fg-faint);
 }
-.viz-half {
-  position: absolute; top: 0; bottom: 0; width: 50%; padding: 0; margin: 0;
-  border: 0; background: transparent; cursor: pointer;
+.viz-over > * {
+  --fg-muted: color-mix(in srgb, var(--mp-base-muted) 70%, var(--fg));
+  --fg-subtle: color-mix(in srgb, var(--mp-base-subtle) 70%, var(--fg));
+  --fg-faint: color-mix(in srgb, var(--mp-base-faint) 65%, var(--fg));
 }
-.viz-half.left { left: 0; cursor: w-resize; }
-.viz-half.right { right: 0; cursor: e-resize; }
-.viz-half:focus-visible { box-shadow: inset 0 0 0 2px var(--brand-ring); outline: none; }
+.viz-ctl {
+  position: relative; z-index: 1; flex: none; margin-top: auto;
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.viz-stage.fs .viz-ctl { position: absolute; left: 12px; right: 12px; bottom: 12px; }
 .viz-name {
-  position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px);
-  padding: 4px 10px; border-radius: var(--r-sm); font-size: 13px; color: var(--fg);
+  min-width: 0; padding: 4px 10px; border-radius: var(--r-sm); font-size: 13px; color: var(--fg);
   background: var(--overlay); border: 1px solid var(--border);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
   opacity: 0; transition: opacity var(--dur-slow, 240ms) var(--ease, ease-out);
 }
 .viz-name.show, .viz-stage:hover .viz-name, .viz-stage:focus-within .viz-name { opacity: 1; }
 .viz-bar {
-  position: absolute; right: 12px; bottom: 12px; display: flex; gap: 2px; padding: 2px;
+  margin-left: auto; display: flex; align-items: center; gap: 2px; padding: 2px; flex: none;
   border-radius: var(--r-sm); background: var(--overlay); border: 1px solid var(--border); color: var(--fg);
-  opacity: 0; transition: opacity var(--dur-slow, 240ms) var(--ease, ease-out);
 }
-.viz-stage:hover .viz-bar, .viz-stage:focus-within .viz-bar { opacity: 1; }
-@media (hover: none) { .viz-bar { opacity: 1; } .viz-bar .btn-icon { width: 44px; height: 44px; } }
+/* Full screen: the picture alone; the bar shows on hover or focus. */
+.viz-stage.fs .viz-bar { opacity: 0; transition: opacity var(--dur-slow, 240ms) var(--ease, ease-out); }
+.viz-stage.fs:hover .viz-bar, .viz-stage.fs:focus-within .viz-bar { opacity: 1; }
+@media (hover: none) { .viz-stage.fs .viz-bar { opacity: 1; } .viz-bar .btn-icon { width: 44px; height: 44px; } }
 .viz-bar .btn-icon[aria-pressed="true"] { color: var(--brand-ink); }
+.viz-opacity { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; color: var(--fg-muted); }
+.viz-opacity input[type="range"] { width: 84px; margin: 0; accent-color: var(--brand); }
+@media (max-width: 760px) {
+  .viz-ctl { flex-wrap: wrap; }
+  .viz-bar { flex-wrap: wrap; }
+  .viz-opacity input[type="range"] { height: 44px; }
+}
 .viz-menu {
   position: absolute; right: 12px; bottom: 56px; width: min(320px, calc(100% - 24px));
   max-height: calc(100% - 72px); display: flex; flex-direction: column;
@@ -814,18 +912,18 @@ html.mp-docked { --player-h: 64px; }
   .viz-name, .viz-bar { transition: none; }
 }
 
-/* Lyrics (lyrics.jsx): the synced view in the Player tab (.lyr-panel), the
-   phone sheet and the desktop bar's floating panel (.lyr-float); a room
+/* Lyrics (lyrics.jsx): the synced view in the expanded player's Lyrics
+   tab (.mp-panel) and the desktop bar's floating panel (.lyr-float); a room
    card's current line; the Jobs tab's card. The current line is the text
    colour at 600, lines already sung are faint, lines to come muted, and a
    gap is a note in the same colours; lyrics.jsx keeps the current line at
    35% of the list's height. A view is --lyr-h tall (its `height` prop),
-   except in the Player tab on a phone, where it is 240px, and in the
-   floating panel, where it fills what the header leaves — and never more
+   except in the expanded player's panel and the floating panel, where it
+   fills what the panel leaves — and never more
    than half the window's height (a phone on its side is wider than 760px
    but only a few hundred pixels tall: the page must stay reachable). */
 .lyr-view { display: flex; flex-direction: column; height: min(var(--lyr-h, 240px), 50vh); min-height: 0; }
-.lyr-float .lyr-view { flex: 1 1 auto; height: auto; }
+.lyr-float .lyr-view, .mp-panel .lyr-view { flex: 1 1 auto; height: auto; }
 .lyr-scroll {
   position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
   padding: 12px 12px 24px; border-radius: var(--r-sm);
@@ -869,16 +967,6 @@ button.lyr-line:hover { background: var(--brand-soft); }
 .lyr-nudge button:hover, .lyr-follow:hover { color: var(--fg); background: var(--brand-soft); }
 .lyr-nudge button:disabled { color: var(--fg-faint); background: transparent; cursor: default; }
 .lyr-follow { margin-left: auto; color: var(--fg); }
-/* The Player tab's and the phone sheet's section header: one toggle. */
-.lyr-sec-toggle {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  width: 100%; margin: 0; padding-right: 14px; border: 0; background: transparent; cursor: pointer;
-  font: inherit; font-size: 13px; font-weight: 600; color: var(--fg); text-align: left;
-}
-.lyr-sec-toggle[aria-expanded="true"] { border-bottom: 1px solid var(--border-soft); }
-.lyr-panel { border-top: 1px solid var(--border-soft); }
-.lyr-panel .lyr-sec-toggle { padding: 10px 20px; }
-.lyr-panel .lyr-view { padding: 0 8px 8px; }
 .lyr-room-line {
   margin-top: 3px; font-size: 12px; font-style: italic; color: var(--fg-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -890,8 +978,6 @@ button.lyr-line:hover { background: var(--brand-soft); }
 .lyr-jobs-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--fg); }
 .lyr-jobs-line { padding-left: 20px; }
 @media (max-width: 760px) {
-  .lyr-panel .lyr-view { height: min(240px, 50vh); }
-  .lyr-panel .lyr-sec-toggle { min-height: 44px; padding: 0 16px; }
   .lyr-nudge button, .lyr-follow { min-height: 32px; padding: 0 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1324,7 +1410,7 @@ button.lyr-line:hover { background: var(--brand-soft); }
    files and nothing else writes them down:
        45        the docked player (player.jsx; "Docked player" above)
        46 / 47   its floating queue and cast target, and their backdrop
-       48        its phone sheet
+       48        the expanded player (PlayerSheet)
        60 / 61   drawers (satellites.jsx)
        70 / 71   nested overlays
        80        full-screen takeovers (doc, sheet, drawings, files)

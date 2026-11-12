@@ -1,7 +1,12 @@
 /* The Now Playing visualizer: MilkDrop presets, drawn by Butterchurn.
  *
- * NowPlayingPanel (music_player_panel.jsx) renders <NowPlayingVisualizer>
- * where the frequency bars used to be. It analyses this browser's own
+ * The expanded player (player.jsx PlayerSheet) renders <NowPlayingVisualizer>
+ * as its stage: the picture is the BACKDROP, and the sheet's panel (lyrics,
+ * equalizer or queue) sits on top of it, see-through by the amount the
+ * "panel" slider in the visualizer's bar sets (30-100 %, 80 % until moved,
+ * remembered per browser). Hide (no panel) leaves the picture alone. With
+ * the visualizer off, unsupported or casting, the panel is a plain card.
+ * It analyses this browser's own
  * playback: the engine taps the player's AnalyserNode (player.jsx's Web
  * Audio graph, after the EQ and before the volume, so turning the volume
  * down doesn't dim the picture). Nothing in the graph changes: the engine
@@ -12,12 +17,16 @@
  * - While the player casts to a room there is no audio here to see, so the
  *   section says so in one quiet line and offers no toggle.
  * - A browser without WebGL 2 (or WebAssembly) keeps the bars and says why.
- * - Click the left / right half for the previous / next preset (arrow keys
- *   when the picture has the focus); the name shows for a moment. Random,
- *   lock (presets change on their own every VIZ_AUTO_SEC unless locked),
- *   the preset list and full screen sit in a small bar over the picture.
- * - Full screen (Fullscreen API on the stage; Esc exits, a double-click
- *   toggles) keeps the screen awake while it plays: VizWakeLock below.
+ * - Previous / next preset are buttons in the visualizer's bar (the arrow
+ *   keys too, while the picture itself has the focus - never while a field
+ *   or a lyric line in the panel has it); the name shows for a moment. The
+ *   halves of the picture are not buttons any more (2026-11-12): the panel
+ *   covers them. Random, lock (presets change on their own every
+ *   VIZ_AUTO_SEC unless locked), the preset list, the panel's opacity and
+ *   full screen sit in the same bar, under the panel.
+ * - Full screen (Fullscreen API on the stage; Esc exits, a double-click on
+ *   the picture toggles) shows the picture alone, without the panel, and
+ *   keeps the screen awake while it plays: VizWakeLock below.
  * - Draws only while it is on screen, the tab is visible and the music is
  *   playing; the pixel ratio is capped so a 4K screen doesn't melt.
  *
@@ -42,6 +51,17 @@ const VIZ_NAME_MS = 3000;
 // drawn at this size and scaled up by the browser.
 const VIZ_MAX_PIXELS = 1920 * 1080;
 const VIZ_MAX_RATIO = 1.5;
+// The panel over the picture: how opaque, 0.3-1 (0.8 until moved). Never
+// below 0.3, so the words on it never vanish into the picture.
+const VIZ_PANEL_KEY = 'domovoi-viz-panel-opacity';
+const VIZ_PANEL_MIN = 0.3;
+const VIZ_PANEL_DEFAULT = 0.8;
+const vizPanelOpacity = (raw) => {
+  if (raw == null || String(raw).trim() === '') return VIZ_PANEL_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return VIZ_PANEL_DEFAULT;
+  return Math.max(VIZ_PANEL_MIN, Math.min(1, n));
+};
 
 const vizStore = {
   get(key, fallback) {
@@ -365,15 +385,15 @@ const VizPresetMenu = ({ catalog, current, onPick, onClose, onChanged }) => {
   );
 };
 
-/* The MilkDrop picture itself. */
-const VizMilkdrop = ({ p }) => {
+/* The MilkDrop picture itself, with `panel` (the expanded player's tab
+ * content, or null for none) laid over it. */
+const VizMilkdrop = ({ p, panel = null }) => {
   const stageRef = React.useRef(null);
   const canvasRef = React.useRef(null);
   const vizRef = React.useRef(null);
   const analyserRef = React.useRef(null);
   const rafRef = React.useRef(0);
   const nameTimer = React.useRef(0);
-  const clickTimer = React.useRef(0);
   const loadSeq = React.useRef(0);
   const [engineErr, setEngineErr] = React.useState('');
   const [engineTry, setEngineTry] = React.useState(0);
@@ -386,6 +406,12 @@ const VizMilkdrop = ({ p }) => {
   const [onScreen, setOnScreen] = React.useState(true);
   const [docVisible, setDocVisible] = React.useState(() => document.visibilityState !== 'hidden');
   const [isFs, setIsFs] = React.useState(false);
+  const [panelOpacity, setPanelOpacity] = React.useState(() => vizPanelOpacity(vizStore.get(VIZ_PANEL_KEY, null)));
+  const changeOpacity = (v) => {
+    const o = vizPanelOpacity(v);
+    setPanelOpacity(o);
+    vizStore.set(VIZ_PANEL_KEY, String(o));
+  };
 
   const playing = p.status === 'playing';
   const analyser = p.getAnalyser ? p.getAnalyser() : null;
@@ -438,7 +464,6 @@ const VizMilkdrop = ({ p }) => {
   React.useEffect(() => () => {
     cancelAnimationFrame(rafRef.current);
     clearTimeout(nameTimer.current);
-    clearTimeout(clickTimer.current);
     const viz = vizRef.current;
     vizRef.current = null;
     if (viz) {
@@ -563,28 +588,30 @@ const VizMilkdrop = ({ p }) => {
     else if (stageRef.current) vizFs.enter(stageRef.current);
   };
 
-  // ── clicks: a half is a step; a double-click is full screen ────────
-  const half = (by) => (e) => {
-    e.stopPropagation();
-    clearTimeout(clickTimer.current);
-    if (e.detail > 1) return;
-    clickTimer.current = setTimeout(() => step(by), vizFs.enabled() ? 230 : 0);
-  };
+  // ── a double-click on the picture (not the panel) is full screen ────
+  const onPicture = (e) => !!e && (e.target === stageRef.current || e.target === canvasRef.current);
   const dbl = (e) => {
+    if (!onPicture(e)) return;
     e.stopPropagation();
-    clearTimeout(clickTimer.current);
     if (vizFs.enabled()) toggleFs();
   };
+  // Keys only while the picture itself has the focus: in the panel the
+  // arrows belong to a slider, a lyric line or the queue's name field.
   const onKey = (e) => {
-    if (e.target && e.target.tagName === 'INPUT') return;
+    if (e.key === 'Escape' && menu) {
+      // The preset list closes; the sheet around it stays open.
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(false);
+      return;
+    }
+    if (e.target !== stageRef.current) return;
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
       e.stopPropagation();
       step(e.key === 'ArrowLeft' ? -1 : 1);
     } else if (e.key === 'f' || e.key === 'F') {
       if (vizFs.enabled()) { e.preventDefault(); e.stopPropagation(); toggleFs(); }
-    } else if (e.key === 'Escape' && menu) {
-      setMenu(false);
     }
   };
 
@@ -594,45 +621,61 @@ const VizMilkdrop = ({ p }) => {
     : engineErr === 'fail' ? "the visualizer couldn't load. Reload the page, or turn it off and on, to try again."
     : (!ready ? 'loading…' : '');
 
+  const showPanel = panel != null && !isFs;
   return (
-    <div ref={stageRef} className={`viz-stage${isFs ? ' fs' : ''}`} tabIndex={0}
+    <div ref={stageRef} className={`viz-stage${isFs ? ' fs' : ''}${showPanel ? ' with-panel' : ''}`} tabIndex={0}
          role="group" aria-label="visualizer" aria-roledescription="visualizer"
          onKeyDown={onKey} onDoubleClick={dbl}>
       <canvas ref={canvasRef} className="viz-canvas" aria-hidden="true"/>
-      {waiting && <div className="viz-wait">{waiting}</div>}
-      {ready && (
-        <>
-          <button type="button" className="viz-half left" aria-label="previous preset" onClick={half(-1)}/>
-          <button type="button" className="viz-half right" aria-label="next preset" onClick={half(1)}/>
-        </>
-      )}
-      {shownEntry && (
-        <div className={`viz-name${showName ? ' show' : ''}`} aria-live="polite">{shownEntry.name}</div>
-      )}
-      {ready && (
-        <div className="viz-bar" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-          <button type="button" className="btn btn-ghost btn-icon" title="random preset" aria-label="random preset"
-                  onClick={random}>
-            <Icon name="shuffle" size={14}/>
-          </button>
-          <button type="button" className="btn btn-ghost btn-icon" aria-pressed={locked}
-                  title={locked ? 'locked on this preset' : `presets change every ${VIZ_AUTO_SEC}s`}
-                  aria-label={locked ? 'unlock preset' : 'lock this preset'} onClick={toggleLock}>
-            <Icon name={locked ? 'lock' : 'lock-open'} size={14}/>
-          </button>
-          <button type="button" className="btn btn-ghost btn-icon" title="presets" aria-label="presets"
-                  aria-expanded={menu} onClick={() => setMenu(!menu)}>
-            <Icon name="list-music" size={14}/>
-          </button>
-          {vizFs.enabled() && (
-            <button type="button" className="btn btn-ghost btn-icon"
-                    title={isFs ? 'exit full screen' : 'full screen'}
-                    aria-label={isFs ? 'exit full screen' : 'full screen'} onClick={toggleFs}>
-              <Icon name={isFs ? 'minimize-2' : 'maximize-2'} size={14}/>
+      {showPanel && <div className="viz-over" style={{ opacity: panelOpacity }}>{panel}</div>}
+      <div className="viz-ctl" onDoubleClick={(e) => e.stopPropagation()}>
+        {(waiting || shownEntry) && (
+          <div className={`viz-name${showName || waiting ? ' show' : ''}`} aria-live="polite">
+            {waiting || shownEntry.name}
+          </div>
+        )}
+        {ready && (
+          <div className="viz-bar">
+            <button type="button" className="btn btn-ghost btn-icon" title="previous preset" aria-label="previous preset"
+                    onClick={() => step(-1)}>
+              <Icon name="skip-back" size={14}/>
             </button>
-          )}
-        </div>
-      )}
+            <button type="button" className="btn btn-ghost btn-icon" title="next preset" aria-label="next preset"
+                    onClick={() => step(1)}>
+              <Icon name="skip-forward" size={14}/>
+            </button>
+            <button type="button" className="btn btn-ghost btn-icon" title="random preset" aria-label="random preset"
+                    onClick={random}>
+              <Icon name="shuffle" size={14}/>
+            </button>
+            <button type="button" className="btn btn-ghost btn-icon" aria-pressed={locked}
+                    title={locked ? 'locked on this preset' : `presets change every ${VIZ_AUTO_SEC}s`}
+                    aria-label={locked ? 'unlock preset' : 'lock this preset'} onClick={toggleLock}>
+              <Icon name={locked ? 'lock' : 'lock-open'} size={14}/>
+            </button>
+            <button type="button" className="btn btn-ghost btn-icon" title="presets" aria-label="presets"
+                    aria-expanded={menu} onClick={() => setMenu(!menu)}>
+              <Icon name="list-music" size={14}/>
+            </button>
+            {showPanel && (
+              <label className="viz-opacity" title="how much the panel covers the picture">
+                <Icon name="layers" size={14}/>
+                <input type="range" min={VIZ_PANEL_MIN * 100} max={100} step={5}
+                       value={Math.round(panelOpacity * 100)} aria-label="panel opacity"
+                       aria-valuetext={`${Math.round(panelOpacity * 100)}%`}
+                       onChange={(e) => changeOpacity(Number(e.target.value) / 100)}/>
+              </label>
+            )}
+            {vizFs.enabled() && (
+              <button type="button" className="btn btn-ghost btn-icon"
+                      title={isFs ? 'exit full screen' : 'full screen'}
+                      aria-label={isFs ? 'exit full screen' : 'full screen'} onClick={toggleFs}>
+                <Icon name={isFs ? 'minimize-2' : 'maximize-2'} size={14}/>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       {menu && (
         <VizPresetMenu catalog={catalog} current={shownKey}
                        onPick={(k) => { pick(k); }} onClose={() => setMenu(false)}
@@ -642,29 +685,39 @@ const VizMilkdrop = ({ p }) => {
   );
 };
 
-/* The Now Playing section: the toggle, then MilkDrop or the bars. */
-const NowPlayingVisualizer = ({ p, remote }) => {
+/* The expanded player's stage: its head (`head`: the sheet's tabs, then the
+ * MilkDrop toggle), then MilkDrop with `panel` over it - or, with MilkDrop
+ * off, unsupported or casting, the bars (not while casting) and `panel` as
+ * a plain card. `panel` null: no panel (the sheet's Hide). */
+const NowPlayingVisualizer = ({ p, remote, head = null, panel = null }) => {
   const [on, setOn] = React.useState(() => vizStore.get(VIZ_ON_KEY, '0') === '1');
+  const plain = (note, bars) => (
+    <div className="viz-section">
+      <div className="viz-head">{head}{note}</div>
+      {bars}
+      {panel != null && <div className="viz-solid">{panel}</div>}
+    </div>
+  );
   if (remote) {
-    return <div className="viz-note">visualizer shows when playing in this browser</div>;
+    return plain(<div className="viz-note">visualizer shows when playing in this browser</div>, null);
   }
   const supported = vizSupported();
   const toggle = (next) => { setOn(next); vizStore.set(VIZ_ON_KEY, next ? '1' : '0'); };
+  const control = supported ? (
+    <label className="viz-toggle">
+      <input type="checkbox" checked={on} onChange={(e) => toggle(e.target.checked)}/>
+      milkdrop visualizer
+    </label>
+  ) : (
+    <span className="viz-note-inline">milkdrop visualizer needs WebGL 2 in this browser</span>
+  );
+  if (!(supported && on)) return plain(control, <div className="viz-bars"><Visualizer p={p} height={64}/></div>);
   return (
     <div className="viz-section">
-      <div className="viz-head">
-        {supported ? (
-          <label className="viz-toggle">
-            <input type="checkbox" checked={on} onChange={(e) => toggle(e.target.checked)}/>
-            milkdrop visualizer
-          </label>
-        ) : (
-          <span className="viz-note-inline">milkdrop visualizer needs WebGL 2 in this browser</span>
-        )}
-      </div>
-      {supported && on ? <VizMilkdrop p={p}/> : <Visualizer p={p} height={120}/>}
+      <div className="viz-head">{head}{control}</div>
+      <VizMilkdrop p={p} panel={panel}/>
     </div>
   );
 };
 
-Object.assign(window, { NowPlayingVisualizer, VizWakeLock });
+Object.assign(window, { NowPlayingVisualizer, VizWakeLock, vizPanelOpacity });

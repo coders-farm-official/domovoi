@@ -11,8 +11,8 @@
  * Where it shows — each surface asks lyricsTrackIdFor(p) whether there is
  * a library song to show lyrics for (never for radio, podcasts, audiobooks
  * or plugin streams):
- *   * the Music page's Player tab (music_player_panel.jsx), open by default;
- *   * the phone's player sheet (player.jsx PlayerSheet), closed by default;
+ *   * the expanded player (player.jsx PlayerSheet, every width): its
+ *     Lyrics tab, picked first when the song has lyrics;
  *   * the desktop docked bar's "lyrics" button (player.jsx MiniPlayer) —
  *     LyricsFloat, floating above the bar like the queue;
  *   * each room card on the Music page (music.jsx NPCard) — LyricsRoomLine,

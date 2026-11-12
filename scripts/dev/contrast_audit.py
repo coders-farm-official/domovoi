@@ -9,7 +9,7 @@ Drives a headless Chromium (Playwright; the installed Edge or Chrome via
 --channel, so no browser download) through every page the dashboard knows
 (the core pages plus each installed plugin's pages), clicks through each
 page's tab strip, and opens the shell's own dialogs (sign-in, server
-picker, the phone player sheet where a phone bar is on screen). On each
+picker, the expanded player when the library has a song to play). On each
 view it runs scripts/dev/contrast_audit.js, which measures WCAG contrast
 of text (4.5:1, large text 3:1), placeholders (4.5:1), icons (3:1) and
 disabled controls (3:1) against the colour actually painted behind them.
@@ -103,12 +103,23 @@ SPECIMENS = {
                                                     zIndex: 120, padding: 16 } },
       h(TrustServerPrompt, { url: 'http://192.168.1.20:6369', name: 'test', onCancel() {}, onConfirm() {} }))""",
 }
+PLAYER_OPEN = ("async () => { const b = document.querySelector('button[title=\"play in this browser\"]');"
+               " if (!b) return false; b.click(); await new Promise((r) => setTimeout(r, 1200));"
+               " return !!(window.openPlayerSheet && window.openPlayerSheet()); }")
 DIALOGS = [
     ("sign-in", "home", "() => { try { Auth.openModal(); return true; } catch (e) { return false; } }"),
     ("server-picker", "home", "() => { const b = [...document.querySelectorAll('header.topbar button')]"
                                ".find((x) => x.querySelector('.lucide-server')); if (b) b.click(); return !!b; }"),
     ("calendar-new-event", "calendar", "() => { const b = [...document.querySelectorAll('.main button')]"
                                        ".find((x) => x.querySelector('.lucide-plus')); if (b) b.click(); return !!b; }"),
+    # The expanded player (player.jsx PlayerSheet): play the first library
+    # song in this browser, open it, then its Queue tab. Nothing to open on
+    # an empty library.
+    ("player", "music", PLAYER_OPEN),
+    ("player-queue", "music", "async () => { if (!await (" + PLAYER_OPEN + ")()) return false;"
+                              " await new Promise((r) => setTimeout(r, 400));"
+                              " const t = [...document.querySelectorAll('.mp-tab')]"
+                              ".find((x) => x.textContent === 'Queue'); if (t) t.click(); return !!t; }"),
     *[(name, "home", f"() => ({MOUNT})({js})") for name, js in SPECIMENS.items()],
 ]
 

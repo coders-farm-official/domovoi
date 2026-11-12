@@ -5,11 +5,11 @@
   room's song with a library track id; it opens LyricsFloat, and the float,
   the queue and the cast target are one-at-a-time; a window narrowed to a
   phone, or a song with nothing to show (a station), closes it;
-* the phone's player sheet (PlayerSheet): a "lyrics" section between the
-  sleep line and "play on", CLOSED until opened, remembered in this browser;
-* the Music page's Player tab (music_player_panel.jsx NowPlayingPanel): a
-  "lyrics" section right after the head, OPEN unless closed, remembered —
-  in room playback too, following the room;
+* the expanded player (PlayerSheet, every width, 2026-11-12): its panel's
+  Lyrics tab, picked first when the song has lyrics (else Equalizer, else
+  Queue); a tab the person picks stays for the session while it applies
+  (Hide and Queue always; Lyrics only for a song with lyrics), and a pick
+  for THIS song stays for it — in room playback too, following the room;
 * the room cards (music.jsx NPCard): the room's current TIMED line under
   the title, nothing for plain lyrics, a stream or a refused viewer;
 * the Jobs tab (music.jsx JobsTab): LyricsJobsCard between the add-music bar
@@ -133,6 +133,18 @@ const lineStates = () => h.findAll(cls('lyr-line')).map((e) => (String(e.props.c
   .find((c) => /^lyr-(past|now|next)$/.test(c)) || '').slice(4));
 const lineTypes = () => h.findAll(cls('lyr-line')).map((e) => e.type);
 const view = () => h.find(cls('lyr-view'));
+const tabs = () => h.findAll(cls('mp-tab')).map((e) => e.text);
+const onTab = () => { const t = h.find((e) => cls('mp-tab')(e) && e.props['aria-selected']); return t ? t.text : null; };
+const tab = (label) => (e) => cls('mp-tab')(e) && e.text === label;
+"""
+
+# A sessionStorage the page can use (the sandbox has none).
+SESSION = r"""
+window.__session = {};
+sessionStorage = {
+  getItem: (k) => (k in window.__session ? window.__session[k] : null),
+  setItem: (k, v) => { window.__session[k] = String(v); },
+};
 """
 
 
@@ -251,80 +263,57 @@ SCENARIOS: dict[str, dict] = {
         " radio: (W().__P.current = W().__radio, h.rerender(), await settle(),"
         "         h.calls.filter((c) => c.path.includes('/lyrics')).length) };",
     ),
-    # ── the phone sheet ────────────────────────────────────────────────
-    "sheet_closed_by_default": _scenario(
+    # ── the expanded player's Lyrics tab ───────────────────────────────
+    "sheet_lyrics_first": _scenario(
         "await start(); await h.click(cls('mp-expand')); await settle();"
-        "const secs = h.findAll((e) => e.type === 'section' && h.inside(e, cls('mp-sheet')))"
-        "  .map((e) => e.props['aria-label']);"
-        "const t = h.find(cls('lyr-sec-toggle'));"
-        "const closed = { expanded: t.props['aria-expanded'], view: !!view(), head: cls('mp-sheet-sec-head')(t),"
-        " icon: iconOf(t), gets: h.calls.filter((c) => c.path === '/api/music/library/7/lyrics').length };"
-        "await h.click(cls('lyr-sec-toggle')); await settle();"
-        "const opened = { expanded: h.find(cls('lyr-sec-toggle')).props['aria-expanded'], view: !!view(),"
-        " height: view().props.style['--lyr-h'], compact: cls('lyr-compact')(view()),"
-        " stored: W().__store['domovoi-lyrics-sheet-open'], types: lineTypes() };"
-        "await h.click(cls('lyr-sec-toggle'));"
-        "return { secs, closed, opened, reclosed: { view: !!view(), stored: W().__store['domovoi-lyrics-sheet-open'] } };",
-        setup=" window.__phone = true;",
-    ),
-    "sheet_remembered_open": _scenario(
-        "await start(); await h.click(cls('mp-expand')); await settle();"
-        "return { expanded: h.find(cls('lyr-sec-toggle')).props['aria-expanded'], lines: lineStates().length };",
-        setup=" window.__phone = true; window.__store['domovoi-lyrics-sheet-open'] = '1';",
+        "return { tabs: tabs(), on: onTab(), view: !!view(), inPanel: !!h.find((e) => cls('lyr-view')(e)"
+        "  && h.inside(e, cls('mp-panel'))), height: view().props.style['--lyr-h'],"
+        " compact: cls('lyr-compact')(view()), types: lineTypes(), states: lineStates(),"
+        " gets: h.calls.filter((c) => c.path === '/api/music/library/7/lyrics').length };",
+        files=PANEL, setup=" window.__phone = true;",
     ),
     "sheet_room": _scenario(
         "await start(); await h.click(cls('mp-expand')); await settle();"
-        "return { types: lineTypes(), states: lineStates(), nudge: !!h.find(cls('lyr-nudge')) };",
-        p=ROOM, setup=" window.__phone = true; window.__store['domovoi-lyrics-sheet-open'] = '1';",
+        "return { on: onTab(), types: lineTypes(), states: lineStates(), nudge: !!h.find(cls('lyr-nudge')),"
+        " tabs: tabs() };",
+        p=ROOM, files=PANEL, setup=" window.__phone = true;",
     ),
     "sheet_radio": _scenario(
-        "await start(); await h.click(cls('mp-expand'));"
-        "return h.findAll((e) => e.type === 'section' && h.inside(e, cls('mp-sheet'))).map((e) => e.props['aria-label']);",
-        setup=(" window.__phone = true; window.__P.current = window.__radio; window.__P.queue = [window.__radio];"),
+        "await start(); await h.click(cls('mp-expand')); await settle();"
+        "return { tabs: tabs(), on: onTab(), view: !!view() };",
+        files=PANEL,
+        setup=" window.__P.current = window.__radio; window.__P.queue = [window.__radio];",
+    ),
+    "sheet_none_found": _scenario(
+        "await start(); await h.click(cls('mp-expand')); await settle();"
+        "const first = { tabs: tabs(), on: onTab() };"
+        # Lyrics picked for this song: it stays, even with none to show.
+        "await h.click(tab('Lyrics')); await settle();"
+        "return { first, picked: onTab(), view: !!view() };",
+        files=PANEL, api={"GET /api/music/library/7/lyrics": _doc(status="instrumental", lines=[], text="")},
+    ),
+    "sheet_session_memory": _scenario(
+        "await start(); await h.click(cls('mp-expand')); await settle(); const seen = [onTab()];"
+        "const song = async (n) => { const P = W().__P; P.current = W().__item(n); P.index = n === 7 ? 0 : 1;"
+        "  h.rerender(); await settle(); seen.push(onTab()); };"
+        "await h.click(tab('Queue')); await settle(); seen.push(onTab());"
+        "await song(8); await song(7);"
+        "await h.click(tab('Hide')); await settle(); seen.push(onTab());"
+        "await song(8); await song(7);"
+        "await h.click(tab('Lyrics')); await settle(); seen.push(onTab());"
+        "await song(8); await song(7);"
+        "return { seen, stored: W().__session['domovoi-player-tab'] };",
+        files=PANEL, api={"GET /api/music/library/8/lyrics": _doc(8, status="instrumental", lines=[], text="")},
+        setup=SESSION,
     ),
     "sheet_storage_throws": _scenario(
-        "await start(); await h.click(cls('mp-expand')); await settle();"
-        "const before = h.find(cls('lyr-sec-toggle')).props['aria-expanded'];"
-        "await h.click(cls('lyr-sec-toggle')); await settle();"
-        "return { before, after: h.find(cls('lyr-sec-toggle')).props['aria-expanded'], view: !!view(),"
-        " error: h.lastError || null };",
-        setup=(" window.__phone = true; localStorage = { getItem() { throw new Error('no'); },"
-               " setItem() { throw new Error('no'); }, removeItem() { throw new Error('no'); } };"),
-    ),
-    # ── the Player tab ─────────────────────────────────────────────────
-    "panel_local": _scenario(
-        "await start(); const tree = h.tree(); const at = (pred) => tree.findIndex(pred);"
-        "const t = h.find(cls('lyr-sec-toggle'));"
-        "return { order: [at(cls('np-head')), at(cls('lyr-panel')), at((e) => e.type === 'canvas')],"
-        " label: h.find(cls('lyr-panel')).props['aria-label'], expanded: t.props['aria-expanded'],"
-        " height: view().props.style['--lyr-h'], compact: cls('lyr-compact')(view()),"
-        " types: lineTypes(), states: lineStates() };",
-        component="NowPlayingPanel", files=PANEL,
-    ),
-    "panel_room": _scenario(
-        "await start(); return { panel: !!h.find(cls('lyr-panel')), types: lineTypes(), states: lineStates(),"
-        " nudge: !!h.find(cls('lyr-nudge')), canvas: !!h.find((e) => e.type === 'canvas') };",
-        component="NowPlayingPanel", files=PANEL, p=ROOM,
-    ),
-    "panel_toggle_remembered": _scenario(
-        "await start(); await h.click(cls('lyr-sec-toggle')); await settle();"
-        "return { expanded: h.find(cls('lyr-sec-toggle')).props['aria-expanded'], view: !!view(),"
-        " stored: W().__store['domovoi-lyrics-panel-open'] };",
-        component="NowPlayingPanel", files=PANEL,
-    ),
-    "panel_remembered_closed": _scenario(
-        "await start(); return { expanded: h.find(cls('lyr-sec-toggle')).props['aria-expanded'], view: !!view(),"
-        " gets: h.calls.filter((c) => c.path === '/api/music/library/7/lyrics').length };",
-        component="NowPlayingPanel", files=PANEL,
-        setup=" window.__store['domovoi-lyrics-panel-open'] = '0';",
-    ),
-    "panel_radio_and_room_stream": _scenario(
-        "await start(); const radio = !!h.find(cls('lyr-panel'));"
-        "const P = W().__P; P.current = W().__item(7); P.target = { kind: 'room', roomId: 'den' };"
-        "P.remoteNp = { room_id: 'den', track_id: null, state: 'play', elapsed_sec: 2, duration_sec: null, readAt: 0 };"
-        "h.rerender(); return { radio, roomStream: !!h.find(cls('lyr-panel')) };",
-        component="NowPlayingPanel", files=PANEL,
-        setup=" window.__P.current = window.__radio; window.__P.queue = [window.__radio];",
+        "await start(); await h.click(cls('mp-expand')); await settle(); const before = onTab();"
+        "await h.click(tab('Queue')); await settle();"
+        "return { before, after: onTab(), error: h.lastError || null };",
+        files=PANEL,
+        setup=(" localStorage = { getItem() { throw new Error('no'); },"
+               " setItem() { throw new Error('no'); }, removeItem() { throw new Error('no'); } };"
+               " sessionStorage = localStorage;"),
     ),
     # ── the room cards ─────────────────────────────────────────────────
     "card_timed": _scenario(
@@ -528,64 +517,51 @@ def test_the_bar_reads_the_songs_lyrics_once_as_it_starts(driven) -> None:
     assert d["radio"] == 1                         # a station is never asked about
 
 
-# ─── the phone sheet ─────────────────────────────────────────────────────
+# ─── the expanded player's Lyrics tab ────────────────────────────────────
 
 
-def test_the_sheet_section_sits_before_play_on_closed_until_opened(driven) -> None:
-    d = driven["sheet_closed_by_default"]
-    assert d["secs"] == ["lyrics", "play on", "queue"]
-    # closed; the docked bar read the song's lyrics once as it started
-    assert d["closed"] == {"expanded": False, "view": False, "head": True, "icon": "chevron-down", "gets": 1}
-    assert d["opened"]["expanded"] is True and d["opened"]["view"] is True
-    assert d["opened"]["height"] == "240px" and d["opened"]["compact"] is True
-    assert d["opened"]["stored"] == "1"
-    assert set(d["opened"]["types"]) == {"button"}
-    assert d["reclosed"] == {"view": False, "stored": "0"}
+def test_the_lyrics_tab_comes_first_when_the_song_has_lyrics(driven) -> None:
+    d = driven["sheet_lyrics_first"]
+    assert d["tabs"] == ["Lyrics", "Equalizer", "Queue", "Hide"] and d["on"] == "Lyrics"
+    assert d["view"] is True and d["inPanel"] is True
+    # The panel sizes it (styles.css .mp-panel .lyr-view), at full type.
+    assert d["height"] == "480px" and d["compact"] is False
+    assert set(d["types"]) == {"button"} and d["states"][:2] == ["past", "now"]
+    assert d["gets"] == 1                          # the bar's read, shared
 
 
-def test_the_sheet_remembers_it_was_opened(driven) -> None:
-    assert driven["sheet_remembered_open"] == {"expanded": True, "lines": 5}
-
-
-def test_the_sheet_follows_the_room(driven) -> None:
+def test_the_lyrics_tab_follows_the_room(driven) -> None:
     d = driven["sheet_room"]
+    assert d["on"] == "Lyrics" and d["tabs"] == ["Lyrics", "Queue", "Hide"]   # no equalizer while casting
     assert set(d["types"]) == {"div"} and d["states"][:2] == ["past", "now"] and d["nudge"] is True
 
 
-def test_no_sheet_section_for_a_station(driven) -> None:
-    assert driven["sheet_radio"] == ["play on", "queue"]
+def test_no_lyrics_tab_for_a_station(driven) -> None:
+    assert driven["sheet_radio"] == {"tabs": ["Equalizer", "Queue", "Hide"], "on": "Equalizer", "view": False}
 
 
-def test_the_sheet_toggle_works_when_storage_refuses(driven) -> None:
-    assert driven["sheet_storage_throws"] == {"before": False, "after": True, "view": True, "error": None}
+def test_a_song_without_lyrics_opens_on_the_equalizer(driven) -> None:
+    d = driven["sheet_none_found"]
+    assert d["first"] == {"tabs": ["Lyrics", "Equalizer", "Queue", "Hide"], "on": "Equalizer"}
+    # ...and Lyrics picked for it stays (its "none" state shows).
+    assert d["picked"] == "Lyrics" and d["view"] is True
 
 
-# ─── the Player tab ──────────────────────────────────────────────────────
+def test_a_picked_tab_stays_for_the_session_while_it_applies(driven) -> None:
+    d = driven["sheet_session_memory"]
+    assert d["seen"] == [
+        "Lyrics",                     # song 7 has lyrics
+        "Queue", "Queue", "Queue",    # picked; song 8, back to 7: kept
+        "Hide", "Hide", "Hide",       # Hide is kept across songs too
+        "Lyrics",                     # picked again on 7
+        "Equalizer",                  # song 8 has none: the equalizer
+        "Lyrics",                     # back on 7: the pick applies again
+    ]
+    assert d["stored"] == "lyrics"
 
 
-def test_the_player_tab_shows_lyrics_after_the_head_open_by_default(driven) -> None:
-    d = driven["panel_local"]
-    head, lyr, canvas = d["order"]
-    assert 0 <= head < lyr < canvas
-    assert d["label"] == "lyrics" and d["expanded"] is True
-    assert d["height"] == "320px" and d["compact"] is False
-    assert set(d["types"]) == {"button"} and d["states"][:2] == ["past", "now"]
-
-
-def test_the_player_tab_follows_a_room(driven) -> None:
-    d = driven["panel_room"]
-    assert d["panel"] is True and set(d["types"]) == {"div"} and d["nudge"] is True
-    assert d["states"][:2] == ["past", "now"]
-    assert d["canvas"] is False                    # no visualizer while casting, as before
-
-
-def test_the_player_tab_remembers_a_closed_section(driven) -> None:
-    assert driven["panel_toggle_remembered"] == {"expanded": False, "view": False, "stored": "0"}
-    assert driven["panel_remembered_closed"] == {"expanded": False, "view": False, "gets": 0}
-
-
-def test_no_player_tab_lyrics_for_a_station_or_a_rooms_stream(driven) -> None:
-    assert driven["panel_radio_and_room_stream"] == {"radio": False, "roomStream": False}
+def test_the_tabs_work_when_storage_refuses(driven) -> None:
+    assert driven["sheet_storage_throws"] == {"before": "Lyrics", "after": "Queue", "error": None}
 
 
 # ─── the room cards ──────────────────────────────────────────────────────

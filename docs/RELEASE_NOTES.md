@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — the player opens from the player bar, over any page
+
+**Music no longer has a Player tab.** The expanded player now opens from
+the player bar at the bottom of the screen, over whatever page you are on,
+on a computer and on a phone alike: click the song's cover or title, the
+up chevron, or (on a phone) **open player**. It grows out of the bar and
+shrinks back into it; the down chevron, Esc, the browser's Back, a swipe
+down on its header (touch) or a page in the menu closes it. Old links and
+bookmarks to `#music/player` open it over Music.
+
+Inside it, under the cover and controls, is a panel with **Lyrics ·
+Equalizer · Queue · Hide**. It starts on Lyrics when the song has words,
+otherwise on the Equalizer; a tab you pick stays picked for the rest of
+the visit while it applies (Hide too). With the MilkDrop visualizer on,
+the picture is drawn behind the panel; the **panel** slider in the
+visualizer's bar sets how much the panel covers it (30 to 100 %, 80 % to
+start; remembered in that browser). Previous / next preset are now buttons
+in that bar (clicking the left or right half of the picture no longer
+changes it). Full screen still shows the picture alone. With the
+visualizer off, or while casting to a room, the panel is a plain card.
+
 ## 2026-11-12 — a playlist plays in this browser
 
 The playlist dialog (Music → Playlists) now has **play here** and **shuffle
