@@ -77,7 +77,7 @@ struct AssistantPhoneConversationView: View {
     /// What actually makes room is this: at an accessibility size the chrome
     /// becomes the first rows of the scrolling half and goes with it, so that
     /// half is given the whole of what is left over the composer. It is
-    /// Kamron's answer 29 — "yes: shell chrome (header and plugin band)
+    /// the owner's answer 29 — "yes: shell chrome (header and plugin band)
     /// scrolls away at accessibility sizes, app-wide" — applied to the chrome
     /// this screen owns rather than the shell's, and it is the same trade
     /// Android makes in the same place by a blunter rule: `ChatHeader`
@@ -445,7 +445,7 @@ struct AssistantPhoneConversationView: View {
     static let transcriptId = "assistant-transcript"
 
     /// "show earlier" — one page more of a conversation longer than the
-    /// window (D64, Kamron's answer 64).
+    /// window (D64, the owner's answer 64).
     ///
     /// **Pinned, not followed.** Growing the window puts a page of messages
     /// *above* what is on screen, and a scroll view whose content grows at the

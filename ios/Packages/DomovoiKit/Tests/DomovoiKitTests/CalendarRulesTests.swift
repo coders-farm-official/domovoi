@@ -152,7 +152,7 @@ final class CalendarRulesTests: XCTestCase {
     ///
     /// It used to assert `[1, 3]`: the 23:30 row with no `ends_at` ended at
     /// 23:30 under Android's `endLocal()` and dropped out of the 4th's
-    /// agenda. **Kamron's answer 17 (2026-11-03): "yes: match Home, keep an
+    /// agenda. **The owner's answer 17 (2026-11-03): "yes: match Home, keep an
     /// open-ended event on screen for an hour."** Under Home's `eventEndMs`
     /// that row runs to 00:30 on the 4th, so it stays — and row 2 is the
     /// discriminating one in both directions: it is the only row here whose

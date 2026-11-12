@@ -14,7 +14,7 @@ import Foundation
 /// They were transcribed from Android's client, field by field, because the
 /// plugin is not in this repository (`plugins/` holds `radio/` only and the
 /// router is mounted dynamically at `web/backend/plugin_host.py:531`). On
-/// 2026-11-03 Kamron said to check the plugin out beside the app and verify
+/// 2026-11-03 the owner said to check the plugin out beside the app and verify
 /// them (answers 6 and 25), and the repository is at
 /// `domovoi-project/domovoi-plugin-imagegen`. **Every path, method, body
 /// field and response field below carries its `web.py` line.** Nothing was
@@ -55,7 +55,7 @@ import Foundation
 /// lane's cancel and the history delete are not drawn on this screen any
 /// more: a control that cannot do what it says is not drawn (NIGHT-RULES §3
 /// bullet 1 names "no button that 401s every time from a phone" exactly), and
-/// Kamron settled the same shape twice in the same answer set — answer 5
+/// the owner settled the same shape twice in the same answer set — answer 5
 /// (hide Android's room-to-room `start`) and answer 41, "admin-only things
 /// stay off both phones". ``ImagesView``'s header is where a reader of the
 /// screen meets that argument.
@@ -232,7 +232,7 @@ public enum ImagesPaths {
     ///
     /// A prompt longer than 4000 characters is a 422 whose `detail` names the
     /// field, which would reach the person through
-    /// ``ImagesStrings/generateFailed(_:)`` (Kamron's answer 44: a 422's
+    /// ``ImagesStrings/generateFailed(_:)`` (the owner's answer 44: a 422's
     /// field list is not stripped) — "would", because nothing on the screen
     /// sends this body today.
     ///

@@ -37,7 +37,7 @@ final class PeopleModelTests: XCTestCase {
         /// to survive.
         let fourIsThere = Shared<Bool>(true)
         /// Person 1's `last_seen_at`, so a push can move it.
-        let kamronAgoSec = Shared<Int64>(60)
+        let jordanAgoSec = Shared<Int64>(60)
 
         let now: Int64
 
@@ -51,8 +51,8 @@ final class PeopleModelTests: XCTestCase {
         private var roster: String {
             var rows = [
                 """
-                {"id":1,"name":"Kamron","created_at":"\(ago(86_400 * 30))",
-                 "last_seen_at":"\(ago(kamronAgoSec.current))",
+                {"id":1,"name":"Jordan","created_at":"\(ago(86_400 * 30))",
+                 "last_seen_at":"\(ago(jordanAgoSec.current))",
                  "notes":"prefers the kitchen satellite","voice_profile_count":3,
                  "presence_tier":"high","namesakes":0}
                 """,
@@ -171,7 +171,7 @@ final class PeopleModelTests: XCTestCase {
         await started(model)
 
         XCTAssertNil(model.roster.error)
-        XCTAssertEqual(model.people.map(\.name), ["Kamron", "Chevy", "Alex", "alex "])
+        XCTAssertEqual(model.people.map(\.name), ["Jordan", "Chevy", "Alex", "alex "])
         // Exactly one of the four was heard inside the window.
         XCTAssertEqual(model.liveCount, 1)
         XCTAssertEqual(model.subtitle, "4 enrolled · 1 heard in the last 5 min")
@@ -184,11 +184,11 @@ final class PeopleModelTests: XCTestCase {
         let (model, _) = rig()
         await started(model)
 
-        let kamron = model.people[0]
+        let jordan = model.people[0]
         let alex = model.people[2]
         XCTAssertEqual(model.subtitle(for: alex), "#3 · same name · 3d ago · low")
-        XCTAssertFalse(model.subtitle(for: kamron).contains("same name"))
-        XCTAssertEqual(model.profileCount(for: kamron), "3p")
+        XCTAssertFalse(model.subtitle(for: jordan).contains("same name"))
+        XCTAssertEqual(model.profileCount(for: jordan), "3p")
         XCTAssertEqual(model.profileCount(for: model.people[3]), "0p")
     }
 
@@ -302,7 +302,7 @@ final class PeopleModelTests: XCTestCase {
 
         // Somebody spoke: the push re-reads and the open profile's own
         // `last_seen_at` moves with it.
-        house.kamronAgoSec.set(7200)
+        house.jordanAgoSec.set(7200)
         model.received(StateEvent(type: "people.last_seen.changed", frame: "{}"))
         await settleUntil({ self.requests(to: "/api/people") >= 2 }, "the push's re-read")
         await settleUntil({ model.selected.map { !model.isLive($0) } ?? false }, "the newer row")

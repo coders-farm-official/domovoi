@@ -224,7 +224,7 @@ extension HealthTone {
     /// They are **not** swapped for ``inkColour`` here, although those pass,
     /// because the ink tokens are *text* inks at 5.65-6.08:1 and a dot drawn
     /// in one reads brown rather than amber. That is the open question already
-    /// in front of Kamron about the header's live dot — bright fill with a
+    /// in front of the owner about the header's live dot — bright fill with a
     /// dark ring, or the duller ink — and this is the same question, so it
     /// waits for the same answer rather than being settled twice differently.
     ///

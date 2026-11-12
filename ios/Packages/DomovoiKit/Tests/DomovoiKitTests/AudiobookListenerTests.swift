@@ -9,7 +9,7 @@ import XCTest
 /// from any person's (`domovoi/spoken_audio.py:145-147`). So a place set on
 /// the phone and a place a room's player saved under a recognised person were
 /// different rows, and "continue from the kitchen" could not see the one the
-/// voice path had written. Kamron's answer 11: "yes, match Android: build the
+/// voice path had written. The owner's answer 11: "yes, match Android: build the
 /// 'listening as' picker."
 ///
 /// The three things a comment cannot carry, and which these cases measure on
@@ -93,7 +93,7 @@ final class AudiobookListenerTests: XCTestCase {
     /// house. Sending one would be a 422, and a 422 on the read is swallowed
     /// into "start at the top".
     func testAnIdTheServerCouldNotParseIsLeftOut() {
-        for bad in ["", "   ", "kamron", "9.5", "9;drop", "٩"] {
+        for bad in ["", "   ", "jordan", "9.5", "9;drop", "٩"] {
             XCTAssertFalse(
                 AudiobookPath.position(7, deviceID: "ios-1", personID: bad).contains("person_id"),
                 "the read sent person_id=\(bad), which is a 422 and a book resuming at zero"

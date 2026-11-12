@@ -20,13 +20,13 @@ import SwiftUI
 /// * **Starting a drop-in between two ROOMS**: the peer picker and `start`
 ///   (`SatOverviewTab.kt:467-560`). The core's `/v1/admin/dropin/start` is
 ///   admin *security* (`domovoi/main.py:2649-2658`), so from this phone it
-///   could only fail — and Kamron settled it rather than leaving it to the
+///   could only fail — and the owner settled it rather than leaving it to the
 ///   tier (answers 5 and 53): "phones never create room-to-room drop-ins",
 ///   and Android's button comes out too. **`hang up` is drawn** —
 ///   `/v1/admin/dropin/end` is device tier (`main.py:2718-2721`).
 ///
 /// **"Drop in from this phone" is drawn** (`PhoneDropinRow`,
-/// `PhoneDropinCall.kt:61`): Kamron, answer 54. ``RoomsDropInRow`` is the
+/// `PhoneDropinCall.kt:61`): The owner, answer 54. ``RoomsDropInRow`` is the
 /// control and the call sheet; it is a device-tier socket of its own
 /// (`main.py:7056`) and the only call it opens is this phone's into this
 /// room.
@@ -185,7 +185,7 @@ struct RoomsOverviewView: View {
     /// `/v1/admin/satellite/set-volume` and its own docstring says it 404s
     /// when the room isn't connected (`web/backend/api/satellites.py:1557-1573`),
     /// so a drag on an offline room could only ever raise a failure toast.
-    /// That is the control Kamron's no-misleading-controls rule forbids. The
+    /// That is the control the owner's no-misleading-controls rule forbids. The
     /// announce field below is the other shape of the same rule: it stays
     /// enabled because ``RoomsModel/announce(to:)`` answers offline itself,
     /// in words, without sending.

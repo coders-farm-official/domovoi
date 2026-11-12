@@ -99,7 +99,7 @@ public struct QueueItem: Equatable, Sendable, Decodable {
     ///
     /// **The basename, where Android shows the whole stored path.**
     /// `QueueTab.kt:360` is `item.title ?: item.file.ifBlank { "unknown" }`,
-    /// and that is a defect rather than a choice: Kamron's server is Windows,
+    /// and that is a defect rather than a choice: The owner's server is Windows,
     /// so an untagged entry reads `C:\Users\…\Music\Artist\Song.mp3` across a
     /// phone-width row that is one line with an ellipsis. The library rows on
     /// both apps already strip the path (``MusicFile/basename(_:)``), and a
@@ -112,7 +112,7 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         return MusicStrings.unnamedTrack
     }
 
-    /// `"The Beatles · 3:04 · added by Kamron's iPhone"`.
+    /// `"The Beatles · 3:04 · added by Jordan's iPhone"`.
     ///
     /// One line with the parts that exist, in Android's order, and the "added
     /// by" tag **appended to it rather than given a line of its own** —
@@ -140,7 +140,7 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
     ///
     /// The server re-checks every edit; this is here so the screen can draw
     /// its controls off it instead of discovering the 403 on the first tap
-    /// (the server's own comment, and Kamron's standing rule that a control
+    /// (the server's own comment, and the owner's standing rule that a control
     /// which cannot do what it says is not drawn).
     public let editable: Bool
 

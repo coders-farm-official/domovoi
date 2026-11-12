@@ -183,7 +183,7 @@ public func calendarInstantEncoded(ms: Int64) -> String {
         .replacingOccurrences(of: ":", with: "%3A")
 }
 
-/// `GET /api/calendar/events` for one window — Kamron's answer 16.
+/// `GET /api/calendar/events` for one window — the owner's answer 16.
 ///
 /// `start` always, `end` only when the window has a ceiling (the route's
 /// docstring: "omit ``end`` for everything from ``start`` onwards"), and

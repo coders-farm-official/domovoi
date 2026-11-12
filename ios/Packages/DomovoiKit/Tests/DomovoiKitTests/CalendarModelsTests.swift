@@ -16,7 +16,7 @@ import XCTest
 /// expectation about the rule and not about arithmetic.
 final class CalendarModelsTests: XCTestCase {
 
-    /// Kamron's zone, which is where the interesting cases are: the `-06:00`
+    /// The owner's zone, which is where the interesting cases are: the `-06:00`
     /// offset is what the §2.3 defect shifts an event by, and the
     /// fall-back night is 2026-11-01.
     private let chicago = TimeZone(identifier: "America/Chicago")!
@@ -131,7 +131,7 @@ final class CalendarModelsTests: XCTestCase {
     /// beside it kept the same row for an hour. Two rules for one event,
     /// raised as DECISIONS §8.
     ///
-    /// **Kamron's answer 17 (2026-11-03): "yes: match Home, keep an
+    /// **The owner's answer 17 (2026-11-03): "yes: match Home, keep an
     /// open-ended event on screen for an hour."** So the divergence is gone
     /// and this case now pins the agreement — asserted against
     /// ``eventEndMs(_:)`` itself rather than against the literal hour, so the

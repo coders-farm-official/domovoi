@@ -46,7 +46,7 @@ public struct NowPlayingSong: Equatable, Sendable, Decodable {
     /// tag, or the generic word.
     ///
     /// The filename is taken off **both** separators. The server may be
-    /// Windows — Kamron's house is — so a path can arrive as
+    /// Windows — the owner's house is — so a path can arrive as
     /// `C:\music\artist\song.mp3`, and splitting on `/` alone would show the
     /// whole thing (`MusicIo.kt` strips both, and says why).
     public var displayTitle: String {
@@ -545,7 +545,7 @@ public enum MusicStrings {
     public static let noRooms = "no rooms provisioned yet"
     public static let noRoomsNote = "set up a room to bring it online"
 
-    /// `"added by Kamron's iPhone"`. Absent entirely when the server has no
+    /// `"added by Jordan's iPhone"`. Absent entirely when the server has no
     /// record — never "added by someone".
     public static func addedBy(_ device: String) -> String { "added by \(device)" }
 

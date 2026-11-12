@@ -21,7 +21,7 @@ import Observation
 /// 403 and anything else a 401 (`admin_auth.py:1288-1305`). This app holds a
 /// household device token and ``DomovoiClient`` refuses the cookie, so both
 /// would 401 every single time from a phone. Android draws both and reports
-/// the failure in a toast afterwards; under Kamron's no-misleading-controls
+/// the failure in a toast afterwards; under the owner's no-misleading-controls
 /// rule neither is drawn here, there is no path constant for either
 /// (``PeoplePath`` says why), and the profile says where they are done
 /// (``PeopleStrings/renamingIsOnTheDashboard``).

@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DomovoiKit
 
-/// The Images shapes this batch added or verified: Kamron's `4 images,
+/// The Images shapes this batch added or verified: The owner's `4 images,
 /// showing 3` (answer 27), and the plugin's own fields as the server really
 /// sends them (answers 6 and 25).
 ///
@@ -18,7 +18,7 @@ import XCTest
 /// The plugin is not in this repository — it mounts its own router under
 /// `/api/plugins/imagegen` (`web/backend/plugin_host.py:531`) — so every
 /// shape in `ImagesModels` was transcribed from Android's client,
-/// `ImagesScreen.kt:76-125`. On 2026-11-03 Kamron said to check it out beside
+/// `ImagesScreen.kt:76-125`. On 2026-11-03 the owner said to check it out beside
 /// the app and verify (answers 6 and 25), and the repository is
 /// `domovoi-project/domovoi-plugin-imagegen`. One serialiser, `_job_row`
 /// (`domovoi_plugin_imagegen/web.py:114-127`), over the columns of
@@ -55,7 +55,7 @@ final class ScreensImagesShapeTests: XCTestCase {
 
     // MARK: - answer 27: the card counts the pictures it is not showing
 
-    /// **Kamron's answer 27**: a card with more pictures than tiles says so.
+    /// **The owner's answer 27**: a card with more pictures than tiles says so.
     ///
     /// The row with four images says `4 images, showing 3`; the row with one
     /// says nothing at all. Both halves, because a sentence drawn on every

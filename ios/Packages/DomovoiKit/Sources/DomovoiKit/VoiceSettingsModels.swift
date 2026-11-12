@@ -223,7 +223,7 @@ public struct VoiceSettingsSamples: Decodable, Sendable, Equatable {
     ///
     /// **`.voice` only.** A `.clip` sample arrives as Ogg Opus, which
     /// `AVAudioPlayer` does not decode, so a button that fetched it would
-    /// play silence — the exact silent fallback Kamron's rule forbids, and
+    /// play silence — the exact silent fallback the owner's rule forbids, and
     /// one Android has already shipped once (`PhoneVoice.kt:371` records
     /// every voice sounding the same when its own TTS answered here). A
     /// voice the server did not mention, or mentioned as `null`, is also no.

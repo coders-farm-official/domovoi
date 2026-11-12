@@ -52,7 +52,7 @@ struct ImagesEngineNote: View {
 /// (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied at
 /// `:339`) and this app sends only `X-Device-Token`, so the button answered
 /// 401 every time from every phone — the control
-/// [[no-misleading-controls]] forbids, and Kamron's answer 41. The whole
+/// [[no-misleading-controls]] forbids, and the owner's answer 41. The whole
 /// argument, and the one plugin change that would bring it back, is in
 /// ``ImagesView``'s header. The row is a report on something the house is
 /// doing; stopping it is the dashboard's.
@@ -160,7 +160,7 @@ struct ImagesJobCard: View {
 /// from every phone — and worse than a dead button, it opened a destructive
 /// confirmation that could only ever fail at the end of it. ``ImagesView``'s
 /// header carries the whole argument and the one plugin change that brings it
-/// back. Kamron's answer 41.
+/// back. The owner's answer 41.
 struct ImagesHistoryCard: View {
 
     let job: ImagesJob
@@ -220,7 +220,7 @@ struct ImagesHistoryCard: View {
         }
     }
 
-    /// `4 images, showing 3` — Kamron's answer 27, and his wording
+    /// `4 images, showing 3` — the owner's answer 27, and his wording
     /// (``ImagesStrings/moreImages(total:shown:)``, IOS-ONLY-STRINGS §9).
     ///
     /// Drawn only when the generation holds more pictures than the three
@@ -245,7 +245,7 @@ struct ImagesHistoryCard: View {
     /// `names.take(3)` (`:398`) — ``ImagesJob/tileNames``.
     ///
     /// **A fourth picture is still not drawn, and it is now counted**:
-    /// Android shows three and says nothing, and Kamron's answer 27 is that
+    /// Android shows three and says nothing, and the owner's answer 27 is that
     /// the card says `4 images, showing 3` — ``moreImages``, just below the
     /// strip. No `+1 more` affordance, because it would open nothing.
     private var thumbnails: some View {

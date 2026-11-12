@@ -54,7 +54,7 @@ public enum NewsStrings {
 
     /// The chip's label for VoiceOver. **iOS-only**: Android's chip is a
     /// `Surface(onClick:)` whose only child is the name, so the name *is* the
-    /// control's label; a control labelled `Kamron` says nothing about what
+    /// control's label; a control labelled `Jordan` says nothing about what
     /// tapping it does.
     ///
     /// This used to say the label was here because the bubble and the name

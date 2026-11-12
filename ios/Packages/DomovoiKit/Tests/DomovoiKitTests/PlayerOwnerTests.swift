@@ -3,7 +3,7 @@ import XCTest
 
 /// Who owns the app's player, and who it saves under.
 ///
-/// D49 / D2 (Kamron, 2026-11-03: "yes, as the next batch") and D11 ("yes,
+/// D49 / D2 (the owner, 2026-11-03: "yes, as the next batch") and D11 ("yes,
 /// match Android: build the 'listening as' picker"). Both are about plumbing
 /// rather than about audio, and both broke the same way before the batch:
 /// nothing owned a ``PlayerModel`` and nothing stored a listener, so five
@@ -252,9 +252,9 @@ final class PlayerOwnerTests: XCTestCase {
 
     /// The player is handed **this phone's** id, not a placeholder.
     func testThePlayerIsBuiltWithThisPhonesDeviceID() {
-        let rig = Rig(serverURL: houseA, deviceID: "iphone-kamron")
+        let rig = Rig(serverURL: houseA, deviceID: "iphone-jordan")
         XCTAssertNotNil(rig.model.player)
-        XCTAssertEqual(["iphone-kamron"], rig.askedFor.current)
+        XCTAssertEqual(["iphone-jordan"], rig.askedFor.current)
     }
 
     // MARK: - 2. which house it belongs to
@@ -391,11 +391,11 @@ final class PlayerOwnerTests: XCTestCase {
     /// server's order (`ConnectionPanel.kt:106`).
     func testTheListenerDropdownLeadsWithThisDevice() {
         let rows = listenerOptions(people: [
-            Person(id: 7, name: "Kamron"),
+            Person(id: 7, name: "Jordan"),
             Person(id: 9, name: "Chevy"),
         ])
         XCTAssertEqual(
-            [PlayerStrings.listenerThisDevice, "Kamron", "Chevy"], rows.map(\.name)
+            [PlayerStrings.listenerThisDevice, "Jordan", "Chevy"], rows.map(\.name)
         )
         XCTAssertEqual([nil, "7", "9"], rows.map(\.personID))
     }
@@ -430,7 +430,7 @@ final class PlayerOwnerTests: XCTestCase {
     /// The chip says the name when there is one and an ellipsis while the
     /// people list is on its way (`AudiobooksScreen.kt:343`).
     func testTheChipSaysAnEllipsisUntilTheNameArrives() {
-        XCTAssertEqual("listening as Kamron", PlayerStrings.listeningAsChip("Kamron"))
+        XCTAssertEqual("listening as Jordan", PlayerStrings.listeningAsChip("Jordan"))
         XCTAssertEqual("listening as …", PlayerStrings.listeningAsChip(nil))
     }
 

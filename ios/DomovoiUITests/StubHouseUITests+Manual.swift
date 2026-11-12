@@ -29,7 +29,7 @@ import XCTest
 // with the cards moving, so a quiescence problem costs that case and not the
 // screen.
 //
-// **Every level is on one screen** (Kamron's answer 73). The top bar is drawn
+// **Every level is on one screen** (the owner's answer 73). The top bar is drawn
 // once and the level under it is swapped — a cut to Start here or a piece,
 // and the camera's 280 ms glide between the map and a cluster — so the tree
 // holds one level and one bar at a time. If a query here ever matches two of
@@ -691,7 +691,7 @@ extension StubHouseUITests {
         evidence(app, "manual-swipe-back-on-start-here")
     }
 
-    /// **Kamron's answer 74**: at an accessibility text size the swipe back
+    /// **The owner's answer 74**: at an accessibility text size the swipe back
     /// goes up a level too — from a cluster to the map, from the map to Start
     /// here — and only from Start here does it leave the manual.
     ///
@@ -2192,7 +2192,7 @@ extension StubHouseUITests {
     ///
     /// So the failing pair is a tint against the card it sits on, and every
     /// pair that carries a glyph passes. Dropping the wash is the only other
-    /// answer and it is the one Kamron declined (answer 34); the cost of the
+    /// answer and it is the one the owner declined (answer 34); the cost of the
     /// allowance — that element, on that screen, blind to a future colour
     /// regression — is in `hx-manual/DECISIONS.md`.
     ///
@@ -2269,7 +2269,7 @@ extension StubHouseUITests {
     /// element's frame was twelve times its own content and the fix was to
     /// take that element out of the tree (``ManualMapNode``'s second line).
     /// Here the element is honest and the allowance is the only answer short
-    /// of dropping the wash, which is the answer Kamron gave. It is in
+    /// of dropping the wash, which is the answer the owner gave. It is in
     /// `gx-manual/DECISIONS.md` for him, with the cost.
     ///
     /// ### The same finding with no element on it (train I007)

@@ -56,7 +56,7 @@ final class PeopleRulesTests: XCTestCase {
     /// every run of whitespace collapsed to one space, **tabs and newlines
     /// included**, which is what Python's bare `split()` does.
     func testCleanPersonNameIsWhatTheServerWouldStore() {
-        XCTAssertEqual(cleanPersonName("  Kamron  "), "Kamron")
+        XCTAssertEqual(cleanPersonName("  Jordan  "), "Jordan")
         XCTAssertEqual(cleanPersonName("Mary   Jane"), "Mary Jane")
         XCTAssertEqual(cleanPersonName("Mary\t\nJane"), "Mary Jane")
         XCTAssertEqual(cleanPersonName(""), "")
@@ -73,7 +73,7 @@ final class PeopleRulesTests: XCTestCase {
 
     func testRosterNameTagMarksOnlyANamesake() {
         XCTAssertEqual(rosterNameTag(Person(id: 3, name: "Alex", namesakes: 1)), "#3 · same name · ")
-        XCTAssertEqual(rosterNameTag(Person(id: 1, name: "Kamron", namesakes: 0)), "")
+        XCTAssertEqual(rosterNameTag(Person(id: 1, name: "Jordan", namesakes: 0)), "")
     }
 
     func testRosterSubtitleReadsTagTimeThenTier() {
@@ -85,7 +85,7 @@ final class PeopleRulesTests: XCTestCase {
         // No tier from the server reads `high` on the roster — the fallback
         // the profile tile does NOT share (`PersonDetail.kt:257` shows an em
         // dash). Both are Android's; they disagree over there too.
-        let noTier = Person(id: 1, name: "Kamron", lastSeenAt: ago(10))
+        let noTier = Person(id: 1, name: "Jordan", lastSeenAt: ago(10))
         XCTAssertEqual(rosterSubtitle(noTier, nowMs: now), "just now · high")
         XCTAssertEqual(PeopleStrings.presenceIs(noTier.presenceTier), "presence: —")
     }
@@ -101,8 +101,8 @@ final class PeopleRulesTests: XCTestCase {
     }
 
     func testNobodySharingTheNameGetsNoNote() {
-        XCTAssertNil(namesakeNote(Person(id: 1, name: "Kamron", namesakes: 0)))
-        XCTAssertNil(namesakeNote(Person(id: 1, name: "Kamron", namesakes: -1)))
+        XCTAssertNil(namesakeNote(Person(id: 1, name: "Jordan", namesakes: 0)))
+        XCTAssertNil(namesakeNote(Person(id: 1, name: "Jordan", namesakes: -1)))
     }
 
     /// Android's note ends *"If they are different people, rename one of
@@ -189,14 +189,14 @@ final class PeopleRulesTests: XCTestCase {
     /// Swift is seeded per process.
     func testAvatarBucketIsStableAndInRange() {
         XCTAssertEqual(personAvatarGradients.count, 5)
-        for name in ["Kamron", "Chevy", "Alex", "alex ", "", "Ольга", "$uicideboy$"] {
+        for name in ["Jordan", "Chevy", "Alex", "alex ", "", "Ольга", "$uicideboy$"] {
             let bucket = personAvatarBucket(name)
             XCTAssertTrue((0..<5).contains(bucket), "\(name) landed on \(bucket)")
             XCTAssertEqual(bucket, personAvatarBucket(name), "\(name) moved between two calls")
         }
         // The literal values, so a change to the hash is a failing test and
         // not a household quietly changing colour.
-        XCTAssertEqual(personAvatarBucket("Kamron"), personAvatarBucket("Kamron"))
+        XCTAssertEqual(personAvatarBucket("Jordan"), personAvatarBucket("Jordan"))
         XCTAssertNotEqual(personAvatarBucket("Alex"), personAvatarBucket("Alexx"))
     }
 
@@ -204,7 +204,7 @@ final class PeopleRulesTests: XCTestCase {
         XCTAssertEqual(personAvatarBucket(""), personAvatarBucket("?"))
         XCTAssertEqual(personAvatarInitial(""), "?")
         XCTAssertEqual(personAvatarInitial("   "), "?")
-        XCTAssertEqual(personAvatarInitial("kamron"), "K")
+        XCTAssertEqual(personAvatarInitial("jordan"), "J")
         XCTAssertEqual(personAvatarInitial(" alex "), "A")
     }
 

@@ -37,7 +37,7 @@ import SwiftUI
 ///
 /// **Nothing, on the playback front, any more.** ``StationsPlayback`` was
 /// the seam and the branch passed ``StationsNoPlayback``, so no play
-/// affordance was drawn at all. D46 (Kamron's answer 46: "the real play
+/// affordance was drawn at all. D46 (the owner's answer 46: "the real play
 /// buttons are added in this same work") filled it:
 /// ``StationsPhonePlayback`` is the witness the route slot passes now, over
 /// ``ShellModel/player``, and every affordance the screen already knew how to

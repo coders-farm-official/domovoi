@@ -104,7 +104,7 @@ struct CalendarAgendaRowView: View {
     /// to the start, so an open-ended event would otherwise draw its own start
     /// twice (`:393`).
     ///
-    /// The **block** end and not ``calendarEndMs(_:)``, which since Kamron's
+    /// The **block** end and not ``calendarEndMs(_:)``, which since the owner's
     /// answer 17 gives an event with no end an hour. The `endsAt != nil`
     /// guard is not enough on its own: a non-nil `ends_at` that will not
     /// parse falls through it, and through the window's rule it would be

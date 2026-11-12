@@ -21,7 +21,7 @@ import XCTest
 /// app's side and read once at launch.
 ///
 /// No case here opens the connection sheet, which would start a LAN sweep
-/// across Kamron's real network (NIGHT-RULES §1).
+/// across the owner's real network (NIGHT-RULES §1).
 extension StubHouseUITests {
 
     // MARK: - App layout

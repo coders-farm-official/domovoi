@@ -94,7 +94,7 @@ final class ChatModelTests: XCTestCase {
         let transcript = Shared<String>("""
         {"messages":[
           {"id":10,"role":"user","content":"how long do lentils take?","created_at":"2026-11-02T17:59:00+00:00",
-           "device_id":"ios-1","device_name":"Kamron's iPhone","source":"typed"},
+           "device_id":"ios-1","device_name":"Jordan's iPhone","source":"typed"},
           {"id":11,"role":"assistant","content":"about twenty minutes","created_at":"2026-11-02T18:00:00+00:00",
            "model":"llama3.2:latest","retryable":true,"stats":{"window_from_id":10}}
         ],"jobs":[]}

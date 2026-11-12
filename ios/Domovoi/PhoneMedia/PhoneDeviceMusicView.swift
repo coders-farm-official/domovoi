@@ -32,7 +32,7 @@ import SwiftUI
 ///   what the owner's rule forbids ([[no-misleading-controls]]). The
 ///   permission is **not** asked for and this side is the picked folders
 ///   instead, which are readable, uploadable and now playable. DECISIONS asks
-///   Kamron whether he wants the read-only list anyway.
+///   the owner whether he wants the read-only list anyway.
 ///
 ///   (Until the 2026-11-03 batch there was a second reason — no handset
 ///   engine at all. That one is gone: D46 put `play` on these rows.)
@@ -228,7 +228,7 @@ struct PhoneDeviceTopMatter: View {
             PhoneUploadRefusedCard(reason: refused.reason, blocked: refused.blocked)
         }
         // The two doors that need no permission, and the folder list as the
-        // extra step: the simple default first, as Kamron's standing note
+        // extra step: the simple default first, as the owner's standing note
         // asks, with the browse underneath for somebody who wants to see
         // everything at once.
         if let uploads = device.uploads {

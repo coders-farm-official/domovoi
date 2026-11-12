@@ -21,7 +21,7 @@ final class PeopleModelsTests: XCTestCase {
 
     func testPersonDecodesTheServersShape() throws {
         let roster: [Person] = try decode("""
-        [{"id":1,"name":"Kamron","created_at":"2026-01-02T03:04:05Z",
+        [{"id":1,"name":"Jordan","created_at":"2026-01-02T03:04:05Z",
           "last_seen_at":"2026-11-02T10:00:00Z","notes":"prefers the kitchen satellite",
           "voice_profile_count":3,"presence_tier":"high","namesakes":0},
          {"id":3,"name":"Alex","created_at":"2026-05-05T00:00:00Z","last_seen_at":null,
@@ -29,7 +29,7 @@ final class PeopleModelsTests: XCTestCase {
         """)
         XCTAssertEqual(roster.count, 2)
         XCTAssertEqual(roster[0].id, 1)
-        XCTAssertEqual(roster[0].name, "Kamron")
+        XCTAssertEqual(roster[0].name, "Jordan")
         XCTAssertEqual(roster[0].notes, "prefers the kitchen satellite")
         XCTAssertEqual(roster[0].voiceProfileCount, 3)
         XCTAssertEqual(roster[0].presenceTier, "high")

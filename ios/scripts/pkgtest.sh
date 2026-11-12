@@ -93,7 +93,7 @@ for package in Packages/*/; do
 	[ -n "$only" ] && [ "\$name" != "$only" ] && continue
 	if [ ! -d "\$package/Tests" ]; then
 		echo ">> \$name: no tests, building only"
-		# nice + caffeinate: the Mac must not doze mid-build, and Kamron's
+		# nice + caffeinate: the Mac must not doze mid-build, and the owner's
 		# own work on it stays smooth.
 		( cd "\$package" && caffeinate -i nice -n 10 swift build 2>&1 | tail -40 ) || status=1
 		continue

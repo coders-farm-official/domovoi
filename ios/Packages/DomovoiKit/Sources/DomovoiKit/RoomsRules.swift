@@ -359,7 +359,7 @@ public func roomsDropInState(_ room: RoomsSatellite) -> RoomsDropInState {
 ///
 /// The core answers `target_busy` for a room that is already in a drop-in
 /// with somebody else (`domovoi/phone_dropin.py:78-79`), so a button offered
-/// then can only fail — Kamron's no-misleading-controls rule exactly. Review
+/// then can only fail — the owner's no-misleading-controls rule exactly. Review
 /// round 1 found this drawn enabled: the row is deliberately drawn for every
 /// state of the room — once, outside the state switch, so that the roster
 /// reporting *this* call a second after it starts cannot unmount the sheet

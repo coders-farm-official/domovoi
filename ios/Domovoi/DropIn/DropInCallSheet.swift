@@ -10,8 +10,8 @@ import SwiftUI
 /// drawn over the screen. **That was measured as doing nothing**: with such a
 /// card up, Apple's audit reported `Contrast failed` against five views
 /// *behind* the 35% scrim and the accessibility tree listed the whole of the
-/// screen underneath as the card's siblings (`DECISIONS-FOR-KAMRON.md` #6,
-/// train S009). Kamron, answer 6: dialogs become real presentations. A sheet
+/// screen underneath as the card's siblings (`DECISIONS-FOR-OWNER.md` #6,
+/// train S009). The owner, answer 6: dialogs become real presentations. A sheet
 /// is one, so what is behind it is behind it for VoiceOver and for the audit
 /// too.
 ///

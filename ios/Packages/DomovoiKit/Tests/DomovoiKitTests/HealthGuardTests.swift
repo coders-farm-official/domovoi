@@ -77,7 +77,7 @@ final class HealthGuardTests: XCTestCase {
     /// **The two expectations below were changed by the `screens` unit** in
     /// the 2026-11-03 batch, in a file no unit's `owns` list named, and the
     /// integration **blessed the edit** rather than revert it or retire the
-    /// case (`INTEGRATION.md`). Kamron's answers 7 and 24 are `not checked
+    /// case (`INTEGRATION.md`). The owner's answers 7 and 24 are `not checked
     /// yet` for a house with no container guard, which is the collapse this
     /// case used to record as green: a byte-clean revert hands the train a
     /// red case, and deleting the case loses the pin. The engine's own branch

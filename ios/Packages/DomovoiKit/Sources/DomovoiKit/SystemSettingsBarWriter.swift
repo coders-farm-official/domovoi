@@ -34,7 +34,7 @@ import Foundation
 /// ``SystemSettingsLayoutModel/canEdit`` is then false. The panel draws no
 /// move, remove or add control at all in that state. Drawing them disabled
 /// would at least be honest; drawing them live over a store that cannot save
-/// is the misleading control Kamron has ruled out twice, and an editor whose
+/// is the misleading control the owner has ruled out twice, and an editor whose
 /// edits vanish on the next launch is exactly that.
 public protocol SystemSettingsBarWriter: Sendable {
 

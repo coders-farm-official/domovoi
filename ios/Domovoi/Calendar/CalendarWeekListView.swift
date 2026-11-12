@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The week: **the agenda's rows under seven day headers.**
 ///
-/// Kamron's answer 14 (2026-11-03), which settled DECISIONS §3: "build the
+/// The owner's answer 14 (2026-11-03), which settled DECISIONS §3: "build the
 /// week view (agenda rows under seven day headers)". Android's week is a
 /// seven-column time grid of 9–11sp text in fixed-height blocks
 /// (`CalendarGrids.kt:212-286`) and that is explicitly **not** what this is.

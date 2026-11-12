@@ -159,7 +159,7 @@ struct ManualMapGeo {
 /// The stage: the wires, the nodes, and the camera over them (`ManualMap`,
 /// `ManualScreen.kt:503`).
 ///
-/// **One stage for the map and every cluster** (Kamron's answer 73):
+/// **One stage for the map and every cluster** (the owner's answer 73):
 /// ``ManualLevelView`` keeps this view's identity across a move between them,
 /// so `focus` changes in place and the camera glides from one to the other.
 struct ManualMapStage: View {
@@ -280,7 +280,7 @@ struct ManualMapStage: View {
     /// A move between the map and a cluster draws a different set of ids
     /// (`domovoi`/`t:<id>` against `h:<id>`/`p:<id>`), so every card of the
     /// level arrived at is a new view and its name retypes from the start —
-    /// Kamron's answer 76, on the way down and on the way up.
+    /// the owner's answer 76, on the way down and on the way up.
     private func nodes(
         _ geo: ManualMapGeo,
         shown: [String],
@@ -334,7 +334,7 @@ struct ManualMapStage: View {
     /// arrival at it** — the Kotlin's `levelKey` (`:593`, handed to every
     /// `MapNode` at `:633`) with a count after it.
     ///
-    /// Android retypes every node on every move, down and up (Kamron's answer
+    /// Android retypes every node on every move, down and up (the owner's answer
     /// 76), because `levelKey` changes inside one composition and every
     /// node's `LaunchedEffect(key, text)` (`:686`) re-fires. Here a move
     /// between the map and a cluster inserts new cards (``nodes``), so the
@@ -655,7 +655,7 @@ struct ManualMapNode: View {
                         // is a correlation and not a mechanism — nothing here
                         // can run a `NavigationStack` or an audit — so the
                         // modifier is left where it is rather than removed to
-                        // find out on Kamron's screen.
+                        // find out on the owner's screen.
                         //
                         // **What VoiceOver reads is the card's own label**
                         // below, `"<title>: <subtitle>"`

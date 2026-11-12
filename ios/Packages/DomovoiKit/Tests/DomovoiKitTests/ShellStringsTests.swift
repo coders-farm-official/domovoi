@@ -527,7 +527,7 @@ final class ShellStringsTests: XCTestCase {
     /// **The one deliberate difference in the whole file.** Android's drawer
     /// says `/ android`; ours says `/ iphone`. Asserted both ways so neither
     /// can drift into the other by accident — and flagged in `I1C1-REPORT.md`
-    /// as a choice for Kamron rather than a transcription.
+    /// as a choice for the owner rather than a transcription.
     func testThePlatformIsTheOneWordThatDiffers() {
         assertKotlinSaysWhole("/ android", "the Kotlin's word, which ours replaces")
         XCTAssertEqual("/ iphone", ShellStrings.platformCrumb)

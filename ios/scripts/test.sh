@@ -25,7 +25,7 @@ Runs, in this order:
      tests) — on the Mac itself, no Simulator;
   2. `xcodebuild test` for Domovoi, DomovoiTests and DomovoiUITests on a
      Simulator destination, with CODE_SIGNING_ALLOWED=NO;
-  3. `xcrun simctl shutdown all`, so nothing is left running on Kamron's Mac.
+  3. `xcrun simctl shutdown all`, so nothing is left running on the owner's Mac.
 
 Options
   --packages-only    stop after step 1.

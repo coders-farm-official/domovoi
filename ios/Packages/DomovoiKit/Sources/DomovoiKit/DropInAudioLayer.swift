@@ -391,7 +391,7 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
 // them. Shipped unconditionally it meant a release build launched with
 // `-domovoi-dropin-mic pump` would skip the microphone permission request and
 // stream synthetic audio into a room — apparatus reachable from outside the
-// app in a build Kamron hands to anyone.
+// app in a build the owner hands to anyone.
 //
 // Every other launch-argument seam in this app is already gated this way, and
 // they are the precedent followed here: `AuditStrip.active` /

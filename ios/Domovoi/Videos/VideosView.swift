@@ -360,7 +360,7 @@ struct VideosView: View {
             Text(tile.video.displayTitle)
                 .font(.caption)
                 // **Two lines normally, as many as it takes at accessibility
-                // sizes** (D66, Kamron: "let video tile names wrap at
+                // sizes** (D66, the owner: "let video tile names wrap at
                 // accessibility sizes"). Android shows one line at every size
                 // and ellipsises (`VideosScreen.kt:293`); at AX5 two lines
                 // here were 102 points and a 20-character name still lost its

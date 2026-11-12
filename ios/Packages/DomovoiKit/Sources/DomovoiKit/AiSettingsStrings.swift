@@ -53,7 +53,7 @@ public enum AiSettingsStrings {
     public static let warnAgain = "warn again"
 
     /// What VoiceOver says for one of those buttons — **iOS-only**, asked for
-    /// by Kamron (answer 2, 2026-11-03): `warn again, scanned pages`.
+    /// by the owner (answer 2, 2026-11-03): `warn again, scanned pages`.
     ///
     /// The **drawn** label stays ``warnAgain``, Android's word for word. The
     /// announcement adds the kind, because every row's button says the same

@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DomovoiKit
 
-/// The transcript's cap (D64, Kamron's answer 64: "cap the transcript (last N
+/// The transcript's cap (D64, the owner's answer 64: "cap the transcript (last N
 /// plus 'show earlier')").
 ///
 /// Android has nothing to compare against — its transcript is a `LazyColumn`

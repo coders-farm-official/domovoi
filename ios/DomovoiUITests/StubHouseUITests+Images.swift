@@ -34,7 +34,7 @@ import XCTest
 /// (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied at
 /// `:360`, `:339`, `:651`) and this app sends only `X-Device-Token`, so all
 /// three answered 401 from every phone. The controls are not drawn
-/// (2026-11-03, Kamron's answer 41; `ImagesView.swift`'s header has the
+/// (2026-11-03, the owner's answer 41; `ImagesView.swift`'s header has the
 /// evidence), and the five cases that drove them are gone — each one named
 /// where it was, with what replaced it.
 ///
@@ -48,7 +48,7 @@ import XCTest
 /// **A server switch inside the generate round trip.** The only way to
 /// change the address from a UI case is the app's connection sheet, which
 /// NIGHT-RULES §1 forbids on a Simulator — it starts a LAN discovery sweep
-/// across Kamron's real home network. The case exists and switches **inside**
+/// across the owner's real home network. The case exists and switches **inside**
 /// the round trip in the package, where the whole thing is driveable:
 /// `ImagesTests.testAServerSwitchMidGenerateLandsNowhere`, with a parked
 /// request. [[read-after-await-wrong-key]].
@@ -180,7 +180,7 @@ extension StubHouseUITests {
         /// ``ImagesStrings/tile(position:)`` — a tile's label since the audit
         /// rejected the file name as one.
         static func tile(position: Int) -> String { "picture \(position)" }
-        /// ``ImagesStrings/moreImages(total:shown:)`` — Kamron's answer 27,
+        /// ``ImagesStrings/moreImages(total:shown:)`` — the owner's answer 27,
         /// his wording. Spelt out here rather than built from the fixture's
         /// counts: a helper that computed `4` and `3` from the same seed the
         /// card reads would agree with the card however wrong both were.
@@ -464,7 +464,7 @@ extension StubHouseUITests {
     // (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied
     // at `:360`) and this app sends only `X-Device-Token`, so the composer —
     // the prompt field, the model picker and `generate` — answered 401 from
-    // every phone and is not drawn (Kamron's answer 41; `ImagesView.swift`'s
+    // every phone and is not drawn (the owner's answer 41; `ImagesView.swift`'s
     // header carries the evidence). Four cases went with it:
     // `testImages_ThePickerOffersOnlyInstalledModels`,
     // `testImages_GenerateIsOffWithoutAPromptAndOnWithOne`,
@@ -686,7 +686,7 @@ extension StubHouseUITests {
             kingfisherTiles.count,
             "the card draws \(kingfisherTiles.count) tiles of four, and Android draws three"
         )
-        // **And it says so** (Kamron's answer 27). Three tiles of four was
+        // **And it says so** (the owner's answer 27). Three tiles of four was
         // Android's shape and it was also the whole of what a person could
         // find out: the fourth picture was neither drawn nor mentioned. The
         // sentence is this card's, in his words, and it is asserted on the
@@ -885,7 +885,7 @@ extension StubHouseUITests {
             // measurement behind it is how a stuck leaf gets excused. If this
             // leaf ever stops growing, that excuse fails here first.
             ("prompt", StubImages.historyPrompt),
-            // `4 images, showing 3` — Kamron's answer 27, added 2026-11-04
+            // `4 images, showing 3` — the owner's answer 27, added 2026-11-04
             // for the same reason the prompt was. It is a new drawn text
             // leaf on the card this case exists to measure, and the audit
             // case waives anonymous `Text clipped` on the strength of *this*

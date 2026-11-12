@@ -164,7 +164,7 @@ extension StubHouseUITests {
             "-domovoi-token", Self.token,
             // Chat is pushed by the shell's own audit seam, which is how every
             // Chat case gets there without driving the connection sheet (which
-            // would start a LAN sweep across Kamron's real network).
+            // would start a LAN sweep across the owner's real network).
             "-domovoi-audit-push", "Chat",
             "-domovoi-audit-push-delay", "\(Self.pushDelay)",
             "-UIPreferredContentSizeCategoryName", mode,

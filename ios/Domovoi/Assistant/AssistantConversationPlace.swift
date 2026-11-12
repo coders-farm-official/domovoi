@@ -2,7 +2,7 @@ import DomovoiKit
 import SwiftUI
 
 /// Which place the conversation on screen is in, handed down so that the
-/// conversation's **own header row** can say it (D63, Kamron's answer 63:
+/// conversation's **own header row** can say it (D63, the owner's answer 63:
 /// "Android's way: the place goes inside each conversation's header row").
 ///
 /// ### Why an environment value and not an argument

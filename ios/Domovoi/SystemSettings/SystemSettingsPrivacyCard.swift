@@ -16,7 +16,7 @@ import SwiftUI
 /// no room mode and opens no microphone, so the two sentences about those are
 /// gone rather than reworded. All three changes are in
 /// `design-notes/ios/overnight/systemsettings/IOS-ONLY-STRINGS.md`, and the
-/// backup wording is the one question in this item that Kamron has to answer —
+/// backup wording is the one question in this item that the owner has to answer —
 /// it is also read on a store listing.
 ///
 /// ### What is not, and why there is no control for it

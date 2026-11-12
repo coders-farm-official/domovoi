@@ -24,7 +24,7 @@ import SwiftUI
 /// file that item could not edit, so the holder lived here with the shared
 /// change written down.
 ///
-/// Kamron answered it (answer 2 / 49: "yes, as the next batch"), and the owner
+/// The owner answered it (answer 2 / 49: "yes, as the next batch"), and the owner
 /// is ``ShellModel/player`` — not `AppContainer`, because ``PlayerModel`` is
 /// `@MainActor` and `AppContainer` is `Sendable` and not main-actor isolated,
 /// so a player cannot be one of its stored properties. What is left here is

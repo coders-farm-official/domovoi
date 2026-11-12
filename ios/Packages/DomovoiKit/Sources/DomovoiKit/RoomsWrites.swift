@@ -453,7 +453,7 @@ extension RoomsModel {
     ///
     /// ### D55 is waiting on the server, and this is why the sentence stays
     ///
-    /// Kamron, answer 55: "no fulfiller means no button and no error: the
+    /// The owner, answer 55: "no fulfiller means no button and no error: the
     /// server computes `can_add` against the fulfiller allowlist, so both
     /// phones draw it honestly." That is a **server** change, and the route
     /// on this branch does not have it: `can_add=(external and not

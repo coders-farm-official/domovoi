@@ -44,7 +44,7 @@ extension StubHouseUITests {
         static let nobodyEnrolled = "nobody enrolled yet"
         static let back = "back"
 
-        static let kamron = "Kamron"
+        static let jordan = "Jordan"
         static let chevy = "Chevy"
         static let alex = "Alex"
         /// Person 4's name carries a trailing space — the server counts
@@ -379,7 +379,7 @@ extension StubHouseUITests {
                 + "live count counted everybody"
         )
         for name in [
-            PeopleUnderTest.kamron, PeopleUnderTest.chevy,
+            PeopleUnderTest.jordan, PeopleUnderTest.chevy,
             PeopleUnderTest.alex, PeopleUnderTest.alexLower,
         ] {
             XCTAssertTrue(peopleRow(app, name).exists, "no roster row for \(name)")
@@ -408,12 +408,12 @@ extension StubHouseUITests {
             "Alex's subtitle does not begin `\(PeopleUnderTest.namesakeTag)` — the roster's "
                 + "name tag is missing, or it is not keyed on `namesakes`"
         )
-        let kamron = peopleRow(app, PeopleUnderTest.kamron)
-        XCTAssertTrue(kamron.exists, "no Kamron row to check")
+        let jordan = peopleRow(app, PeopleUnderTest.jordan)
+        XCTAssertTrue(jordan.exists, "no Jordan row to check")
         XCTAssertFalse(
-            (kamron.value as? String ?? "").contains(PeopleUnderTest.sameName),
-            "Kamron shares a name with nobody and the row says they do: "
-                + "\(kamron.value as? String ?? "nothing")"
+            (jordan.value as? String ?? "").contains(PeopleUnderTest.sameName),
+            "Jordan shares a name with nobody and the row says they do: "
+                + "\(jordan.value as? String ?? "nothing")"
         )
     }
 
@@ -430,13 +430,13 @@ extension StubHouseUITests {
             "`chev` does not match Chevy — the filter is case-sensitive, or over another field"
         )
         XCTAssertTrue(
-            waitUntilGone(peopleRow(app, PeopleUnderTest.kamron)),
-            "`chev` left Kamron in the roster — the filter narrowed nothing"
+            waitUntilGone(peopleRow(app, PeopleUnderTest.jordan)),
+            "`chev` left Jordan in the roster — the filter narrowed nothing"
         )
 
         clearField(app)
         XCTAssertTrue(
-            peopleRow(app, PeopleUnderTest.kamron).waitForExistence(timeout: 10),
+            peopleRow(app, PeopleUnderTest.jordan).waitForExistence(timeout: 10),
             "clearing the filter did not bring the household back"
         )
 
@@ -478,7 +478,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_ProfileShowsTheirOwnStats() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         let tile = app.descendants(matching: .any)
             .matching(
                 NSPredicate(
@@ -489,9 +489,9 @@ extension StubHouseUITests {
             .firstMatch
         let counted = tile.waitForExistence(timeout: 15)
         let noted = app.staticTexts[PeopleUnderTest.notes].exists
-        evidence(app, "people-profile-kamron")
+        evidence(app, "people-profile-jordan")
         XCTAssertTrue(counted, "the voice-profiles tile does not read 3 for a person with three")
-        XCTAssertTrue(noted, "Kamron's notes are not on the profile")
+        XCTAssertTrue(noted, "Jordan's notes are not on the profile")
 
         app.buttons[PeopleUnderTest.back].tap()
         XCTAssertTrue(peopleOpen(app, PeopleUnderTest.chevy), "Chevy's detail did not open")
@@ -501,7 +501,7 @@ extension StubHouseUITests {
         XCTAssertTrue(saidNone, "a person with no notes does not get the `no notes yet` line")
         XCTAssertFalse(
             app.staticTexts[PeopleUnderTest.notes].exists,
-            "Chevy's profile is showing Kamron's notes — the tiles and the notes are reading a "
+            "Chevy's profile is showing Jordan's notes — the tiles and the notes are reading a "
                 + "shared value rather than the open person's"
         )
     }
@@ -551,12 +551,12 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_NoRenameOrForgetControl() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         let sentence = containing(app, PeopleUnderTest.whereRenamingIs)
         let explained = sentence.waitForExistence(timeout: 15)
         evidence(app, "people-no-admin-controls")
         XCTAssertFalse(
-            app.buttons["rename \(PeopleUnderTest.kamron)"].exists,
+            app.buttons["rename \(PeopleUnderTest.jordan)"].exists,
             "the rename control is back — `PATCH /api/people/{id}` is admin-only and 401s from "
                 + "every phone (people.py:145)"
         )
@@ -585,7 +585,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_MemoryTabSeparatesPendingFromActive() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let band = app.staticTexts[PeopleUnderTest.pendingBand]
         XCTAssertTrue(band.waitForExistence(timeout: 20), "no pending band over the extracted rows")
@@ -644,7 +644,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_AddingAMemorySavesIt() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let field = app.textFields[PeopleUnderTest.addMemory]
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no add-a-memory field")
@@ -691,7 +691,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_ApprovingAPendingMemoryMovesIt() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let approve = app.buttons["approve \(PeopleUnderTest.pendingMemory)"]
         XCTAssertTrue(approve.waitForExistence(timeout: 20), "the pending memory has no approve")
@@ -728,7 +728,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_ForgettingAMemoryAsksFirst() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let forget = app.buttons["forget \(PeopleUnderTest.activeMemory)"]
         XCTAssertTrue(forget.waitForExistence(timeout: 20), "the active memory has no forget")
@@ -759,7 +759,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_FavoritesGroupByKind() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let counts = app.staticTexts[PeopleUnderTest.favoriteCounts]
         XCTAssertTrue(
@@ -799,7 +799,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_AddingAFavoriteNeedsBothFields() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let kind = app.textFields[PeopleUnderTest.favoriteKind]
         XCTAssertTrue(peopleReveal(app, kind), "no favourite `kind` field")
@@ -844,7 +844,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_SessionsExpandToTheirTurns() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "sessions"), "no sessions tab")
         let kitchen = app.buttons
             .matching(NSPredicate(format: "value BEGINSWITH %@", PeopleUnderTest.kitchenSession))
@@ -880,7 +880,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_ConversationSearchCountsWhatItFound() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "conversations"), "no conversations tab")
         let field = app.textFields[PeopleUnderTest.search]
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no conversation search field")
@@ -903,7 +903,7 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_LongAnswerExpands() throws {
         let app = peopleLaunch()
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "conversations"), "no conversations tab")
         let more = app.buttons[PeopleUnderTest.more]
         XCTAssertTrue(more.waitForExistence(timeout: 20), "no `more` on the long answer")
@@ -937,7 +937,7 @@ extension StubHouseUITests {
             app.staticTexts[PeopleUnderTest.subtitle].waitForExistence(timeout: 30),
             "the roster did not draw"
         )
-        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
+        XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let card = app.staticTexts[PeopleUnderTest.couldNotReach]
         let saidSo = card.waitForExistence(timeout: 20)
@@ -976,8 +976,8 @@ extension StubHouseUITests {
             app.staticTexts[PeopleUnderTest.subtitle].waitForExistence(timeout: 30),
             "the roster did not draw"
         )
-        let row = peopleRow(app, PeopleUnderTest.kamron)
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "no Kamron row")
+        let row = peopleRow(app, PeopleUnderTest.jordan)
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "no Jordan row")
         row.tap()
         // Queried before the reads finish, because the toast is raised when
         // the fifth one lands and lives 2.4 seconds.
@@ -1011,7 +1011,7 @@ extension StubHouseUITests {
             "the denylist view does not say the count is hashes"
         )
         // The one privacy claim this screen makes out loud.
-        for name in [PeopleUnderTest.kamron, PeopleUnderTest.chevy, PeopleUnderTest.alex] {
+        for name in [PeopleUnderTest.jordan, PeopleUnderTest.chevy, PeopleUnderTest.alex] {
             XCTAssertFalse(
                 containing(app, name).exists,
                 "\(name) is named on the denylist view, which claims nothing identifying is kept"
@@ -1038,11 +1038,11 @@ extension StubHouseUITests {
             app.staticTexts[PeopleUnderTest.subtitle].waitForExistence(timeout: 30),
             "the roster did not draw"
         )
-        let kamron = peopleRow(app, PeopleUnderTest.kamron)
-        XCTAssertTrue(kamron.waitForExistence(timeout: 20), "no Kamron row")
-        kamron.tap()
+        let jordan = peopleRow(app, PeopleUnderTest.jordan)
+        XCTAssertTrue(jordan.waitForExistence(timeout: 20), "no Jordan row")
+        jordan.tap()
         let back = app.buttons[PeopleUnderTest.back]
-        XCTAssertTrue(back.waitForExistence(timeout: 20), "Kamron's detail did not open")
+        XCTAssertTrue(back.waitForExistence(timeout: 20), "Jordan's detail did not open")
         // Inside the held request: the sessions and conversations reads are
         // immediate, the memories read is the one being delayed.
         usleep(700_000)
@@ -1064,7 +1064,7 @@ extension StubHouseUITests {
         evidence(app, "people-switched-mid-flight")
         XCTAssertFalse(
             leaked.exists,
-            "`\(PeopleUnderTest.activeMemory)` is Kamron's and it is on Chevy's memory tab — a "
+            "`\(PeopleUnderTest.activeMemory)` is Jordan's and it is on Chevy's memory tab — a "
                 + "read published after the person was switched"
         )
         XCTAssertTrue(
@@ -1086,15 +1086,15 @@ extension StubHouseUITests {
     @MainActor
     func testPeople_GrowsAtTheLargestTypeSize() throws {
         let ordinary = peopleLaunch()
-        let small = peopleRow(ordinary, PeopleUnderTest.kamron)
-        XCTAssertTrue(small.waitForExistence(timeout: 25), "no Kamron row at the ordinary size")
+        let small = peopleRow(ordinary, PeopleUnderTest.jordan)
+        XCTAssertTrue(small.waitForExistence(timeout: 25), "no Jordan row at the ordinary size")
         let smallHeight = small.frame.height
         evidence(ordinary, "people-row-ordinary")
         ordinary.terminate()
 
         let large = peopleLaunch(mode: "UICTContentSizeCategoryAccessibilityXXXL")
-        let big = peopleRow(large, PeopleUnderTest.kamron)
-        XCTAssertTrue(big.waitForExistence(timeout: 25), "no Kamron row at AX5")
+        let big = peopleRow(large, PeopleUnderTest.jordan)
+        XCTAssertTrue(big.waitForExistence(timeout: 25), "no Jordan row at AX5")
         let bigHeight = big.frame.height
         evidence(large, "people-row-ax5")
 

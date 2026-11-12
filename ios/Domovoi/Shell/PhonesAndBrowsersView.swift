@@ -11,7 +11,7 @@ import SwiftUI
 /// says is ``IdentityDisplay``, what each forget does is
 /// ``ForgetAffordance``, and the cascade is ``TrustBook/forget(_:)``.
 ///
-/// **Listening as** arrived with the 2026-11-03 batch (Kamron's answer 11:
+/// **Listening as** arrived with the 2026-11-03 batch (the owner's answer 11:
 /// "yes, match Android: build the 'listening as' picker"). It is here and not
 /// on Podcasts or Audiobooks because that is where Android puts it — those two
 /// screens draw a *hint chip* and the real selector lives in this panel

@@ -169,7 +169,7 @@ public final class NewsModel {
     /// calls ``NewsPersonModel/stop()`` before the next person's model
     /// exists, and every write and poll over there returns at
     /// `guard let self, !self.stopped` **before** it calls this — so a slow
-    /// DELETE for Kamron's topic cannot toast `remove topic failed: …` over
+    /// DELETE for Jordan's topic cannot toast `remove topic failed: …` over
     /// Chevy's news, because it never reaches this closure at all. A guard
     /// that cannot fire is a guard no test can hold, and it read as the thing
     /// keeping the wrong person's sentence off the screen.

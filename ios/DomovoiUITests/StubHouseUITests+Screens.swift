@@ -16,7 +16,7 @@ import XCTest
 ///
 /// `StubHouseUITests+Images.swift` lost five cases when the composer, the
 /// lane's cancel and the history delete came off the screen — all three
-/// routes are admin-only on the plugin and 401 from every phone (Kamron's
+/// routes are admin-only on the plugin and 401 from every phone (the owner's
 /// answer 41; `ImagesView.swift`'s header has the evidence). The cases that
 /// replace them are **new**, so they are named `testScreens_…` and their
 /// evidence is `screens-…`, which is how a train hands a result back to the
@@ -49,7 +49,7 @@ extension StubHouseUITests {
     // MARK: - D35: the lyrics panel comes back to the song by itself
 
     /// A drag pauses following; **four seconds later it comes back without
-    /// being asked** (Kamron's answer 35).
+    /// being asked** (the owner's answer 35).
     ///
     /// Android pauses on `DragInteraction.Start` and resumes
     /// `FOLLOW_PAUSE_MS` after `Stop` (`LyricsPanel.kt:468-485`, `:118`), and
@@ -159,7 +159,7 @@ extension StubHouseUITests {
     // MARK: - D2: `warn again` announces its kind
 
     /// Each `warn again` button **reads** `warn again` and **announces**
-    /// `warn again, <the kind>` (Kamron's answer 2).
+    /// `warn again, <the kind>` (the owner's answer 2).
     ///
     /// Two silenced kinds, so the case can say the two announcements differ:
     /// a label built from a constant would be the same string on both rows,
@@ -249,7 +249,7 @@ extension StubHouseUITests {
     /// `check_admin_request` (`domovoi/admin_auth.py:1245-1274`) — a Bearer
     /// session and the dashboard's cookie, never `X-Device-Token`. This app
     /// sends only the device token, so all three answered 401 from every
-    /// phone, every time. Kamron's answer 41: "admin-only things stay off
+    /// phone, every time. The owner's answer 41: "admin-only things stay off
     /// both phones". `ImagesView.swift`'s header carries the whole argument
     /// and the one plugin change that would bring them back.
     ///
@@ -439,7 +439,7 @@ extension StubHouseUITests {
     // MARK: - D39: the News chip row has no avatar bubble
 
     /// The person chips are plain pills: **no initial, anywhere in the row**
-    /// (Kamron's answer 39).
+    /// (the owner's answer 39).
     ///
     /// The bubble was the row's only colour and the last thing in it an
     /// auditor could sample and misattribute — five `Contrast failed` over
@@ -449,7 +449,7 @@ extension StubHouseUITests {
     /// question said dropping the bubble "is Android's shape
     /// (`NewsScreen.kt`)"; it is not. `NewsScreen.kt:139` draws
     /// `AvatarBubble(p.name, 20)` inside the chip's `Row` and `:185` draws
-    /// the rail's `AvatarBubble(p.name, 32)`. Kamron's answer is still the
+    /// the rail's `AvatarBubble(p.name, 32)`. The owner's answer is still the
     /// spec, and the Android half of it is logged in this unit's
     /// DECISIONS.md — the same way answers 2 and 24 got one.
     ///
@@ -462,7 +462,7 @@ extension StubHouseUITests {
     /// 2. no **text or image** element is drawn over a chip: none of their
     ///    frames lies inside a chip's frame. That is the exact shape round 3
     ///    shipped and this one deleted — `StaticText 'K' {{28,225.3},{28,28}}`
-    ///    inside `Button 'Kamron' {{16,217.3},{113,44}}` — and within those
+    ///    inside `Button 'Jordan' {{16,217.3},{113,44}}` — and within those
     ///    two element types it is **letter-blind**: a bubble drawing a glyph,
     ///    a digit, a word or a symbol image fails it whatever the character
     ///    is.
@@ -668,7 +668,7 @@ enum ScreensWords {
     /// The fourth name's trailing space is the seed's, kept exactly: the
     /// chip's identifier is built from `NewsPerson.displayName`, so a name
     /// trimmed here would look for a chip that is not there.
-    static let newsChipPeople = ["Kamron", "Chevy", "Alex", "alex "]
+    static let newsChipPeople = ["Jordan", "Chevy", "Alex", "alex "]
 
     /// The initials of that whole roster — what an avatar bubble would have
     /// drawn (``NewsPerson/initial``: trimmed, first character, uppercased,
@@ -676,5 +676,5 @@ enum ScreensWords {
     /// rather than a sample: round 2 of this unit denied `K` and `C` only,
     /// described as "the two people in `fixtures/news.py`", so a bubble left
     /// on either `Alex` chip passed (review 2, finding 5).
-    static let newsInitials = ["K", "C", "A"]
+    static let newsInitials = ["J", "C", "A"]
 }

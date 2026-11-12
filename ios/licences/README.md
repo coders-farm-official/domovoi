@@ -73,4 +73,4 @@ same trust reasons as Gemma. Moonshine is how Android runs it through
 sherpa-onnx, so the fallback is now the plan — and the paragraph above is not
 a footnote, it is the build instruction.
 
-Spike A0 measures Moonshine on Kamron's iPhone 14.
+Spike A0 measures Moonshine on the owner's iPhone 14.

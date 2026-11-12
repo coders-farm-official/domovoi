@@ -586,7 +586,7 @@ extension StubHouseUITests {
     /// its own.
     ///
     /// **It never opens the connection sheet** (NIGHT-RULES §1: that starts a
-    /// LAN sweep of Kamron's real network). The pill is asserted to exist and
+    /// LAN sweep of the owner's real network). The pill is asserted to exist and
     /// is not tapped.
     @MainActor
     func testShell_TheLocalShellsHeaderIsOnEveryTab() throws {

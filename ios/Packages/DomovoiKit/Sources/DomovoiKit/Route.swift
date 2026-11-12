@@ -130,7 +130,7 @@ public let workspaceRoutes: [Route] = [
 ]
 
 /// The phone bar's default, left to right: home · music · videos · chat
-/// (`Routes.kt:150`, and Kamron's decision of 2026-10 that the bar is these
+/// (`Routes.kt:150`, and the owner's decision of 2026-10 that the bar is these
 /// four and is customisable).
 public let defaultPhoneBar: [Route] = [.home, .music, .videos, .chat]
 

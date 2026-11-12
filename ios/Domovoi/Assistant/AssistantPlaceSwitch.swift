@@ -189,7 +189,7 @@ struct AssistantPlaceSwitch<House: View>: View {
     ) -> some View {
         VStack(spacing: 0) {
             // **The band is not drawn over a conversation at all** (D63,
-            // Kamron's answer 63: "Android's way: the place goes inside each
+            // the owner's answer 63: "Android's way: the place goes inside each
             // conversation's header row"). It used to be dropped at an
             // accessibility size only, which train R001 measured the need
             // for and entry 63 then named as the hole to close: the chip is

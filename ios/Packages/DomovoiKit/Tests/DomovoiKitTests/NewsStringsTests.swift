@@ -197,7 +197,7 @@ final class NewsStringsTests: XCTestCase {
         assertKotlinSourceHas("'s news")
         assertKotlinSourceHas("polled — ")
         assertKotlinSourceHas(" new item")
-        XCTAssertEqual("Kamron's news", NewsStrings.personsNews("Kamron"))
+        XCTAssertEqual("Jordan's news", NewsStrings.personsNews("Jordan"))
         XCTAssertTrue(
             NewsStrings.polled(3).unicodeScalars.contains(UnicodeScalar(0x2014)!),
             "polled — N uses an em dash"

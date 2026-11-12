@@ -60,12 +60,12 @@ final class PlayerPositionsTests: XCTestCase {
         // was never saved at all. `VideoModels.swift:454` already sends it
         // only when it parses.
         XCTAssertEqual(
-            PlayerServerPositions.readQuery(deviceID: "phone-1", personID: "kamron"),
+            PlayerServerPositions.readQuery(deviceID: "phone-1", personID: "jordan"),
             "?device_id=phone-1",
             "a name is not a person id the server can take"
         )
         let body = try fields(PlayerServerPositions.saveBody(
-            deviceID: "phone-1", personID: "kamron", positionSec: 1, speed: 1
+            deviceID: "phone-1", personID: "jordan", positionSec: 1, speed: 1
         ))
         XCTAssertNil(body["person_id"])
     }

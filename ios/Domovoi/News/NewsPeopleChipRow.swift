@@ -21,11 +21,11 @@ import SwiftUI
 ///
 /// This is a shape, not a style, and it is what the five `Contrast failed`
 /// this screen carried for four trains were: see ``chip(_:stacked:)``. The
-/// avatar bubble that used to be drawn over the pill is **gone** — Kamron's
+/// avatar bubble that used to be drawn over the pill is **gone** — the owner's
 /// answer 39, 2026-11-03.
 ///
 /// **It is a divergence from Android, not a port of it**, and the question
-/// Kamron answered said otherwise. `PeopleChipRow` draws
+/// the owner answered said otherwise. `PeopleChipRow` draws
 /// `AvatarBubble(p.name, 20)` inside the chip's own `Row`
 /// (`NewsScreen.kt:139`), and the expanded rail draws
 /// `AvatarBubble(p.name, 32)` (`:185`), so Android has the bubble in both
@@ -78,7 +78,7 @@ struct NewsPeopleChipRow: View {
     /// and name. Train S005 is the run that named them, and the frames are
     /// what give it away:
     ///
-    ///     Contrast failed | element: label='Kamron' frame=(16, 217.3, 113, 44)
+    ///     Contrast failed | element: label='Jordan' frame=(16, 217.3, 113, 44)
     ///     Contrast failed | element: label='Chevy'  frame=(137, 217.3, 103.3, 44)
     ///
     /// A `StaticText` 113 x 44 is not a word; it is the **pill**. The chip's
@@ -96,10 +96,10 @@ struct NewsPeopleChipRow: View {
     /// the control and its leaves where they were — R001 and R002 both show
     /// the chip three deep with the leaves still at the bottom:
     ///
-    ///     Button, {{16, 217.3}, {113, 44}}, id: 'news-chip-Kamron', label: 'Kamron's news'
-    ///       Button, {{16, 217.3}, {113, 44}}, label: 'Kamron'
+    ///     Button, {{16, 217.3}, {113, 44}}, id: 'news-chip-Jordan', label: 'Jordan's news'
+    ///       Button, {{16, 217.3}, {113, 44}}, label: 'Jordan'
     ///         StaticText, {{28, 225.3}, {28, 28}}, label: 'K'
-    ///         StaticText, {{16, 217.3}, {113, 44}}, label: 'Kamron'
+    ///         StaticText, {{16, 217.3}, {113, 44}}, label: 'Jordan'
     ///
     /// It is app-wide, not News's and not the integration's:
     /// ``HomeAttentionView``'s rows were `Button` + `children: .ignore` +
@@ -119,7 +119,7 @@ struct NewsPeopleChipRow: View {
     ///
     /// ### And then the bubble went altogether (answer 39)
     ///
-    /// Kamron's answer 39, 2026-11-03: `drop the avatar bubble out of the
+    /// The owner's answer 39, 2026-11-03: `drop the avatar bubble out of the
     /// News chip`. It was the row's only colour, it carried no information
     /// that the name beside it did not — the initial *is* the first letter of
     /// the name — and with the five-hue avatar declined (answer 37) there was
@@ -191,7 +191,7 @@ struct NewsPeopleChipRow: View {
         .foregroundStyle(picked ? Color.brandFg : Color.primary)
         // **iOS-only** (`IOS-ONLY-STRINGS.md`): Android's chip is a
         // `Surface(onClick:)` whose only child is the name, so the name *is*
-        // the control's label. A control labelled `Kamron` says nothing about
+        // the control's label. A control labelled `Jordan` says nothing about
         // what tapping it does, and the stacked layout draws a second line a
         // reader would otherwise not hear — the same shape as Alerts'
         // `not now, Timer alerts are off on this phone`.
@@ -219,7 +219,7 @@ struct NewsPeopleChipRow: View {
         return name + Text("\n") + heard
     }
 
-    /// What VoiceOver hears: `Kamron's news`, and the `heard …` line with it
+    /// What VoiceOver hears: `Jordan's news`, and the `heard …` line with it
     /// wherever the chip draws one. A reader hearing less than the chip shows
     /// is the no-misleading rule the other way round.
     private func spoken(_ person: NewsPerson, stacked: Bool) -> String {
@@ -235,7 +235,7 @@ struct NewsPeopleChipRow: View {
 // drawn as one ``Color/brand`` bubble rather than Android's five hue
 // gradients (whose white initial measures about 2:1 on every one of them).
 //
-// **It is gone, and so is its only caller** (Kamron's answers 37 and 39,
+// **It is gone, and so is its only caller** (the owner's answers 37 and 39,
 // 2026-11-03): the gradients are declined and the bubble is dropped out of
 // the chip. It is deleted rather than kept for later because a view with no
 // caller reads as shipped behaviour to the next person through this file —

@@ -2,7 +2,7 @@ import Foundation
 
 /// The four sentences this app says that Android has no words for.
 ///
-/// **Drafts, awaiting Kamron's wording.** They are written down here, in one
+/// **Drafts, awaiting the owner's wording.** They are written down here, in one
 /// place and nowhere else, so that rewording either is a one-line change and
 /// so that `grep` finds every use. `design-notes/ios/IOS-ONLY-STRINGS.md` is
 /// where they came from and where the open question lives; nothing in this

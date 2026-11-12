@@ -18,7 +18,7 @@ import XCTest
 /// ### One button is never tapped
 ///
 /// `use a different server` opens the connection sheet, and the sheet starts
-/// a LAN discovery sweep across Kamron's real network (RULES "Safety"). It
+/// a LAN discovery sweep across the owner's real network (RULES "Safety"). It
 /// is asserted **present and hittable**, never pressed. `open the dashboard`
 /// is not pressed either: it hands the address to Safari, which takes the
 /// Simulator out of the app. `use this phone's media` is pressed, because it

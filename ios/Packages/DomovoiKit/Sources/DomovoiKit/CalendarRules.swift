@@ -13,7 +13,7 @@ import Foundation
 // It used to run on **one unparameterised read** of the whole list
 // (`CalendarScreen.kt:84`, DECISIONS §7) — the server's default first 500
 // events by `starts_at`, every view's window cut out of that list
-// client-side. **Kamron's answer 16 (2026-11-03): "yes: ask the server for a
+// client-side. **The owner's answer 16 (2026-11-03): "yes: ask the server for a
 // window per view (`?start=&end=`)."** So the read is now bounded to the
 // visible range (``calendarWindow(mode:anchor:in:)``) and the filters below
 // still run over whatever arrived — they are the window the *view* draws,
@@ -82,7 +82,7 @@ public func calendarStep(
 ///
 /// The agenda's floor is measured against ``calendarEndMs(_:)``, which gives
 /// an event with no `ends_at` **an hour** — Home's `eventEndMs` rule, adopted
-/// here by Kamron's answer 17. It used to fall back to the start, which is
+/// here by the owner's answer 17. It used to fall back to the start, which is
 /// Android's rule and dropped such an event the instant it began while Home's
 /// card beside it kept it.
 ///
@@ -189,7 +189,7 @@ public func calendarAgendaSections(
 /// The week view's groups — **seven, always**, one per day of the
 /// Sunday-first week, in date order, each carrying the rows that start on it.
 ///
-/// Kamron's answer 14 is "agenda rows under seven day headers", and *seven* is
+/// The owner's answer 14 is "agenda rows under seven day headers", and *seven* is
 /// the part that makes this its own function rather than
 /// ``calendarAgendaSections(_:todayMs:in:)`` over a week-filtered list: the
 /// agenda's groups come from the rows, so a day with nothing on it has no
@@ -386,7 +386,7 @@ public let calendarWindowLimit = 500
 /// ``calendarWindow(mode:anchor:in:)``.
 public let calendarAgendaLeadInDays = 1
 
-/// The instants one view needs read — Kamron's answer 16, as a function.
+/// The instants one view needs read — the owner's answer 16, as a function.
 ///
 /// Each view already has a range, moved by the chevrons, and this is that
 /// range as the route's two bounds:

@@ -27,7 +27,7 @@ import SwiftUI
 /// ### The panel comes back to the song by itself
 ///
 /// A drag pauses following and it resumes four seconds after the drag **ends**
-/// — Android's `FOLLOW_PAUSE_MS` (`LyricsPanel.kt:468-485`, `:118`), Kamron's
+/// — Android's `FOLLOW_PAUSE_MS` (`LyricsPanel.kt:468-485`, `:118`), the owner's
 /// answer 35. This view only **reports the phase** (`.onScrollPhaseChange`,
 /// below); the timer is ``MusicRoomLyricsModel/handReleased()``'s, in a model
 /// that outlives this `ScrollView`.

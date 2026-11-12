@@ -75,7 +75,7 @@ public enum FileStrings {
     /// for one control. `filter folder…` would fit too — about 297 of 345 at
     /// AX5 on the pixel scale, roughly 14 % to spare — and was passed over
     /// for that one-word consistency, not for size; it is an open call for
-    /// Kamron in `gx-transfers/DECISIONS.md`. `IOS-ONLY-STRINGS.md` records
+    /// the owner in `gx-transfers/DECISIONS.md`. `IOS-ONLY-STRINGS.md` records
     /// the string.
     public static let filterPlaceholderShort = "filter…"
 

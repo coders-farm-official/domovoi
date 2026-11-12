@@ -27,7 +27,7 @@ import SwiftUI
 /// "kept for 90 days · 4,120 turns since 3 August" line above the button
 /// would be honest and useful on both platforms. It is not here because
 /// NIGHT-RULES §6 says to take the Android-faithful choice, and it is
-/// Kamron's one open question for this item
+/// the owner's one open question for this item
 /// (`design-notes/ios/overnight/voicesettings/DECISIONS.md`).
 ///
 /// ## What is not, and why there is no control for it
@@ -35,7 +35,7 @@ import SwiftUI
 /// **The disabled button.** Android draws `Open on the dashboard` greyed out
 /// when there is no server (`SettingsScreen.kt:430`); here it is not drawn at
 /// all, and the no-server sentence takes its place. A disabled control still
-/// says the app could do the thing, which is the reading Kamron's rule has
+/// says the app could do the thing, which is the reading the owner's rule has
 /// gone against twice — and the sentence the section needs
 /// (``ShellStrings/noServerForDashboard``, "add one under Phones & browsers
 /// first") is an instruction, which a greyed-out button is not.

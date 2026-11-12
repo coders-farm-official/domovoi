@@ -38,7 +38,7 @@ struct NewsPersonView: View {
     /// button that reaches the internet.
     ///
     /// A column at an accessibility size rather than a row, so `polling…`
-    /// does not squeeze `Kamron's news` to one word a line. Branched on
+    /// does not squeeze `Jordan's news` to one word a line. Branched on
     /// `dynamicTypeSize.isAccessibilitySize`, which is what the rest of this
     /// app does (`HomeAnnounceView.swift:58`) — and not `ViewThatFits`, whose
     /// choice a test cannot predict from the type size alone.

@@ -566,7 +566,7 @@ struct ChatStreamError: Decodable {
 /// The cost of that container is the one entry 64 names: the server sends a
 /// whole thread with no limit (`chat.py`'s messages route takes no `limit`),
 /// so a thousand-message thread built a thousand bubbles the moment it opened
-/// and nothing had ever timed it. **Kamron's answer is to cap the transcript**
+/// and nothing had ever timed it. **The owner's answer is to cap the transcript**
 /// — "yes: cap the transcript (last N plus 'show earlier')" (answer 64) — so
 /// the container stays eager and what shrinks is how many messages it is
 /// handed.

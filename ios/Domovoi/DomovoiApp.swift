@@ -17,7 +17,7 @@ import UIKit
 /// Keychain.
 ///
 /// **It used to be ``InMemoryShellStore``, on every launch**, which is how
-/// the first build on Kamron's own iPhone forgot its server the moment the app
+/// the first build on the owner's own iPhone forgot its server the moment the app
 /// was force-quit — and ``TokenVault`` had no caller at all, so the token did
 /// not survive either, whatever the comment here used to imply. Part 1 left
 /// the persisted store to "the batch that has something to write"; parts 2
@@ -257,7 +257,7 @@ struct DomovoiApp: App {
 }
 
 /// The I0 gate's screen: it launched, it said what it was, and it showed the
-/// Local Network prompt's wording on Kamron's own iPhone.
+/// Local Network prompt's wording on the owner's own iPhone.
 ///
 /// **No longer the app's root** — the shell is — and kept because the two
 /// things it documents are still true of every screen from here on: the

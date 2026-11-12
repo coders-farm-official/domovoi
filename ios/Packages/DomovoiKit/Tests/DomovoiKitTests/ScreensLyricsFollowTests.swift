@@ -5,7 +5,7 @@ import XCTest
 /// The lyrics panel's **follow** state machine: the pause a drag makes, the
 /// four-second resume after it, and every path that cancels that resume.
 ///
-/// Kamron's answer 35, 2026-11-03: `resume following on the 4-second timer`.
+/// The owner's answer 35, 2026-11-03: `resume following on the 4-second timer`.
 /// Android pauses on `DragInteraction.Start` and starts a fresh
 /// `delay(FOLLOW_PAUSE_MS)` on `Stop`/`Cancel`
 /// (`LyricsPanel.kt:468-485`, `:118`); none of that is specified anywhere on

@@ -12,7 +12,7 @@ import XCTest
 /// **out-of-process** UI that XCUITest cannot hold steady, and a Simulator's
 /// photo library is whatever the last person left in it. So the phone's own
 /// library is a `#if DEBUG` fake behind that argument (``PhoneMediaFake``),
-/// and the real pickers are covered by a hand pass on Kamron's phone, which
+/// and the real pickers are covered by a hand pass on the owner's phone, which
 /// DECISIONS says in as many words.
 ///
 /// Every fake name carries a nonsense word the stub house never uses —
@@ -25,7 +25,7 @@ import XCTest
 /// `AnswerForTheOldServerDoesNotLandUnderTheNew`. The only way to change
 /// servers from inside the app is the connection sheet, and NIGHT-RULES §1
 /// forbids opening one on a Simulator — it starts a LAN discovery sweep
-/// across Kamron's real home network. The property is covered where it can
+/// across the owner's real home network. The property is covered where it can
 /// be: `PhoneUploadModelTests` switches the house **inside** the round trip,
 /// which is the shape [[read-after-await-wrong-key]] asks for. In its place
 /// is `AFailureNeverShowsTheServersFieldList`, which tests the other half of
@@ -179,7 +179,7 @@ extension StubHouseUITests {
     ///   `Button` labelled `switch server` whose *child* `StaticText` is the
     ///   house's address, so an `.any` query for the address would find it —
     ///   and tapping it opens the connection sheet, which NIGHT-RULES §1
-    ///   forbids on a Simulator because it sweeps Kamron's real home network.
+    ///   forbids on a Simulator because it sweeps the owner's real home network.
     ///   Matching a button's own label leaves it out, and the explicit skip
     ///   below is the second lock on the same door.
     /// * **the collapsed row itself.** Its label is
@@ -1711,7 +1711,7 @@ enum StubPhoneMedia {
     static let serverAddressStem = "127.0.0.1"
     /// The SHELL's server chip (`ShellChromeViews.swift`), which must never be
     /// tapped: it opens the connection sheet, and NIGHT-RULES §1 forbids one
-    /// on a Simulator because it sweeps Kamron's real home network. Spelt out
+    /// on a Simulator because it sweeps the owner's real home network. Spelt out
     /// here so ``StubHouseUITests/phoneSourceMenuRow(_:_:)`` can skip it by
     /// name as well as by query shape.
     static let switchServer = "switch server"

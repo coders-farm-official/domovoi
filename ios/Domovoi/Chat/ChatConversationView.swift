@@ -265,7 +265,7 @@ struct ChatConversationView: View {
     /// and the measurement at length: the place band above Chat is gone (D63)
     /// and the chip is in this row instead, which at AX5 is a straight swap of
     /// 80 points for 80 — so what actually hands the transcript its height
-    /// back is the chrome going with the scroll, which is Kamron's answer 29
+    /// back is the chrome going with the scroll, which is the owner's answer 29
     /// applied to the chrome this screen owns. Below an accessibility size
     /// nothing moves.
     ///
@@ -539,7 +539,7 @@ struct ChatConversationView: View {
                     // true answer is the one to ask.
                     VStack(alignment: .leading, spacing: 10) {
                         let messages = chat.transcript.messages
-                        // **The cap** (D64, Kamron's answer 64): the
+                        // **The cap** (D64, the owner's answer 64): the
                         // container stays eager — the note above is the
                         // measurement that bought it — and what shrinks is
                         // how many messages it is handed.
@@ -770,7 +770,7 @@ struct ChatConversationView: View {
     static let transcriptID = "chat-transcript"
 
     /// "show earlier" — one page more of a thread longer than the window
-    /// (D64, Kamron's answer 64).
+    /// (D64, the owner's answer 64).
     ///
     /// **Pinned, not followed.** Growing the window puts a page of messages
     /// *above* what is on screen, and a scroll view whose content grows at
@@ -958,7 +958,7 @@ struct ChatConversationView: View {
                     // branch takes it, and with words in the box this one does.
                     //
                     // **Drawn and disabled while a reply is being written** —
-                    // Kamron's answer 70 (2026-11-04): "greyed-out send while a
+                    // the owner's answer 70 (2026-11-04): "greyed-out send while a
                     // reply is written, as Android", under his standing rule 1,
                     // that a small detail follows Android. Android draws this
                     // same spot's button `enabled = canSend` with a faint tint
@@ -982,7 +982,7 @@ struct ChatConversationView: View {
                     // *dimmed*, and it is not hittable.
                     //
                     // **The label's colour is named, not inherited** (D8,
-                    // Kamron's answer 8: "same send-key fix on the house
+                    // the owner's answer 8: "same send-key fix on the house
                     // chat's composer"). `.borderedProminent` draws a WHITE
                     // label on the accent, and white on ``Color/brand`` is
                     // **2.05:1** — the arithmetic is in the token's own doc

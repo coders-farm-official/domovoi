@@ -7,7 +7,7 @@ import SwiftUI
 /// two grid files, as a phone screen. **One bounded read per range** —
 /// `GET /api/calendar/events?start=&end=&limit=` for the visible window,
 /// re-read on `calendar.events.changed`, widened rather than repeated when a
-/// chevron steps next door (``CalendarModel``, Kamron's answer 16).
+/// chevron steps next door (``CalendarModel``, the owner's answer 16).
 ///
 /// ### What is here
 ///

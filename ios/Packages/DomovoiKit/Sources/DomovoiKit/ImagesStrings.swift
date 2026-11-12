@@ -116,7 +116,7 @@ public enum ImagesStrings {
     /// be a count of the tiles claiming to be a count of the pictures.
     public static func tile(position: Int) -> String { "picture \(position)" }
 
-    /// **iOS-only**, asked for by Kamron (answer 27, 2026-11-03): a card with
+    /// **iOS-only**, asked for by the owner (answer 27, 2026-11-03): a card with
     /// more pictures than it shows says so.
     ///
     /// Android draws three tiles and says nothing, so a four-image generation

@@ -3,7 +3,7 @@ import Foundation
 /// The phone bar: the tabs along the bottom of **this** phone.
 ///
 /// A port of `android/.../ui/shell/PhoneBar.kt` (map §1.7), read on
-/// 2026-10-29. Kamron's decision of 2026-10 stands on both platforms: the bar
+/// 2026-10-29. The owner's decision of 2026-10 stands on both platforms: the bar
 /// is `home · music · videos · chat` and it is customisable.
 ///
 /// The rules, each of which `PhoneBarTest.kt` pins:

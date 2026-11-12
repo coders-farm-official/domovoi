@@ -11,7 +11,7 @@ import Foundation
 ///
 /// ### Why `canPlay` and not just a no-op `play`
 ///
-/// Kamron's no-misleading-controls rule. A witness that cannot play is not a
+/// The owner's no-misleading-controls rule. A witness that cannot play is not a
 /// witness that plays silently: the screen asks ``canPlay`` and, when it is
 /// false, **draws no play affordance at all** — no row tap that plays, no
 /// play glyph, no `play here`. A tap that POSTs `/play` and then makes no

@@ -159,7 +159,7 @@ struct AiSettingsChatPanel: View {
             //
             // The label carries the **word**, because an identifier is not
             // read out: DECISIONS §12 logged a list of identical buttons as a
-            // real defect inherited from Android, and Kamron's answer 2 is
+            // real defect inherited from Android, and the owner's answer 2 is
             // yes, announce the kind — `warn again, scanned pages`
             // (``AiSettingsStrings/warnAgainAbout(_:)``, IOS-ONLY-STRINGS §13).
             // The drawn word is untouched, so nothing a sighted person reads

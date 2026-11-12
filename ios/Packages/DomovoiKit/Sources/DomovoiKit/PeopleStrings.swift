@@ -14,7 +14,7 @@ import Foundation
 /// profile tab. Both routes are `require_admin_mutation` — Bearer only
 /// (`people.py:145`, `:355`; `admin_auth.py:1288-1305`) — and this app holds
 /// a household device token and never a Bearer, so both would 401 every
-/// time. Under Kamron's no-misleading-controls rule neither is drawn, and the
+/// time. Under the owner's no-misleading-controls rule neither is drawn, and the
 /// screen says where they are done instead:
 ///
 ///  - ``renamingIsOnTheDashboard`` — the line in place of the two buttons.
@@ -22,7 +22,7 @@ import Foundation
 ///    note, which on Android is *"If they are different people, rename one of
 ///    them"*: advice about a control that is not here.
 ///
-/// Both are drafts awaiting Kamron's wording, recorded with the open question
+/// Both are drafts awaiting the owner's wording, recorded with the open question
 /// in `design-notes/ios/overnight/people/IOS-ONLY-STRINGS.md`. Nothing else
 /// on this screen is new words.
 public enum PeopleStrings {

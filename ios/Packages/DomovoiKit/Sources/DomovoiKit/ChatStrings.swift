@@ -43,7 +43,7 @@ public enum ChatStrings {
     /// because its transcript is a `LazyColumn` (`ChatScreen.kt:973`) and a
     /// lazy list needs no cap. This app's is eager on purpose — train R002's
     /// measurement is in ``ChatTranscriptWindow`` — so the cap is what stands
-    /// in for the laziness, and Kamron's own words for it are the label
+    /// in for the laziness, and the owner's own words for it are the label
     /// (answer 64: "cap the transcript (last N plus 'show earlier')").
     public static let showEarlier = "show earlier"
 

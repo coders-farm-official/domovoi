@@ -32,7 +32,7 @@ import Observation
 /// (`LyricsPanel.kt:468-485`, `FOLLOW_PAUSE_MS = 4_000` at `:118`). It was
 /// left out for one round on the reasoning that SwiftUI has no
 /// drag-interaction stream and a timer started from a scroll phase would
-/// guess at the gesture. Kamron's answer 35, 2026-11-03: `resume following on
+/// guess at the gesture. The owner's answer 35, 2026-11-03: `resume following on
 /// the 4-second timer`.
 ///
 /// It is built here, in the model, and the view only **reports the phase** —
@@ -345,7 +345,7 @@ public final class MusicRoomLyricsModel {
     ///
     /// **Android has no branch for this** — Compose reports no interaction
     /// for a finger that has not dragged, so over there the pending resume
-    /// does fire under it. The divergence is Kamron's brief item (D): "make
+    /// does fire under it. The divergence is the owner's brief item (D): "make
     /// sure the resume cannot yank the panel while a finger is still down".
     ///
     /// Idempotent, like the other two: `onScrollPhaseChange` reports

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Calendar, the three things Kamron answered on 2026-11-03: the week view
+/// Calendar, the three things the owner answered on 2026-11-03: the week view
 /// (14), the window per read (16) and the hour an open-ended event keeps (17).
 ///
 /// The screen's own cases are `StubHouseUITests+Calendar.swift` and its
@@ -281,7 +281,7 @@ extension StubHouseUITests {
 
     /// **Seven day headers, with the agenda's rows under them.**
     ///
-    /// Kamron's answer 14, as a screen. Four things fail it: a week that is
+    /// The owner's answer 14, as a screen. Four things fail it: a week that is
     /// Android's seven-column grid (there are no day headers in one), a week
     /// that drops its empty days (which would be an agenda with a shorter
     /// window and nothing a person could tell from the agenda), a week that
@@ -568,7 +568,7 @@ extension StubHouseUITests {
     /// **An open-ended event is still on screen fifty minutes after it
     /// started, and gone after seventy.**
     ///
-    /// Kamron's answer 17, as a screen. The agenda's floor is **today's
+    /// The owner's answer 17, as a screen. The agenda's floor is **today's
     /// midnight** and not now, so an open-ended event from this morning is
     /// drawn all day under either rule — the hour only shows at the day
     /// boundary, which is where the fixture's two rows sit: `porch light`

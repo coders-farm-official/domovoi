@@ -67,7 +67,7 @@ extension StubHouseUITests {
     /// wait: a control that is supposed to be absent must not be waited for,
     /// or the case spends ten seconds proving nothing.
     ///
-    /// **`isEnabled` is part of the question since Kamron's answer 70.** The
+    /// **`isEnabled` is part of the question since the owner's answer 70.** The
     /// send is now drawn and disabled while a reply is being written
     /// (Android's shape), so existence alone no longer answers "can this
     /// message go". ``chatComposerSendButton(_:)`` is the one that asks only
@@ -284,7 +284,7 @@ extension StubHouseUITests {
     }
 
     /// **The send is drawn and greyed out while a reply is being written** —
-    /// Kamron's answer 70 (2026-11-04), which took Android's shape over the
+    /// the owner's answer 70 (2026-11-04), which took Android's shape over the
     /// empty spot this screen shipped.
     ///
     /// Android draws the same button `enabled = canSend` with a faint tint
@@ -1086,7 +1086,7 @@ extension StubHouseUITests {
     /// 401.7 the shell leaves Chat — and the transcript was left a
     /// `ScrollView` **6.7 points tall** holding 860 points of content. The
     /// band was therefore dropped at accessibility sizes, which is what entry
-    /// 63 asked about and what Kamron answered: the place goes in the header,
+    /// 63 asked about and what the owner answered: the place goes in the header,
     /// at every size.
     ///
     /// Moving it alone would have swapped 80 points for 80, so the chrome goes

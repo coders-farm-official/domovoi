@@ -24,7 +24,7 @@ import Foundation
 /// ``totalSec`` is nil and a consumer draws **no** whole-book seek bar — the
 /// book plays part by part, chapter by chapter. A total guessed from the parts
 /// we do know is a seek bar whose thumb sits in the wrong place for the whole
-/// book, which is exactly the misleading control Kamron's rule is about.
+/// book, which is exactly the misleading control the owner's rule is about.
 public struct PlayerBookTimeline: Equatable, Sendable {
 
     /// The parts' lengths in seconds, in order; nil for one that is unknown.

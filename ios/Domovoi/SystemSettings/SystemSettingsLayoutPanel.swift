@@ -28,7 +28,7 @@ import SwiftUI
 ///    the first — ``SystemSettingsLayoutModel/canEdit`` is false and the panel
 ///    draws the rows, the preview line and the shared-screen note and **no**
 ///    move, remove, add or `default` control. An editor whose edits vanish on
-///    the next launch is the misleading control Kamron has ruled out twice.
+///    the next launch is the misleading control the owner has ruled out twice.
 ///  - **A toast after `default`.** Android toasts the restored bar
 ///    (`PhoneBarPanel.kt:105`). The shell has had a toast producer since
 ///    I1-C part 3 (``ShellModel/showToast(_:)``), so this *could* be one — and
@@ -201,7 +201,7 @@ struct SystemSettingsLayoutPanel: View {
         // disabled on arrival and the platform renders it at a fraction of
         // its colour, on a card that is nearly the same grey.
         //
-        // It is not drawn conditionally instead, although Kamron's
+        // It is not drawn conditionally instead, although the owner's
         // no-misleading-controls rule would allow it: a `default` that
         // appears the moment the first edit lands would be a control arriving
         // under the person's finger, and Android draws it disabled

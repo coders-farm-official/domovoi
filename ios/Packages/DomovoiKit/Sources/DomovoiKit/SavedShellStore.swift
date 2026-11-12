@@ -82,7 +82,7 @@ public final class SavedStateBox: SavedState {
 /// `DomovoiApp` built one on every launch — so the shipping app forgot its
 /// server, its trust and its pins every time it was force-quit, and
 /// ``TokenVault`` had **no caller at all**: `AppContainer` held one and
-/// nothing ever read or wrote it. Kamron found the first half of that on his
+/// nothing ever read or wrote it. The owner found the first half of that on his
 /// own phone within a minute of the first install. Part 1 of I1-C said the
 /// persisted store belonged to "the batch that has something to write"; parts
 /// 2 and 3 wrote the picker, the trust dialogs and the pairing screens and

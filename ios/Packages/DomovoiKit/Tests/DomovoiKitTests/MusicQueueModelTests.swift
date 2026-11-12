@@ -525,7 +525,7 @@ final class MusicQueueModelTests: XCTestCase {
         house.queues.set([
             "den": """
             {"editable":false,"guest":false,
-             "blocked_reason":"Kamron's iPad isn't allowed to edit the queue in den",
+             "blocked_reason":"Jordan's iPad isn't allowed to edit the queue in den",
              "items":[{"song_id":7,"title":"Hey Jude","playing":true},
                        {"song_id":9,"title":"Come Together"}]}
             """,
@@ -537,7 +537,7 @@ final class MusicQueueModelTests: XCTestCase {
         XCTAssertFalse(queue.mayMove)
         XCTAssertFalse(queue.mayRemove(try entry(queue, 1)))
         XCTAssertEqual(
-            "Kamron's iPad isn't allowed to edit the queue in den. "
+            "Jordan's iPad isn't allowed to edit the queue in den. "
                 + "You can watch the queue but not change it.",
             queue.watchOnlyNote
         )

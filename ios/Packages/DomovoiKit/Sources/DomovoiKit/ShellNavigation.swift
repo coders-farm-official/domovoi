@@ -213,7 +213,7 @@ public enum ShellWidth: Equatable, Sendable { case compact, regular }
 ///   leave nothing for the content.
 ///
 /// **The iPad is an open question, deliberately left open.** It ships
-/// (`project.yml` targets both families) and Kamron has none to try it on, so
+/// (`project.yml` targets both families) and the owner has none to try it on, so
 /// this is the smallest defensible rule rather than a design: a real iPad
 /// story wants `NavigationSplitView`, the breadcrumb Android's drawer has,
 /// and a decision about where the player goes. Listed for I1-F in the report.

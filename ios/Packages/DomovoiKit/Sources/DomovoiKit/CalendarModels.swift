@@ -146,7 +146,7 @@ public func calendarStartMs(_ entry: CalendarEntry) -> Int64 {
 /// passed, while Home's card beside it kept the same event for an hour. Two
 /// rules for one row, raised as DECISIONS §8.
 ///
-/// **Kamron's answer 17 (2026-11-03): "yes: match Home, keep an open-ended
+/// **The owner's answer 17 (2026-11-03): "yes: match Home, keep an open-ended
 /// event on screen for an hour."** So this is `HomeToday.swift`'s
 /// ``eventEndMs(_:)``, copied rather than approximated: the server's end if it
 /// parses, else `start + 3_600_000`, and the `Int64.max` sentinel stays itself
@@ -327,7 +327,7 @@ public struct CalendarDay: Hashable, Comparable, Sendable {
 /// `UICTContentSizeCategoryAccessibilityXXXL`. DECISIONS §3 asked whether the
 /// week was wanted as a grouped list instead.
 ///
-/// **Kamron's answer 14 (2026-11-03): "build the week view (agenda rows under
+/// **The owner's answer 14 (2026-11-03): "build the week view (agenda rows under
 /// seven day headers)."** So the week is a week-bounded list — the agenda's own
 /// rows, under all seven day headers, from
 /// ``calendarWeekSections(_:anchor:todayMs:in:)``

@@ -3,7 +3,7 @@ import XCTest
 
 /// Which server the queue belongs to, and what a move to another one leaves.
 ///
-/// `ServerScopeTest` on Android, and the bug behind it is Kamron's own, from
+/// `ServerScopeTest` on Android, and the bug behind it is the owner's own, from
 /// 2026-10-12: he played music from one Domovoi, connected the app to a fresh
 /// one at another address, and the mini player still showed the first one's
 /// song. Id 12 on another server is another song, or nothing.

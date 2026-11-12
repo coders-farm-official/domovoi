@@ -28,8 +28,8 @@ final class NewsModelTests: XCTestCase {
     // MARK: - the house
 
     /// Two people, two topics, two feeds and three stories — seeded so that
-    /// every assertion **discriminates**: Kamron's briefing contains
-    /// `aurora`, Chevy's is null; Kamron's stories say `trebuchet` and
+    /// every assertion **discriminates**: Jordan's briefing contains
+    /// `aurora`, Chevy's is null; Jordan's stories say `trebuchet` and
     /// Chevy's say `marmalade`, so "the right person's data is on screen" and
     /// "the wrong person's is not" are two different checks.
     private final class House: Sendable {
@@ -37,10 +37,10 @@ final class NewsModelTests: XCTestCase {
         /// An empty roster — the "nobody is enrolled" pane.
         let noPeople = Shared<Bool>(false)
 
-        /// Kamron has left the roster and Chevy has not — the roster read
+        /// Jordan has left the roster and Chevy has not — the roster read
         /// that is **not** empty and no longer holds the picked person, which
         /// is the only way to reach `.pickAPerson` through the live code.
-        let kamronGone = Shared<Bool>(false)
+        let jordanGone = Shared<Bool>(false)
 
         /// `DELETE /api/news/topics/{tid}` answers this instead of 204 — 409
         /// is what a topic removed from another device gives.
@@ -72,8 +72,8 @@ final class NewsModelTests: XCTestCase {
         /// into it.
         let seen = Shared<[String]>([])
 
-        static let kamron = """
-        {"id":1,"name":"Kamron","created_at":"2026-01-01T00:00:00Z",
+        static let jordan = """
+        {"id":1,"name":"Jordan","created_at":"2026-01-01T00:00:00Z",
          "last_seen_at":"2026-11-01T11:00:00Z","voice_profile_count":2,
          "presence_tier":"high","namesakes":0}
         """
@@ -83,12 +83,12 @@ final class NewsModelTests: XCTestCase {
          "presence_tier":"high","namesakes":0}
         """
 
-        /// Kamron: `tech` (a category, two feeds) and `Formula 1` (free-form,
+        /// Jordan: `tech` (a category, two feeds) and `Formula 1` (free-form,
         /// none). Two versus zero makes the plural and the free-form empty
         /// line both reachable, and `tech` surviving is how the category
         /// toggle's "it deleted the right id" is told from "it deleted
         /// something".
-        static let kamronTopics = """
+        static let jordanTopics = """
         [{"id":11,"person_id":1,"kind":"category","topic":"tech","feed_count":2},
          {"id":12,"person_id":1,"kind":"freeform","topic":"Formula 1","feed_count":0}]
         """
@@ -96,7 +96,7 @@ final class NewsModelTests: XCTestCase {
         [{"id":21,"person_id":2,"kind":"category","topic":"sports","feed_count":1}]
         """
 
-        static let kamronFeeds = """
+        static let jordanFeeds = """
         [{"id":31,"url":"https://feeds.bbci.co.uk/news/rss.xml","title":"BBC Tech",
           "source":"bbc.co.uk","discovered_via":"curated","scope":"national","valid":true,
           "last_polled_at":"2026-11-01T11:30:00Z","last_error":null},
@@ -105,7 +105,7 @@ final class NewsModelTests: XCTestCase {
           "last_polled_at":null,"last_error":"404"}]
         """
 
-        static let kamronItems = """
+        static let jordanItems = """
         [{"id":41,"title":"A trebuchet in the garden","summary":"<p>Bold <b>claim</b></p>",
           "source":"example.org","url":"https://example.org/a","topic":"tech",
           "published_at":"2026-11-01T08:00:00Z","fetched_at":"2026-11-01T09:00:00Z",
@@ -122,8 +122,8 @@ final class NewsModelTests: XCTestCase {
 
         func rosterBody() -> String {
             if noPeople.current { return "[]" }
-            if kamronGone.current { return "[\(Self.chevy)]" }
-            return "[\(Self.kamron),\(Self.chevy)]"
+            if jordanGone.current { return "[\(Self.chevy)]" }
+            return "[\(Self.jordan),\(Self.chevy)]"
         }
 
         /// `egress.http_exception`'s shape: a 409 whose `detail` is the
@@ -169,11 +169,11 @@ final class NewsModelTests: XCTestCase {
                         #"["world","national","tech","business","science","sports","health","politics","entertainment"]"#
                     )
                 case "/api/news/people/1/topics":
-                    return .json(method == "GET" ? Self.kamronTopics : #"{"id":99,"person_id":1,"kind":"freeform","topic":"x","feed_count":1}"#)
+                    return .json(method == "GET" ? Self.jordanTopics : #"{"id":99,"person_id":1,"kind":"freeform","topic":"x","feed_count":1}"#)
                 case "/api/news/people/2/topics":
                     return .json(method == "GET" ? Self.chevyTopics : #"{"id":98,"person_id":2,"kind":"freeform","topic":"x","feed_count":1}"#)
                 case "/api/news/people/1/items":
-                    return .json(Self.kamronItems)
+                    return .json(Self.jordanItems)
                 case "/api/news/people/2/items":
                     return .json(Self.chevyItems)
                 case "/api/news/people/1/briefing":
@@ -187,7 +187,7 @@ final class NewsModelTests: XCTestCase {
                     guard self.feedsStatus.current == 200 else {
                         return .json(#"{"detail":"the feed table is being rebuilt"}"#, status: self.feedsStatus.current)
                     }
-                    return .json(method == "GET" ? Self.kamronFeeds : #"{"id":33,"url":"https://new/rss.xml","discovered_via":"manual","valid":true}"#)
+                    return .json(method == "GET" ? Self.jordanFeeds : #"{"id":33,"url":"https://new/rss.xml","discovered_via":"manual","valid":true}"#)
                 case "/api/news/topics/12/feeds":
                     // A free-form topic discovery found nothing for.
                     return .json("[]")
@@ -291,7 +291,7 @@ final class NewsModelTests: XCTestCase {
 
         XCTAssertEqual(1, model.selectedID, "the server's first row, NewsScreen.kt:70-74")
         XCTAssertEqual(.person, model.pane)
-        XCTAssertEqual("Kamron's news", model.detail?.heading)
+        XCTAssertEqual("Jordan's news", model.detail?.heading)
         XCTAssertEqual(1, model.detail?.personID)
         XCTAssertEqual(
             "the aurora is visible tonight",
@@ -347,7 +347,7 @@ final class NewsModelTests: XCTestCase {
         // the same house.
         let park = parkRequest(
             to: "/api/news/people/1/items",
-            answering: { .json(House.kamronItems) },
+            answering: { .json(House.jordanItems) },
             otherwise: { request in
                 guard
                     let url = request.url,
@@ -357,9 +357,9 @@ final class NewsModelTests: XCTestCase {
                 case "/api/health":
                     let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
                     return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
-                case "/api/people": return .json("[\(House.kamron),\(House.chevy)]")
+                case "/api/people": return .json("[\(House.jordan),\(House.chevy)]")
                 case "/api/news/categories": return .json(#"["world","tech","sports"]"#)
-                case "/api/news/people/1/topics": return .json(House.kamronTopics)
+                case "/api/news/people/1/topics": return .json(House.jordanTopics)
                 case "/api/news/people/2/topics": return .json(House.chevyTopics)
                 case "/api/news/people/2/items": return .json(House.chevyItems)
                 case "/api/news/people/1/briefing":
@@ -373,7 +373,7 @@ final class NewsModelTests: XCTestCase {
         let model = NewsModel(in: container)
 
         model.start()
-        await settleUntil({ model.detail?.personID == 1 }, "Kamron picked")
+        await settleUntil({ model.detail?.personID == 1 }, "Jordan picked")
         await settleUntil({ park.arrived.current }, "person 1's items reaching the server")
 
         // Inside the round trip.
@@ -478,10 +478,10 @@ final class NewsModelTests: XCTestCase {
         await started(model)
         XCTAssertEqual(.person, model.pane)
 
-        house.kamronGone.set(true)
+        house.jordanGone.set(true)
         house.seen.set([])
         model.people.refresh()
-        await settleUntil({ model.roster.count == 1 }, "the roster without Kamron")
+        await settleUntil({ model.roster.count == 1 }, "the roster without Jordan")
         await nothingHappens()
 
         XCTAssertEqual(.pickAPerson, model.pane, "the departed person's news is still on screen")
@@ -939,7 +939,7 @@ final class NewsModelTests: XCTestCase {
         await settleUntil({ model.detail?.personID == 2 }, "Chevy picked")
         await nothingHappens()
 
-        XCTAssertNil(model.toast, "Kamron's refusal must not be shown over Chevy's news")
+        XCTAssertNil(model.toast, "Jordan's refusal must not be shown over Chevy's news")
     }
 
     /// The toast outlives the person it was made for when that person is
@@ -1042,10 +1042,10 @@ final class NewsModelTests: XCTestCase {
         house.internetOff.set(true)
         let (model, _) = rig(house: house)
         await started(model)
-        let kamron = model.detail!
+        let jordan = model.detail!
 
-        kamron.toggleCategory("science")
-        kamron.stop()
+        jordan.toggleCategory("science")
+        jordan.stop()
         await nothingHappens()
 
         XCTAssertNil(model.toast, "a stopped person's model still published its refusal")
