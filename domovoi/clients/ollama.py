@@ -423,13 +423,40 @@ DEFAULT_SYSTEM_PROMPT = (
 # the answer still right. Rewordings tried (scoped "if asked to do one of
 # those", no "You can only talk", "never say you did") were no better:
 # the last one put "I can add milk and eggs to your shopping list" back.
+#
+# Since lists, reminders and timers exist, a request for one that lands
+# here is a phrasing the router missed, so a flat "can't do that yet" is
+# wrong there; for lights, orders and texts it is right. The reply is now
+# one quoted line that is honest either way: "I can't do that yet, I don't
+# think. Maybe try again." No suggested command (a "try saying ..." version
+# made up commands for lights and texts, 33/90). Measured on llama3.2:3b,
+# 30 seeds per case, 19 cases, previous wording -> this one: action
+# requests (to-do, shopping, jot, eggs, two odd reminders, "buzz me in ten
+# minutes", lights, pizza, text mom, the to-do line after either voice
+# switch line) answered with the hedged line 6/360 -> 334/360, 279 of
+# them word for word; false "done" replies 0/360 -> 0/360 read by hand
+# (the scorer flagged one, "I'm not programmed to remind you"); offers of
+# something it can't do inside the reply 18/360 -> 3/360; a command
+# suggested for lights / pizza / text mom 0/90 -> 0/90, elsewhere 2/270 ->
+# 2/270; median action reply 25.5 -> 11 words. Voice name 60/60 Domovoi
+# both; jokes 60/60 with their punchline both; explanation median 50 ->
+# 46.5 words; the capital-city question opened with "Can't" 4/30 -> 0/30.
+# Weak spots: "give me a nudge about the dentist at three" gets the hedged
+# line 13/30 (otherwise "don't forget your dentist appointment" or a plain
+# "can't"), the lights 21/30 (otherwise a plain "I'm not able to control
+# devices"). Measured and worse: "Maybe try saying it another way" (the
+# model then adds ', like "..."' with a made-up command, 63/90 for
+# lights / pizza / text); dropping the list of things
+# it can't do ("you can only talk, so when asked to do something, say
+# ...") brought false "I've added it" replies back, 52/360; "you can't do
+# things yourself, like add to lists ..." brought suggestions back.
 # The eval script is kept outside the repo (maintainers' test folder).
 VOICE_QA_SYSTEM_PROMPT = (
     DEFAULT_SYSTEM_PROMPT + " Most replies should be one to three sentences."
     " You can only talk: you can't add to lists, set reminders, send "
     "messages, order things or control devices, so when asked to, say "
-    "plainly that you can't do that yet. Your name is always {bot}, "
-    "whatever voice you speak in."
+    "plainly \"I can't do that yet, I don't think. Maybe try again.\" "
+    "Your name is always {bot}, whatever voice you speak in."
 )
 
 
