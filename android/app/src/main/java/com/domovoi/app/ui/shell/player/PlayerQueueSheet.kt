@@ -34,6 +34,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -61,7 +64,9 @@ import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.screens.music.LyricsFollow
-import com.domovoi.app.ui.screens.music.LyricsSection
+import com.domovoi.app.player.LyricsResult
+import com.domovoi.app.ui.screens.music.LyricsBody
+import com.domovoi.app.ui.screens.music.rememberLyricsLoad
 import com.domovoi.app.ui.screens.music.SHEET_LYRICS_HEIGHT
 import com.domovoi.app.ui.screens.music.capLyricsHeight
 import com.domovoi.app.ui.screens.music.lyricsTrackIdOf
@@ -94,6 +99,29 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
     val isRemote = target is PlayTarget.Room
     val current = queue.getOrNull(index)
 
+    // The lyrics: a library track, on this phone or in the room being cast
+    // to. Loaded here, above the tabs, so the default tab can follow them.
+    val room = target as? PlayTarget.Room
+    val lyricsTrackId = if (room != null) {
+        remote?.takeIf { it.roomId == room.roomId }?.trackId
+    } else {
+        lyricsTrackIdOf(current)
+    }
+    val lyrics = lyricsTrackId?.let { rememberLyricsLoad(it, room?.roomId) }
+    val lyricsFollow = lyricsTrackId?.let { room?.let { r -> LyricsFollow.Room(r.roomId) } ?: LyricsFollow.Local }
+    val lyricsTab = lyrics != null && lyrics.result !is LyricsResult.Hidden
+    // The song a tab was picked for: the room's track while casting.
+    val songKey = if (room != null) "room:${lyricsTrackId ?: ""}:${current?.uid ?: ""}" else current?.uid.orEmpty()
+    var here by remember { mutableStateOf<Pair<String, SheetTab>?>(null) }
+    val tab = playerSheetTab(
+        here = here?.takeIf { it.first == songKey }?.second,
+        picked = SheetTabMemory.picked,
+        lyricsTab = lyricsTab,
+        lyricsFound = lyricsFound(lyrics?.result),
+        lyricsLoading = lyrics != null && lyrics.result == null,
+    )
+    val tabs = sheetTabs(lyricsTab)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -119,20 +147,23 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                 val effPlaying = if (isRemote) remote?.state == "play" else playing
                 item(key = "sheet-transport") { SheetTransport(playing = effPlaying, onDismiss = onDismiss) }
 
-                // ── Lyrics (a library track, here or in the room) ─────────
-                val room = target as? PlayTarget.Room
-                val lyricsTrackId = if (room != null) {
-                    remote?.takeIf { it.roomId == room.roomId }?.trackId
-                } else {
-                    lyricsTrackIdOf(current)
+                // ── Panel tabs: Lyrics · Queue · Hide ─────────────────────
+                item(key = "sheet-tabs") {
+                    SheetTabStrip(tabs, tab) { t ->
+                        here = songKey to t
+                        SheetTabMemory.picked = t
+                    }
                 }
-                if (lyricsTrackId != null) {
-                    val follow = room?.let { LyricsFollow.Room(it.roomId) } ?: LyricsFollow.Local
-                    item(key = "sheet-lyrics") { SheetLyrics(lyricsTrackId, follow, lyricsHeight) }
+
+                // ── Lyrics (a library track, here or in the room) ─────────
+                if (tab == SheetTab.Lyrics && lyrics != null && lyricsFollow != null) {
+                    item(key = "sheet-lyrics") {
+                        LyricsBody(lyrics, lyricsFollow, lyricsHeight, Modifier.padding(top = 4.dp, bottom = 2.dp))
+                    }
                 }
 
                 // ── Queue ─────────────────────────────────────────────────
-                item(key = "sheet-queue-head") {
+                if (tab == SheetTab.Queue) item(key = "sheet-queue-head") {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -152,7 +183,9 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                     }
                 }
 
-                if (isRemote) {
+                if (tab != SheetTab.Queue) {
+                    // Lyrics or Hide: no queue rows.
+                } else if (isRemote) {
                     item(key = "sheet-queue-casting") {
                         Text(
                             "casting — the queue lives on the room's speaker; transport controls act on the room",
@@ -280,18 +313,29 @@ internal fun SheetTransport(playing: Boolean, onDismiss: () -> Unit) {
     }
 }
 
-/** The sheet's "lyrics" section: closed until opened (Prefs
- *  `lyrics_sheet_open`), then [height] of lyrics — [SHEET_LYRICS_HEIGHT],
- *  or less in a short window ([capLyricsHeight]). */
+/** The panel's tab strip: [tabs], [selected] underlined; a tap picks one. */
 @Composable
-private fun SheetLyrics(trackId: Long, follow: LyricsFollow, height: Dp) {
-    val app = LocalApp.current
-    val open by app.prefs.lyricsSheetOpen.collectAsState()
-    LyricsSection(
-        trackId, follow, height, open,
-        onOpenChange = app.prefs::setLyricsSheetOpen,
-        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
-    )
+private fun SheetTabStrip(tabs: List<SheetTab>, selected: SheetTab, onPick: (SheetTab) -> Unit) {
+    TabRow(
+        selectedTabIndex = tabs.indexOf(selected).coerceAtLeast(0),
+        containerColor = Color.Transparent,
+        contentColor = Domovoi.colors.fg,
+        modifier = Modifier.padding(top = 4.dp),
+    ) {
+        tabs.forEach { t ->
+            Tab(
+                selected = t == selected,
+                onClick = { onPick(t) },
+                text = {
+                    Text(
+                        t.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (t == selected) Domovoi.colors.fg else Domovoi.colors.fgMuted,
+                    )
+                },
+            )
+        }
+    }
 }
 
 /** The seek bar and times: the only part of the sheet that follows the

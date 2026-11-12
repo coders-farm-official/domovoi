@@ -64,6 +64,11 @@ internal class MusicUi {
     val selectedIds = mutableStateListOf<Long>()
     var bulkPid by mutableStateOf<Long?>(null)
 
+    // Genres tab (web GenresTab): its search and sort, and the open genre.
+    var genreQ by mutableStateOf("")
+    var genreSort by mutableStateOf("name")
+    var openGenre by mutableStateOf<GenreRow?>(null)
+
     // Drawers / sheets
     var detailTrack by mutableStateOf<LibraryTrack?>(null)
     var openPlaylist by mutableStateOf<Playlist?>(null)
