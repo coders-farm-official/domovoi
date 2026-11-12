@@ -2951,7 +2951,7 @@ const TrainingVoices = ({ phrase, preview, fire }) => {
     if (!said) return;
     setBusy(true);
     try { setJob(await preview.start(said)); }
-    catch (e) { fire(`failed: ${e.message || e}`); }
+    catch (e) { reportMutationFailure(fire, 'Make the samples', e); }
     finally { setBusy(false); }
   };
   return (

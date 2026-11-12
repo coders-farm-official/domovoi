@@ -149,6 +149,18 @@ household.
   (ISC), marked 12.0.2 (MIT), qrcode-generator 1.4.4
   by Kazuhiko Arase (MIT) and Excalidraw 0.17.6 (MIT; it carries DOMPurify
   3.0.3 under Apache-2.0 or MPL-2.0, used here under Apache-2.0).
+- **The Now Playing visualizer's engine**, Butterchurn 3.0.0-beta.5 by
+  Jordan Berg (MIT; `web/static/vendor/butterchurn/`), with what its
+  bundle carries: eel-wasm (MIT), @assemblyscript/loader (Apache-2.0; its
+  licence and NOTICE beside it) and ecma-proposal-math-extensions (MIT).
+  Its built-in "clouds2" noise texture, very likely the original
+  MilkDrop's and of unstated licence, is replaced by an original one
+  generated for Domovoi (the folder's README says how).
+- **The visualizer's standard presets** (`web/static/visualizer/presets/`)
+  are Domovoi's own, written for it, and MIT like the rest of the code. No
+  community MilkDrop preset ships with Domovoi: those are almost all
+  shared without a licence (the folder's README says what was checked).
+  Presets a household adds are its own business and stay on its server.
 - **The Documents editor's libraries** (`web/static/vendor/tiptap`,
   `vendor/yjs`, `vendor/mammoth`), built from exact pinned versions by
   `scripts/vendor/editors/build.mjs`, each folder with a `THIRD-PARTY.json`

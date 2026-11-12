@@ -92,7 +92,7 @@ const satLastSeen = (s) => s.last_seen_at || s.last_connected_at || null;
 /* ---- A phone room's battery (V040, domovoi/room_battery.py) ---------
  * `s.battery` = {percent, charging, on_power, reported_at, low,
  * probably_out} on a phone room once it has reported; null on every other
- * room (a Pi has no battery, a laptop's stays on its Health card). Kept
+ * room (a Pi has no battery, a laptop's stays in its Health section). Kept
  * after the room goes offline: the card shows the last level, muted. */
 const satRoomBatteryIcon = (b) => (b.charging ? 'battery-charging'
   : b.percent == null ? 'battery'
@@ -387,7 +387,7 @@ const SatConversationTurn = ({ c }) => {
   );
 };
 
-/* ---- Health card + last outage (overview tab) -------------- */
+/* ---- Health section + last outage (Settings tab) -------------- */
 // GET /api/satellites/{room}/health: the latest `health` sample the Pi
 // sent (one a minute; kept by the core across disconnects, so an offline
 // room still shows its last minute), the record its previous process life
@@ -608,12 +608,12 @@ const SatHealthCard = ({ room, online }) => {
       </div>
       {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
-          {s.settings_ignored.join('; ')}. It uses its board’s default instead; a new value from the Settings tab replaces the stored one.
+          {s.settings_ignored.join('; ')}. It uses its board’s default instead; a new value from the settings below replaces the stored one.
         </div>
       )}
       {satWakeOverride(s) && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
-          It wakes at sensitivity {satWakeOverride(s).inUse}, not the {satWakeOverride(s).setting} in its Settings tab: a wake word pushed earlier left its own value behind. Setting the wake sensitivity again replaces it; updating the room device's software stops a push from doing this again.
+          It wakes at sensitivity {satWakeOverride(s).inUse}, not the {satWakeOverride(s).setting} in its settings below: a wake word pushed earlier left its own value behind. Setting the wake sensitivity again replaces it; updating the room device's software stops a push from doing this again.
         </div>
       )}
       {s && s.reboot_needed && (
@@ -644,7 +644,8 @@ const SatHealthCard = ({ room, online }) => {
           <SatHealthStat label="uptime" value={satHealthUptime(s.uptime_s)}
                          sub={`process ${satHealthUptime(s.proc_uptime_s)} · ${s.reconnects == null ? '—' : s.reconnects} reconnects`}/>
           <SatHealthStat label="wi-fi" value={wifiLinkText(s.wifi).main}
-                         sub={[s.wifi && s.wifi.signal_dbm != null ? wifiLinkText(s.wifi).sub : null,
+                         sub={[s.wifi && s.wifi.mode !== 'ap' && s.wifi.signal_dbm != null ? wifiSignalWord(s.wifi.signal_dbm) : null,
+                               s.wifi && s.wifi.signal_dbm != null ? wifiLinkText(s.wifi).sub : null,
                                s.nm_state && s.nm_state.state ? `NetworkManager: ${s.nm_state.state}` : (s.wifi && s.wifi.ssid ? s.wifi.ssid : 'no link data')]
                                .filter(Boolean).join(' · ')}
                          tone={s.wifi ? wifiTone(s.wifi) : 'idle'}/>
@@ -1111,7 +1112,6 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const waiting = s.status === 'waiting';
   const [msg, setMsg] = React.useState('');
   const [peer, setPeer] = React.useState('');
-  const wTone = wifiTone(s.wifi);
   const np = s.now_playing;
   const playing = np?.state === 'play' && np.song;
   const songDur = np?.song?.duration_sec ?? 0;
@@ -1225,7 +1225,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       `It pulls the new room software from the Domovoi server, backs up its current ` +
       `tree, and restarts — dropping offline for a few seconds. If the new code won't ` +
       `start, it rolls back automatically.\n\n` +
-      `Some updates finish at the next boot: if its health card then says ` +
+      `Some updates finish at the next boot: if the Health section of its Settings tab then says ` +
       `"reboot needed", unplug it for a few seconds and plug it back in.`
     )) return;
     setUpgradeErr(null);
@@ -1310,78 +1310,103 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             {satLastSeen(s) ? new Date(satLastSeen(s)).toISOString().replace('T',' ').slice(0,16) + ' UTC' : '—'}
           </div>
         </div>
-        <div style={{ padding: '14px 16px' }}>
-          <div className="label">wi-fi</div>
-          {s.wifi && s.wifi.mode === 'ap' ? (
+        <div className="sat-nowplaying" style={{ padding: '14px 16px', minWidth: 0 }}>
+          <div className="label">now playing</div>
+          {playing || (np?.state === 'pause' && np.song) ? (
             <>
-              <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor('err') }}>setup hotspot</div>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>hosting its setup network, not on the house Wi-Fi</div>
-            </>
-          ) : s.wifi && s.wifi.signal_dbm != null ? (
-            <>
-              <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor(wTone) }}>
-                {Math.round(s.wifi.signal_dbm)} dBm
-                <span style={{ fontSize: 11, fontWeight: 400 }}> {wifiSignalWord(s.wifi.signal_dbm)}</span>
+              <div style={{ fontSize: 13, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <strong style={{ fontWeight: 500 }}>{np.song.title || np.song.file?.split('/').pop() || 'unknown'}</strong>
+                {np.song.artist && <span style={{ color: 'var(--fg-muted)' }}> · {np.song.artist}</span>}
               </div>
-              <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
-                {s.wifi.ssid || '—'}
-                {s.wifi.rx_mbits != null && ` · ${s.wifi.rx_mbits.toFixed(1)}${s.wifi.tx_mbits != null ? ` / ${s.wifi.tx_mbits.toFixed(1)}` : ''} Mbit/s`}
+              <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 2 }}>
+                {fmtDur(np.elapsed_sec)}{songDur ? ` / ${fmtDur(songDur)}` : ''}
               </div>
-            </>
-          ) : s.wifi && s.wifi.rx_mbits != null ? (
-            <>
-              <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor(wTone) }}>
-                {s.wifi.rx_mbits.toFixed(1)}
-                {s.wifi.tx_mbits != null && (
-                  <span style={{ fontSize: 11, color: 'var(--fg-muted)', fontWeight: 400 }}> / {s.wifi.tx_mbits.toFixed(1)} Mbit/s</span>
-                )}
-              </div>
-              <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>{s.wifi.ssid || '—'}</div>
+              {s.sat_type === 'video' && (
+                <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
+                  <IconButton name={np.state === 'play' ? 'pause' : 'play'}
+                              title={np.state === 'play' ? 'pause' : 'resume'}
+                              onClick={async () => {
+                                try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${s.room_id}`); }
+                                catch (e) { reportMutationFailure(fire, np.state === 'play' ? 'pause' : 'resume', e); }
+                              }}/>
+                  <IconButton name="skip-forward" title="skip"
+                              onClick={async () => {
+                                try { await apiPost(`/api/music/skip/${s.room_id}`); }
+                                catch (e) { reportMutationFailure(fire, 'skip', e); }
+                              }}/>
+                  <IconButton name="square" title="stop"
+                              onClick={async () => {
+                                try { await apiPost(`/api/music/stop/${s.room_id}`); }
+                                catch (e) { reportMutationFailure(fire, 'stop', e); }
+                              }}/>
+                </div>
+              )}
             </>
           ) : (
-            <div className="mono" style={{ fontSize: 13, color: 'var(--fg-faint)', marginTop: 4 }}>no signal</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 4 }}>nothing playing</div>
           )}
         </div>
       </div>
 
-      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-soft)' }}>
-        <div className="label" style={{ marginBottom: 6 }}>now playing</div>
-        {playing || (np?.state === 'pause' && np.song) ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              <strong style={{ fontWeight: 500 }}>{np.song.title || np.song.file?.split('/').pop() || 'unknown'}</strong>
-              {np.song.artist && <span style={{ color: 'var(--fg-muted)' }}> · {np.song.artist}</span>}
-              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginLeft: 8 }}>
-                {fmtDur(np.elapsed_sec)}{songDur ? ` / ${fmtDur(songDur)}` : ''}
-              </span>
-            </div>
-            {s.sat_type === 'video' && (
-              <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-                <IconButton name={np.state === 'play' ? 'pause' : 'play'}
-                            title={np.state === 'play' ? 'pause' : 'resume'}
-                            onClick={async () => {
-                              try { await apiPost(`/api/music/${np.state === 'play' ? 'pause' : 'resume'}/${s.room_id}`); }
-                              catch (e) { reportMutationFailure(fire, np.state === 'play' ? 'pause' : 'resume', e); }
-                            }}/>
-                <IconButton name="skip-forward" title="skip"
-                            onClick={async () => {
-                              try { await apiPost(`/api/music/skip/${s.room_id}`); }
-                              catch (e) { reportMutationFailure(fire, 'skip', e); }
-                            }}/>
-                <IconButton name="square" title="stop"
-                            onClick={async () => {
-                              try { await apiPost(`/api/music/stop/${s.room_id}`); }
-                              catch (e) { reportMutationFailure(fire, 'stop', e); }
-                            }}/>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>nothing playing</div>
+      <VolumeControl s={s} fire={fire}/>
+
+      {s.sat_type === 'video' && satCan(s, 'display') && <VideoControls s={s} fire={fire}/>}
+
+      <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
+        <div className="label" style={{ marginBottom: 6 }}>announce to {s.room_id}</div>
+        {!canAnnounce && (
+          <div className="mono sat-not-offered">{notOffered} doesn't take announcements — timers and reminders aren't spoken there</div>
         )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input value={msg} onChange={e => setMsg(e.target.value)}
+                 onKeyDown={e => { if (e.key === 'Enter') sendAnnounce(); }}
+                 placeholder={`speak in the ${s.room_id} room…`}
+                 disabled={s.status !== 'online' || !canAnnounce}
+                 style={{ flex: 1, font: 'inherit', fontSize: 13, height: 32, padding: '0 10px',
+                          borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                          background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
+          <Button variant="primary" icon="send" disabled={!msg.trim() || s.status !== 'online' || !canAnnounce} onClick={sendAnnounce}>
+            send
+          </Button>
+        </div>
       </div>
 
-      <SatHealthCard room={s.room_id} online={s.status === 'online'}/>
+      <SatTimerScopeControl s={s} fire={fire} refresh={refresh}/>
+
+      <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
+        <div className="label" style={{ marginBottom: 6 }}>drop in</div>
+        {s.in_call_with ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Pill tone="live" live>in call with {s.in_call_with}</Pill>
+            <Button icon="x" onClick={hangUp}>Hang up</Button>
+          </div>
+        ) : !s.mic_enabled ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+            no microphone on this device — voice input is off
+          </div>
+        ) : !s.full_duplex ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+            this room's mic can't do drop-in — it needs an echo-cancelling array (XVF3800)
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select value={peer} onChange={e => setPeer(e.target.value)}
+                    disabled={s.status !== 'online' || peers.length === 0}
+                    style={{ flex: 1, font: 'inherit', fontSize: 13, height: 32, padding: '0 8px',
+                             borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                             background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}>
+              <option value="">{peers.length ? 'choose a room…' : 'no eligible rooms'}</option>
+              {peers.map(p => <option key={p.room_id} value={p.room_id}>{p.room_id}</option>)}
+            </select>
+            <Button variant="primary" icon="phone" disabled={!peer || s.status !== 'online'} onClick={startDropIn}>
+              Start
+            </Button>
+          </div>
+        )}
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+          live two-way audio — say "hang up" or use the button to end
+        </div>
+      </div>
 
       <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 8, fontSize: 12, borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label">room id</div>
@@ -1451,68 +1476,6 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         <div className="label">stream</div>
         <div className="mono" style={{ color: 'var(--fg-muted)' }}>{np?.stream_url || (s.mpd_ports ? `(http :${s.mpd_ports.http})` : '—')}</div>
       </div>
-
-      <VolumeControl s={s} fire={fire}/>
-
-      {s.sat_type === 'video' && satCan(s, 'display') && <VideoControls s={s} fire={fire}/>}
-
-      <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
-        <div className="label" style={{ marginBottom: 6 }}>announce to {s.room_id}</div>
-        {!canAnnounce && (
-          <div className="mono sat-not-offered">{notOffered} doesn't take announcements — timers and reminders aren't spoken there</div>
-        )}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input value={msg} onChange={e => setMsg(e.target.value)}
-                 onKeyDown={e => { if (e.key === 'Enter') sendAnnounce(); }}
-                 placeholder={`speak in the ${s.room_id} room…`}
-                 disabled={s.status !== 'online' || !canAnnounce}
-                 style={{ flex: 1, font: 'inherit', fontSize: 13, height: 32, padding: '0 10px',
-                          borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                          background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
-          <Button variant="primary" icon="send" disabled={!msg.trim() || s.status !== 'online' || !canAnnounce} onClick={sendAnnounce}>
-            send
-          </Button>
-        </div>
-      </div>
-
-      <SatTimerScopeControl s={s} fire={fire} refresh={refresh}/>
-
-      <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
-        <div className="label" style={{ marginBottom: 6 }}>drop in</div>
-        {s.in_call_with ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Pill tone="live" live>in call with {s.in_call_with}</Pill>
-            <Button icon="x" onClick={hangUp}>Hang up</Button>
-          </div>
-        ) : !s.mic_enabled ? (
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-            no microphone on this device — voice input is off
-          </div>
-        ) : !s.full_duplex ? (
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-            this room's mic can't do drop-in — it needs an echo-cancelling array (XVF3800)
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <select value={peer} onChange={e => setPeer(e.target.value)}
-                    disabled={s.status !== 'online' || peers.length === 0}
-                    style={{ flex: 1, font: 'inherit', fontSize: 13, height: 32, padding: '0 8px',
-                             borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
-                             background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}>
-              <option value="">{peers.length ? 'choose a room…' : 'no eligible rooms'}</option>
-              {peers.map(p => <option key={p.room_id} value={p.room_id}>{p.room_id}</option>)}
-            </select>
-            <Button variant="primary" icon="phone" disabled={!peer || s.status !== 'online'} onClick={startDropIn}>
-              Start
-            </Button>
-          </div>
-        )}
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
-          live two-way audio — say "hang up" or use the button to end
-        </div>
-      </div>
-
-      <SatCaptureControl s={s} fire={fire} refresh={refresh}/>
 
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2304,6 +2267,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
+          {tab === 'settings'      && <SatHealthCard room={s.room_id} online={s.status === 'online'}/>}
           {tab === 'settings'      && <RoomQuietHoursSettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && (satCan(s, 'config')
@@ -2314,6 +2278,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
                 </div>
               : <Empty glyph="sleeping" title="settings stay on the device"
                        sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
+          {tab === 'settings'      && <SatCaptureControl s={s} fire={fire} refresh={refresh}/>}
         </div>
       </aside>
     </>
@@ -3421,7 +3386,7 @@ const SpareUsbStick = ({ res, body, fire }) => {
             “Allow Microsoft 3rd Party UEFI CA” in its firmware settings, or turn Secure Boot off.</div>
           <div style={{ color: 'var(--warn-ink)' }}>Some older PCs’ firmware only has Microsoft’s 2011 certificate,
             and Debian’s newer boot loaders are signed with the 2023 one only. So the room keeps the boot loader
-            the stick installed (it is frozen, never updated), and this page warns on that room’s health card
+            the stick installed (it is frozen, never updated), and this page warns in the Health section of that room’s Settings tab
             when its firmware lacks the 2023 certificate. To update the firmware by hand: install the maker’s
             latest BIOS/UEFI update for that model from their support site (do it before wiping, from Windows,
             if you can: Windows Update may also bring the certificate), or turn Secure Boot off.</div>

@@ -327,8 +327,13 @@ const NowPlayingPanel = () => {
         </section>
       )}
 
-      {/* visualizer */}
-      {!remote && (
+      {/* visualizer: MilkDrop or the bars (visualizer.jsx); while casting,
+          a quiet line says it needs this browser's own playback */}
+      {typeof NowPlayingVisualizer === 'function' ? (
+        <div style={{ padding: '0 20px 12px' }}>
+          <NowPlayingVisualizer p={p} remote={remote}/>
+        </div>
+      ) : !remote && (
         <div style={{ padding: '0 20px 12px' }}>
           <Visualizer p={p} height={120}/>
         </div>

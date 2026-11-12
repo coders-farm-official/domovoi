@@ -16,6 +16,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [Does it support multiple people?](#does-it-support-multiple-people)
 - [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
 - [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
+- [Does the music visualizer keep the screen on?](#does-the-music-visualizer-keep-the-screen-on)
 - [Can I send pictures in chat?](#can-i-send-pictures-in-chat)
 - [Can I ask a chat about a document?](#can-i-ask-a-chat-about-a-document)
 - [Does Domovoi look things up online?](#does-domovoi-look-things-up-online)
@@ -370,6 +371,18 @@ On the dashboard, single-file audiobooks (a `.m4b`, say) save as that one file, 
 **Audiobooks in the Android app** save differently. Open a book and choose **save to phone**: the app shows the book's size first, then keeps the book in its **own storage** (not Downloads, and never in the phone's Music), with its cover and chapters, so it plays with no server at all. It needs no storage permission and goes away with the app. The download runs in the background with a notification you can cancel from; if you leave home halfway, it pauses and **finishes by itself** the next time the server is in reach (there is no mobile-data setting: the server is only on your home network). The book keeps **one place on the phone** for streaming and the saved copy, sent to the server whenever the phone is connected; if a room got further in the same book for you, the app offers to **continue from** that room. Saved books are on Audiobooks → **your device**, which shows the space they use and removes them, and on the app's Audiobooks tab when there is no server. Books saved to `Downloads/Domovoi/` by earlier versions stay there.
 
 All of this is a plain file copy from your own server — nothing goes to the internet.
+
+## Does the music visualizer keep the screen on?
+
+Yes, while it plays full screen: the screen doesn't dim, lock or start the screen saver, like a video site in full screen. It lets go when you leave full screen, pause, or switch away from the tab. (The visualizer is in the dashboard: Music → Player → **milkdrop visualizer**.)
+
+How, and where that was checked:
+
+- **Chrome and Edge** (Windows, checked 2026-11-11 by watching Windows' "display required" flag): on an `https://` or `localhost` address the browser's Screen Wake Lock does it. On the usual plain `http://192.168.1.20:6369` address that lock doesn't exist, so the dashboard plays a tiny invisible, silent video while full screen, which these browsers keep the screen on for. Both ways were measured to hold the screen on and to let go.
+- **Firefox and Safari**: not measured. They offer the Screen Wake Lock on `https://` addresses, and the dashboard uses it there. On plain `http://` the same silent video is tried; whether it keeps the screen on there hasn't been checked.
+- **iPhone and iPad**: Safari there can only show a video full screen, not a page part, so the visualizer has no full-screen button.
+
+The visualizer needs WebGL 2 (any current desktop browser has it). It draws only what this browser is playing; while the player is sending music to a room, there is nothing here to draw, and the Player tab says so.
 
 ## Can I send pictures in chat?
 

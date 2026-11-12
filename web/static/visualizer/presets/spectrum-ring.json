@@ -1,0 +1,98 @@
+{
+ "version": 2,
+ "baseVals": {
+  "mv_a": 0,
+  "ob_size": 0,
+  "ob_a": 0,
+  "ib_size": 0,
+  "ib_a": 0,
+  "warp": 0,
+  "gammaadj": 1.8,
+  "wave_brighten": 0,
+  "wave_a": 0.001,
+  "decay": 0.9,
+  "zoom": 0.985,
+  "wrap": 0
+ },
+ "shapes": [
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  }
+ ],
+ "waves": [
+  {
+   "baseVals": {
+    "enabled": 1,
+    "samples": 256,
+    "spectrum": 1,
+    "thick": 1,
+    "additive": 1,
+    "smoothing": 0.5,
+    "scaling": 1.2
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": "an = sample*6.283185 + time*0.15;\namp = 0.22 + 0.1*max(min(value1, 1.5), 0);\nx = 0.5 + amp*cos(an);\ny = 0.5 + amp*sin(an);\nr = 0.55 + 0.45*sin(sample*6.283185 + time*0.7);\ng = 0.45 + 0.35*sin(sample*12.56637 - time*0.5);\nb = 0.6 + 0.4*cos(sample*6.283185 - time*0.9);\na = 0.9;"
+  },
+  {
+   "baseVals": {
+    "enabled": 1,
+    "samples": 256,
+    "spectrum": 1,
+    "thick": 0,
+    "additive": 1,
+    "smoothing": 0.6,
+    "scaling": 0.8
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": "an = -sample*6.283185 - time*0.1;\namp = 0.13 + 0.06*max(min(value2, 1.5), 0);\nx = 0.5 + amp*cos(an);\ny = 0.5 + amp*sin(an);\nr = 1.0; g = 0.7; b = 0.25; a = 0.6;"
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  }
+ ],
+ "init_eqs_eel": "",
+ "frame_eqs_eel": "rot = 0.004*sin(time*0.4);",
+ "pixel_eqs_eel": "",
+ "warp": "",
+ "comp": "shader_body {\n  vec3 base = texture(sampler_main, uv).rgb;\n  vec3 glow = texture(sampler_blur1, uv).rgb * scale1 + bias1;\n  ret = base * 1.1 + glow * 0.9;\n  ret = ret / (1.0 + ret * 0.35);\n}"
+}

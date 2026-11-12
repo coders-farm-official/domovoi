@@ -89,6 +89,10 @@ def test_spoken_names() -> None:
     "remove milk from the shopping list", "take milk off the list",
     "clear the shopping list", "clear the crossed off items from my to-do list",
     "make a list called camping", "create a camping list", "delete the camping list",
+    # The two lists every house has, without the word "list" (2026-11-11).
+    "add eggs to the shopping", "put eggs on the shopping", "add bread to the groceries",
+    "add tarp the trailer to my to-do", "Add tarp the trailer to my to-dos.",
+    "could you add milk to the shopping for me",
 ])
 def test_list_phrasings_are_the_lists_fast_paths(said: str) -> None:
     assert fast_path_winner(said) == "lists", said
@@ -117,6 +121,9 @@ def test_lists_poaches_nothing(said: str, owner: str) -> None:
     "add bohemian rhapsody to the queue",
     "add it to my library", "add this to the queue", "check the weather",
     "remind me to buy milk", "put on some music",
+    # Only the names every house has, and never "to do" as two words.
+    "put the kettle on to do the dishes", "add the tent to my camping",
+    "add this song to my workout", "put some jazz on in the kitchen",
 ])
 def test_music_and_other_adds_never_reach_lists(said: str) -> None:
     assert fast_path_winner(said) != "lists", said
@@ -127,6 +134,7 @@ def test_music_and_other_adds_never_reach_lists(said: str) -> None:
     "add this song to my play list",       # a playlist heard as two words
     "add this song to my music list",
     "cross it off",                        # no item to look for
+    "put it on the shopping",              # no item said
 ])
 async def test_declined_phrasings_route_on(said: str) -> None:
     from domovoi.router import plan_route
@@ -187,6 +195,20 @@ async def test_the_live_bug_is_kept_and_said(voice) -> None:
     logged = (await voice.db.execute(text(
         "SELECT matched_handler FROM intents_log ORDER BY id DESC LIMIT 1"))).scalar_one()
     assert logged == "lists"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_two_house_lists_without_the_word_list(voice) -> None:
+    r = await voice("Add eggs to the shopping.")
+    assert (r.matched_handler, r.matched_path) == ("lists", "fast")
+    assert r.text == "Added eggs to your shopping list."
+    r = await voice("put bread on the groceries")
+    assert r.text == "Added bread to your shopping list."
+    r = await voice("add tarp the trailer to my to-do")
+    assert r.text == "Added tarp the trailer to your to-do list."
+    assert await _items(voice.db, "shopping") == [("Eggs", False), ("Bread", False)]
+    assert await _items(voice.db, "to-do") == [("Tarp the trailer", False)]
 
 
 @requires_db

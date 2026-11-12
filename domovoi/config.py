@@ -1313,6 +1313,11 @@ class Settings(BaseSettings):
     # fetched from the google/fonts repository plus their licence file, and
     # the cached catalogue. The bundled set lives in web/static/fonts.
     fonts_dir: str = os.path.expanduser("~/.domovoi/fonts")
+    # MilkDrop presets an admin added for the whole house on the Now Playing
+    # screen's visualizer (web/backend/api/visualizer.py): one JSON file per
+    # preset, already converted to Butterchurn's format. The standard set
+    # ships in web/static/visualizer/presets.
+    visualizer_presets_dir: str = os.path.expanduser("~/.domovoi/visualizer_presets")
 
     # ─── Media acquisition queue (design §4.8) ─────────────────────────
     # The queue holds USER-requested media (voice adds, dashboard adds,

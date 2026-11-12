@@ -161,7 +161,7 @@ def test_a_pi_row_renders_exactly_as_the_row_from_before_s0(driven, pi):
     assert now["badge"] is None, "no board badge on a Pi, even with an adopted board"
     assert not _button(now, "Restart room")["disabled"]
     assert "settings stay on the device" not in now["settings"]
-    assert "battery" not in now["overview"] and "mic blocked" not in now["overview"]
+    assert " | battery | " not in now["settings"] and "mic blocked" not in now["settings"]
 
 
 def test_a_linux_pc_shows_its_board_and_keeps_what_it_declared(driven):
@@ -169,29 +169,29 @@ def test_a_linux_pc_shows_its_board_and_keeps_what_it_declared(driven):
     assert r["badge"] == "Linux PC"
     assert not _button(r, "Restart room")["disabled"]
     assert not _button(r, "Upgrade room")["disabled"]
-    assert "battery" in r["overview"] and "81%" in r["overview"]
-    assert "charging" in r["overview"]
+    assert "battery" in r["settings"] and "81%" in r["settings"]
+    assert "charging" in r["settings"]
     assert "settings stay on the device" not in r["settings"]
 
 
 def test_a_battery_held_full_on_the_charger_asks_for_a_charge_limit(driven):
-    assert "100%" in driven["battery__full_on_charger"]["overview"]
-    assert "set a charge limit" in driven["battery__full_on_charger"]["overview"]
-    low = driven["battery__low_on_battery"]["overview"]
+    assert "100%" in driven["battery__full_on_charger"]["settings"]
+    assert "set a charge limit" in driven["battery__full_on_charger"]["settings"]
+    low = driven["battery__low_on_battery"]["settings"]
     assert "15%" in low and "on battery" in low and "charge limit" not in low
 
 
 def test_a_charging_battery_says_charging(driven):
-    r = driven["battery__charging"]["overview"]
+    r = driven["battery__charging"]["settings"]
     assert "70%" in r and "charging" in r
 
 
 def test_flat_battery_keys_show_nothing(driven):
-    assert "battery" not in driven["battery__flat_keys_are_not_a_shape"]["overview"]
+    assert " | battery | " not in driven["battery__flat_keys_are_not_a_shape"]["settings"]
 
 
 def test_a_spare_device_without_a_battery_shows_none(driven):
-    assert "battery" not in driven["battery__none"]["overview"]
+    assert " | battery | " not in driven["battery__none"]["settings"]
 
 
 def test_an_android_room_greys_what_it_left_out_with_a_reason(driven):
@@ -201,7 +201,7 @@ def test_an_android_room_greys_what_it_left_out_with_a_reason(driven):
     assert _button(r, "Upgrade room")["disabled"]
     assert not _button(r, "Reset pairing")["disabled"], "pairing is the core's, always offered"
     assert "this Android room restarts and updates itself" in r["overview"]
-    assert "mic blocked" in r["overview"] and "64%" in r["overview"]
+    assert "mic blocked" in r["settings"] and "64%" in r["settings"]
     # 2026-10-25: a phone room's Settings tab has its battery switches (kept
     # on the server, test_web_room_battery.py); the rest stays on the phone.
     assert "Say when the battery is low" in r["settings"]
