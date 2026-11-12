@@ -141,6 +141,63 @@ def voice_history_keep_days(value: object) -> int | None:
     return None if keep == "forever" else int(keep)
 
 
+# `music_listens_keep` (Up next P1, 2026-11-12): how long the listening
+# history (music_listens, V051) is kept. Days, or "off" = don't keep any:
+# nothing new is recorded and what is kept is deleted. The default is the
+# longest choice. See domovoi/music_listens.py.
+MUSIC_LISTENS_KEEP_CHOICES = ("off", "90", "365")
+MUSIC_LISTENS_KEEP_DEFAULT = "365"
+MUSIC_LISTENS_KEEP_LABELS = {"off": "Don't keep", "90": "90 days", "365": "1 year"}
+# The only spellings that turn it off. Anything unreadable keeps the most
+# (365): this setting deletes, so a typo must never delete more than asked.
+_MUSIC_LISTENS_KEEP_OFF = frozenset({"off", "don't keep", "dont keep", "dont-keep", "none", "no"})
+_MUSIC_LISTENS_KEEP_WARNED: set[str] = set()
+
+
+def normalize_music_listens_keep(value: object) -> str:
+    """One of :data:`MUSIC_LISTENS_KEEP_CHOICES` for a raw setting value.
+
+    Never fatal, and never shorter than asked: blank is the default, a
+    whole number of days rounds UP to the next choice (30 keeps 90; more
+    than 90 keeps a year; 0 or less, or more than a year, keeps a year,
+    because 0 can as well mean "no limit" as "nothing"), and only the
+    spellings in ``_MUSIC_LISTENS_KEEP_OFF`` mean "don't keep". Anything
+    else keeps a year, and the log says so once."""
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return MUSIC_LISTENS_KEEP_DEFAULT
+    if text in MUSIC_LISTENS_KEEP_CHOICES:
+        return text
+    if text in _MUSIC_LISTENS_KEEP_OFF:
+        return "off"
+    compact = text.replace(" ", "").replace("_", "")
+    for suffix in ("days", "day", "d"):
+        if compact.endswith(suffix) and compact[: -len(suffix)].isdigit():
+            compact = compact[: -len(suffix)]
+            break
+    if compact in ("1y", "1year", "year", "12months"):
+        return "365"
+    if compact.lstrip("-").isdigit():
+        days = int(compact)
+        meant = "90" if 0 < days <= 90 else "365"
+        if text not in _MUSIC_LISTENS_KEEP_WARNED and meant != compact:
+            _MUSIC_LISTENS_KEEP_WARNED.add(text)
+            _log.warning("MUSIC_LISTENS_KEEP=%r read as %r (the choices: %s)",
+                         value, meant, ", ".join(MUSIC_LISTENS_KEEP_CHOICES))
+        return meant
+    if text not in _MUSIC_LISTENS_KEEP_WARNED:
+        _MUSIC_LISTENS_KEEP_WARNED.add(text)
+        _log.warning("MUSIC_LISTENS_KEEP=%r is not one of %s; keeping a year until it is",
+                     value, ", ".join(MUSIC_LISTENS_KEEP_CHOICES))
+    return MUSIC_LISTENS_KEEP_DEFAULT
+
+
+def music_listens_keep_days(value: object) -> int | None:
+    """The days ``value`` keeps, or None for "off" (keep nothing)."""
+    keep = normalize_music_listens_keep(value)
+    return None if keep == "off" else int(keep)
+
+
 def normalize_think_setting(value: object) -> str:
     """One of :data:`QA_THINK_CHOICES` for a raw setting value: a bool, the
     usual boolean spellings in any case, or blank / "auto" / "none" for
@@ -1395,6 +1452,20 @@ class Settings(BaseSettings):
     @classmethod
     def _voice_history_keep_known(cls, value: object) -> str:
         return normalize_voice_history_keep(value)
+
+    # ─── Listening history (Up next P1, 2026-11-12; domovoi/music_listens.py) ─
+    # How long the songs each player played, and for whom, are kept
+    # (music_listens, V051): "365" days (the default), "90", or "off" =
+    # don't keep any (nothing new is recorded, what is kept is deleted).
+    # Settings → Privacy → Listening history; a save prunes at once.
+    music_listens_keep: str = MUSIC_LISTENS_KEEP_DEFAULT
+    # How often the pruner deletes what is older (workers/music_listens_pruner.py).
+    music_listens_pruner_interval_sec: float = 21600.0  # 6h
+
+    @field_validator("music_listens_keep", mode="before")
+    @classmethod
+    def _music_listens_keep_known(cls, value: object) -> str:
+        return normalize_music_listens_keep(value)
 
     # ─── Library enricher ──────────────────────────────────────────────
     # Walks library_tracks for files with no enriched_at and tries to

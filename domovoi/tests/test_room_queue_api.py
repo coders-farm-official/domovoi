@@ -418,7 +418,8 @@ def test_add_stamps_provenance_and_the_read_joins_it(
 
     queue = web_client.get("/api/music/queue/kitchen").json()
     assert [i["added_by"] for i in queue["items"]] == ["Kitchen iPad", "Kitchen iPad"]
-    assert [i["added_by_device_id"] for i in queue["items"]] == ["browser-abc"] * 2
+    # The id is an admin's since 2026-11-12; the household reads the name.
+    assert [i["added_by_device_id"] for i in queue["items"]] == [None, None]
     # First entry is what the fake core reports as playing.
     assert queue["items"][0]["playing"] is True
     assert queue["items"][1]["playing"] is False
@@ -456,7 +457,7 @@ def test_an_unregistered_device_leaves_added_by_null(
     )
     item = web_client.get("/api/music/queue/kitchen").json()["items"][0]
     assert item["added_by"] is None
-    assert item["added_by_device_id"] == "browser-never-registered"
+    assert item["added_by_device_id"] is None   # recorded; shown to an admin only
 
 
 @requires_db

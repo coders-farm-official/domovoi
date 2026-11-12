@@ -350,10 +350,34 @@ const _deviceIdHeader = () => {
   } catch { return {}; }
 };
 
+// The claim key this browser was handed when it said "this is me" on a
+// person's People page (web/backend/api/devices.py): it proves this browser
+// is that person's when it acts as them (clearing their listening history).
+// Kept per server, like the household token; sent on every API call to that
+// server, never anywhere else. Only its hash is on the server.
+const CLAIM_KEY_HEADER = 'X-Domovoi-Claim-Key';
+const _claimKeyName = () => {
+  try { return (typeof Auth !== 'undefined' && Auth.perServerKey) ? Auth.perServerKey('domovoi-claim-key') : 'domovoi-claim-key'; }
+  catch { return 'domovoi-claim-key'; }
+};
+const ClaimKey = {
+  get: () => { try { return localStorage.getItem(_claimKeyName()) || null; } catch { return null; } },
+  set: (key) => {
+    try {
+      if (key) localStorage.setItem(_claimKeyName(), key);
+      else localStorage.removeItem(_claimKeyName());
+    } catch { /* no storage: this browser can't act as its person, and says so */ }
+  },
+};
+const _claimKeyHeader = () => {
+  const k = ClaimKey.get();
+  return k ? { [CLAIM_KEY_HEADER]: k } : {};
+};
+
 // Every header an /api call carries. Exported because a handful of callers
 // need a RAW fetch (streamed downloads with progress, uploads that report
 // bytes) and must send the same set these helpers do.
-const apiHeaders = () => ({ ..._authHeaders(), ..._deviceIdHeader(), ...REQUESTED_WITH });
+const apiHeaders = () => ({ ..._authHeaders(), ..._deviceIdHeader(), ..._claimKeyHeader(), ...REQUESTED_WITH });
 
 // Media the BROWSER fetches by URL — <img src>, <video src>, window.open —
 // can't carry a header, so the household device token rides in the query
@@ -1647,7 +1671,45 @@ const DeviceIdentity = (() => {
       return v === '1' ? true : v === '0' ? false : null;
     } catch { return null; }
   };
+  /* Whose device this is ("this is me", People page): the person the
+   * server says this browser is, {id, name}, or null. Every device row
+   * carries it (owner_person_id / owner_person_name). Echoed to
+   * localStorage like the shared-screen flag, so the player's "listening
+   * as" starts from it at once on a reload. It decides whose the songs
+   * played here are (POST /api/music/listens) and whether this browser
+   * may clear a person's listening history without the admin password. */
+  const OWNER_KEY = 'domovoi-device-owner';
+  let lastOwner;                      // undefined until this session knows
+  const ownerListeners = new Set();
+  const cachedOwner = () => {
+    try {
+      const v = JSON.parse(localStorage.getItem(OWNER_KEY) || 'null');
+      return v && typeof v.id === 'number' ? v : null;
+    } catch { return null; }
+  };
+  const owner = () => (lastOwner !== undefined ? lastOwner : cachedOwner());
+  const rememberOwner = (row) => {
+    if (!row || !('owner_person_id' in row)) return;
+    const next = row.owner_person_id != null
+      ? { id: Number(row.owner_person_id), name: row.owner_person_name || '',
+          claimedAt: row.owner_claimed_at || null } : null;
+    const before = owner();
+    // The claim key comes once, in the answer to the claim that made it.
+    // A device that is nobody's, or whose person changed without a new key
+    // (an admin set it), holds none: the old one no longer works.
+    if (row.claim_key) ClaimKey.set(row.claim_key);
+    else if (!next || (before && before.id !== next.id)) ClaimKey.set(null);
+    lastOwner = next;
+    try { localStorage.setItem(OWNER_KEY, JSON.stringify(next)); } catch {}
+    if ((before && before.id) !== (next && next.id) || (before && before.name) !== (next && next.name)) {
+      ownerListeners.forEach((fn) => { try { fn(next); } catch {} });
+    }
+  };
+  // fn(owner) whenever whose this browser is changes. Returns the unsubscribe.
+  const subscribeOwner = (fn) => { ownerListeners.add(fn); return () => ownerListeners.delete(fn); };
+
   const remember = (row) => {
+    rememberOwner(row);
     if (!row || typeof row.shared_screen !== 'boolean') return row;
     const changed = row.shared_screen !== sharedScreen();
     lastShared = row.shared_screen;
@@ -1766,8 +1828,19 @@ const DeviceIdentity = (() => {
     return remember(row);
   };
 
+  /* "This is me" (personId) or "not me" (null) for THIS browser. The
+   * server's rules (web/backend/api/devices.py claim_refusal): a person
+   * nobody has claimed, or releasing its own, is this browser's to do;
+   * a person another device has claimed is an admin's, so that refusal
+   * opens the sign-in prompt and is sent again once an admin is in. */
+  const setPerson = async (personId) => {
+    const row = await apiPut(`/api/devices/${encodeURIComponent(id())}/person`,
+                             { person_id: personId == null ? null : Number(personId) });
+    return remember(row);
+  };
+
   return { id, name: cachedName, suggestedName, register, refresh, rename, boot,
-           canRegister, sharedScreen, subscribeShared };
+           canRegister, sharedScreen, subscribeShared, owner, subscribeOwner, setPerson };
 })();
 
 // ─── Time helpers (page-local NOW vs reference NOW) ─────────────────
@@ -1857,7 +1930,7 @@ Object.assign(window, {
   apiGet, apiPost, apiPatch, apiPut, apiDelete, deviceDownload,
   apiFetch, apiFetchRaw, apiUpload,
   apiHeaders, withDeviceToken,
-  stateBus, ServerStore, ServerRestart, DeviceIdentity, apiErrorText, isAuthFailure,
+  stateBus, ServerStore, ServerRestart, DeviceIdentity, ClaimKey, apiErrorText, isAuthFailure,
   mutationErrorText, reportMutationFailure, deviceBlockReason, clipSentence,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,

@@ -394,15 +394,16 @@ def test_settings_is_five_groups_in_plain_words(driven) -> None:
         ["Household", ["Rooms", "People", "Phones & browsers"]],
         ["Voice", ["Wake words", "Voices", "Greetings"]],
         ["Chat & AI", ["Models"]],
-        ["Privacy", ["Internet", "Voice history"]],
+        ["Privacy", ["Internet", "Voice history", "Listening history"]],
         ["System", ["About & updates", "Health", "App layout", "Advanced"]],
     ]
     o = driven["settings_groups_and_names"]
     assert o["heads"] == ["Household", "Voice", "Chat & AI", "Privacy", "System"]
     assert [label for label, _ in o["items"]] == [
         "Rooms", "People", "Phones & browsers", "Wake words", "Voices", "Greetings", "Models",
-        "Internet", "Voice history", "About & updates", "Health", "App layout", "Advanced"]
+        "Internet", "Voice history", "Listening history", "About & updates", "Health", "App layout", "Advanced"]
     assert dict(o["items"])["Voice history"] == "#settings/voice-history"
+    assert dict(o["items"])["Listening history"] == "#settings/listening-history"
     assert o["title"] == "Greetings"
 
 
@@ -411,7 +412,7 @@ def test_every_settings_section_has_an_address_and_its_old_names_open_it(driven)
     slugs = dict(o["slugs"])
     assert slugs == {s: s for s in (
         "rooms", "people", "phones-and-browsers", "app-layout", "wake-words", "voices", "greetings", "models",
-        "internet", "voice-history", "about", "health", "advanced")}
+        "internet", "voice-history", "listening-history", "about", "health", "advanced")}
     ids = [i for i, _ in o["slugs"]]
     assert o["roundTrip"] == ids
     assert dict(o["byAlias"]) == {

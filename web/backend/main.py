@@ -54,6 +54,7 @@ from web.backend.api import images as images_api
 from web.backend.api import models as models_api
 from web.backend.api import music as music_api
 from web.backend.api import music_aliases as music_aliases_api
+from web.backend.api import music_listens as music_listens_api
 from web.backend.api import music_artists as music_artists_api
 from web.backend.api import music_genres as music_genres_api
 from web.backend.api import lyrics as lyrics_api
@@ -410,6 +411,9 @@ app.include_router(music_aliases_api.router)
 app.include_router(music_artists_api.router)
 # Genres (V050): the Music page's Genres tab, open reads like Artists.
 app.include_router(music_genres_api.router)
+# Listening history (V051, Up next P1): the players' listens, the summary,
+# clearing a person's and deleting all. Literal paths, its own module.
+app.include_router(music_listens_api.router)
 # Lyrics (V021): the household tier's synced-lyrics reads. Its own module,
 # like the names above, so /api/music/lyrics/* and the /lyrics leaves stay
 # clear of music_api's /library/{track_id} matchers.

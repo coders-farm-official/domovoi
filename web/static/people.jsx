@@ -219,7 +219,340 @@ const PersonVoiceMatches = ({ person, matches }) => {
   );
 };
 
-const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceMatches, onDeleteSample, onForget, onRenamed, fire }) => {
+/* ---- Whose this browser is, and their listening history (2026-11-12) ----
+ *
+ * "This is me" (owner decision 2026-11-12): a phone or browser can say it
+ * is one person's. What plays on it then counts as that person's listening
+ * history, and that person can clear their own history from it. The
+ * server's rules (web/backend/api/devices.py claim_refusal): a person
+ * nobody has claimed, or letting go of its own claim, is this browser's to
+ * do; a person another phone or browser already has is an admin's, so that
+ * press opens the sign-in prompt. A shared screen is nobody's.
+ *
+ * Clearing (web/backend/api/music_listens.py): a person's own phone or
+ * browser, or an admin. Anyone else is asked first: sign in as an admin,
+ * or say "this is me" here and then clear. */
+
+/* {id, name} of the person this browser is, or null; follows changes. */
+const usePeopleDeviceOwner = () => {
+  const read = () => {
+    try { return DeviceIdentity.owner ? DeviceIdentity.owner() : null; } catch { return null; }
+  };
+  const [owner, setOwner] = React.useState(read);
+  React.useEffect(() => {
+    let off = null;
+    try { if (DeviceIdentity.subscribeOwner) off = DeviceIdentity.subscribeOwner(() => setOwner(read())); } catch {}
+    setOwner(read());
+    return () => { if (off) off(); };
+  }, []);
+  return owner;
+};
+
+const peopleSignedInAsAdmin = () => {
+  try { return !!(Auth.isLoggedIn() || (Auth.status && Auth.status.setup_complete === false)); }
+  catch { return false; }
+};
+
+const songsWord = (n) => `${n} song${n === 1 ? '' : 's'}`;
+
+/* Whether this browser can act as its person: it holds the claim key the
+ * server handed it when it said "this is me" (data.js ClaimKey). A claim
+ * from before keys, or one whose key this browser lost, can't. */
+const peopleHoldsClaimKey = () => {
+  try { return !!(typeof ClaimKey !== 'undefined' && ClaimKey.get()); } catch { return false; }
+};
+
+/* The first 10 minutes after "this is me": clearing the person's history
+ * from this browser is an admin's until then (the server's rule too). */
+const PEOPLE_FRESH_CLAIM_MS = 10 * 60 * 1000;
+const peopleClaimIsFresh = (owner) => {
+  if (!owner || !owner.claimedAt) return true;
+  const t = Date.parse(owner.claimedAt);
+  return !Number.isFinite(t) || Date.now() - t < PEOPLE_FRESH_CLAIM_MS;
+};
+
+const PersonThisBrowser = ({ person, fire, onChanged }) => {
+  const owner = usePeopleDeviceOwner();
+  const shared = useSharedScreen();
+  const [busy, setBusy] = React.useState(false);
+  const mine = !!owner && owner.id === person.id;
+  const proven = mine && peopleHoldsClaimKey();
+  const elsewhere = Math.max(0, (person.device_count || 0) - (mine ? 1 : 0));
+
+  const claim = async (pid) => {
+    setBusy(true);
+    try {
+      await DeviceIdentity.setPerson(pid);
+      fire(pid == null ? 'this browser isn’t anyone’s now' : `this browser is ${person.name}’s now`);
+      onChanged();
+    } catch (e) {
+      reportMutationFailure(fire, pid == null ? 'change' : 'claim', e);
+    } finally { setBusy(false); }
+  };
+
+  let line;
+  let action = null;
+  if (shared) {
+    line = 'This is a shared screen, so it isn’t anyone’s: what plays here counts for the whole household.';
+  } else if (mine && !proven) {
+    // A claim from before claim keys (or this browser lost its key): saying
+    // "this is me" again is how it gets one.
+    line = `This browser is ${person.name}’s, but it can’t prove it yet. Say “this is me” again to act as ${person.name} here.`;
+    action = <Button variant="primary" icon="user-check" disabled={busy} onClick={() => claim(person.id)}>this is me</Button>;
+  } else if (mine) {
+    line = `This browser is ${person.name}’s. What plays here counts as ${person.name}’s listening, and ${person.name} can clear it from here.`;
+    action = <Button icon="user-x" disabled={busy} onClick={() => claim(null)}>not me</Button>;
+  } else if (owner) {
+    line = `This browser is ${owner.name}’s.`;
+    action = <Button icon="user-check" disabled={busy} onClick={() => claim(person.id)}>it’s {person.name}’s instead</Button>;
+  } else {
+    line = `Is this ${person.name}’s browser? Then what plays here counts as ${person.name}’s listening, and ${person.name} can clear it from here.`;
+    action = <Button variant="primary" icon="user-check" disabled={busy} onClick={() => claim(person.id)}>this is me</Button>;
+  }
+  return (
+    <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6 }}>this browser</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, color: 'var(--fg)', flex: '1 1 260px', lineHeight: 1.5 }}>{line}</div>
+        {action}
+      </div>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
+        {elsewhere === 0
+          ? `no ${mine ? 'other ' : ''}phone or browser is ${person.name}’s`
+          : `${elsewhere} ${mine ? 'other ' : ''}phone${elsewhere === 1 ? '' : 's'} or browser${elsewhere === 1 ? '' : 's'} ${elsewhere === 1 ? 'is' : 'are'} ${person.name}’s`}
+        {!shared && !mine && elsewhere > 0 && ' · an admin has to say yes to add this one'}
+      </div>
+    </div>
+  );
+};
+
+/* A small dialog with ordinary (not destructive) buttons. */
+const PeopleChoiceDialog = ({ title, icon = 'info', children, actions, onCancel }) => (
+  <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,0.45)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+       onClick={onCancel}>
+    <div role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}
+         style={{ width: 'min(460px, 100%)', background: 'var(--card)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--r-lg)', boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px',
+                    borderBottom: '1px solid var(--border-soft)' }}>
+        <Icon name={icon} size={16}/>
+        <strong style={{ fontSize: 14 }}>{title}</strong>
+      </div>
+      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10,
+                    fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+        {children}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 8, padding: '12px 16px',
+                    borderTop: '1px solid var(--border-soft)' }}>
+        <Button icon="x" onClick={onCancel}>Cancel</Button>
+        {actions}
+      </div>
+    </div>
+  </div>
+);
+
+const PersonListening = ({ person, listens, fire, onChanged }) => {
+  const owner = usePeopleDeviceOwner();
+  const shared = useSharedScreen();
+  const [ask, setAsk] = React.useState(null);   // null | 'who' | 'confirm'
+  const [busy, setBusy] = React.useState(false);
+  const data = listens.data;
+  const row = data && (data.people || []).find((r) => r.person_id === person.id);
+  const count = row ? row.listens : 0;
+  const mine = !shared && !!owner && owner.id === person.id;
+  // This browser may clear it itself: it is the person's, holds its claim
+  // key, and said "this is me" more than 10 minutes ago (the server checks
+  // all three; an admin skips them).
+  const ownClear = mine && peopleHoldsClaimKey() && !peopleClaimIsFresh(owner);
+  const off = data && data.keep === 'off';
+
+  const start = () => setAsk(ownClear || peopleSignedInAsAdmin() ? 'confirm' : 'who');
+  const signIn = async () => {
+    setAsk(null);
+    let ok = false;
+    try { ok = await Auth.ensureLoggedIn(); } catch { ok = false; }
+    if (ok) setAsk('confirm');
+  };
+  const clear = async () => {
+    setBusy(true);
+    try {
+      const res = await apiDelete(`/api/music/listens/people/${person.id}`);
+      fire(`cleared ${person.name}’s listening history (${songsWord((res && res.deleted) || 0)})`);
+      listens.refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'clear', e);
+    } finally { setBusy(false); setAsk(null); }
+  };
+
+  // Why this browser can't clear it itself, in one line.
+  const why = shared ? 'This is a shared screen, so it can’t be anyone’s.'
+    : mine && !peopleHoldsClaimKey() ? `This browser is ${person.name}’s but can’t prove it yet: say “this is me” again on this page.`
+    : mine ? `This browser said it was ${person.name}’s less than 10 minutes ago. Until then only an admin can clear it.`
+    : owner ? `This browser is ${owner.name}’s.`
+    : `If this is ${person.name}’s browser, say “this is me” on this page; from 10 minutes later ${person.name} can clear it from here.`;
+
+  return (
+    <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6 }}>listening history</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 13, flex: '1 1 260px', lineHeight: 1.5 }}>
+          {!data ? <span style={{ color: 'var(--fg-muted)' }}>reading…</span>
+            : off ? <span style={{ color: 'var(--fg-muted)' }}>Domovoi keeps no listening history (Settings → Privacy → Listening history).</span>
+            : count === 0 ? <span style={{ color: 'var(--fg-muted)' }}>nothing kept for {person.name}</span>
+            : <span>{songsWord(count)} played for {person.name} · kept {data.keep_label === '1 year' ? 'a year' : data.keep_label}</span>}
+        </div>
+        {data && !off && count > 0 && (
+          <Button icon="trash-2" disabled={busy} onClick={start}
+                  style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
+            clear
+          </Button>
+        )}
+      </div>
+
+      {ask === 'who' && (
+        <PeopleChoiceDialog title={`Clear ${person.name}’s listening history?`} icon="lock"
+                            onCancel={() => setAsk(null)}
+                            actions={
+                              <Button variant="primary" icon="log-in" disabled={busy} onClick={signIn}>
+                                sign in as admin
+                              </Button>
+                            }>
+          <div>Each person clears their own. Only {person.name}’s own phone or browser, or an admin, can clear it.</div>
+          <div>{why}</div>
+        </PeopleChoiceDialog>
+      )}
+      {ask === 'confirm' && (
+        <DeleteConfirmDialog title={`Clear ${person.name}’s listening history?`} busy={busy}
+                             confirmLabel="Clear" onCancel={() => setAsk(null)} onConfirm={clear}>
+          <div>
+            This deletes the {songsWord(count)} played for {person.name} in every room and on every
+            phone and browser. Up next stops learning from them. Songs played for the whole household
+            and for other people stay.
+          </div>
+          <div>This can’t be undone.</div>
+        </DeleteConfirmDialog>
+      )}
+    </div>
+  );
+};
+
+/* Settings → Privacy → Listening history: how long it is kept (an admin
+ * changes it), how much there is, and deleting all of it (an admin).
+ * Each person's own clear is on their People page. */
+const ListeningHistoryPanel = () => {
+  const [fire, toastNode] = useToast();
+  const lh = useApiObject('/api/music/listens/summary', { quiet: true, refetchOnAuth: true });
+  const { data, error, refresh } = lh;
+  const [pendingKeep, setPendingKeep] = React.useState(null);
+  const [askDelete, setAskDelete] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const refused = error && (error.status === 401 || error.status === 403);
+  const keep = data ? data.keep : null;
+  const choices = (data && data.choices) || [];
+  const labelOf = (v) => (choices.find((c) => c.value === v) || {}).label || v;
+  const days = (v) => (v === 'off' ? 0 : Number(v));
+
+  const saveKeep = async (value) => {
+    setBusy(true);
+    try {
+      const res = await apiPatch('/api/config/editable', { changes: { music_listens_keep: value } });
+      const why = res && res.rejected && res.rejected.music_listens_keep;
+      if (why) fire(`not saved: ${why}`);
+      else fire(value === 'off' ? 'listening history is off now' : `listening history is kept for ${labelOf(value)} now`);
+      refresh();
+      setTimeout(refresh, 2000);
+    } catch (e) {
+      reportMutationFailure(fire, 'save', e);
+    } finally { setBusy(false); setPendingKeep(null); }
+  };
+  const onKeepChange = (value) => {
+    if (value === keep) return;
+    if (days(value) < days(keep)) setPendingKeep(value);   // shorter deletes: ask first
+    else saveKeep(value);
+  };
+  const deleteAll = async () => {
+    setBusy(true);
+    try {
+      const res = await apiPost('/api/music/listens/delete-all', {});
+      fire(`deleted all listening history (${songsWord((res && res.deleted) || 0)})`);
+      refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'delete', e);
+    } finally { setBusy(false); setAskDelete(false); }
+  };
+
+  const people = ((data && data.people) || []).filter((p) => p.listens > 0);
+  return (
+    <Card title="Listening history"
+          sub="The songs each room, browser and phone played, and who they were played for. Up next learns from it.">
+      {refused && !data ? <PairedOnlyEmpty what="how long the house keeps what was played"/> : (
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, fontSize: 13, lineHeight: 1.55 }}>
+          <div style={{ color: 'var(--fg-muted)', maxWidth: 560 }}>
+            A song counts for the person a room heard asking for it, or the person a phone or browser
+            belongs to (“this is me” on their People page); otherwise for the whole household. Anything
+            older than you choose here is deleted. Each person can clear their own from their People page.
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <label htmlFor="listening-history-keep" style={{ fontWeight: 500 }}>Keep listening history</label>
+            <select id="listening-history-keep" value={keep || ''} disabled={!data || busy}
+                    onChange={(e) => onKeepChange(e.target.value)}
+                    style={{ ..._cfgInput, minWidth: 150 }}>
+              {!keep && <option value="" disabled>…</option>}
+              {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+            <span style={{ fontSize: 12, color: 'var(--fg-faint)' }}>an admin changes this</span>
+          </div>
+          <div className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span>
+              {!data ? 'reading…'
+                : data.total === 0 ? 'nothing kept yet'
+                : `${songsWord(data.total)} kept · the oldest from ${new Date(data.oldest_at).toLocaleDateString()}`}
+            </span>
+            {data && data.total > 0 && (
+              <span>
+                {people.map((p) => `${p.name} ${p.listens}`).concat(data.household ? [`household ${data.household}`] : []).join(' · ')}
+              </span>
+            )}
+            {data && data.keep === 'off' && <span>Don’t keep: nothing is recorded, and Up next picks from the library alone.</span>}
+          </div>
+          <div style={{ paddingTop: 14, borderTop: '1px solid var(--border-soft)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <Button icon="trash-2" disabled={!data || busy || !data.total} onClick={() => setAskDelete(true)}
+                    style={{ background: 'var(--err-soft)', color: 'var(--err-ink)', borderColor: 'transparent' }}>
+              Delete all listening history
+            </Button>
+            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>an admin does this</span>
+          </div>
+        </div>
+      )}
+      {pendingKeep && (
+        <DeleteConfirmDialog title={pendingKeep === 'off' ? 'Stop keeping listening history?' : `Keep listening history for ${labelOf(pendingKeep)}?`}
+                             busy={busy} confirmLabel={pendingKeep === 'off' ? 'Don’t keep' : `Keep ${labelOf(pendingKeep)}`}
+                             onCancel={() => setPendingKeep(null)} onConfirm={() => saveKeep(pendingKeep)}>
+          <div>
+            {pendingKeep === 'off'
+              ? 'All listening history is deleted now, and nothing new is recorded.'
+              : `Everything played more than ${labelOf(pendingKeep)} ago is deleted now, and from then on.`}
+            {' '}This can’t be undone.
+          </div>
+        </DeleteConfirmDialog>
+      )}
+      {askDelete && (
+        <DeleteConfirmDialog title="Delete all listening history?" busy={busy}
+                             confirmLabel="Delete all listening history"
+                             onCancel={() => setAskDelete(false)} onConfirm={deleteAll}>
+          <div>This deletes every song played in every room and on every phone and browser, for everyone and for the whole household. Up next starts again from the library alone.</div>
+          <div>This can’t be undone.</div>
+        </DeleteConfirmDialog>
+      )}
+      {toastNode}
+    </Card>
+  );
+};
+
+window.ListeningHistoryPanel = ListeningHistoryPanel;
+
+const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceMatches, onDeleteSample, onForget, onRenamed, fire, listens, onDeviceChanged }) => {
   // Rename: PATCH /api/people/{id}, admin tier. A name somebody else has
   // is refused (409) with the server's reason, and the box stays open.
   const [editing, setEditing] = React.useState(false);
@@ -304,6 +637,10 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceMatches, on
       <PersonVoiceSamples samples={samples} onDelete={onDeleteSample}/>
 
       <PersonVoiceMatches person={person} matches={voiceMatches}/>
+
+      <PersonThisBrowser person={person} fire={fire} onChanged={onDeviceChanged}/>
+
+      <PersonListening person={person} listens={listens} fire={fire} onChanged={onDeviceChanged}/>
 
       <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>notes</div>
@@ -914,6 +1251,8 @@ const PeoplePage = ({ embedded = false } = {}) => {
   // "Keep voice history", for the rail's line and the Voice history view.
   // Quiet: an unpaired browser isn't asked to pair just for the rail.
   const voiceHistory = useApiObject('/api/voice-history', { quiet: true, refetchOnAuth: true });
+  // The listening history's counts per person (Profile tab), quiet too.
+  const listens = useApiObject('/api/music/listens/summary', { quiet: true, refetchOnAuth: true });
 
   // Per-person fetches; refetch when the selection changes OR when
   // a memory/favorite mutation bumps the tick.
@@ -1143,6 +1482,8 @@ const PeoplePage = ({ embedded = false } = {}) => {
                           onDeleteSample={onDeleteSample}
                           onForget={() => setConfirmFor(selected)}
                           onRenamed={refreshPeople}
+                          listens={listens}
+                          onDeviceChanged={() => { refreshPeople(); listens.refresh(); }}
                           fire={fire}/>
             )}
             {tab === 'memory' && (

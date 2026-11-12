@@ -2826,6 +2826,143 @@
         }
       }
     },
+    "/api/music/listens": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Post Listens",
+        "description": "Record a batch of a browser's or phone's listens. ``{accepted,\ndropped, recording}``: ``accepted`` the rows that were new, ``dropped``\nthe rest (too old, too far ahead, unknown song, already recorded, or\npast the device's daily cap), ``recording`` false while the household\nkeeps no listening history.\n\nChecked here, not taken on the player's word (review 2026-11-12): the\noutcome is worked out again from the seconds played and the length\n(only the player's \"skipped\" is kept: a skip is something only the\nplayer saw); a shared screen's rows are the household's whatever person\nthey name; a batch in which one device played longer in total than the\ntime since its first song began is refused (422); and a device adds at\nmost ``DEVICE_DAILY_CAP`` listens a day.",
+        "operationId": "post_listens_api_music_listens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListensIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Listens Api Music Listens Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/listens/summary": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Summary",
+        "description": "``{keep, keep_label, keep_days, choices, total, oldest_at, household,\npeople: [{person_id, name, listens}]}``. Counts only, never a song.",
+        "operationId": "get_summary_api_music_listens_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Summary Api Music Listens Summary Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/listens/people/{person_id}": {
+      "delete": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Clear Person",
+        "description": "Clear one person's listening history: ``{deleted}``. An admin, or\na phone or browser claimed as that person that isn't a shared screen,\nproves it with its claim key (``X-Domovoi-Claim-Key``, compared in\nconstant time) and claimed more than 10 minutes ago. 404 for a person\nnobody has; 403, saying why and who may, for anything else (the\ndashboard answers it with the admin sign-in).",
+        "operationId": "clear_person_api_music_listens_people__person_id__delete",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Clear Person Api Music Listens People  Person Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/listens/delete-all": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Delete All",
+        "description": "Delete all listening history: every person's and the household's,\nfrom every room, browser and phone, and who each room's music was for.\nAdmin, security tier: 501 before setup. ``{deleted}``.",
+        "operationId": "delete_all_api_music_listens_delete_all_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Delete All Api Music Listens Delete All Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -3521,6 +3658,59 @@
         }
       }
     },
+    "/api/devices/{device_id}/person": {
+      "put": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Set Device Person",
+        "description": "\"This is me\": set the person this phone or browser is, or\n``person_id: null`` for nobody in particular. Device tier, with the\nclaim rules on top (:func:`claim_decision`, the module docstring): the\ndevice itself may claim a person nobody has claimed yet and release its\nown claim; anything else is an admin's. 403 names what an admin can do\n(the dashboard answers it with the sign-in prompt and sends it again),\n409 a shared screen, 404 an unknown device or person, 503 a database\nwithout V035.",
+        "operationId": "set_device_person_api_devices__device_id__person_put",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePerson"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices/{device_id}/shared-screen": {
       "patch": {
         "tags": [
@@ -3769,7 +3959,7 @@
           "people"
         ],
         "summary": "Delete Person",
-        "description": "The same delete as the voice \"forget me\" path (which runs it only\nfor a voice that matches the person's own samples; this is the\nadmin's way), in one transaction:\n\n* what they said (owner, 2026-10-17): every ``conversation_log`` and\n  ``intents_log`` row voice identification attributed to them as the\n  speaker, and the short-term conversation of the sessions those turns\n  were in (``voice_history.delete_person_history``). A turn in which\n  someone else said their name is the other speaker's and stays;\n* then the person: their voice samples, memories, favorites and\n  preferences go with the row (FK cascades). What other tables keep\n  of them (a chat-mic message's speaker mark, an alias they taught)\n  lapses to NULL.",
+        "description": "The same delete as the voice \"forget me\" path (which runs it only\nfor a voice that matches the person's own samples; this is the\nadmin's way), in one transaction:\n\n* what they said (owner, 2026-10-17): every ``conversation_log`` and\n  ``intents_log`` row voice identification attributed to them as the\n  speaker, and the short-term conversation of the sessions those turns\n  were in (``voice_history.delete_person_history``). A turn in which\n  someone else said their name is the other speaker's and stays;\n* then the person: their voice samples, memories, favorites,\n  preferences and listening history (``music_listens``, V051) go with\n  the row (FK cascades). What other tables keep of them (a chat-mic\n  message's speaker mark, an alias they taught, a phone or browser\n  claimed as theirs, a room's music being for them) lapses to NULL.",
         "operationId": "delete_person_api_people__person_id__delete",
         "parameters": [
           {
@@ -21099,6 +21289,42 @@
             "type": "boolean",
             "title": "Shared Screen",
             "default": false
+          },
+          "owner_person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Person Id"
+          },
+          "owner_person_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Person Name"
+          },
+          "owner_claimed_at": {
+            "title": "Owner Claimed At"
+          },
+          "claim_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Key"
           }
         },
         "type": "object",
@@ -21107,6 +21333,24 @@
           "name"
         ],
         "title": "Device"
+      },
+      "DevicePerson": {
+        "properties": {
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          }
+        },
+        "type": "object",
+        "title": "DevicePerson"
       },
       "DeviceRegistration": {
         "properties": {
@@ -23232,6 +23476,135 @@
         ],
         "title": "ListPatch"
       },
+      "ListenIn": {
+        "properties": {
+          "track_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Track Id"
+          },
+          "device_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$",
+            "title": "Device Id"
+          },
+          "listener_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listener Person Id"
+          },
+          "as_household": {
+            "type": "boolean",
+            "title": "As Household",
+            "default": false
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "explicit",
+              "list",
+              "auto"
+            ],
+            "title": "Origin",
+            "default": "explicit"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "played_sec": {
+            "type": "number",
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Played Sec"
+          },
+          "duration_sec": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 86400.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Sec"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "finished",
+              "skipped",
+              "stopped"
+            ],
+            "title": "Outcome"
+          },
+          "player": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "browser",
+                  "android",
+                  "ios"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Player"
+          }
+        },
+        "type": "object",
+        "required": [
+          "track_id",
+          "device_id",
+          "started_at",
+          "played_sec",
+          "outcome"
+        ],
+        "title": "ListenIn"
+      },
+      "ListensIn": {
+        "properties": {
+          "listens": {
+            "items": {
+              "$ref": "#/components/schemas/ListenIn"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Listens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "listens"
+        ],
+        "title": "ListensIn"
+      },
       "ListsCleared": {
         "properties": {
           "removed": {
@@ -24655,6 +25028,11 @@
           "namesakes": {
             "type": "integer",
             "title": "Namesakes",
+            "default": 0
+          },
+          "device_count": {
+            "type": "integer",
+            "title": "Device Count",
             "default": 0
           }
         },
