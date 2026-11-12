@@ -69,6 +69,7 @@ from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import satellites as satellites_api
 from web.backend.api import stats as stats_api
 from web.backend.api import videos as videos_api
+from web.backend.api import visualizer as visualizer_api
 from web.backend.api import voice as voice_api
 from web.backend.api import voice_history as voice_history_api
 from web.backend.api import voices as voices_api
@@ -395,6 +396,9 @@ app.include_router(plugins_api.router)
 # The household's web menu (Settings → System → App layout): an open read
 # beside the manifest, admin writes (V045 household_settings).
 app.include_router(nav_layout_api.router)
+# The Now Playing visualizer's added presets: household read, admin writes
+# (files under visualizer_presets_dir; the standard set is static).
+app.include_router(visualizer_api.router)
 app.include_router(capabilities_api.router)
 app.include_router(acquisitions_api.router)
 app.include_router(music_api.router)

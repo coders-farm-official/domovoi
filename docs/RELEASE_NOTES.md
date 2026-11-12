@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — a MilkDrop visualizer on the Player tab
+
+**Music → Player has a "milkdrop visualizer" switch** beside the old
+frequency bars: MilkDrop presets drawn from what this browser is playing.
+Click the left or right half of the picture for the previous or next
+preset (or the arrow keys); the bar over it picks a random one, locks the
+current one (otherwise they change every 40 seconds), lists them, and goes
+full screen. While it plays full screen the screen doesn't turn off or
+start the screen saver, also on the usual plain-http dashboard address. It
+needs WebGL 2; a browser without it keeps the bars and says so. While the
+bar is playing on a room there is nothing here to draw, and the Player tab
+says so.
+
+Twelve presets come with Domovoi; they are its own (MIT). An admin can
+add others for the whole house from the preset list: a classic `.milk`
+file or a Butterchurn 3 `.json`. A `.milk` file's custom MilkDrop 2
+shaders aren't converted, so such a preset may look plainer than in
+MilkDrop; the upload says so. Butterchurn's older JSON format is refused
+(its equations are JavaScript, which the dashboard won't run). Added
+presets are kept in `~/.domovoi/visualizer_presets`.
+
 ## 2026-11-11 — a voice is not a name, and questions don't pretend to act
 
 **Switching voices now answers "Okay, I'll speak in May's voice now."

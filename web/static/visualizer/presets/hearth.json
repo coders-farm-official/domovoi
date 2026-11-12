@@ -1,0 +1,91 @@
+{
+ "version": 2,
+ "baseVals": {
+  "mv_a": 0,
+  "ob_size": 0,
+  "ob_a": 0,
+  "ib_size": 0,
+  "ib_a": 0,
+  "warp": 0.25,
+  "gammaadj": 1.8,
+  "wave_brighten": 0,
+  "wave_mode": 0,
+  "wave_scale": 1.3,
+  "wave_smoothing": 0.6,
+  "wave_thick": 1,
+  "additivewave": 1,
+  "decay": 0.955,
+  "warpanimspeed": 0.7,
+  "warpscale": 1.6,
+  "zoom": 1.0
+ },
+ "shapes": [
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  }
+ ],
+ "waves": [
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  }
+ ],
+ "init_eqs_eel": "",
+ "frame_eqs_eel": "wave_r = 1.0;\nwave_g = 0.55 + 0.2*sin(time*0.7);\nwave_b = 0.12 + 0.1*sin(time*0.37);\nwave_a = 0.55 + 0.25*min(bass_att, 2);\nzoom = 1.008 + 0.035*bass_att;\nrot = 0.006*sin(time*0.31);\nq1 = treb_att;",
+ "pixel_eqs_eel": "zoom = zoom + 0.02*sin(rad*14 - time*2.2)*q1;",
+ "warp": "",
+ "comp": "shader_body {\n  vec3 base = texture(sampler_main, uv).rgb;\n  vec3 glow = texture(sampler_blur1, uv).rgb * scale1 + bias1;\n  ret = base * 1.1 + glow * 0.9;\n  ret = ret / (1.0 + ret * 0.35);\n}"
+}

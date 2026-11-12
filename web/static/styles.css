@@ -743,6 +743,77 @@ html.mp-docked { --player-h: 64px; }
   .np-eq-presets { flex-wrap: wrap; }
 }
 
+/* The Now Playing visualizer (visualizer.jsx). The stage is 16:9, no taller
+   than 60% of the window; full screen it is the whole screen. The picture is
+   user-content imagery (the preset draws it); the chrome over it (the name,
+   the bar, the preset list) sits on overlay chips so it reads in both themes
+   over any picture. The two halves are transparent buttons: previous / next
+   preset. The bar shows on hover or focus, and always on a touch screen. */
+.viz-head { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 8px; }
+.viz-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); cursor: pointer; }
+.viz-note, .viz-note-inline { font-size: 12px; color: var(--fg-muted); }
+.viz-note { padding: 4px 0; }
+.viz-stage {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: 60vh; overflow: hidden;
+  border-radius: var(--r-md); border: 1px solid var(--border); background: var(--sunken);
+  outline: none;
+}
+.viz-stage:focus-visible { box-shadow: 0 0 0 2px var(--brand-ring); }
+.viz-stage.fs, .viz-stage:fullscreen { max-height: none; aspect-ratio: auto; width: 100vw; height: 100vh; border: 0; border-radius: 0; }
+.viz-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.viz-wait {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: var(--fg-muted); padding: 16px; text-align: center;
+}
+.viz-half {
+  position: absolute; top: 0; bottom: 0; width: 50%; padding: 0; margin: 0;
+  border: 0; background: transparent; cursor: pointer;
+}
+.viz-half.left { left: 0; cursor: w-resize; }
+.viz-half.right { right: 0; cursor: e-resize; }
+.viz-half:focus-visible { box-shadow: inset 0 0 0 2px var(--brand-ring); outline: none; }
+.viz-name {
+  position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px);
+  padding: 4px 10px; border-radius: var(--r-sm); font-size: 13px; color: var(--fg);
+  background: var(--overlay); border: 1px solid var(--border);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  opacity: 0; transition: opacity var(--dur-slow, 240ms) var(--ease, ease-out);
+}
+.viz-name.show, .viz-stage:hover .viz-name, .viz-stage:focus-within .viz-name { opacity: 1; }
+.viz-bar {
+  position: absolute; right: 12px; bottom: 12px; display: flex; gap: 2px; padding: 2px;
+  border-radius: var(--r-sm); background: var(--overlay); border: 1px solid var(--border); color: var(--fg);
+  opacity: 0; transition: opacity var(--dur-slow, 240ms) var(--ease, ease-out);
+}
+.viz-stage:hover .viz-bar, .viz-stage:focus-within .viz-bar { opacity: 1; }
+@media (hover: none) { .viz-bar { opacity: 1; } .viz-bar .btn-icon { width: 44px; height: 44px; } }
+.viz-bar .btn-icon[aria-pressed="true"] { color: var(--brand-ink); }
+.viz-menu {
+  position: absolute; right: 12px; bottom: 56px; width: min(320px, calc(100% - 24px));
+  max-height: calc(100% - 72px); display: flex; flex-direction: column;
+  background: var(--overlay); border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md); color: var(--fg); font-size: 13px;
+}
+.viz-menu-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--border-soft); font-weight: 600; }
+.viz-menu-list { overflow-y: auto; padding: 4px 0; min-height: 0; flex: 1 1 auto; }
+.viz-menu-group { padding: 8px 12px 4px; font-size: 11px; color: var(--fg-muted); }
+.viz-menu-row { display: flex; align-items: center; padding-right: 4px; }
+.viz-menu-row.on { background: var(--brand-soft); }
+.viz-menu-pick {
+  flex: 1 1 auto; min-width: 0; text-align: left; font: inherit; color: var(--fg); background: transparent;
+  border: 0; padding: 8px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.viz-menu-pick:hover { background: var(--highlight); }
+.viz-menu-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-soft); }
+.viz-menu-note { font-size: 11px; color: var(--fg-muted); }
+.viz-menu-said { width: 100%; font-size: 12px; color: var(--fg); }
+.viz-menu-err { width: 100%; font-size: 12px; color: var(--err-ink); }
+/* The wake-lock fallback's video: playing, never seen (visualizer.jsx). */
+.viz-wake-video { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .viz-name, .viz-bar { transition: none; }
+}
+
 /* Lyrics (lyrics.jsx): the synced view in the Player tab (.lyr-panel), the
    phone sheet and the desktop bar's floating panel (.lyr-float); a room
    card's current line; the Jobs tab's card. The current line is the text

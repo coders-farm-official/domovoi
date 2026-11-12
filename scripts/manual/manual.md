@@ -401,6 +401,16 @@ Your music library, on the server, played in any room or in the browser.
   in the library puts it next in the room's queue.
 - Playlists and favorites: [Music → Playlists](#music/playlists).
 - Each queued song says which device added it.
+- **Dashboard:** a MilkDrop visualizer: [Music → Player](#music/player),
+  switch on **milkdrop visualizer**. It draws what this browser is
+  playing (not a room). Click the left or right half for the previous or
+  next preset, or use the arrow keys; the bar over it picks a random
+  preset, locks the one on screen, lists them all, and goes full screen
+  (Esc leaves). Full screen and playing, the screen stays on.
+- **Dashboard:** add presets for the whole house *(admin)*: the preset
+  list → **add presets**, a classic `.milk` file or a Butterchurn 3
+  `.json`. A `.milk` file's custom shaders aren't converted, so it may
+  look plainer than in MilkDrop.
 
 **Try saying**
 
