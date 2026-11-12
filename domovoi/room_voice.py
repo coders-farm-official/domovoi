@@ -108,8 +108,12 @@ async def _register_shipped(db: Any, name: str) -> dict | None:
 
 
 def confirmation(name: str) -> str:
-    """What the room says, in the new voice: the voice command's reply."""
-    return f"Okay, I'm {name} now."
+    """What the room says, in the new voice: the voice command's reply.
+
+    The voice is a voice, not a persona: the assistant stays Domovoi
+    (``settings.bot_name``). "Okay, I'm May now." once sat in the Q&A
+    history and the model then called itself May (2026-11-11)."""
+    return f"Okay, I'll speak in {name}'s voice now."
 
 
 async def apply(app: Any, room_id: str, name: str | None) -> dict[str, Any]:

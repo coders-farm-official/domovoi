@@ -370,7 +370,7 @@ class VoiceHandler(Handler):
             # (domovoi/room_voice.py). Nothing for the device to do.
             await room_voice.choose(session, ctx.app, ctx.room_id, voice["name"])
             return self._r(
-                f"Okay, I'm {voice['name']} now.",
+                room_voice.confirmation(voice["name"]),
                 ctx,
                 voice_override=voice["name"],
             )
@@ -378,7 +378,7 @@ class VoiceHandler(Handler):
         # user hears the change immediately; pi_action persists it Pi-side
         # and re-reports it for subsequent turns.
         return self._r(
-            f"Okay, I'm {voice['name']} now.",
+            room_voice.confirmation(voice["name"]),
             ctx,
             voice_override=voice["name"],
             pi_action="set_voice",

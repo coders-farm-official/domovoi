@@ -264,7 +264,7 @@ async def test_sounds_changed_names_the_voice_only_for_a_room_whose_voice_the_se
 async def test_switching_a_phone_rooms_voice_keeps_it_on_the_server(paired, kept, registry):
     phone, ws = await _hello(PHONE)
     resp = await VoiceHandler()._switch_response("ryan", _ctx(phone), object())  # type: ignore[arg-type]
-    assert resp.text == "Okay, I'm Ryan now."
+    assert resp.text == "Okay, I'll speak in Ryan's voice now."
     assert resp.voice_override == "Ryan", "the confirmation is already in the new voice"
     assert resp.pi_action is None and resp.pi_action_arg is None, "nothing for the phone to do"
     assert kept.voices[PHONE["room_id"]] == "Ryan"
@@ -377,8 +377,8 @@ async def test_the_picker_sends_a_pi_the_change_the_voice_command_makes(paired, 
     assert out == {"room_id": PI["room_id"], "voice": "Norman", "kept_on": "device", "said": True}
     start = next(f for f in ws.sent if f.get("type") == "response_start")
     end = next(f for f in ws.sent if f.get("type") == "response_end")
-    assert start["text"] == "Okay, I'm Norman now."
-    assert picker.spoken == [("Okay, I'm Norman now.", "en_US-norman-medium")], "said in the new voice"
+    assert start["text"] == "Okay, I'll speak in Norman's voice now."
+    assert picker.spoken == [("Okay, I'll speak in Norman's voice now.", "en_US-norman-medium")], "said in the new voice"
     assert (end["pi_action"], end["pi_action_arg"], end["interrupted"]) == ("set_voice", "Norman", False)
     assert picker.voices == {}, "nothing kept on the server: the Pi stores it and reports it back"
     assert PI["room_id"] not in ws.app.state.satellite_voice
@@ -416,7 +416,7 @@ async def test_the_picker_keeps_a_phone_rooms_voice_on_the_server(paired, picker
     assert {"type": "sounds_changed", "room_voice": "Norman"} in ws.sent
     end = next(f for f in ws.sent if f.get("type") == "response_end")
     assert "pi_action" not in end, "nothing for the phone to do"
-    assert picker.spoken[-1] == ("Okay, I'm Norman now.", "en_US-norman-medium")
+    assert picker.spoken[-1] == ("Okay, I'll speak in Norman's voice now.", "en_US-norman-medium")
     # Back to the server's own voice.
     ws.sent.clear()
     out = await room_voice.apply(ws.app, PHONE["room_id"], None)
