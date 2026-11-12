@@ -166,6 +166,21 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var wantModels: RoomModels.Files? = null
     @Volatile private var wakeWord = store.wakeWord
     @Volatile private var wakeThreshold = store.wakeThreshold
+    /** The last turn went wrong (ignored as background talk, cut off at the
+     *  length cap, an error, no reply, no server): the next wake waits out
+     *  the cooldown ([WakeGate]). Set from either thread, taken once by the
+     *  listening thread when it is back to listening. */
+    @Volatile private var quietNextWake = false
+    /** A `dropin_start` marked `await_ready` waits here for the reply that
+     *  announced it; its lock guards the call state ([inCall]). */
+    private val dropin = DropinAfterReply(
+        // A reply arriving or playing; a call's own track is not one.
+        stillPlaying = { replyPlaying() },
+        sendReady = { send(RoomProtocol.DROPIN_READY) },
+        now = { SystemClock.elapsedRealtime() },
+        launch = { work -> scope.launch { work() } },
+        pause = { ms -> delay(ms) },
+    )
 
     // health facts
     @Volatile private var lastFrameAt = 0L
@@ -218,6 +233,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     fun stop() {
         if (!running) return
         running = false
+        // A call still waiting for its announcement never opens now.
+        dropin.cancel()
         connectJob?.cancel()
         healthJob?.cancel()
         batteryReceiver?.let { runCatching { context.unregisterReceiver(it) } }
@@ -405,6 +422,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         update { it.copy(link = Link.Ready) }
         outcome?.complete("ready")
         send(RoomProtocol.volumeStatus(volume.level()))
+        sendConfigStatus()
         background { syncSounds() }
         // The core hears the battery now, not at the end of the first minute.
         batteryReporter.reset()
@@ -427,6 +445,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         // Any other error during a turn ends it, as a Pi treats it, so the
         // listening thread never waits for a reply that is not coming.
         Log.w(TAG, "server error: ${f.reason} ${f.message}")
+        // A turn that went wrong: the next wake waits out the cooldown.
+        quietNextWake = true
         acceptingAudio = false
         speaker.stop()
         responseEndSeen = true
@@ -455,6 +475,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             return
         }
         acceptingAudio = false
+        // Taken for background talk: the next wake waits out the cooldown.
+        if (f.ignored) quietNextWake = true
         expectFollowup = f.expectFollowup && !f.interrupted
         responseEndSeen = true
         speaker.end()
@@ -499,9 +521,21 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         // Never open the mic-while-playing on a phone without an echo
         // canceller, whatever the core says (the Pi's defence in depth).
         if (!acceptsDropin(echoCanceller, f.fullDuplex)) {
+            dropin.cancel()
             send(RoomProtocol.DROPIN_END)
             return
         }
+        // With `await_ready` the reply announcing the call plays out first
+        // (at most 8 s), then the call opens and `dropin_ready` goes out;
+        // without it the call opens now, as it always did.
+        if (f.awaitReady && replyPlaying()) Log.i(TAG, "drop-in: finishing the reply before opening the call")
+        dropin.start(f.awaitReady) { enterCall(f) }
+    }
+
+    private fun replyPlaying(): Boolean = acceptingAudio || (speaker.active && !callTrack)
+
+    /** Opens the call (under [dropin]'s lock). */
+    private fun enterCall(f: RoomProtocol.ServerFrame.DropinStart) {
         pendingMusic = null
         music.stop()
         callPeer = f.peerLabel ?: f.peerRoom
@@ -521,8 +555,12 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     }
 
     private fun onDropinEnd() {
-        if (!inCall) return
-        leaveCall()
+        synchronized(dropin) {
+            // A call still waiting for its announcement is dropped too.
+            dropin.cancel()
+            if (!inCall) return
+            leaveCall()
+        }
         // The core's "disconnected" chime came just before this frame.
         speaker.end()
         update { it.copy(peerRoom = null) }
@@ -548,8 +586,17 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         speaker.stop()
         responseEndSeen = true
         expectFollowup = false
-        if (inCall) leaveCall()
+        synchronized(dropin) {
+            // A call still waiting for its announcement is gone with the session.
+            dropin.cancel()
+            if (inCall) leaveCall()
+        }
         closed?.complete(Unit)
+    }
+
+    /** The room's wake settings, so what the core holds for it is what it does. */
+    private fun sendConfigStatus() {
+        send(RoomProtocol.configStatus(wakeThreshold, WakeGate.PATIENCE_DEFAULT, WakeGate.COOLDOWN_SEC_DEFAULT))
     }
 
     /** Sends [frame] if a session is up and the core understands it. */
@@ -630,6 +677,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         store.setWakeWord(slug!!, threshold)
         wakeWord = slug
         wakeThreshold = store.wakeThreshold
+        // The pushed threshold is the room's one threshold now: say so.
+        sendConfigStatus()
         refreshModels()
     }
 
@@ -698,7 +747,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 val e = ears
                 try {
                     when {
-                        inCall -> if (callFrame(frame, n, e) && e != null) callCommand(mic, frame, e)
+                        inCall -> {
+                            val heard = callFrame(frame, n, e)
+                            if (heard != null && e != null) callCommand(mic, frame, e, heard)
+                        }
                         e == null -> idleFrame()
                         else -> if (listenFrame(frame, n, e)) turn(mic, frame, e, "wake_word")
                     }
@@ -730,6 +782,17 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         maybeStartMusic()
     }
 
+    // The listening thread's own: the wake gate (rebuilt when the threshold
+    // changes) and the peak score of the wake that opened the next turn.
+    private var gate: WakeGate? = null
+    private var wakePeak: Float? = null
+
+    private fun wakeGate(): WakeGate {
+        val g = gate
+        if (g != null && g.threshold == wakeThreshold) return g
+        return WakeGate(wakeThreshold).also { gate = it }
+    }
+
     /** One frame while listening for the wake word: true on a wake. */
     private fun listenFrame(frame: ShortArray, n: Int, e: Ears): Boolean {
         if (phase != Phase.LISTENING && phase != Phase.SPEAKING) setPhase(Phase.LISTENING)
@@ -738,14 +801,24 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             if (phase != Phase.SPEAKING) setPhase(Phase.SPEAKING)
             return false
         }
+        val g = wakeGate()
         if (phase == Phase.SPEAKING) {
             setPhase(Phase.LISTENING)
             e.wake.reset()
+            g.reset()
+        }
+        // Back to listening after a turn that went wrong: no wake for the
+        // cooldown, counted from here (the reply, if any, is over).
+        if (quietNextWake) {
+            quietNextWake = false
+            g.quietFor(SystemClock.elapsedRealtime())
         }
         maybeStartMusic()
         val score = e.wake.accept(frame, n) ?: return false
-        if (score > wakeThreshold) {
-            Log.i(TAG, "wake word (score %.2f)".format(score))
+        if (g.feed(score, SystemClock.elapsedRealtime())) {
+            wakePeak = g.lastPeak
+            Log.i(TAG, "wake word (peak score %.3f over %d chunk(s); threshold %.2f, %d in a row needed)"
+                .format(g.lastPeak ?: score, g.lastRun, g.threshold, g.patience))
             return true
         }
         return false
@@ -754,6 +827,18 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     /** A whole turn from the wake: acknowledge, capture, reply, follow-ups. */
     private fun turn(mic: RoomMic, frame: ShortArray, e: Ears, firstTrigger: String) {
         val wokeAt = SystemClock.elapsedRealtime()
+        // Taken once: a wake's score is about the capture right after it.
+        val wakeScore = wakePeak
+        wakePeak = null
+        try {
+            turnAfterWake(mic, frame, e, firstTrigger, wokeAt, wakeScore)
+        } finally {
+            // Whatever run the gate was in is over with the turn.
+            gate?.reset()
+        }
+    }
+
+    private fun turnAfterWake(mic: RoomMic, frame: ShortArray, e: Ears, firstTrigger: String, wokeAt: Long, wakeScore: Float?) {
         pendingMusic = null
         val musicWas = music.playing
         music.stop()
@@ -762,6 +847,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             // No server: say so instead of streaming into the void.
             setPhase(Phase.ACK)
             playAndDrop(mic, frame) { sounds.clip("network_issues.mp3")?.let { RoomClips.play(it, 6_000) } ?: RoomClips.chime() }
+            // No server: a turn that went wrong.
+            quietNextWake = true
             e.wake.reset()
             setPhase(Phase.LISTENING)
             return
@@ -788,7 +875,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         var wakeMs: Int? = (SystemClock.elapsedRealtime() - wokeAt).toInt()
         var first = true
         while (running && !muted) {
-            val outcome = capture(mic, frame, e, trigger, if (first) ack else emptyMap(), wakeMs, preSpeech)
+            val outcome = capture(mic, frame, e, trigger, if (first) ack else emptyMap(), wakeMs, preSpeech, if (first) wakeScore else null)
             first = false
             wakeMs = null
             if (outcome != CaptureOutcome.SENT) break
@@ -833,6 +920,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         ack: Map<String, JsonElement>,
         wakeMs: Int?,
         preSpeech: Int?,
+        wakeScore: Float? = null,
     ): CaptureOutcome {
         val utt = ++uttSeq
         val hints = "speech_pause" in features
@@ -849,7 +937,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             captureUtt = null
             return CaptureOutcome.CANCELLED
         }
-        if (!send(RoomProtocol.utteranceStart(trigger, utt, 0, wakeMs))) {
+        if (!send(RoomProtocol.utteranceStart(trigger, utt, 0, wakeMs, wakeScore))) {
             captureUtt = null
             return CaptureOutcome.DROPPED
         }
@@ -890,6 +978,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 }
                 if (step.end != null) break
             }
+            // Speech that never paused (media, most likely): the next wake
+            // waits out the cooldown.
+            if (m.ended == ExitReason.MAX_LENGTH) quietNextWake = true
             val afterEnd = if (m.ended == ExitReason.SERVER && m.speaking) listenAfterEnd(mic, frame, e, m) else emptyMap()
             captureUtt = null
             setPhase(Phase.THINKING)
@@ -926,24 +1017,28 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             if (speaker.active && phase != Phase.SPEAKING) setPhase(Phase.SPEAKING)
             if (mic.read(frame) <= 0) Thread.sleep(30)
         }
+        // No reply: the next wake waits out the cooldown.
+        if (running) quietNextWake = true
         return false
     }
 
-    /** One frame of a drop-in: relayed as it is. True when the wake word
-     *  was heard ("hey jarvis, hang up"). */
-    private fun callFrame(frame: ShortArray, n: Int, e: Ears?): Boolean {
+    /** One frame of a drop-in: relayed as it is. The wake word's score when
+     *  it was heard ("hey jarvis, hang up"), else null. One chunk over the
+     *  threshold is enough here, as on a Pi: the wake gate's patience and
+     *  cooldown are the main wake loop's only. */
+    private fun callFrame(frame: ShortArray, n: Int, e: Ears?): Float? {
         if (phase != Phase.CALL) setPhase(Phase.CALL)
         update { if (!it.micLive) it.copy(micLive = true) else it }
         sendAudio(frame, n)
-        if (e == null) return false
-        val score = e.wake.accept(frame, n) ?: return false
-        return score > wakeThreshold
+        if (e == null) return null
+        val score = e.wake.accept(frame, n) ?: return null
+        return score.takeIf { it > wakeThreshold }
     }
 
     /** A command in the middle of a call: framed as a turn, so the core
      *  transcribes it instead of relaying it; the call goes on after. */
-    private fun callCommand(mic: RoomMic, frame: ShortArray, e: Ears) {
-        val outcome = capture(mic, frame, e, "wake_word", CaptureMachine.ackFields(null, false), 0, null)
+    private fun callCommand(mic: RoomMic, frame: ShortArray, e: Ears, wakeScore: Float) {
+        val outcome = capture(mic, frame, e, "wake_word", CaptureMachine.ackFields(null, false), 0, null, wakeScore)
         if (outcome == CaptureOutcome.SENT) awaitReply(mic, frame)
         e.wake.reset()
         if (inCall) setPhase(Phase.CALL) else setPhase(Phase.LISTENING)
