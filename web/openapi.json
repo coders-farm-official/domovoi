@@ -8055,6 +8055,64 @@
         }
       }
     },
+    "/api/lan-name": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Get Lan Name",
+        "description": "The server's name on the home network (Settings \u2192 System \u2192 About &\nupdates), from the core's ``GET /v1/lan-name``: what was asked for,\nwhat is held, and its state (``announced``, ``checking``, ``taken``,\n``off``, ``no_lan``, ``failed``, ``no_host``).",
+        "operationId": "get_lan_name_api_lan_name_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Put Lan Name",
+        "description": "Change the network name or turn it on or off (admin, both hops).\n202 with ``checking`` while the name is checked on the network.",
+        "operationId": "put_lan_name_api_lan_name_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LanNameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/acoustid-test": {
       "post": {
         "tags": [
@@ -22180,6 +22238,35 @@
         },
         "type": "object",
         "title": "LabelBody"
+      },
+      "LanNameRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "title": "LanNameRequest"
       },
       "LibraryAlias": {
         "properties": {

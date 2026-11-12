@@ -2459,6 +2459,44 @@ from them, so they stay LAN-published, and `ufw` must allow them alongside
 sudo ufw allow from 192.168.0.0/16 to any port 8050:8099 proto tcp
 ```
 
+The network name (below) and the printers' multicast look both need
+mDNS, UDP `5353`, from the LAN:
+
+```bash
+sudo ufw allow from 192.168.0.0/16 to any port 5353 proto udp
+```
+
+**The network name.** The server answers to `domovoi.local` on your home
+network, so a browser on the same network opens
+`http://domovoi.local:6369` instead of an address. The core announces it
+itself (`domovoi/lan_name/`, our own standard-library mDNS responder; no
+package to install). It shares UDP `5353` with Avahi when Avahi is there.
+On a box whose own host name is `domovoi`, Avahi already publishes
+`domovoi.local` with this box's LAN address: Domovoi leaves the name to
+Avahi, Settings says `answered by this computer`, and Domovoi looks again
+every minute.
+
+- If another device already answers to `domovoi.local` (a second Domovoi,
+  say), the server takes `domovoi2.local`, then `domovoi3.local`, and
+  keeps it after restarts (`~/.domovoi/lan_name/state.json`), so bookmarks
+  and satellites don't move about.
+- Settings → System → About & updates shows the name and its state, and
+  an admin can change it there (or turn it off). A name you type that
+  another device already holds isn't changed: the row says `taken` and the
+  previous name stays. In `.env`: `LAN_NAME` and `LAN_NAME_ENABLED`.
+- The name goes on the default-route network adapter, with its private
+  (RFC 1918) address; a box with no such address has no name (`no network
+  address`). Nor does one whose default route goes through a tunnel, VPN or
+  virtual interface (`tun`, `wg`, `ppp`, a bridge or anything else under
+  `/sys/devices/virtual`). Only packets that arrive on that adapter, from its
+  subnet, are read.
+- A name is a convenience, not proof: satellites resolve it and still
+  check the server's key at the address they reach. Phones keep the
+  address they paired with.
+- Nothing to undo on removal: the core sends a goodbye when it stops, and
+  other devices forget the name at once.
+- A test of it on a real (Docker) network: `scripts/dev/run-lan-name-test.sh`.
+
 **Printers and scanners.** Domovoi prints to and scans from network
 printers only (Settings → Household → Printers & scanners). It finds them with a
 three-second multicast (mDNS) look, and the answers come back to UDP 5353.

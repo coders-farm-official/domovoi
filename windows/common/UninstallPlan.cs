@@ -69,7 +69,7 @@ namespace Domovoi.Windows
                 case UninstallKind.Blocked: return "stop: " + Reason;
                 case UninstallKind.DeleteService: return "delete the " + Target + " service";
                 case UninstallKind.StopAccountProcesses: return "end any program still running as " + Paths.AccountName;
-                case UninstallKind.RemoveFirewallRules: return "remove the Hyper-V firewall rules " + Target;
+                case UninstallKind.RemoveFirewallRules: return "remove the firewall rules " + Target;
                 case UninstallKind.RemoveMediaAccess: return "remove Setup's access rules from " + Target;
                 case UninstallKind.RemoveFolderIfEmpty: return "remove " + Target + " if it is empty";
                 case UninstallKind.DeleteProfile: return "delete the profile of " + Paths.AccountName + " (" + Target + ")";
@@ -305,7 +305,7 @@ namespace Domovoi.Windows
                 case UninstallKind.RemoveMediaAccess: return "as an administrator: icacls \"" + Step.Target + "\" /remove *" + string.Join(" *", Step.Sids.ToArray());
                 case UninstallKind.UnhideAccount: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList\" /v " + Paths.AccountName + " /f";
                 case UninstallKind.RemoveRunOnce: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce\" /v DomovoiSetupResume /f";
-                case UninstallKind.RemoveFirewallRules: return "in an administrator PowerShell: Get-NetFirewallHyperVRule -Name 'Domovoi-*' | Remove-NetFirewallHyperVRule";
+                case UninstallKind.RemoveFirewallRules: return "in an administrator PowerShell: Get-NetFirewallHyperVRule -Name 'Domovoi-*' | Remove-NetFirewallHyperVRule; Remove-NetFirewallRule -Name '" + Firewall.MdnsRuleName + "'";
                 case UninstallKind.RemoveRights: return "the rights of " + Step.Target + " are inert once the account is gone; on Pro, Local Security Policy > User Rights Assignment lists them";
                 case UninstallKind.DeleteAccount: return "as an administrator: net user " + Paths.AccountName + " /delete";
                 case UninstallKind.StopAccountProcesses: return "end the programs running as " + Paths.AccountName + " (Task Manager > Details), then delete the account";

@@ -7,8 +7,9 @@ sentinel ``auto`` and this module resolves it.
 
 The order (since 2026-10-12, :func:`locate`):
 
-1. **The core's name** — ``domovoi.local`` and any name the core told this
-   device about in its ``ready`` frame (:func:`server_names`). A name is
+1. **The core's name** — any name the core told this device about in its
+   ``ready`` frame (its network name first), then ``domovoi.local``
+   (:func:`server_names`). A name is
    only a hint: it is resolved HERE, to addresses, and each address is
    dialled and held to the pinned server identity like any other, so the
    proof is bound to the address actually dialled and a name that resolves
@@ -271,10 +272,13 @@ def _read_names(path: Path) -> list[str]:
 
 
 def server_names(path: Path | None = None) -> list[str]:
-    """The names to try, in order: :data:`DEFAULT_NAMES`, then the ones the
-    core advertised (deduplicated)."""
+    """The names to try, in order: the ones the core advertised (its
+    network name first, so a house whose server is ``domovoi2.local``
+    doesn't dial the neighbour's ``domovoi.local`` first), then
+    :data:`DEFAULT_NAMES` (deduplicated). Whichever answers, the identity
+    check at that address decides."""
     out: list[str] = []
-    for name in (*DEFAULT_NAMES, *_read_names(path or SERVER_NAMES_PATH)):
+    for name in (*_read_names(path or SERVER_NAMES_PATH), *DEFAULT_NAMES):
         if name not in out:
             out.append(name)
     return out

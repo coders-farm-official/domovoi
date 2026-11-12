@@ -921,6 +921,16 @@ class Settings(BaseSettings):
     # adoption and writing a card aren't available, because WSL sees no
     # removable drives. Set it only if detection gets your host wrong.
     domovoi_host_kind: str = "auto"
+    # The server's name on the home network (domovoi/lan_name/): the label
+    # without ".local". The default "domovoi" moves to domovoi2, domovoi3 ...
+    # when another device already answers to it; a name set here (Settings
+    # → System → About & updates) is never changed, only reported taken.
+    # Checked by domovoi/lan_name/names.py; an invalid value means the
+    # default. Who announces it: the core on Linux, DomovoiHost on the
+    # Windows install (request/report files).
+    lan_name: str = "domovoi"
+    # False: announce no name (a goodbye goes out for the one held).
+    lan_name_enabled: bool = True
     # How long a satellite gets to reconnect after an upgrade+self-restart
     # before its on-Pi watchdog rolls back to the pre-upgrade tarball. Bounds
     # the window an import-clean-but-behaviourally-broken upgrade can wedge a

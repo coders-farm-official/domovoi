@@ -135,6 +135,28 @@ async def get_admin(
         return r.status_code, r.text
 
 
+async def put_admin(
+    path: str,
+    body: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, Any]:
+    """PUT to a Domovoi server admin endpoint (the network name's
+    ``/v1/lan-name``). Returns ``(status_code, json_or_text)``, or
+    ``(0, None)`` on connection failure; mirrors :func:`post_admin`."""
+    url = f"{domovoi_url().rstrip('/')}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.put(url, json=body or {}, headers=headers)
+    except Exception as e:
+        log.warning("admin PUT %s failed: %s", path, e)
+        return 0, None
+    try:
+        return r.status_code, r.json()
+    except Exception:
+        return r.status_code, r.text
+
+
 async def delete_admin(
     path: str,
     timeout: float = 10.0,

@@ -1175,10 +1175,26 @@ Everything that executes code or rewrites configuration. Details next.
 
 ### What the server publishes to the LAN
 
+**The network name is a convenience, not proof of which server you
+reached.** The server announces `domovoi.local` (or `domovoi2.local`, or a
+name set in Settings > System > About & updates) with its own small mDNS
+responder: the core on Linux, DomovoiHost on the Windows install
+(`domovoi/lan_name/`, `windows/common/MdnsResponder.cs`). Anyone on the
+LAN can answer for any `.local` name, before Domovoi does or instead of
+it, so nothing rests on the name: satellites resolve it and then check the
+server's key at the address they reached (see *Server identity*), and the
+phone apps keep the address they paired with. On a network you don't
+trust, type the server's address, or use the paired app, before you sign
+in as the admin. The responder answers only for its own name, parses what
+the LAN sends with a per-packet budget and at most a couple of hundred
+packets a second, ignores packets from outside the LAN adapter's subnet
+(and, on Linux, from any other interface), and sends a goodbye when it
+stops. It can be turned off in the same Settings row.
+
 The core also tells each satellite that has finished its handshake the
-name this host answers to on the LAN (`server_names` in `ready`:
-`<hostname>.local`), so the satellite can find it again by name when its
-address moves; a satellite announces itself as `domovoi-<room>.local`
+names this host answers to on the LAN (`server_names` in `ready`: the
+network name it holds, such as `domovoi.local`, then `<hostname>.local`),
+so the satellite can find it again by name when its address moves; a satellite announces itself as `domovoi-<room>.local`
 over mDNS (avahi on Pi OS), which is also its host name and what the
 router lists. Neither is new exposure: avahi publishes both host names on
 any stock install, and a name is only ever a hint the identity check
@@ -1189,7 +1205,8 @@ Only three kinds of port face the LAN from Domovoi's own stack: the core
 (`8050`, `8051`, …) that the satellites fetch audio from. (A plugin that
 runs a server in a container, such as Jellyfin, RomM or Kiwix, publishes
 that server's own port too. Looking for printers binds UDP 5353 for a few
-seconds and answers no one. On the Windows install, the firewall rules that
+seconds and answers no one; the network name above keeps UDP 5353 open and
+answers for its one name only. On the Windows install, the firewall rules that
 let the LAN in name Domovoi's ports and your home subnet only.) Everything
 else the stack runs — Postgres
 (`6432`), Letta (`6283`), SearXNG (`6888`) and each room's MPD **control**

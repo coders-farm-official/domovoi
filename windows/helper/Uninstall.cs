@@ -230,7 +230,7 @@ namespace Domovoi.Windows.Helper
                     // Listing again must work: a failure is a leftover, never "removed".
                     List<string> left = Steps.FirewallRuleNames(o);
                     if (left.Count > 0) return "firewall rules " + string.Join(", ", left.ToArray());
-                    o.Say("removed the Hyper-V firewall rules " + s.Target);
+                    o.Say("removed the firewall rules " + s.Target);
                     return null;
 
                 case UninstallKind.RemoveMediaAccess:

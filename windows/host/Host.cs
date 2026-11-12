@@ -32,6 +32,13 @@
 //      Domovoi uses, and carry out a move the dashboard asked for: the
 //      folder checked and made, the distro's fstab block rewritten, the
 //      Linux system restarted (the limits' restart rules);
+//   6e. the network name (common\MdnsResponder.cs, LanNameHost.cs): from
+//      the service's start, answer to domovoi.local (or the name held last
+//      time, host-state.json "lan_name") on the LAN adapter; every 5 s while
+//      Domovoi runs, read the core's request as the service user and take a
+//      new name or the off switch; tell the Linux side what is held
+//      (/var/lib/domovoi-windows/lan_name.json, as root) and the tray and
+//      Setup (host\out\lan-name.json, status.json "lan_name");
 //   7. with the start parameter "unregister": unregister the distro, end
 //      this account's own WSL session (wsl --shutdown as domovoi-svc, which
 //      leaves every other account's WSL alone), and stop (the uninstaller's
@@ -95,6 +102,15 @@ namespace Domovoi.Windows.Host
         string mediaLastReport;
         string mediaLastTrayMap;
         string mediaLastProblem;
+        // The network name (LanNameHost.cs): the responder's thread, when the
+        // request is next read, and the last report, tray file, problem and
+        // name kept in host-state.json.
+        LanNameHost lanName;
+        DateTime lanNext = DateTime.MinValue;
+        string lanLastReport;
+        string lanLastTray;
+        string lanLastProblem;
+        string lanLastClaimed;
 
         public Host(ManualResetEvent stop)
         {
@@ -218,6 +234,7 @@ namespace Domovoi.Windows.Host
         {
             CheckAccount();
             LoadLastLinuxRestart();
+            StartLanName();
             log.Write("DomovoiHost started as " + WindowsIdentity.GetCurrent().Name + " (pid " + Inv.S(status.HostPid) + ")");
             Status("starting", HostProgress.PhaseConfig, 0, "Starting");
             int lastGen = -1, lastAttempt = -1;
@@ -251,6 +268,7 @@ namespace Domovoi.Windows.Host
                         ready = false;
                         lock (statusGate) status.Percent = 0;
                         ready = BringUp(job);
+                        lanLastReport = null;
                         if (ready) wslVersionUp = WslOutage.ExeVersion(Paths.WslExe);
                         // At the service's start for a job already
                         // provisioned (every boot), a bring-up that failed is
@@ -279,6 +297,7 @@ namespace Domovoi.Windows.Host
                     }
                     ProcessRequests(ready);
                     if (ready) PeriodicCoreLog();
+                    TrackLanName(ready);
                     if (ready)
                     {
                         ready = PollLimits(job);
@@ -309,6 +328,7 @@ namespace Domovoi.Windows.Host
                 if (DateTime.UtcNow - lastStatusWrite > TimeSpan.FromSeconds(10)) WriteStatus(true);
                 if (Sleep(1000)) break;
             }
+            StopLanName();
             log.Write("DomovoiHost stopping");
         }
 
@@ -699,6 +719,125 @@ namespace Domovoi.Windows.Host
             holderBackoffSec = 5;
             lock (statusGate) status.Percent = 0;
             return BringUp(job);
+        }
+
+        // -- the network name (MdnsResponder.cs, LanNameHost.cs) ---------
+
+        Dictionary<string, object> StoredLanName() { return Json.Obj(ReadState(), "lan_name") ?? new Dictionary<string, object>(); }
+
+        // From the service's start, before the distro is up: Setup's last
+        // page shows the name, and it holds through restarts of Domovoi.
+        void StartLanName()
+        {
+            Dictionary<string, object> d = StoredLanName();
+            string name = LanName.Exact(Json.Str(d, "requested")) ?? LanName.Default;
+            bool enabled = Json.Bool(d, "enabled") ?? true;
+            string claimed = LanName.Exact(Json.Str(d, "claimed"));
+            lanLastClaimed = claimed;
+            lanName = new LanNameHost(delegate (string m) { log.Write(m); });
+            lanName.Start(name, enabled, claimed);
+            log.Write("network name: " + (enabled ? "announcing " + name + ".local"
+                + (claimed != null && claimed != name ? " (held last time: " + claimed + ".local)" : "") : "off"));
+        }
+
+        // The goodbye, and the socket closed. Also from Shutdown.
+        public void StopLanName()
+        {
+            LanNameHost l = lanName;
+            lanName = null;
+            if (l != null) l.Stop();
+        }
+
+        // Every loop: keep the held name (sticky), tell the tray, Setup and,
+        // while Domovoi runs, the Linux side; every LanNameFiles.Every read
+        // the core's request.
+        void TrackLanName(bool ready)
+        {
+            LanNameHost l = lanName;
+            if (l == null) return;
+            bool up = ready && holder != null && !SafeExited(holder);
+            if (up && DateTime.UtcNow >= lanNext)
+            {
+                lanNext = DateTime.UtcNow + LanNameFiles.Every;
+                PollLanName(l);
+            }
+            string address;
+            MdnsSnapshot s = l.Snapshot(out address);
+            if (s.Claimed != null && s.Claimed != lanLastClaimed && (s.State == "announced" || s.State == "taken" || s.State == "held"))
+            {
+                var d = StoredLanName();
+                d["claimed"] = s.Claimed;
+                if (UpdateState("lan_name", d)) lanLastClaimed = s.Claimed;
+            }
+            string fqdn = (s.State == "announced" || s.State == "taken" || s.State == "held") ? LanName.Fqdn(s.Claimed) : null;
+            lock (statusGate) status.LanName = fqdn;
+            string tray = LanNameFiles.TrayText(s);
+            if (tray != lanLastTray)
+            {
+                lanLastTray = tray;
+                try { MediaPrep.WriteForUsers(Path.Combine(Paths.HostOut, LanNameFiles.TrayName), tray); }
+                catch (IOException e) { log.Write("can't write the tray's network name: " + e.Message); }
+                catch (UnauthorizedAccessException e) { log.Write("can't write the tray's network name: " + e.Message); }
+                catch (InvalidOperationException e) { log.Write("can't write the tray's network name: " + e.Message); }
+            }
+            if (up) ReportLanName(s, address);
+        }
+
+        void PollLanName(LanNameHost l)
+        {
+            WslResult r;
+            try { r = Wsl.Run(LanNameFiles.ReadArgs(Paths.DistroName), HardwareLimits.TimeoutMs, null, LanNameFiles.MaxRequestBytes + 64); }
+            catch (System.ComponentModel.Win32Exception e) { log.Write("can't read the network-name request: " + e.Message); return; }
+            if (r.TimedOut) return;
+            // head's exit 1 is "no such file": no request.
+            LanNameRequest req = LanNameFiles.Parse(r.ExitCode == 0 ? r.Stdout : null);
+            if (req.State == "invalid")
+            {
+                if (req.Problem != lanLastProblem) log.Write("the network-name request is refused: " + req.Problem);
+                lanLastProblem = req.Problem;
+                return;
+            }
+            lanLastProblem = null;
+            if (req.State != "ok") return;
+            Dictionary<string, object> d = StoredLanName();
+            if (Json.Str(d, "request_id") == req.Id) return;
+            d["request_id"] = req.Id;
+            d["requested"] = req.Name;
+            d["enabled"] = req.Enabled;
+            // Recorded first: a request that can't be recorded isn't acted on
+            // (it would be taken again at every poll).
+            if (!UpdateState("lan_name", d)) return;
+            log.Write("network name: the household asks for " + (req.Enabled ? req.Name + ".local" : "no name"));
+            l.Desire(req.Name, req.Enabled);
+        }
+
+        void ReportLanName(MdnsSnapshot s, string address)
+        {
+            Dictionary<string, object> d = StoredLanName();
+            string rid = Json.Str(d, "request_id");
+            // The report names the request only once the responder works on
+            // its name: until then the page says "checking".
+            string asked = Json.Str(d, "requested");
+            bool askedOn = Json.Bool(d, "enabled") ?? true;
+            bool caughtUp = askedOn ? (s.Requested == asked && s.State != "off") : s.State == "off";
+            if (rid != null && asked != null && !caughtUp) rid = null;
+            string key = LanNameFiles.Report(s, rid, address, DateTime.MinValue);
+            if (key == lanLastReport) return;
+            string text = LanNameFiles.Report(s, rid, address, DateTime.UtcNow);
+            byte[] body = new UTF8Encoding(false).GetBytes(text);
+            string sha;
+            using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(body));
+            try
+            {
+                WslResult w = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", LanNameFiles.ReportScript() }, 60000, body, 4096);
+                if (w.ExitCode == 0 && w.Stdout.StartsWith(sha, StringComparison.Ordinal))
+                {
+                    lanLastReport = key;
+                    log.Write("told the Linux side the network name (" + (s.Claimed != null ? s.Claimed + ".local, " : "") + s.State + ")");
+                }
+                else log.Write("could not tell the Linux side the network name (exit " + Inv.S(w.ExitCode) + "): " + FirstLine(w.Stderr + w.Stdout));
+            }
+            catch (System.ComponentModel.Win32Exception e) { log.Write("could not tell the Linux side the network name: " + e.Message); }
         }
 
         // -- the media folders (MediaFolders.cs, MediaPrep.cs) -----------
@@ -1589,6 +1728,8 @@ namespace Domovoi.Windows.Host
         // host restart as a distro restart).
         public void Shutdown(bool quick)
         {
+            // The network name's goodbye first (Run normally sent it already).
+            StopLanName();
             Process p = provision;
             if (p != null)
             {

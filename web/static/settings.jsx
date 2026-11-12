@@ -3572,6 +3572,176 @@ const AboutCard = () => (
   </Card>
 );
 
+/* The server's name on the home network (GET/PUT /api/lan-name,
+ * domovoi/lan_name/): "network name  domovoi2.local  ● announced  [change]".
+ * Any paired device reads it; an admin changes it or turns it off. The
+ * server checks a new name on the network first (state "checking", polled
+ * here), and never changes a name the household typed: one another device
+ * holds stays "taken" and the previous name is kept. The name is only a
+ * convenience for browsers; satellites still check the server's key. */
+const LAN_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const lanNameProblem = (raw) => {
+  let s = (raw || '').trim().toLowerCase();
+  if (s.endsWith('.')) s = s.slice(0, -1);
+  if (s.endsWith('.local')) s = s.slice(0, -6);
+  if (!s) return 'no name given';
+  if (s.length > 63) return 'too long: up to 63';
+  if (s.includes('.')) return 'one word only: no dots';
+  if (s.startsWith('-') || s.endsWith('-')) return 'can’t start or end with a hyphen';
+  if (!LAN_NAME_RE.test(s)) return 'letters, digits and hyphens only';
+  if (s === 'localhost' || s === 'local') return `${s} is kept for this device itself`;
+  return null;
+};
+const LAN_STATE = {
+  announced: { tone: 'ok', word: 'announced' },
+  checking: { tone: 'brand', word: 'checking…', live: true },
+  taken: { tone: 'warn', word: 'taken' },
+  off: { tone: 'idle', word: 'off' },
+  no_lan: { tone: 'warn', word: 'no network address' },
+  failed: { tone: 'err', word: 'failed' },
+  no_host: { tone: 'idle', word: 'not announced' },
+  // This computer's own name service (Avahi, or Windows for a PC with the
+  // same name) answers to it with this server's address: Domovoi leaves it
+  // to that and looks again every minute.
+  held: { tone: 'ok', word: 'answered by this computer' },
+  // DomovoiHost: Windows marks the network Public; nothing is announced.
+  public: { tone: 'warn', word: 'not announced' },
+};
+const lanOutcome = (d) => {
+  if (!d) return '';
+  if (d.state === 'taken' && d.claimed) return `taken — kept ${d.claimed}.local`;
+  if (d.state === 'announced' && d.claimed && d.claimed !== d.requested) return `taken — using ${d.claimed}.local`;
+  return (LAN_STATE[d.state] || {}).word || d.state;
+};
+
+const NetworkNameCard = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    try { return Auth.subscribe(force); } catch { return undefined; }
+  }, []);
+  let admin = false;
+  try { admin = !!(Auth.isLoggedIn() || (Auth.status && Auth.status.authenticated)); } catch { admin = false; }
+  const { data, error, refresh } = useApiObject('/api/lan-name', { quiet: true });
+  const [fire, node] = useToast();
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  // A save waits for the probe: poll while "checking", then say how it went.
+  const [waiting, setWaiting] = React.useState(false);
+  const checking = !!data && data.state === 'checking';
+  React.useEffect(() => {
+    if (!checking) return undefined;
+    const t = setInterval(refresh, 1500);
+    const stop = setTimeout(() => clearInterval(t), 90000);
+    return () => { clearInterval(t); clearTimeout(stop); };
+  }, [checking, refresh]);
+  React.useEffect(() => {
+    if (waiting && data && data.state !== 'checking') {
+      setWaiting(false);
+      fire(lanOutcome(data));
+    }
+  }, [waiting, data]);
+
+  if (error && !data) return null;      // an older server, or not paired
+  if (!data) return null;
+
+  const st = LAN_STATE[data.state] || { tone: 'idle', word: data.state };
+  const shown = data.fqdn || (data.requested ? `${data.requested}.local` : '');
+  const problem = editing ? lanNameProblem(draft) : null;
+  const canEdit = admin && data.state !== 'no_host';
+
+  const put = async (body, after) => {
+    setSaving(true);
+    try {
+      const d = await apiFetch('/api/lan-name', { method: 'PUT', body: JSON.stringify(body) });
+      setWaiting(!!d && d.state === 'checking');
+      if (d && d.state !== 'checking') fire(lanOutcome(d));
+      if (after) after();
+      refresh();
+    } catch (e) {
+      fire(`network name: ${apiErrorText(e)}`);
+    } finally { setSaving(false); }
+  };
+  const save = () => {
+    if (problem) return;
+    put({ name: draft.trim() }, () => setEditing(false));
+  };
+  const takenLine = data.taken && data.taken !== data.claimed
+    && !(data.state === 'taken' && !data.claimed)
+    ? `${data.taken}.local was taken on this network` : null;
+
+  return (
+    <Card title="Network name"
+          sub="What browsers on your home network can open instead of an address.">
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: 'var(--fg-muted)', minWidth: 96 }}>network name</span>
+          {data.claimed
+            ? <a className="mono" href={`http://${data.fqdn}:6369`} style={{ color: 'var(--brand-ink)' }}>{data.fqdn}</a>
+            : <span className="mono" style={{ color: 'var(--fg-muted)' }}>{data.state === 'no_host' || data.state === 'off' ? '—' : shown}</span>}
+          <Pill tone={st.tone} live={!!st.live}>{data.state === 'taken' && data.claimed ? lanOutcome(data) : st.word}</Pill>
+          {canEdit && !editing && (
+            <Button icon="pencil" disabled={saving}
+                    onClick={() => { setDraft(data.requested || ''); setEditing(true); }}>change</Button>
+          )}
+        </div>
+        {takenLine && <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>{takenLine}</div>}
+        {data.state === 'taken' && !data.claimed && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            {`${data.requested}.local is taken on this network; no name is announced`}
+          </div>
+        )}
+        {data.state === 'held' && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            this computer's own name service announces it, not Domovoi
+          </div>
+        )}
+        {data.error && ['failed', 'no_host', 'taken', 'public', 'no_lan'].includes(data.state) && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>{data.error}</div>
+        )}
+        {editing && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingLeft: 108 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', border: '1px solid var(--border)',
+                             borderRadius: 'var(--r-sm)', background: 'var(--card)', height: 30,
+                             flex: '1 1 220px', maxWidth: 360 }}>
+                <input value={draft} autoFocus aria-label="network name" maxLength={80}
+                       onChange={(e) => setDraft(e.target.value)}
+                       onKeyDown={(e) => {
+                         if (e.key === 'Enter') save();
+                         if (e.key === 'Escape') setEditing(false);
+                       }}
+                       className="mono"
+                       style={{ font: 'inherit', fontSize: 13, border: 0, outline: 'none', background: 'transparent',
+                                color: 'var(--fg)', padding: '0 4px 0 10px', flex: 1, minWidth: 0, height: 28 }}/>
+                <span className="mono" style={{ color: 'var(--fg-muted)', paddingRight: 10 }}>.local</span>
+              </span>
+              <Button variant="primary" icon="check" disabled={!!problem || saving} onClick={save}>
+                {saving ? 'saving…' : 'save'}
+              </Button>
+              <Button disabled={saving} onClick={() => setEditing(false)}>cancel</Button>
+            </div>
+            <div style={{ fontSize: 11, color: problem && draft.trim() ? 'var(--warn-ink)' : 'var(--fg-faint)' }}>
+              {problem && draft.trim() ? problem : 'letters, digits and hyphens · up to 63'}
+            </div>
+          </div>
+        )}
+        {admin && data.state !== 'no_host' && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            <input type="checkbox" checked={!!data.enabled} disabled={saving}
+                   onChange={(e) => put({ enabled: e.target.checked })}/>
+            announce a name on this network
+          </label>
+        )}
+        <div style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+          a name on your network isn’t proof — satellites still check the server’s key
+        </div>
+      </div>
+      {node}
+    </Card>
+  );
+};
+
 /* About & updates (Settings → System): what Domovoi is, then the version
  * it runs and its updates (VersionSection, Configuration's until
  * 2026-10-21). The version answers a paired device or an admin; anyone
@@ -3589,6 +3759,7 @@ const AboutPanel = () => {
   return (
     <>
       <AboutCard/>
+      {household && <div data-settings-mark="network-name"><NetworkNameCard/></div>}
       <div data-settings-mark="updates">
         {household ? <VersionSection/> : (
           <Card title="Version and updates" padded>
@@ -5217,8 +5388,8 @@ const SETTINGS_SECTIONS = [
     sub: 'The fonts documents and spreadsheets can use, and adding more for the whole house.',
     words: 'font fonts typeface typefaces lettering documents document spreadsheets sheets writing more fonts add' },
   { id: 'about', label: 'About & updates',
-    sub: 'What Domovoi is, the version it runs, and its updates.',
-    words: 'about version update updates upgrade check pull restart channel stable main release manual licence licences license fingerprint' },
+    sub: 'What Domovoi is, its name on your network, the version it runs, and its updates.',
+    words: 'about version update updates upgrade check pull restart channel stable main release manual licence licences license fingerprint network name local domovoi.local mdns hostname address bonjour' },
   { id: 'health', label: 'Health', optional: true,
     sub: 'Every check on this Domovoi, green or not: the server, updates, rooms, plugins, internet and containers.',
     words: 'health status problems problem check checks containers container guard incident incidents tamper disk database server attention' },
@@ -5236,6 +5407,7 @@ const SETTINGS_SEARCH_ITEMS = [
   { label: 'Who may edit a room’s queue', section: 'phones-and-browsers', mark: 'queue-access', words: 'queue access block' },
   { label: 'Guest access', section: 'phones-and-browsers', mark: 'guest-access', words: 'guest guests visitor' },
   { label: 'Files access', section: 'phones-and-browsers', mark: 'files-access', words: 'files documents' },
+  { label: 'Network name', section: 'about', mark: 'network-name', words: 'network name local domovoi.local mdns hostname address' },
   { label: 'Updates', section: 'about', mark: 'updates', words: 'update check pull restart version channel' },
   { label: 'User manual', section: 'about', mark: 'manual', words: 'manual help guide' },
   { label: 'Admin account', section: 'advanced', mark: 'admin', words: 'admin password sign in sign out claim setup' },

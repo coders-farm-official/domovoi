@@ -100,6 +100,7 @@ static partial class Tests
         SatelliteSetupTests();
         MediaFolderTests();
         UpdateTests();
+        LanNameTests();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;
@@ -1479,7 +1480,12 @@ static partial class Tests
             "[pscustomobject]@{ Name='WslCore-Allow-Inbound-ICMPv4-1-40e0ac32-46a5-438a-a0b2-2b479e8f2e90'; VMCreatorId='{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' }, " +
             "[pscustomobject]@{ Name='Household-Game-Server'; VMCreatorId='{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' }, " +
             "[pscustomobject]@{ Name='Domovoi-Other-VM'; VMCreatorId='{11111111-2222-3333-4444-555555555555}' }) }\n" +
-            "function Remove-NetFirewallHyperVRule { param($Name) [void]$script:removed.Add($Name) }\n";
+            "function Remove-NetFirewallHyperVRule { param($Name) [void]$script:removed.Add($Name) }\n" +
+            // The network name's ordinary (not Hyper-V) rule, beside a
+            // household's own mDNS rule that must stay.
+            "function Get-NetFirewallRule { param($Name, $ErrorAction) @(" +
+            "[pscustomobject]@{ Name='Domovoi-mDNS-5353' }, [pscustomobject]@{ Name='Household-mDNS' }) | Where-Object { $_.Name -eq $Name } }\n" +
+            "function Remove-NetFirewallRule { param($Name) [void]$script:removed.Add($Name) }\n";
         using (var ps = PowerShell.Create())
         {
             ps.AddScript(fakes + script + "\n$script:removed");
@@ -1494,7 +1500,7 @@ static partial class Tests
         Run("firewall cleanup removes only Domovoi's WSL rules (review #11, mutant M1)", delegate
         {
             var removed = RunAgainstFakeRules(Firewall.RemoveScript());
-            SeqEq(new[] { "Domovoi-Core-6370", "Domovoi-MPD-8050-8099" }, removed, "removed");
+            SeqEq(new[] { "Domovoi-Core-6370", "Domovoi-MPD-8050-8099", "Domovoi-mDNS-5353" }, removed, "removed");
         });
         Run("firewall: a cleanup filter wider than Domovoi-* fails this test", delegate
         {
@@ -1509,7 +1515,7 @@ static partial class Tests
         {
             string add = Firewall.AddScript(Firewall.Plan("192.168.1.0/24"));
             string prelude = add.Substring(0, add.IndexOf("New-NetFirewallHyperVRule", StringComparison.Ordinal));
-            SeqEq(new[] { "Domovoi-Core-6370", "Domovoi-MPD-8050-8099" }, RunAgainstFakeRules(prelude), "removed");
+            SeqEq(new[] { "Domovoi-Core-6370", "Domovoi-MPD-8050-8099", "Domovoi-mDNS-5353" }, RunAgainstFakeRules(prelude), "removed");
         });
     }
 

@@ -339,12 +339,25 @@ namespace Domovoi.Windows.Helper
             List<FirewallRule> rules = Firewall.Plan(subnet);
             l.FirewallSubnet = subnet;
             foreach (var r in rules) if (!l.FirewallRules.Contains(r.Name)) l.FirewallRules.Add(r.Name);
+            if (!l.FirewallRules.Contains(Firewall.MdnsRuleName)) l.FirewallRules.Add(Firewall.MdnsRuleName);
             SaveLedger(l);
             string outText = PowerShell(Firewall.AddScript(rules), o);
             foreach (string line in outText.Split('\n')) if (line.Trim().Length > 0) o.LogOnly("firewall: " + line.Trim());
             o.Say("added Hyper-V firewall rules for WSL (inbound TCP from " + subnet + "): "
                 + string.Join(", ", rules.ConvertAll(r => r.Name + " " + r.LocalPorts).ToArray()));
+            // The network name (MdnsResponder.cs): after the Hyper-V rules,
+            // whose script takes every Domovoi rule away first.
+            outText = PowerShell(Firewall.MdnsAddScript(HostExe), o);
+            foreach (string line in outText.Split('\n')) if (line.Trim().Length > 0) o.LogOnly("firewall: " + line.Trim());
+            o.Say("added the firewall rule " + Firewall.MdnsRuleName + " (inbound UDP 5353 for DomovoiHost.exe, from the local subnet, on "
+                + Firewall.MdnsProfiles.Replace(",", " and ") + " networks): other devices find this PC as domovoi.local");
             o.Kv("firewall", subnet);
+        }
+
+        // Where Setup installs DomovoiHost.exe (an admin-owned folder).
+        public static string HostExe
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Domovoi\DomovoiHost.exe"); }
         }
 
         // -- the host's job ---------------------------------------------
@@ -499,6 +512,7 @@ namespace Domovoi.Windows.Helper
             o.Kv("tier", st.Tier ?? "");
             o.Kv("gpu", st.GpuKnown ? (st.Gpu.Count == 0 ? "none" : string.Join(", ", st.Gpu.ToArray())) : "");
             o.Kv("ai", st.Ai == null ? "" : (st.Ai.Value ? "yes" : "no"));
+            o.Kv("lan_name", st.LanName ?? "");
             o.Kv("generation", Inv.S(st.Generation));
             o.Kv("attempt", Inv.S(st.Attempt));
             if (st.Bytes != null) o.Kv("bytes", Inv.S(st.Bytes.Value));

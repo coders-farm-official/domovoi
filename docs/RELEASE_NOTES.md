@@ -4,6 +4,32 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — the server answers to domovoi.local
+
+**A Linux server now announces `domovoi.local` on the home network**, so
+a browser on the same network opens `http://domovoi.local:6369`. The core
+does it itself (UDP 5353, beside Avahi if it is there); with `ufw` on, allow
+it from the LAN: `sudo ufw allow from 192.168.0.0/16 to any port 5353 proto udp`.
+If another device already answers to `domovoi.local`, the server takes
+`domovoi2.local` (then `domovoi3` ...) and keeps it. `LAN_NAME` and
+`LAN_NAME_ENABLED` in `.env` (docs/LINUX_HOST.md, "The network name").
+**Settings → System → About & updates** shows it ("network name") with its
+state, and an admin can change it or turn it off there; a typed name that
+another device already holds is not changed or numbered: it says `taken`
+and the previous name stays.
+
+**On the Windows install, DomovoiHost announces it** (docs/WINDOWS_HOST.md,
+"The network name"), once a Setup with this change has repaired the
+install: Setup adds one Windows firewall rule, `Domovoi-mDNS-5353` (inbound
+UDP 5353 for DomovoiHost.exe, from the local subnet, Private and Domain
+networks only; the uninstaller removes it). Until then Settings says
+`not announced`. Nothing is announced while Windows marks the network
+Public. Setup's last page and the tray's **Open as domovoi.local**
+show the name; **Copy address** and the phone code keep the address.
+Satellites now try the name the server tells them first, then
+`domovoi.local`; they still check the server's key wherever a name leads.
+A name is never proof of identity.
+
 ## 2026-11-11 — a room's Health moved to its Settings tab
 
 **In a room's drawer, the Health section (wi-fi, memory, cpu, boot

@@ -234,6 +234,17 @@ namespace Domovoi.Windows.Tray
                     items.Add(parent);
                 }
             }
+            // The network name DomovoiHost holds (MdnsResponder.cs), for a
+            // browser. "Copy address" and the phone code keep the address: a
+            // phone saves the server it pairs with, and a name is no proof.
+            string fqdn = Addresses.NetworkName();
+            if (fqdn != null)
+            {
+                string named = Addresses.NameUrl(opt.WebUrl, fqdn);
+                var byName = new ToolStripMenuItem("Open as " + fqdn);
+                byName.Click += delegate { OpenUrl(named + "/"); };
+                items.Add(byName);
+            }
         }
 
         // -- actions ----------------------------------------------------

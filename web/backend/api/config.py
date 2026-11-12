@@ -35,6 +35,7 @@ from web.backend.domovoi_client import (
     get_admin,
     get_cached_snapshot,
     post_admin,
+    put_admin,
 )
 from web.backend.plugin_host import HOST
 from web.backend.schemas import ConfigResponse, ConfigUpdateRequest
@@ -147,6 +148,31 @@ async def patch_editable_config(body: ConfigUpdateRequest, request: Request):
         headers=auth_forward_headers(request),
     )
     return bridge_response(status, answer)
+
+
+class LanNameRequest(BaseModel):
+    # Either or both; absent = unchanged. The name is checked by the core
+    # (domovoi/lan_name/names.py), never here, so the two can't disagree.
+    name: str | None = Field(default=None, max_length=80)
+    enabled: bool | None = None
+
+
+@router.get("/lan-name", dependencies=[Depends(require_device_read)])
+async def get_lan_name(request: Request):
+    """The server's name on the home network (Settings → System → About &
+    updates), from the core's ``GET /v1/lan-name``: what was asked for,
+    what is held, and its state (``announced``, ``checking``, ``taken``,
+    ``off``, ``no_lan``, ``failed``, ``no_host``)."""
+    return bridge_response(*await get_admin("/v1/lan-name", headers=auth_forward_headers(request)))
+
+
+@router.put("/lan-name", dependencies=[Depends(require_admin_mutation)])
+async def put_lan_name(body: LanNameRequest, request: Request):
+    """Change the network name or turn it on or off (admin, both hops).
+    202 with ``checking`` while the name is checked on the network."""
+    return bridge_response(
+        *await put_admin("/v1/lan-name", body.model_dump(exclude_none=True), headers=auth_forward_headers(request))
+    )
 
 
 # The longest typed key the test forwards. Checked in the handler, not as a

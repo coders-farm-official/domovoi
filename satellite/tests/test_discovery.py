@@ -634,16 +634,20 @@ def test_nothing_verifying_anywhere_is_none():
     assert found is None
 
 
-def test_the_names_are_the_default_then_what_the_core_advertised(tmp_path):
+def test_the_names_are_what_the_core_advertised_then_the_default(tmp_path):
     path = tmp_path / "server-names.json"
     assert discovery.server_names(path) == ["domovoi.local"]
     assert discovery.remember_names(
         ["Beelink.local.", "not a name!", "192.168.1.5", "localhost", "domovoi.local"], path
     ) is True
-    assert discovery.server_names(path) == ["domovoi.local", "beelink.local"]
+    assert discovery.server_names(path) == ["beelink.local", "domovoi.local"]
     # Saying the same thing again writes nothing.
     assert discovery.remember_names(["beelink.local", "domovoi.local"], path) is False
     assert discovery.remember_names("beelink.local", path) is False   # not a list
+    # A server that holds domovoi2.local (another Domovoi had the default):
+    # its own name is tried before the neighbour's domovoi.local.
+    assert discovery.remember_names(["domovoi2.local", "kitchen-pc.local"], path) is True
+    assert discovery.server_names(path) == ["domovoi2.local", "kitchen-pc.local", "domovoi.local"]
 
 
 def test_a_name_lookup_never_hangs_and_never_returns_loopback():
