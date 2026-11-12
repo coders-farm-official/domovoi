@@ -94,7 +94,16 @@ extension StubHouseUITests {
             pushDelay: Self.pushDelay
         )
         let foot = startingWith(app, HealthUnderTest.dashboardFootHead)
-        guard foot.waitForExistence(timeout: 40) else { return (app, false) }
+        // An unpaired launch may be met by the auto-raised pairing screen,
+        // which is the screen Android shows there; the guest line is behind
+        // its `not now` (``waitPastTheAutoRaisedPairing(_:for:timeout:)`` has
+        // the trains). After the tap the workspace is rebuilt and its seeded
+        // push runs again, `pushDelay` later — inside the same 40 s. A paired
+        // launch waits as before: a pairing screen there is a defect.
+        let footDrawn = paired
+            ? foot.waitForExistence(timeout: 40)
+            : waitPastTheAutoRaisedPairing(app, for: foot, timeout: 40)
+        guard footDrawn else { return (app, false) }
         // The foot alone is NOT a sentinel: `content` draws `dashboardFoot` in
         // all four branches including `.loading` (`HealthPanelView.swift:110`),
         // which is what `HealthPanelState.from` returns while `config.loading`

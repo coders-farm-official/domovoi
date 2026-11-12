@@ -578,6 +578,59 @@ final class StubHouseUITests: XCTestCase {
         return false
     }
 
+    /// Wait for `target` on an **unpaired** launch, taking the auto-raised
+    /// pairing screen's own way out — `not now` — whenever it is up, the way
+    /// a person would.
+    ///
+    /// ### Why an unpaired launch may land on `pair this phone`
+    ///
+    /// It is the right screen, not a defect. Android raises it the moment a
+    /// device-tier read is refused for want of the token (`AppShell.kt`
+    /// `ShellContent`, `pairingRequired` collected as state), and an
+    /// unpaired phone's `/api/satellites` and `/api/calendar/events` are
+    /// tracked reads that 401 (`HomeReads.swift`). What makes it a coin toss
+    /// here is that the iPhone shell only re-reads the flag in
+    /// ``ShellModel/refresh()`` — at launch, that is the scene's first
+    /// `.active` — so whether the screen shows depends on what the flag
+    /// holds at that moment: set by those 401s, cleared by the tracked
+    /// `POST /api/devices/register` 200, all landing within a few
+    /// milliseconds of each other. The wf/ios-b-all trains through I021, and
+    /// I027, won it for Home; I025 and I026 (wf/ios-d-all) lost it on
+    /// `testHealth_AnUnpairedPhoneGetsTheGuestLine` with the same requests on
+    /// the wire; I003 (b-all) lost it on
+    /// `testWhereTheEightDynamicTypeFindingsLive`.
+    ///
+    /// So a case about what an unpaired phone sees **after** that screen
+    /// goes through it rather than betting on the race. `not now` is held
+    /// until the token changes (``ShellModel/pairingDismissed``), so once is
+    /// enough; the loop is for a raise that comes after the first look.
+    ///
+    /// **Never call this on a paired launch**: there the pairing screen
+    /// would be a defect, and tapping past it would hide it.
+    ///
+    /// The title is checked as well as the button, because `not now` is
+    /// also the label of other questions in this app (the audiobook resume
+    /// dialog) and only this screen's is to be answered here.
+    @MainActor
+    func waitPastTheAutoRaisedPairing(
+        _ app: XCUIApplication,
+        for target: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let title = app.staticTexts[ShellStringsUnderTest.pairTitle]
+        let notNow = app.buttons[ShellStringsUnderTest.notNow]
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if target.exists { return true }
+            if title.exists, notNow.exists {
+                print("PAIRING AUTO-RAISED on an unpaired launch — tapping `not now`")
+                notNow.tap()
+            }
+            usleep(300_000)
+        }
+        return target.exists
+    }
+
     /// Whether the shell gave up on the server and fell back to local media.
     ///
     /// Worth its own check, and its own message, because it is a *different
@@ -1421,7 +1474,11 @@ final class StubHouseUITests: XCTestCase {
         // Whatever it shows, photograph it: the point of this one is the
         // words, which no test has ever read on a screen.
         let link = app.buttons[ShellStringsUnderTest.pairLink]
-        let told = link.waitForExistence(timeout: 20)
+        // Home's link is behind the auto-raised pairing screen when the shell
+        // raises it, which is a race this case used to need to win (see
+        // ``waitPastTheAutoRaisedPairing(_:for:timeout:)``). Both screens tell
+        // the phone to pair; this one is about Home's words.
+        let told = waitPastTheAutoRaisedPairing(app, for: link, timeout: 20)
         let named = houseName(in: app).waitForExistence(timeout: 10)
         evidence(app, "20-unpaired")
         XCTAssertFalse(
