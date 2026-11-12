@@ -20,6 +20,10 @@
 </p>
 
 <p align="center">
+  <a href="https://play.google.com/store/apps/details?id=com.domovoi.app"><img alt="Get it on Google Play" src="https://img.shields.io/badge/Get%20it%20on%20Google%20Play-414141?style=for-the-badge&logo=googleplay&logoColor=white"></a>
+</p>
+
+<p align="center">
   <a href="https://discord.gg/j3H5XamSxg"><img alt="Join us on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
   <a href="https://forms.gle/wbz194RhuLmJdg3D8"><img alt="Get updates by email" src="https://img.shields.io/badge/Get%20updates%20by%20email-F2A618?style=for-the-badge"></a>
 </p>
