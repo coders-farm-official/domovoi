@@ -354,6 +354,63 @@ async def test_play_cascade_graceful_absence_when_no_provider(monkeypatch: pytes
     assert "provider" not in resp.text.lower()
 
 
+# Live garage turns (2026-11-12), as Whisper heard them, and the query the
+# streaming provider gets for each. "again" is part of a title, never read
+# as a replay; "<artist>, the song <title>" reaches the provider as
+# "<title> by <artist>", without the filler; "<title> by <artist>" as said.
+@pytest.mark.parametrize(
+    ("said", "query"),
+    [
+        ("Play little pseudo glitch again.", "little pseudo glitch again"),
+        ("Play Lil' Cedo, the song Glitch Again.", "glitch again by lil' cedo"),
+        ("Play Glitch again by Lil Cito.", "glitch again by lil cito"),
+        ("play holla cheese the song bff4l", "bff4l by holla cheese"),
+        ("play the beatles the song stand by me", "stand by me by the beatles"),
+        ("play me the song glitch again", "glitch again"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_spoken_play_reaches_the_provider_as(
+    said: str, query: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from domovoi.handlers.spoken_audio import SpokenAudioHandler
+    from domovoi.router import plan_route
+
+    _use_miss_mpd()
+
+    async def no_pod(self, ctx, session, show):
+        return None
+
+    monkeypatch.setattr(SpokenAudioHandler, "try_play_latest", no_pod)
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "music", said
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+    with _registered(_FakeStreamingProvider()) as provider:
+        await plan.fast_path.method(plan.handler, plan.match, ctx, None)
+    assert provider.stream_calls == [("kitchen", None, query)]
+
+
+@pytest.mark.asyncio
+async def test_provider_finding_nothing_relevant_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider that finds nothing carrying the words asked for answers
+    None: the house says it couldn't find the song, naming what was
+    asked, and streams nothing."""
+    from domovoi.handlers.spoken_audio import SpokenAudioHandler
+    from domovoi.router import plan_route
+
+    _use_miss_mpd()
+
+    async def no_pod(self, ctx, session, show):
+        return None
+
+    monkeypatch.setattr(SpokenAudioHandler, "try_play_latest", no_pod)
+    plan = plan_route("Play Lil' Cedo, the song Glitch Again.")
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+    with _registered(_FakeStreamingProvider(stream_result=None)):
+        resp = await plan.fast_path.method(plan.handler, plan.match, ctx, None)
+    assert resp.text == "I couldn't find anything called glitch again by lil' cedo."
+
+
 @pytest.mark.asyncio
 async def test_now_playing_when_stopped() -> None:
     stub = MPDStubClient()  # default state = "stop"

@@ -4,6 +4,18 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — "Play <artist>, the song <title>" asks for that song
+
+"Play Lil Seeto, the song Glitch Again" is now read as the song Glitch
+Again by Lil Seeto, the same as "play Glitch Again by Lil Seeto": the
+library is searched for that title by that artist, and a song you don't
+have is looked up as "glitch again by lil seeto" without "the song" in
+the search. A title with "by" in it keeps it ("play the Beatles, the song
+Stand By Me"). When a media-provider plugin finds nothing that carries the
+words you asked for, the answer is "I couldn't find anything called …";
+the media-provider plugin's next release stops streaming an unrelated
+result in that case.
+
 ## 2026-11-12 — Add songs from a room's queue, and a quicker Room queue tab
 
 Music → Room queue now has a search box at the top, under the room
