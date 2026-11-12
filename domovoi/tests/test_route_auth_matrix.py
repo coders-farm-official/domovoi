@@ -364,6 +364,8 @@ SPEECH_READS: list[tuple[str, str]] = [
     # conversation_log rows: user_text / assistant_text
     ("web", "/api/satellites/{room_id}/conversations"),
     ("web", "/api/people/{person_id}/conversations"),
+    # V049 voice-match turns (admins get rows; any other device reader an empty list)
+    ("web", "/api/people/{person_id}/voice-matches"),
     # voice notes: dictated speech
     ("web", "/api/satellites/{room_id}/notes"),
     ("web", "/api/people/{person_id}/notes"),
