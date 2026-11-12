@@ -1608,7 +1608,7 @@
        "text": "Each room has one shared queue, and anyone in the house can add to it."
       },
       {
-       "text": "[Music → Room queue](route:music/queue): drag to reorder. A room card's **queue** button goes straight there.",
+       "text": "[Music → Room queue](route:music/queue): drag to reorder, tap a song to play it now. A room card's **queue** button goes straight there. **Save as playlist** keeps the room's queue as a new playlist; radio streams, podcasts and files that aren't in your library are left out, and it says how many.",
        "only": "dashboard"
       },
       {
@@ -1630,7 +1630,7 @@
        "only": "dashboard"
       },
       {
-       "text": "Add to the queue from the queue itself: under the songs in the **Queue** panel (in the player and in the bar's queue), the search box finds songs by title, artist, album or genre. **Enter** adds the highlighted result, **Shift+Enter** plays it next, the arrow keys move, **Esc** clears. A genre result adds up to 25 of its songs, shuffled. While playing in a room, an add goes to the room's queue too (and **play next** is not offered). **Save as playlist** is the smaller button below: it asks for a name and keeps the queue's songs.",
+       "text": "Add to the queue from the queue itself: under the songs in the **Queue** panel (in the player and in the bar's queue), the search box finds songs by title, artist, album or genre. **Enter** adds the highlighted result, **Shift+Enter** plays it next, the arrow keys move, **Esc** clears. A genre result adds up to 25 of its songs, shuffled. While playing in a room, an add goes to the room's queue too: **play next** right after the song playing there, an add after the songs somebody asked for and before the room's up next. **Save as playlist** is the smaller button below: it asks for a name and keeps the queue's songs (while playing in a room, the room's queue).",
        "only": "dashboard"
       },
       {
@@ -1639,6 +1639,13 @@
       },
       {
        "text": "The **autoplay** switch at the top of **up next** turns it off: the queue then stops at its end (a song played from a list still plays the rest of that list). This browser remembers it. With two people or more in the household, **for** picks whose taste the mix follows (**household** for everyone); it starts at the person this browser is (\"this is me\" on People) and is **household** on a shared screen.",
+       "only": "dashboard"
+      },
+      {
+       "text": "**Up next in a room.** A song played in a room — **play in** a room from a song's details, an artist's or a genre's room **play**, a cast from the browser or the app, or saying \"play\" a song or \"play something\" there — is followed by songs like it; the server adds them to the room's queue as it plays. A whole list played in a room plays as it is, and similar songs join when it is nearly over. Casting from the browser takes its up next along, and casting back brings it home. A playlist played in a room still plays one song at a time and has no up next; a radio stream, a podcast or a book ends it, and so does stopping or clearing the room, or two hours paused."
+      },
+      {
+       "text": "The room's picks show in [Music → Room queue](route:music/queue) under **up next**, each with why it was picked, with the room's **autoplay** switch and **less like this**; while you play in a room the player's **Queue** shows the room's up next; and a room's page in [Settings → Household → Rooms](route:settings/rooms) shows its next three under now playing, with **open queue**. Guests can play a song now, move and remove, but not switch autoplay or use less like this.",
        "only": "dashboard"
       },
       {

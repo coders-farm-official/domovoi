@@ -385,6 +385,24 @@ async def test_core_guest_add_never_starts_a_room_that_stopped_meanwhile(
     assert no_player_starts == []
 
 
+async def test_core_guest_jumps_within_a_playing_rooms_queue(
+    rooms, claimed, no_player_starts, core_db
+) -> None:
+    """The queue's "play this one" (Up next P4): a guest on a playing room
+    plays another entry now — a skip by another name — and starts nothing."""
+    stub = rooms[ACTIVE]
+    target = _ids(stub)[2]
+    async with _core() as c:
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/play", json={"song_id": target})
+        assert r.status_code == 200, r.text
+        assert r.json()["started"] is False
+        gone = await c.post(f"/v1/admin/music/queue/{ACTIVE}/play", json={"song_id": 9999})
+        assert gone.status_code == 404
+    assert (await stub.current_song())["id"] == target
+    assert await stub.state() == "play"
+    assert no_player_starts == []
+
+
 # ─── Core: a guest on an IDLE room, and on clear ──────────────────────────
 
 
@@ -399,6 +417,7 @@ async def test_core_guest_is_refused_an_idle_room_and_nothing_starts(
             ("POST", f"/v1/admin/music/queue/{room}/add", {"track_ids": [1]}),
             ("POST", f"/v1/admin/music/queue/{room}/remove", {"song_ids": [1]}),
             ("POST", f"/v1/admin/music/queue/{room}/move", {"song_id": 1, "to_position": 0}),
+            ("POST", f"/v1/admin/music/queue/{room}/play", {"song_id": 1}),
         ]
         for method, path, body in calls:
             r = await c.request(method, path, json=body)
@@ -734,7 +753,7 @@ def _core_gates(method: str, path: str) -> list[Any]:
     return _gates_for(method, path)
 
 
-@pytest.mark.parametrize("suffix", ["add", "remove", "move"])
+@pytest.mark.parametrize("suffix", ["add", "remove", "move", "play"])
 def test_core_edit_routes_wear_the_guest_gate(suffix) -> None:
     gates = _core_gates("POST", f"/v1/admin/music/queue/{{room_id}}/{suffix}")
     assert guest_queue.require_device_or_active_room_guest in gates
@@ -844,6 +863,8 @@ _EDITS = [
     ("add", {"track_ids": [1], "device_id": "browser-guest1"}),
     ("remove", {"song_ids": [7], "device_id": "browser-guest1"}),
     ("move", {"song_id": 7, "to_position": 0, "device_id": "browser-guest1"}),
+    # The queue's "play this one" jump (Up next P4): the skip's tier.
+    ("play", {"song_id": 7, "device_id": "browser-guest1"}),
 ]
 
 _CREDENTIAL_HEADERS = ("authorization", "x-device-token", "cookie")

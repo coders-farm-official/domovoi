@@ -153,15 +153,6 @@ const itemFromPick = (pick, sessionId) => Object.assign(
   itemFromTrack({ id: pick.track_id, title: pick.title, artist: pick.artist, album: pick.album,
                   duration_sec: pick.duration_sec }),
   { origin: 'auto', upNextSeq: pick.seq, reasonLabel: pick.reason_label || '', sessionId });
-/* The Up next header's "why": what the mix is built from. */
-const upNextBasis = (u) => {
-  if (!u || !u.seed) return '';
-  const list = u.seed.list && u.seed.list.name;
-  if (u.mode === 'list' && list) return `shuffled from ${list}`;
-  if (u.mode === 'continue' && list) return `more like ${list}`;
-  if (u.seed.title) return `based on ${u.seed.title}`;
-  return '';
-};
 /* Up next's calls that nobody pressed a button for (the start that rides
  * on a play, a refill, a removed pick): `noPrompt`, so a refused sign-in
  * never opens a prompt over the music. */
@@ -179,6 +170,20 @@ const _upNextFrom = (s) => ({
   id: s.id, mode: s.mode, autoplay: !!s.autoplay, person: s.person || null, seed: s.seed || null,
   haveThrough: s.have_through_seq || 0, ended: !!s.ended, loading: false, offline: false,
 });
+/* Whose taste a new mix follows, as a start or a cast sends it: the
+ * "listening as" person picked here, "household" picked on purpose (or a
+ * shared screen with no pick), else nothing (the server uses this
+ * browser's claimed person). */
+const upNextListenerFields = () => {
+  let shared = false;
+  try { shared = !!(DeviceIdentity.sharedScreen && DeviceIdentity.sharedScreen() === true); } catch {}
+  let picked;
+  try { picked = SpokenAudio.explicitPerson(); } catch { picked = undefined; }
+  if (picked === 'none') return { as_household: true };
+  if (picked !== undefined && picked !== null) return { listener_person_id: picked };
+  return shared ? { as_household: true } : {};
+};
+
 /* Where an explicit "add to queue" lands: after the last song somebody
  * asked for, before the first Up next pick still to come. */
 const _upNextAddAt = (q, index) => {
@@ -1255,14 +1260,8 @@ const PlaybackProvider = ({ children }) => {
     if (!_upNextPaired()) return null;
     const gen = upNextGenRef.current;
     setUpNext({ loading: true, autoplay: autoplayPrefRef.current, mode: null, seed: null });
-    const body = { target: { kind: 'device', device_id: DeviceIdentity.id() }, start,
-                   autoplay: autoplayPrefRef.current };
-    let shared = false;
-    try { shared = !!(DeviceIdentity.sharedScreen && DeviceIdentity.sharedScreen() === true); } catch {}
-    const picked = SpokenAudio.explicitPerson();
-    if (picked === 'none') body.as_household = true;
-    else if (picked !== undefined) body.listener_person_id = picked;
-    else if (shared) body.as_household = true;
+    const body = Object.assign({ target: { kind: 'device', device_id: DeviceIdentity.id() }, start,
+                                 autoplay: autoplayPrefRef.current }, upNextListenerFields());
     return _upNextCall('POST', '/api/music/up-next/sessions', body).then((s) => {
       if (gen !== upNextGenRef.current || !s || !s.id) return;
       setUpNext(_upNextFrom(s));
@@ -1439,17 +1438,20 @@ const PlaybackProvider = ({ children }) => {
   const jumpTo = React.useCallback((i) => {
     if (i < 0 || i >= queue.length) return;
     if (target.kind === 'browser') { ListenLog.skip(); setIndex(i); loadAndPlay(queue[i]); return; }
-    // While casting: the room restarts on that row. The highlight moves only
-    // once it has (a row a room can't play is refused and moves nothing).
+    // While casting: the room plays that row now — a real jump within the
+    // room's own queue (POST /api/music/queue/{room}/play, Up next P4),
+    // found by its library song; a row the room's queue doesn't hold any
+    // more is cast again from there, as before. The highlight moves only
+    // once the room has moved (a row a room can't play moves nothing).
     // In line with the casts (castTo): it waits for one still on its way,
-    // and a "play here" that comes meanwhile wins — the re-cast is not sent,
+    // and a "play here" that comes meanwhile wins — the jump is not sent,
     // or the room that took it is paused again.
     const gen = playHereGenRef.current;
     const run = castChainRef.current.then(async () => {
       // No longer casting by its turn (a play here, a hand-back): nothing to do.
       const t = targetRef.current;
       if (t.kind !== 'room') return;
-      await castRoomJump(t.roomId, i);
+      if (!(await castRoomPlayEntry(t.roomId, queueRef.current[i]))) await castRoomJump(t.roomId, i);
       if (gen !== playHereGenRef.current) {
         await _roomControl('pause', t.roomId).catch((e) => console.warn(`pausing ${t.roomId} failed`, e));
         return;
@@ -1654,8 +1656,31 @@ const PlaybackProvider = ({ children }) => {
     const at = Math.floor(Number(startSec) || 0);
     if (at >= 2 && first && first.kind === 'library' && first.trackId === trackIds[0]) body.start_sec = at;
     if (paused) body.start_paused = true;
+    // Up next goes with the queue (P4): this browser's session carries on
+    // in the room (the room's server refills it from there); without one
+    // the room arms its own for what was cast.
+    const u = upNextRef.current;
+    if (u && u.id && !u.ended) body.up_next_session_id = u.id;
+    if (!autoplayPrefRef.current) body.autoplay = false;
+    Object.assign(body, upNextListenerFields());
     await apiPost('/api/music/play-tracks', body);
   }, []);
+  /* The room plays `item` now, if its queue holds that song: the entry
+   * after the one playing first, else the nearest before it. True when it
+   * jumped. */
+  const castRoomPlayEntry = async (roomId, item) => {
+    if (!item || item.trackId == null) return false;
+    let q = null;
+    try { q = await apiGet(`${roomQueuePath(roomId)}?device_id=${encodeURIComponent(DeviceIdentity.id())}`); }
+    catch { return false; }
+    const items = (q && q.items) || [];
+    const cur = items.findIndex((x) => x && x.playing);
+    const hits = items.map((x, j) => ({ x, j })).filter(({ x }) => x && x.track_id === item.trackId);
+    const hit = hits.find(({ j }) => j > cur) || hits[hits.length - 1];
+    if (!hit) return false;
+    await roomPlayEntry(roomId, hit.x.song_id);
+    return true;
+  };
   const castRoomJump = React.useCallback(async (roomId, i) => {
     // Re-cast from the chosen index onward so "play this queue item" works remotely.
     const items = queueRef.current.slice(i);
@@ -1778,6 +1803,16 @@ const PlaybackProvider = ({ children }) => {
     remoteNpRef.current = null;
     setRemoteNp(null);
     moveTarget({ kind: 'browser' });
+    // Up next comes home with the music: the session the room carried on
+    // moves back to this browser (P4). One the room no longer has (another
+    // play replaced it) is dropped here; the queue starts a new one when
+    // it is nearly over.
+    const un = upNextRef.current;
+    if (un && un.id) {
+      _upNextCall('POST', `/api/music/up-next/sessions/${un.id}/move`,
+        { target: { kind: 'device', device_id: DeviceIdentity.id() } })
+        .catch(() => { if (upNextRef.current && upNextRef.current.id === un.id) dropUpNext(); });
+    }
     const playing = !!(item && wasPlaying && leftPaused);
     if (item) {
       setIndex(follow.at);
@@ -2681,6 +2716,13 @@ const playerQueueCount = (queue, index) => (queue || []).filter((it, i) => !_upN
  * the home server" when it couldn't be reached, instead of picks that
  * won't come. */
 const PlayerUpNext = ({ p }) => {
+  // While casting, Up next is the room's: the picks its server adds as it
+  // plays, read from the room's own queue (P4).
+  if (p.target && p.target.kind === 'room' && p.target.roomId) return <RoomUpNext roomId={p.target.roomId}/>;
+  return <PlayerUpNextHere p={p}/>;
+};
+
+const PlayerUpNextHere = ({ p }) => {
   const [note, setNote] = React.useState('');
   const [busy, setBusy] = React.useState(null);      // the row whose "less like this" is on its way
   const u = p.upNext || null;
@@ -2691,7 +2733,6 @@ const PlayerUpNext = ({ p }) => {
   const { items: people } = useApiList(show ? '/api/people' : null,
     { eventTypes: ['people.last_seen.changed'], quiet: true });
   if (!show) return null;
-  const casting = !!(p.target && p.target.kind === 'room');
   const on = u ? !!u.autoplay : !!p.autoplay;
   const listMode = !!(u && u.mode === 'list');
   const listName = u && u.seed && u.seed.list ? u.seed.list.name : null;
@@ -2780,8 +2821,131 @@ const PlayerUpNext = ({ p }) => {
           ))}
         </div>
       )}
-      {casting && rows.length > 0 && (
-        <div className="mp-un-line">{p.target.roomId} plays these as they were sent; up next adds more while it plays here</div>
+      <div className="mp-q-note" role="status" aria-live="polite">{note}</div>
+    </section>
+  );
+};
+
+/* ── A room's "up next" section (P4) ────────────────────────────────────
+ * What the room's own Up next will play after what somebody asked for,
+ * read from the room's queue: each pick with why it was picked; tap one to
+ * play it now (a real jump); "less like this" (that artist is out of the
+ * mix) and remove. The head says what the mix is built from and holds the
+ * Autoplay switch. The player's queue while casting and a room's drawer
+ * (`limit`: its first few, with "open queue") show it; the Music page's
+ * Room queue tab draws the same rows inside its own list.
+ *
+ * No misleading controls: nothing at all when the room has no Up next;
+ * no switch and no "less like this" for a guest (a guest may remove, and
+ * jump, on a playing room). The queue is re-read when the room's song
+ * changes, every 10 s while shown (the server adds picks as it plays), and
+ * after every press. */
+const ROOM_UP_NEXT_POLL_MS = 10000;
+const RoomUpNext = ({ roomId, limit = null, onOpenQueue = null, send = null, className = '' }) => {
+  const [note, setNote] = React.useState('');
+  const [busy, setBusy] = React.useState(null);
+  const [gone, setGone] = React.useState(() => new Set());
+  const deviceId = DeviceIdentity.id();
+  const { data: q, refresh } = useApiObject(
+    roomId ? `${roomQueuePath(roomId)}?device_id=${encodeURIComponent(deviceId)}` : null,
+    { eventTypes: ['music.now_playing.changed'], quiet: true });
+  React.useEffect(() => {
+    if (!roomId) return undefined;
+    const t = setInterval(() => {
+      try { if (typeof document !== 'undefined' && document.hidden) return; } catch {}
+      refresh();
+    }, ROOM_UP_NEXT_POLL_MS);
+    return () => clearInterval(t);
+  }, [roomId]); // eslint-disable-line
+  // Songs taken out here leave the list at once; a fresh read of the queue
+  // (its entries changed) is the truth again.
+  const qKey = ((q && q.items) || []).map((x) => x && x.song_id).join(',');
+  React.useEffect(() => { setGone(new Set()); }, [qKey]);
+  if (!q || !q.session_id) return null;
+  const guest = !!q.guest;
+  const editable = q.editable !== false;
+  const post = send || apiPost;
+  const all = roomUpNextRows(q.items).filter(({ it }) => !gone.has(it.song_id));
+  const rows = limit ? all.slice(0, limit) : all;
+  const basis = roomUpNextBasis(q);
+  const line = roomUpNextLine(q, all);
+  const act = async (key, verb, fn) => {
+    setNote(''); setBusy(key);
+    try { await fn(); refresh(); }
+    catch (e) { if (!isAuthFailure(e)) setNote(`Couldn't ${verb}: ${apiErrorText(e)}`); }
+    finally { setBusy(null); }
+  };
+  const toggle = (on) => act('autoplay', 'change autoplay', () =>
+    apiPatch(`/api/music/up-next/sessions/${q.session_id}`, { autoplay: !!on }));
+  const playNow = (it) => act(it.song_id, 'play that', () => roomPlayEntry(roomId, it.song_id, post));
+  const remove = (it) => act(it.song_id, 'remove that', async () => {
+    await post(roomQueuePath(roomId, '/remove'), { song_ids: [it.song_id], device_id: deviceId });
+    setGone((g) => new Set([...g, it.song_id]));
+  });
+  const lessLike = (it) => act(it.song_id, 'change the mix', async () => {
+    const r = await apiPost(`/api/music/up-next/sessions/${q.session_id}/feedback`,
+      { seq: it.up_next_seq, kind: 'less_like_this' });
+    // The server takes that artist's picks out of the room's queue on its
+    // next look; they leave this list now.
+    const seqs = new Set((r && r.removed) || []);
+    const out = (q.items || []).filter((x) => x && seqs.has(x.up_next_seq) && !x.playing).map((x) => x.song_id);
+    setGone((g) => new Set([...g, ...out, it.song_id]));
+    const n = Math.max(0, out.length - 1);
+    setNote(`No more ${it.artist || 'of that'} in this mix${n ? ` (${n} more taken out)` : ''}.`);
+  });
+  return (
+    <section className={`mp-un${className ? ` ${className}` : ''}`} aria-label={`up next in ${roomId}`}>
+      <div className="mp-un-head">
+        <div className="mp-un-what">
+          <span className="mp-un-name">up next</span>
+          {basis && <span className="mp-un-basis">{basis}</span>}
+        </div>
+        {!guest && editable && (
+          <label className="mp-un-auto" title="keep playing similar songs when the queue ends">
+            <input type="checkbox" role="switch" checked={!!q.autoplay} aria-checked={!!q.autoplay}
+                   disabled={busy === 'autoplay'}
+                   aria-label={`autoplay in ${roomId}: keep playing similar songs when the queue ends`}
+                   onChange={(e) => toggle(!!e.target.checked)}/>
+            <span>autoplay</span>
+          </label>
+        )}
+      </div>
+      {line && <div className="mp-un-line" role="status">{line}</div>}
+      {rows.length > 0 && (
+        <div className="mp-q-list mp-un-list">
+          {rows.map(({ it }) => (
+            <div key={it.song_id} className="mp-q-row mp-un-row">
+              <div className="mp-q-num mono" aria-hidden="true"><Icon name="sparkles" size={12}/></div>
+              <div className="mp-q-main" role="button" tabIndex={0} title={`play now in ${roomId}`}
+                   onClick={() => editable && playNow(it)}
+                   onKeyDown={(e) => { if (editable && (e.key === 'Enter' || e.key === ' ')) { if (e.preventDefault) e.preventDefault(); playNow(it); } }}>
+                <div className="mp-q-title">{it.title || 'unknown'}</div>
+                <div className="mp-un-sub">
+                  <span className="mp-q-sub mono">{it.artist || '—'}</span>
+                  {it.reason_label && <span className="mp-un-why">{it.reason_label}</span>}
+                </div>
+              </div>
+              {editable && (
+                <div className="mp-un-acts">
+                  {!guest && (
+                    <IconButton name="thumbs-down" onClick={() => lessLike(it)} disabled={busy === it.song_id}
+                                title={`less like this: no more ${it.artist || 'of this artist'} in this mix`}
+                                aria-label={`less like this: ${it.artist || it.title}`}/>
+                  )}
+                  <IconButton name="x" onClick={() => remove(it)} disabled={busy === it.song_id}
+                              title="remove" aria-label={`remove ${it.title || 'this song'}`}/>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {onOpenQueue && (
+        <div className="mp-un-line">
+          <a href="#music/queue" onClick={(e) => { if (e.preventDefault) e.preventDefault(); onOpenQueue(); }}>
+            open {roomId}'s queue{all.length > rows.length ? ` · ${all.length - rows.length} more` : ''}
+          </a>
+        </div>
       )}
       <div className="mp-q-note" role="status" aria-live="polite">{note}</div>
     </section>
@@ -2791,16 +2955,24 @@ const PlayerUpNext = ({ p }) => {
 /* "Save queue as playlist" — the library tracks in the queue, in order.
  * A secondary control under the queue's search: a button that opens a small
  * name prompt (2026-11-12; it used to take the place of the search box). */
-const PlayerQueueSave = ({ queue }) => {
+const PlayerQueueSave = ({ queue, roomId = null }) => {
   const [open, setOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [name, setName] = React.useState('');
   const [note, setNote] = React.useState('');
   const trackIds = queue.filter((it) => it.kind === 'library' && it.trackId != null).map((it) => it.trackId);
   const saveAsPlaylist = async () => {
-    if (!trackIds.length || !name.trim() || saving) return;
+    if ((!roomId && !trackIds.length) || !name.trim() || saving) return;
     setSaving(true); setNote('');
     try {
+      if (roomId) {
+        // While casting: the room's own queue, as the room holds it (P4).
+        const r = await apiPost(roomQueuePath(roomId, '/save-playlist'),
+          { name: name.trim(), device_id: DeviceIdentity.id() });
+        setNote(roomSaveNote(r, name.trim()));
+        setName(''); setSaving(false); setOpen(false);
+        return;
+      }
       const pl = await apiPost('/api/playlists', { name: name.trim() });
       for (const tid of trackIds) {
         try { await apiPost(`/api/playlists/${pl.id}/tracks`, { track_id: tid }); } catch {}
@@ -2818,8 +2990,9 @@ const PlayerQueueSave = ({ queue }) => {
     return (
       <div className="mp-q-saverow">
         <Button icon="save" onClick={() => { setOpen(true); setNote(''); }}
-                disabled={!trackIds.length}
-                title={trackIds.length ? 'save this queue as a playlist' : 'no library songs in the queue to save'}>
+                disabled={!roomId && !trackIds.length}
+                title={roomId ? `save ${roomId}'s queue as a playlist`
+                  : trackIds.length ? 'save this queue as a playlist' : 'no library songs in the queue to save'}>
           save as playlist
         </Button>
         {note && <span className="mp-q-note" role="status">{note}</span>}
@@ -2871,8 +3044,9 @@ const _QUEUE_GENRE_TAKE = 25;   // songs a genre row adds, shuffled
  * Combobox + listbox; Enter adds the highlighted row, Shift+Enter plays it
  * next, Up/Down move, Esc clears. While casting, the panel still shows the
  * queue this browser keeps for the room, and an add goes to both it and the
- * room's own queue (POST /api/music/queue/{room}/add); "play next" has no
- * room counterpart, so it is not offered then. */
+ * room's own queue (POST /api/music/queue/{room}/add): "add to queue"
+ * lands after what was asked for and before the room's Up next picks,
+ * "play next" right after the song playing there (`where`, P4). */
 const PlayerQueueAdd = ({ p }) => {
   const [prompt] = React.useState(_queueAskPrompt);
   const [q, setQ] = React.useState('');
@@ -2927,24 +3101,25 @@ const PlayerQueueAdd = ({ p }) => {
       const tracks = await tracksOf(row);
       if (!tracks.length) { setStatus(`Nothing to add from ${label(row)}.`); return; }
       const items = tracks.map(itemFromTrack);
-      if (next && !casting) {
+      if (next) {
         for (let i = items.length - 1; i >= 0; i--) p.playNext(items[i]);
       } else {
         p.enqueue(items);
-        if (casting) {
-          try {
-            await apiPost(`/api/music/queue/${encodeURIComponent(p.target.roomId)}/add`,
-              { track_ids: tracks.map((t) => t.id), device_id: DeviceIdentity.id() });
-          } catch (e) {
-            if (!isAuthFailure(e)) {
-              setStatus(`Added "${label(row)}" here, but ${p.target.roomId} didn't take it: ${apiErrorText(e)}`);
-            }
-            return;
+      }
+      if (casting) {
+        try {
+          await apiPost(roomQueuePath(p.target.roomId, '/add'),
+            { track_ids: tracks.map((t) => t.id), device_id: DeviceIdentity.id(), where: next ? 'next' : 'end' });
+        } catch (e) {
+          if (!isAuthFailure(e)) {
+            setStatus(`Added "${label(row)}" here, but ${p.target.roomId} didn't take it: ${apiErrorText(e)}`);
           }
+          return;
         }
       }
       const n = items.length;
-      setStatus(`${next && !casting ? 'Playing next' : 'Added'}: ${label(row)}${n > 1 ? ` (${n} songs)` : ''}`);
+      const where = casting ? ` in ${p.target.roomId}` : '';
+      setStatus(`${next ? 'Playing next' : 'Added'}${where}: ${label(row)}${n > 1 ? ` (${n} songs)` : ''}`);
     } catch (e) {
       if (!isAuthFailure(e)) setStatus(`Couldn't add ${label(row)}: ${apiErrorText(e)}`);
     }
@@ -2993,10 +3168,9 @@ const PlayerQueueAdd = ({ p }) => {
                   </>
                 )}
               </div>
-              {!casting && (
-                <IconButton name="corner-down-right" tabIndex={-1} onClick={() => add(row, true)}
-                            title="play next" aria-label={`play ${label(row)} next`}/>
-              )}
+              <IconButton name="corner-down-right" tabIndex={-1} onClick={() => add(row, true)}
+                          title={casting ? `play next in ${p.target.roomId}` : 'play next'}
+                          aria-label={`play ${label(row)} next`}/>
               <IconButton name="list-plus" tabIndex={-1} onClick={() => add(row, false)}
                           title="add to queue" aria-label={`add ${label(row)} to the queue`}/>
             </div>
@@ -3009,7 +3183,7 @@ const PlayerQueueAdd = ({ p }) => {
       <div className="mp-q-note" role="status" aria-live="polite">
         {status || (busy && asking ? 'searching…' : '')}
       </div>
-      <PlayerQueueSave queue={p.queue}/>
+      <PlayerQueueSave queue={p.queue} roomId={casting ? p.target.roomId : null}/>
     </div>
   );
 };
@@ -3160,5 +3334,7 @@ Object.assign(window, {
   resolveSourceStreamUrl,
   playerUrls, OfflineCache, SpokenAudio,
   CoverTile, EQ_BANDS, EQ_LABELS, EQ_MIN_DB, EQ_MAX_DB,
-  ListenLog, PlayerUpNext, playerQueueCount, upNextBasis,
+  ListenLog, PlayerUpNext, playerQueueCount,
+  // A room's queue and its Up next (P4): music.jsx, satellites.jsx.
+  RoomUpNext, PlayerQueueSave, upNextListenerFields,
 });

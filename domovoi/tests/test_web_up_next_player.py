@@ -606,7 +606,9 @@ def test_the_one_line_states(driven) -> None:
     assert driven["sec_loading"]["line"] == ["finding songs like this one…"]
     assert driven["sec_waiting"]["line"] == ["similar songs join here when the queue is nearly over"]
     assert driven["sec_waiting"]["forSel"] is None          # no session to follow yet
-    assert any("kitchen plays these as they were sent" in t for t in driven["sec_casting"]["line"])
+    # While casting, the section is the ROOM's own (P4, test_web_up_next_rooms.py):
+    # a room with no Up next shows none, never this browser's copy.
+    assert driven["sec_casting"]["section"] is False
 
 
 def test_no_section_where_it_would_mislead(driven) -> None:

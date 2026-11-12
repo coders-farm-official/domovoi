@@ -276,6 +276,9 @@ class MPDConnection:
     async def pause(self, state: Any) -> None:
         await self._nothing("pause", state)
 
+    async def playid(self, song_id: Any) -> None:
+        await self._nothing("playid", song_id)
+
     async def play(self, pos: Any = None) -> None:
         await self._nothing("play", *(() if pos is None else (pos,)))
 

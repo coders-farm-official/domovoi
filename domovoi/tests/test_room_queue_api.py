@@ -157,6 +157,7 @@ def _resolved_endpoint(method: str, path: str):
         ("remove", "admin_music_queue_remove"),
         ("move", "admin_music_queue_move"),
         ("clear", "admin_music_queue_clear"),
+        ("play", "admin_music_queue_play"),
     ],
 )
 def test_queue_post_routes_are_not_captured_by_the_action_matcher(
