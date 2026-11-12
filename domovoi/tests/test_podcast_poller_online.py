@@ -89,6 +89,7 @@ async def test_a_tick_does_nothing_with_internet_access_turned_off(monkeypatch) 
     with egress.override_policy("never"):
         assert await poller.PodcastFeedPoller().tick() == {
             "polled": 0, "new": 0, "downloaded": 0, "evicted": 0,
+            "failed": 0, "failures": [],
         }
 
 

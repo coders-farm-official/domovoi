@@ -27,8 +27,9 @@ autodiscovery link yields an empty list, never an exception to the caller.
 
 Both fetchers go through ``domovoi.net_safety``: a feed or probe URL must
 be http(s) and must not resolve into the house's own address space, and
-every redirect hop is re-checked. The feed body is fetched here (capped)
-and handed to feedparser as bytes — feedparser would otherwise open the
+every redirect hop is re-checked. The feed body is fetched here (at most
+``MAX_FEED_BYTES``; a longer feed is cut after its last complete item,
+newest first, by ``domovoi.feed_prefix``) and handed to feedparser as bytes — feedparser would otherwise open the
 URL itself, and it accepts local paths and other schemes.
 
 Testability: ``parse_feed`` and ``_probe_page_for_feed_urls`` are
@@ -47,7 +48,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from domovoi import net_safety
+from domovoi import feed_prefix, net_safety
 from domovoi.clients.searxng import get_searxng_client
 from domovoi.config import settings
 
@@ -167,10 +168,15 @@ def _parse_feed_blocking(url: str) -> tuple[str | None, list[FeedArticle]]:
         max_bytes=MAX_FEED_BYTES,
         timeout=15.0,
         headers={"User-Agent": "Domovoi-news/1.0"},
+        truncate=True,
     )
     if result.status_code >= 400:
         raise RuntimeError(f"feed returned {result.status_code}")
-    parsed = feedparser.parse(result.content)
+    content = result.content
+    if result.truncated:
+        # Raises when not one article fits: no articles, by contract.
+        content = feed_prefix.cut_to_last_item(content)
+    parsed = feedparser.parse(content)
     feed = getattr(parsed, "feed", {}) or {}
     source = feed.get("title") if hasattr(feed, "get") else getattr(feed, "title", None)
 

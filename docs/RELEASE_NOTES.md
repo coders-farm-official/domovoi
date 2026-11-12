@@ -30,6 +30,30 @@ Satellites now try the name the server tells them first, then
 `domovoi.local`; they still check the server's key wherever a name leads.
 A name is never proof of identity.
 
+## 2026-11-12 — big podcast feeds are read, and "poll now" says which shows failed
+
+**A podcast whose feed is larger than 8 MB (a daily show with its whole
+back catalogue can be 30 MB) now polls.** Before, such a show downloaded
+nothing and kept its feed address as its title, and "poll now" said
+nothing. Now the server reads the first 8 MB of the feed, cuts it after
+the last whole episode and keeps up to its 200 newest episodes; older
+ones in the feed are not listed. Feeds list the newest episode first;
+the rare big feed that lists the oldest first gets its oldest episodes
+recorded instead, and the server log says so.
+
+**"Poll now" says which shows couldn't be read and why,** for example
+"1 show couldn't be read: Example Show — feed too large" (or "feed not
+found", "couldn't reach the feed", "not a podcast feed"). `POST
+/api/podcasts/poll` adds `failed` and `failures` to its answer; the four
+counts are unchanged, so older apps keep working.
+
+**A feed that hasn't changed isn't downloaded again:** the server asks
+with the feed's last ETag / Last-Modified and skips it on a "not
+modified" answer. This is remembered in memory, so the first poll after
+a restart reads every feed in full.
+
+News feeds larger than 8 MB are read the same way (newest articles).
+
 ## 2026-11-11 — a room's Health moved to its Settings tab
 
 **In a room's drawer, the Health section (wi-fi, memory, cpu, boot

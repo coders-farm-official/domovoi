@@ -476,11 +476,36 @@ async def _itunes_lookup(name: str) -> tuple[Optional[str], Optional[str], Optio
 
 
 # ─── Manual poll trigger ────────────────────────────────────────────────
-@router.post("/poll", dependencies=[Depends(require_device)])
-async def poll_now() -> dict[str, int]:
+class PollFailure(BaseModel):
+    """One show whose feed couldn't be read on this pass."""
+
+    subscription_id: int
+    title: str
+    # too_large | not_found | http_error | not_a_feed | unreachable |
+    # refused | error
+    reason: str
+    # The reason in plain words, for a toast ("feed too large").
+    message: str
+
+
+class PollResult(BaseModel):
+    polled: int = 0
+    new: int = 0
+    downloaded: int = 0
+    evicted: int = 0
+    # Added 2026-11-12: older clients read only the four counts above.
+    failed: int = 0
+    failures: list[PollFailure] = Field(default_factory=list)
+
+
+@router.post("/poll", dependencies=[Depends(require_device)], response_model=PollResult)
+async def poll_now() -> dict[str, Any]:
     """Run one feed-poll + download + keep-N pass immediately (network).
     The web process runs the poller functions directly against the shared DB
     — the same code the background worker ticks.
+
+    The answer says which shows couldn't be read (``failures``), so a
+    "poll now" that read nothing isn't silent.
 
     Device tier: it makes the server fetch every subscribed feed now."""
     from domovoi.workers.podcast_feed_poller import PodcastFeedPoller

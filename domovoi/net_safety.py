@@ -781,6 +781,13 @@ class FetchResult:
     status_code: int
     content: bytes
     content_type: str | None = None
+    # ``truncate=True`` only: the body went on past ``max_bytes`` and
+    # ``content`` is its first ``max_bytes`` bytes.
+    truncated: bool = False
+    # The cache validators the answer carried, for a conditional GET next
+    # time (If-None-Match / If-Modified-Since).
+    etag: str | None = None
+    last_modified: str | None = None
 
 
 def _declared_too_large(response: Any, max_bytes: int) -> bool:
@@ -799,31 +806,42 @@ async def fetch_bytes(
     headers: dict[str, str] | None = None,
     client: Any | None = None,
     chunk_size: int = 65536,
+    truncate: bool = False,
 ) -> FetchResult:
     """GET ``url`` through :func:`open_stream` and read at most
     ``max_bytes`` of body. Raises :class:`ResponseTooLarge` the moment the
     cap is exceeded (declared or observed); the caller decides what an
     HTTP error status means. A ``client`` may be supplied (tests pass one
-    with a mock transport); otherwise a fresh one is used and closed."""
+    with a mock transport); otherwise a fresh one is used and closed.
+
+    ``truncate=True`` keeps the first ``max_bytes`` bytes of a longer body
+    instead of raising (``FetchResult.truncated`` says so) and stops
+    reading there, for a caller that can use a prefix (a feed, newest
+    items first). The URL and redirect checks are the same either way.
+
+    The request asks for gzip; ``max_bytes`` counts DECODED bytes, and a
+    gzip or deflate body is inflated here a bounded step at a time
+    (:class:`_CappedBody`), so a small compressed body that inflates to
+    gigabytes stops at the cap without ever being held whole."""
     import httpx
 
     own = client is None
     if own:
         client = httpx.AsyncClient(timeout=timeout)
     try:
-        response = await open_stream(client, url, headers=headers)
+        response = await open_stream(client, url, headers=_with_gzip(headers))
         try:
-            if _declared_too_large(response, max_bytes):
+            if not truncate and _declared_too_large(response, max_bytes):
                 raise ResponseTooLarge(str(response.url), max_bytes)
-            content = await _read_capped_async(response, max_bytes, chunk_size)
+            body = _CappedBody(response, max_bytes, truncate)
+            chunks = response.aiter_raw(chunk_size) if body.raw else response.aiter_bytes(chunk_size)
+            async for chunk in chunks:
+                if body.add(chunk):
+                    break
+            content, truncated = body.finish()
         finally:
             await response.aclose()
-        return FetchResult(
-            url=str(response.url),
-            status_code=response.status_code,
-            content=content,
-            content_type=response.headers.get("content-type"),
-        )
+        return _result(response, content, truncated)
     finally:
         if own:
             await client.aclose()
@@ -837,44 +855,131 @@ def fetch_bytes_sync(
     headers: dict[str, str] | None = None,
     client: Any | None = None,
     chunk_size: int = 65536,
+    truncate: bool = False,
 ) -> FetchResult:
     """Blocking twin of :func:`fetch_bytes` (for code already running in a
-    worker thread, such as the feedparser callers)."""
+    worker thread, such as the feedparser callers), ``truncate`` included."""
     import httpx
 
     own = client is None
     if own:
         client = httpx.Client(timeout=timeout)
     try:
-        response = open_stream_sync(client, url, headers=headers)
+        response = open_stream_sync(client, url, headers=_with_gzip(headers))
         try:
-            if _declared_too_large(response, max_bytes):
+            if not truncate and _declared_too_large(response, max_bytes):
                 raise ResponseTooLarge(str(response.url), max_bytes)
-            buf = bytearray()
-            for chunk in response.iter_bytes(chunk_size):
-                buf.extend(chunk)
-                if len(buf) > max_bytes:
-                    raise ResponseTooLarge(str(response.url), max_bytes)
+            body = _CappedBody(response, max_bytes, truncate)
+            chunks = response.iter_raw(chunk_size) if body.raw else response.iter_bytes(chunk_size)
+            for chunk in chunks:
+                if body.add(chunk):
+                    # Stop reading: closing the response drops the rest.
+                    break
+            content, truncated = body.finish()
         finally:
             response.close()
-        return FetchResult(
-            url=str(response.url),
-            status_code=response.status_code,
-            content=bytes(buf),
-            content_type=response.headers.get("content-type"),
-        )
+        return _result(response, content, truncated)
     finally:
         if own:
             client.close()
 
 
-async def _read_capped_async(response: Any, max_bytes: int, chunk_size: int) -> bytes:
-    buf = bytearray()
-    async for chunk in response.aiter_bytes(chunk_size):
-        buf.extend(chunk)
-        if len(buf) > max_bytes:
-            raise ResponseTooLarge(str(response.url), max_bytes)
-    return bytes(buf)
+def _result(response: Any, content: bytes, truncated: bool) -> FetchResult:
+    return FetchResult(
+        url=str(response.url),
+        status_code=response.status_code,
+        content=content,
+        content_type=response.headers.get("content-type"),
+        truncated=truncated,
+        etag=response.headers.get("etag"),
+        last_modified=response.headers.get("last-modified"),
+    )
+
+
+def _with_gzip(headers: dict[str, str] | None) -> dict[str, str]:
+    """The caller's headers, asking for a gzip/deflate body unless they
+    already say what they accept."""
+    out = dict(headers or {})
+    if not any(k.lower() == "accept-encoding" for k in out):
+        out["Accept-Encoding"] = "gzip, deflate"
+    return out
+
+
+class _CappedBody:
+    """A response body collected decoded, never more than ``max_bytes`` + 1
+    bytes of it in memory.
+
+    gzip and deflate are inflated HERE, from the raw stream, with zlib's
+    ``max_length``: httpx's own decoder inflates a whole network chunk at
+    once, and 64 KB of a gzip bomb is ~64 MB decoded. Any other encoding
+    (the request asks only for gzip/deflate) goes through httpx's decoders
+    (``raw`` is False then). Over the cap: :class:`ResponseTooLarge`, or
+    with ``truncate`` the first ``max_bytes`` bytes and ``add`` answers
+    True (stop reading)."""
+
+    def __init__(self, response: Any, max_bytes: int, truncate: bool) -> None:
+        import zlib
+
+        self.url = str(response.url)
+        self.max_bytes = max_bytes
+        self.truncate = truncate
+        self.buf = bytearray()
+        self.truncated = False
+        encoding = (response.headers.get("content-encoding") or "").strip().lower()
+        self._deflate = encoding == "deflate"
+        self._started = False
+        if encoding in ("gzip", "x-gzip"):
+            self._z: Any = zlib.decompressobj(zlib.MAX_WBITS | 16)
+        elif self._deflate:
+            self._z = zlib.decompressobj()
+        else:
+            self._z = None
+        if getattr(response, "is_stream_consumed", False):
+            # Already read whole (a response built from bytes, as a mock
+            # transport answers): httpx decoded it; take it as it is.
+            self._z = None
+        self.raw = self._z is not None
+
+    def _take(self, piece: bytes) -> bool:
+        self.buf += piece
+        if len(self.buf) <= self.max_bytes:
+            return False
+        if not self.truncate:
+            raise ResponseTooLarge(self.url, self.max_bytes)
+        del self.buf[self.max_bytes:]
+        self.truncated = True
+        return True
+
+    def add(self, chunk: bytes) -> bool:
+        """Take one chunk; True once the cap is reached (``truncate``)."""
+        if self._z is None:
+            return self._take(chunk)
+        import zlib
+
+        import httpx
+
+        data = chunk
+        while data and not self._z.eof:
+            room = self.max_bytes + 1 - len(self.buf)
+            try:
+                piece = self._z.decompress(data, room)
+            except zlib.error as exc:
+                if self._deflate and not self._started:
+                    # "deflate" sent as a raw stream, without the zlib header.
+                    self._z = zlib.decompressobj(-zlib.MAX_WBITS)
+                    self._started = True
+                    continue
+                raise httpx.DecodingError(str(exc)) from exc
+            self._started = True
+            if self._take(piece):
+                return True
+            data = self._z.unconsumed_tail
+        return False
+
+    def finish(self) -> tuple[bytes, bool]:
+        if self._z is not None and not self.truncated:
+            self._take(self._z.flush(self.max_bytes + 1 - len(self.buf)))
+        return bytes(self.buf), self.truncated
 
 
 async def iter_capped(response: Any, max_bytes: int, chunk_size: int = 65536):
