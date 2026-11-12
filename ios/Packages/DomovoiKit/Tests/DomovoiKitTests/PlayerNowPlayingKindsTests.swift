@@ -11,6 +11,7 @@ import XCTest
 /// ``PlayerNowPlayingInfo/fields()`` and ``PlayerRemoteCommands/enabled(target:current:canNext:canPrevious:hasPreviousItem:)``.
 ///
 /// No array is indexed here: a Swift trap would take the whole run with it.
+@MainActor
 final class PlayerNowPlayingKindsTests: XCTestCase {
 
     private static let book = PlayerItem.fromBook(
