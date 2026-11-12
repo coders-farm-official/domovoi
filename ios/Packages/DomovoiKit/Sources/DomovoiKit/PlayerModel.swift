@@ -994,7 +994,8 @@ public final class PlayerModel {
         }
         nowPlaying.publish(info)
         nowPlaying.setEnabled(PlayerRemoteCommands.enabled(
-            target: target, current: item, canNext: canNext, canPrevious: canPrevious
+            target: target, current: item, canNext: canNext, canPrevious: canPrevious,
+            hasPreviousItem: index > 0
         ))
         nowPlaying.attachArtwork(path: info.artworkPath, absolute: absoluteForArtwork())
     }
@@ -1015,8 +1016,9 @@ public final class PlayerModel {
         case .nextTrack: next()
         case .previousTrack: previous()
         case .changePlaybackPosition: if let position { seek(to: position) }
-        case .skipForward: seek(by: 15)
-        case .skipBackward: seek(by: -15)
+        // Back 15 s, forward 30 s (`SessionMedia.kt:26-29`).
+        case .skipForward: seek(by: PlayerRemoteCommands.skipForwardSec)
+        case .skipBackward: seek(by: -PlayerRemoteCommands.skipBackSec)
         case .changePlaybackRate: break  // the rate comes from the app's own control
         }
     }
