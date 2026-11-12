@@ -19,6 +19,10 @@ Condensed band map — core handlers occupy exactly the design §4.2 table:
     170 clock
     175 calendar         after clock ("what's tomorrow" is the date); before
                          library's "do i have X" ("anything on friday")
+    178 lists            "add X to my to-do list", "what's on the shopping list";
+                         every pattern ends on "list" (or "cross off ..."), so
+                         playlists/queue/library are never poached; before
+                         documents' "read me the X"
     180 repeat           clusters with double_check
     190 double_check     owns "verify"/"are you sure"
     200 dropin           immediately before intercom
@@ -68,6 +72,7 @@ from domovoi.handlers.homelab import HomelabHandler
 from domovoi.handlers.household_calendar import CalendarHandler
 from domovoi.handlers.intercom import IntercomHandler
 from domovoi.handlers.library import LibraryHandler
+from domovoi.handlers.lists import ListsHandler
 from domovoi.handlers.memory import MemoryHandler
 from domovoi.handlers.music import MusicHandler
 from domovoi.handlers.music_alias import MusicAliasHandler
@@ -99,6 +104,7 @@ _CORE_HANDLERS: list[Handler] = [
     HomelabHandler(),
     IntercomHandler(),
     LibraryHandler(),
+    ListsHandler(),
     MemoryHandler(),
     MusicHandler(),
     MusicAliasHandler(),
@@ -165,6 +171,7 @@ __all__ = [
     "HomelabHandler",
     "IntercomHandler",
     "LibraryHandler",
+    "ListsHandler",
     "MemoryHandler",
     "MusicAliasHandler",
     "MusicHandler",

@@ -453,6 +453,9 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
     ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions, with the person who spoke",
     ("web", "/api/calendar/events"): "the household's appointments: titles, places, descriptions",
     ("web", "/api/calendar/events/{event_id}"): "one appointment",
+    # Household lists (V048, 2026-11-11): what the house needs to buy and do.
+    ("web", "/api/lists"): "the household's lists: names and how many things are on each",
+    ("web", "/api/lists/{list_id}"): "one list's items, with who added each and in which room",
     # REV-11 (2026-10-08): the siblings the first pass left open, each of
     # which still told a LAN poller when a room was in use.
     ("web", "/api/satellites/{room_id}/recently-played"): (

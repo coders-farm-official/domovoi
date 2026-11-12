@@ -90,6 +90,15 @@ DEVICE_TIER = [
     ("POST", "/api/calendar/events"),
     ("PATCH", "/api/calendar/events/{event_id}"),
     ("DELETE", "/api/calendar/events/{event_id}"),
+    # lists (V048): the household's to-do, shopping and named lists
+    ("POST", "/api/lists"),
+    ("PATCH", "/api/lists/{list_id}"),
+    ("DELETE", "/api/lists/{list_id}"),
+    ("POST", "/api/lists/{list_id}/items"),
+    ("PATCH", "/api/lists/{list_id}/items/{item_id}"),
+    ("DELETE", "/api/lists/{list_id}/items/{item_id}"),
+    ("PUT", "/api/lists/{list_id}/items/order"),
+    ("POST", "/api/lists/{list_id}/clear-done"),
     # version: a check only fetches and reports
     ("POST", "/api/config/version/check"),
     # playlists

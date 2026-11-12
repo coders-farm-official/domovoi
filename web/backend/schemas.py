@@ -869,6 +869,73 @@ class CalendarEventPatch(BaseModel):
     description: str | None = None
 
 
+# ─── Lists (V048, web/backend/api/lists.py) ───────────────────────────────
+
+
+class HouseholdList(BaseModel):
+    id: int
+    name: str
+    position: int
+    open_count: int
+    done_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class HouseholdListItem(BaseModel):
+    id: int
+    list_id: int
+    text: str
+    done: bool
+    done_at: datetime | None = None
+    position: int
+    # Who added it, when known: a recognised voice (its person's name), or
+    # the room a voice add came from. Both None for the dashboard and apps.
+    added_by_person_id: int | None = None
+    added_by_name: str | None = None
+    added_by_room: str | None = None
+    added_via: Literal["voice", "screen"]
+    created_at: datetime
+    updated_at: datetime
+
+
+class HouseholdListDetail(BaseModel):
+    list: HouseholdList
+    items: list[HouseholdListItem]
+
+
+class ListCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class ListPatch(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class ListItemCreate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=200)
+
+
+class ListItemPatch(BaseModel):
+    text: str | None = Field(default=None, min_length=1, max_length=200)
+    done: bool | None = None
+
+
+class ListItemAdded(BaseModel):
+    item: HouseholdListItem
+    # added: a new item; reopened: the same item was crossed off and is
+    # open again; already: it is already open on the list (nothing changed).
+    outcome: Literal["added", "reopened", "already"]
+
+
+class ListItemOrder(BaseModel):
+    item_ids: list[int] = Field(..., max_length=500)
+
+
+class ListsCleared(BaseModel):
+    removed: int
+
+
 # ─── Action requests ──────────────────────────────────────────────────────
 
 

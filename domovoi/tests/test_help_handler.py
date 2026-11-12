@@ -76,7 +76,7 @@ def test_the_tool_is_never_offered() -> None:
 def test_the_answer_is_the_live_feature_list() -> None:
     text_ = capabilities_summary()
     assert text_.startswith("Here are a few things I can do.")
-    for name in ("timer", "reminder", "music", "calendar", "news"):
+    for name in ("timer", "reminder", "music", "calendar", "lists", "news"):
         h = HANDLER_BY_NAME[name]
         assert f'{h.display.label}: try "{h.example_phrases[0]}".' in text_, name
     assert text_.endswith("The rest is in the manual, on the dashboard.")

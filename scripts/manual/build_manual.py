@@ -51,6 +51,9 @@ ROUTES: dict[str, dict] = {
     "videos": {"dashboard": "#videos", "app": {"screen": "Videos"}},
     "news": {"dashboard": "#news", "app": {"screen": "News"}},
     "calendar": {"dashboard": "#calendar", "app": {"screen": "Calendar"}},
+    # The phone apps have no Lists screen yet (design-notes hand-off): the
+    # app opens the dashboard's Lists page until they do.
+    "lists": {"dashboard": "#lists", "app": {"dashboard": True}},
     "files": {"dashboard": "#files", "app": {"screen": "Files"}},
     "plugins": {"dashboard": "#plugins", "app": {"dashboard": True}},
     # Settings' sections (web settings.jsx SETTINGS_SECTIONS, the app's
@@ -94,7 +97,7 @@ TOPICS: list[dict] = [
      "keywords": ["document", "pdf", "word", "summary", "letter", "bill", "draft", "write", "read aloud", "print"]},
     # The id predates the title (the clients' topic icons key on it).
     {"id": "chat-files-calendar", "title": "Files, printing and calendar", "subtitle": "your household's files",
-     "keywords": ["files", "photos", "documents", "calendar", "print", "scan"]},
+     "keywords": ["files", "photos", "documents", "calendar", "print", "scan", "lists", "to-do", "shopping"]},
     {"id": "your-phone", "title": "Your phone", "subtitle": "the Domovoi app",
      "keywords": ["android", "app", "phone", "tablet", "mobile"]},
     {"id": "rooms-and-devices", "title": "Rooms and devices", "subtitle": "the speakers that listen",
@@ -150,6 +153,7 @@ PIECES: dict[str, tuple] = {
     "Documents and spreadsheets": ("documents", "write, edit and share, together", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "editor", "word", "docx", "pdf", "fonts", "photo", "picture", "caption", "crop", "co-editing", "together", "version history", "restore", "read-only"], {}),
     "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page", "print a draft", "print it"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
+    "Lists": ("lists", "to-do, shopping, any list", ["list", "lists", "to-do", "todo", "to do", "shopping", "groceries", "grocery", "cross off", "check off", "tick off"], {}),
     # Your phone
     "Get the app and connect": ("connect", "from your own server", ["install", "apk", "connect", "pair", "household token", "server", "qr"], {}),
     "Music on the phone": ("phone-music", "here or in a room, saved offline", ["offline", "download", "save to device", "player", "your device", "add folder"], {}),
@@ -281,6 +285,11 @@ PHRASES: dict[str, tuple] = {
     "what's on my calendar today": ("calendar", "fast", {}),
     "what's next on my calendar": ("calendar", "fast", {}),
     "do I have anything on Friday": ("calendar", "fast", {}),
+    "add milk to the shopping list": ("lists", "fast", {}),
+    "what's on my to-do list": ("lists", "fast", {}),
+    "cross milk off the shopping list": ("lists", "fast", {}),
+    "clear the shopping list": ("lists", "fast", {}),
+    "what lists do I have": ("lists", "fast", {}),
     "my name is Sarah": ("voice_profile", "fast", {}),
     "who am I": ("voice_profile", "fast", {}),
     "forget me": ("voice_profile", "fast", {}),

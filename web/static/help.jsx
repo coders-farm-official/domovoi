@@ -53,7 +53,7 @@ const helpPageName = () => {
   const parts = String(typeof resolveRoute === 'function' ? resolveRoute(raw) : raw).split('/');
   const route = parts[0] || 'home';
   const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks',
-    videos: 'Videos', news: 'News', people: 'People', calendar: 'Calendar',
+    videos: 'Videos', news: 'News', people: 'People', calendar: 'Calendar', lists: 'Lists',
     plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
   if (labels[route]) {
     const tab = parts[1];

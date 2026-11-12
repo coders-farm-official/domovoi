@@ -96,6 +96,7 @@
   <script type="text/babel" data-presets="react" src="satellite_media.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellites.jsx"></script>
   <script type="text/babel" data-presets="react" src="calendar.jsx"></script>
+  <script type="text/babel" data-presets="react" src="lists.jsx"></script>
   <script type="text/babel" data-presets="react" src="plugins.jsx"></script>
   <!-- Printers and scanners: the Settings tab (PrintersPanel), the Print
        dialog and the Scan sheet that Files / Documents open. Before
@@ -162,6 +163,7 @@
       // no plugin can take the old address.
       satellites: () => window.SettingsPage,
       calendar: () => window.CalendarPage,
+      lists: () => window.ListsPage,
       files: () => window.FilesPage,
       plugins: () => window.PluginsPage,
       settings: () => window.SettingsPage,

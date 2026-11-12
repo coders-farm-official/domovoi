@@ -52,7 +52,7 @@ _HELP_RE = re.compile(
 
 # The areas the answer names, in order, when the handler is registered and
 # has a phrase. A plugin's handlers follow (up to _MAX_PLUGINS of them).
-_CORE_AREAS = ("timer", "reminder", "music", "calendar", "news")
+_CORE_AREAS = ("timer", "reminder", "music", "calendar", "lists", "news")
 _MAX_PLUGINS = 2
 
 

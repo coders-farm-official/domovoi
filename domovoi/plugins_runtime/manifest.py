@@ -72,7 +72,7 @@ RESERVED_SLUGS = frozenset(
 CORE_WEB_ROUTES = frozenset(
     {
         "home", "chat", "music", "podcasts", "audiobooks", "videos", "news",
-        "people", "satellites", "calendar", "files", "plugins", "settings",
+        "people", "satellites", "calendar", "lists", "files", "plugins", "settings",
         "manual", "containers",
     }
 )

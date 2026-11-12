@@ -236,6 +236,10 @@ TABLES_TO_TRUNCATE = [
     "collab_snapshots",
     "collab_updates",
     "collab_docs",
+    # Household lists (V048). The migration seeds To-do and Shopping; a
+    # test that needs them puts them back (test_lists_handler.seed_defaults).
+    "list_items",
+    "lists",
 ]
 
 
