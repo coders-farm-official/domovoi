@@ -343,8 +343,9 @@ async def get_session(session_id: str, request: Request) -> dict[str, Any]:
 
 @router.post("/sessions/{session_id}/next", dependencies=[Depends(require_device)])
 async def next_picks(session_id: str, body: NextIn, request: Request) -> dict[str, Any]:
-    """``{batch_no, picks, ended, removed}``. Asked again with the same
-    ``have_through_seq``, the same batch comes back."""
+    """``{batch_no, picks, ended, removed, mode}``. Asked again with the
+    same ``have_through_seq``, the same batch comes back. ``mode`` is the
+    session's now: a short list played out goes on as ``continue``."""
     async with session_scope() as s:
         st = await _load(s, request, session_id, lock=True)
         if st.sess.target_kind == "room":
@@ -356,12 +357,13 @@ async def next_picks(session_id: str, body: NextIn, request: Request) -> dict[st
             first_batch = ahead[0]["batch_no"]
             same = [p for p in ahead if p["batch_no"] == first_batch]
             return {"batch_no": first_batch, "picks": [_pick_json(p) for p in same],
-                    "ended": False, "removed": removed}
+                    "ended": False, "removed": removed, "mode": st.sess.mode}
         if st.ended_at is not None:
-            return {"batch_no": st.sess.batch_no, "picks": [], "ended": True, "removed": removed}
+            return {"batch_no": st.sess.batch_no, "picks": [], "ended": True, "removed": removed,
+                    "mode": st.sess.mode}
         batch_no, picks, ended = await _draw(s, st)
         return {"batch_no": batch_no, "picks": [_pick_json(p) for p in picks], "ended": ended,
-                "removed": removed}
+                "removed": removed, "mode": st.sess.mode}
 
 
 @router.post("/sessions/{session_id}/feedback", dependencies=[Depends(require_device)])

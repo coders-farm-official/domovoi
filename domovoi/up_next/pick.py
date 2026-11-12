@@ -58,11 +58,17 @@ drawn by weighted sampling without replacement (Efraimidis–Spirakis keys,
 :func:`es_order`), 20% uniformly from the rest of the pool, so one corner
 of the list can't take over. The remaining pool is re-sampled at every
 refill, so the cycle drifts with what was listened to and still plays
-every track once. When the cycle is used up and autoplay is on, the next
-cycle reshuffles the whole list; the last 10% of the previous cycle can't
-take its first 10 places (:class:`~.model.ListCycle`). With autoplay off
-the session ends at the end of the list. A batch never holds one track
-twice (a short list gives short batches).
+every track once. When the cycle is used up and autoplay is on, a list of
+``list_repeat_min`` (50) tracks or more starts a new cycle that reshuffles
+the whole list; the last 10% of the previous cycle can't take its first
+10 places (:class:`~.model.ListCycle`). A shorter list (2 search results,
+an album) plays through once: :func:`list_used_up` then says so, and the
+engine carries the session on in **continue mode** (library mode seeded
+by what was just heard plus the list's tracks, the same as after a whole
+playlist played on purpose), so its picks carry their own reasons ("same
+artist", "wildcard" …) and a short list never ping-pongs. With autoplay
+off the session ends at the end of the list, whatever its size. A batch
+never holds one track twice (a short list gives short batches).
 
 **The queue** (:func:`place_explicit` and friends): explicit items ("play
 next", "add to queue") always sit before every auto pick still to come.
@@ -571,6 +577,38 @@ def start_cycle(clicked: int | None) -> ListCycle:
     return ListCycle(cycle=0, done=(clicked,) if clicked is not None else (), tail=())
 
 
+def _list_pool(members: Sequence[Track], taste: Taste) -> list[Track]:
+    """The list's playable tracks, each once, in list order."""
+    seen: set[int] = set()
+    out: list[Track] = []
+    for t in members:
+        if t.id not in seen and not taste.excludes(t):
+            seen.add(t.id)
+            out.append(t)
+    return out
+
+
+def list_repeats(size: int, config: EngineConfig = DEFAULT_CONFIG) -> bool:
+    """True when a list of ``size`` playable tracks starts a new cycle once
+    it is used up (``list_repeat_min`` or more); a shorter one plays once."""
+    return size >= config.list_repeat_min
+
+
+def list_used_up(
+    members: Sequence[Track], state: ListCycle, *, taste: Taste = Taste(),
+    config: EngineConfig = DEFAULT_CONFIG,
+) -> bool:
+    """True when a list too short to repeat has handed out every track it
+    has: the session goes on in the library (continue mode) if autoplay
+    is on. False for an empty list (nothing playable: :func:`list_batch`
+    ends it) and for a list long enough to reshuffle."""
+    pool = _list_pool(members, taste)
+    if not pool or list_repeats(len(pool), config):
+        return False
+    done = set(state.done)
+    return all(t.id in done for t in pool)
+
+
 def list_batch(
     *,
     n: int,
@@ -584,23 +622,24 @@ def list_batch(
     label: str = "from this list",
     seed_track_id: int | None = None,
     prev_keys: Sequence[str] = (),
+    repeat: bool | None = None,
     config: EngineConfig = DEFAULT_CONFIG,
 ) -> tuple[list[Pick], ListCycle, bool]:
     """A list-mode batch: ``(picks, the new cycle state, ended)``.
 
     ``members`` is the list as it is now (edits to a playlist count from
     the next refill), in list order. ``ended`` is True when the list is
-    done and autoplay is off, or nothing in it may be played.
+    done and autoplay is off, or nothing in it may be played. ``repeat``:
+    whether a used-up list starts a new cycle (None: :func:`list_repeats`
+    by its size); a list that doesn't stops at its end with ``ended``
+    False, and the caller goes on in the library (:func:`list_used_up`).
     """
     stats = stats or {}
-    seen: set[int] = set()
-    pool_all: list[Track] = []
-    for t in members:
-        if t.id not in seen and not taste.excludes(t):
-            seen.add(t.id)
-            pool_all.append(t)
+    pool_all = _list_pool(members, taste)
     if not pool_all or n <= 0:
         return [], state, not pool_all
+    if repeat is None:
+        repeat = list_repeats(len(pool_all), config)
     by_id = {t.id: t for t in pool_all}
     picks: list[Pick] = []
     batch_ids: set[int] = set()
@@ -614,6 +653,8 @@ def list_batch(
             if not autoplay:
                 ended = True
                 break
+            if not repeat:
+                break  # played through once; the library takes it from here
             k_tail = math.ceil(BOUNDARY_TAIL_SHARE * len(st.done)) if st.done else 0
             tail = tuple(i for i in st.done[len(st.done) - k_tail:] if i in by_id) if k_tail else ()
             st = ListCycle(cycle=st.cycle + 1, done=(), tail=tail)

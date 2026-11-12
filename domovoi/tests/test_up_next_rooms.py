@@ -291,6 +291,33 @@ async def test_a_list_keeps_itself_with_autoplay_off(clean, room) -> None:
 
 
 @requires_db
+async def test_a_small_list_plays_once_then_the_room_goes_on_in_the_library(clean, room) -> None:
+    # Two search results clicked in a room: the other one, then the library's
+    # mix when the queue runs low (never the two again), with its own reasons.
+    d = await _seed()
+    two = d["ids"][:2]
+    await _playing(room, [d["uri"][two[0]]])
+    sid = await rooms.start_from_request(
+        ROOM, track_id=two[0], context={"kind": "ids", "track_ids": two, "name": 'results for "nin"'},
+        person_id=None, autoplay=True, client=room)
+    first = await _picks(sid)
+    assert [p["track_id"] for p in first] == [two[1]] and first[0]["reason_code"] == "from_list"
+    did = await _look(room)                                # 1 left: refill
+    assert did["queued"] == 30
+    st = await _active()
+    assert st is not None and st.sess.mode == "continue"
+    later = [p for p in await _picks(sid) if p["batch_no"] > first[0]["batch_no"]]
+    assert len(later) == 30 and not {p["track_id"] for p in later} & set(two)
+    assert "from_list" not in {p["reason_code"] for p in later}
+    queue = await room.queue_list()
+    files = [e["file"] for e in queue]
+    assert files.count(d["uri"][two[0]]) == files.count(d["uri"][two[1]]) == 1
+    view = await rooms.queue_view(ROOM, [dict(song_id=e["id"], file=e["file"]) for e in queue])
+    assert view["up_next"]["mode"] == "continue"
+    assert view["up_next"]["seed"]["list"] == {"kind": "ids", "name": 'results for "nin"'}
+
+
+@requires_db
 async def test_picks_removed_or_taken_out_are_noted_and_leave_the_queue(clean, room) -> None:
     d = await _seed()
     sid = await _library_start(room, d)

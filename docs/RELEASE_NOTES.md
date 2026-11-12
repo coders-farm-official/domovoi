@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — A short list no longer repeats itself in Up next
+
+Click a song in a short list, such as two search results or a 10-song
+album, and Up next now plays the rest of that list once and then carries
+on with similar songs from the whole library (same artist, same era,
+same genre, played together, a few wildcards), each saying why it was
+picked. The queue's header changes from "shuffled from <list>" to
+"more like <list>" at that point. Before, it shuffled the same few songs
+over and over. A list of 50 songs or more still goes round again,
+reshuffled. With autoplay off, any list still stops at its last song.
+This works the same in the browser and in a room.
+
+API (docs/API_REFERENCE.md §3.5f): the answer of
+`POST /api/music/up-next/sessions/{id}/next` adds `mode`, and a session's
+`mode` can move from `list` to `continue` while it runs.
+
 ## 2026-11-12 — A playlist played in a room is the room's whole queue
 
 Play a playlist in a room — its play or shuffle button, Favorites, or
