@@ -6,7 +6,6 @@ import android.os.SystemClock
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
@@ -41,7 +40,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.longOrNull
-import androidx.core.net.toUri
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Where transport controls are pointed: this device, or a satellite room. */
@@ -267,12 +265,9 @@ class PlayerController(
         if (pathOrUri.startsWith("/")) api.absolute(pathOrUri) else pathOrUri
 
     private fun mediaItemFor(item: PlayItem): MediaItem {
-        val meta = MediaMetadata.Builder()
-            .setTitle(item.title)
-            .setArtist(item.artist)
-            .setAlbumTitle(item.album)
-            .apply { item.coverPath?.let { setArtworkUri(resolveSrc(it).toUri()) } }
-            .build()
+        // What the notification and the lock screen show for each kind
+        // (SessionMedia): title, the line under it, artwork, media type.
+        val meta = SessionMedia.metadata(item, api::absolute)
         return MediaItem.Builder()
             .setMediaId(item.uid)
             .setUri(resolveSrc(item.src))
@@ -449,6 +444,40 @@ class PlayerController(
         val t = _target.value
         if (t is PlayTarget.Room) return roomAction("stop", t.roomId)
         clearQueue()
+    }
+
+    /**
+     * The mini player's "Stop and close" (web/static/player.jsx closePlayer):
+     * a room being cast to is stopped first and waited for; then the phone
+     * stops watching it, the queue is emptied and the bar goes. False — and
+     * nothing here changed — when the room says it didn't stop: the bar
+     * stays and the caller says so.
+     *
+     * In line with the casts ([castLock]), so it stops the room a cast in
+     * flight lands on. A "play here" that comes while the room's answer is
+     * on its way ([playHereGen]) owns the queue and the bar by then, and
+     * they are left to it.
+     */
+    suspend fun stopAndClose(): Boolean {
+        val gen = playHereGen.get()
+        return withContext(NonCancellable) {
+            castLock.withLock {
+                if (playHereGen.get() != gen) return@withLock true
+                val room = (_target.value as? PlayTarget.Room)?.roomId
+                if (room != null) {
+                    if (!roomActionNow("stop", room)) return@withLock false
+                    if (playHereGen.get() != gen || (_target.value as? PlayTarget.Room)?.roomId != room) {
+                        return@withLock true
+                    }
+                    remotePollJob?.cancel()
+                    remotePollJob = null
+                    _remote.value = null
+                    _target.value = PlayTarget.Local
+                }
+                clearQueue()
+                true
+            }
+        }
     }
 
     fun next() {

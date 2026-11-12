@@ -52,9 +52,8 @@ ROUTES: dict[str, dict] = {
     "videos": {"dashboard": "#videos", "app": {"screen": "Videos"}},
     "news": {"dashboard": "#news", "app": {"screen": "News"}},
     "calendar": {"dashboard": "#calendar", "app": {"screen": "Calendar"}},
-    # The phone apps have no Lists screen yet (design-notes hand-off): the
-    # app opens the dashboard's Lists page until they do.
-    "lists": {"dashboard": "#lists", "app": {"dashboard": True}},
+    # The Android app's Lists screen (iOS follows Android).
+    "lists": {"dashboard": "#lists", "app": {"screen": "Lists"}},
     "files": {"dashboard": "#files", "app": {"screen": "Files"}},
     "plugins": {"dashboard": "#plugins", "app": {"dashboard": True}},
     # Settings' sections (web settings.jsx SETTINGS_SECTIONS, the app's

@@ -62,6 +62,18 @@ class ManualContentTest {
         }
     }
 
+    /** Lists hand-off §5 / §7.8: the manual's Lists page links `route:lists`,
+     *  which opens the app's own Lists screen (no longer the dashboard's). */
+    @Test fun theListsLinkOpensTheListsScreen() {
+        val lists = doc.routes["lists"]!!
+        assertFalse(lists.app.dashboard)
+        assertEquals(Route.Lists, manualRouteScreen(lists))
+        assertTrue(manualRouteOpens(lists, Capabilities.EMPTY))
+        assertEquals("#lists", lists.dashboard)
+        // A link that opens the dashboard is never a screen.
+        assertNull(manualRouteScreen(doc.routes["plugins"]!!))
+    }
+
     /** The manual's link to Chat reads as plain text while the server's AI
      *  features are off (no link that bounces back to Home); on, or on an
      *  older server that has no switch, it is a link. */

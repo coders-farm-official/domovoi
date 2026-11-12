@@ -787,7 +787,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | A chat that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
-| Household lists (to-do, shopping, your own) | voice: "add milk to the shopping list" | voice | ✅ Lists page | — not yet |
+| Household lists (to-do, shopping, your own) | voice: "add milk to the shopping list" | voice | ✅ Lists page | ✅ Lists screen (Tools): add, cross off, reorder, rename; updates live |
 | Edit documents and spreadsheets (documents co-edited live) | — | — | ✅ | ✅ the server's Documents, same editors |
 | Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
 | Custom wake-word recording & training | records the clips | wakes on a pushed model; no recording | ✅ record → train → push to room | — |

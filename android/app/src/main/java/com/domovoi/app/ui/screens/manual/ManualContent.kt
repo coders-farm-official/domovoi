@@ -381,6 +381,12 @@ internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive
 internal fun listedHandlers(doc: ManualDoc, names: List<String>, features: Map<String, Boolean>): List<String> =
     names.filter { n -> doc.handlerNeedsFeature[n]?.let { features[it] == true } ?: true }
 
+/** The app screen a manual link to [route] opens: its `app.screen`, by
+ *  [Route] name; null when the link opens the dashboard or names no screen
+ *  this build has. */
+internal fun manualRouteScreen(route: ManualRoute): Route? =
+    if (route.app.dashboard) null else Route.entries.firstOrNull { it.name == route.app.screen }
+
 /** Whether a manual link to [route] opens something here. A link to an app
  *  screen this server doesn't offer (a plugin's that isn't installed; Chat
  *  with the server's AI features off) reads as plain text, never as a link

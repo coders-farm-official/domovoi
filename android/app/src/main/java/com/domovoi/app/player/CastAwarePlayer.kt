@@ -12,7 +12,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  * The player the media session holds: the media notification, the lock
  * screen, a headset's buttons and Bluetooth controls all drive this.
  *
- * On this phone it is the ExoPlayer, unchanged. While casting
+ * On this phone it is the ExoPlayer, except for what fits the kind playing
+ * ([SessionMedia]): a live station offers nothing that seeks and has no
+ * length, and skip back / forward move 15 s / 30 s. While casting
  * ([PlayerController.target] is a room) it is the ROOM:
  *  - play / pause / next / previous go to the room (resume, pause, skip,
  *    previous) through the [PlayerController], never to the phone's own
@@ -102,6 +104,13 @@ class CastAwarePlayer(
      *  the ExoPlayer's own next and previous. */
     private val book: Boolean get() = room == null && ChapterSkip.applies(controller.current)
 
+    /** Whether something is queued before this phone's item. */
+    private fun hasPreviousItem(): Boolean = controller.index.value > 0
+
+    /** This phone's item can be moved within: not while casting, and not a
+     *  live station ([SessionMedia.live]). */
+    private val seekableHere: Boolean get() = room == null && !SessionMedia.live(controller.current)
+
     // ---- commands ------------------------------------------------------------
     override fun play() {
         if (room != null) controller.resume() else super.play()
@@ -136,7 +145,7 @@ class CastAwarePlayer(
     }
 
     override fun seekTo(positionMs: Long) {
-        if (room == null) super.seekTo(positionMs)
+        if (seekableHere) super.seekTo(positionMs)
     }
 
     override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
@@ -144,20 +153,30 @@ class CastAwarePlayer(
     }
 
     override fun seekToDefaultPosition() {
-        if (room == null) super.seekToDefaultPosition()
+        if (seekableHere) super.seekToDefaultPosition()
     }
 
     override fun seekToDefaultPosition(mediaItemIndex: Int) {
         if (room == null) super.seekToDefaultPosition(mediaItemIndex)
     }
 
+    /** Skip back [SessionMedia.SKIP_BACK_MS]: the notification's skip button,
+     *  a headset's or a car's rewind. Not the ExoPlayer's own 5 s. */
     override fun seekBack() {
-        if (room == null) super.seekBack()
+        if (seekableHere) super.seekTo((currentPosition - SessionMedia.SKIP_BACK_MS).coerceAtLeast(0L))
     }
 
+    /** Skip forward [SessionMedia.SKIP_FORWARD_MS], never past the end. */
     override fun seekForward() {
-        if (room == null) super.seekForward()
+        if (!seekableHere) return
+        val to = currentPosition + SessionMedia.SKIP_FORWARD_MS
+        val end = duration
+        super.seekTo(if (end != C.TIME_UNSET && end > 0) minOf(to, end) else to)
     }
+
+    override fun getSeekBackIncrement(): Long = SessionMedia.SKIP_BACK_MS
+
+    override fun getSeekForwardIncrement(): Long = SessionMedia.SKIP_FORWARD_MS
 
     // ---- what the session shows ----------------------------------------------
     override fun getAvailableCommands(): Player.Commands {
@@ -174,7 +193,9 @@ class CastAwarePlayer(
                 .build()
         }
         if (room == null) {
-            return Player.Commands.Builder().addAll(own).removeAll(*NEVER_FROM_THE_SESSION.toIntArray()).build()
+            // A station offers nothing that seeks (SessionMedia).
+            val kind = SessionMedia.commands(controller.current, hasPreviousItem(), own)
+            return Player.Commands.Builder().addAll(kind).removeAll(*NEVER_FROM_THE_SESSION.toIntArray()).build()
         }
         return Player.Commands.Builder()
             .addAll(own)
@@ -188,6 +209,7 @@ class CastAwarePlayer(
         command in NEVER_FROM_THE_SESSION -> false
         book && command in NEXT -> controller.canNextHere()
         book && command in PREVIOUS -> true
+        room == null && SessionMedia.withholds(controller.current, hasPreviousItem(), command) -> false
         room == null -> super.isCommandAvailable(command)
         command in NOT_IN_A_ROOM -> false
         command in IN_A_ROOM -> true
@@ -229,13 +251,14 @@ class CastAwarePlayer(
         if (room == null) super.getTotalBufferedDuration() else 0L
 
     override fun getDuration(): Long {
-        val r = room ?: return super.getDuration()
+        // A live station has no length, whatever its stream's headers say.
+        val r = room ?: return if (SessionMedia.live(controller.current)) C.TIME_UNSET else super.getDuration()
         val d = reading(r)?.durationSec ?: return C.TIME_UNSET
         return if (d > 0) (d * 1000).toLong() else C.TIME_UNSET
     }
 
     override fun getContentDuration(): Long =
-        if (room == null) super.getContentDuration() else duration
+        if (room == null && !SessionMedia.live(controller.current)) super.getContentDuration() else duration
 
     /**
      * Tell the session the target or the room's state changed, so the

@@ -140,7 +140,7 @@
   "lists": {
    "dashboard": "#lists",
    "app": {
-    "dashboard": true
+    "screen": "Lists"
    }
   },
   "files": {
