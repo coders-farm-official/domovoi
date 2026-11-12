@@ -4,6 +4,13 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — Music page: rooms start folded away
+
+**The room cards on the Music page are now hidden until you press
+"Show rooms"** (it reads "Show rooms (2 playing)" while rooms are
+playing). The choice is kept per browser; the Room queue tab and the
+room queue buttons work as before.
+
 ## 2026-11-11 — a pushed wake word no longer hides the room's wake sensitivity
 
 **Pushing a wake word to a room now sets that room's Wake sensitivity,

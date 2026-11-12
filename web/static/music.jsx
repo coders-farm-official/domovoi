@@ -1961,6 +1961,16 @@ const MusicPage = () => {
   // goes to the tab before.
   const [tab, setTab] = useRouteTab('music', MUSIC_PAGE_TABS, 'library');
   const [selected, setSelected] = React.useState(null);
+  // The rooms strip is folded away until asked for (a simple page by
+  // default); the choice is kept per browser, and the page works without it.
+  const [roomsOpen, setRoomsOpen] = React.useState(() => {
+    try { return localStorage.getItem('domovoi.music.roomsOpen') === '1'; } catch { return false; }
+  });
+  const toggleRooms = () => {
+    const next = !roomsOpen;
+    setRoomsOpen(next);
+    try { localStorage.setItem('domovoi.music.roomsOpen', next ? '1' : '0'); } catch { /* kept for the visit */ }
+  };
   // Playlists tab state: which playlist row's drawer is open, and
   // which library track triggered the "+ add to playlist" drawer.
   // Independent so a user can browse the playlist drawer without
@@ -2506,7 +2516,23 @@ const MusicPage = () => {
       {/* [1] Now Playing strip — one card per provisioned room.
             Empty if no mpd_rooms have been registered yet (first boot);
             a fetch failure says so instead of posing as first boot. */}
-      {nowPlaying.length === 0 ? (
+      {(() => {
+        const playingCount = nowPlaying.filter(np => np.state === 'play').length;
+        return (
+          <div>
+            <button type="button" className="rooms-toggle" onClick={toggleRooms}
+                    aria-expanded={roomsOpen} aria-controls="music-rooms-strip"
+                    style={{ background: 'none', border: 0, padding: '10px 4px', minHeight: 44,
+                             color: 'var(--brand-ink)', font: 'inherit', cursor: 'pointer',
+                             textDecoration: 'underline' }}>
+              {roomsOpen ? 'Hide rooms'
+                : playingCount > 0 ? `Show rooms (${playingCount} playing)` : 'Show rooms'}
+            </button>
+          </div>
+        );
+      })()}
+      <div id="music-rooms-strip" hidden={!roomsOpen}>
+      {roomsOpen && (nowPlaying.length === 0 ? (
         <Card>
           {npError ? (
             <Empty glyph="headphones" title="rooms unavailable"
@@ -2526,7 +2552,8 @@ const MusicPage = () => {
                     onFavorite={onFavorite} onQueue={showRoomQueue}/>
           ))}
         </div>
-      )}
+      ))}
+      </div>
 
       {/* [2] Lower tabbed section */}
       {/* A wrapper for the ref: Card forwards no extra props. */}

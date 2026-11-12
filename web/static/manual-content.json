@@ -1568,6 +1568,10 @@
        "text": "Add music: [Music](route:music) → **Upload**, or copy files into the server's music folder."
       },
       {
+       "text": "The room cards are folded away on [Music](route:music); press **Show rooms** to see them (it remembers your choice in that browser).",
+       "only": "dashboard"
+      },
+      {
        "text": "Each room has one shared queue, and anyone in the house can add to it."
       },
       {

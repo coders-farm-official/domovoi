@@ -270,7 +270,7 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
     URLSearchParams, FormData, encodeURIComponent, decodeURIComponent,
     document: { documentElement: { getAttribute: () => null, setAttribute: noop }, createElement: () => ({ setAttribute: noop, style: {} }),
                 addEventListener: noop, removeEventListener: noop },
-    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    localStorage: { getItem: (k) => (k === 'domovoi.music.roomsOpen' ? '1' : null), setItem: noop, removeItem: noop },
     navigator: { userAgent: 'harness' },
     apiGet: (p) => api.call('GET', p),
     apiPost: (p, body) => api.call('POST', p, body),
