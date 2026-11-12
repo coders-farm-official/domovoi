@@ -3,6 +3,7 @@ package com.domovoi.app.ui.screens.music
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -36,8 +37,10 @@ internal fun RoomQueueSheet(room: String, onDismiss: () -> Unit) {
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Domovoi.colors.card,
     ) {
+        // The search box raises a keyboard, and a modal sheet's window
+        // ignores it (ADJUST_NOTHING): the sheet makes room itself.
         LazyColumn(
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth().imePadding(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {

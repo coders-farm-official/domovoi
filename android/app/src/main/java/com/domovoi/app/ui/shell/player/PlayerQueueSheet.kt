@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -145,7 +146,9 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
         // has a few hundred dp, and the lyrics must never push the queue out
         // of reach (the 2026-10-06 review). The lyrics panel's height comes
         // from the sheet's own (at most half of it).
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // The search box raises a keyboard, and a modal sheet's window
+        // ignores it (ADJUST_NOTHING): the sheet makes room itself.
+        BoxWithConstraints(Modifier.fillMaxWidth().imePadding()) {
             val lyricsHeight = capLyricsHeight(SHEET_LYRICS_HEIGHT, maxHeight)
             LazyColumn(
                 Modifier.fillMaxWidth(),
