@@ -324,7 +324,7 @@ private fun ManualBody(doc: ManualDoc, cached: Boolean, navigate: (Route) -> Uni
                 r == null -> Unit
                 r.app.dashboard -> r.dashboard?.let { h -> dashboardUrl(server, h)?.let { openWebLink(context, it) } }
                 r.app.screen == "Settings" && r.app.tab != null -> openSettingsTab(r.app.tab)
-                else -> Route.entries.firstOrNull { it.name == r.app.screen }?.let(navigate)
+                else -> manualRouteScreen(r)?.let(navigate)
             }
         },
         onDoc = { target -> openWebLink(context, docUrl(doc, live.version, target)) },
