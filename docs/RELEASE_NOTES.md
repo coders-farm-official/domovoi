@@ -4,6 +4,12 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — a playlist plays in this browser
+
+The playlist dialog (Music → Playlists) now has **play here** and **shuffle
+here** beside the room controls, so a playlist (or Favorites) plays in the
+browser you are using, whole list, with no room needed.
+
 ## 2026-11-12 — the server answers to domovoi.local
 
 **A Linux server now announces `domovoi.local` on the home network**, so
