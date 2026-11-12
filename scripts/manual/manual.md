@@ -1701,6 +1701,11 @@ are personal.
   memories.
 - *(admin)* **rename**, **forget person**, or delete one wrong voice
   sample.
+- Make this phone or browser yours: open your name there and press
+  **this is me**. What you play on it then counts as your listening, and
+  the player's "listening as" starts at you. Someone who already has a
+  phone or browser needs an admin to add a second one. A shared screen
+  can't be anyone's.
 
 **If something's wrong:** two people with the same name: an admin renames
 one on [Settings → Household → People](#settings/people).
@@ -1738,7 +1743,10 @@ on the server itself. Ask whoever set up Domovoi.
 [Settings → Household → Phones & browsers](#settings/phones-and-browsers):
 
 - **This device**: give this browser or phone a name. It's what queues
-  show as "added by".
+  show as "added by". It also says whose it is (set with **this is me**
+  on People).
+- **Known devices** *(admin)*: the **person** column says whose each
+  phone or browser is; an admin can change it.
 - **Queue access**, **Files access** *(admin)*: stop one device changing a
   room's music or the files.
 - **Guests** *(admin)*: ban a guest who keeps changing the music.
@@ -1765,6 +1773,7 @@ Everything stays on your server, or on your phone.
 | Timers and reminders that went off | 7 days |
 | Command recordings (off unless an admin turns them on for a room) | 14 days |
 | Play history | 90 days |
+| The songs each room, phone and browser played, and who for | 1 year, or what **Keep listening history** says |
 | The list of recent print jobs | 90 days (an admin can clear it) |
 | News stories | 90 days (saved ones always) |
 | The server's own log | no words, only how many |
@@ -1782,6 +1791,13 @@ each room's **Conversations** tab.
   Advanced](#settings/advanced) → **show the settings** → **Privacy**.
 - *(admin)* **Delete all voice history**, on the same page, deletes it all
   at once. People, voice samples, memories, notes, timers and chats stay.
+- Clear your own listening history: your name on
+  [Settings → Household → People](#settings/people) → **listening history**
+  → **clear**. On a phone or browser that isn't yours, it asks for the admin
+  password, or lets you say **this is me** first.
+- *(admin)* [Settings → Privacy → Listening history](#settings/listening-history):
+  **Keep listening history** for 1 year (the default), 90 days, or
+  **Don't keep**; and **Delete all listening history**, for everyone.
 - *(admin)* **forget person** on [Settings → Household → People](#settings/people) does what "forget me"
   does, for anyone: it deletes only what that person said.
 - "never save my voice": Domovoi stops learning it.

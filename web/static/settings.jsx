@@ -3843,7 +3843,30 @@ const ThisDeviceCard = ({ fire, onRenamed }) => {
         <span className="mono">{deviceId}</span>
         {' — this browser’s id, also used for podcast and video resume positions.'}
       </div>
+      <ThisDeviceOwnerLine/>
     </Card>
+  );
+};
+
+/* Whose this browser is ("this is me" on a person's People page, V035):
+ * what plays here counts as theirs. Changed on the People page. */
+const ThisDeviceOwnerLine = () => {
+  const read = () => {
+    try { return DeviceIdentity.owner ? DeviceIdentity.owner() : null; } catch { return null; }
+  };
+  const [owner, setOwner] = React.useState(read);
+  const shared = useSharedScreen();
+  React.useEffect(() => {
+    let off = null;
+    try { if (DeviceIdentity.subscribeOwner) off = DeviceIdentity.subscribeOwner(() => setOwner(read())); } catch {}
+    return () => { if (off) off(); };
+  }, []);
+  return (
+    <div style={{ padding: '0 16px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+      {shared ? 'A shared screen: it isn’t anyone’s, and what plays here counts for the whole household.'
+        : owner ? <>This browser is <strong style={{ color: 'var(--fg)' }}>{owner.name}</strong>’s: what plays here counts as theirs. Change it on <a href="#settings/people">People</a>.</>
+        : <>This browser isn’t anyone’s: what plays here counts for the whole household. To make it yours, open your name on <a href="#settings/people">People</a> and press “this is me”.</>}
+    </div>
   );
 };
 
@@ -3860,6 +3883,22 @@ const QueueAccessCard = ({ fire, deviceList }) => {
   const [note, setNote] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [sharing, setSharing] = React.useState(null);   // device_id mid-toggle
+  // Whose each device is (V035): an admin sets any device's person here;
+  // a device says "this is me" itself on the People page.
+  const [owning, setOwning] = React.useState(null);     // device_id mid-change
+  const { items: peopleRoster } = useApiList('/api/people', { quiet: true });
+  const setOwnerOf = async (d, personId) => {
+    setOwning(d.device_id);
+    try {
+      await apiPut(`/api/devices/${encodeURIComponent(d.device_id)}/person`, { person_id: personId });
+      const who = personId == null ? null : (peopleRoster.find((p) => p.id === personId) || {}).name;
+      fire(who ? `${d.name} is ${who}’s now` : `${d.name} isn’t anyone’s now`);
+      refreshDevices();
+      if (d.device_id === DeviceIdentity.id() && DeviceIdentity.refresh) DeviceIdentity.refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'change', e);
+    } finally { setOwning(null); }
+  };
 
   /* Shared screen (V014): Home shows a device marked here without anyone's
    * personal content — calendar titles become "busy", reminders show their
@@ -4006,7 +4045,7 @@ const QueueAccessCard = ({ fire, deviceList }) => {
       </Card>
 
       <Card title={`Known devices (${devices.length})`}
-            sub="Browsers and phones that have introduced themselves, most recent first. Mark a tablet the whole house uses as a shared screen and Home and the page list leave personal content off it: a courtesy for the kitchen, not a lock (the same things are readable without a credential).">
+            sub="Browsers and phones that have introduced themselves, most recent first. Mark a tablet the whole house uses as a shared screen and Home and the page list leave personal content off it: a courtesy for the kitchen, not a lock (the same things are readable without a credential). Person is whose a device is: what plays on it counts as theirs (a device says so itself on its owner’s People page; here an admin can set any).">
         {devicesLoading && devices.length === 0 ? (
           <div style={{ padding: 20, fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
         ) : devices.length === 0 ? (
@@ -4017,7 +4056,7 @@ const QueueAccessCard = ({ fire, deviceList }) => {
         ) : (
           <table className="tbl">
             <thead><tr>
-              <th>name</th><th>id</th><th>platform</th><th>last seen</th><th>shared screen</th>
+              <th>name</th><th>id</th><th>platform</th><th>last seen</th><th>person</th><th>shared screen</th>
             </tr></thead>
             <tbody>
               {devices.map((d) => (
@@ -4031,6 +4070,18 @@ const QueueAccessCard = ({ fire, deviceList }) => {
                   <td className="mono" style={{ fontSize: 11 }}>{d.device_id}</td>
                   <td className="mono" style={{ fontSize: 11 }}>{d.platform || '—'}</td>
                   <td className="mono">{d.last_seen_at ? relTime(d.last_seen_at) : '—'}</td>
+                  <td>
+                    {d.shared_screen ? <span style={{ fontSize: 12, color: 'var(--fg-faint)' }}>nobody</span> : (
+                      <select value={d.owner_person_id ?? ''} disabled={owning === d.device_id}
+                              onChange={(e) => setOwnerOf(d, e.target.value === '' ? null : Number(e.target.value))}
+                              aria-label={`${d.name}: whose it is`}
+                              style={{ font: 'inherit', fontSize: 12, height: 28, borderRadius: 'var(--r-sm)',
+                                       border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
+                        <option value="">nobody</option>
+                        {(peopleRoster || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    )}
+                  </td>
                   <td>
                     <input type="checkbox" name="shared-screen"
                            checked={!!d.shared_screen} disabled={sharing === d.device_id}
@@ -5333,7 +5384,7 @@ const SETTINGS_GROUPS = [
     sections: ['rooms', 'people', 'phones-and-browsers', 'media-folders', 'printers'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
-  { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history'] },
+  { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
   { id: 'documents', label: 'Documents', icon: 'file-text', sections: ['fonts'] },
   { id: 'system', label: 'System', icon: 'server', sections: ['about', 'health', 'app-layout', 'advanced'] },
 ];
@@ -5386,6 +5437,10 @@ const SETTINGS_SECTIONS = [
   { id: 'voice-history', label: 'Voice history', aliases: ['recordings'],
     sub: 'Commands kept from the rooms you opted in, to tune when Domovoi stops listening — admins only.',
     words: 'voice history recordings recording captures commands kept audio transcript privacy delete' },
+  // people.jsx draws it (ListeningHistoryPanel), V051 (2026-11-12).
+  { id: 'listening-history', label: 'Listening history',
+    sub: 'The songs each room, browser and phone played, and for whom: how long they are kept, and deleting them.',
+    words: 'listening history listens played songs music up next privacy delete clear keep retention' },
   { id: 'fonts', label: 'Fonts', optional: true,
     sub: 'The fonts documents and spreadsheets can use, and adding more for the whole house.',
     words: 'font fonts typeface typefaces lettering documents document spreadsheets sheets writing more fonts add' },
@@ -5441,6 +5496,10 @@ const settingsPanel = (id, marks) => {
     case 'models': return <ModelsPanel/>;
     case 'internet': return <InternetPanel/>;
     case 'voice-history': return <CapturesPanel/>;
+    case 'listening-history': {
+      const Panel = window.ListeningHistoryPanel;
+      return typeof Panel === 'function' ? <Panel/> : null;
+    }
     case 'about': return <AboutPanel/>;
     case 'advanced': return <ConfigPanel setupAsked={mark === 'setup'} mark={mark} startFolded/>;
     default: {

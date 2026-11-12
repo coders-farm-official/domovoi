@@ -301,6 +301,11 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import voice_history
 
     reapply.on_reapply("voice_history_keep", voice_history.schedule_retention_now)
+    # Saving "Keep listening history" deletes what it no longer keeps at
+    # once (domovoi/music_listens.py).
+    from domovoi import music_listens
+
+    reapply.on_reapply("music_listens_keep", music_listens.schedule_prune_now)
 
 
 # At shutdown, how long a worker owner's (a plugin's, the core's) running
@@ -758,6 +763,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #
     # Registration order is the canonical start order (shutdown reverses it):
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
+    #   listen_logger → music_listens_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
@@ -787,6 +793,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(TimerWatcher(app=app), owner="core")
     WORKERS.add_worker(PlaybackStateSweeper(app), owner="core")
     WORKERS.add_worker(MediaPlaysPruner(), owner="core")
+    # The listening history (V051, Up next P1): each room's songs as they
+    # end, and the retention (domovoi/music_listens.py).
+    from domovoi.workers.listen_logger import ListenLogger
+    from domovoi.workers.music_listens_pruner import MusicListensPruner
+
+    WORKERS.add_worker(ListenLogger(), owner="core")
+    WORKERS.add_worker(MusicListensPruner(), owner="core")
     WORKERS.add_worker(MemoryExtractor(), owner="core")
     # Lyric search's line index (V021 track_lyric_lines; domovoi/workers/lyrics_index.py).
     from domovoi.workers.lyrics_index import LyricsIndexer
@@ -2642,6 +2655,9 @@ async def admin_snapshot() -> dict[str, Any]:
         # "Keep voice history" (30 / 90 / 365 / forever), for People →
         # Voice history on the web: its own copy goes stale on a save.
         "voice_history_keep": settings.voice_history_keep,
+        # "Keep listening history" (365 / 90 / off), for the web's
+        # POST /api/music/listens and Settings → Privacy → Listening history.
+        "music_listens_keep": settings.music_listens_keep,
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),

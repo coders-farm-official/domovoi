@@ -1647,7 +1647,39 @@ const DeviceIdentity = (() => {
       return v === '1' ? true : v === '0' ? false : null;
     } catch { return null; }
   };
+  /* Whose device this is ("this is me", People page): the person the
+   * server says this browser is, {id, name}, or null. Every device row
+   * carries it (owner_person_id / owner_person_name). Echoed to
+   * localStorage like the shared-screen flag, so the player's "listening
+   * as" starts from it at once on a reload. It decides whose the songs
+   * played here are (POST /api/music/listens) and whether this browser
+   * may clear a person's listening history without the admin password. */
+  const OWNER_KEY = 'domovoi-device-owner';
+  let lastOwner;                      // undefined until this session knows
+  const ownerListeners = new Set();
+  const cachedOwner = () => {
+    try {
+      const v = JSON.parse(localStorage.getItem(OWNER_KEY) || 'null');
+      return v && typeof v.id === 'number' ? v : null;
+    } catch { return null; }
+  };
+  const owner = () => (lastOwner !== undefined ? lastOwner : cachedOwner());
+  const rememberOwner = (row) => {
+    if (!row || !('owner_person_id' in row)) return;
+    const next = row.owner_person_id != null
+      ? { id: Number(row.owner_person_id), name: row.owner_person_name || '' } : null;
+    const before = owner();
+    lastOwner = next;
+    try { localStorage.setItem(OWNER_KEY, JSON.stringify(next)); } catch {}
+    if ((before && before.id) !== (next && next.id) || (before && before.name) !== (next && next.name)) {
+      ownerListeners.forEach((fn) => { try { fn(next); } catch {} });
+    }
+  };
+  // fn(owner) whenever whose this browser is changes. Returns the unsubscribe.
+  const subscribeOwner = (fn) => { ownerListeners.add(fn); return () => ownerListeners.delete(fn); };
+
   const remember = (row) => {
+    rememberOwner(row);
     if (!row || typeof row.shared_screen !== 'boolean') return row;
     const changed = row.shared_screen !== sharedScreen();
     lastShared = row.shared_screen;
@@ -1766,8 +1798,19 @@ const DeviceIdentity = (() => {
     return remember(row);
   };
 
+  /* "This is me" (personId) or "not me" (null) for THIS browser. The
+   * server's rules (web/backend/api/devices.py claim_refusal): a person
+   * nobody has claimed, or releasing its own, is this browser's to do;
+   * a person another device has claimed is an admin's, so that refusal
+   * opens the sign-in prompt and is sent again once an admin is in. */
+  const setPerson = async (personId) => {
+    const row = await apiPut(`/api/devices/${encodeURIComponent(id())}/person`,
+                             { person_id: personId == null ? null : Number(personId) });
+    return remember(row);
+  };
+
   return { id, name: cachedName, suggestedName, register, refresh, rename, boot,
-           canRegister, sharedScreen, subscribeShared };
+           canRegister, sharedScreen, subscribeShared, owner, subscribeOwner, setPerson };
 })();
 
 // ─── Time helpers (page-local NOW vs reference NOW) ─────────────────

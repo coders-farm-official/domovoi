@@ -42,6 +42,39 @@ content off Home and off its launchers. Presentational, and thin:
   page too.
 
 Enforcement would take a restricted display pairing of its own (V014).
+
+**Whose device this is** (``devices.owner_person_id``, V035; "claim a
+person", Up next P1, owner decisions 2026-11-12). A phone or browser can
+say "this is me" for a person on the People page (and in the apps): from
+then on what it plays is that person's listening history, and later their
+favourites. Because a claimed device may also CLEAR its person's listening
+history (web/backend/api/music_listens.py), a claim is not free-for-all.
+The rules (:func:`claim_refusal`, the only place they live; also applied,
+quietly, to the ``owner_person_id`` the Android app sends with its
+registration):
+
+* an ADMIN (Bearer, or a box before setup) may set or clear any device's
+  person, except on a shared screen;
+* a SHARED SCREEN is nobody's: it cannot be claimed (409), by an admin
+  either — unmark it first;
+* otherwise only the device ITSELF may change whose it is (the id in the
+  path is the id the caller names itself by: the registration cookie,
+  ``X-Device-Id``, ``X-Domovoi-Device-Id`` or ``?device_id=``), and:
+
+  * releasing its own claim is always allowed;
+  * claiming a person nobody has claimed yet, or the one it already is,
+    is allowed;
+  * claiming a person another device has already claimed needs an admin
+    (403, which the dashboard answers with the sign-in prompt) — so a
+    second phone of the same person takes an admin's yes once;
+  * changing ANOTHER device's person (claiming or releasing) needs an
+    admin.
+
+A guest (no household credential) never gets this far: the route is device
+tier. Within the household the caller's device id is self-asserted, like
+every id on this table: these rules stop a slip and a casual grab, not a
+household member who copies another device's id (docs/SECURITY_PRIVACY.md,
+"Whose phone or browser this is").
 """
 
 from __future__ import annotations
@@ -50,11 +83,16 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_admin_read, require_device
+from domovoi.admin_auth import (
+    check_admin_request,
+    require_admin_mutation,
+    require_admin_read,
+    require_device,
+)
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -95,6 +133,12 @@ class DeviceRename(BaseModel):
     name: str = Field(..., min_length=1, max_length=_MAX_NAME)
 
 
+class DevicePerson(BaseModel):
+    # The person this device is ("this is me"), or null: nobody in
+    # particular (the household). Rules: claim_refusal.
+    person_id: int | None = Field(default=None, ge=1)
+
+
 class DeviceSharedScreen(BaseModel):
     shared_screen: bool
 
@@ -110,6 +154,11 @@ class Device(BaseModel):
     # Home page shows a shared-screen view on it. False on a database that
     # has not had V014 yet.
     shared_screen: bool = False
+    # The person this device says it is (V035, claimed on the People page
+    # or in the app), with their current name; null for nobody in
+    # particular. What the browser player's "listening as" starts from.
+    owner_person_id: int | None = None
+    owner_person_name: str | None = None
 
 
 def _clean_name(raw: str | None) -> str | None:
@@ -194,6 +243,8 @@ def _row_to_device(r: Any) -> Device:
     return Device(
         device_id=r[0], name=r[1], platform=r[2], user_agent=r[3],
         first_seen_at=r[4], last_seen_at=r[5], shared_screen=bool(r[6]),
+        owner_person_id=int(r[7]) if len(r) > 7 and r[7] is not None else None,
+        owner_person_name=r[8] if len(r) > 8 else None,
     )
 
 
@@ -254,11 +305,127 @@ async def _columns(s: Any) -> str:
     """The select / RETURNING list for a :class:`Device`, ``shared_screen``
     last — read as FALSE until V014 is applied."""
     flag = "shared_screen" if await _has_shared_screen(s) else "FALSE AS shared_screen"
-    return f"{_BASE_COLUMNS}, {flag}"
+    owner = (
+        "owner_person_id, "
+        "(SELECT p.name FROM people p WHERE p.id = devices.owner_person_id) AS owner_person_name"
+        if await _has_owner(s)
+        else "NULL AS owner_person_id, NULL AS owner_person_name"
+    )
+    return f"{_BASE_COLUMNS}, {flag}, {owner}"
+
+
+# ─── Whose device this is: the claim rules ───────────────────────────────
+
+
+def caller_device(request: Request) -> str | None:
+    """The id the caller names itself by: the registration cookie,
+    ``X-Device-Id``, ``?device_id=`` (files.caller_device_id), then the
+    ``X-Domovoi-Device-Id`` header the dashboard puts on every call.
+    Self-asserted, like every device id."""
+    # Inside the call: files imports music, which imports this module's
+    # neighbours at import time.
+    from web.backend.api import files as files_api
+
+    return files_api.caller_device_id(request, None) or valid_device_id(
+        request.headers.get("X-Domovoi-Device-Id")
+    )
+
+
+async def caller_is_admin(request: Request) -> bool:
+    """A live admin Bearer, or a box nobody has claimed yet (everything is
+    the household's before setup). The dashboard cookie alone is not: it
+    renders state and never authorizes a change."""
+    return await check_admin_request(request) in ("ok", "pre-setup")
+
+
+SHARED_SCREEN_CLAIM_DETAIL = (
+    "this is a shared screen, so it is the whole household's and can't be "
+    "anyone's. An admin can unmark it in Settings → Phones & browsers first."
+)
+
+
+async def claim_refusal(
+    s: Any, device_id: str, person_id: int | None, *, admin: bool, caller: str | None,
+) -> tuple[int, str] | None:
+    """Why ``caller`` may NOT set ``device_id``'s person to ``person_id``
+    (None = release), as ``(status, detail)``; None when it may. The rules
+    are the module docstring's; this is the only place they live."""
+    row = (
+        await s.execute(
+            text(
+                "SELECT owner_person_id, "
+                + ("shared_screen" if await _has_shared_screen(s) else "FALSE")
+                + " FROM devices WHERE device_id = :id"
+            ),
+            {"id": device_id},
+        )
+    ).first()
+    if row is None:
+        return 404, f"device {device_id!r} hasn't registered yet"
+    current = int(row[0]) if row[0] is not None else None
+    if row[1] and person_id is not None:
+        return 409, SHARED_SCREEN_CLAIM_DETAIL
+    name = None
+    if person_id is not None:
+        # FOR UPDATE: two devices claiming the same unclaimed person at the
+        # same moment take turns, so the second sees the first's claim (the
+        # "nobody has claimed them yet" check below) instead of both passing.
+        found = (
+            await s.execute(
+                text("SELECT name FROM people WHERE id = :p FOR UPDATE"), {"p": person_id},
+            )
+        ).first()
+        if found is None:
+            return 404, f"person {person_id} not found"
+        name = found[0]
+    if admin:
+        return None
+    if caller != device_id:
+        return 403, (
+            "only that phone or browser itself, or an admin, can change whose it is"
+        )
+    if person_id is None or person_id == current:
+        return None
+    others = (
+        await s.execute(
+            text(
+                "SELECT COUNT(*) FROM devices "
+                "WHERE owner_person_id = :p AND device_id <> :id"
+            ),
+            {"p": person_id, "id": device_id},
+        )
+    ).scalar_one()
+    if others:
+        return 403, (
+            f"{name} is already claimed by another phone or browser. "
+            "An admin can add this one too."
+        )
+    return None
+
+
+async def _set_owner(s: Any, device_id: str, person_id: int | None) -> None:
+    await s.execute(
+        text(
+            "UPDATE devices SET owner_person_id = (SELECT id FROM people WHERE id = :o) "
+            "WHERE device_id = :id"
+        ),
+        {"o": person_id, "id": device_id},
+    )
+
+
+async def _read_device(s: Any, device_id: str) -> Any:
+    columns = await _columns(s)
+    return (
+        await s.execute(
+            text(f"SELECT {columns} FROM devices WHERE device_id = :id"), {"id": device_id}
+        )
+    ).first()
 
 
 @router.post("/register", response_model=Device, dependencies=DEVICE)
-async def register_device(payload: DeviceRegistration, response: Response) -> Device:
+async def register_device(
+    payload: DeviceRegistration, response: Response, request: Request,
+) -> Device:
     """Upsert this client's row and bump ``last_seen_at``.
 
     Idempotent and cheap — clients call it on every boot. ``name`` is only
@@ -293,13 +460,21 @@ async def register_device(payload: DeviceRegistration, response: Response) -> De
         )
         result = row.first()
         if "owner_person_id" in payload.model_fields_set and await _has_owner(s):
-            await s.execute(
-                text(
-                    "UPDATE devices SET owner_person_id = (SELECT id FROM people WHERE id = :o) "
-                    "WHERE device_id = :id"
-                ),
-                {"o": payload.owner_person_id, "id": ident},
+            # "This phone belongs to" from the app's registration: the same
+            # claim rules as PUT /{device_id}/person, with the registering
+            # device as the caller. A claim the rules refuse is NOT an error
+            # here (the app registers on every start): the row keeps the
+            # person it had, and the answer says which that is.
+            owner = payload.owner_person_id
+            refusal = await claim_refusal(
+                s, ident, owner, admin=await caller_is_admin(request), caller=ident,
             )
+            if refusal is None:
+                await _set_owner(s, ident, owner)
+                result = await _read_device(s, ident)
+            else:
+                log.info("device %s: owner %s from its registration not applied: %s",
+                         ident, owner, refusal[1])
     if result is None:  # pragma: no cover — RETURNING always yields on upsert
         raise HTTPException(status_code=500, detail="upsert returned no row")
     # From here the browser carries its own name on every request, including
@@ -338,6 +513,36 @@ async def rename_device(device_id: str, payload: DeviceRename) -> Device:
     return _row_to_device(result)
 
 
+@router.put("/{device_id}/person", response_model=Device, dependencies=DEVICE)
+async def set_device_person(device_id: str, payload: DevicePerson, request: Request) -> Device:
+    """"This is me": set the person this phone or browser is, or
+    ``person_id: null`` for nobody in particular. Device tier, with the
+    claim rules on top (:func:`claim_refusal`, the module docstring): the
+    device itself may claim a person nobody has claimed yet and release its
+    own claim; anything else is an admin's. 403 names what an admin can do
+    (the dashboard answers it with the sign-in prompt and sends it again),
+    409 a shared screen, 404 an unknown device or person, 503 a database
+    without V035."""
+    ident = _validate_id(device_id)
+    async with session_scope() as s:
+        if not await _has_owner(s):
+            raise HTTPException(
+                status_code=503,
+                detail="this database has no devices.owner_person_id column yet — run the migrations (V035)",
+            )
+        refusal = await claim_refusal(
+            s, ident, payload.person_id,
+            admin=await caller_is_admin(request), caller=caller_device(request),
+        )
+        if refusal is not None:
+            raise HTTPException(status_code=refusal[0], detail=refusal[1])
+        await _set_owner(s, ident, payload.person_id)
+        result = await _read_device(s, ident)
+    if result is None:  # pragma: no cover — claim_refusal found the row
+        raise HTTPException(status_code=404, detail=f"device {ident!r} hasn't registered yet")
+    return _row_to_device(result)
+
+
 @router.patch(
     "/{device_id}/shared-screen",
     response_model=Device,
@@ -361,11 +566,17 @@ async def set_shared_screen(device_id: str, payload: DeviceSharedScreen) -> Devi
                 ),
             )
         columns = await _columns(s)
+        # A shared screen is nobody's: marking one drops the person it was
+        # claimed for (claim_refusal keeps it that way).
+        owner_reset = (
+            ", owner_person_id = CASE WHEN :shared THEN NULL ELSE owner_person_id END"
+            if await _has_owner(s) else ""
+        )
         row = await s.execute(
             text(
                 f"""
                 UPDATE devices
-                SET shared_screen = :shared
+                SET shared_screen = :shared{owner_reset}
                 WHERE device_id = :id
                 RETURNING {columns}
                 """

@@ -1057,6 +1057,18 @@ async def _assert_may_replace_queue(
         await music_queue._assert_can_edit(caller, room_id)
 
 
+async def _note_room_start(
+    status: int, request: Request, body_device_id: str | None, room_id: str
+) -> None:
+    """After a play that REPLACED the room's queue went through: the
+    room's music is the calling device's person's now, for the listening
+    history (web/backend/api/music_listens.py). Nothing on a refusal."""
+    if 200 <= status < 300:
+        from web.backend.api.music_listens import note_room_start
+
+        await note_room_start(request, body_device_id, room_id)
+
+
 @router.post("/play", dependencies=DEVICE)
 async def play(body: PlayRequest, request: Request):
     await _assert_may_replace_queue(request, body.device_id, body.room_id)
@@ -1065,6 +1077,7 @@ async def play(body: PlayRequest, request: Request):
         {"room_id": body.room_id, "query": body.query},
         headers=auth_forward_headers(request),
     )
+    await _note_room_start(status, request, body.device_id, body.room_id)
     return bridge_response(status, payload)
 
 
@@ -1086,6 +1099,7 @@ async def play_playlist(body: PlayPlaylistRequest, request: Request):
         },
         headers=auth_forward_headers(request),
     )
+    await _note_room_start(status, request, body.device_id, body.room_id)
     return bridge_response(status, payload)
 
 
@@ -1148,6 +1162,7 @@ async def play_track(body: PlayTrackRequest, request: Request):
         {"room_id": body.room_id, "track_id": body.track_id},
         headers=auth_forward_headers(request),
     )
+    await _note_room_start(status, request, body.device_id, body.room_id)
     return bridge_response(status, payload)
 
 
@@ -1803,6 +1818,7 @@ async def play_tracks(body: CastTracksRequest, request: Request):
         payload_out,
         headers=auth_forward_headers(request),
     )
+    await _note_room_start(status, request, body.device_id, body.room_id)
     return bridge_response(status, payload)
 
 

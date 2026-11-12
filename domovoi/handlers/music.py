@@ -28,6 +28,7 @@ from domovoi.handlers.music_rooms import (
     control_room_patterns,
 )
 from domovoi.handlers.shared import phone_play
+from domovoi import music_listens
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Context, Intent, Response
 from domovoi.log_privacy import said
@@ -1475,6 +1476,9 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
         """
         if ctx.from_phone:
             return phone_play.phone_transport(self.name, ctx, "next")
+        # The listening history: the song playing now ends as a skip
+        # (domovoi/music_listens.py; the listen logger reads the stamp).
+        music_listens.note_skip(ctx.room_id)
         try:
             place = await self._queue_place(ctx.room_id)
         except _PlayerUnreachable as e:

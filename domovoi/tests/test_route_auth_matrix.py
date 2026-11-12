@@ -310,6 +310,9 @@ SECURITY_TIER_ROUTES = [
     # image and volume removed.
     ("core", "POST", "/v1/admin/wake/trainer/disable"),
     ("web", "POST", "/api/wake-words/trainer/disable"),
+    # "Delete all listening history" (V051, Up next P1, 2026-11-12):
+    # everyone's songs, the household's too, like "Delete all voice history".
+    ("web", "POST", "/api/music/listens/delete-all"),
 ]
 
 
@@ -496,6 +499,12 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
     ("web", "/api/voice-history"): (
         "how long voice history is kept, how many turns and since when, the "
         "cleanup and delete-all jobs' counts — never what was said"
+    ),
+    # Listening history (V051, 2026-11-12): no songs, but how much each
+    # person has listened is personal.
+    ("web", "/api/music/listens/summary"): (
+        "how long listening history is kept and how many songs each person "
+        "has in it — never a song"
     ),
 }
 

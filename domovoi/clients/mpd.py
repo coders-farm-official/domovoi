@@ -118,6 +118,9 @@ class MPDClient(Protocol):
     async def seek_cur(self, delta_sec: float) -> None: ...
     async def seek_to(self, position_sec: float) -> None: ...
     async def elapsed_sec(self) -> float | None: ...
+    # One status read for the listen logger: state, the current song's
+    # songid, file, elapsed and length (workers/listen_logger.py).
+    async def playback_snapshot(self) -> dict[str, Any]: ...
     # Open the http stream output of a PAUSED daemon without playing
     # anything: `pause 0` then `pause 1`. Returns the state MPD was in
     # (only "pause" is touched). See `ensure_stream_serving`.
@@ -371,6 +374,16 @@ class MPDStubClient:
         if self._state == "stop" or self._song is None:
             return None
         return float(self._song.get("_elapsed", 0.0))
+
+    async def playback_snapshot(self) -> dict[str, Any]:
+        song = self._song if self._state != "stop" else None
+        return {
+            "state": self._state,
+            "songid": (song or {}).get("id"),
+            "file": (song or {}).get("file"),
+            "elapsed": float((song or {}).get("_elapsed", 0.0)) if song else None,
+            "duration": (song or {}).get("duration"),
+        }
 
 
 def _is_not_playing(exc: BaseException) -> bool:
@@ -1064,6 +1077,33 @@ class RealMPDClient:
             return float(raw) if raw is not None else None
         except (TypeError, ValueError):
             return None
+
+    async def playback_snapshot(self) -> dict[str, Any]:
+        """``{state, songid, file, elapsed, duration}`` from one connection:
+        MPD's ``status`` and ``currentsong``. ``songid`` / ``file`` are
+        None when no song is current; ``state`` is play, pause or stop.
+        Read every few seconds by the listen logger, so one round trip
+        rather than the three ``state`` + ``current_song`` +
+        ``elapsed_sec`` would take."""
+        async with self._connect() as c:
+            status = await c.status()
+            song = await c.currentsong() if status.get("songid") is not None else {}
+
+        def _num(raw: Any) -> float | None:
+            try:
+                return float(raw) if raw not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        state = status.get("state", "stop")
+        songid = status.get("songid")
+        return {
+            "state": state if state in ("play", "pause", "stop") else "stop",
+            "songid": int(songid) if songid is not None and str(songid).isdigit() else None,
+            "file": (song or {}).get("file"),
+            "elapsed": _num(status.get("elapsed")),
+            "duration": _num(status.get("duration")) or _num((song or {}).get("duration")),
+        }
 
 
 # Room → (control_port, http_port). Populated by `mpd_provisioner.ensure_room`

@@ -49,9 +49,11 @@ const EQ_MAX_DB = 12;
  * instant the current ends). Non-zero fades the outgoing/incoming pair. */
 const DEFAULT_CROSSFADE_SEC = 0;
 
-/* Client-side "recent" list — history is intentionally ephemeral (no
- * server-side play logging for browser playback). Kept in localStorage so
- * the offline auto-cache has something to prioritise. */
+/* Client-side "recent" list, kept in localStorage so the offline
+ * auto-cache has something to prioritise. It is not the listening history:
+ * since 2026-11-12 (V051) each library song this browser plays is also
+ * logged to the server when it ends (ListenLog, below), and that is what
+ * Up next learns from. */
 const RECENT_KEY = 'domovoi-player-recent';
 const RECENT_MAX = 60;
 
@@ -252,13 +254,42 @@ const SpokenAudio = (() => {
   // unified is what makes "added by <device>" and the resume positions refer
   // to the same thing, and what makes an admin device block cover both.
   const clientId = () => DeviceIdentity.id();
-  const getPerson = () => {
-    try { const v = localStorage.getItem(PERSON_KEY); return v ? Number(v) : null; }
-    catch { return null; }
+  /* What this browser was told to listen as: a person id, 'none' (nobody
+   * in particular, on purpose), or undefined (nothing picked: follow the
+   * device). */
+  const explicitPerson = () => {
+    try {
+      const v = localStorage.getItem(PERSON_KEY);
+      if (v === 'none') return 'none';
+      return v ? Number(v) : undefined;
+    } catch { return undefined; }
   };
+  /* The person whose this browser's listening is: the one picked in
+   * "listening as", else the person this browser is claimed by ("this is
+   * me" on the People page), unless it is a shared screen. null = the
+   * household. */
+  const devicePerson = () => {
+    try {
+      if (DeviceIdentity.sharedScreen && DeviceIdentity.sharedScreen() === true) return null;
+      const o = DeviceIdentity.owner ? DeviceIdentity.owner() : null;
+      return o ? o.id : null;
+    } catch { return null; }
+  };
+  const getPerson = () => {
+    const v = explicitPerson();
+    if (v === 'none') return null;
+    return v !== undefined ? v : devicePerson();
+  };
+  /* Picking the device's own person (or nobody, on a browser nobody
+   * claimed) goes back to following the device; "nobody" on a claimed
+   * browser is remembered as such. */
   const setPerson = (pid) => {
     try {
-      if (pid == null) localStorage.removeItem(PERSON_KEY);
+      const dev = devicePerson();
+      if (pid == null) {
+        if (dev == null) localStorage.removeItem(PERSON_KEY);
+        else localStorage.setItem(PERSON_KEY, 'none');
+      } else if (Number(pid) === dev) localStorage.removeItem(PERSON_KEY);
       else localStorage.setItem(PERSON_KEY, String(pid));
     } catch {}
   };
@@ -291,7 +322,150 @@ const SpokenAudio = (() => {
     try { await apiPost(u.post, body); } catch {}
   };
 
-  return { clientId, getPerson, setPerson, fetchPosition, savePosition };
+  return { clientId, getPerson, setPerson, explicitPerson, devicePerson,
+           fetchPosition, savePosition };
+})();
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Listening history (V051, Up next P1, 2026-11-12). Each LIBRARY song this
+ * browser plays is one row on the server, written when it ends:
+ *   track_id, this browser's id, when it started, how long it really
+ *   played (wall clock while playing; a pause adds nothing), its length,
+ *   and how it ended: `finished` at 90 % or more, else `skipped` (next,
+ *   or a queue row picked) or `stopped` (stop, a new play, casting to a
+ *   room, the page closed).
+ * Whose it is: the "listening as" person when one was picked, "nobody" as
+ * picked, else the server's own answer (the person this browser is
+ * claimed by, unless it is a shared screen). The same rule as the rooms
+ * (domovoi/music_listens.py outcome_for).
+ *
+ * Rows wait in a small outbox in localStorage and go to POST
+ * /api/music/listens in batches: a few seconds after a song ends, when the
+ * browser comes back online, and on pagehide (a keepalive fetch, which can
+ * carry the household token; sendBeacon can't set a header). An unsent
+ * row survives a reload; the server drops rows more than 7 days old. Only
+ * a refused BATCH SHAPE (a 4xx other than 401/403/408/429) drops rows here.
+ * Streams, podcasts, audiobooks and files outside the library are never
+ * logged. Nothing is sent from a browser that isn't paired.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const ListenLog = (() => {
+  const OUTBOX_KEY = 'domovoi-listen-outbox';
+  const OUTBOX_MAX = 500;
+  const BATCH = 200;
+  const PAGEHIDE_BATCH = 100;   // a keepalive body is capped at 64 KB
+  const FINISHED_SHARE = 0.9;
+  const KEPT_ERRORS = [401, 403, 408, 429];
+  let cur = null;   // { uid, trackId, startedAt, played, since, duration, skipped }
+  let timer = null;
+  let sending = false;
+
+  const load = () => {
+    try { const v = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch { return []; }
+  };
+  const save = (rows) => {
+    try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(rows.slice(-OUTBOX_MAX))); } catch {}
+  };
+  const dropSent = (n) => save(load().slice(n));
+  const outcome = (played, duration, skipped) => {
+    if (duration > 0 && played >= FINISHED_SHARE * duration) return 'finished';
+    return skipped ? 'skipped' : 'stopped';
+  };
+  const playedNow = () => {
+    if (!cur) return 0;
+    return cur.played + (cur.since != null ? (Date.now() - cur.since) / 1000 : 0);
+  };
+
+  /* The song now playing here: `item` (a library one, or anything else),
+   * and whether it is playing. Called on every change of item or status;
+   * the same item again only moves the clock. */
+  const follow = (item, playing, durationSec) => {
+    const lib = item && item.kind === 'library' && item.trackId != null ? item : null;
+    if (cur && (!lib || lib.uid !== cur.uid)) close();
+    if (!lib) return;
+    if (!cur) {
+      cur = { uid: lib.uid, trackId: lib.trackId, startedAt: new Date().toISOString(),
+              played: 0, since: null, duration: lib.durationSec || null, skipped: false };
+    }
+    if (durationSec > 0 && Number.isFinite(durationSec)) cur.duration = durationSec;
+    if (playing && cur.since == null) cur.since = Date.now();
+    if (!playing && cur.since != null) { cur.played = playedNow(); cur.since = null; }
+  };
+  // The song now playing was skipped (next, a queue row picked).
+  const skip = () => { if (cur) cur.skipped = true; };
+  // The song now playing has ended, however. `natural`: it ran to its end.
+  const close = (natural = false) => {
+    if (!cur) return;
+    let played = playedNow();
+    const duration = cur.duration || 0;
+    if (natural && duration > 0) played = Math.max(played, duration);
+    if (duration > 0) played = Math.min(played, duration);
+    const row = {
+      track_id: cur.trackId, device_id: DeviceIdentity.id(), started_at: cur.startedAt,
+      played_sec: Math.round(played), outcome: outcome(played, duration, cur.skipped && !natural),
+    };
+    if (duration > 0) row.duration_sec = Math.round(duration);
+    const picked = SpokenAudio.explicitPerson();
+    if (picked === 'none') row.as_household = true;
+    else if (picked !== undefined) row.listener_person_id = picked;
+    cur = null;
+    if (played < 1) return;
+    const rows = load();
+    rows.push(row);
+    save(rows);
+    clearTimeout(timer);
+    timer = setTimeout(() => flush(), 5000);
+  };
+
+  const paired = () => {
+    try { return typeof Auth === 'undefined' || !!(Auth.isPaired() || Auth.isLoggedIn()); }
+    catch { return false; }
+  };
+  /* Send what waits, through apiFetch with `noPrompt` (nobody pressed
+   * anything, so a refusal never opens a prompt). `keepalive` (the page
+   * is being hidden or closed): one smaller batch, a fetch the browser
+   * finishes after the page has gone; the answer, if it comes, clears
+   * what it took. */
+  const flush = async ({ keepalive = false } = {}) => {
+    if (sending || !paired()) return;
+    const rows = load();
+    if (!rows.length) return;
+    const batch = rows.slice(0, keepalive ? PAGEHIDE_BATCH : BATCH);
+    const body = JSON.stringify({ listens: batch });
+    sending = !keepalive;
+    try {
+      await apiFetch('/api/music/listens', { method: 'POST', body, noPrompt: true, keepalive });
+      dropSent(batch.length);
+      if (!keepalive && load().length) setTimeout(() => flush(), 1000);
+    } catch (e) {
+      const st = e && e.status;
+      // A batch the server can't take as it is would fail forever: drop it.
+      if (st >= 400 && st < 500 && !KEPT_ERRORS.includes(st)) dropSent(batch.length);
+    } finally { if (!keepalive) sending = false; }
+  };
+
+  /* Listen for the page going away and the network coming back once this
+   * browser has played (or has left unsent) a library song: not at load,
+   * so a page that never plays music adds no handlers. */
+  let armed = false;
+  const arm = () => {
+    if (armed) return;
+    armed = true;
+    try {
+      window.addEventListener('online', () => flush());
+      window.addEventListener('pagehide', () => { close(); flush({ keepalive: true }); });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flush({ keepalive: true });
+      });
+    } catch { /* no window (a test harness) */ }
+  };
+  // What an earlier visit left behind goes out a little after load.
+  try {
+    setTimeout(() => { if (load().length) { arm(); flush(); } }, 8000);
+  } catch { /* no timers */ }
+
+  return { follow: (...a) => { if (a[0] && a[0].kind === 'library') arm(); return follow(...a); },
+           skip, close, flush, outbox: load };
 })();
 
 /* Build a generic queue item from a downloaded podcast episode row.
@@ -503,7 +677,20 @@ const PlaybackProvider = ({ children }) => {
   // positions key off this (defaults to the dashboard user = null/anon).
   const [listenerPersonId, setListenerPersonIdState] = React.useState(() => SpokenAudio.getPerson());
   const setListenerPersonId = React.useCallback((pid) => {
-    SpokenAudio.setPerson(pid); setListenerPersonIdState(pid);
+    SpokenAudio.setPerson(pid); setListenerPersonIdState(SpokenAudio.getPerson());
+  }, []);
+  // Nothing picked here follows the device: when the server says whose
+  // this browser is ("this is me", People page) or that it is a shared
+  // screen, "listening as" moves with it.
+  React.useEffect(() => {
+    const sync = () => setListenerPersonIdState(SpokenAudio.getPerson());
+    const offs = [];
+    try {
+      if (DeviceIdentity.subscribeOwner) offs.push(DeviceIdentity.subscribeOwner(sync));
+      if (DeviceIdentity.subscribeShared) offs.push(DeviceIdentity.subscribeShared(sync));
+    } catch { /* data.js absent */ }
+    sync();
+    return () => offs.forEach((off) => { try { off(); } catch {} });
   }, []);
 
   const current = index >= 0 && index < queue.length ? queue[index] : null;
@@ -712,6 +899,8 @@ const PlaybackProvider = ({ children }) => {
     // Only react to the currently-active element ending.
     const g = graphRef.current;
     if (!g || el !== g.els[g.active]) return;
+    // The listening history: this song ran to its end.
+    ListenLog.close(true);
     if (sleepEndOfTrackRef.current) {
       sleepEndOfTrackRef.current = false;
       setSleepRemainingSec(null);
@@ -732,6 +921,16 @@ const PlaybackProvider = ({ children }) => {
   const queueRef = React.useRef(queue); queueRef.current = queue;
   const indexRef = React.useRef(index); indexRef.current = index;
   const advanceRef = React.useRef(advanceTo); advanceRef.current = advanceTo;
+
+  // The listening history (ListenLog): the library song playing in THIS
+  // browser, and whether it is playing. A new item closes the one before
+  // (as stopped, or skipped when next / a queue row ended it); casting to
+  // a room closes it too (the room's own logger takes over there).
+  const currentUid = current ? current.uid : null;
+  React.useEffect(() => {
+    if (target.kind !== 'browser') { ListenLog.follow(null, false); return; }
+    ListenLog.follow(current, status === 'playing', durationSec);
+  }, [currentUid, status, target.kind, durationSec]); // eslint-disable-line
 
   /* ── position ticker (rAF) + crossfade trigger ────────────────────── */
   React.useEffect(() => {
@@ -897,6 +1096,8 @@ const PlaybackProvider = ({ children }) => {
         if (i < cur) return cur - 1;
         if (i === cur) {
           // Removing the current item — advance to what slid into its slot.
+          // For the listening history that is a skip of it.
+          if (target.kind === 'browser') ListenLog.skip();
           if (nq.length === 0) { stop(); return -1; }
           const ni = Math.min(cur, nq.length - 1);
           if (target.kind === 'browser') loadAndPlay(nq[ni]);
@@ -928,7 +1129,7 @@ const PlaybackProvider = ({ children }) => {
 
   const jumpTo = React.useCallback((i) => {
     if (i < 0 || i >= queue.length) return;
-    if (target.kind === 'browser') { setIndex(i); loadAndPlay(queue[i]); return; }
+    if (target.kind === 'browser') { ListenLog.skip(); setIndex(i); loadAndPlay(queue[i]); return; }
     // While casting: the room restarts on that row. The highlight moves only
     // once it has (a row a room can't play is refused and moves nothing).
     // In line with the casts (castTo): it waits for one still on its way,
@@ -965,6 +1166,7 @@ const PlaybackProvider = ({ children }) => {
     if (target.kind === 'room') { apiPost(`/api/music/stop/${target.roomId}`).catch(() => {}); setStatus('stopped'); return; }
     const g = graphRef.current;
     if (g) g.els.forEach((el) => { try { el.pause(); } catch {} });
+    ListenLog.close();
     setStatus('stopped');
     setPositionSec(0);
   }
@@ -991,6 +1193,7 @@ const PlaybackProvider = ({ children }) => {
     // room was cast (since 2026-10-01; before, skip swapped it for one
     // random library track).
     if (target.kind === 'room') { apiPost(`/api/music/skip/${target.roomId}`).catch(() => {}); return; }
+    ListenLog.skip();
     const ni = index + 1;
     if (ni < queue.length) advanceTo(ni, { crossfade: false });
     else stop();

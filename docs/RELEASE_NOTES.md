@@ -4,6 +4,40 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — listening history, and "this is me" on a phone or browser
+
+**Domovoi now keeps a listening history** (migration V051): each library
+song a room, browser or phone plays, how long it played, how it ended
+(finished, skipped, stopped) and who it was for. Up next will learn from it.
+It is kept **1 year** by default; Settings → Privacy → **Listening history**
+(an admin) sets 90 days or **Don't keep** (`MUSIC_LISTENS_KEEP`: `365`,
+`90`, `off`) and has **Delete all listening history**. Forgetting a person
+deletes theirs. What is recorded and who may clear it:
+docs/SECURITY_PRIVACY.md, "Listening history".
+
+- **Rooms** log by themselves: the core reads each room's player every few
+  seconds, so a song the player moved on to by itself is recorded now too.
+  A room's song is the person whose voice started the music, or the person
+  of the phone or browser that last replaced the room's queue.
+- **The browser player** sends its songs when each ends (and when the tab
+  closes); the "listening as" choice on Podcasts now starts at the person
+  this browser is (see below) and offers "household" for nobody in
+  particular.
+- **The apps** send theirs with the next app updates
+  (`POST /api/music/listens`; docs/API_REFERENCE.md §3.5e).
+
+**"This is me."** On People, a person's page has **this is me** for the
+phone or browser in your hand: what it plays then counts as that person's,
+and that person can **clear** their own listening history from it. A
+browser that isn't theirs asks for the admin password instead, or offers
+"this is me" first. The first phone or browser to claim a person needs no
+password; a second one, or changing another device's person, needs an
+admin (Settings → Phones & browsers → Known devices has a **person**
+column). A shared screen can't be anyone's, and marking a device shared
+drops its person. The Android app's "This phone belongs to" follows the
+same rule: a phone that names a person another device already has
+registers as before but stays unclaimed until an admin says yes.
+
 ## 2026-11-12 — a playlist plays in this browser
 
 The playlist dialog (Music → Playlists) now has **play here** and **shuffle

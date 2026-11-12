@@ -217,20 +217,29 @@ const ChapterList = ({ p }) => {
 };
 
 /* ── "Listening as [person]" selector — browser has no voice ID ───────── */
+/* It starts at the person this browser is claimed by ("this is me" on the
+ * People page; never on a shared screen), and a pick here holds for this
+ * browser until changed. "household" = nobody in particular: what plays
+ * here then counts for the whole house. */
 const ListeningAsSelector = () => {
   const p = usePlayback();
   // Quiet: the roster is a household read (WEB-15), and a selector nobody
-  // has touched must not pop the pair prompt; unpaired, it offers only "me".
+  // has touched must not pop the pair prompt; unpaired, it offers only "household".
   const { items: people } = useApiList('/api/people', { eventTypes: ['people.last_seen.changed'], quiet: true });
   if (!p.available) return null;
+  const mine = p.spoken && p.spoken.devicePerson ? p.spoken.devicePerson() : null;
   return (
     <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--fg-muted)' }}>
       <Icon name="user" size={13}/> listening as
       <select value={p.listenerPersonId ?? ''}
               onChange={(e) => p.setListenerPersonId(e.target.value === '' ? null : Number(e.target.value))}
               style={{ font: 'inherit', fontSize: 12, height: 28, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--fg)' }}>
-        <option value="">me (this browser)</option>
-        {(people || []).map((pers) => <option key={pers.id} value={pers.id}>{pers.name}</option>)}
+        <option value="">household</option>
+        {(people || []).map((pers) => (
+          <option key={pers.id} value={pers.id}>
+            {pers.id === mine ? `${pers.name} (this browser)` : pers.name}
+          </option>
+        ))}
       </select>
     </label>
   );

@@ -101,7 +101,9 @@ async def list_people() -> list[Person]:
                        COALESCE(vc.profile_count, 0) AS profile_count,
                        (SELECT COUNT(*) FROM people o
                          WHERE o.id <> p.id
-                           AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes
+                           AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes,
+                       (SELECT COUNT(*) FROM devices d
+                         WHERE d.owner_person_id = p.id) AS device_count
                 FROM people p
                 LEFT JOIN (
                     SELECT person_id, COUNT(*) AS profile_count
@@ -125,7 +127,9 @@ async def get_person(person_id: int) -> Person:
                        COALESCE(vc.profile_count, 0) AS profile_count,
                        (SELECT COUNT(*) FROM people o
                          WHERE o.id <> p.id
-                           AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes
+                           AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes,
+                       (SELECT COUNT(*) FROM devices d
+                         WHERE d.owner_person_id = p.id) AS device_count
                 FROM people p
                 LEFT JOIN (
                     SELECT person_id, COUNT(*) AS profile_count
@@ -410,10 +414,11 @@ async def delete_person(person_id: int) -> None:
       speaker, and the short-term conversation of the sessions those turns
       were in (``voice_history.delete_person_history``). A turn in which
       someone else said their name is the other speaker's and stays;
-    * then the person: their voice samples, memories, favorites and
-      preferences go with the row (FK cascades). What other tables keep
-      of them (a chat-mic message's speaker mark, an alias they taught)
-      lapses to NULL.
+    * then the person: their voice samples, memories, favorites,
+      preferences and listening history (``music_listens``, V051) go with
+      the row (FK cascades). What other tables keep of them (a chat-mic
+      message's speaker mark, an alias they taught, a phone or browser
+      claimed as theirs, a room's music being for them) lapses to NULL.
     """
     async with session_scope() as s:
         await voice_history.delete_person_history(s, person_id)
@@ -795,6 +800,7 @@ def _row_to_person(r: Any) -> Person:
         voice_profile_count=int(r[5]),
         presence_tier=_presence_tier_for(r[3]),
         namesakes=int(r[6]) if len(r) > 6 else 0,
+        device_count=int(r[7] or 0) if len(r) > 7 else 0,
     )
 
 

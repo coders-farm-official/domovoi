@@ -256,6 +256,12 @@
     "tab": "voice-history"
    }
   },
+  "settings/listening-history": {
+   "dashboard": "#settings/listening-history",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/health": {
    "dashboard": "#settings/health",
    "app": {
@@ -4548,6 +4554,9 @@
       },
       {
        "text": "{admin} **rename**, **forget person**, or delete one wrong voice sample."
+      },
+      {
+       "text": "Make this phone or browser yours: open your name there and press **this is me**. What you play on it then counts as your listening, and the player's \"listening as\" starts at you. Someone who already has a phone or browser needs an admin to add a second one. A shared screen can't be anyone's."
       }
      ]
     },
@@ -4658,7 +4667,10 @@
      "ordered": false,
      "items": [
       {
-       "text": "**This device**: give this browser or phone a name. It's what queues show as \"added by\"."
+       "text": "**This device**: give this browser or phone a name. It's what queues show as \"added by\". It also says whose it is (set with **this is me** on People)."
+      },
+      {
+       "text": "**Known devices** {admin}: the **person** column says whose each phone or browser is; an admin can change it."
       },
       {
        "text": "**Queue access**, **Files access** {admin}: stop one device changing a room's music or the files."
@@ -4750,6 +4762,10 @@
        "90 days"
       ],
       [
+       "The songs each room, phone and browser played, and who for",
+       "1 year, or what **Keep listening history** says"
+      ],
+      [
        "The list of recent print jobs",
        "90 days (an admin can clear it)"
       ],
@@ -4784,6 +4800,12 @@
       },
       {
        "text": "{admin} **Delete all voice history**, on the same page, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
+      },
+      {
+       "text": "Clear your own listening history: your name on [Settings → Household → People](route:settings/people) → **listening history** → **clear**. On a phone or browser that isn't yours, it asks for the admin password, or lets you say **this is me** first."
+      },
+      {
+       "text": "{admin} [Settings → Privacy → Listening history](route:settings/listening-history): **Keep listening history** for 1 year (the default), 90 days, or **Don't keep**; and **Delete all listening history**, for everyone."
       },
       {
        "text": "{admin} **forget person** on [Settings → Household → People](route:settings/people) does what \"forget me\" does, for anyone: it deletes only what that person said."
