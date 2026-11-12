@@ -160,6 +160,22 @@ def _impossible_device(items: list[ListenIn], now: datetime) -> str | None:
     return None
 
 
+async def _feed_up_next(items: list[ListenIn]) -> None:
+    from web.backend.api import up_next as up_next_api
+
+    rows = [
+        {
+            "track_id": i.track_id, "device_id": i.device_id, "session_id": i.session_id,
+            "started_at": _aware(i.started_at), "played_sec": i.played_sec,
+            "duration_sec": i.duration_sec,
+            "outcome": music_listens.outcome_for(i.played_sec, i.duration_sec, i.outcome == "skipped"),
+        }
+        for i in items if i.session_id is not None
+    ]
+    if rows:
+        await up_next_api.feed_listens(rows)
+
+
 @router.post("", dependencies=[Depends(require_device)])
 async def post_listens(body: ListensIn) -> dict[str, Any]:
     """Record a batch of a browser's or phone's listens. ``{accepted,
@@ -176,8 +192,6 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
     time since its first song began is refused (422); and a device adds at
     most ``DEVICE_DAILY_CAP`` listens a day."""
     keep = live_keep()
-    if not music_listens.recording(keep):
-        return {"accepted": 0, "dropped": len(body.listens), "recording": False}
     now = datetime.now(timezone.utc)
     bad = _impossible_device(body.listens, now)
     if bad is not None:
@@ -185,6 +199,11 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
             status_code=422,
             detail=f"{bad}: more seconds played than have passed since its first song began",
         )
+    # Songs an Up next session played feed that session (its drift seeds,
+    # its early-skip rule), whether or not the household keeps the history.
+    await _feed_up_next(body.listens)
+    if not music_listens.recording(keep):
+        return {"accepted": 0, "dropped": len(body.listens), "recording": False}
     async with session_scope() as s:
         devices = await _devices(s, {item.device_id for item in body.listens})
         room_left: dict[str, int] = {}

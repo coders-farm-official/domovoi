@@ -290,7 +290,7 @@ const EpisodeRow = ({ ep, onPlay, now }) => {
     when && <span key="d" title={podPublishedFull(ep.published_at)}>{when}</span>,
     len && <span key="l">{len}</span>,
     (prog.kind === 'played' || prog.kind === 'partial' || prog.kind === 'resumed')
-      && <span key="p" style={prog.kind !== 'played' ? { color: 'var(--brand)' } : undefined}>{prog.label}</span>,
+      && <span key="p" style={prog.kind !== 'played' ? { color: 'var(--brand-ink)' } : undefined}>{prog.label}</span>,
     chapters > 0 && <span key="c">{`${chapters} ${chapters === 1 ? 'chapter' : 'chapters'}`}</span>,
     <span key="s">{podDownload(ep)}</span>,
   ].filter(Boolean);

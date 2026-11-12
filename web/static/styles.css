@@ -665,6 +665,46 @@ html.mp-docked { --player-h: 64px; }
 .mp-q-res:last-child { border-bottom: none; }
 .mp-q-res.on { background: var(--brand-soft); }
 .mp-q-res-main { min-width: 0; padding: 6px 10px; cursor: pointer; }
+/* The queue's "up next" section (PlayerUpNext): Up next's picks, after the
+   songs somebody asked for. A head (what the mix is built from + the
+   Autoplay switch), "for <name>", one muted line when there is something
+   to say, then the picks: title, artist and why, less like this, remove. */
+.mp-un { border-top: 1px solid var(--border); }
+.mp-un-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 4px; }
+.mp-un-what { display: flex; flex-direction: column; min-width: 0; }
+.mp-un-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+.mp-un-basis { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-un-auto { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; color: var(--fg); cursor: pointer; min-height: 32px; }
+.mp-un-auto input {
+  appearance: none; -webkit-appearance: none; margin: 0; flex: none; cursor: pointer;
+  width: 32px; height: 18px; border-radius: var(--r-full); position: relative;
+  background: var(--sunken); border: 1px solid var(--fg-faint);
+  transition: background 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+.mp-un-auto input::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  border-radius: var(--r-full); background: var(--fg-muted);
+  transition: transform 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+.mp-un-auto input:checked { background: var(--brand); border-color: var(--brand); }
+.mp-un-auto input:checked::after { transform: translateX(14px); background: var(--fg-on-brand); }
+.mp-un-auto input:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: 2px; }
+.mp-un-for { display: flex; align-items: center; gap: 6px; padding: 0 12px 6px; font-size: 12px; color: var(--fg-muted); }
+.mp-un-for select {
+  font: inherit; font-size: 12px; height: 28px; padding: 0 6px; min-width: 0;
+  border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg);
+}
+.mp-un-line { padding: 4px 12px 8px; font-size: 11px; color: var(--fg-muted); }
+.mp-un-row { grid-template-columns: 20px minmax(0, 1fr) auto; cursor: default; }
+.mp-un-sub { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mp-un-sub .mp-q-sub { flex: 0 1 auto; min-width: 0; }
+.mp-un-why {
+  flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10px; font-weight: 500; line-height: 16px; padding: 0 6px;
+  border-radius: var(--r-sm); background: var(--idle-soft); color: var(--fg-muted);
+}
+.mp-un-acts { display: flex; gap: 2px; }
+.mp-un .mp-q-note { padding: 0 12px 8px; }
 .mp-q-save input {
   flex: 1; min-width: 0; font: inherit; font-size: 12px; height: 30px; padding: 0 10px;
   border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg);
@@ -778,6 +818,10 @@ html.mp-docked { --player-h: 64px; }
 .mp-sheet .mp-q-save .btn { height: 44px; }
 .mp-sheet .mp-q-save .btn-icon { width: 44px; }
 .mp-sheet .mp-q-res-main { min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+.mp-sheet .mp-un-row { grid-template-columns: 24px minmax(0, 1fr) auto; }
+.mp-sheet .mp-un-auto { min-height: 44px; font-size: 13px; }
+.mp-sheet .mp-un-head { padding: 8px 4px 4px 14px; }
+.mp-sheet .mp-un-for, .mp-sheet .mp-un-line, .mp-sheet .mp-un .mp-q-note { padding-left: 14px; }
 .mp-sheet .mp-q-results { max-height: 36vh; }
 .mp-sheet .np-eq-presets { flex-wrap: wrap; }
 

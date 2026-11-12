@@ -603,6 +603,11 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
     setQ, setSource, setSort, setFavoritedOnly,
   } = lib;
   const filtered = !!q || source !== 'all' || favoritedOnly;
+  // Up next: a song played from a searched or filtered library goes on with
+  // the rest of what is shown; from the whole library, with songs like it.
+  const rowContext = filtered
+    ? { kind: 'ids', name: q ? `results for "${q}"` : (favoritedOnly ? 'favorites' : 'this list') }
+    : null;
 
   const [selected, setSelected] = React.useState(() => new Set());
   const [bulkPid, setBulkPid] = React.useState('');
@@ -718,7 +723,7 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                 <td onClick={e => e.stopPropagation()}>
                   <span className="lib-play">
                     <span className="lib-cover-phone"><CoverArt src={libraryCoverUrl(t.id)} size={32} icon={null}/></span>
-                    <IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/>
+                    <IconButton name="play" onClick={() => onBrowserPlay(t, rowContext, items)} title="play in this browser"/>
                   </span>
                 </td>
                 {/* The cover, then title, artist and album stacked in one
@@ -891,6 +896,10 @@ const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoo
   const ids = (detail && detail.track_ids) || [];
   const albums = (detail && detail.albums) || [];
   const what = album == null ? artist.name : `${album || 'songs with no album'} · ${artist.name}`;
+  // Up next: what a song played from here goes on with.
+  const context = album == null ? { kind: 'artist', ref: artist.name, name: artist.name }
+    : album ? { kind: 'album', ref: `${artist.name}|${album}`, name: album }
+      : { kind: 'ids', name: what };
   const chip = (key, label, count, active, onClick) => (
     <button key={key} type="button" onClick={onClick}
       style={{ font: 'inherit', fontSize: 12, cursor: 'pointer', padding: '4px 10px',
@@ -935,10 +944,11 @@ const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoo
         </div>
 
         <TrackSetActions rooms={rooms} room={room} onRoom={setRoom} ids={ids} songs={songs} what={what}
+                         context={context}
                          onClose={onClose} onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
                          onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}/>
         <TrackSetSongs songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
-                       onQueueTrack={onQueueTrack}
+                       onQueueTrack={onQueueTrack} context={context}
                        sub={(t) => [t.album, t.artist !== artist.name ? t.artist : null].filter(Boolean).join(' · ')}/>
       </aside>
     </>
@@ -949,7 +959,7 @@ const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoo
  * add to queue in a room, which gets every track id the server gave (`ids`,
  * at most ROOM_TRACK_CAP at once), and play / shuffle / queue in this
  * browser, which takes the songs loaded so far (`songs`, a paged list). */
-const TrackSetActions = ({ rooms, room, onRoom, ids, songs, what, onClose, onPlayTracks,
+const TrackSetActions = ({ rooms, room, onRoom, ids, songs, what, context = null, onClose, onPlayTracks,
                            onQueueTracksInRoom, onBrowserPlayTracks, onBrowserQueueTracks }) => {
   const loaded = songs.items || [];
   const roomIds = (shuffle) => (shuffle ? shuffledIds(ids) : ids).slice(0, ROOM_TRACK_CAP);
@@ -978,9 +988,9 @@ const TrackSetActions = ({ rooms, room, onRoom, ids, songs, what, onClose, onPla
       <div className="label" style={{ margin: '12px 0 6px' }}>this browser</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Button icon="headphones" disabled={loaded.length === 0}
-                onClick={() => onBrowserPlayTracks(loaded, what)}>play here</Button>
+                onClick={() => onBrowserPlayTracks(loaded, what, context)}>play here</Button>
         <Button icon="shuffle" disabled={loaded.length === 0}
-                onClick={() => onBrowserPlayTracks(shuffledIds(loaded), what)}>shuffle here</Button>
+                onClick={() => onBrowserPlayTracks(shuffledIds(loaded), what, context)}>shuffle here</Button>
         <Button icon="list-plus" disabled={loaded.length === 0}
                 onClick={() => onBrowserQueueTracks(loaded, what)}>queue here</Button>
       </div>
@@ -995,8 +1005,9 @@ const TrackSetActions = ({ rooms, room, onRoom, ids, songs, what, onClose, onPla
 
 /* The songs of such a drawer, loaded as they scroll: a tap opens the track
  * drawer, the buttons play or queue one in this browser. `sub(t)` is the
- * line under the title. */
-const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack }) => {
+ * line under the title. Play starts Up next on `context`, the drawer's
+ * list (the artist, album or genre; the loaded songs for an `ids` one). */
+const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack, context = null }) => {
   const loaded = songs.items || [];
   return (
     <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
@@ -1022,7 +1033,7 @@ const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack 
                 </div>
               </button>
               <div style={{ display: 'flex', gap: 2 }}>
-                <IconButton name="play" onClick={() => onBrowserPlay(t)} title="play in this browser"/>
+                <IconButton name="play" onClick={() => onBrowserPlay(t, context, loaded)} title="play in this browser"/>
                 <IconButton name="list-plus" onClick={() => onQueueTrack(t)} title="add to browser queue"/>
               </div>
             </div>
@@ -1171,6 +1182,8 @@ const GenreDrawer = ({ genre, rooms, onClose, onPlayTracks, onQueueTracksInRoom,
   if (!genre) return null;
   const ids = (detail && detail.track_ids) || [];
   const count = detail ? detail.track_count : genre.track_count;
+  // "no genre" ('') isn't a genre to draw from: its loaded songs are the list.
+  const context = genre.key ? { kind: 'genre', ref: genre.key, name: genre.name } : { kind: 'ids', name: genre.name };
   return (
     <>
       <div onClick={onClose}
@@ -1192,10 +1205,10 @@ const GenreDrawer = ({ genre, rooms, onClose, onPlayTracks, onQueueTracksInRoom,
           </div>
         </div>
         <TrackSetActions rooms={rooms} room={room} onRoom={setRoom} ids={ids} songs={songs} what={genre.name}
-                         onClose={onClose} onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
+                         context={context} onClose={onClose} onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
                          onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}/>
         <TrackSetSongs songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
-                       onQueueTrack={onQueueTrack}
+                       onQueueTrack={onQueueTrack} context={context}
                        sub={(t) => [t.artist, t.album].filter(Boolean).join(' · ')}/>
       </aside>
     </>
@@ -1839,7 +1852,7 @@ const PlaylistsTab = ({ playlists, loading, onSelect, onPlay, onCreate, fire }) 
  * unpaged) in this browser. Footer holds Play / Shuffle buttons (both POST
  * /v1/admin/music/play-playlist with shuffle=false/true), Rename,
  * and Delete — the last two are disabled for Favorites. */
-const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowserPlayTracks, onRemoveTrack, onDelete, onEdit, onReorder, fire }) => {
+const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowserPlayTracks, onBrowserPlay, onRemoveTrack, onDelete, onEdit, onReorder, fire }) => {
   const [room, setRoom] = React.useState(rooms[0] || null);
   const [editing, setEditing] = React.useState(false);
   const [form, setForm] = React.useState({ name: '', description: '', cover_color: '', cover_emoji: '' });
@@ -1858,6 +1871,10 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
   // (playlists.changed) but never that row, so it read "3 tracks" over
   // two (F-023). The row's count only fills in until the fetch lands.
   const trackCount = tracks ? items.length : playlist.track_count;
+  // Up next: a song played from here goes on with the rest of the playlist
+  // (Favorites, a virtual list, by its songs).
+  const context = playlist.is_virtual ? { kind: 'ids', name: playlist.name }
+    : { kind: 'playlist', ref: String(playlist.id), name: playlist.name };
 
   const startEdit = () => {
     setForm({
@@ -1924,9 +1941,9 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
           <div className="label" style={{ margin: '12px 0 6px' }}>this browser</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Button icon="headphones" disabled={items.length === 0}
-                    onClick={() => { onBrowserPlayTracks(items, playlist.name); onClose(); }}>play here</Button>
+                    onClick={() => { onBrowserPlayTracks(items, playlist.name, context); onClose(); }}>play here</Button>
             <Button icon="shuffle" disabled={items.length === 0}
-                    onClick={() => { onBrowserPlayTracks(shuffledIds(items), playlist.name); onClose(); }}>shuffle here</Button>
+                    onClick={() => { onBrowserPlayTracks(shuffledIds(items), playlist.name, context); onClose(); }}>shuffle here</Button>
           </div>
           {editing && !playlist.is_virtual && (
             <div style={{ marginTop: 12 }}>
@@ -1951,7 +1968,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                      onDragStart={() => { dragFrom.current = i; }}
                      onDragOver={e => e.preventDefault()}
                      onDrop={() => onDrop(i)}
-                     style={{ display: 'grid', gridTemplateColumns: '32px 1fr 24px',
+                     style={{ display: 'grid', gridTemplateColumns: '32px 1fr auto auto',
                               alignItems: 'center', gap: 8,
                               padding: '8px 16px',
                               cursor: playlist.is_virtual ? 'default' : 'grab',
@@ -1965,6 +1982,10 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                       {t.artist || '—'}
                     </div>
                   </div>
+                  {onBrowserPlay && (
+                    <IconButton name="play" onClick={() => onBrowserPlay(t, context, items)}
+                                title="play in this browser" aria-label={`play ${t.title || 'this song'} in this browser`}/>
+                  )}
                   <IconButton name="x"
                               onClick={() => onRemoveTrack(playlist, t).then(refresh)}
                               title="remove from playlist"/>
@@ -2196,17 +2217,22 @@ const MusicPage = () => {
   // library rows). Degrades gracefully when the
   // provider isn't mounted (available === false).
   const player = usePlayback();
-  const onBrowserPlay = (track) => {
+  // A song played here starts Up next (player.jsx playFromList): with the
+  // list it was clicked in (`context`, `list`: the rest of that list comes
+  // next), or on its own (songs like it from the whole library).
+  const onBrowserPlay = (track, context = null, list = null) => {
     if (!player.available) { fire('browser player not available'); return; }
     // "Play here" plays here, casting or not: a room being cast to is
     // paused (player.jsx playItems), and the toast says which — once the
     // room has answered, so it never says "paused" over a room whose pause
     // didn't happen (the core's 502 for a player that never got it).
     const playing = `playing "${track.title || 'track'}" in this browser`;
-    const left = player.playItems([window.itemFromTrack(track)], 0, {
-      onLeft: (room, paused) => fire(paused ? `${playing} · paused ${room}`
-        : `${playing} · couldn't pause ${room}, it may still be playing`),
-    });
+    const onLeft = (room, paused) => fire(paused ? `${playing} · paused ${room}`
+      : `${playing} · couldn't pause ${room}, it may still be playing`);
+    const idx = Array.isArray(list) ? list.findIndex((t) => t && t.id === track.id) : -1;
+    const left = typeof player.playFromList === 'function'
+      ? player.playFromList(idx >= 0 ? list : [track], Math.max(0, idx), idx >= 0 ? context : null, { onLeft })
+      : player.playItems([window.itemFromTrack(track)], 0, { onLeft });
     if (!left) fire(playing);
   };
   const onQueueTrack = (track) => {
@@ -2215,14 +2241,17 @@ const MusicPage = () => {
     fire(`queued "${track.title || 'track'}"`);
   };
   // Many tracks at once (the Artists drawer's "play here" / "queue here").
-  const onBrowserPlayTracks = (tracks, label) => {
+  // A whole list played here, in the order given (shuffled or not): the
+  // list is the queue; Up next carries on when it is nearly over.
+  const onBrowserPlayTracks = (tracks, label, context = null) => {
     if (!player.available) { fire('browser player not available'); return; }
     if (!tracks.length) return;
     const playing = `playing ${label} in this browser`;
-    const left = player.playItems(tracks.map(t => window.itemFromTrack(t)), 0, {
-      onLeft: (room, paused) => fire(paused ? `${playing} · paused ${room}`
-        : `${playing} · couldn't pause ${room}, it may still be playing`),
-    });
+    const onLeft = (room, paused) => fire(paused ? `${playing} · paused ${room}`
+      : `${playing} · couldn't pause ${room}, it may still be playing`);
+    const left = typeof player.playList === 'function'
+      ? player.playList(tracks, context || { kind: 'ids', name: label }, { onLeft })
+      : player.playItems(tracks.map(t => window.itemFromTrack(t)), 0, { onLeft });
     if (!left) fire(playing);
   };
   const onBrowserQueueTracks = (tracks, label) => {
@@ -2787,7 +2816,7 @@ const MusicPage = () => {
       <PlaylistDrawer playlist={openPlaylist} rooms={rooms}
                       onClose={() => setOpenPlaylist(null)}
                       onPlay={onPlayPlaylist} onShuffle={onShufflePlaylist}
-                      onBrowserPlayTracks={onBrowserPlayTracks}
+                      onBrowserPlayTracks={onBrowserPlayTracks} onBrowserPlay={onBrowserPlay}
                       onRemoveTrack={onRemoveFromPlaylist}
                       onDelete={onDeletePlaylist} onEdit={onEditPlaylist}
                       onReorder={onReorderPlaylist}

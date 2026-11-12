@@ -506,7 +506,31 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
         "how long listening history is kept and how many songs each person "
         "has in it — never a song"
     ),
+    # Up next (V053, phase P3, 2026-11-12): a browser's or phone's mix —
+    # what it is playing next and whose taste it follows (a person's name).
+    ("web", "/api/music/up-next/sessions/{session_id}"): (
+        "a device's Up next: the songs it will play next and the person whose "
+        "taste the mix follows"
+    ),
 }
+
+# Up next's writes (V053, phase P3): the household device tier, never the
+# guest gate (a guest has no Up next) nor an admin-only one.
+UP_NEXT_DEVICE_WRITES = [
+    ("POST", "/api/music/up-next/sessions"),
+    ("POST", "/api/music/up-next/sessions/{session_id}/next"),
+    ("POST", "/api/music/up-next/sessions/{session_id}/feedback"),
+    ("PATCH", "/api/music/up-next/sessions/{session_id}"),
+]
+
+
+@pytest.mark.parametrize(("method", "path"), UP_NEXT_DEVICE_WRITES,
+                         ids=[f"web {m} {p}" for m, p in UP_NEXT_DEVICE_WRITES])
+def test_up_next_writes_are_the_device_tier(method, path) -> None:
+    by_key = {(a, m, p): d for a, m, p, d in ROUTES}
+    assert ("web", method, path) in by_key, f"web {method} {path} is missing"
+    calls = list(_dependency_calls(by_key[("web", method, path)]))
+    assert admin_auth.require_device in calls, f"web {method} {path} must wear require_device"
 
 
 @pytest.mark.parametrize(

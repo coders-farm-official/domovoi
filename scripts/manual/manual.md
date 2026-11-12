@@ -429,6 +429,24 @@ Your music library, on the server, played in any room or in the browser.
   shuffled. While playing in a room, an add goes to the room's queue too
   (and **play next** is not offered). **Save as playlist** is the
   smaller button below: it asks for a name and keeps the queue's songs.
+- **Dashboard:** **Up next** keeps the music going in this browser. Play
+  a song from a list (a playlist, an artist, an album, a genre, search
+  results) and the rest of that list follows it, shuffled toward songs
+  like the ones you let play, then round again. Play a song on its own and
+  similar songs from your library follow it. Play or shuffle a whole list
+  and it plays as it is; similar songs join when it is nearly over. They
+  show in the **Queue** panel under **up next**, below the songs you asked
+  for, each with why it was picked ("same artist", "90s", "from road
+  trip", "wildcard"). Tap one to play it now, the thumbs-down for **less
+  like this** (no more of that artist for this mix), or the x to remove it.
+  Songs you add always go before them. Skipping a song in its first 30
+  seconds plays that artist less.
+- **Dashboard:** the **autoplay** switch at the top of **up next** turns it
+  off: the queue then stops at its end (a song played from a list still
+  plays the rest of that list). This browser remembers it. With two people
+  or more in the household, **for** picks whose taste the mix follows
+  (**household** for everyone); it starts at the person this browser is
+  ("this is me" on People) and is **household** on a shared screen.
 - **Dashboard:** a MilkDrop visualizer: in the player, switch on
   **milkdrop visualizer**. It draws what this browser is playing (not a
   room), behind the panel. Its bar has previous and next preset, random,
