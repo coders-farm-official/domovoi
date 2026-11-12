@@ -37,7 +37,10 @@ from __future__ import annotations
 #        fetch and a class of local, api or web; ctx.add_lookup_source;
 #        the core orders them by class) and the manifest's optional
 #        [plugin] help file, indexed by Domovoi's help desk.
-API_VERSION = "1.8.0"
+# 1.9.0: core-router websocket routes marked @device_endpoint are served
+#        (the per-slug gate's websocket form: enable, LAN Origin, household
+#        token; open sockets closed on disable).
+API_VERSION = "1.9.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,

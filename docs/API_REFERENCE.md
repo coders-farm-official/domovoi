@@ -2368,10 +2368,16 @@ for how to declare them.
   by hand rather than stacked as a decorator). So is a route the gate cannot
   cover: a plain Starlette `Route` (`router.add_route`), `Mount` or `Host`
   on a plugin router would mount without the gate dependency, so it fails
-  the load. Plugin websocket routes are not supported yet: the gate is
-  HTTP-only, so a `@router.websocket` route (or a Starlette
-  `WebSocketRoute`) fails the load in both processes with "plugin
-  websocket routes are not supported yet". GETs are open unless the
+  the load. A plugin websocket route is served by the core only, on the
+  device tier only: a `@router.websocket` route marked `@device_endpoint`
+  takes the household token (`X-Device-Token`, or `?token=` from a
+  browser) or an admin Bearer at the handshake, a browser `Origin` must be
+  on the LAN, and a refused or disabled upgrade is closed `1008` before it
+  is accepted; disabling the plugin closes its open sockets (`1001`). An
+  unmarked or `@open_endpoint` socket, a Starlette `WebSocketRoute`, or a
+  websocket on a plugin's web router fails the load with "plugin
+  websocket routes must be @device_endpoint routes on the core router
+  (core.py)". GETs are open unless the
   plugin adds its own `Depends(admin_required)` or marks the GET
   `@device_endpoint`.
 * Pre-setup grace applies: until the admin credential exists, the gate

@@ -79,7 +79,9 @@ __all__ = [
     "iter_plugin_routes",
     "ungated_routes",
     "websocket_routes",
+    "refused_websocket_routes",
     "WEBSOCKET_UNSUPPORTED",
+    "enforce_websocket_tier",
     "unlisted_tier_routes",
     "enforce_route_tier",
     "admin_required",
@@ -233,34 +235,71 @@ def ungated_routes(routers: Iterable[Any]) -> list[str]:
 
 
 # The one sentence both processes' load errors carry for a plugin
-# websocket route, so a plugin author can search for it.
-WEBSOCKET_UNSUPPORTED = "plugin websocket routes are not supported yet"
+# websocket route they will not serve, so a plugin author can search for
+# it. The core serves a websocket route that is ``@device_endpoint`` on a
+# FastAPI router (:func:`refused_websocket_routes`); the web dashboard
+# process serves none (its plugin pages talk to the core's sockets).
+WEBSOCKET_UNSUPPORTED = (
+    "plugin websocket routes must be @device_endpoint routes on the core "
+    "router (core.py)"
+)
 
 
 def websocket_routes(routers: Iterable[Any]) -> list[str]:
     """``"WEBSOCKET path (module.function)"`` for every websocket route on
     ``routers`` — ``@router.websocket`` / ``add_api_websocket_route``
     (FastAPI's ``APIWebSocketRoute``) or a plain Starlette
-    ``WebSocketRoute``. Both processes refuse a plugin with any
-    (:data:`WEBSOCKET_UNSUPPORTED`).
-
-    The per-slug gate is written for HTTP: its dependency takes a
-    ``Request``, so on a websocket FastAPI cannot call it and the
-    handshake died with a ``TypeError`` at connect time — closed, but for
-    no reason a plugin author could read — while a plain
-    ``WebSocketRoute`` skipped the gate altogether. Until the gate has a
-    websocket form (what tier a socket needs, and how a browser presents
-    it), the load fails up front and says so."""
+    ``WebSocketRoute``. The web process refuses a plugin with any
+    (:data:`WEBSOCKET_UNSUPPORTED`); the core refuses only
+    :func:`refused_websocket_routes`."""
     from starlette.routing import WebSocketRoute
 
     out: list[str] = []
     for route in iter_plugin_routes(routers):
         if not isinstance(route, WebSocketRoute):   # APIWebSocketRoute too
             continue
-        fn = getattr(route, "endpoint", None)
-        where = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
-        out.append(f"WEBSOCKET {getattr(route, 'path', '?')} ({where})")
+        out.append(_websocket_label(route))
     return out
+
+
+def refused_websocket_routes(routers: Iterable[Any]) -> list[str]:
+    """The websocket routes on ``routers`` the CORE will not serve, each
+    as ``"WEBSOCKET path (module.function) <why>"``.
+
+    A plugin websocket is served only when it is a FastAPI
+    ``APIWebSocketRoute`` (``@router.websocket`` / ``add_api_websocket_route``)
+    whose function is ``@device_endpoint``:
+
+    * the tier is fixed. A socket carries a live, two-way stream for as
+      long as it stays open, so it takes the household device token (or an
+      admin Bearer) at the handshake — never the open tier, and not the
+      admin default either, which a browser cannot present on an upgrade
+      without leaking a session token into the URL;
+    * a plain Starlette ``WebSocketRoute`` is mounted with no router
+      dependency at all, so the gate (enable-404, ``Origin``, tier) would
+      never run for it."""
+    from fastapi.routing import APIWebSocketRoute
+    from starlette.routing import WebSocketRoute
+
+    out: list[str] = []
+    for route in iter_plugin_routes(routers):
+        if not isinstance(route, WebSocketRoute):
+            continue
+        label = _websocket_label(route)
+        if not isinstance(route, APIWebSocketRoute):
+            out.append(
+                f"{label} is a plain Starlette WebSocketRoute, which the "
+                "plugin gate never runs for — use @router.websocket"
+            )
+        elif endpoint_tier(getattr(route, "endpoint", None)) != "device":
+            out.append(f"{label} is not @device_endpoint")
+    return out
+
+
+def _websocket_label(route: Any) -> str:
+    fn = getattr(route, "endpoint", None)
+    where = f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
+    return f"WEBSOCKET {getattr(route, 'path', '?')} ({where})"
 
 
 def tier_conflicts(routers: Iterable[Any]) -> list[str]:
@@ -358,6 +397,28 @@ async def enforce_route_tier(request: Request) -> None:
         await require_device(request)
         return
     await admin_required(request)
+
+
+async def enforce_websocket_tier(websocket: Any) -> None:
+    """The auth half of the core's per-slug gate for a plugin WEBSOCKET
+    upgrade. Only ``@device_endpoint`` sockets are ever mounted
+    (:func:`refused_websocket_routes`); this refuses anything else anyway,
+    then requires the household token — the ``X-Device-Token`` header (the
+    Android app) or ``?token=`` (a browser, which cannot set headers on an
+    upgrade) — or an admin Bearer, with the pre-setup LAN grace and the
+    same wrong-token backoff as every other device-tier check
+    (``admin_auth.websocket_device_ok``). Refused: the handshake is closed
+    1008 before the socket is accepted, so the endpoint never runs."""
+    from fastapi import WebSocketException
+
+    from domovoi.admin_auth import websocket_device_ok
+
+    if endpoint_tier(websocket.scope.get("endpoint")) != "device":
+        raise WebSocketException(code=1008, reason="not a device-tier socket")
+    if not await websocket_device_ok(websocket):
+        raise WebSocketException(
+            code=1008, reason="household device token or admin session required"
+        )
 
 
 async def admin_required(request: Request) -> None:

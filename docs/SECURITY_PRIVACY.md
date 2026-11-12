@@ -1680,10 +1680,13 @@ What the install flow *does* do (verified in
   own route classes only, so a plugin router carrying a plain Starlette
   `Route` (`router.add_route`), `Mount` or `Host` — which would answer
   with no tier at all, even while the plugin is disabled — is refused at
-  load in both processes, nested routers included. So is any websocket
-  route: the gate is HTTP-only (a Starlette `WebSocketRoute` skips it, and
-  on `@router.websocket` it cannot even be called), so plugin websocket
-  routes are not supported yet. The bundled
+  load in both processes, nested routers included. A plugin websocket is
+  served by the core only and only on the device tier: the gate runs on
+  the upgrade (disabled plugin, a browser `Origin` off the LAN, or no
+  household token / admin Bearer → closed `1008` before accept), and
+  disabling the plugin closes its open sockets. An unmarked or
+  `@open_endpoint` socket, a Starlette `WebSocketRoute` (which skips the
+  gate) and any socket on the dashboard process are refused at load. The bundled
   radio plugin opens nothing to the whole LAN: its
   everyday mutations (play, favorite, edit, forget, simulcast lookup) are
   `@device_endpoint` and its FCC bulk import keeps the admin default.

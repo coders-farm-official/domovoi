@@ -812,7 +812,7 @@ async def test_the_web_mount_refuses_a_websocket_route(shape: str, tmp_path: Pat
         host._mount_one(row)
         assert SLUG not in host.mounted
         error = host.load_errors[SLUG]
-        assert "plugin websocket routes are not supported yet" in error, error
+        assert webkit.WEBSOCKET_UNSUPPORTED in error, error
         assert "WEBSOCKET /ws (" in error
         assert "gate cannot cover" not in error   # named once, for the right reason
         assert not any(
@@ -834,14 +834,14 @@ async def test_the_core_refuses_a_websocket_route(shape: str, tmp_path: Path) ->
         assert len(exc.value.errors) == 1, exc.value.errors
         error = exc.value.errors[0]
         assert "WEBSOCKET /ws (" in error
-        assert "plugin websocket routes are not supported yet" in error, error
+        assert webkit.WEBSOCKET_UNSUPPORTED in error, error
         assert SLUG not in LOADER.loaded
         # The mount is the last door, for any caller but the loader.
         import importlib
 
         module = importlib.import_module(f"domovoi_plugin_{SLUG}.core")
         plugin_http._mounted.pop(SLUG, None)
-        with pytest.raises(TypeError, match="plugin websocket routes are not supported yet"):
+        with pytest.raises(TypeError, match="must be @device_endpoint"):
             plugin_http.mount_plugin_router(FastAPI(), SLUG, module.router)
         assert SLUG not in plugin_http._mounted
     finally:
@@ -850,24 +850,24 @@ async def test_the_core_refuses_a_websocket_route(shape: str, tmp_path: Path) ->
         _forget_core_plugin(root)
 
 
-async def test_a_websocket_route_used_to_fail_only_at_connect() -> None:
-    """Why the load refuses it: behind the gate, a plugin websocket could
-    not even be called — the gate's dependency wants a Request. Mounted
-    by hand (``include_router``, skipping the refusal), the handshake
-    fails with the TypeError the refusal now replaces."""
+async def test_the_gate_now_runs_on_a_websocket_upgrade(monkeypatch) -> None:
+    """The gate takes an ``HTTPConnection``, so FastAPI calls it on an
+    upgrade too (it used to take a ``Request`` and the handshake died with
+    a ``TypeError``). Mounted by hand, skipping the load-time refusal, an
+    UNMARKED socket is still closed 1008 at the handshake: the gate's
+    websocket form is the device tier only."""
     from fastapi import Depends, WebSocket
     from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
 
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN}, device_token=TOKEN)
     router = APIRouter()
 
     @router.websocket("/ws")
-    async def live(websocket: WebSocket):
+    async def live(websocket: WebSocket):  # pragma: no cover — never reached
         await websocket.accept()
         await websocket.close()
 
-    assert webkit.websocket_routes([router]) == [
-        f"WEBSOCKET /ws ({__name__}.test_a_websocket_route_used_to_fail_only_at_connect.<locals>.live)"
-    ]
     app = FastAPI()
     app.include_router(
         router, prefix=f"/v1/plugins/{SLUG}",
@@ -875,9 +875,12 @@ async def test_a_websocket_route_used_to_fail_only_at_connect() -> None:
     )
     plugin_http.set_plugin_enabled(SLUG, True)
     try:
-        with pytest.raises(TypeError, match="request"):
-            with TestClient(app).websocket_connect(f"/v1/plugins/{SLUG}/ws"):
-                pass
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with TestClient(app).websocket_connect(
+                f"/v1/plugins/{SLUG}/ws?token={TOKEN}"
+            ) as ws:
+                ws.receive_text()
+        assert exc.value.code == 1008
     finally:
         plugin_http._plugin_enabled.pop(SLUG, None)
 

@@ -375,7 +375,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.8.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.9.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 | `help` | Optional (SDK 1.8): a short Markdown help file inside the plugin, e.g. `"HELP.md"`. Domovoi's help desk indexes it with the manual (see [your plugin's help file](#your-plugins-help-file-sdk-18)). Optional for third-party plugins; **required for Coders Farm's own**. |
 | `accent` | Optional. Your dashboard page's colour, `"#rrggbb"` (or `"#rgb"`): its primary buttons, links, selection washes and the frame the dashboard draws around it. Checked for contrast at load; see [the frame and your accent](#the-frame-and-your-accent). Without it the page gets the neutral plugin slate. |
@@ -908,7 +908,7 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.8.0"` — 1.3 added
+`domovoi.sdk.API_VERSION` (currently `"1.9.0"` — 1.3 added
 `device_endpoint`; 1.4 added `egress`, the internet-access gate, and
 `connectivity.policy` / `.reason` / `.internet_allowed`, and made
 `sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
@@ -917,7 +917,8 @@ the `[[containers]]` table and `ctx.add_container` /
 1.7 added `sdk.core_config.ai_features` and made `sdk.http` refuse a model
 request to this box's Ollama while the household's AI features are off,
 §4.14; 1.8 added lookup sources, `ctx.add_lookup_source`, §4.19, and the
-manifest's optional `help` file) is
+manifest's optional `help` file; 1.9 serves `@device_endpoint` websocket
+routes on the core router, §4.15) is
 the semver your `domovoi_api` range is checked against. Ask for `">=1.4"`
 if you use the 1.4 names; for 1.5's, either ask for `">=1.5"` or call
 `ctx.add_container` only `if hasattr(ctx, "add_container")` so an older
@@ -1505,17 +1506,44 @@ with the router's own decorators or `add_api_route` (nested routers via
 `router.mount(...)` is mounted by FastAPI without the gate dependency —
 no tier, and no `404` while disabled — so it fails the load too.
 
-**Plugin websocket routes are not supported yet.** The gate that gives a
-route its tier and its disabled-`404` is written for HTTP requests; on a
-websocket FastAPI cannot call it, so a `@router.websocket(...)` route used
-to mount and then fail every handshake with a `TypeError`. Until the gate
-has a websocket form, a plugin router carrying any websocket route —
-`@router.websocket`, `add_api_websocket_route`, or a Starlette
-`add_websocket_route` — fails the load in both processes with "plugin
-websocket routes are not supported yet", naming the route. For live
-dashboard updates, declare `[[realtime]]` channels in the manifest
-([§4.12](#412-realtime--sdkrealtime)): they ride the dashboard's own
-`/ws/state` socket.
+**Plugin websocket routes (SDK 1.9): core process, device tier only.** A live,
+two-way stream (a game, a remote control) gets a websocket on the CORE
+router, marked `@device_endpoint`:
+
+```python
+from fastapi import WebSocket, WebSocketDisconnect
+from domovoi.sdk import device_endpoint
+
+@router.websocket("/live")
+@device_endpoint
+async def live(ws: WebSocket):
+    await ws.accept()
+    try:
+        while True:
+            await ws.send_text(await ws.receive_text())
+    except WebSocketDisconnect:
+        pass
+```
+
+It is served at `ws://<server>:6370/v1/plugins/<slug>/live`. The per-slug
+gate runs on the upgrade, before your function: a disabled plugin, a
+browser `Origin` off the LAN, or a caller without the household token is
+closed `1008` before the socket is accepted. A browser cannot set headers
+on an upgrade, so it presents the token as `?token=<household token>`;
+the Android app sends `X-Device-Token`; an admin `Bearer` passes too, and
+the pre-setup grace applies. When the plugin is disabled or re-enabled the
+core closes every socket its routes hold open (`1001`), so a socket never
+outlives the load that accepted it.
+
+Anything else fails the load (and the mount) with "plugin websocket
+routes must be @device_endpoint routes on the core router (core.py)",
+naming the route: an unmarked or `@open_endpoint` socket, a Starlette
+`add_websocket_route` (FastAPI would mount it without the gate), and any
+websocket on the dashboard's `web.py` router. The trust screen lists each
+socket among the device-tier routes as `WS /v1/plugins/<slug>/...`. For
+dashboard state alone, `[[realtime]]` channels in the manifest
+([§4.12](#412-realtime--sdkrealtime)) are still the lighter tool: they
+ride the dashboard's own `/ws/state` socket.
 
 ### 4.16 The web entry point — `register_web(ctx)`
 

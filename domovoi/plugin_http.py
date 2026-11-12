@@ -29,8 +29,16 @@ dependencies:
   :func:`mount_plugin_routers` itself), and so is a route FastAPI would
   mount WITHOUT the gate dependency — a plain Starlette ``Route`` /
   ``Mount`` / ``Host`` (``webkit.ungated_routes``) — and any websocket
-  route: the gate is HTTP-only, so plugin websocket routes are not
-  supported yet (``webkit.websocket_routes``).
+  route that is not a ``@device_endpoint`` FastAPI websocket route
+  (``webkit.refused_websocket_routes``).
+* **Websockets** — a plugin websocket route is DEVICE TIER only. The same
+  per-slug gate runs on the upgrade (it takes an ``HTTPConnection``, so
+  FastAPI calls it for both scopes): disabled → closed 1008, a browser
+  ``Origin`` off the LAN → closed 1008 (``transport_guard.origin_allowed``,
+  the core's own sockets' check), and no household token (header or
+  ``?token=``) / admin Bearer → closed 1008 — all before the socket is
+  accepted. Sockets a slug holds open are closed when the slug is
+  disabled or mounted again, so a torn-down load never keeps talking.
 
 The v1 auth model (scope amendment) is the lightweight one: the admin
 gate checks a Bearer token against ``admin_sessions`` (sha256-stored,
@@ -42,11 +50,14 @@ posture — so a fresh clone works before the setup flow runs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
+import weakref
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, WebSocketException
+from starlette.requests import HTTPConnection
 from sqlalchemy import text
 
 from domovoi.admin_auth import check_admin_request
@@ -60,9 +71,11 @@ from domovoi.webkit import (  # noqa: F401 — re-exported for plugin authors
     device_endpoint,
     endpoint_tier,
     enforce_route_tier,
+    enforce_websocket_tier,
     is_device_endpoint,
     is_open_endpoint,
     open_endpoint,
+    refused_websocket_routes,
     tier_conflicts,
     ungated_routes,
     websocket_routes,
@@ -85,10 +98,37 @@ _SLUG_ATTR = "_domovoi_plugin_slug"
 # without an await, so on the event loop a request routes against the
 # table as it was before the mount or as it is after, never in between.
 _MOUNT_LOCK = threading.Lock()
+# slug → the websockets its gate has let through and that may still be
+# open. Weak, so a socket that ended on its own is simply gone.
+_open_sockets: dict[str, "weakref.WeakSet[Any]"] = {}
 
 
 def set_plugin_enabled(slug: str, enabled: bool) -> None:
     _plugin_enabled[slug] = enabled
+    if not enabled:
+        _close_sockets(slug)
+
+
+def _close_sockets(slug: str) -> None:
+    """Close every websocket the slug's routes hold open (1001, "going
+    away"): the gate only judges an upgrade, so without this a socket
+    opened before a disable would keep talking to a torn-down load."""
+    sockets = list(_open_sockets.pop(slug, None) or ())
+    if not sockets:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return   # no loop: nothing is being served
+
+    async def _close(ws: Any) -> None:
+        try:
+            await ws.close(code=1001, reason=f"plugin {slug!r} disabled")
+        except Exception:  # noqa: BLE001 — already closed / peer gone
+            pass
+
+    for ws in sockets:
+        loop.create_task(_close(ws))
 
 
 def plugin_enabled(slug: str) -> bool:
@@ -113,7 +153,7 @@ async def has_admin_auth() -> bool:
         return False
 
 
-async def _admin_ok(request: Request) -> bool:
+async def _admin_ok(request: HTTPConnection) -> bool:
     """True when the request may perform admin-tier actions. Allows all
     while no admin password has been set up (pre-setup LAN-trust —
     module docstring); afterwards requires a live Bearer session
@@ -126,21 +166,42 @@ def _make_gate(slug: str, mount: list[Any] | None = None):
     of the mount that includes the route: once the slug is mounted again
     (a later enable, on this app or another) the route 404s like a
     disabled one, whatever the flag says."""
-    def _refuse_if_gone() -> None:
-        if not _plugin_enabled.get(slug, False) or (
+    def _gone() -> bool:
+        return not _plugin_enabled.get(slug, False) or (
             mount is not None and _mounted.get(slug) is not mount
-        ):
+        )
+
+    def _refuse_if_gone() -> None:
+        if _gone():
             raise HTTPException(status_code=404, detail=f"plugin {slug!r} disabled")
 
-    async def _gate(request: Request) -> None:
+    async def _gate(conn: HTTPConnection) -> None:
+        if conn.scope.get("type") == "websocket":
+            await _websocket_gate(conn)
+            return
         _refuse_if_gone()
         # Default-DENY for mutations: the admin tier unless the route
         # function carries a tier marker (shared body with the web gate).
-        await enforce_route_tier(request)
+        await enforce_route_tier(conn)  # type: ignore[arg-type] — an http scope is a Request
         # The tier check can await the DB. A disable (or disable and
         # re-enable) that ran meanwhile tore this route's SDK down, so
         # look again before the endpoint runs against it.
         _refuse_if_gone()
+
+    async def _websocket_gate(ws: Any) -> None:
+        from domovoi.transport_guard import origin_allowed
+
+        if _gone():
+            raise WebSocketException(code=1008, reason=f"plugin {slug!r} disabled")
+        # A browser page may open a socket to any host (the same-origin
+        # policy does not cover upgrades), so a page off the LAN is turned
+        # away the way the core's own sockets turn it away.
+        if not origin_allowed(ws.headers.get("origin")):
+            raise WebSocketException(code=1008, reason="cross-origin socket refused")
+        await enforce_websocket_tier(ws)
+        if _gone():
+            raise WebSocketException(code=1008, reason=f"plugin {slug!r} disabled")
+        _open_sockets.setdefault(slug, weakref.WeakSet()).add(ws)
     return _gate
 
 
@@ -152,6 +213,7 @@ def _unmount(app: FastAPI, slug: str) -> None:
         r for r in app.router.routes if getattr(r, _SLUG_ATTR, None) != slug
     ]
     _mounted.pop(slug, None)
+    _close_sockets(slug)
     app.openapi_schema = None
 
 
@@ -165,11 +227,10 @@ def _refuse(slug: str, routers: list[Any]) -> None:
             f"plugin {slug!r}: route(s) carry both @open_endpoint and "
             f"@device_endpoint: {'; '.join(conflicts)}"
         )
-    sockets = websocket_routes(routers)
+    sockets = refused_websocket_routes(routers)
     if sockets:
-        # The gate's dependency takes a Request; on a websocket FastAPI
-        # cannot call it and the handshake dies with a TypeError. Say why
-        # at mount instead.
+        # Only a @device_endpoint FastAPI websocket route takes the gate's
+        # websocket form; say why at mount instead of serving it.
         raise TypeError(
             f"plugin {slug!r}: {WEBSOCKET_UNSUPPORTED}: {'; '.join(sockets)}"
         )
@@ -250,6 +311,8 @@ def mount_plugin_routers(app: FastAPI, slug: str, routers: Any) -> None:
         # else the end — where a first mount lands.
         at = old[0] if old else len(kept)
         table[:] = kept[:at] + added + kept[at:]
+        # Sockets the previous mount let through talk to its torn-down SDK.
+        _close_sockets(slug)
         _mounted[slug] = routers
         set_plugin_enabled(slug, True)
         # Routes changed after startup: the cached OpenAPI doc is stale.

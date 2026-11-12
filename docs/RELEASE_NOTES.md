@@ -4,6 +4,21 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — plugins can open device-tier websockets (SDK 1.9.0)
+
+A plugin's core router may now carry a websocket route, so a plugin can
+hold a live two-way stream (a game, a remote control) with phones and
+browsers on the LAN. It must be marked `@device_endpoint`: the upgrade
+needs the household token (`X-Device-Token`, or `?token=` from a browser)
+or an admin Bearer, a browser `Origin` must be on the LAN, and a refused
+upgrade is closed `1008` before it is accepted. Disabling or re-enabling
+the plugin closes its open sockets. The install trust screen lists each
+socket among the device-tier routes (`WS /v1/plugins/<slug>/...`).
+Unmarked or `@open_endpoint` sockets, Starlette `WebSocketRoute`s and
+sockets on a plugin's dashboard (`web.py`) router are still refused at
+load, now with "plugin websocket routes must be @device_endpoint routes on
+the core router (core.py)" (docs/PLUGIN_DEVELOPMENT.md §4.15).
+
 ## 2026-11-12 — a genre from MusicBrainz for recognised songs
 
 A song whose file names no genre but which song recognition matched (it

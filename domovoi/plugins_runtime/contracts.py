@@ -26,8 +26,8 @@ Checks:
    must be one the install preview's source walk lists on that tier; and
    every route must be one FastAPI runs the plugin gate for — a plain
    Starlette ``Route`` / ``Mount`` would mount with no gate at all. A
-   websocket route is refused too: plugin websocket routes are not
-   supported yet (the gate is HTTP-only). Each is a load failure
+   websocket route must be a ``@device_endpoint`` FastAPI websocket route
+   (the gate's websocket form is device tier only). Each is a load failure
    (:func:`check_route_tiers`).
 7. Web page routes: every ``[[web.pages]].route`` is a valid hash slug
    and collides with neither a core dashboard route nor another enabled
@@ -514,17 +514,17 @@ def check_route_tiers(
     of a decorator — fails the load instead of serving a route the admin
     was never shown. And a route FastAPI would mount without the gate
     dependency (a plain Starlette ``Route``, ``Mount`` or ``Host``) fails
-    it too, as does any websocket route
-    (:func:`domovoi.webkit.websocket_routes` — the gate is HTTP-only, so
-    one used to fail its handshake with a ``TypeError`` instead). Nested
+    it too, as does a websocket route that is not a ``@device_endpoint``
+    FastAPI websocket route (:func:`domovoi.webkit.refused_websocket_routes`
+    — the gate's websocket form is the device tier only). Nested
     routers are walked (:func:`domovoi.webkit.iter_plugin_routes`). The
     web process refuses the same routes when it mounts them."""
     from domovoi.webkit import (
         WEBSOCKET_UNSUPPORTED,
+        refused_websocket_routes,
         tier_conflicts,
         ungated_routes,
         unlisted_tier_routes,
-        websocket_routes,
     )
 
     for conflict in tier_conflicts(routers):
@@ -532,11 +532,11 @@ def check_route_tiers(
             f"route {conflict} carries both @open_endpoint and "
             f"@device_endpoint — pick one tier"
         )
-    for ws in websocket_routes(routers):
+    for ws in refused_websocket_routes(routers):
         report.errors.append(
-            f"route {ws}: {WEBSOCKET_UNSUPPORTED} (the plugin gate is "
-            "HTTP-only; for live dashboard updates declare [[realtime]] "
-            "channels in the manifest)"
+            f"route {ws}: {WEBSOCKET_UNSUPPORTED} (a socket takes the "
+            "household device token at the handshake; for live dashboard "
+            "updates alone, [[realtime]] channels in the manifest are enough)"
         )
     for ungated in ungated_routes(routers):
         report.errors.append(
