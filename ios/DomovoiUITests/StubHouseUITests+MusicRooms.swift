@@ -219,7 +219,9 @@ extension StubHouseUITests {
     /// read off the picture where it was drawn (fails under 4.5:1,
     /// ``roomsAssertOwnInk``) and those findings are retaken at the settled
     /// position, which must not move again; a retaken finding on an element
-    /// the page clips is measured whole (``navClippedMeasured(_:_:on:)``).
+    /// the page clips is measured whole (``navClippedMeasured(_:_:on:anonymousForCutLeaves:)``).
+    /// The one named Dynamic Type finding it meets, against the `favorites
+    /// only` text, is allowed only after that text is measured growing at AX5.
     /// Anything else attributed fails.
     @MainActor
     func testMusicRooms_TheFoldedPageAudits() throws {
@@ -272,16 +274,72 @@ extension StubHouseUITests {
             judgedOn = settled
         }
         let clipped = navClippedMeasured(app, pixelLines, on: judgedOn)
-        let rest = other + clipped.kept
+        // Read off the audited launch **before** any other launch replaces it:
+        // the ordinary half of the favourites switch's measurement.
+        let switchText = app.staticTexts[MusicRoomsUnderTest.favoritesOnly]
+        let ordinaryHeight: CGFloat? = switchText.exists ? switchText.frame.height : nil
+        let scaling = other.filter(Self.musicRoomsIsTheSwitchScalingFinding)
+        var rest = other.filter { !Self.musicRoomsIsTheSwitchScalingFinding($0) } + clipped.kept
+        if !scaling.isEmpty {
+            // **Allowed only for a label this case has just watched grow.**
+            // I022 named `favorites only` (type=48, 101.7 x 20.3) for "User
+            // will not be able to change the font size of this element" —
+            // ``knownScalingFalsePositive``, which was measured once by hand
+            // (20.33 -> 63.33 points at AX5) but never by a running case.
+            // This is that measurement: the same leaf at AX5 on a launch of
+            // its own, and the finding stays in `rest` unless it is at least
+            // twice as tall there. A switch whose font were pinned to one
+            // size would measure the same at both and fail here.
+            app.terminate()
+            let axHeight = musicRoomsFavouritesSwitchHeightAtAX5()
+            let ordinary = ordinaryHeight.map { "\($0)" } ?? "not on screen"
+            let ax5 = axHeight.map { "\($0)" } ?? "not on screen"
+            print("SCALE [musicrooms] '\(MusicRoomsUnderTest.favoritesOnly)' large=\(ordinary) ax5=\(ax5)")
+            if let small = ordinaryHeight, let big = axHeight, small > 0, big >= small * 2 {
+                for line in scaling {
+                    print("MUSICROOMS AUDIT measured scaling false positive (\(small) -> \(big)) :: \(line)")
+                }
+            } else {
+                rest += scaling
+            }
+        }
         print(
             "MUSICROOMS AUDIT floor=\(firstSplit.floor) rest=\(firstSplit.rest.count) "
-                + "moved=\(!moves.isEmpty) clipped-measured=\(clipped.allowed.count) ours=\(rest.count)"
+                + "moved=\(!moves.isEmpty) clipped-measured=\(clipped.allowed.count) "
+                + "scaling-named=\(scaling.count) ours=\(rest.count)"
         )
         XCTAssertTrue(
             rest.isEmpty,
             "Apple's audit has \(rest.count) attributed finding(s) on the folded Music page: "
                 + rest.joined(separator: " || ")
         )
+    }
+
+    /// The one named Dynamic Type finding this case measures rather than
+    /// believes: Apple's "font size" headline against the `favorites only`
+    /// **text** (type 48, a `StaticText`) and nothing else. The same words on
+    /// any other element, or any other headline on this one, stays in `rest`.
+    static func musicRoomsIsTheSwitchScalingFinding(_ line: String) -> Bool {
+        line.hasPrefix("Dynamic Type font sizes are partially unsupported")
+            && line.contains("| element: type=48 \(knownScalingFalsePositive) frame=")
+    }
+
+    /// The `favorites only` text's height on Music at AX5, on a launch of its
+    /// own; `nil` (with the tree printed) if it never drew. The filters sit
+    /// under the tab strip in a `LazyVStack`, so at AX5 they are unbuilt until
+    /// the page is scrolled to them (``musicMoreScroll(_:to:flicks:)``).
+    @MainActor
+    func musicRoomsFavouritesSwitchHeightAtAX5() -> CGFloat? {
+        let (app, landed) = openMusicMore("UICTContentSizeCategoryAccessibilityXXXL")
+        defer { app.terminate() }
+        guard landed else {
+            print("=== MUSIC NEVER LANDED AT AX5 — tree follows ===\n" + app.debugDescription)
+            return nil
+        }
+        let text = app.staticTexts[MusicRoomsUnderTest.favoritesOnly]
+        guard musicMoreScroll(app, to: text) else { return nil }
+        evidence(app, "musicrooms-42-favourites-ax5")
+        return text.frame.height
     }
 }
 
@@ -297,4 +355,6 @@ enum MusicRoomsUnderTest {
     static let parlour = "parlour"
     static let attic = "attic"
     static let stopAndClose = "Stop and close"
+    /// ``MusicStrings/favoritesOnly``.
+    static let favoritesOnly = "favorites only"
 }

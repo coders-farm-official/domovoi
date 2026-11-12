@@ -228,8 +228,10 @@ extension StubHouseUITests {
     /// pixel-sampled findings are retaken at the settled position, which must
     /// not move again. A retaken finding against an element the page clips at
     /// its top or foot is measured by bringing that element wholly into view
-    /// and reading its ink (``navClippedMeasured(_:_:on:)``); everything else
-    /// fails.
+    /// and reading its ink (``navClippedMeasured(_:_:on:anonymousForCutLeaves:)``);
+    /// an anonymous `Contrast failed` is counted against a labelled leaf an
+    /// edge cuts, measured whole the same way, one each (train I022); everything
+    /// else fails.
     @MainActor
     func testNav_TheGroupedGridAudits() throws {
         let app = launch()
@@ -280,7 +282,7 @@ extension StubHouseUITests {
             pixelLines = retakeSplit.rest.filter(Self.roomsSamplesPixels)
             judgedOn = settled
         }
-        let clipped = navClippedMeasured(app, pixelLines, on: judgedOn)
+        let clipped = navClippedMeasured(app, pixelLines, on: judgedOn, anonymousForCutLeaves: true)
         let rest = other + clipped.kept
         print(
             "NAV GRID AUDIT floor=\(firstSplit.floor) rest=\(firstSplit.rest.count) "
@@ -311,12 +313,18 @@ extension StubHouseUITests {
     func navClippedMeasured(
         _ app: XCUIApplication,
         _ lines: [String],
-        on shot: RoomsWindowShot
+        on shot: RoomsWindowShot,
+        anonymousForCutLeaves: Bool = false
     ) -> (allowed: [String], kept: [String]) {
         let page = shot.page
         var allowed: [String] = []
         var kept: [String] = []
+        var anonymous: [String] = []
         for line in lines {
+            if anonymousForCutLeaves, Self.navAnonymousContrast(line) {
+                anonymous.append(line)
+                continue
+            }
             guard !page.isEmpty, let label = Self.roomsLabel(in: line) else {
                 kept.append(line)
                 continue
@@ -330,35 +338,165 @@ extension StubHouseUITests {
                 kept.append(line)
                 continue
             }
-            let element = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == %@", label))
-                .firstMatch
-            guard navReach(app, element) else {
-                print("NAV GRID AUDIT clipped '\(label)' could not be brought whole — kept :: \(line)")
+            let cutAt = "clipped at " + clippedTwins.map { "\($0.frame)" }.joined(separator: ", ")
+                + " by the page \(page)"
+            if navMeasuredWhole(app, label, cutAt, line) {
+                allowed.append(line)
+            } else {
+                kept.append(line)
+            }
+        }
+        guard !anonymous.isEmpty else { return (allowed, kept) }
+
+        // **An anonymous `Contrast failed`, paid for one per measured cut
+        // leaf** — the rule ``testNews_TheAnonymousBudgetIsACount()`` pins for
+        // News, here for Home's grid, and only where a caller asks for it.
+        //
+        // Train I022 is why. I017 and I021 retook this audit with one
+        // `Contrast failed` **named** against the Today card's `calendar`
+        // link at `(301.7, 63.3, 59.3, 44.0)`, across the page's top edge at
+        // 93.3, and measured it whole at 5.01:1 (`#975800` on `#F1F1F2`). The
+        // Lists tile then made `tools` five tiles, which wraps `Files` to a
+        // new row and puts `Settings` and `Manual` one row (110 points)
+        // lower, so the case reaches the grid's foot with the page scrolled
+        // 110 points further: `calendar` was at -94.7 before the audit and,
+        // after the audit's own 51.7-point move, at `{{301.7, -43.0}, {59.3,
+        // 44.0}}` — the **window's** top edge runs through it now, one point
+        // of it on screen. I022's retake reported one `Contrast failed` with
+        // `element: nil` and nothing named, and in the settled tree
+        // `calendar` is the only labelled leaf any edge (page top, page foot,
+        // window top, window foot) runs through. A cut leaf comes back named
+        // in one run and anonymous in the next from the same pixels (S012,
+        // and News' R003: one cut leaf, one anonymous finding).
+        //
+        // What is measured: which leaves an edge cuts, on the tree the
+        // findings were judged on; and each one's ink, drawn whole, which
+        // must be 4.5:1 or better. What is **not** measured, because the
+        // audit gave no element: that the anonymous finding is that leaf. So
+        // this is a count — one anonymous finding per cut leaf, none for a
+        // leaf already named in this pass (judged above), a second past the
+        // count fails, and a cut leaf reading under 4.5:1 fails.
+        let window = app.frame
+        let named = Set(lines.compactMap { Self.roomsLabel(in: $0) })
+        let cut = Self.navCutLeaves(shot.pageElements, page: page, window: window)
+            .filter { !named.contains($0.label) }
+        print(
+            "NAV GRID AUDIT anonymous contrast=\(anonymous.count) cut leaves="
+                + cut.map { "'\($0.label)' \($0.frame)" }.joined(separator: ", ")
+        )
+        for (index, line) in anonymous.enumerated() {
+            guard index < cut.count else {
+                print("NAV GRID AUDIT anonymous contrast past the cut-leaf count — kept :: \(line)")
                 kept.append(line)
                 continue
             }
-            let frame = element.frame
-            evidence(app, "nav-grid-clipped-\(label)")
-            guard let picture = app.screenshot().image.cgImage,
-                  let reading = Self.roomsLeafInk(picture, window: app.frame, frame: frame)
-            else {
-                print("NAV GRID AUDIT clipped '\(label)' at \(frame) has no ink to read — kept :: \(line)")
+            let leaf = cut[index]
+            let cutAt = "cut by an edge at \(leaf.frame) (page \(page), window \(window)); "
+                + "the anonymous finding is counted against it"
+            if navMeasuredWhole(app, leaf.label, cutAt, line) {
+                allowed.append(line)
+            } else {
                 kept.append(line)
-                continue
             }
-            let said = "'\(label)' clipped at " + clippedTwins.map { "\($0.frame)" }.joined(separator: ", ")
-                + " by the page \(page); drawn whole at \(frame) it reads \(reading.ink) on \(reading.paper) "
-                + String(format: "%.2f", reading.ratio) + ":1"
-            XCTAssertGreaterThanOrEqual(
-                reading.ratio,
-                Self.roomsContrastFloor,
-                "nav-grid: \(said) — under 4.5:1 where it is drawn whole, so the colour is the defect"
-            )
-            print("NAV GRID AUDIT clipped, measured :: \(said) :: \(line)")
-            allowed.append(line)
         }
         return (allowed, kept)
+    }
+
+    /// A `Contrast failed` the audit attached no element to.
+    static func navAnonymousContrast(_ line: String) -> Bool {
+        line.hasPrefix("Contrast failed") && line.hasSuffix("| element: nil")
+    }
+
+    /// The labelled **leaves** of the page (no other labelled page element
+    /// inside their frame) that an edge runs through: the page's top or foot,
+    /// or the window's. A tile button holding its own `StaticText` is not a
+    /// leaf — its words are, and they are judged where they are. One per
+    /// label, so a twin cannot pay twice.
+    static func navCutLeaves(
+        _ elements: [(label: String, frame: CGRect)],
+        page: CGRect,
+        window: CGRect
+    ) -> [(label: String, frame: CGRect)] {
+        guard !page.isEmpty else { return [] }
+        let edges = [page.minY, page.maxY, window.minY, window.maxY]
+        var seen = Set<String>()
+        return elements.filter { element in
+            let frame = element.frame
+            guard frame.width > 0, frame.height > 0 else { return false }
+            let isLeaf = !elements.contains { other in
+                other.frame != frame && other.frame.width > 0 && frame.contains(other.frame)
+            }
+            let isCut = edges.contains { frame.minY < $0 - 0.5 && frame.maxY > $0 + 0.5 }
+            guard isLeaf, isCut, !seen.contains(element.label) else { return false }
+            seen.insert(element.label)
+            return true
+        }
+    }
+
+    /// Bring `label` wholly into the page, photograph it and read its ink.
+    /// Under 4.5:1 fails the case with the reading. False (so the caller
+    /// keeps the line) when it could not be brought whole or read at all.
+    @MainActor
+    func navMeasuredWhole(_ app: XCUIApplication, _ label: String, _ cutAt: String, _ line: String) -> Bool {
+        let element = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", label))
+            .firstMatch
+        guard navReach(app, element) else {
+            print("NAV GRID AUDIT clipped '\(label)' could not be brought whole — kept :: \(line)")
+            return false
+        }
+        let frame = element.frame
+        evidence(app, "nav-grid-clipped-\(label)")
+        guard let picture = app.screenshot().image.cgImage,
+              let reading = Self.roomsLeafInk(picture, window: app.frame, frame: frame)
+        else {
+            print("NAV GRID AUDIT clipped '\(label)' at \(frame) has no ink to read — kept :: \(line)")
+            return false
+        }
+        let said = "'\(label)' \(cutAt); drawn whole at \(frame) it reads \(reading.ink) on \(reading.paper) "
+            + String(format: "%.2f", reading.ratio) + ":1"
+        XCTAssertGreaterThanOrEqual(
+            reading.ratio,
+            Self.roomsContrastFloor,
+            "nav-grid: \(said) — under 4.5:1 where it is drawn whole, so the colour is the defect"
+        )
+        print("NAV GRID AUDIT clipped, measured :: \(said) :: \(line)")
+        return true
+    }
+
+    /// ``navCutLeaves(_:page:window:)`` on I022's settled tree, pinned. No
+    /// app: the leaves are geometry. `calendar` is cut by the window's top;
+    /// the `Settings` tile is cut by the page's foot but holds its own words,
+    /// which are not cut; `today` is wholly above the page and cut by nothing;
+    /// the announce field's zero frame is nothing.
+    func testNav_TheCutLeavesAreGeometry() {
+        let page = CGRect(x: 0, y: 93.3, width: 393, height: 676.7)
+        let window = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let settled: [(label: String, frame: CGRect)] = [
+            ("today", CGRect(x: 32, y: 13, width: 40.7, height: 18)),
+            ("calendar", CGRect(x: 301.7, y: -43, width: 59.3, height: 44)),
+            ("Lists", CGRect(x: 295.5, y: 572.8, width: 26.7, height: 14.3)),
+            ("Settings", CGRect(x: 32, y: 701.7, width: 104.3, height: 72)),
+            ("gearshape.fill", CGRect(x: 72.5, y: 718, width: 23, height: 23)),
+            ("Settings", CGRect(x: 59.5, y: 744.8, width: 50.7, height: 14.3)),
+            ("announce in every room", CGRect.zero),
+        ]
+        XCTAssertEqual(Self.navCutLeaves(settled, page: page, window: window).map(\.label), ["calendar"])
+        // I017's position: the same link across the page's top instead.
+        let i017: [(label: String, frame: CGRect)] = [
+            ("calendar", CGRect(x: 301.7, y: 63.3, width: 59.3, height: 44)),
+        ]
+        XCTAssertEqual(Self.navCutLeaves(i017, page: page, window: window).map(\.label), ["calendar"])
+        // Nothing cut: no budget.
+        let whole: [(label: String, frame: CGRect)] = [
+            ("Lists", CGRect(x: 295.5, y: 572.8, width: 26.7, height: 14.3)),
+        ]
+        XCTAssertEqual(Self.navCutLeaves(whole, page: page, window: window).count, 0)
+        XCTAssertTrue(Self.navAnonymousContrast("Contrast failed: Contrast failed for element | element: nil"))
+        XCTAssertFalse(Self.navAnonymousContrast(
+            "Contrast failed: Contrast failed for element | element: type=9 label='calendar' "
+                + "frame=(301.7, 63.3, 59.3, 44.0)"
+        ))
     }
 
     // MARK: - Settings → Household
