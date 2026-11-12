@@ -73,6 +73,14 @@ SCENARIOS = {
         "await h.change((e) => e.type === 'input' && e.props['aria-label'] === 'add to Shopping', 'Butter');"
         " h.rerender(); await h.submit((e) => e.type === 'form' && cls(e).includes('lists-add'));"
         " await h.settle(); h.rerender(); return h.calls;"),
+    # Typed fast: the next item goes in while the first is still being sent.
+    "add_fast": _page(
+        "const box = (e) => e.type === 'input' && e.props['aria-label'] === 'add to Shopping';"
+        " const form = (e) => e.type === 'form' && cls(e).includes('lists-add');"
+        " await h.change(box, 'Butter'); h.rerender(); h.submit(form); h.rerender();"
+        " const after = h.find(box).props.value;"
+        " await h.change(box, 'Jam'); h.rerender(); h.submit(form); h.rerender();"
+        " await h.settle(); h.rerender(); return { after, calls: h.calls };"),
     "check": _page(
         "await h.click((e) => e.props && e.props.role === 'checkbox' && e.props['aria-label'] === 'cross off Milk');"
         " await h.settle(); h.rerender(); return h.calls;"),
@@ -130,3 +138,9 @@ def test_deleting_a_list_asks_first(driven) -> None:
 def test_an_empty_house_says_what_to_do(driven) -> None:
     text = " ".join(driven["empty"])
     assert "no lists yet" in text and "make a list called camping" in text
+
+
+def test_typing_fast_loses_nothing(driven) -> None:
+    o = driven["add_fast"]
+    assert o["after"] == ""                                  # the box empties at once
+    assert [c["body"]["text"] for c in o["calls"] if c["method"] == "POST"] == ["Butter", "Jam"]

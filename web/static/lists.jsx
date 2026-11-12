@@ -129,7 +129,6 @@ const ListsItemRow = ({ item, onToggle, onEdit, onDelete, grip, rowRef, dragging
 /* ---- The open list ------------------------------------------------ */
 const ListsDetail = ({ list, items, fire, refresh, onRename, onDeleteList }) => {
   const [text, setText] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
   const [local, setLocal] = React.useState(items);
   const [drag, setDrag] = React.useState(null);           // { id, order: [ids] }
   const [renaming, setRenaming] = React.useState(false);
@@ -147,21 +146,22 @@ const ListsDetail = ({ list, items, fire, refresh, onRename, onDeleteList }) => 
   const doneItems = local.filter((i) => i.done);
   const shownOpen = drag ? drag.order.map((id) => openItems.find((i) => i.id === id)).filter(Boolean) : openItems;
 
+  // The box empties at once, so the next item can be typed while this one
+  // is sent; a failed add puts its words back when the box is still empty.
   const add = async (e) => {
     if (e) e.preventDefault();
     const t = text.trim();
-    if (!t || busy) return;
-    setBusy(true);
+    if (!t) return;
+    setText('');
     try {
       const r = await apiPost(`${base}/items`, { text: t });
-      setText('');
       if (r && r.outcome === 'already') fire(`"${r.item.text}" is already on the list`);
       else if (r && r.outcome === 'reopened') fire(`"${r.item.text}" is back on the list`);
-      refresh();
     } catch (err) {
+      setText((cur) => cur || t);
       reportMutationFailure(fire, 'add', err, { kept: true });
     } finally {
-      setBusy(false);
+      refresh();
     }
   };
   const toggle = async (it) => {
@@ -278,7 +278,7 @@ const ListsDetail = ({ list, items, fire, refresh, onRename, onDeleteList }) => 
       <form className="lists-add" onSubmit={add}>
         <input className="lists-inp" value={text} maxLength={200} placeholder={`add to ${list.name.toLowerCase()}`}
                aria-label={`add to ${list.name}`} onChange={(e) => setText(e.target.value)}/>
-        <Button type="submit" variant="primary" icon="plus" disabled={!text.trim() || busy}>add</Button>
+        <Button type="submit" variant="primary" icon="plus" disabled={!text.trim()}>add</Button>
       </form>
       {local.length === 0 ? (
         <Empty title="nothing on this list" sub={`type above, or say "add milk to the ${list.name.toLowerCase()} list"`}/>
