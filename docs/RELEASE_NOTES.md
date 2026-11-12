@@ -4,6 +4,15 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — a room's Health moved to its Settings tab
+
+**In a room's drawer, the Health section (wi-fi, memory, cpu, boot
+network step, last outage, the wake-sensitivity note) and the command
+recordings switch are now on the Settings tab,** Health first. The
+Overview tab's top row is "last heard from" and "now playing", then
+volume, announce and the rest of the everyday controls, then the details
+list. Nothing changed in what they do.
+
 ## 2026-11-11 — a voice is not a name, and questions don't pretend to act
 
 **Switching voices now answers "Okay, I'll speak in May's voice now."
