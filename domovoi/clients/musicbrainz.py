@@ -256,6 +256,9 @@ class HttpMusicBrainzClient:
     # The search endpoint is slower than a lookup under load.
     SEARCH_TIMEOUT_SEC = 10.0
     MIN_SCORE = 80  # MB score is 0–100; below 80 is not reliable enough to overwrite metadata
+    # Largest answer read (a search page is a few KB, a recording a few
+    # hundred bytes); a longer body is "no proper answer", not a verdict.
+    MAX_BODY_BYTES = 2 * 1024 * 1024
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -409,7 +412,14 @@ class HttpMusicBrainzClient:
         """(HTTP status, parsed JSON or None). Raises
         :class:`MusicBrainzUnavailable` when no answer came back —
         including when internet access is turned off for this box, so the
-        alias fetch backs off instead of recording a verdict."""
+        alias fetch backs off instead of recording a verdict — and when the
+        body is longer than :attr:`MAX_BODY_BYTES`.
+
+        Redirects are not followed (the API answers in place): a 3xx comes
+        back as its status, which every caller treats as no answer, so a
+        request can never be sent on to a host ``egress`` did not check."""
+        import json
+
         import requests
 
         url = f"{self.BASE}/{path}"
@@ -423,15 +433,30 @@ class HttpMusicBrainzClient:
                 params=params,
                 headers={"User-Agent": self.USER_AGENT, "Accept": "application/json"},
                 timeout=timeout,
+                allow_redirects=False,
+                stream=True,
             )
         except Exception as e:
             raise MusicBrainzUnavailable(type(e).__name__) from e
-        if r.status_code != 200:
-            return r.status_code, None
         try:
-            return 200, r.json()
-        except ValueError:
-            return 200, None
+            if r.status_code != 200:
+                return r.status_code, None
+            body = bytearray()
+            try:
+                for chunk in r.iter_content(64 * 1024):
+                    body += chunk
+                    if len(body) > self.MAX_BODY_BYTES:
+                        raise MusicBrainzUnavailable("answer too large")
+            except MusicBrainzUnavailable:
+                raise
+            except Exception as e:
+                raise MusicBrainzUnavailable(type(e).__name__) from e
+            try:
+                return 200, json.loads(bytes(body))
+            except (ValueError, RecursionError):
+                return 200, None
+        finally:
+            r.close()
 
 
 _client: MusicBrainzClient | None = None

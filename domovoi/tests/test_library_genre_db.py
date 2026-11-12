@@ -115,7 +115,7 @@ async def test_the_backfill_reads_rows_the_indexer_already_had(db_session, monke
     ), {"a": str(a), "b": str(b), "gone": str(music / "gone.mp3")})
     await db_session.commit()
 
-    assert await LibraryTagBackfill().tick() == {"read": 2, "missing": 1}
+    assert await LibraryTagBackfill().tick() == {"read": 2, "missing": 1, "deferred": 0, "refused": 0}
     rows = (await db_session.execute(text(
         "SELECT title, artist, album, genre, genre_keys, year, year_source, tags_version "
         "FROM library_tracks ORDER BY id"
@@ -128,7 +128,57 @@ async def test_the_backfill_reads_rows_the_indexer_already_had(db_session, monke
         # Not there: stamped read, so the pass ends.
         ("Gone", "Y", None, None, None, None, None, TAGS_VERSION),
     ]
-    assert await LibraryTagBackfill().tick() == {"read": 0, "missing": 0}
+    assert (await LibraryTagBackfill().tick())["read"] == 0
+
+
+@requires_db
+async def test_a_row_the_database_refuses_never_sinks_its_batch(db_session) -> None:
+    """Security review of V050, finding 2: a value Postgres refuses (a NUL
+    in text) used to roll back the whole batch, which was then re-read
+    every second for ever. Each row now has its own savepoint; the refused
+    one is stamped with no genre, the rest are written."""
+    from domovoi.workers.library_tag_backfill import DbBackfillStore
+
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title) VALUES ('/m/1.mp3', '1'), "
+        "('/m/2.mp3', '2'), ('/m/3.mp3', '3')"
+    ))
+    await db_session.commit()
+    ids = [r[0] for r in (await db_session.execute(text("SELECT id FROM library_tracks ORDER BY id"))).all()]
+    ok = {"genre": "Soul", "genre_keys": ["soul"], "year": 1970}
+    bad = {"genre": "Rock\x00evil", "genre_keys": ["rock"], "year": 1980}   # past the sanitiser
+    refused = await DbBackfillStore().write([(ids[0], ok), (ids[1], bad), (ids[2], ok)], TAGS_VERSION)
+    assert refused == 1
+    rows = (await db_session.execute(text(
+        "SELECT genre, year, tags_version FROM library_tracks ORDER BY id"))).all()
+    assert [tuple(r) for r in rows] == [
+        ("Soul", 1970, TAGS_VERSION), (None, None, TAGS_VERSION), ("Soul", 1970, TAGS_VERSION),
+    ]
+
+
+@requires_db
+async def test_nul_and_bidi_characters_never_reach_the_database(db_session, monkeypatch, tmp_path) -> None:
+    from domovoi.workers.library_indexer import index_music_dir
+    from domovoi.workers.library_tag_backfill import LibraryTagBackfill
+
+    music = tmp_path / "music"
+    music.mkdir()
+    (music / "new.flac").write_bytes(mw.flac_file(comments=[
+        ("TITLE", "Ti\x00tle"), ("ARTIST", "Art\x00ist"), ("GENRE", "Rock;\x00evil"),
+        ("ALBUM", "Al\x00bum")]))
+    old = mw.write_mp3(music / "old.mp3", [mw.text_frame("TCON", "\u202eRock\u202c")])
+    monkeypatch.setattr(settings, "music_dir", str(music))
+    await db_session.execute(text("INSERT INTO library_tracks (file_path, title) VALUES (:p, 'Old')"),
+                             {"p": str(old)})
+    await db_session.commit()
+    assert (await index_music_dir())["inserted"] == 1
+    assert (await LibraryTagBackfill().tick())["refused"] == 0
+    rows = (await db_session.execute(text(
+        "SELECT title, artist, album, genre, genre_keys FROM library_tracks ORDER BY id"))).all()
+    assert [tuple(r) for r in rows] == [
+        ("Old", None, None, "Rock", ["rock"]),
+        ("Title", "Artist", "Album", "Rock;evil", ["rock", "evil"]),
+    ]
 
 
 # ─── The year fetch's writes ──────────────────────────────────────────────

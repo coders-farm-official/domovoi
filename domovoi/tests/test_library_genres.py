@@ -17,6 +17,7 @@ The database half (the migration, the writes, the web API) is
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -59,7 +60,7 @@ from domovoi.workers import library_indexer as li
     (["Soul", "soul", "SOUL "], ["soul"]),                      # once, first seen
     (["Unknown", "Other", "genre", "", "  "], []),              # placeholders
     (["x" * 41], []),                                           # a comment, not a genre
-    (["Rock​Pop"], []),                                    # format characters
+    (["Rock\u200bPop"], ["rockpop"]),                           # format characters removed
     (["Indie Rock"], ["indie rock"]),                           # no taxonomy: not "rock"
 ])
 def test_genre_keys(values, keys) -> None:
@@ -214,14 +215,15 @@ class _Store:
         self.written: list[tuple[int, Any]] = []
         self.pending_calls = 0
 
-    async def pending(self, version: int, limit: int) -> list[tuple[int, str]]:
+    async def pending(self, version: int, limit: int, after_id: int) -> list[tuple[int, str]]:
         self.pending_calls += 1
         done = {i for i, _ in self.written}
-        return [r for r in self.rows if r[0] not in done][:limit]
+        return [r for r in self.rows if r[0] not in done and r[0] > after_id][:limit]
 
-    async def write(self, rows, version: int) -> None:
+    async def write(self, rows, version: int) -> int:
         assert version == TAGS_VERSION
         self.written.extend(rows)
+        return 0
 
 
 class _Clock:
@@ -242,12 +244,12 @@ async def test_backfill_reads_a_batch_per_tick_and_stamps_missing_files(tmp_path
     store = _Store([(1, str(a)), (2, str(tmp_path / "gone.mp3")), (3, str(a))])
     clock = _Clock()
     w = bf.LibraryTagBackfill(store=store, clock=clock)
-    assert await w.tick() == {"read": 1, "missing": 1}
+    assert await w.tick() == {"read": 1, "missing": 1, "deferred": 0, "refused": 0}
     assert store.written[0] == (1, {"genre": "Soul", "genre_keys": ["soul"], "year": 1970})
     assert store.written[1] == (2, None)                     # stamped, so the pass ends
-    assert await w.tick() == {"read": 1, "missing": 0}
+    assert (await w.tick())["read"] == 1
     # Nothing left: idle for a minute, then one look.
-    assert await w.tick() == {"read": 0, "missing": 0}
+    assert (await w.tick())["read"] == 0
     calls = store.pending_calls
     clock.t += 30
     await w.tick()
@@ -264,7 +266,7 @@ async def test_backfill_waits_while_the_music_folder_is_away(tmp_path, monkeypat
     monkeypatch.setattr(settings, "music_dir", str(tmp_path / "unmounted"))
     store = _Store([(1, str(tmp_path / "unmounted" / "a.mp3"))])
     w = bf.LibraryTagBackfill(store=store, clock=_Clock())
-    assert await w.tick() == {"read": 0, "missing": 0}
+    assert (await w.tick())["read"] == 0
     assert store.pending_calls == 0 and store.written == []
 
 
@@ -275,6 +277,111 @@ def test_backfill_reader_refuses_what_is_not_an_audio_file(tmp_path) -> None:
     assert read_genre_year(tmp_path / "notes.txt") is None
     assert read_genre_year(tmp_path) is None
     assert read_genre_year(tmp_path / "missing.mp3") is None
+
+
+@pytest.mark.asyncio
+async def test_a_mostly_missing_batch_is_left_for_later_not_stamped(tmp_path, monkeypatch) -> None:
+    """Security review of V050, finding 4: a share mounted under MUSIC_DIR
+    that is away looks like a batch of missing files. Those rows are left
+    unread and retried on the next pass; only after MISSING_GRACE_SEC are
+    they stamped. The rows after them are not held up."""
+    from domovoi.workers import library_tag_backfill as bf
+
+    monkeypatch.setattr(settings, "music_dir", str(tmp_path))
+    monkeypatch.setattr(bf, "BATCH_SIZE", 8)
+    a = mw.write_mp3(tmp_path / "a.mp3", [mw.text_frame("TCON", "Soul")])
+    share = tmp_path / "share"                      # away: nothing under it
+    rows = [(i, str(share / f"{i}.mp3")) for i in range(1, 7)] + [(7, str(a)), (8, str(a)), (9, str(a))]
+    store, clock = _Store(rows), _Clock()
+    w = bf.LibraryTagBackfill(store=store, clock=clock)
+    got = await w.tick()
+    assert (got["read"], got["missing"], got["deferred"]) == (2, 0, 6)
+    assert [i for i, _ in store.written] == [7, 8]
+    assert (await w.tick())["read"] == 1             # the pass goes on past them
+    assert (await w.tick())["read"] == 0             # end of the pass: a pause
+    clock.t += bf.IDLE_RECHECK_SEC
+    assert (await w.tick())["deferred"] == 6         # retried, still away
+    assert len(store.written) == 3
+    clock.t += bf.MISSING_GRACE_SEC
+    await w.tick()                                   # the pass's end again
+    clock.t += bf.IDLE_RECHECK_SEC
+    got = await w.tick()
+    assert (got["missing"], got["deferred"]) == (6, 0)
+    assert sorted(i for i, _ in store.written) == list(range(1, 10))
+
+
+@pytest.mark.asyncio
+async def test_a_share_that_comes_back_is_read(tmp_path, monkeypatch) -> None:
+    from domovoi.workers import library_tag_backfill as bf
+
+    monkeypatch.setattr(settings, "music_dir", str(tmp_path))
+    share = tmp_path / "share"
+    rows = [(i, str(share / f"{i}.mp3")) for i in range(1, 7)]
+    store, clock = _Store(rows), _Clock()
+    w = bf.LibraryTagBackfill(store=store, clock=clock)
+    assert (await w.tick())["deferred"] == 6
+    for i in range(1, 7):
+        mw.write_mp3(share / f"{i}.mp3", [mw.text_frame("TCON", "Jazz")])
+    await w.tick()
+    clock.t += bf.IDLE_RECHECK_SEC
+    assert (await w.tick())["read"] == 6
+    assert all(meta["genre_keys"] == ["jazz"] for _, meta in store.written)
+
+
+# ─── Hostile tag values (security review of V050) ─────────────────────────
+
+
+def test_a_huge_genre_value_is_skipped_fast() -> None:
+    """Finding 1: NFKC expands U+FDFA 18-fold and is not linear; a 450 KB
+    tag took 12.6 s holding the GIL. Values over MAX_RAW_CHARS are now
+    skipped before any normalising, and only MAX_VALUES are looked at."""
+    import time
+
+    from domovoi import library_genres as lg
+
+    huge = "\ufdfa" * 1_000_000
+    t = time.perf_counter()
+    assert genre_keys([huge, "Soul"]) == ["soul"]
+    assert display_genre([huge, "Soul"]) == "Soul"
+    assert parse_year(huge + " 1999") is None
+    assert genre_keys(["\ufdfa" * 300] * 100_000) == []
+    assert time.perf_counter() - t < 0.5
+    assert genre_keys(["x"] * lg.MAX_VALUES + ["Soul"]) == ["x"]       # the 65th is not read
+    assert genre_keys(["\ufdfa" * lg.MAX_RAW_CHARS]) == []             # at the limit: read, too long a key
+
+
+def test_a_huge_genre_tag_in_a_file_is_skipped_fast(tmp_path) -> None:
+    import time
+
+    p = tmp_path / "a.flac"
+    p.write_bytes(mw.flac_file(comments=[("TITLE", "T"), ("GENRE", "\ufdfa" * 1_000_000),
+                                         ("GENRE", "Soul"), ("DATE", "\ufdfa" * 1_000_000)]))
+    t = time.perf_counter()
+    got = _tags(p)
+    assert time.perf_counter() - t < 2.0
+    assert got["genre_keys"] in (["soul"], None)     # None if the reader's own budget cut the block
+
+
+@pytest.mark.parametrize("raw, shown, keys", [
+    ("Rock;\x00evil", "Rock;evil", ["rock", "evil"]),
+    ("\u202eRock\u202c", "Rock", ["rock"]),
+    ("Ro\u200bck", "Rock", ["rock"]),
+    ("\x00", None, []),
+])
+def test_control_and_format_characters_never_reach_the_display(raw, shown, keys) -> None:
+    assert display_genre([raw]) == shown
+    if keys is not None:
+        assert genre_keys([raw]) == keys
+
+
+def test_nul_is_stripped_from_title_artist_album(tmp_path) -> None:
+    # Vorbis comments keep a NUL inside a value (ID3 reads one as a value
+    # separator, so it never gets that far there).
+    p = tmp_path / "a.flac"
+    p.write_bytes(mw.flac_file(comments=[("TITLE", "Ti\x00tle"), ("ARTIST", "\x00"),
+                                         ("ALBUM", "A\x00b")]))
+    got = li._read_tags(p)
+    assert (got["title"], got["artist"], got["album"]) == ("Title", None, "Ab")
 
 
 # ─── MusicBrainz: the client's recording year ─────────────────────────────
@@ -292,6 +399,12 @@ class _Resp:
             raise ValueError("no json")
         return self._body
 
+    def iter_content(self, _size: int = 1):
+        yield b"<html>" if self._body is None else json.dumps(self._body).encode()
+
+    def close(self) -> None:
+        pass
+
 
 @pytest.fixture
 def mb_http(monkeypatch):
@@ -301,10 +414,13 @@ def mb_http(monkeypatch):
     from domovoi.clients.musicbrainz import HttpMusicBrainzClient
 
     calls: list[tuple[str, dict]] = []
+    kwargs: list[dict] = []
     queue: list[_Resp] = []
 
-    def fake_get(url, params=None, headers=None, timeout=None):
+    def fake_get(url, params=None, headers=None, timeout=None, **kw):
         calls.append((url, dict(params or {})))
+        kwargs.append(kw)
+        assert kw == {"allow_redirects": False, "stream": True}
         return queue.pop(0)
 
     monkeypatch.setattr(requests, "get", fake_get)
@@ -353,6 +469,25 @@ async def test_only_an_mbid_reaches_the_path(mb_http, bad) -> None:
     with pytest.raises(MusicBrainzRejected):
         await client.recording_year(bad)
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_redirect_is_followed_and_the_body_is_capped(mb_http, monkeypatch) -> None:
+    """Finding 5 (pre-existing): redirects are not followed, so a request
+    can never be sent on to a host egress did not check; a body over 2 MB
+    is no answer."""
+    from domovoi.clients.musicbrainz import MusicBrainzRejected, MusicBrainzUnavailable
+
+    client, calls, queue = mb_http
+    queue.append(_Resp(302))
+    with pytest.raises(MusicBrainzRejected):
+        await client.recording_year(MBID)
+    monkeypatch.setattr(client, "MAX_BODY_BYTES", 100)
+    queue.append(_Resp(200, {"first-release-date": "1999", "pad": "x" * 200}))
+    with pytest.raises(MusicBrainzUnavailable, match="too large"):
+        await client.recording_year(MBID)
+    assert len(calls) == 2
+    assert client.MAX_BODY_BYTES == 100 and type(client).MAX_BODY_BYTES == 2 * 1024 * 1024
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,9 @@ half minutes for 6,000 songs; budget three quarters of an hour or more for
 100,000, longer on a network share). Until it is done
 the Genres tab says "reading genres from your files… N of M" and fills in
 as it goes. Nothing leaves the house for this. A song whose file is gone
-is skipped; with the music folder missing (an unplugged drive) it waits.
+is skipped; with the music folder missing (an unplugged drive) it waits,
+and songs on a drive or share inside it that is away are tried again on
+later passes (for up to six hours) rather than marked as having no genre.
 
 **A song with no year in its tags but a MusicBrainz recording id** gets
 the recording's first-release year from MusicBrainz: the recording id only,

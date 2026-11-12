@@ -9,6 +9,10 @@ indexer and tag backfill write ``library_tracks.genre`` / ``genre_keys`` /
 ID3v2.4's NUL-separated list) and a value may hold several genres
 ("Rock; Indie"). :func:`genre_keys` turns them into normalised keys:
 
+0. Only the first :data:`MAX_VALUES` values, and only values of at most
+   :data:`MAX_RAW_CHARS` characters as stored, are read at all
+   (:func:`bounded`): normalising is not linear in the length, and a tag
+   is whatever a file says.
 1. A value that names ID3v1 genres by number is turned into names: "(17)",
    "(17)Rock" (ID3v2.3: the reference, then optionally the same as text),
    a bare "17", "(RX)" (remix) and "(CR)" (cover).
@@ -25,12 +29,15 @@ ID3v2.4's NUL-separated list) and a value may hold several genres
    -> ``electronic``; and a few more. Small on purpose: it joins spellings
    of one genre and never decides that two genres are one (no "indie
    rock" -> "rock" taxonomy in v1; Up next matches on any shared key).
-5. Placeholders ("unknown", "none", "genre", "other", "misc", "n/a", "-")
-   and parts longer than :data:`MAX_KEY_CHARS` are dropped; a key is kept
+5. Control and format characters (NUL, bidi overrides, zero-width
+   spaces) are removed; placeholders ("unknown", "none", "genre", "other",
+   "misc", "n/a", "-") and parts longer than :data:`MAX_KEY_CHARS` are
+   dropped; a key is kept
    once, in first-seen order, at most :data:`MAX_KEYS` per track.
 
 ``library_tracks.genre`` is the first value as tagged (after step 1),
-trimmed to :data:`MAX_GENRE_CHARS`, for display; :func:`genre_label` is
+without control or format characters (NUL, bidi overrides), trimmed to
+:data:`MAX_GENRE_CHARS`, for display; :func:`genre_label` is
 how the Genres tab names a key ("hip hop" -> "Hip Hop", "r&b" -> "R&B").
 
 **Year.** :func:`parse_year`: the first four-digit number between
@@ -43,7 +50,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from datetime import date
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from domovoi.media_tags._id3 import ID3V1_GENRES
 
@@ -63,6 +70,15 @@ MAX_KEYS = 8
 MAX_KEY_CHARS = 40
 #: Longest ``library_tracks.genre`` (V050's CHECK allows 200).
 MAX_GENRE_CHARS = 100
+#: Longest raw tag value looked at, as stored (before any Unicode
+#: normalisation): a longer one is skipped whole. NFKC can expand a
+#: character 18-fold (U+FDFA) and costs more than linear time on such text,
+#: holding the GIL, so a huge "genre" (a 16 MB Vorbis comment) is refused
+#: before it is normalised (security review of V050, finding 1).
+MAX_RAW_CHARS = 256
+#: Most raw values looked at per file (a file can repeat GENRE thousands
+#: of times); the rest are ignored.
+MAX_VALUES = 64
 #: Earliest year believed (a "0000" or a "1066" track number is not one).
 MIN_YEAR = 1900
 
@@ -150,6 +166,26 @@ _SPACE_RE = re.compile(r"[\s_\-‐-―]+")
 _YEAR_RE = re.compile(r"(?<!\d)(\d{4})(?!\d)")
 
 
+def bounded(values: Iterable[object]) -> Iterator[str]:
+    """The raw values worth reading: strings of at most
+    :data:`MAX_RAW_CHARS`, the first :data:`MAX_VALUES` values only. Every
+    rule below reads through this, BEFORE resolving or normalising."""
+    for i, raw in enumerate(values):
+        if i >= MAX_VALUES:
+            return
+        if isinstance(raw, str) and len(raw) <= MAX_RAW_CHARS:
+            yield raw
+
+
+def _printable(text: str) -> str:
+    """``text`` without control and format characters (NUL, which Postgres
+    refuses in text; the bidi overrides such as U+202E, which would flip
+    what the Genres tab shows), whitespace runs as one space."""
+    return " ".join("".join(
+        ch for ch in text if unicodedata.category(ch) not in ("Cc", "Cf")
+    ).split())
+
+
 def _id3v1_name(n: int) -> str | None:
     return ID3V1_GENRES[n] if 0 <= n < len(ID3V1_GENRES) else None
 
@@ -198,11 +234,9 @@ def _norm(part: str) -> str:
 
 
 def _key_of(part: str) -> str | None:
-    k = _norm(part)
+    k = _norm(_printable(part))
     k = ALIASES.get(k, k)
     if k in _PLACEHOLDERS or len(k) > MAX_KEY_CHARS:
-        return None
-    if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in k):
         return None
     return k
 
@@ -211,9 +245,7 @@ def genre_keys(values: Iterable[str]) -> list[str]:
     """The normalised genre keys of a file's genre values (module
     docstring, steps 1-5). [] when none survive."""
     out: list[str] = []
-    for raw in values:
-        if not isinstance(raw, str):
-            continue
+    for raw in bounded(values):
         for name in resolve_numeric(raw):
             whole = _norm(name)
             parts = [name] if whole in ALIASES or whole in LABELS else _SPLIT_RE.split(name)
@@ -228,12 +260,11 @@ def genre_keys(values: Iterable[str]) -> list[str]:
 
 def display_genre(values: Iterable[str]) -> str | None:
     """``library_tracks.genre``: the first value as tagged, its ID3
-    numbers read, trimmed; None when the file has no genre worth showing."""
-    for raw in values:
-        if not isinstance(raw, str):
-            continue
+    numbers read, control and format characters dropped, trimmed; None
+    when the file has no genre worth showing."""
+    for raw in bounded(values):
         for name in resolve_numeric(raw):
-            text = " ".join(name.split())
+            text = _printable(name)
             if text and genre_keys([text]):
                 return text[:MAX_GENRE_CHARS]
     return None
@@ -256,7 +287,7 @@ def parse_year(value: object, *, today: date | None = None) -> int | None:
         return None
     if isinstance(value, int):
         return value if MIN_YEAR <= value <= latest else None
-    if not isinstance(value, str):
+    if not isinstance(value, str) or len(value) > MAX_RAW_CHARS:
         return None
     for m in _YEAR_RE.finditer(value):
         y = int(m.group(1))

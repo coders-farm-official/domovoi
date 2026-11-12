@@ -150,14 +150,24 @@ def _genre_values(tags: Any) -> list[str]:
 
 
 def _year_of(tags: Any) -> int | None:
-    from domovoi.library_genres import parse_year
+    from domovoi.library_genres import bounded, parse_year
 
     for keys in (_ORIGINAL_YEAR_KEYS, _YEAR_KEYS):
-        for value in _text_values(tags, *keys):
+        for value in bounded(_text_values(tags, *keys)):
             year = parse_year(value)
             if year is not None:
                 return year
     return None
+
+
+def _no_nul(text: str | None) -> str | None:
+    """A tag value without NUL characters, which Postgres refuses in text
+    (one in a title would abort the whole sweep's transaction); None when
+    nothing else is left."""
+    if text is None:
+        return None
+    cleaned = text.replace("\x00", "").strip()
+    return cleaned or None
 
 
 def _read_tags(path: Path) -> dict[str, Any]:
@@ -198,12 +208,12 @@ def _read_tags(path: Path) -> dict[str, Any]:
     if tags is None:
         return out
 
-    out["title"] = tags.first("TIT2", "title", "©nam", "Title")
+    out["title"] = _no_nul(tags.first("TIT2", "title", "©nam", "Title"))
     # WMA keeps the artist in Author and the album in WM/AlbumTitle, and
     # MP4 the album artist in aART (read since 2026-10-15).
-    out["artist"] = tags.first("TPE1", "artist", "©ART", "Artist", "Author", "albumartist",
-                               "TPE2", "aART", "WM/AlbumArtist")
-    out["album"] = tags.first("TALB", "album", "©alb", "Album", "WM/AlbumTitle")
+    out["artist"] = _no_nul(tags.first("TPE1", "artist", "©ART", "Artist", "Author", "albumartist",
+                                       "TPE2", "aART", "WM/AlbumArtist"))
+    out["album"] = _no_nul(tags.first("TALB", "album", "©alb", "Album", "WM/AlbumTitle"))
     # A file whose genre or date is malformed still gives its title.
     try:
         from domovoi.library_genres import display_genre, genre_keys
