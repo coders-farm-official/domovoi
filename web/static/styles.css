@@ -886,8 +886,10 @@ html.mp-docked { --player-h: 64px; }
   .viz-bar { flex-wrap: wrap; }
   .viz-opacity input[type="range"] { height: 44px; }
 }
+/* Above the see-through panel (.viz-over, z-index 1) and the control row:
+   the preset list opened UNDER the lyrics (owner, 2026-11-12). */
 .viz-menu {
-  position: absolute; right: 12px; bottom: 56px; width: min(320px, calc(100% - 24px));
+  position: absolute; z-index: 5; right: 12px; bottom: 56px; width: min(320px, calc(100% - 24px));
   max-height: calc(100% - 72px); display: flex; flex-direction: column;
   background: var(--overlay); border: 1px solid var(--border); border-radius: var(--r-lg);
   box-shadow: var(--shadow-md); color: var(--fg); font-size: 13px;
