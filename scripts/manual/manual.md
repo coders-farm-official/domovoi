@@ -459,9 +459,17 @@ Your music library, on the server, played in any room or in the browser.
   to the room's queue as it plays. A whole list played in a room plays as
   it is, and similar songs join when it is nearly over. Casting from the
   browser takes its up next along, and casting back brings it home. A
-  playlist played in a room still plays one song at a time and has no up
-  next; a radio stream, a podcast or a book ends it, and so does stopping
-  or clearing the room, or two hours paused.
+  radio stream, a podcast or a book ends it, and so does stopping or
+  clearing the room, or two hours paused.
+- **A playlist in a room.** Play or shuffle a playlist (or your
+  favorites) in a room, or say "play the road trip playlist" there, and
+  the whole playlist goes into the room's queue, from its first song. Edit
+  it like any room queue: jump to a song, move, remove, add, play next.
+  Songs like it join when it is nearly over (none with **autoplay** off).
+  The queue is a copy: changing it never changes the playlist; **save as
+  playlist** keeps it as a new one. Songs the music player can't find are
+  skipped. "Add <song> after this" puts a song right after the one
+  playing.
 - **Dashboard:** the room's picks show in [Music → Room queue](#music/queue)
   under **up next**, each with why it was picked, with the room's
   **autoplay** switch and **less like this**; while you play in a room

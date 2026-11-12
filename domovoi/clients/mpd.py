@@ -257,18 +257,21 @@ class MPDStubClient:
     async def prepare_files(
         self, uris: list[str], *, start_sec: float = 0.0, start_index: int = 0
     ) -> list[dict[str, Any]]:
-        # The stub has no database to refuse a path: every URI is queued,
-        # its title read from the file name.
+        # Every URI is queued, its title read from the file name, except a
+        # path in ``refused_files`` (as MPD refuses one not in its database).
         from pathlib import PurePosixPath
+
+        def _takes(uri: str) -> bool:
+            return bool(uri) and uri not in self.refused_files
 
         songs = [
             {"file": uri, "title": PurePosixPath(uri).stem}
-            for uri in uris if uri
+            for uri in uris if _takes(uri)
         ]
         if not songs:  # like the real client: nothing queued, nothing touched
             return []
         # Where the start URI lands once the blanks are dropped.
-        at = min(sum(1 for u in uris[: max(0, start_index)] if u), len(songs) - 1)
+        at = min(sum(1 for u in uris[: max(0, start_index)] if _takes(u)), len(songs) - 1)
         queued = self._assign_ids(songs)
         self.queue_generation += 1
         self._queue = list(queued)

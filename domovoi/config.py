@@ -1395,7 +1395,7 @@ class Settings(BaseSettings):
     # cadence is each provider plugin's own setting, not core's.
     acquisition_max_attempts: int = 3
     # Cadence of the core playback-state sweeper (stale now-playing stamps,
-    # current_playlist hygiene, natural-end music_stop pushes to the Pi).
+    # natural-end music_stop pushes to the Pi).
     playback_sweeper_interval_sec: float = 5.0
 
     # ─── Two-way drop-in (live room-to-room audio) ─────────────────────

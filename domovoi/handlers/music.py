@@ -1480,22 +1480,15 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
 
         **The smart skip is for a room whose queue holds one song (or
         none)**, which is how every other start leaves it — a spoken
-        "play X" or "play something", a play-track click, a playlist
-        (core plays one song at a time and advances it here), a
-        provider's stream. MPD's next would just end the music there, so:
+        "play X" or "play something", a play-track click, a provider's
+        stream. (A playlist in a room is its whole queue since
+        2026-11-12, so its "next" is the queue's.) MPD's next would just end the music there, so:
 
         * **An external stream from a registered streaming-search
           provider is active** (``last_play_source`` matches the
           provider's slug) — search the same query again via the
           capability seam and stream the first result that isn't
           ``likely_same`` as the current title.
-        * **A playlist is active in this room** —
-          ``app.state.current_playlist[room_id]`` is set AND its
-          stored ``last_file_path`` matches MPD's currentsong (so
-          the entry isn't stale from a prior playlist play). In
-          ``ordered`` mode advance by position (loop at end); in
-          ``shuffle`` mode pick a random track from the playlist
-          excluding the just-played one.
         * **Local library track is playing (not in a playlist)** —
           pick another random library track. Detected via session
           context (``last_play_source == "local"``) or by
@@ -1546,14 +1539,6 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
                     return stream_skip
         else:
             source = None
-
-        # Playlist branch — checks per-room state with a freshness
-        # guard against MPD's currentsong, so an entry from a prior
-        # playlist play that's been superseded by some other source
-        # in the same room is correctly ignored.
-        playlist_response = await self._maybe_skip_in_playlist(ctx, session)
-        if playlist_response is not None:
-            return playlist_response
 
         local_play = source == "local"
         if not local_play:
@@ -1660,137 +1645,6 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             session_id=ctx.session_id,
             matched_handler=self.name,
             failure="not_playing",
-        )
-
-    async def _maybe_skip_in_playlist(
-        self, ctx: Context, session: AsyncSession
-    ) -> Response | None:
-        """If ``app.state.current_playlist[ctx.room_id]`` is set AND
-        passes the MPD-file freshness check, advance within the
-        playlist and return the resulting Response. Otherwise return
-        None and let ``_smart_skip`` continue to its other branches.
-
-        Reuses :func:`domovoi.handlers.shared.playlist_pick.
-        pick_next_track` so the SELECT logic is identical to the
-        ``play-playlist`` admin endpoint's first-pick path.
-        """
-        if ctx.app is None or not ctx.room_id:
-            return None
-        entry = None
-        try:
-            entry = ctx.app.state.current_playlist.get(ctx.room_id)
-        except Exception:
-            return None
-        if not isinstance(entry, dict):
-            return None
-
-        # Freshness check: MPD's currentsong should still be the
-        # track we last played from this playlist. If anything else
-        # has taken over the room, drop the entry and let the rest of
-        # _smart_skip handle the new source.
-        try:
-            mpd_inspect = get_mpd_client_for(ctx.room_id)
-            current = (await mpd_inspect.current_song()) or {}
-            current_file = current.get("file") or ""
-        except Exception as e:
-            log.debug("smart_skip playlist freshness check failed: %s", e)
-            return None
-        if current_file != entry.get("last_file_path"):
-            try:
-                ctx.app.state.current_playlist.pop(ctx.room_id, None)
-            except Exception:
-                pass
-            return None
-
-        from pathlib import PurePath
-
-        from domovoi.handlers.shared.playlist_pick import (
-            persist_resume_position,
-            pick_next_track,
-        )
-
-        playlist_id = int(entry.get("playlist_id", 0))
-        playlist_name = str(entry.get("name") or "playlist")
-        mode = str(entry.get("mode") or "ordered")
-        last_track_id = entry.get("last_track_id")
-        last_position = entry.get("last_position")
-
-        picked = await pick_next_track(
-            session=session,
-            playlist_id=playlist_id,
-            mode=mode,
-            last_track_id=last_track_id,
-            last_position=last_position,
-        )
-        if picked is None:
-            return self._reply(
-                ctx, f"The {playlist_name} playlist is empty."
-            )
-
-        mpd = get_mpd_client_for(ctx.room_id)
-        song: dict[str, Any] | None = None
-        try:
-            if picked.title and picked.artist:
-                song = await mpd.prepare_search(
-                    {"title": picked.title, "artist": picked.artist}
-                )
-            elif picked.title:
-                song = await mpd.prepare_search({"title": picked.title})
-            if song is None:
-                substrings = [s for s in (picked.title, picked.artist) if s]
-                if substrings:
-                    song = await mpd.prepare_filename(*substrings)
-            if song is None and picked.file_path:
-                basename = PurePath(picked.file_path).name
-                if basename:
-                    song = await mpd.prepare_filename(basename)
-        except Exception as e:
-            log.warning("smart_skip playlist play failed: %s", e)
-            return self._unreachable(ctx)
-        if not song:
-            return self._reply(
-                ctx,
-                f"I picked {picked.title or 'a track'} but the music "
-                "player couldn't find it. Try 'rescan my library'.",
-            )
-
-        # Update the room's playlist state with the new pick.
-        try:
-            ctx.app.state.current_playlist[ctx.room_id] = {
-                "playlist_id": playlist_id,
-                "name": playlist_name,
-                "mode": mode,
-                "last_track_id": picked.track_id,
-                "last_position": picked.position,
-                "last_file_path": str(song.get("file", "")),
-            }
-        except Exception as e:
-            log.debug("smart_skip: couldn't update current_playlist: %s", e)
-
-        # Durable resume — guarded inside the helper to ordered + non-Favorites
-        # (this stamp block also runs for shuffle, which must NOT persist).
-        await persist_resume_position(session, playlist_id, mode, picked.position)
-
-        await record_media_play(
-            session,
-            room_id=ctx.room_id,
-            source="playlist",
-            title=picked.title,
-            artist=picked.artist,
-            library_track_id=picked.track_id,
-        )
-        return Response(
-            text=f"Next in {playlist_name}.",
-            session_id=ctx.session_id,
-            matched_handler=self.name,
-            music_action="start",
-            music_stream_url=mpd_stream_url_for(ctx.room_id),
-            data={
-                "playlist_id": playlist_id,
-                "playlist_name": playlist_name,
-                "mode": mode,
-                "track_id": picked.track_id,
-            },
         )
 
     def _reply(self, ctx: Context, text_: str) -> Response:

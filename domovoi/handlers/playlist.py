@@ -66,9 +66,10 @@ _ADD_TO_PLAYLIST_RE = re.compile(
     r"^add (?:this|that|it|the current (?:song|track)) "
     r"to (?:my |the )?(.+?) playlist$"
 )
-# "add <song description> after this" — insert into the CURRENTLY-PLAYING
-# playlist right after the current track. Anchored on the trailing
-# "after this" so it can't poach "add this to my X playlist".
+# "add <song description> after this" — insert into the room's QUEUE right
+# after the song playing now (never into a saved playlist: a room's queue is
+# a copy of the playlist it came from). Anchored on the trailing "after
+# this" so it can't poach "add this to my X playlist".
 _ADD_AFTER_THIS_RE = re.compile(r"^add (.+?) after this$")
 
 
@@ -298,86 +299,77 @@ class PlaylistHandler(Handler):
         ctx: Context,
         session: AsyncSession,
     ) -> Response:
-        # Durable resume: ordered mode continues from the saved position
-        #. Shuffle / Favorites return None and start fresh.
-        resume = await read_resume_position(session, playlist_id, mode)
-        picked = await pick_next_track(
-            session=session,
-            playlist_id=playlist_id,
-            mode=mode,
-            last_track_id=None,
-            last_position=resume,
-        )
-        if picked is None:
-            return self._reply(
-                ctx, f"The {playlist_name} playlist is empty."
-            )
         if ctx.from_phone:
+            # Durable resume: ordered mode continues from the saved position
+            # on a phone. Shuffle / Favorites return None and start fresh.
+            resume = await read_resume_position(session, playlist_id, mode)
+            picked = await pick_next_track(
+                session=session,
+                playlist_id=playlist_id,
+                mode=mode,
+                last_track_id=None,
+                last_position=resume,
+            )
+            if picked is None:
+                return self._reply(
+                    ctx, f"The {playlist_name} playlist is empty."
+                )
             return await self._play_on_phone(
                 playlist_id=playlist_id, playlist_name=playlist_name, mode=mode,
                 picked=picked, ctx=ctx, session=session,
             )
+        return await self._play_in_room(
+            playlist_id=playlist_id, playlist_name=playlist_name, mode=mode,
+            ctx=ctx, session=session,
+        )
 
-        # Three-stage MPD lookup mirroring MusicHandler._play_random.
-        # Stamps current_playlist on success.
-        from pathlib import PurePath
+    async def _play_in_room(
+        self,
+        *,
+        playlist_id: int,
+        playlist_name: str,
+        mode: str,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """The whole playlist becomes the room's queue, in order or
+        shuffled, with Up next armed for when it is nearly over
+        (domovoi/handlers/shared/room_playlist.py). The queue is a copy:
+        editing it never changes the playlist."""
+        from domovoi.handlers.shared import room_playlist
 
         mpd = get_mpd_client_for(ctx.room_id)
-        song: dict[str, Any] | None = None
         try:
-            if picked.title and picked.artist:
-                song = await mpd.prepare_search(
-                    {"title": picked.title, "artist": picked.artist}
-                )
-            elif picked.title:
-                song = await mpd.prepare_search({"title": picked.title})
-            if song is None:
-                substrings = [s for s in (picked.title, picked.artist) if s]
-                if substrings:
-                    song = await mpd.prepare_filename(*substrings)
-            if song is None and picked.file_path:
-                basename = PurePath(picked.file_path).name
-                if basename:
-                    song = await mpd.prepare_filename(basename)
+            played = await room_playlist.play_in_room(
+                ctx.room_id, mpd, playlist_id=playlist_id, shuffle=(mode == "shuffle"),
+                person_id=getattr(ctx, "person_id", None), autoplay=True,
+            )
+        except room_playlist.PlaylistMissing:
+            return self._reply(ctx, f"I don't have a playlist called {playlist_name} any more.")
+        except room_playlist.PlaylistEmpty:
+            return self._reply(ctx, f"The {playlist_name} playlist is empty.")
+        except room_playlist.NothingPlayable:
+            return self._reply(
+                ctx,
+                f"The music player couldn't find any of the songs in {playlist_name}. "
+                "Try 'rescan my library'.",
+            )
         except Exception as e:
             log.warning("playlist play MPD failed: %s", e)
             return self._reply(ctx, "I couldn't reach the music player.")
 
-        if not song:
-            return self._reply(
-                ctx,
-                f"I picked {picked.title or 'a track'} but the music "
-                "player couldn't find it. Try 'rescan my library'.",
-            )
-
-        # Stamp playlist state for _smart_skip to read.
-        if ctx.app is not None and ctx.room_id:
-            try:
-                ctx.app.state.current_playlist[ctx.room_id] = {
-                    "playlist_id": playlist_id,
-                    "name": playlist_name,
-                    "mode": mode,
-                    "last_track_id": picked.track_id,
-                    "last_position": picked.position,
-                    "last_file_path": str(song.get("file", "")),
-                }
-            except Exception as e:
-                log.debug("could not stamp current_playlist: %s", e)
-
-        await persist_resume_position(session, playlist_id, mode, picked.position)
-
+        first = played.first
         await record_media_play(
             session,
             room_id=ctx.room_id,
             source="playlist",
-            title=picked.title,
-            artist=picked.artist,
-            library_track_id=picked.track_id,
+            title=first.get("title"),
+            artist=first.get("artist"),
+            library_track_id=first["id"],
         )
 
         # Stash a small marker in session context so the router /
-        # other handlers know what's playing in this room without
-        # having to peek at app.state.
+        # other handlers know what's playing in this room.
         if ctx.session_id:
             try:
                 repo = SessionRepository(session)
@@ -385,7 +377,7 @@ class PlaylistHandler(Handler):
                     ctx.session_id, "last_play_source", "playlist",
                 )
                 # Reset any stale external-stream seam state so a later
-                # "next" advances the playlist, not an old search.
+                # "next" follows the room's queue, not an old search.
                 await repo.set_context_key(
                     ctx.session_id, "last_stream_query", None,
                 )
@@ -396,17 +388,25 @@ class PlaylistHandler(Handler):
                 log.debug("couldn't save playlist play state: %s", e)
 
         verb = "Shuffling" if mode == "shuffle" else "Playing"
+        reply = f"{verb} {played.name}."
+        if played.skipped:
+            n = played.skipped
+            reply += f" I skipped {n} song{'s' if n != 1 else ''} I couldn't find."
         return Response(
-            text=f"{verb} {playlist_name}.",
+            text=reply,
             session_id=ctx.session_id,
             matched_handler=self.name,
             music_action="start",
             music_stream_url=mpd_stream_url_for(ctx.room_id),
             data={
                 "playlist_id": playlist_id,
-                "playlist_name": playlist_name,
+                "playlist_name": played.name,
                 "mode": mode,
-                "track_id": picked.track_id,
+                "track_id": first["id"],
+                "total": played.total,
+                "queued": played.queued,
+                "skipped": played.skipped,
+                "up_next": {"session_id": played.session_id} if played.session_id else None,
             },
         )
 
@@ -525,91 +525,25 @@ class PlaylistHandler(Handler):
     async def _add_after_this(
         self, query: str, ctx: Context, session: AsyncSession
     ) -> Response:
-        """Insert a song right after the currently-playing playlist track.
+        """Put a library song in the room's queue right after the song
+        playing now: the queue's "play next", by voice.
 
-        Only meaningful while an ordered playlist is the active source —
-        shuffle / Favorites fall back to appending at the end with a note.
-        A song not in the library becomes a media acquisition (design §4.8):
-        the queue row is attached to this playlist and lands at its end once
-        a registered fulfiller downloads it. Stays requires_network='no' —
-        enqueue is local; with no fulfiller installed the row simply waits
-        and the user hears the graceful-absence message."""
+        Since 2026-11-12 a playlist played in a room is the room's whole
+        queue, and that queue is a copy: this edits the queue only, never
+        the saved playlist (before, it inserted the song into the playing
+        playlist's rows). A song the library doesn't have becomes a media
+        acquisition (design §4.8), attached to no playlist: it lands in the
+        library once a registered fulfiller downloads it; with none
+        installed the row waits and the reply is the graceful-absence copy."""
         if not query:
             return self._reply(ctx, "Add what after this?")
-        entry = None
-        if ctx.app is not None and ctx.room_id:
-            e = ctx.app.state.current_playlist.get(ctx.room_id)
-            if isinstance(e, dict):
-                entry = e
-        if entry is None:
+        if ctx.from_phone or not ctx.room_id:
             return self._reply(
-                ctx,
-                "Nothing's playing from a playlist right now — start a "
-                "playlist first, then I can add a song after the current one.",
+                ctx, "On a phone, add songs after this one from the queue screen.",
             )
-        playlist_id = int(entry.get("playlist_id", 0))
-        mode = str(entry.get("mode") or "ordered")
-        last_pos = entry.get("last_position")
-        playlist_name = str(entry.get("name") or "the playlist")
-
         track_id, track_title = await self._resolve_library_track(query, session)
-
-        if track_id is not None:
-            if playlist_id == 0:
-                return self._reply(
-                    ctx,
-                    "You're playing your Favorites, which I can't insert into "
-                    "mid-list — favorite the song instead.",
-                )
-            if mode == "ordered" and isinstance(last_pos, int):
-                # Shift everything after the current track down one, then
-                # slot the new track in. the no-UNIQUE-on-position schema makes
-                # the transient mid-shift safe.
-                await session.execute(
-                    text(
-                        "UPDATE playlist_tracks SET position = position + 1 "
-                        "WHERE playlist_id = :pid AND position > :pos"
-                    ),
-                    {"pid": playlist_id, "pos": last_pos},
-                )
-                await session.execute(
-                    text(
-                        "INSERT INTO playlist_tracks (playlist_id, track_id, position) "
-                        "VALUES (:pid, :tid, :pos) "
-                        "ON CONFLICT (playlist_id, track_id) DO NOTHING"
-                    ),
-                    {"pid": playlist_id, "tid": track_id, "pos": last_pos + 1},
-                )
-                await session.execute(text("SELECT pg_notify('playlists_changed', 'added')"))
-                return self._reply(
-                    ctx, f"Added {track_title} to {playlist_name}, right after this one."
-                )
-            # Shuffle (or no usable position) → append at the end.
-            await session.execute(
-                text(
-                    "INSERT INTO playlist_tracks (playlist_id, track_id, position) "
-                    "VALUES (:pid, :tid, COALESCE((SELECT MAX(position) + 1 "
-                    "FROM playlist_tracks WHERE playlist_id = :pid), 0)) "
-                    "ON CONFLICT (playlist_id, track_id) DO NOTHING"
-                ),
-                {"pid": playlist_id, "tid": track_id},
-            )
-            await session.execute(text("SELECT pg_notify('playlists_changed', 'added')"))
-            return self._reply(
-                ctx,
-                f"Added {track_title} to the end of {playlist_name} — it's "
-                "shuffling, so I can't slot it right after this one.",
-            )
-
-        # Not in the library. Real playlist → enqueue a media acquisition
-        # attached to this playlist (design §4.8: enqueue always succeeds;
-        # a registered fulfiller drains it, absence degrades gracefully).
-        # Favorites (virtual id 0) can't be attached to.
-        if playlist_id != 0:
-            enqueued = await self._enqueue_fetch_missing(
-                query, playlist_id, session
-            )
-            if enqueued:
+        if track_id is None:
+            if await self._enqueue_fetch_missing(query, session):
                 if CAPABILITIES.absent(MEDIA_ACQUISITION_FULFILLER):
                     return self._reply(
                         ctx,
@@ -618,19 +552,57 @@ class PlaylistHandler(Handler):
                     )
                 return self._reply(
                     ctx,
-                    f"I couldn't find {query} in your library, so I've "
-                    f"queued it to download — it'll land at the end of "
-                    f"{playlist_name} once it's ready.",
+                    f"I couldn't find {query} in your library, so I've queued it "
+                    "to download — it'll be in your library once it's ready.",
                 )
-        return self._reply(
-            ctx, f"I couldn't find {query} in your library.",
-        )
+            return self._reply(ctx, f"I couldn't find {query} in your library.")
+        row = (
+            await session.execute(
+                text("SELECT title, artist, file_path FROM library_tracks WHERE id = :t"),
+                {"t": track_id},
+            )
+        ).first()
+        title, artist, file_path = (row[0], row[1], row[2]) if row is not None else (track_title, None, "")
+
+        from domovoi.handlers.shared.library_match import mpd_file_for_library_path
+
+        mpd = get_mpd_client_for(ctx.room_id)
+        try:
+            queue = await mpd.queue_list()
+            current = (await mpd.current_song()) or {}
+            cur_id = current.get("id", current.get("Id"))
+            ids = [str(e.get("id")) for e in queue]
+            at = ids.index(str(cur_id)) + 1 if cur_id is not None and str(cur_id) in ids else None
+            if at is None:
+                return self._reply(
+                    ctx,
+                    "Nothing's playing in here right now — play something first, "
+                    "then I can add a song after it.",
+                )
+            uri = mpd_file_for_library_path(file_path or "")
+            if uri:
+                added = [a for a in await mpd.queue_add_files([uri], position=at) if a]
+            else:
+                added = await mpd.queue_add_tracks(
+                    [{"title": title or "", "artist": artist or "", "file_path": file_path or ""}],
+                    position=at,
+                )
+        except Exception as e:
+            log.warning("add after this: the music player failed: %s", e)
+            return self._reply(ctx, "I couldn't reach the music player.")
+        if not added:
+            return self._reply(
+                ctx,
+                f"The music player couldn't find {title or query}. Try 'rescan my library'.",
+            )
+        return self._reply(ctx, f"Added {title or query}, right after this one.")
 
     async def _enqueue_fetch_missing(
-        self, query: str, playlist_id: int, session: AsyncSession
+        self, query: str, session: AsyncSession
     ) -> bool:
-        """Queue a 'query'-kind media acquisition soft-attached to the
-        playlist, through the core acquisition service (design §4.8).
+        """Queue a 'query'-kind media acquisition, attached to no playlist
+        (a room's queue edit never writes a playlist), through the core
+        acquisition service (design §4.8).
         Best-effort: False on failure (the caller falls back to the plain
         couldn't-find message). This producer only writes the request —
         claim/complete is a fulfiller's job (requested_by='voice:playlist',
@@ -644,7 +616,6 @@ class PlaylistHandler(Handler):
                 text=query,
                 metadata={"title": query},
                 requested_by="voice:playlist",
-                attach_to_playlist_id=playlist_id,
                 # The caller already searched the library and missed;
                 # a second fuzzy pass would only block legitimately
                 # different tracks with similar names.

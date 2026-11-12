@@ -1095,8 +1095,9 @@ async def _room_up_next_fields(request: Request, body: Any) -> dict[str, Any]:
                                      as_household=body.as_household)
     if person is not None:
         out["person_id"] = person
-    if body.context is not None:
-        out["context"] = body.context.model_dump(exclude_none=True)
+    context = getattr(body, "context", None)  # play-playlist: the core names the list
+    if context is not None:
+        out["context"] = context.model_dump(exclude_none=True)
     if not body.autoplay:
         out["autoplay"] = False
     return out
@@ -1131,20 +1132,22 @@ async def play(body: PlayRequest, request: Request):
 
 @router.post("/play-playlist", dependencies=DEVICE)
 async def play_playlist(body: PlayPlaylistRequest, request: Request):
-    """Start a playlist (real or the Favorites virtual one) in a
-    room. Proxies to the Domovoi server's
-    ``/v1/admin/music/play-playlist`` which handles the SELECT,
-    hands the first/picked track to MPD, and stamps
-    ``app.state.current_playlist`` so subsequent ``next`` calls
-    stay inside the playlist."""
+    """Play a playlist (real or the Favorites virtual one) in a room.
+    Proxies to the Domovoi server's ``/v1/admin/music/play-playlist``,
+    which loads the WHOLE playlist into the room's queue (in order or
+    shuffled) and arms the room's Up next with the playlist as its
+    source. The answer adds ``total`` / ``queued`` / ``skipped`` /
+    ``loading`` / ``up_next`` to the fields it always had."""
     await _assert_may_replace_queue(request, body.device_id, body.room_id)
+    payload_out: dict[str, Any] = {
+        "room_id": body.room_id,
+        "playlist_id": body.playlist_id,
+        "shuffle": body.shuffle,
+    }
+    payload_out.update(await _room_up_next_fields(request, body))
     status, payload = await post_admin(
         "/v1/admin/music/play-playlist",
-        {
-            "room_id": body.room_id,
-            "playlist_id": body.playlist_id,
-            "shuffle": body.shuffle,
-        },
+        payload_out,
         headers=auth_forward_headers(request),
     )
     await _note_room_start(status, request, body.device_id, body.room_id)

@@ -1,7 +1,7 @@
 """Core playback-state sweeper — the core half of the state-sweeper
 split (design §4.7, locked 9).
 
-Reconciles three pieces of per-room playback state against what each
+Reconciles two pieces of per-room playback state against what each
 room's MPD is *actually* doing, catching the one cleanup case the
 dispatch paths can't: a track (or the last track of a queue) ending on
 its own. MPD silently goes to ``state=stop`` with no event pushed back
@@ -12,9 +12,6 @@ to the core, so:
   Eviction rule per stamp: MPD state not play/pause, OR
   ``currentsong.file`` no longer equals the stamp's canonical
   "what's playing" field (``data["stream_url"]`` by convention).
-* **``app.state.current_playlist``** entries go stale the same way
-  (freshness key ``last_file_path``) — a stale entry would trap
-  MusicHandler's smart-skip inside a playlist that stopped playing.
 * **The Pi keeps rendering silence**: MPD's httpd output is
   ``always_on``, so on a natural end the Pi's mpg123 never exits and
   its music LED never clears. ``_sweep_pi_music`` watches every room
@@ -59,11 +56,10 @@ class PlaybackStateSweeper(Worker):
 
     async def tick(self) -> int:
         """Sweep once. Returns the total number of entries pruned across
-        the now-playing stamps + ``current_playlist``. Also runs
+        the now-playing stamps. Also runs
         `_sweep_pi_music` (a satellite push, not folded into the count)."""
         pruned = 0
         pruned += await self._sweep_stamps()
-        pruned += await self._sweep_playlist_dict()
         await self._sweep_pi_music()
         return pruned
 
@@ -91,43 +87,6 @@ class PlaybackStateSweeper(Worker):
                     pruned += 1
         if pruned:
             log.debug("sweeper: pruned %d stale now-playing stamp(s)", pruned)
-        return pruned
-
-    async def _sweep_playlist_dict(self) -> int:
-        current: dict[str, Any] | None = getattr(
-            self.app.state, "current_playlist", None
-        )
-        if not current:
-            return 0
-        pruned = 0
-        # Iterate a snapshot of the keys — handlers can mutate the dict
-        # concurrently (a new play in another room mid-sweep).
-        for room_id in list(current.keys()):
-            entry = current.get(room_id)
-            if not isinstance(entry, dict):
-                current.pop(room_id, None)
-                pruned += 1
-                continue
-            try:
-                client = get_mpd_client_for(room_id)
-                state = await client.state()
-                song = await client.current_song() or {}
-            except Exception as e:
-                log.debug(
-                    "sweeper: MPD probe for room=%s (current_playlist) failed: %s",
-                    room_id, e,
-                )
-                continue
-            if state not in ("play", "pause"):
-                current.pop(room_id, None)
-                pruned += 1
-                continue
-            if song.get("file") != entry.get("last_file_path"):
-                current.pop(room_id, None)
-                pruned += 1
-        if pruned:
-            log.debug("sweeper: pruned %d stale current_playlist entr%s",
-                      pruned, "y" if pruned == 1 else "ies")
         return pruned
 
     async def _sweep_pi_music(self) -> int:
@@ -178,9 +137,6 @@ class PlaybackStateSweeper(Worker):
             self._music_seen_playing.discard(room_id)
             resumable.pop(room_id, None)
             NOW_PLAYING.clear(room_id)
-            playlist_dict = getattr(self.app.state, "current_playlist", None)
-            if isinstance(playlist_dict, dict):
-                playlist_dict.pop(room_id, None)
             target = sessions.get(room_id)
             if target is None:
                 # No live WS (Pi dropped). Nothing to notify; the entry is

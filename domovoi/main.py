@@ -635,26 +635,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # on music_stop, and the playback-state sweeper prunes stale stamps.
     # No per-provider app.state dict exists anymore.
 
-    # room_id → playlist playback state, populated by
-    # PlaylistHandler / the play-playlist admin endpoint and read by
-    # MusicHandler._smart_skip so "next" stays inside the current
-    # playlist. Entry shape:
-    #   {
-    #     "playlist_id": int,           # 0 == virtual Favorites
-    #     "name":        str,
-    #     "mode":        "ordered" | "shuffle",
-    #     "last_track_id":   int,
-    #     "last_position":   int | None,  # None for favorites — uses
-    #                                     # library_tracks.id as the
-    #                                     # ordering key instead
-    #     "last_file_path":  str,         # freshness check vs MPD
-    #                                     # currentsong.file
-    #   }
-    # Cleared by _admin_dispatch_music / streaming._send_response on
-    # music_action="stop", and pruned by the music-source sweeper
-    # when MPD's currentsong drifts away from last_file_path.
-    app.state.current_playlist = {}
-
     # room_id → most-recent WiFi self-report from that room's Pi. Pushed
     # by the satellite's WiFiWatcher every poll (default 60 s) as a
     # `wifi_status` text frame, plus once on hello so a freshly-connected
@@ -2582,7 +2562,6 @@ async def admin_snapshot() -> dict[str, Any]:
         # opaque data, mirrored for the dashboard's attribution pill.
         # Deliberately never carries elapsed_sec (dossier §7 inv. 8).
         "now_playing": NOW_PLAYING.snapshot(),
-        "current_playlist": dict(app.state.current_playlist),
         "active_dropins": active_dropins,
         # Lyric search's line index (status only, never a lyric).
         "lyrics_index": lyrics_index_status(),
@@ -5451,7 +5430,7 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
     music paths it writes ONE ``intents_log`` row (no ``conversation_log``
     — a cast isn't conversation) and records the first track as a play in
     the Recently-played tab. Subsequent in-queue advancement is MPD's own
-    queue, so no ``current_playlist`` stamping is needed.
+    queue.
 
     The room starts on the first id, ``start_sec`` into it: a client hands
     over from where its listener is, so it sends its current track first
@@ -7309,6 +7288,11 @@ class _AdminPlayPlaylistBody(BaseModel):
     room_id: str
     playlist_id: int = Field(..., ge=0)  # 0 == virtual Favorites
     shuffle: bool = False
+    # Up next (2026-11-12), as for play-tracks: whose taste the picks follow,
+    # Autoplay, or ``up_next: false`` for the playlist alone.
+    person_id: int | None = Field(default=None, ge=1)
+    autoplay: bool = True
+    up_next: bool = True
 
 
 @app.post(
@@ -7317,125 +7301,61 @@ class _AdminPlayPlaylistBody(BaseModel):
     dependencies=[Depends(require_device)],
 )
 async def admin_music_play_playlist(body: _AdminPlayPlaylistBody) -> dict[str, Any]:
-    """Start a playlist (or the Favorites virtual playlist) in
-    ``room_id``. Ordered mode (default) plays the first track and
-    stamps ``current_playlist[room_id]`` so subsequent voice/web
-    "next" advances by position; shuffle mode picks a random row
-    and stamps ``mode=shuffle`` so "next" continues randomly.
-
-    Reuses :func:`domovoi.handlers.shared.playlist_pick.
-    pick_next_track` to keep the SELECT logic identical to the one
-    ``MusicHandler._smart_skip`` uses for in-playlist advancement —
-    same join, same ordering, same favorites-bridging behavior.
+    """Play a playlist (or the Favorites virtual playlist) in ``room_id``:
+    the WHOLE playlist becomes the room's queue, in order or shuffled, and
+    a ``continue`` Up next session is armed with the playlist as its source
+    (domovoi/handlers/shared/room_playlist.py). The room's queue tools then
+    work on it like on any queue; the queue is a copy, so editing it never
+    changes the playlist. A long playlist starts after its first songs are
+    in and the rest follow in the background (``loading``). Songs whose
+    file the music player doesn't have are left out (``skipped``, counted
+    so far).
 
     Writes one ``intents_log`` row (no ``conversation_log``) so UI
     clicks stay out of the satellites' conversation feed.
     """
     import time
-    from pathlib import PurePath
 
     from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
     from domovoi.db.repositories import IntentLogRepository
+    from domovoi.handlers.shared import room_playlist
     from domovoi.handlers.shared.play_history import record_media_play
-    from domovoi.handlers.shared.playlist_pick import (
-        persist_resume_position,
-        pick_next_track,
-        read_resume_position,
-    )
 
     started = time.monotonic()
     mode = "shuffle" if body.shuffle else "ordered"
 
     async with session_scope() as s:
-        # 404-guard the playlist row first so the dashboard gets a
-        # clean error rather than a "this playlist is empty" message.
-        if body.playlist_id != 0:
-            exists = (
-                await s.execute(
-                    text("SELECT name FROM playlists WHERE id = :id"),
-                    {"id": body.playlist_id},
-                )
-            ).first()
-            if exists is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"playlist {body.playlist_id} not found",
-                )
-            playlist_name = exists[0]
-        else:
-            playlist_name = "Favorites"
-
-        # Durable resume — ordered mode continues from the saved position.
-        resume = await read_resume_position(s, body.playlist_id, mode)
-        picked = await pick_next_track(
-            session=s,
-            playlist_id=body.playlist_id,
-            mode=mode,
-            last_track_id=None,
-            last_position=resume,
-        )
-        if picked is not None:
-            await persist_resume_position(s, body.playlist_id, mode, picked.position)
-
-    if picked is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"playlist {playlist_name!r} has no tracks",
-        )
+        # 404 / 400 before the room is touched.
+        try:
+            name, rows = await room_playlist.playlist_rows(s, body.playlist_id)
+        except room_playlist.PlaylistMissing:
+            raise HTTPException(status_code=404, detail=f"playlist {body.playlist_id} not found") from None
+    if not rows:
+        raise HTTPException(status_code=400, detail=f"playlist {name!r} has no tracks")
 
     await _ensure_room_mpd(body.room_id)
     mpd = get_mpd_client_for(body.room_id)
-    song: dict[str, Any] | None = None
     try:
-        if picked.title and picked.artist:
-            song = await mpd.prepare_search({"title": picked.title, "artist": picked.artist})
-        elif picked.title:
-            song = await mpd.prepare_search({"title": picked.title})
-        if song is None:
-            substrings = [s_ for s_ in (picked.title, picked.artist) if s_]
-            if substrings:
-                song = await mpd.prepare_filename(*substrings)
-        if song is None and picked.file_path:
-            basename = PurePath(picked.file_path).name
-            if basename:
-                log.info(
-                    "admin play-playlist id=%s fell through to basename %r",
-                    body.playlist_id, basename,
-                )
-                song = await mpd.prepare_filename(basename)
-    except Exception as e:
-        log.warning(
-            "admin play-playlist id=%s MPD raised: %s",
-            body.playlist_id, e,
+        played = await room_playlist.play_in_room(
+            body.room_id, mpd, playlist_id=body.playlist_id, shuffle=body.shuffle,
+            person_id=body.person_id, autoplay=body.autoplay, up_next=body.up_next,
         )
-        raise HTTPException(
-            status_code=502,
-            detail=f"MPD error: {e}",
-        ) from e
-
-    if not song:
+    except room_playlist.PlaylistMissing:
+        raise HTTPException(status_code=404, detail=f"playlist {body.playlist_id} not found") from None
+    except room_playlist.PlaylistEmpty as e:
+        raise HTTPException(status_code=400, detail=f"playlist {e.name!r} has no tracks") from None
+    except room_playlist.NothingPlayable as e:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"MPD couldn't find {picked.title or 'track'} "
-                f"({picked.file_path!r}) — try 'rescan my library'"
-            ),
-        )
-
-    # Stamp playlist state for subsequent "next" calls. last_file_path
-    # is what MPD just reported — use that for the freshness check
-    # rather than the library_tracks.file_path (those are absolute
-    # host paths; MPD's file is the relative URI it returns).
-    app.state.current_playlist[body.room_id] = {
-        "playlist_id": body.playlist_id,
-        "name": playlist_name,
-        "mode": mode,
-        "last_track_id": picked.track_id,
-        "last_position": picked.position,
-        "last_file_path": str(song.get("file", "")),
-    }
+            detail=(f"MPD couldn't find any of the {e.total} songs in {e.name} "
+                    "— try 'rescan my library'"),
+        ) from None
+    except Exception as e:
+        log.warning("admin play-playlist id=%s MPD raised: %s", body.playlist_id, e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
 
     latency_ms = int((time.monotonic() - started) * 1000)
+    first = played.first
     async with session_scope() as s:
         await IntentLogRepository(s).log(
             room_id=body.room_id,
@@ -7453,9 +7373,9 @@ async def admin_music_play_playlist(body: _AdminPlayPlaylistBody) -> dict[str, A
             s,
             room_id=body.room_id,
             source="playlist",
-            title=picked.title,
-            artist=picked.artist,
-            library_track_id=picked.track_id,
+            title=first.get("title"),
+            artist=first.get("artist"),
+            library_track_id=first["id"],
         )
 
     response = Response(
@@ -7469,12 +7389,18 @@ async def admin_music_play_playlist(body: _AdminPlayPlaylistBody) -> dict[str, A
     return {
         "played": True,
         "playlist_id": body.playlist_id,
-        "playlist_name": playlist_name,
+        "playlist_name": played.name,
         "mode": mode,
-        "track_id": picked.track_id,
-        "title": picked.title,
-        "artist": picked.artist,
+        "track_id": first["id"],
+        "title": first.get("title"),
+        "artist": first.get("artist"),
         "latency_ms": latency_ms,
+        # The whole playlist as the room's queue (2026-11-12).
+        "total": played.total,
+        "queued": played.queued,
+        "skipped": played.skipped,
+        "loading": played.loading,
+        "up_next": {"session_id": played.session_id} if played.session_id else None,
     }
 
 

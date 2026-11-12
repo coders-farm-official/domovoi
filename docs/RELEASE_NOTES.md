@@ -4,6 +4,42 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — A playlist played in a room is the room's whole queue
+
+Play a playlist in a room — its play or shuffle button, Favorites, or
+"play the road trip playlist" out loud — and the whole playlist now goes
+into that room's queue, in order or shuffled. The first song starts right
+away; a long playlist fills in behind it. Because it's a normal queue, you
+can open the room's queue and jump to a song, move songs around, take
+some out, add more or put one next. When the playlist is nearly over,
+Up next adds songs like it, the same way it does after an artist or an
+album; turn the room's **autoplay** off and the music stops when the
+playlist ends.
+
+The queue is a copy. Changing the room's queue never changes the saved
+playlist — to keep an edited queue, use **save as playlist**, which always
+makes a new one.
+
+Also changed:
+
+- A room plays a playlist from its first song. It used to pick up where
+  the playlist was last left off in a room; a phone still does.
+- Songs the music player can't find (a file that moved, or one outside the
+  music folder) are skipped; "play the X playlist" says how many.
+- "Add <song> after this" now puts the song in the room's queue right
+  after the one playing, for anything that's playing. It used to insert
+  the song into the playing playlist itself; it no longer touches any
+  playlist. A song that isn't in the library still goes on the download
+  list, but no longer joins a playlist when it arrives.
+
+API (docs/API_REFERENCE.md §3.5a, §3.5f): `POST /api/music/play-playlist`
+and the core's `/v1/admin/music/play-playlist` keep their request and
+their answer's fields; the answer adds `total`, `queued`, `skipped`,
+`loading` and `up_next`, and the request may add `listener_person_id` /
+`as_household` / `autoplay` / `up_next` as play-tracks does. The core's
+`GET /v1/admin/snapshot` no longer carries `current_playlist` (nothing
+read it). No client needs a change.
+
 ## 2026-11-12 — Up next in the rooms; a room's queue jumps, inserts and saves
 
 A room now keeps the music going too. A song played in a room — "play in
@@ -19,8 +55,8 @@ or browser's "listening as" / claimed person; never shown to a guest.
 
 **Limits.** A playlist played in a room ("play road trip", a playlist's
 play button) still plays one song at a time and starts no Up next; it ends
-the room's Up next. A stream, a podcast or an audiobook does the same. A
-room's Up next ends when the room is stopped, cleared, or left paused or
+the room's Up next (changed the same day: see the entry above). A stream,
+a podcast or an audiobook does the same. A room's Up next ends when the room is stopped, cleared, or left paused or
 stopped for two hours.
 
 Where it shows, in the existing queue views:

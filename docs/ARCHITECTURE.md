@@ -368,7 +368,13 @@ or Autoplay off (never the song playing), appends the next batch by exact
 file once five or fewer songs are left, trims the queue to 50 songs behind
 the current one, and ends the session when the room stopped, sat idle two
 hours or had its queue replaced; the logic is `domovoi/up_next/rooms.py`,
-which the room start paths call too), the three lyrics
+which the room start paths call too; a playlist played in a room is the
+room's whole queue since 2026-11-12 — `handlers/shared/room_playlist.py`
+loads it, the first 50 songs at once and the rest in the background, and
+arms a `continue` session with the playlist as its source; no picks join
+while the rest is loading. The queue is a copy: nothing that edits a room's
+queue writes the playlist it came from; the old one-song-at-a-time
+playlist state, `app.state.current_playlist`, is gone), the three lyrics
 workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics"), the
 three printing workers (§6 "Printing and scanning"), and the container guard (`container_guard`, `domovoi/container_guard/`): every
 30 s it compares the Docker containers the core expects — the compose
