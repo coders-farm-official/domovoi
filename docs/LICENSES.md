@@ -153,6 +153,9 @@ household.
   Jordan Berg (MIT; `web/static/vendor/butterchurn/`), with what its
   bundle carries: eel-wasm (MIT), @assemblyscript/loader (Apache-2.0; its
   licence and NOTICE beside it) and ecma-proposal-math-extensions (MIT).
+  Its built-in "clouds2" noise texture, very likely the original
+  MilkDrop's and of unstated licence, is replaced by an original one
+  generated for Domovoi (the folder's README says how).
 - **The visualizer's standard presets** (`web/static/visualizer/presets/`)
   are Domovoi's own, written for it, and MIT like the rest of the code. No
   community MilkDrop preset ships with Domovoi: those are almost all

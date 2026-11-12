@@ -37,7 +37,7 @@ VENDOR = STATIC / "vendor" / "butterchurn"
 PRESETS = STATIC / "visualizer" / "presets"
 ADMIN = "admin-session-token"
 DEVICE = "lantern-river-kettle-harbor"
-ENGINE_SHA256 = "b5353af542b95cb5264069a0a4f52a23174e45745b58c48e245a3557d229b640"
+ENGINE_SHA256 = "c90f94234af2902fb98108bfbf868274d1498da0097e3318878b75116d86993a"
 
 MILK = """[preset00]
 fRating=3.000000

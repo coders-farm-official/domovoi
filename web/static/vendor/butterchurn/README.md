@@ -13,8 +13,9 @@ loaded only when someone turns the visualizer on.
   npm integrity `sha512-BStK4OAbBb9Pvt8PuQlS4WVmYBwU1KuDMRHF1V89QjoIFauAqq7tpV4EpYXj7K563r5daLrMX+2y5DBhZZ9Xig==`
   (checked on download, 2026-11-11).
 * `butterchurn.min.js` is `package/dist/butterchurn.min.js` from that
-  tarball, unchanged: sha256
-  `b5353af542b95cb5264069a0a4f52a23174e45745b58c48e245a3557d229b640`
+  tarball (sha256 `b5353af542b95cb5264069a0a4f52a23174e45745b58c48e245a3557d229b640`)
+  with ONE change, below: sha256 now
+  `c90f94234af2902fb98108bfbf868274d1498da0097e3318878b75116d86993a`
   (`domovoi/tests/test_web_visualizer.py` holds it to this). Its last line
   names a source map that isn't shipped; a browser only asks for it with
   its developer tools open.
@@ -35,8 +36,17 @@ The bundle includes its dependencies:
 | @assemblyscript/loader 0.17.x | Apache-2.0 | `LICENSE-assemblyscript-loader.txt`, `NOTICE-assemblyscript.txt` (from the AssemblyScript repository at v0.17.14) |
 | ecma-proposal-math-extensions 0.0.2 (Rick Waldron) | MIT (declared in its package.json) | the MIT terms as in `LICENSE.txt` |
 
-The engine also embeds a small noise texture ("clouds2", a base64 JPEG)
-that presets may sample. Domovoi's own presets don't use it.
+**The one change:** the engine embeds a 128×128 noise texture
+("clouds2", a base64 JPEG) that presets may sample. Its origin is very
+likely the original MilkDrop's own texture, whose licence nobody has
+stated, so it is replaced here (2026-11-11) by an original texture
+generated for Domovoi: seeded, tileable value noise in four octaves
+(numpy + Pillow, seed 20261111), grey, saved as a quality-90 JPEG at the
+same size, in the same `this.clouds2Image.src="data:image/jpeg;base64,…"`
+spot. A preset that samples `sampler_clouds2` gets a similar soft cloud
+pattern. Domovoi's own presets don't use it. The only other embedded image
+is a 1×1 blank GIF (the engine's "empty" texture). Upgrading the engine
+means making this replacement again.
 
 No presets come from this package. The standard set Domovoi ships is its
 own (`web/static/visualizer/presets/`, MIT with the rest of the repo); see
