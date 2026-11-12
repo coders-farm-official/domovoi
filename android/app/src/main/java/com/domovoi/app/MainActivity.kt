@@ -101,6 +101,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         Diagnostics.watchdog.stop()
         if (!isChangingConfigurations) (application as DomovoiApplication).container.identity.appBackgrounded()
+        // Listening history waiting in the outbox goes when the app leaves the screen.
+        if (!isChangingConfigurations) (application as DomovoiApplication).container.listens.flushNow()
         super.onStop()
     }
 

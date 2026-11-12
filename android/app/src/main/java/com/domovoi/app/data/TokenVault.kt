@@ -119,8 +119,13 @@ class TokenVault(
 /** The vault's record as a SharedPreferences entry of its own, in its own
  *  file: `shared_prefs/domovoi-vault.xml`. (SharedPreferences, not the
  *  DataStore, so a harness rewriting the DataStore blob leaves it be.) */
-class PrefsVaultStore(context: Context) : TokenVault.Store {
-    private val prefs = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+class PrefsVaultStore(
+    context: Context,
+    /** Its own file: the claim keys ("this is me", data/Prefs.kt) are kept
+     *  in `domovoi-claim-keys`, beside the tokens, never in the same record. */
+    file: String = FILE,
+) : TokenVault.Store {
+    private val prefs = context.applicationContext.getSharedPreferences(file, Context.MODE_PRIVATE)
 
     override fun load(): String? = prefs.getString(KEY, null)
 

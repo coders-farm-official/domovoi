@@ -142,6 +142,7 @@ internal fun PersonDetail(
                     turnCount = detail.conversations.size,
                     onForget = { confirmForget = true },
                     onRename = { renaming = true },
+                    onPeopleChanged = onRenamed,
                 )
                 1 -> MemoryTab(person, detail)
                 2 -> SessionsTab(person, detail)
@@ -202,6 +203,7 @@ private fun ProfileTab(
     turnCount: Int,
     onForget: () -> Unit,
     onRename: () -> Unit,
+    onPeopleChanged: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -278,6 +280,11 @@ private fun ProfileTab(
                 color = if (notes != null) Domovoi.colors.fg else Domovoi.colors.fgFaint,
             )
         }
+
+        // Whose this phone is, and their listening history (2026-11-12).
+        HorizontalDivider(color = Domovoi.colors.borderSoft)
+        ThisPhoneSection(person, onPeopleChanged)
+        ListeningHistorySection(person)
 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

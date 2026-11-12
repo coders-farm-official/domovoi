@@ -73,10 +73,13 @@ internal fun ConnectionPanel() {
     val serverUrl by app.prefs.serverUrl.collectAsState()
     val themeMode by app.prefs.themeMode.collectAsState()
     val listenerId by app.prefs.listenerPersonId.collectAsState()
-    val owners by app.prefs.owners.collectAsState()
-    val aiOn = LocalCapabilities.current.aiEnabled
-    // Per server: a person id belongs to the server that issued it.
-    val ownerId = ServerCredentials.ownerFor(owners, serverUrl)
+    // Whose this phone is, as the server last said (net/DeviceRegistry.kt):
+    // never what was asked for, so a refused claim never shows here.
+    val deviceOwners by app.prefs.deviceOwners.collectAsState()
+    val sharedAnswers by app.prefs.sharedScreens.collectAsState()
+    val owner = deviceOwners[ServerCredentials.normalize(serverUrl)]
+    val sharedHere = ServerCredentials.sharedAnswerFor(sharedAnswers, serverUrl) == true
+    var claiming by remember { mutableStateOf(false) }
     val connected by app.bus.connected.collectAsState()
     val deviceToken by app.prefs.deviceToken.collectAsState()
     val trusted by app.prefs.trustedServers.collectAsState()
@@ -102,14 +105,15 @@ internal fun ConnectionPanel() {
 
     val peopleState = rememberApi(fetch = { it.api.get("/api/people").decode<List<SettingsPerson>>() })
     val people = peopleState.data ?: emptyList()
-    // null == "me (this device)" — resume positions stay per-device.
+    // null == the household (nobody in particular), the web's "household".
     val listenerOptions: List<SettingsPerson?> = listOf(null) + people
     val selectedListener: SettingsPerson? = people.firstOrNull { it.id.toString() == listenerId }
     // Kept for the phone chat's prompt (data/HouseholdNames.kt).
     LaunchedEffect(listenerId, selectedListener?.name) {
         app.householdNames.recordListener(serverUrl, listenerId, selectedListener?.name)
     }
-    val selectedOwner: SettingsPerson? = people.firstOrNull { it.id.toString() == ownerId }
+    val selectedOwner: SettingsPerson? = people.firstOrNull { it.id == owner?.id }
+        ?: owner?.let { SettingsPerson(it.id, it.name) }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -316,15 +320,22 @@ internal fun ConnectionPanel() {
             }
         }
 
-        // Only the chat mic reads it (ChatScreen): with the server's AI
-        // features off there is no Chat, so no card for it.
-        if (aiOn) item {
+        // Whose this phone is ("this is me", 2026-11-12): the server's
+        // answer, changed through the same PUT the People page uses. Only
+        // on a paired phone (an unpaired one would be refused).
+        if (!deviceToken.isNullOrBlank()) item {
             PanelCard(
                 "This phone belongs to",
-                "Who usually talks to the domovoi from this phone's chat mic. Voice messages still " +
-                    "show who it heard; the marker is lighter when that's someone else.",
+                "What plays here counts as this person's listening, and they can clear it from here. " +
+                    "Voice messages still show who it heard; the marker is lighter when that's someone else.",
             ) {
-                if (peopleState.error != null && peopleState.data == null) {
+                if (sharedHere) {
+                    Text(
+                        "This is a shared screen, so it isn’t anyone’s: what plays here counts for the whole household.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else if (peopleState.error != null && peopleState.data == null) {
                     Text(
                         "couldn't load people: ${peopleState.error}",
                         style = MaterialTheme.typography.bodySmall,
@@ -335,12 +346,15 @@ internal fun ConnectionPanel() {
                         selected = selectedOwner,
                         options = listenerOptions,
                         label = { it?.name ?: "nobody in particular" },
+                        enabled = !claiming,
                         onSelect = { person ->
-                            app.prefs.setOwnerPersonId(serverUrl, person?.id?.toString())
-                            toast(
-                                if (person == null) "this phone belongs to nobody in particular"
-                                else "this phone belongs to ${person.name}",
-                            )
+                            claiming = true
+                            scope.launch {
+                                // The toast says the server's answer, not the pick.
+                                val out = com.domovoi.app.ui.screens.people.claimHere(app, person?.id)
+                                claiming = false
+                                toast(out.message)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -351,8 +365,8 @@ internal fun ConnectionPanel() {
         item {
             PanelCard(
                 "Listening as",
-                "Podcast and audiobook resume positions sync to this person — pick yourself to " +
-                    "share progress with the rooms; leave it on this device to keep it local.",
+                "Whose the songs played here are, and where podcast and audiobook places sync. " +
+                    "It follows whose this phone is until you pick someone; household is nobody in particular.",
             ) {
                 if (peopleState.error != null && peopleState.data == null) {
                     Text(
@@ -364,11 +378,17 @@ internal fun ConnectionPanel() {
                     SettingsDropdown(
                         selected = selectedListener,
                         options = listenerOptions,
-                        label = { it?.name ?: "me (this device)" },
+                        label = {
+                            when {
+                                it == null -> "household"
+                                it.id == owner?.id && !sharedHere -> "${it.name} (this phone)"
+                                else -> it.name
+                            }
+                        },
                         onSelect = { person ->
                             app.prefs.setListenerPersonId(person?.id?.toString())
                             toast(
-                                if (person == null) "listening as this device"
+                                if (person == null) "listening as the household"
                                 else "listening as ${person.name}",
                             )
                         },
