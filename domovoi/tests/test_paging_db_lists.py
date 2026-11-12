@@ -299,3 +299,39 @@ def test_episodes_filters(shows):
         q = c.get(path, params={"q": "Episode 02", "limit": 50}).json()
     assert dl["total"] == sum(1 for e in eps if e["fp"]) and all(e["has_file"] for e in dl["items"])
     assert q["total"] == 10   # Episode 020..029
+
+
+def test_episodes_carry_the_listeners_place(shows):
+    sid, _subs, eps = shows
+    path = f"/api/podcasts/subscriptions/{sid}/episodes"
+    dev = f"dev-{RUN}"
+
+    async def _ids():
+        from web.backend.db import session_scope
+        async with session_scope() as s:
+            rows = (await s.execute(text(
+                "SELECT id, guid FROM podcast_episodes WHERE subscription_id = :s"),
+                {"s": sid})).all()
+        return {g: i for i, g in rows}
+
+    ids = _run(_ids())
+    a, b = ids[eps[1]["guid"]], ids[eps[2]["guid"]]
+    _run(_exec(
+        "INSERT INTO playback_positions (item_type, item_id, device_id, person_id, position_sec)"
+        " VALUES ('podcast_episode', :i, :d, NULL, :p)",
+        [{"i": a, "d": dev, "p": 90}, {"i": b, "d": f"other-{RUN}", "p": 5}]))
+    try:
+        with _client() as c:
+            plain = c.get(path, params={"limit": 50}).json()["items"]
+            mine = c.get(path, params={"limit": 50, "device_id": dev}).json()["items"]
+            bare = c.get(path, params={"device_id": dev}).json()
+            other_person = c.get(path, params={"limit": 50, "device_id": dev,
+                                               "person_id": 987654}).json()["items"]
+        assert all(e["position_sec"] is None for e in plain)          # no device, no place
+        assert {e["id"]: e["position_sec"] for e in mine if e["position_sec"] is not None} == {a: 90}
+        assert isinstance(bare, list) and {e["id"] for e in bare if e["position_sec"] == 90} == {a}
+        assert all(e["position_sec"] is None for e in other_person)   # another person's slot
+        assert [e["id"] for e in mine] == [e["id"] for e in plain]    # same order either way
+    finally:
+        _run(_exec("DELETE FROM playback_positions WHERE device_id IN (:d, :o)",
+                   {"d": dev, "o": f"other-{RUN}"}))

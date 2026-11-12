@@ -177,17 +177,181 @@ const PodArt = ({ url, size = 48 }) => {
       </div>;
 };
 
+/* ---- Episode details (formats are pinned in test_web_podcasts_page.py) ----
+ * Every helper takes `now` so a test can fix the clock. Text only: a feed's
+ * description is HTML, and it is reduced to plain text here and drawn as a
+ * React text node, never injected. Local time, like the rest of the page. */
+const POD_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const POD_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const podDayNumber = (d) => Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+/* "today" · "yesterday" · "3 days ago" (to 6) · "12 Oct" · "12 Oct 2025"
+   (the year only when it is not this year). '' for no / unreadable date. */
+const podPublished = (iso, now = new Date()) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const ago = podDayNumber(now) - podDayNumber(d);
+  if (ago === 0) return 'today';
+  if (ago === 1) return 'yesterday';
+  if (ago >= 2 && ago <= 6) return `${ago} days ago`;
+  const plain = `${d.getDate()} ${POD_MONTHS[d.getMonth()]}`;
+  return d.getFullYear() === now.getFullYear() ? plain : `${plain} ${d.getFullYear()}`;
+};
+/* The tooltip: "Tue 12 Oct 2026, 14:05". */
+const podPublishedFull = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${POD_DAYS[d.getDay()]} ${d.getDate()} ${POD_MONTHS[d.getMonth()]} ${d.getFullYear()}, ${hh}:${mm}`;
+};
+/* "1 h 12 min" · "1 h" · "38 min" · "<1 min" · '' when unknown. */
+const podLength = (sec) => {
+  if (!(sec > 0)) return '';
+  const total = Math.round(sec / 60);
+  if (total < 1) return '<1 min';
+  const h = Math.floor(total / 60); const m = total % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+};
+/* The listener's place in an episode. `kind`: 'unknown' (an older server, or
+   no listener sent: nothing shown), 'new' (never started), 'played',
+   'partial' (with `label` "24 min left" and `pct`), 'resumed' (a place but no
+   length: "at 24 min"). Within 30 s of the end counts as played. */
+const podProgress = (ep) => {
+  if (!ep || ep.position_sec === undefined) return { kind: 'unknown' };
+  const pos = Number(ep.position_sec);
+  if (ep.position_sec === null || !(pos > 0)) return { kind: 'new' };
+  const dur = Number(ep.duration_sec);
+  if (!(dur > 0)) return { kind: 'resumed', label: `at ${podLength(pos) || '<1 min'}` };
+  if (dur - pos <= 30) return { kind: 'played', label: 'played' };
+  return { kind: 'partial', label: `${podLength(dur - pos)} left`,
+           pct: Math.max(2, Math.min(98, Math.round((pos / dur) * 100))) };
+};
+const podDownload = (ep) => {
+  if (ep.has_file) return 'downloaded';
+  if (ep.download_status === 'downloading') return 'downloading';
+  if (ep.download_status === 'failed') return 'download failed';
+  return 'not downloaded';
+};
+const POD_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', hellip: '…', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“' };
+/* HTML → plain text: block ends become line breaks, tags are dropped, the
+   common entities decoded. Nothing here ever reaches the DOM as markup. */
+const podPlainText = (html) => {
+  if (!html || typeof html !== 'string') return '';
+  return html
+    .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, ' ')
+    .replace(/<\s*br\s*\/?\s*>|<\s*\/\s*(p|div|li|h[1-6]|ul|ol|blockquote)\s*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+      if (e[0] === '#') {
+        const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+        return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+      }
+      return Object.prototype.hasOwnProperty.call(POD_ENTITIES, e.toLowerCase()) ? POD_ENTITIES[e.toLowerCase()] : m;
+    })
+    .replace(/[ \t ]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+const podSubInfo = (sub, total) => {
+  const n = sub.episode_count != null ? sub.episode_count : total;
+  const bits = [];
+  if (n != null) bits.push(`${n} ${n === 1 ? 'episode' : 'episodes'}`);
+  bits.push(sub.last_polled_at ? `updated ${relTime(sub.last_polled_at)}` : 'not checked yet');
+  return bits.join(' · ');
+};
+
+/* Click (or Enter / Space) toggles two lines against the whole text. */
+const PodText = ({ text, style }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div role="button" tabIndex={0} aria-expanded={open} title={open ? 'show less' : 'show more'}
+         onClick={() => setOpen(!open)}
+         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
+         style={{ fontSize: 12, color: 'var(--fg-muted)', cursor: 'pointer', overflowWrap: 'anywhere',
+                  whiteSpace: open ? 'pre-wrap' : 'normal', ...style,
+                  ...(open ? { maxHeight: '40vh', overflowY: 'auto' }
+                           : { overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }) }}>
+      {text}
+    </div>
+  );
+};
+
+const EpisodeRow = ({ ep, onPlay, now }) => {
+  const when = podPublished(ep.published_at, now);
+  const len = podLength(ep.duration_sec);
+  const prog = podProgress(ep);
+  const desc = podPlainText(ep.description);
+  const chapters = ep.chapters && ep.chapters.length ? ep.chapters.length : 0;
+  const meta = [
+    when && <span key="d" title={podPublishedFull(ep.published_at)}>{when}</span>,
+    len && <span key="l">{len}</span>,
+    (prog.kind === 'played' || prog.kind === 'partial' || prog.kind === 'resumed')
+      && <span key="p" style={prog.kind !== 'played' ? { color: 'var(--brand)' } : undefined}>{prog.label}</span>,
+    chapters > 0 && <span key="c">{`${chapters} ${chapters === 1 ? 'chapter' : 'chapters'}`}</span>,
+    <span key="s">{podDownload(ep)}</span>,
+  ].filter(Boolean);
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 16px',
+                  borderBottom: '1px solid var(--border-soft)' }}>
+      <button className="btn btn-primary btn-icon" disabled={!ep.has_file}
+              onClick={() => onPlay(ep)}
+              style={{ width: 32, height: 32, borderRadius: '50%', opacity: ep.has_file ? 1 : 0.4, flexShrink: 0 }}>
+        <Icon name="play" size={14}/>
+      </button>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {prog.kind === 'new' && (
+            <span title="not played yet" aria-label="not played yet"
+                  style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--brand)', flexShrink: 0 }}/>
+          )}
+          <div style={{ fontSize: 13, fontWeight: prog.kind === 'new' ? 600 : 500, minWidth: 0, overflow: 'hidden',
+                        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflowWrap: 'anywhere' }}>{ep.title}</div>
+        </div>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--fg-muted)', display: 'flex', flexWrap: 'wrap', gap: '0 6px', marginTop: 2 }}>
+          {meta.map((m, i) => <React.Fragment key={i}>{i > 0 && <span aria-hidden="true">·</span>}{m}</React.Fragment>)}
+        </div>
+        {prog.kind === 'partial' && (
+          <div style={{ height: 3, borderRadius: 2, background: 'var(--sunken)', marginTop: 4, overflow: 'hidden' }}>
+            <div style={{ width: `${prog.pct}%`, height: '100%', background: 'var(--brand)' }}/>
+          </div>
+        )}
+        {desc && <PodText text={desc} style={{ marginTop: 4 }}/>}
+      </div>
+      {ep.has_file && (
+        <IconButton name="download" title="save to this device"
+                    onClick={() => deviceDownload(`/api/podcasts/episodes/${ep.id}/audio?download=1`)}/>
+      )}
+    </div>
+  );
+};
+
 const EpisodeDrawer = ({ sub, onClose, onPlay, onUnsub }) => {
   const [search, setSearch] = React.useState('');
   const debSearch = useDebouncedValue(search, 250);
   const needle = debSearch.trim();
+  // The listening-as person's place in each episode comes with the rows
+  // (device_id + person_id); changing the person re-reads them.
+  const pb = typeof usePlayback === 'function' ? usePlayback() : null;
+  const deviceId = pb && pb.spoken && pb.spoken.clientId ? pb.spoken.clientId() : null;
+  const personId = pb && pb.listenerPersonId != null ? pb.listenerPersonId : null;
+  const qs = [];
+  if (needle) qs.push(`q=${encodeURIComponent(needle)}`);
+  if (deviceId) {
+    qs.push(`device_id=${encodeURIComponent(deviceId)}`);
+    if (personId != null) qs.push(`person_id=${personId}`);
+  }
   // A long back catalogue arrives a page at a time as the drawer scrolls;
   // the search runs on the server over every episode of the show.
   const list = usePagedList(
-    `/api/podcasts/subscriptions/${sub.id}/episodes`
-      + (needle ? `?q=${encodeURIComponent(needle)}` : ''),
+    `/api/podcasts/subscriptions/${sub.id}/episodes` + (qs.length ? `?${qs.join('&')}` : ''),
     { eventTypes: ['podcasts.changed', 'podcast_positions.changed'] });
   const episodes = list.items;
+  const now = new Date();
+  const showText = podPlainText(sub.description);
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.35)', zIndex: 50 }}/>
@@ -203,32 +367,15 @@ const EpisodeDrawer = ({ sub, onClose, onPlay, onUnsub }) => {
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-muted)', marginBottom: 4 }}>
+            {podSubInfo(sub, list.total)}
+          </div>
+          {showText && <PodText text={showText} style={{ marginBottom: 8 }}/>}
           <input type="text" placeholder="search episodes…" value={search}
                  onChange={(e) => setSearch(e.target.value)} style={{ ..._inp, width: '100%', height: 30 }}/>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
-          {(episodes || []).map((ep) => (
-            <div key={ep.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 16px',
-                                      borderBottom: '1px solid var(--border-soft)' }}>
-              <button className="btn btn-primary btn-icon" disabled={!ep.has_file}
-                      onClick={() => onPlay(ep)}
-                      style={{ width: 32, height: 32, borderRadius: '50%', opacity: ep.has_file ? 1 : 0.4 }}>
-                <Icon name="play" size={14}/>
-              </button>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ep.title}</div>
-                <div className="mono" style={{ fontSize: 10, color: 'var(--fg-muted)' }}>
-                  {ep.duration_sec ? fmtDur(ep.duration_sec) : '—'}
-                  {ep.chapters && ep.chapters.length ? ` · ${ep.chapters.length} chapters` : ''}
-                  {!ep.has_file ? ` · ${ep.download_status}` : ''}
-                </div>
-              </div>
-              {ep.has_file && (
-                <IconButton name="download" title="save to this device"
-                            onClick={() => deviceDownload(`/api/podcasts/episodes/${ep.id}/audio?download=1`)}/>
-              )}
-            </div>
-          ))}
+          {(episodes || []).map((ep) => <EpisodeRow key={ep.id} ep={ep} onPlay={onPlay} now={now}/>)}
           {(episodes || []).length === 0 && !list.loading && !list.error && (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
               {needle ? `no episodes match “${needle}”` : 'no episodes yet — try "poll now"'}

@@ -14210,6 +14210,43 @@
             "description": "newest (default) \u00b7 oldest"
           },
           {
+            "name": "device_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "With this, each row carries the listener's place (position_sec) for that device (and person_id); without it position_sec is null",
+              "title": "Device Id"
+            },
+            "description": "With this, each row carries the listener's place (position_sec) for that device (and person_id); without it position_sec is null"
+          },
+          {
+            "name": "person_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The person listening, with device_id",
+              "title": "Person Id"
+            },
+            "description": "The person listening, with device_id"
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
