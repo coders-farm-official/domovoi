@@ -384,3 +384,39 @@ async def test_an_oversize_body_is_refused_before_it_is_read(auth, store):
                          json={"filename": "big.milk", "content": "a=1\n" * (vp.MAX_UPLOAD_BYTES // 2)})
     assert r.status_code in (400, 413, 422)
     assert not store.exists() or not list(store.iterdir())
+
+
+# ─── the Now Playing section, rendered (jsx_render_harness.js) ──────────
+
+
+def _render(scenarios: dict) -> dict:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node, "node is required to render the dashboard's JSX"
+    proc = subprocess.run(
+        [node, str(Path(__file__).with_name("jsx_render_harness.js")), str(REPO), json.dumps(scenarios)],
+        capture_output=True, text=True, encoding="utf-8", timeout=300,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_casting_shows_one_quiet_line_and_no_toggle_and_no_webgl2_keeps_the_bars():
+    base = {"file": "web/static/visualizer.jsx", "component": "NowPlayingVisualizer",
+            "preload": ["web/static/music_player_panel.jsx"]}
+    out = _render({
+        "remote": {**base, "props": {"p": {"status": "playing"}, "remote": True}},
+        "local_no_webgl": {**base, "props": {"p": {"status": "playing"}, "remote": False}},
+    })
+    remote = out["remote"]
+    assert [e["text"] for e in remote] == ["visualizer shows when playing in this browser"]
+    assert not any(e["type"] == "input" for e in remote), "no toggle while casting"
+    local = out["local_no_webgl"]
+    texts = " ".join(e["text"] for e in local)
+    # node has no WebGL 2: the toggle is not offered (it couldn't do what it
+    # says), the bars stay, and the reason is on screen.
+    assert "milkdrop visualizer needs WebGL 2 in this browser" in texts
+    assert not any(e["type"] == "input" for e in local)
+    assert any(e["type"] == "canvas" for e in local), "the bars visualizer still draws"

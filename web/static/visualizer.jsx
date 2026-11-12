@@ -140,8 +140,8 @@ const vizFetchPreset = async (entry) => {
  *    display wake lock for a playing video, and a MediaStream counts even
  *    muted (a muted FILE does not: measured 2026-11-11 in Chrome and Edge
  *    on Windows, plain http on a non-localhost name, by the system's
- *    display-required flag). Other browsers: the manual's "Visualizer"
- *    section says what is known.
+ *    display-required flag). Other browsers: docs/FAQ.md, "Does the music
+ *    visualizer keep the screen on?".
  *
  * hold(true) while full screen + playing + visible; hold(false) otherwise.
  * mode() says which one holds: 'api', 'video' or null (for the manual
@@ -218,9 +218,11 @@ const VizWakeLock = (() => {
     mode = null;
   };
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && want && !sentinel && !video) acquire();
-  });
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && want && !sentinel && !video) acquire();
+    });
+  }
 
   return {
     hold(on) {
