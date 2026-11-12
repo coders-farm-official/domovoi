@@ -169,6 +169,13 @@ struct RouteScreen: View {
             // no control for any of it — the week grid, "sync now", and the
             // all-day flag no API can read.
             CalendarScreenView(model: model)
+        case .lists:
+            // slot: lists
+            // ``ListsScreenView`` says what is left out and why. No capability
+            // gate: `/api/lists` is core (`Route.swift` gates `stations` and
+            // `images` only), and the local shell never offers it
+            // (``localTabs(phoneCanChat:sharedScreen:savedBooks:)``).
+            ListsScreenView(model: model)
         case .stations:
             // slot: stations
             // ``StationsPhonePlayback`` over the app's one player (D46/D49) —

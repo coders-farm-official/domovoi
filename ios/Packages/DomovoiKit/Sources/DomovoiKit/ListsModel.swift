@@ -322,15 +322,20 @@ public final class ListsModel {
         _ action: String,
         onOk: @escaping @MainActor (T) -> Void = { _ in },
         onFail: @escaping @MainActor () -> Void = {},
-        _ call: @escaping @Sendable () async throws(DomovoiError) -> T
+        _ call: @escaping @Sendable () async throws -> T
     ) {
         let asked = container.store.serverURL
         Task { @MainActor [weak self] in
+            // Untyped, because a trailing closure's thrown type is not
+            // inferred from its context; every call in it is the client's,
+            // which throws nothing but ``DomovoiError``.
             let result: Result<T, DomovoiError>
-            do throws(DomovoiError) {
+            do {
                 result = .success(try await call())
+            } catch let trouble as DomovoiError {
+                result = .failure(trouble)
             } catch {
-                result = .failure(error)
+                result = .failure(.unreachable("\(error)"))
             }
             guard let self, self.container.store.serverURL == asked else { return }
             switch result {
