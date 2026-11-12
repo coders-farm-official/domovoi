@@ -1106,6 +1106,12 @@ record a `media_plays` history row (best-effort), and return a `Response`
 carrying `music_action="start"` and the room's MPD HTTP stream URL. The
 streaming layer runs the `music_start` → `music_ready` handshake from those
 fields — **return the Response unchanged** (you may overwrite `.text`).
+When the calling plugin is a `streaming-search-provider`, the play is a
+song: the core arms the room's Up next to carry on from the library when it
+ends, seeded by the `artist` you pass (else `now_playing_data["artist"]` or
+`["channel"]`, else an "Artist - Song" title). Pass the artist when you
+know it. A plugin that isn't a streaming-search provider (a radio station)
+gets no follow-on.
 On MPD failure you get a Response with no `music_action` and a spoken
 fallback. **Under `INTERNET_ACCESS=never`** a `stream_url` whose host is
 not on the house network is refused before it reaches MPD (the room's MPD

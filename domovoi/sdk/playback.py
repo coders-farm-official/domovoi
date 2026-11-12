@@ -15,6 +15,10 @@ invariant 9) so plugins never hand-assemble it:
 * the room's now-playing stamp is placed (source must be a registered
   now-playing source, §4.7) and one ``media_plays`` history row is
   recorded (best-effort).
+* a streaming-search provider's song arms the room's Up next, which
+  carries the music on from the library when the song ends
+  (:func:`domovoi.up_next.rooms.follow_stream`; a radio station's
+  stream does not).
 
 A voice turn's Response rides home on the turn's own socket. Code that
 plays or stops OUTSIDE a voice turn — a plugin's HTTP route (a page's
@@ -136,6 +140,9 @@ class PlaybackAPI:
             except Exception as e:
                 log.debug("play_url: media_plays record failed: %s", e)
 
+        if self._streams_songs():
+            await self._follow_with_up_next(room_id, title, artist, data)
+
         label = f"{title} by {artist}" if artist else title
         return Response(
             text=f"Playing {label}.",
@@ -144,6 +151,31 @@ class PlaybackAPI:
             music_action="start",
             music_stream_url=mpd_stream_url_for(room_id),
         )
+
+    def _streams_songs(self) -> bool:
+        """Is this plugin a streaming-search provider? Its plays are songs,
+        which Up next carries on from when they end; a radio station's are
+        not."""
+        from domovoi.capabilities import CAPABILITIES, STREAMING_SEARCH_PROVIDER
+
+        return self.slug in CAPABILITIES.providers_for(STREAMING_SEARCH_PROVIDER)
+
+    async def _follow_with_up_next(
+        self, room_id: str, title: str, artist: str | None, data: dict[str, Any],
+    ) -> None:
+        """Arm the room's Up next to carry on from the library when this
+        song ends (domovoi/up_next/rooms.py ``follow_stream``). Best-effort:
+        the stream plays regardless."""
+        try:
+            from domovoi.up_next import rooms as up_next_rooms
+
+            by = artist or data.get("artist") or data.get("channel")
+            await up_next_rooms.follow_stream(
+                room_id, get_mpd_client_for(room_id), title=title,
+                artist=str(by) if by else None,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("play_url: up next won't follow room=%s: %s", room_id, e)
 
     async def stop(self, room_id: str) -> Response:
         """Stop the room's MPD + clear its now-playing stamp; the returned

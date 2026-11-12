@@ -49,6 +49,15 @@ _LAST_STREAM_TITLE_KEY = "last_stream_title"
 log = logging.getLogger(__name__)
 
 
+def _stream_listener(ctx: Context):
+    """Around a provider's stream: Up next follows it with the speaker's
+    taste (None: an unrecognised voice, the household) when it ends
+    (domovoi/up_next/rooms.py ``follow_stream``)."""
+    from domovoi.up_next import rooms as up_next_rooms
+
+    return up_next_rooms.listening_as(getattr(ctx, "person_id", None))
+
+
 class _PlayerUnreachable(Exception):
     """The room's music player didn't answer a queue read (see
     ``MusicHandler._queue_place``): the skip says so without trying it
@@ -1132,7 +1141,8 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             return await self._not_in_library(query, q_display, "offline", ctx, session, **kw)
         stream_response: Response | None = None
         try:
-            stream_response = await provider.stream(ctx.room_id, query=q_display)
+            with _stream_listener(ctx):
+                stream_response = await provider.stream(ctx.room_id, query=q_display)
         except Exception as e:
             # The request itself is left out of the line (privacy).
             log.warning(
@@ -1331,7 +1341,8 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             return None
         query = f"song that goes {phrase}" + (f" by {artist}" if artist else "")
         try:
-            response = await provider.stream(ctx.room_id, query=query)
+            with _stream_listener(ctx):
+                response = await provider.stream(ctx.room_id, query=query)
         except Exception as e:
             log.warning("streaming provider %r failed for a lyric request (%s)",
                         getattr(provider, "slug", "?"), type(e).__name__)
@@ -1723,7 +1734,8 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
                 seen_current = True
                 continue
             try:
-                response = await provider.stream(ctx.room_id, candidate)
+                with _stream_listener(ctx):
+                    response = await provider.stream(ctx.room_id, candidate)
             except Exception as e:
                 log.warning("smart_skip: provider stream failed: %s", e)
                 continue

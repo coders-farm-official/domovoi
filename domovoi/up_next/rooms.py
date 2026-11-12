@@ -27,6 +27,13 @@ core keeps it going:
     oldest go, so a day-long session keeps a small queue and "previous"
     still works.
 
+* **After a stream** — a song from an external source (a streaming-search
+  provider's ``sdk.playback.play_url``) arms the room's session as it is
+  queued (:func:`follow_stream`): seeded by the stream's artist when the
+  library has them, else the listener's taste. Its first batch joins after
+  the stream once it was heard and is nearly over, so the player simply
+  moves on; a stop, Autoplay off or a stream that fails at once leaves
+  the room quiet.
 * **End** — a new start (:func:`store.create` ends the old one), the queue
   replaced by anything else (a stream, a podcast: the client's
   ``queue_generation`` moved on since the session started), the queue
@@ -39,10 +46,14 @@ exactly as it would have without Up next.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from sqlalchemy import text
 
@@ -167,14 +178,19 @@ async def start(
     person_id: int | None = None,
     autoplay: bool = True,
     client: Any = None,
+    fill_now: bool = True,
+    exclude_tracks: Iterable[int] = (),
 ) -> str | None:
     """Start the room's session (ending the one before). Call it AFTER the
     start replaced the room's queue. ``list`` / ``library`` append the first
-    batch now when ``client`` is the room's player. Returns the session id,
-    or None when it couldn't start (logged; the music plays regardless)."""
+    batch now when ``client`` is the room's player (and ``fill_now``: a
+    stream's follow-on waits for the stream's end, :func:`follow_stream`).
+    ``exclude_tracks`` are never picked. Returns the session id, or None
+    when it couldn't start (logged; the music plays regardless)."""
     try:
         sess = UpNextSession.start(target=target_for(room_id), mode=mode, seed=seed,
                                    person_id=person_id, autoplay=autoplay)
+        sess.excluded_tracks.update(int(t) for t in exclude_tracks)
         async with _session_scope() as s:
             await store.create(s, sess, name=name)
         SEEN[sess.id] = _Seen(generation=_generation(client))
@@ -182,7 +198,7 @@ async def start(
         log.warning("up next: couldn't start %s's session: %s", room_id, e)
         return None
     log.info("up next: %s session %s started in %s", mode, sess.id, room_id)
-    if client is not None and mode != "continue":
+    if client is not None and mode != "continue" and fill_now:
         try:
             await fill(room_id, client, sess.id)
         except Exception as e:  # noqa: BLE001 — the extender tries again
@@ -240,6 +256,150 @@ async def move_here(room_id: str, session_id: str, client: Any = None) -> bool:
     except Exception as e:  # noqa: BLE001
         log.warning("up next: moving session %s to %s failed: %s", session_id, room_id, e)
         return False
+
+
+# ─── After a stream (owner, 2026-11-12) ───────────────────────────────────
+
+#: A stream must have played this long before anything is queued after it
+#: (one that fails at once is followed by nothing).
+STREAM_HEARD_SEC = 15.0
+#: ...and, when its length is known, have no more than this left (until
+#: then "next" on it is the stream's own; the extender looks every 5 s).
+STREAM_TAIL_SEC = 60.0
+#: How long the arming may spend matching the stream's artist.
+STREAM_MATCH_SEC = 2.0
+#: Most library songs of the matched artist that seed the mix.
+STREAM_SEED_CAP = 500
+
+_UNSET: Any = object()
+#: Whose taste a stream's follow-on is for, set by the voice path around a
+#: provider's stream (:func:`listening_as`); unset: the room's session
+#: before the stream, else the household.
+STREAM_LISTENER: ContextVar[Any] = ContextVar("up_next_stream_listener", default=_UNSET)
+
+_DASH = re.compile(r"\s+[-\u2013\u2014]\s+")
+_BRACKETS = re.compile(r"[\(\[][^\)\]]*[\)\]]")
+
+
+@contextmanager
+def listening_as(person_id: int | None) -> Iterator[None]:
+    """The stream started inside this block is followed with ``person_id``'s
+    taste (None: the household)."""
+    token = STREAM_LISTENER.set(person_id)
+    try:
+        yield
+    finally:
+        STREAM_LISTENER.reset(token)
+
+
+def stream_nearly_over(snap: dict[str, Any]) -> bool:
+    """Has the stream playing now been heard (:data:`STREAM_HEARD_SEC`) and,
+    when its length is known, is it in its last :data:`STREAM_TAIL_SEC`?"""
+    try:
+        elapsed = float(snap.get("elapsed") or 0.0)
+    except (TypeError, ValueError):
+        elapsed = 0.0
+    if elapsed < STREAM_HEARD_SEC:
+        return False
+    try:
+        duration = float(snap.get("duration") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return duration <= 0.0 or duration - elapsed <= STREAM_TAIL_SEC
+
+
+def _artist_names(artist: str | None, title: str | None) -> list[str]:
+    """Who a stream is by, best guess first: its artist (or channel), then
+    the part of an "Artist - Song" title before the dash."""
+    out: list[str] = []
+    guesses = [artist]
+    parts = _DASH.split(str(title or ""), maxsplit=1)
+    if len(parts) == 2:
+        guesses.append(parts[0])
+    for g in guesses:
+        name = " ".join(str(g or "").split())
+        if name and name.casefold() not in {o.casefold() for o in out}:
+            out.append(name)
+    return out
+
+
+def _song_key(title: str | None) -> str:
+    t = _BRACKETS.sub(" ", str(title or "")).casefold()
+    return "".join(ch for ch in t if ch.isalnum())
+
+
+async def match_stream(s: Any, artist: str | None, title: str | None) -> tuple[str, list[int], list[int]] | None:
+    """The library artist a stream is by: ``(name as the library spells it,
+    their songs, those of them that are the stream's own song)``, or None.
+    An exact match on the library's artist names first, then the "play X"
+    resolver's sure artist or credit match (never a did-you-mean)."""
+    from domovoi.handlers.shared import library_match
+
+    for name in _artist_names(artist, title):
+        rows = (await s.execute(text(
+            "SELECT id, artist, title FROM library_tracks "
+            "WHERE artist_norm = library_search_norm(:n) AND artist_norm <> '' "
+            "ORDER BY id LIMIT :cap"), {"n": name, "cap": STREAM_SEED_CAP})).all()
+        label = rows[0][1] if rows else None
+        if not rows:
+            res = await library_match.resolve_request(
+                s, {"artist": name}, kinds=frozenset({"artist", "credit"}))
+            best = res.best
+            if res.decision != "play" or best is None or best.ref.type not in ("artist", "credit"):
+                continue
+            ids = [int(i) for i in best.track_ids[:STREAM_SEED_CAP]]
+            if not ids:
+                continue
+            rows = (await s.execute(text(
+                "SELECT id, artist, title FROM library_tracks WHERE id = ANY(:ids) ORDER BY id"),
+                {"ids": ids})).all()
+            label = best.ref.label
+        if not rows:
+            continue
+        pieces = _DASH.split(str(title or ""))
+        keys = {k for k in (_song_key(title), *(_song_key(p) for p in pieces[1:])) if k}
+        same = [int(r[0]) for r in rows if _song_key(r[2]) in keys]
+        return str(label or name), [int(r[0]) for r in rows], same
+    return None
+
+
+async def follow_stream(room_id: str, client: Any, *, title: str | None, artist: str | None) -> str | None:
+    """A song from an external source was just queued in the room (its
+    player holds the stream alone): arm the session that carries the music
+    on from the library when it ends. Seeded by the stream's artist when
+    the library has them (``continue`` over their songs, so the mix leans to
+    their artist, era and genres: "more like <artist>"), else ``library``
+    with no seed (the listener's taste, like "play something"). Nothing is
+    queued now: :func:`look` adds the first batch once the stream was heard
+    and is nearly over. Autoplay and the listener carry over from the
+    room's session before the stream; :func:`listening_as` names the
+    listener. The stream's own song in the library is never picked.
+    Best-effort: returns the session id or None."""
+    found = None
+    try:
+        async with _session_scope() as s:
+            prev = await store.active_for(s, target_for(room_id))
+            try:
+                found = await asyncio.wait_for(match_stream(s, artist, title), STREAM_MATCH_SEC)
+            except asyncio.TimeoutError:
+                log.info("up next: matching %s's stream took too long; its taste follows it", room_id)
+                found = None
+            if found is not None:
+                label, ids, same = found
+                seed, name = await service.build_seed(
+                    s, None, service.ContextIn(kind="ids", track_ids=ids, name=label[: service.NAME_MAX]))
+    except Exception as e:  # noqa: BLE001 — the stream plays regardless
+        log.warning("up next: %s's stream won't be followed: %s", room_id, e)
+        return None
+    person = STREAM_LISTENER.get()
+    if person is _UNSET:
+        person = prev.sess.person_id if prev is not None else None
+    autoplay = prev.sess.autoplay if prev is not None else True
+    if found is None:
+        return await start(room_id, mode="library", seed=SeedRef(track_id=None), person_id=person,
+                           autoplay=autoplay, client=client, fill_now=False)
+    return await start(room_id, mode="continue", seed=seed, name=name, person_id=person,
+                       autoplay=autoplay, client=client, fill_now=False, exclude_tracks=same)
 
 
 # ─── Refill ───────────────────────────────────────────────────────────────
@@ -396,6 +556,11 @@ async def look(room_id: str, client: Any, snap: dict[str, Any], *,
         cur = ids.index(int(songid))
     left = len(ids) - cur - 1
     may_draw = not st.sess.ended and (st.sess.autoplay or st.sess.mode == "list")
+    if left == 0 and "://" in files.get(ids[cur], "") and not stream_nearly_over(snap):
+        # A stream is the last thing queued: its follow-on joins once it
+        # was heard and is nearly over, so a stream that fails at once
+        # plays nothing after it, and "next" on it is the stream's own.
+        may_draw = False
     if left <= refill_at and may_draw and now >= seen.backoff_until and room_id not in LOADING:
         did["queued"] = await fill(room_id, client, sid)
     return did
