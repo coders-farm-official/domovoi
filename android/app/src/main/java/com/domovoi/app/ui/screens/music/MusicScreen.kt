@@ -472,7 +472,7 @@ fun MusicScreen() {
                     pager = libPager,
                     libraryTotal = libraryTotal,
                     realPlaylists = realPlaylists,
-                    onSelect = { ui.detailTrack = it },
+                    onSelect = { ui.detailTrack = it; ui.detailContext = null },
                     onToggleFavorite = onToggleFavorite,
                     onAddToPlaylist = { ui.addTrack = it },
                     onBulkAdd = onBulkAdd,
@@ -509,6 +509,7 @@ fun MusicScreen() {
                 refreshLib = { libPager.reload() },
                 refreshStats = stats.refresh,
                 refreshNP = nowPlaying.refresh,
+                listContext = ui.detailContext,
             )
         }
         ui.openPlaylist?.let { p ->
@@ -528,6 +529,7 @@ fun MusicScreen() {
                 onClose = { ui.openGenre = null },
                 onSelectTrack = { t ->
                     ui.openGenre = null
+                    ui.detailContext = UpNextContext.genre(g)
                     ui.detailTrack = t
                 },
                 refreshNP = nowPlaying.refresh,

@@ -16,19 +16,23 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,6 +54,7 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.LoadingState
+import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.runAction
@@ -68,8 +77,15 @@ import kotlinx.coroutines.launch
  * devices had names, and whatever the device id says (a non-admin reads
  * `added_by_device_id: null` since 2026-11-12; the name is what is shown).
  *
- * Rows: tap plays that song now ([RoomQueueApi.playNow]), hold the handle
- * and drag to reorder, × removes. 48dp targets throughout.
+ * Rows: tap plays that song now ([RoomQueueApi.play], the room's real jump),
+ * hold the handle and drag to reorder, × removes. 48dp targets throughout.
+ *
+ * Up next (P4, RoomUpNext.kt): the room's own picks are marked (a sparkle
+ * and a muted reason chip) under an "up next" head that says what the mix
+ * is built from and holds the room's autoplay switch; "less like this" on a
+ * pick takes its artist out of the mix; "save as playlist" keeps the queue.
+ * A guest gets the jump, the moves and remove — no switch, no "less like
+ * this", no saving, no clear. Nothing of Up next shows without a session.
  */
 
 /** The tab's own state, hoisted out of the lazy items so it survives the
@@ -79,6 +95,8 @@ internal class RoomQueueSelection(initialRoom: String?) {
     var room by mutableStateOf(initialRoom)
     var busy by mutableStateOf(false)
     var confirmClear by mutableStateOf(false)
+    /** Picks a "less like this" took back, gone from the view at once. */
+    var dropped by mutableStateOf<DroppedPicks?>(null)
     val drag = QueueDragState()
 }
 
@@ -90,8 +108,16 @@ internal class RoomQueueModel(
     val remove: (QueueItem) -> Unit,
     val move: (QueueItem, Int) -> Unit,
     val clear: () -> Unit,
-    /** Plays the entry now; null where the room can't (nothing playing). */
+    /** Plays the entry now; null where this caller can't. */
     val playNow: ((QueueItem) -> Unit)? = null,
+    /** The rows shown: the queue's, less the picks just taken back. */
+    val items: List<QueueItem> = queue.items,
+    val controls: RoomQueueControls = roomQueueControls(queue),
+    /** "save as playlist", null where it isn't offered. */
+    val save: SaveAsPlaylistFlow? = null,
+    val saveQueue: () -> Unit = {},
+    val setAutoplay: (Boolean) -> Unit = {},
+    val lessLike: (QueueItem) -> Unit = {},
 )
 
 /** The secondary line of a room-queue row: artist · length · added by. */
@@ -118,6 +144,7 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
     // edit already sent must still finish and say how it went
     // (ServerAction.kt says why).
     val scope = app.scope
+    val server by app.prefs.serverUrl.collectAsState()
 
     // Default to a room that's actually playing — that's the queue you opened
     // this tab to look at.
@@ -126,23 +153,42 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
         if (sel.room == null) sel.room = playingRoom ?: rooms.firstOrNull()
     }
 
-    val rq = remember(app) { RoomQueueApi(app.api, { app.prefs.serverUrl.value }, { app.prefs.deviceId }) }
+    val rq = remember(app) { RoomQueueApi(app.api) { app.prefs.deviceId } }
     val room = sel.room
     val queueState = rememberApi(room, eventTypes = setOf("music.now_playing.changed")) {
         val r = room ?: return@rememberApi RoomQueue()
         rq.read(r)
     }
+    // One per room and server: a name typed for one room's queue is not
+    // saved as another's.
+    val save = remember(room, server) { SaveAsPlaylistFlow() }
 
-    /** One edit at a time; its answer refreshes the list. */
-    fun edit(failLabel: String, done: String? = null, action: suspend (String) -> Unit) {
+    /**
+     * One edit at a time; its answer refreshes the list. [done] gets the
+     * answer only while the app still talks to the server and the room the
+     * edit was for (read-after-await): another house's queue never takes
+     * it, and says nothing.
+     */
+    fun <T> edit(
+        failLabel: String,
+        action: suspend (String) -> T,
+        done: (T) -> String? = { null },
+    ) {
         val r = sel.room ?: return
         if (sel.busy) return
+        val at = app.prefs.serverUrl.value
         scope.launch {
             sel.busy = true
             try {
                 runAction { action(r) }
-                    .onSuccess { done?.let(toast); queueState.refresh() }
-                    .onFailure { toast("$failLabel failed: ${apiErrorText(it)}") }
+                    .onSuccess {
+                        if (app.prefs.serverUrl.value != at || sel.room != r) return@onSuccess
+                        done(it)?.let(toast)
+                        queueState.refresh()
+                    }
+                    .onFailure {
+                        if (app.prefs.serverUrl.value == at) toast("$failLabel failed: ${apiErrorText(it)}")
+                    }
             } finally {
                 sel.busy = false
             }
@@ -150,27 +196,63 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
     }
 
     val queue = queueState.data ?: RoomQueue()
-    val canPlayNow = RoomQueueApi.playingPos(queue) != null
+    val items = visibleRoomItems(queue, sel.dropped, server, room)
+    val controls = roomQueueControls(queue)
+    val sessionId = queue.sessionId
     return RoomQueueModel(
         sel = sel,
         queue = queue,
         loading = queueState.loading,
-        remove = { item -> edit("remove", "removed \"${item.title ?: "track"}\"") { rq.remove(it, listOf(item.songId)) } },
-        move = { item, to -> edit("move") { rq.move(it, item.songId, to) } },
-        clear = { edit("clear", "cleared ${sel.room}'s queue") { rq.clear(it) } },
-        playNow = if (!canPlayNow) null else { item ->
-            edit("play", "playing \"${item.title ?: "track"}\" in ${sel.room}") { rq.playNow(it, queue, item.songId) }
+        remove = { item -> edit("remove", { rq.remove(it, listOf(item.songId)) }) { "removed \"${item.title ?: "track"}\"" } },
+        move = { item, to -> edit("move", { rq.move(it, item.songId, roomMoveTarget(items, to)) }) },
+        clear = { edit("clear", { rq.clear(it) }) { "cleared ${sel.room}'s queue" } },
+        playNow = if (!controls.playNow) null else { item ->
+            edit("play", { rq.play(it, item.songId) }) { "playing \"${item.title ?: "track"}\" in ${sel.room}" }
+        },
+        items = items,
+        controls = controls,
+        save = save.takeIf { controls.save },
+        saveQueue = save@{
+            val r = sel.room ?: return@save
+            if (!save.canSaveRoom()) return@save
+            val at = app.prefs.serverUrl.value
+            scope.launch {
+                // The flow belongs to this room and server: a note for a
+                // save sent elsewhere is never shown here.
+                if (save.saveRoom { name -> rq.savePlaylist(r, name) } && app.prefs.serverUrl.value == at) {
+                    toast(save.note)
+                }
+            }
+        },
+        setAutoplay = { on ->
+            if (sessionId != null && controls.autoplay) {
+                edit("autoplay", { rq.setAutoplay(sessionId, on) }) { roomAutoplayNote(sel.room.orEmpty(), on) }
+            }
+        },
+        lessLike = lessLike@{ item ->
+            val seq = item.upNextSeq ?: return@lessLike
+            if (sessionId == null || !controls.lessLike) return@lessLike
+            val at = app.prefs.serverUrl.value
+            edit("less like this", { rq.lessLikeThis(sessionId, seq) }) { removed ->
+                // Gone from the view at once (the room drops them within
+                // ~5 s), for this server, room and session only.
+                val r = sel.room ?: return@edit null
+                val prev = sel.dropped?.takeIf { it.server == at && it.room == r && it.sessionId == sessionId }
+                sel.dropped = (prev ?: DroppedPicks(at, r, sessionId, emptySet())).plus(removed + seq)
+                lessLikeNote(item.artist, removed.size)
+            }
         },
     )
 }
 
 /**
- * A header card (room picker, count, clear, blocked notice), the search box
- * that adds to the room, then one lazy item per queue entry. A room queue
- * can hold hundreds of songs (a playlist, a cast from the phone); drawing
- * them all inside one item built every row on the main thread in a single
- * frame, the same freeze the player tab had. [picker]: the room chips (off
- * where the room is already chosen, a room's own sheet).
+ * A header card (room picker, count, save, clear, blocked notice), the
+ * search box that adds to the room, then one lazy item per queue entry —
+ * and the Up next head among them. A room queue can hold hundreds of songs
+ * (a playlist, a cast from the phone); drawing them all inside one item
+ * built every row on the main thread in a single frame, the same freeze
+ * the player tab had. [picker]: the room chips (off where the room is
+ * already chosen, a room's own sheet).
  */
 internal fun LazyListScope.queueTab(rooms: List<String>, rq: RoomQueueModel, picker: Boolean = true) {
     item(key = "room-queue-head") { RoomQueueHeader(rooms, rq, picker) }
@@ -181,7 +263,7 @@ internal fun LazyListScope.queueTab(rooms: List<String>, rq: RoomQueueModel, pic
         item(key = "room-queue-add") { QueueAddBox(QueueTarget.Room(room), modifier = Modifier.padding(top = 4.dp)) }
     }
 
-    val items = rq.queue.items
+    val items = rq.items
     when {
         rq.loading && items.isEmpty() -> item(key = "room-queue-loading") { LoadingState() }
         items.isEmpty() -> item(key = "room-queue-empty") {
@@ -190,23 +272,43 @@ internal fun LazyListScope.queueTab(rooms: List<String>, rq: RoomQueueModel, pic
                 "search above to add a song, or say \"play something\" in ${rq.sel.room ?: "a room"}",
             )
         }
-        else -> items(
-            count = items.size,
-            key = { "room-queue-${items[it].songId}-$it" },
-            contentType = { "room-queue-row" },
-        ) { idx ->
-            val item = items[idx]
-            val editable = rq.queue.editable && !rq.sel.busy
-            RoomQueueRow(
-                item = item,
-                index = idx,
-                count = items.size,
-                editable = editable,
-                drag = rq.sel.drag,
-                onPlayNow = rq.playNow?.takeIf { editable && !item.playing }?.let { f -> { f(item) } },
-                onMove = { from, to -> rq.move(items[from], to) },
-                onRemove = { rq.remove(item) },
-            )
+        else -> {
+            val lines = roomQueueLines(rq.queue, items)
+            items(
+                count = lines.size,
+                key = { i ->
+                    when (val line = lines[i]) {
+                        RoomQueueLine.UpNextHead -> "room-queue-up-next"
+                        is RoomQueueLine.Entry -> "room-queue-${items[line.index].songId}-${line.index}"
+                    }
+                },
+                contentType = { i -> if (lines[i] is RoomQueueLine.UpNextHead) "room-queue-up-next" else "room-queue-row" },
+            ) { i ->
+                when (val line = lines[i]) {
+                    RoomQueueLine.UpNextHead -> RoomUpNextHead(rq, room.orEmpty())
+                    is RoomQueueLine.Entry -> {
+                        val idx = line.index
+                        val item = items[idx]
+                        val editable = rq.queue.editable && !rq.sel.busy
+                        val pick = item.isPick && idx in roomUpNextRows(items)
+                        RoomQueueRow(
+                            item = item,
+                            index = idx,
+                            count = items.size,
+                            editable = editable,
+                            pick = pick,
+                            drag = rq.sel.drag,
+                            onPlayNow = rq.playNow?.takeIf { editable && !item.playing }?.let { f -> { f(item) } },
+                            onMove = { from, to -> rq.move(items[from], to) },
+                            // A guest never removes the song playing now (the server's rule).
+                            onRemove = if (rq.queue.guest && item.playing) null else { { rq.remove(item) } },
+                            onLessLike = if (lessLikeOffered(rq.controls, items, idx) && !rq.sel.busy) {
+                                { rq.lessLike(item) }
+                            } else null,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -228,7 +330,7 @@ internal fun RoomQueueDialogs(rq: RoomQueueModel) {
 
 @Composable
 private fun RoomQueueHeader(rooms: List<String>, rq: RoomQueueModel, picker: Boolean) {
-    val items = rq.queue.items
+    val items = rq.items
     val editable = rq.queue.editable
 
     DomovoiCard(Modifier.fillMaxWidth(), padding = 0) {
@@ -267,7 +369,7 @@ private fun RoomQueueHeader(rooms: List<String>, rq: RoomQueueModel, picker: Boo
             )
         }
 
-        if (items.isNotEmpty() && editable) {
+        if (rq.controls.clear) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -284,6 +386,20 @@ private fun RoomQueueHeader(rooms: List<String>, rq: RoomQueueModel, picker: Boo
                     Spacer(Modifier.size(4.dp))
                     Text("clear queue")
                 }
+            }
+        }
+
+        // "save as playlist": the room's own queue, as the room holds it
+        // (the household's; never a guest's).
+        rq.save?.let { flow ->
+            Column(Modifier.fillMaxWidth().padding(start = 6.dp, end = 14.dp, bottom = 6.dp)) {
+                SaveAsPlaylistRow(
+                    flow = flow,
+                    enabled = true,
+                    hint = roomSaveHint(rq.sel.room ?: "the room"),
+                    canSave = flow.canSaveRoom(),
+                    onSave = rq.saveQueue,
+                )
             }
         }
 
@@ -308,16 +424,61 @@ private fun RoomQueueHeader(rooms: List<String>, rq: RoomQueueModel, picker: Boo
     }
 }
 
+/** The "up next" head: what the mix is built from, the autoplay switch, the one muted line. */
+@Composable
+private fun RoomUpNextHead(rq: RoomQueueModel, room: String) {
+    val basis = roomUpNextBasis(rq.queue)
+    val line = roomUpNextLine(rq.queue, roomUpNextRows(rq.items).size)
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp, start = 12.dp)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                SectionLabel(UP_NEXT_HEAD)
+                if (basis.isNotEmpty()) {
+                    Text(
+                        basis,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (rq.controls.autoplay) {
+                Text(AUTOPLAY, style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted)
+                Switch(
+                    checked = rq.queue.autoplay == true,
+                    onCheckedChange = { rq.setAutoplay(it) },
+                    enabled = !rq.sel.busy,
+                    modifier = Modifier.semantics { contentDescription = roomAutoplayLabel(room) },
+                )
+            }
+        }
+        line?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted,
+                modifier = Modifier.padding(bottom = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+    }
+}
+
 @Composable
 private fun RoomQueueRow(
     item: QueueItem,
     index: Int,
     count: Int,
     editable: Boolean,
+    pick: Boolean,
     drag: QueueDragState,
     onPlayNow: (() -> Unit)?,
     onMove: (Int, Int) -> Unit,
-    onRemove: () -> Unit,
+    onRemove: (() -> Unit)?,
+    onLessLike: (() -> Unit)?,
 ) {
     val title = item.title ?: item.file.ifBlank { "unknown" }
     Row(
@@ -358,22 +519,44 @@ private fun RoomQueueRow(
                 )
             }
             Column(Modifier.weight(1f)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (item.playing) FontWeight.SemiBold else FontWeight.Normal,
-                    color = Domovoi.colors.fg,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    roomQueueSubline(item),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Domovoi.colors.fgMuted,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (pick) {
+                        Icon(
+                            Icons.Filled.AutoAwesome, contentDescription = "up next pick",
+                            tint = Domovoi.colors.fgMuted, modifier = Modifier.size(12.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (item.playing) FontWeight.SemiBold else FontWeight.Normal,
+                        color = Domovoi.colors.fg,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        roomQueueSubline(item),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // Why the room picked it: a muted chip ("same artist", "90s").
+                    item.reasonLabel?.takeIf { item.isPick && it.isNotBlank() }?.let { Pill(it) }
+                }
+            }
+        }
+        onLessLike?.let { f ->
+            IconButton(onClick = f, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    Icons.Filled.ThumbDown, contentDescription = lessLikeLabel(item.artist),
+                    tint = Domovoi.colors.fgMuted, modifier = Modifier.size(18.dp),
                 )
             }
         }
-        if (editable) {
+        if (editable && onRemove != null) {
             IconButton(onClick = onRemove, modifier = Modifier.size(48.dp)) {
                 Icon(
                     Icons.Filled.Close, contentDescription = "remove $title from the queue",

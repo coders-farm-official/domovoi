@@ -102,7 +102,7 @@ internal class QueueAdder(
                 override fun enqueue(items: List<PlayItem>) = app.player.enqueue(items)
                 override fun playNext(items: List<PlayItem>) = app.player.playNext(items)
             },
-            room = RoomQueueApi(app.api, { app.prefs.serverUrl.value }, { app.prefs.deviceId }),
+            room = RoomQueueApi(app.api) { app.prefs.deviceId },
             genreSongs = { key -> app.api.get(queueGenreSongsPath(key)).decode<LibraryPage>().items },
         )
     }
@@ -155,6 +155,32 @@ internal class SaveAsPlaylistFlow {
         try {
             saveQueueAsPlaylist(api, clean, trackIds)
             note = savedAsNote(clean); name = ""; open = false
+            return true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note = saveFailedNote(apiErrorText(e))
+            return false
+        } finally {
+            saving = false
+        }
+    }
+
+    /** A room's queue has no list here to check: the server says what it held. */
+    fun canSaveRoom() = open && name.isNotBlank() && !saving
+
+    /**
+     * Saves a ROOM's queue ([send]: `POST …/queue/{room}/save-playlist` with
+     * the name asked for), the room's own list as the room holds it. The
+     * note is the web's: how many songs and what was left out, or the
+     * server's sentence for a refusal (a name taken, nothing to save).
+     */
+    suspend fun saveRoom(send: suspend (name: String) -> RoomSaveResult): Boolean {
+        if (!canSaveRoom()) return false
+        val clean = name.trim()
+        saving = true; note = ""
+        try {
+            note = roomSaveNote(send(clean), clean); name = ""; open = false
             return true
         } catch (e: CancellationException) {
             throw e

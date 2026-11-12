@@ -82,6 +82,10 @@ class TrackDrawerPlayTest {
             CoverArt.noteFailure(api.absolute(CoverArt.libraryPath(track.id)), 404)
             val prefs = allocateWithoutConstructor(Prefs::class.java)
             setField(prefs, "serverUrl", MutableStateFlow(base))
+            setField(prefs, "deviceId", "android-test")
+            // "Listening as" a person on this server: the room's mix follows them (P4).
+            setField(prefs, "_listenerPicks", MutableStateFlow(mapOf(base to "3")))
+            setField(prefs, "_sharedScreens", MutableStateFlow(emptyMap<String, Boolean>()))
             val bus = allocateWithoutConstructor(StateBus::class.java)
             setField(bus, "events", MutableSharedFlow<WsEvent>())
             val app = allocateWithoutConstructor(AppContainer::class.java)
@@ -136,6 +140,9 @@ class TrackDrawerPlayTest {
             assertEquals("/api/music/play-track", sent?.path)
             val body = sent!!.body.readUtf8()
             assertTrue(body, "\"room_id\":\"mobile\"" in body && "\"track_id\":42" in body)
+            // Up next P4: who asks, whose mix, and never the old one-song play.
+            assertTrue(body, "\"device_id\":\"android-test\"" in body && "\"listener_person_id\":3" in body)
+            assertFalse(body, "up_next" in body)
             assertEquals("the play's answer never landed", 1, refreshed)
             assertEquals(listOf("playing \"ZipLoc Bag Boys\" in mobile…"), toasts)
         } finally {

@@ -389,6 +389,8 @@ internal fun GenreDrawer(
                 app.api.post("/api/music/queue/${android.net.Uri.encode(r)}/add", buildJsonObject {
                     putJsonArray("track_ids") { send.forEach { add(it) } }
                     put("device_id", app.prefs.deviceId)
+                    // After the songs somebody asked for, before the room's Up next picks.
+                    put("where", RoomQueueApi.WHERE_END)
                 })
             },
             onSuccess = {

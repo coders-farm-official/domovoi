@@ -53,8 +53,8 @@ import kotlinx.coroutines.launch
  * shows a queue: the full player's Queue tab, Music's player and room-queue
  * tabs, and a room's queue sheet. Primary: it sits at the queue's top, a
  * friendly prompt in it. "Save as playlist" is a quiet button under it that
- * asks for a name (the phone's queue only: a room's entries are files, not
- * library ids).
+ * asks for a name (the phone's queue here; a room's queue has its own in
+ * the room queue's header, saved by the server from the room's list).
  *
  * Hidden on a phone that isn't paired: it searches the household's library
  * and writes to a queue, and both need the pairing.
@@ -234,14 +234,34 @@ private fun QueueSaveRow(trackIds: List<Long>) {
         app.scope.launch { if (flow.save(app.api, trackIds)) toast(flow.note) }
     }
 
+    SaveAsPlaylistRow(
+        flow = flow,
+        enabled = trackIds.isNotEmpty(),
+        hint = if (trackIds.isNotEmpty()) SAVE_AS_PLAYLIST_HINT else SAVE_AS_PLAYLIST_NONE,
+        canSave = flow.canSave(trackIds),
+        onSave = ::save,
+    )
+}
+
+/**
+ * The save button and, once pressed, its name field: the phone's queue
+ * ([QueueSaveRow]) and a room's (the room queue's header). [hint]: the
+ * button's TalkBack name; [onSave] sends.
+ */
+@Composable
+internal fun SaveAsPlaylistRow(
+    flow: SaveAsPlaylistFlow,
+    enabled: Boolean,
+    hint: String,
+    canSave: Boolean,
+    onSave: () -> Unit,
+) {
     if (!flow.open) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(
                 onClick = flow::ask,
-                enabled = trackIds.isNotEmpty(),
-                modifier = Modifier.heightIn(min = 48.dp).semantics {
-                    contentDescription = if (trackIds.isNotEmpty()) SAVE_AS_PLAYLIST_HINT else SAVE_AS_PLAYLIST_NONE
-                },
+                enabled = enabled,
+                modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = hint },
             ) {
                 Icon(Icons.Filled.Save, null, Modifier.size(16.dp))
                 Spacer(Modifier.size(6.dp))
@@ -258,11 +278,11 @@ private fun QueueSaveRow(trackIds: List<Long>) {
             placeholder = { Text(PLAYLIST_NAME_PROMPT, color = Domovoi.colors.fgSubtle) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { save() }),
+            keyboardActions = KeyboardActions(onDone = { onSave() }),
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = "playlist name" },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = ::save, enabled = flow.canSave(trackIds), modifier = Modifier.heightIn(min = 48.dp)) {
+            Button(onClick = onSave, enabled = canSave, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Filled.Save, null, Modifier.size(16.dp))
                 Spacer(Modifier.size(6.dp))
                 Text("save")

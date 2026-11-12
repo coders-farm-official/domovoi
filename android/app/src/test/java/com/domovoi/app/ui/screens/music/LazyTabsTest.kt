@@ -101,6 +101,27 @@ class LazyTabsTest {
         assertEquals(scope.keys.size, scope.keys.toSet().size)
     }
 
+    @Test fun theRoomsUpNextHeadIsItsOwnLineBeforeTheFirstPick() {
+        val items = listOf(
+            QueueItem(songId = 1, pos = 0, playing = true),
+            QueueItem(songId = 2, pos = 1),
+            QueueItem(songId = 3, pos = 2, origin = "auto", reasonLabel = "same artist", upNextSeq = 1),
+            QueueItem(songId = 4, pos = 3, origin = "auto", reasonLabel = "90s", upNextSeq = 2),
+        )
+        fun keys(q: RoomQueue): List<Any?> {
+            val scope = RecordingScope()
+            scope.queueTab(listOf("office"), RoomQueueModel(RoomQueueSelection("office"), q, false, {}, { _, _ -> }, {}))
+            return scope.keys.drop(2)   // the header and the search box
+        }
+        val session = RoomQueue(roomId = "office", items = items, sessionId = "s1", autoplay = true)
+        assertEquals(
+            listOf<Any?>("room-queue-1-0", "room-queue-2-1", "room-queue-up-next", "room-queue-3-2", "room-queue-4-3"),
+            keys(session),
+        )
+        // Without a session: the rows alone, no head.
+        assertEquals(listOf<Any?>("room-queue-1-0", "room-queue-2-1", "room-queue-3-2", "room-queue-4-3"), keys(session.copy(sessionId = null)))
+    }
+
     @Test fun roomQueueWithoutRoomsIsTheHeaderAlone() {
         val rq = RoomQueueModel(RoomQueueSelection(null), RoomQueue(), false, {}, { _, _ -> }, {})
         val scope = RecordingScope()

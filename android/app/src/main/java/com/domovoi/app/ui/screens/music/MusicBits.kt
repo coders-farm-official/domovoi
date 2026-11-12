@@ -71,6 +71,8 @@ internal class MusicUi {
 
     // Drawers / sheets
     var detailTrack by mutableStateOf<LibraryTrack?>(null)
+    /** The list [detailTrack] was opened from (a genre's songs), for "play in <room>". */
+    var detailContext by mutableStateOf<UpNextContext?>(null)
     var openPlaylist by mutableStateOf<Playlist?>(null)
     var addTrack by mutableStateOf<LibraryTrack?>(null)
     var saveQueueOpen by mutableStateOf(false)

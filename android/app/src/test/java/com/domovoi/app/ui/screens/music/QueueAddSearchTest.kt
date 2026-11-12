@@ -17,7 +17,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
@@ -126,9 +125,8 @@ class QueueAddSearchTest {
         }
         start()
     }
-    @Volatile private var serverKey = "house-a"
     private val api = ApiClient({ server.url("/").toString().trimEnd('/') })
-    private val rooms = RoomQueueApi(api, { serverKey }, { "phone-7" })
+    private val rooms = RoomQueueApi(api) { "phone-7" }
     private var rig: CastRig? = null
 
     @After fun tearDown() {
@@ -193,7 +191,7 @@ class QueueAddSearchTest {
         val took = adder(r).add(QueueTarget.Room("office"), listOf(lantern), next = false)
 
         assertEquals(1, took)
-        assertEquals(listOf("""POST /api/music/queue/office/add {"track_ids":[12],"device_id":"phone-7"}"""), posts())
+        assertEquals(listOf("""POST /api/music/queue/office/add {"track_ids":[12],"device_id":"phone-7","where":"end"}"""), posts())
         // An empty phone queue stays empty: filling it would start the phone playing.
         assertTrue(r.player.queue.value.isEmpty())
     }
@@ -206,19 +204,17 @@ class QueueAddSearchTest {
         assertEquals(listOf(101L, 102L, 12L), r.player.queue.value.map { it.id })
     }
 
-    @Test fun playNextInARoomAddsThenMovesEachRightAfterThePlayingSong() = runBlocking {
+    @Test fun playNextInARoomIsOneAddThatSaysNext() = runBlocking {
+        // P4: the room puts them right after the playing song itself
+        // (`where: next`); it used to be an add, then a move per song.
         val r = CastRig().also { rig = it }
-        officeQueue()
         answers["/api/music/queue/office/add"] = json("""{"queued":[{"song_id":91},{"song_id":92}]}""")
 
-        adder(r).add(QueueTarget.Room("office"), listOf(lantern, moth), next = true)
+        val took = adder(r).add(QueueTarget.Room("office"), listOf(lantern, moth), next = true)
 
+        assertEquals(2, took)
         assertEquals(
-            listOf(
-                """POST /api/music/queue/office/add {"track_ids":[12,13],"device_id":"phone-7"}""",
-                """POST /api/music/queue/office/move {"song_id":91,"to_position":2,"device_id":"phone-7"}""",
-                """POST /api/music/queue/office/move {"song_id":92,"to_position":3,"device_id":"phone-7"}""",
-            ),
+            listOf("""POST /api/music/queue/office/add {"track_ids":[12,13],"device_id":"phone-7","where":"next"}"""),
             posts(),
         )
     }
@@ -303,32 +299,10 @@ class QueueAddSearchTest {
         assertEquals("""POST /api/music/queue/kids%2Fden/clear {"device_id":"phone-7"}""", calls.single())
     }
 
-    @Test fun playNowMovesTheSongUpThenSkipsToIt() = runBlocking {
+    @Test fun aRowTapIsTheRoomsJumpNotAMoveAndASkip() = runBlocking {
         officeQueue()
-        val q = rooms.read("office")
-        rooms.playNow("office", q, 60)   // before the playing song: lands at its place
-        rooms.playNow("office", q, 80)   // already next: just the skip
-        assertEquals(
-            listOf(
-                """POST /api/music/queue/office/move {"song_id":60,"to_position":1,"device_id":"phone-7"}""",
-                "POST /api/music/skip/office",
-                "POST /api/music/skip/office",
-            ),
-            posts(),
-        )
-    }
-
-    @Test fun aServerChangeInsideTheRoundTripStopsTheChain() = runBlocking {
-        officeQueue()
-        answers["/api/music/queue/office/add"] = json("""{"queued":[{"song_id":91}]}""")
-        // The app moves to another Domovoi while the add is on its way.
-        onRequest = { if (it.path == "/api/music/queue/office/add") serverKey = "house-b" }
-        try {
-            rooms.playNext("office", listOf(12))
-            fail("the chain went on against another server")
-        } catch (_: ServerMovedException) {
-        }
-        assertFalse("a move went to the new server: $calls", calls.any { "/move" in it })
+        rooms.play("office", 60)
+        assertEquals(listOf("""POST /api/music/queue/office/play {"song_id":60,"device_id":"phone-7"}"""), posts())
     }
 
     @Test fun anAddsAnswerNamesItsNewEntries() {

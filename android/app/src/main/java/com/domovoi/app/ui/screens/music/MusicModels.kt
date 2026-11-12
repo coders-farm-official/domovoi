@@ -105,6 +105,15 @@ data class QueueItem(
     @SerialName("added_by_device_id") val addedByDeviceId: String? = null,
     @SerialName("added_at") val addedAt: String? = null,
     val playing: Boolean = false,
+    // Up next (P4): `auto` for a song the room's Up next picked, with why
+    // ("same artist", "90s", "from road trip") and its number in the
+    // session (for "less like this"); `explicit` for one somebody asked for.
+    val origin: String = "explicit",
+    @SerialName("reason_label") val reasonLabel: String? = null,
+    @SerialName("up_next_seq") val upNextSeq: Int? = null,
+    // The library song the entry is; null for a stream, a podcast or a
+    // file the library doesn't know.
+    @SerialName("track_id") val trackId: Long? = null,
 )
 
 @Serializable
@@ -117,4 +126,13 @@ data class RoomQueue(
     // discovering the 403 on first tap.
     val editable: Boolean = true,
     @SerialName("blocked_reason") val blockedReason: String? = null,
+    // True when the answer went to a GUEST (no household credential): no
+    // clear, no save, no autoplay switch, no "less like this".
+    val guest: Boolean = false,
+    // The room's Up next session (P4), all null without one: its id (for
+    // PATCH / feedback on /api/music/up-next/sessions/{id}), autoplay, and
+    // what the mix is built from (RoomUpNext.kt).
+    @SerialName("session_id") val sessionId: String? = null,
+    val autoplay: Boolean? = null,
+    @SerialName("up_next") val upNext: RoomUpNext? = null,
 )

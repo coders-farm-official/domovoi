@@ -52,8 +52,6 @@ import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 /** Track detail drawer — metadata, play-in-room chips, local play/queue,
  *  delete (optionally with the file on disk). Mirrors the web Drawer. */
@@ -67,6 +65,9 @@ internal fun TrackDrawer(
     refreshLib: () -> Unit,
     refreshStats: () -> Unit,
     refreshNP: () -> Unit,
+    /** The list the track was opened from, when there is one (a genre's
+     *  songs): "play in <room>" then plays on through that list. */
+    listContext: UpNextContext? = null,
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -95,13 +96,21 @@ internal fun TrackDrawer(
         // the app's scope, so closing doesn't cancel it, and failure still
         // toasts.
         onClose()
+        // The song starts the room's Up next (P4): it plays, then songs like
+        // it (or the rest of [listContext]) follow it there, the mix following
+        // whoever this phone listens as. Worked out now, for the server the
+        // tap was on, and sent only to that one.
+        val server = app.prefs.serverUrl.value
+        val body = roomPlayTrackBody(
+            room = room,
+            trackId = track.id,
+            deviceId = app.prefs.deviceId,
+            context = listContext,
+            pick = app.prefs.listenerPickFor(server),
+            shared = app.prefs.sharedHere(server),
+        )
         scope.launchAction(
-            action = {
-                app.api.post("/api/music/play-track", buildJsonObject {
-                    put("room_id", room)
-                    put("track_id", track.id)
-                })
-            },
+            action = { app.api.post("/api/music/play-track", body, onlyTo = server) },
             onSuccess = { refreshNP() },
             onFailure = { toast("play failed: ${it.message}") },
         )
