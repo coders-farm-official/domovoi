@@ -84,6 +84,8 @@ CORE_NAV: dict[str, int] = {
     # slotted itself against it sorts as before.
     "satellites": 30,
     "calendar": 40,
+    # The household's lists (V048), in Tools beside Calendar.
+    "lists": 42,
     "files": 45,
     "plugins": 95,
     "settings": 100,

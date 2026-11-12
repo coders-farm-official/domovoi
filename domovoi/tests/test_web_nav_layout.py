@@ -457,7 +457,7 @@ def driven(tmp_path_factory) -> dict:
 
 def test_the_household_order_sets_the_top_level(driven):
     media = {"group": "media", "label": "Media", "items": ["music", "podcasts", "audiobooks", "videos", "stations"]}
-    tools = {"group": "tools", "label": "Tools", "items": ["news", "calendar", "files"]}
+    tools = {"group": "tools", "label": "Tools", "items": ["news", "calendar", "lists", "files"]}
     # Kids is empty, so not drawn; the rest in the household's order.
     assert driven["r_order"] == ["plugins", tools, "chat", media]
 
@@ -465,7 +465,9 @@ def test_the_household_order_sets_the_top_level(driven):
 def test_raw_mode_keeps_empty_and_one_page_groups_for_the_editor(driven):
     out = driven["r_order_raw"]
     assert out[0] == {"group": "kids", "label": "Kids", "items": []}
-    assert out[1] == {"group": "tools", "label": "Tools", "items": ["files"]}
+    # Lists (2026-11-11), which the saved layout never mentions, joins its
+    # default group after the listed page.
+    assert out[1] == {"group": "tools", "label": "Tools", "items": ["files", "lists"]}
     # What the order doesn't name follows in nav order.
     assert [e if isinstance(e, str) else e["group"] for e in out[2:]] == ["chat", "media", "news", "calendar", "plugins"]
 
@@ -479,8 +481,8 @@ def test_the_edit_operations(driven):
     assert groups["media"]["items"] == ["podcasts", "music", "audiobooks", "videos", "chat"]
     assert groups["kids"] == {"id": "kids", "label": "Kids", "items": ["files"]}
     # Tools' pages went to the top level where Tools was; the unknown move did nothing.
-    assert end["order"] == ["group:media", "news", "calendar", "group:kids", "plugins"]
-    assert set(end["top"]) == {"news", "calendar", "plugins"}
+    assert end["order"] == ["group:media", "news", "calendar", "lists", "group:kids", "plugins"]
+    assert set(end["top"]) == {"news", "calendar", "lists", "plugins"}
     assert o["id"] == "kids-teens" and o["id2"] == "kids-teens-2" and o["id3"] == "group-123"
 
 
@@ -504,7 +506,7 @@ def test_the_moves_produce_the_expected_layout(driven):
     assert body["version"] == 1
     groups = {g["id"]: g for g in body["groups"]}
     assert groups["media"]["items"] == ["music", "audiobooks", "podcasts", "videos", "stations", "chat"]
-    assert groups["tools"] == {"id": "tools", "label": "Office", "items": ["calendar"]}
+    assert groups["tools"] == {"id": "tools", "label": "Office", "items": ["calendar", "lists"]}
     assert groups["new-group"] == {"id": "new-group", "label": "Kids", "items": ["files"]}
     assert body["top"] == ["plugins", "news"]
     assert body["order"] == ["group:media", "plugins", "group:tools", "news", "group:new-group"]
@@ -534,16 +536,29 @@ def test_the_sidebar_draws_the_saved_layout(driven):
     o = driven["sidebar_saved"]
     assert o["rows"] == [["news", None], ["podcasts", "kids"], ["files", "kids"], ["chat", None],
                          ["videos", "media"], ["music", "media"], ["audiobooks", "media"],
-                         ["stations", "media"], ["calendar", None], ["plugins", None]]
+                         ["stations", "media"], ["calendar", None], ["lists", None], ["plugins", None]]
     assert o["heads"] == ["Kids", "Watch"]
 
 
 def test_shared_screen_hiding_still_applies_on_top(driven):
     # Chat, Files and News are hidden on a shared screen wherever the layout
-    # puts them: Kids is left with Calendar alone, a plain row.
+    # puts them: Kids is left with Calendar alone, a plain row. Lists, which
+    # the layout doesn't mention and whose Tools group it dropped, is a
+    # top-level row in nav order.
     assert driven["sidebar_saved_shared"] == [
-        "calendar", "music", "podcasts", "audiobooks", "videos", "plugins"]
+        "calendar", "music", "podcasts", "audiobooks", "videos", "lists", "plugins"]
 
 
 def test_homes_grid_uses_the_saved_layout(driven):
     assert driven["grid_saved"] == ["kids"]
+
+
+def test_a_page_added_after_the_menu_was_saved_still_shows(driven):
+    """Lists arrived (2026-11-11) after households had saved menus that never
+    mention it. A saved menu that keeps Tools gets it in Tools, after the
+    pages it lists; one that dropped Tools gets it as a top-level row in nav
+    order. It is never lost."""
+    tools = next(e for e in driven["r_order"] if isinstance(e, dict) and e["group"] == "tools")
+    assert tools["items"][-2:] == ["lists", "files"]
+    assert ["lists", None] in driven["sidebar_saved"]["rows"]
+    assert "lists" in driven["sidebar_saved_shared"]

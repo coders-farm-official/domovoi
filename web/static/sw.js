@@ -82,6 +82,7 @@ const SHELL_ASSETS = [
   '/people.jsx',
   '/satellites.jsx',
   '/calendar.jsx',
+  '/lists.jsx',
   '/plugins.jsx',
   '/settings.jsx',
   // Settings → Household → Media folders.

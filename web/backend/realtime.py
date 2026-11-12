@@ -61,6 +61,10 @@ Channels emitted (core; enabled plugins add their own via manifest
   ``rooms``, each phone room's last report (``{room_id, percent, charging,
   on_power}``); fires when a level, a warning or a room's switch changes.
   The phones' notification and the room cards ride it
+* ``lists`` — the household's lists (V048, web/backend/api/lists.py): a
+  digest (counts, id sums, the newest ``updated_at`` of lists and items),
+  never a name or an item; fires on every list or item write, by voice or
+  from any screen, and an open Lists page reads the lists again
 * ``nav_layout`` — the household's web menu (V045, Settings → App layout):
   the layout ``GET /api/nav-layout`` returns, null for the default; fires
   when an admin saves or resets it, and every open dashboard redraws its
@@ -220,6 +224,10 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # save or reset in Settings → App layout redraws every open sidebar
     # on `nav_layout.changed`.
     "nav_layout_changed": "nav_layout",
+    # Household lists (V048, domovoi/lists.py): every write, by voice (the
+    # core's lists handler) or from the dashboard and the apps, fires
+    # `lists_changed`; an open Lists page reads again on `lists.changed`.
+    "lists_changed": "lists",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -1054,6 +1062,14 @@ async def _snapshot_nav_layout() -> dict[str, Any] | None:
     return await nav_layout_api.snapshot()
 
 
+async def _snapshot_lists() -> dict[str, Any]:
+    """The household's lists (``lists.changed``): a digest that moves on
+    every write, never a name or an item (web/backend/api/lists.py)."""
+    from web.backend.api import lists as lists_api
+
+    return await lists_api.snapshot()
+
+
 # Bind the snapshot helpers to the StatePollLoop so emit_for_channel
 # can resolve them by channel name. Done outside the class body
 # because the helpers themselves are defined further down in the
@@ -1099,6 +1115,8 @@ StatePollLoop._CHANNEL_HELPERS = {
     "fonts": _snapshot_fonts,
     # The household's web menu layout (V045): `nav_layout.changed`.
     "nav_layout": _snapshot_nav_layout,
+    # The household's lists (V048): `lists.changed`.
+    "lists": _snapshot_lists,
 }
 
 # The core realtime channels, frozen BEFORE any plugin mutates the helper

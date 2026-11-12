@@ -606,14 +606,14 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
 * `[[web.pages]]` — sidebar entries. `route` is lowercase letters, digits,
   `_` and `-` (it becomes `#<route>`), and may not be one a core page owns
   (`home`, `chat`, `music`, `podcasts`, `audiobooks`, `videos`, `news`,
-  `people`, `satellites`, `calendar`, `files`, `plugins`, `settings`,
-  `manual`, `containers`): the load refuses it. `page` names a key in that
+  `people`, `satellites`, `calendar`, `lists`, `files`, `plugins`,
+  `settings`, `manual`, `containers`): the load refuses it. `page` names a key in that
   registry; `nav_order` slots among core pages (core publishes its own
   orders; default 50); `badge` polls an endpoint and renders `payload[key]`
   as a count.
 * `nav_group` — optional: the sidebar group the page sits in. The
   dashboard's sidebar is Home · Chat · **Media** (Music, Podcasts,
-  Audiobooks, Videos) · **Tools** (News, Calendar, Files) · Plugins, each
+  Audiobooks, Videos) · **Tools** (News, Calendar, Lists, Files) · Plugins, each
   group opening in place. `"media"` is for things you play or look at
   (stations, pictures, games), `"tools"` for things you use; leave the key
   out and the page is a top-level row, as before. Inside a group pages

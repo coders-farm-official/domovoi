@@ -56,6 +56,7 @@ from web.backend.api import music as music_api
 from web.backend.api import music_aliases as music_aliases_api
 from web.backend.api import music_artists as music_artists_api
 from web.backend.api import lyrics as lyrics_api
+from web.backend.api import lists as lists_api
 from web.backend.api import music_queue as music_queue_api
 from web.backend.api import nav_layout as nav_layout_api
 from web.backend.api import news as news_api
@@ -428,6 +429,7 @@ app.include_router(containers_api.router)
 app.include_router(satellites_api.router)
 app.include_router(satellites_api.timers_router)
 app.include_router(calendar_api.router)
+app.include_router(lists_api.router)
 app.include_router(config_api.router)
 app.include_router(playlists_api.router)
 app.include_router(greetings_api.router)

@@ -349,6 +349,23 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     "zip_too_large": _e("The zip is too large", "It is over the size a plugin may be." + _PLUGIN_ZIP, "plugins"),
     "zip_too_many_entries": _e("The zip has too many files", "It is over the number a plugin may have." + _PLUGIN_ZIP,
                                "plugins"),
+    # ── lists (web/backend/api/lists.py) ─────────────────────────────────
+    "list_name_taken": _e(
+        "There's already a list by that name",
+        "Another list already answers to that name. To-do, todo and to do are one name, and so are "
+        "shopping, grocery and groceries. Pick another name, or use the list you have.",
+        "lists",
+    ),
+    "too_many_lists": _e(
+        "That's as many lists as Domovoi keeps",
+        "A household can keep up to 50 lists. Delete one you no longer use, then make the new one.",
+        "lists",
+    ),
+    "list_full": _e(
+        "That list is full",
+        "A list holds up to 500 things. Clear the crossed-off ones, or delete some, then add again.",
+        "lists",
+    ),
 }
 
 

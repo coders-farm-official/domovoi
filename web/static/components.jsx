@@ -1609,6 +1609,8 @@ const CORE_NAV_ITEMS = [
   // a bar saved with People keeps its tab, which opens Settings → People.
   { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people', barOnly: true },
   { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar' },
+  // The household's lists (V048, lists.jsx): to-do, shopping, any list it names.
+  { route: 'lists',      icon: 'list-checks', label: 'Lists',      order: 42 },
   { route: 'files',      icon: 'folder',      label: 'Files',      order: 45 },
   { route: 'plugins',    icon: 'blocks',      label: 'Plugins',    order: 95 },
 ];
@@ -1625,7 +1627,7 @@ const NAV_GROUPS = [
   { id: 'media', label: 'Media', icon: 'circle-play', open: true,
     routes: ['music', 'podcasts', 'audiobooks', 'videos'] },
   { id: 'tools', label: 'Tools', icon: 'wrench', open: false,
-    routes: ['news', 'calendar', 'files'] },
+    routes: ['news', 'calendar', 'lists', 'files'] },
 ];
 
 /* The nav tree a launcher draws, from three inputs:
@@ -2727,7 +2729,7 @@ const _groupBy = (list) => {
 
 /* ---- Topbar ------------------------------------------------- */
 const Topbar = ({ route, setRoute, theme, setTheme }) => {
-  const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', videos: 'Videos', news: 'News', people: 'People', calendar: 'Calendar', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
+  const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', videos: 'Videos', news: 'News', people: 'People', calendar: 'Calendar', lists: 'Lists', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
   // Plugin routes take their crumb label from the manifest.
   if (!labels[route]) {
     const manifest = window.DomovoiPluginManifest || { plugins: [] };

@@ -4,8 +4,9 @@ Owner design:
 
 * the desktop sidebar is Home (the brand row) · Chat · **Media ▸** (Music,
   Podcasts, Audiobooks, Videos, and plugin pages that ask for it, such as
-  the radio plugin's Stations) · **Tools ▸** (News, Calendar, Files) ·
-  Plugins; a plugin page with no group is a top-level row, as before;
+  the radio plugin's Stations) · **Tools ▸** (News, Calendar, Lists, Files) ·
+  Plugins; a plugin page with no group is a top-level row, as before
+  (Lists joined Tools on 2026-11-11);
 * the group names and core members are ONE table (components.jsx
   NAV_GROUPS), so renaming a group is one word;
 * ``resolveNavTree`` builds the tree every launcher draws from three
@@ -137,6 +138,10 @@ SCENARIOS = {
     "r_default": _resolve([], None),
     "r_plugins": _resolve([_STATIONS, _IMAGES, _LOOSE], None),
     "r_shared": _resolve([_STATIONS], None, shared=True),
+    "r_shared_one_tool": _resolve([_STATIONS], {
+        "groups": [{"id": "media", "label": "Media", "items": []},
+                   {"id": "tools", "label": "Tools", "items": []}],
+        "top": ["lists"]}, shared=True),
     "r_rename_and_move": _resolve([_STATIONS], {
         "groups": [{"id": "media", "label": "Watch & listen", "items": ["files"]},
                    {"id": "tools", "label": "Tools", "items": []}],
@@ -260,7 +265,7 @@ def test_one_table_names_the_groups_and_the_manifest_allows_the_same_ids() -> No
     assert re.findall(r"id: '(\w+)'", block) == list(NAV_GROUPS) == ["media", "tools"]
     assert re.findall(r"label: '([^']+)'", block) == ["Media", "Tools"]
     assert "routes: ['music', 'podcasts', 'audiobooks', 'videos']" in block
-    assert "routes: ['news', 'calendar', 'files']" in block
+    assert "routes: ['news', 'calendar', 'lists', 'files']" in block
     # Media starts open, so Music is one click from a cold load.
     assert re.search(r"id: 'media'[^}]*open: true", block)
     # The labels live nowhere else in the shell.
@@ -271,7 +276,7 @@ def test_one_table_names_the_groups_and_the_manifest_allows_the_same_ids() -> No
 
 MEDIA = {"group": "media", "label": "Media", "open": True,
          "items": ["music", "podcasts", "audiobooks", "videos"]}
-TOOLS = {"group": "tools", "label": "Tools", "open": False, "items": ["news", "calendar", "files"]}
+TOOLS = {"group": "tools", "label": "Tools", "open": False, "items": ["news", "calendar", "lists", "files"]}
 
 
 def test_the_defaults(driven) -> None:
@@ -287,10 +292,18 @@ def test_an_unknown_group_is_top_level(driven) -> None:
     assert driven["r_lone_plugin_group"] == ["chat", MEDIA, TOOLS, "games", "plugins"]
 
 
-def test_a_shared_screen_leaves_one_tool_which_is_a_plain_row(driven) -> None:
-    # News and Files are hidden there, Chat too: Tools is Calendar alone.
+def test_a_shared_screen_keeps_calendar_and_lists_in_tools(driven) -> None:
+    # News and Files are hidden there, Chat too: Tools is Calendar and
+    # Lists (the kitchen tablet's shopping list).
     media = {**MEDIA, "items": MEDIA["items"] + ["stations"]}
-    assert driven["r_shared"] == [media, "calendar", "plugins"]
+    tools = {**TOOLS, "items": ["calendar", "lists"]}
+    assert driven["r_shared"] == [media, tools, "plugins"]
+
+
+def test_a_shared_screen_leaves_one_tool_which_is_a_plain_row(driven) -> None:
+    # Lists lifted to the top level: Tools is Calendar alone, a plain row.
+    media = {**MEDIA, "items": MEDIA["items"] + ["stations"]}
+    assert driven["r_shared_one_tool"] == [media, "calendar", "lists", "plugins"]
 
 
 def test_an_override_renames_a_group_and_moves_a_page_into_it(driven) -> None:
@@ -298,7 +311,7 @@ def test_an_override_renames_a_group_and_moves_a_page_into_it(driven) -> None:
     assert out == ["chat",
                    {"group": "media", "label": "Watch & listen", "open": True,
                     "items": ["files", "music", "podcasts", "audiobooks", "videos", "stations"]},
-                   {"group": "tools", "label": "Tools", "open": False, "items": ["news", "calendar"]},
+                   {"group": "tools", "label": "Tools", "open": False, "items": ["news", "calendar", "lists"]},
                    "plugins"]
 
 
@@ -308,12 +321,12 @@ def test_an_override_makes_a_group_ignores_unknown_routes_and_lifts_one_to_the_t
                    {"group": "media", "label": "Media", "open": True,
                     "items": ["music", "podcasts", "audiobooks"]},
                    {"group": "kids", "label": "Kids", "open": False, "items": ["videos", "stations"]},
-                   {"group": "tools", "label": "Tools", "open": False, "items": ["news", "files"]},
+                   {"group": "tools", "label": "Tools", "open": False, "items": ["news", "lists", "files"]},
                    "calendar", "plugins"]
 
 
 def test_a_group_the_override_leaves_out_is_gone_and_its_pages_go_top_level(driven) -> None:
-    assert driven["r_dropped_group"] == ["chat", MEDIA, "news", "calendar", "files", "plugins"]
+    assert driven["r_dropped_group"] == ["chat", MEDIA, "news", "calendar", "lists", "files", "plugins"]
 
 
 def test_a_malformed_override_changes_nothing_it_cannot_read(driven) -> None:
@@ -336,11 +349,11 @@ def test_the_sidebar_order_and_where_each_page_sits(driven) -> None:
     o = driven["s_cold_music"]
     order = [r["route"] for r in o["rows"]]
     assert order == ["home", "chat", "music", "podcasts", "audiobooks", "videos", "stations",
-                     "news", "calendar", "files", "plugins"]
+                     "news", "calendar", "lists", "files", "plugins"]
     rows = _rows(o)
     assert {r for r, v in rows.items() if v["group"] == "media"} == {
         "music", "podcasts", "audiobooks", "videos", "stations"}
-    assert {r for r, v in rows.items() if v["group"] == "tools"} == {"news", "calendar", "files"}
+    assert {r for r, v in rows.items() if v["group"] == "tools"} == {"news", "calendar", "lists", "files"}
     assert rows["chat"]["group"] is None and rows["plugins"]["group"] is None
     # People is in Settings now: no row.
     assert "people" not in rows
@@ -397,8 +410,10 @@ def test_a_shared_screen_keeps_the_rule_and_drops_lone_groups(driven) -> None:
     o = driven["s_shared"]
     rows = _rows(o)
     assert not {"people", "chat", "files", "news"} & set(rows)
-    assert rows["calendar"]["group"] is None        # Tools with one page: a plain row
-    assert set(_heads(o)) == {"media"}
+    # Tools keeps Calendar and Lists (one page left would be a plain row:
+    # test_a_shared_screen_leaves_one_tool_which_is_a_plain_row).
+    assert rows["calendar"]["group"] == "tools" and rows["lists"]["group"] == "tools"
+    assert set(_heads(o)) == {"media", "tools"}
 
 
 def test_a_phone_bar_saved_with_people_keeps_its_tab(driven) -> None:
@@ -427,7 +442,7 @@ def test_the_grid_has_the_same_groups(driven) -> None:
     blocks = driven["grid"]
     assert blocks == [
         {"head": "media", "tiles": ["#podcasts", "#audiobooks", "#stations"]},
-        {"head": "tools", "tiles": ["#news", "#calendar", "#files"]},
+        {"head": "tools", "tiles": ["#news", "#calendar", "#lists", "#files"]},
         {"head": None, "tiles": ["#plugins", "#settings", "#manual"]},
     ]
 
