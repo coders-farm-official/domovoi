@@ -2963,6 +2963,258 @@
         }
       }
     },
+    "/api/music/up-next/sessions": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Start Session",
+        "description": "Start Up next on this device (it replaces the device's previous\nsession). The answer is the session with its first batch: ``list`` and\n``library`` modes draw it now, ``continue`` mode when the list is\nnearly over (``POST \u2026/next``).",
+        "operationId": "start_session_api_music_up_next_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Start Session Api Music Up Next Sessions Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Session",
+        "description": "The session and the picks it still has waiting.",
+        "operationId": "get_session_api_music_up_next_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Session Api Music Up Next Sessions  Session Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Patch Session",
+        "description": "Turn Autoplay on or off, or change whose taste the mix follows.",
+        "operationId": "patch_session_api_music_up_next_sessions__session_id__patch",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Patch Session Api Music Up Next Sessions  Session Id  Patch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/sessions/{session_id}/next": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Next Picks",
+        "description": "``{batch_no, picks, ended, removed}``. Asked again with the same\n``have_through_seq``, the same batch comes back.",
+        "operationId": "next_picks_api_music_up_next_sessions__session_id__next_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NextIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Next Picks Api Music Up Next Sessions  Session Id  Next Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/sessions/{session_id}/feedback": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Feedback",
+        "description": "``{removed}``: the seqs of the picks this took out of the session\n(the player drops them from its queue).",
+        "operationId": "feedback_api_music_up_next_sessions__session_id__feedback_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Feedback Api Music Up Next Sessions  Session Id  Feedback Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -20983,6 +21235,65 @@
         "title": "ConfigUpdateRequest",
         "description": "A batch of domovoi config edits from the settings gear, keyed by\nSettings field name. Validated/coerced server-side by the Domovoi core."
       },
+      "ContextIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "playlist",
+              "album",
+              "artist",
+              "genre",
+              "ids"
+            ],
+            "title": "Kind"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 600
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "track_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Ids"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "ContextIn"
+      },
       "ConversationTurn": {
         "properties": {
           "id": {
@@ -21906,6 +22217,74 @@
         ],
         "title": "FavoriteNowPlayingResult",
         "description": "Result of favoriting whatever is currently playing in a room.\n\n``kind`` tells the dashboard what happened so it can render the\nappropriate toast: ``library`` = an existing library row's flag was\nflipped (returns ``track_id``); ``acquisition`` = an external\nstream was queued into the generic media-acquisition queue\n(returns ``acquisition_id`` + the core's user-facing ``message``,\nwhich carries the graceful-absence copy when no provider plugin is\ninstalled)."
+      },
+      "FeedbackIn": {
+        "properties": {
+          "seq": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seq"
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "less_like_this",
+              "remove"
+            ],
+            "title": "Kind"
+          },
+          "played_sec": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 86400.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Played Sec"
+          },
+          "duration_sec": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 86400.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Sec"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "FeedbackIn"
       },
       "FetchBody": {
         "properties": {
@@ -24593,6 +24972,20 @@
         ],
         "title": "NewsTopicCreate"
       },
+      "NextIn": {
+        "properties": {
+          "have_through_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Have Through Seq"
+          }
+        },
+        "type": "object",
+        "required": [
+          "have_through_seq"
+        ],
+        "title": "NextIn"
+      },
       "NowPlaying": {
         "properties": {
           "room_id": {
@@ -24851,6 +25244,35 @@
         },
         "type": "object",
         "title": "PatchBody"
+      },
+      "PatchIn": {
+        "properties": {
+          "autoplay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
+          },
+          "listener_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listener Person Id"
+          }
+        },
+        "type": "object",
+        "title": "PatchIn"
       },
       "PendingSatellite": {
         "properties": {
@@ -27531,6 +27953,44 @@
         ],
         "title": "Session"
       },
+      "SessionIn": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/TargetIn"
+          },
+          "start": {
+            "$ref": "#/components/schemas/StartIn"
+          },
+          "listener_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listener Person Id"
+          },
+          "as_household": {
+            "type": "boolean",
+            "title": "As Household",
+            "default": false
+          },
+          "autoplay": {
+            "type": "boolean",
+            "title": "Autoplay",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "target",
+          "start"
+        ],
+        "title": "SessionIn"
+      },
       "SetActiveBody": {
         "properties": {
           "role": {
@@ -27696,6 +28156,39 @@
         "title": "SpareDeviceEnrolRequest",
         "description": "Settings \u2192 Rooms \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
       },
+      "StartIn": {
+        "properties": {
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "whole_list": {
+            "type": "boolean",
+            "title": "Whole List",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "StartIn"
+      },
       "StreamUploadResponse": {
         "properties": {
           "saved": {
@@ -27767,6 +28260,26 @@
         },
         "type": "object",
         "title": "SubscribeRequest"
+      },
+      "TargetIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "device",
+            "title": "Kind"
+          },
+          "device_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$",
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "device_id"
+        ],
+        "title": "TargetIn"
       },
       "TextWriteRequest": {
         "properties": {

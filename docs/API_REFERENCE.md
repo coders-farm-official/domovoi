@@ -994,6 +994,55 @@ more a minute later.
 The setting is written like any other: `PATCH /api/config/editable` with
 `music_listens_keep` (§3.9).
 
+A listen that names an Up next session (`session_id`) of the same device
+also feeds that session (§3.5f): it moves its drift seeds and applies its
+early-skip rule, whatever "Keep listening history" says.
+
+### 3.5f Music: Up next (browsers and phones)
+
+`web/backend/api/up_next.py`, `domovoi/up_next/` (engine and
+`store.py`), V053 (Up next P3, 2026-11-12). When a library song plays in a
+browser or a phone, the web keeps a session for that device that hands out
+songs like it; the player adds them to its queue as `auto` items, after
+every song somebody asked for. One active session per device (a new start
+ends the one before; ended sessions are deleted after 30 days). Rooms come
+in phase P4.
+
+Modes: `list` (a song clicked inside a list: the rest of that list,
+weighted toward songs like the ones playing, then round again while
+autoplay is on, or stop at the list's end with autoplay off), `library` (a
+song on its own: similar songs from the whole library by quota, same
+artist / era / genre / played together / wildcard), `continue` (a whole
+list played on purpose: nothing until it is nearly over, then like
+`library`, seeded by the list).
+
+Whose mix it is (`person`, null = the household): the
+`listener_person_id` the start names, else the household when it says
+`as_household`, else the person the device is claimed by unless it is a
+shared screen. Self-asserted within the household. A caller that names
+itself (`X-Domovoi-Device-Id`, `X-Device-Id`, the registration cookie,
+`?device_id=`) acts on its own device's sessions only: `403` otherwise.
+
+`Session` = `{id, target: {kind: "device", device_id}, mode, autoplay,
+person: {id, name} | null, seed: {track_id, title, artist, label, list:
+{kind, name} | null}, picks: [Pick], batch_no, have_through_seq, ended}`.
+`Pick` = `{seq, track_id, title, artist, album, duration_sec, reason_code,
+reason_label, status, mpd_song_id, batch_no}`; `reason_code` is
+`same_artist`, `same_era`, `same_genre`, `played_together`, `wildcard`,
+`similar_artist` or `from_list`; `reason_label` is what the queue shows
+(`same artist`, `90s`, `from 1997-ish`, `soul`, `from road trip`,
+`played together`, `wildcard`) and never names a person. A list pick's
+label says what it shares with the song the session started from, else
+`from <list>`.
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `POST /api/music/up-next/sessions` | **Device** | `{target: {kind: "device", device_id}, start: {track_id, context?} \| {context, whole_list: true, track_id?}, listener_person_id?, as_household?, autoplay?}`; `context` = `{kind: playlist\|album\|artist\|genre\|ids, ref?, track_ids?, name?}` (`ref`: a playlist id, `"<artist>\|<album>"`, an artist's name, a genre key; `track_ids`: up to 500, for `ids`; `name`: what the queue calls the list, a playlist's own name is read from the database) | `Session` with its first batch (`list`, `library`; none for `continue`). `404` for a song or playlist nobody has, `422` for a malformed start, a room target or a person nobody has, `403` for another device's target. |
+| `GET /api/music/up-next/sessions/{id}` | **Device read** | — | `Session` with the picks still waiting (`status` `queued`). `404` for an unknown id. |
+| `POST /api/music/up-next/sessions/{id}/next` | **Device** | `{have_through_seq}` (the highest seq the player holds) | `{batch_no, picks, ended, removed}`. **Idempotent:** picks after `have_through_seq` already handed out come back as they were (the earliest such batch), so a retried request never skips one; otherwise the next batch is drawn. `removed`: the seqs the session took back ("less like this", two early skips of one artist), for the player to drop. `ended` true and no picks once there is nothing more (autoplay off outside a list, a list played out with autoplay off, a session a new start replaced). |
+| `POST /api/music/up-next/sessions/{id}/feedback` | **Device** | `{seq \| track_id, kind: skip\|less_like_this\|remove, played_sec?, duration_sec?}` | `{removed}`. `remove`: that pick out. `less_like_this`: its artist (a track with no artist: that track) is out for the rest of the session, and every waiting pick by them is taken back. `skip`: within 30 s demotes the artist ×0.3 and its first genre ×0.6 for the session; a second early skip of one artist excludes it (its waiting picks come back in `removed`). Session-only: nothing here outlasts the session (owner decision 2026-11-12). |
+| `PATCH /api/music/up-next/sessions/{id}` | **Device** | `{autoplay?, listener_person_id?}` (`listener_person_id: null` = the household; left out = unchanged) | `Session`. Autoplay on again restarts a list that stopped at its end. The new listener counts from the next batch. |
+
 ### 3.5d Music: the visualizer's presets
 
 `web/backend/api/visualizer.py`, `web/backend/visualizer_presets.py`. The

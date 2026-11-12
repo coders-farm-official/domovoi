@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — Up next keeps the music going in the browser
+
+Play a song in the web player and the queue no longer stops after it. A
+song played from a list (playlist, artist, album, genre, search results)
+goes on with the rest of that list, shuffled toward songs like the ones
+you let play; a song played on its own goes on with similar songs from the
+library; a whole list played or shuffled on purpose plays as it is, and
+similar songs join when it is nearly over. The Queue panel (the player's
+Queue tab and the bar's queue) has a new **up next** section below the
+songs you asked for: each song says why it was picked ("same artist",
+"90s", "from road trip", "wildcard"), with **less like this** and remove.
+The **autoplay** switch turns it off (the queue then stops at its end).
+With two people or more, **for** picks whose taste the mix follows.
+Playlist songs now have their own play button. Rooms keep today's
+behaviour until a later update.
+
+Server: migration **V053** (`up_next_sessions`, `up_next_picks`) and new
+endpoints under `/api/music/up-next` (device tier; see
+docs/API_REFERENCE.md §3.5f). A listen the player sends with a
+`session_id` also feeds that session, even under "Don't keep" listening
+history (nothing is recorded then; the mix only learns for its own
+session).
+
 ## 2026-11-12 — add to the queue from the queue
 
 The Queue panel in the web player (the player's Queue tab and the bar's
