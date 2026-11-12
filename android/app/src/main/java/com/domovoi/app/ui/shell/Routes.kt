@@ -6,6 +6,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.PermMedia
@@ -64,6 +65,11 @@ enum class Route(val label: String, val icon: ImageVector) {
      *  opens Settings → Rooms. On no launcher ([LauncherlessRoutes]). */
     Satellites("Rooms", Icons.Filled.CellTower),
     Calendar("Calendar", Icons.Filled.CalendarMonth),
+
+    /** The household's lists (to-do, shopping, any it names), the web's
+     *  #lists: household data like Calendar, so a server screen only (no
+     *  local tab, [localTabs]). */
+    Lists("Lists", Icons.Filled.Checklist),
     Stations("Stations", Icons.Filled.Radio),
     Files("Files", Icons.Filled.Folder),
     Settings("Settings", Icons.Filled.Settings),
@@ -160,7 +166,7 @@ fun settingsTabFor(route: Route): String? = SettingsTabRoutes[route]
 val WorkspaceRoutes = listOf(
     Route.Chat,
     Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images,
-    Route.News, Route.Calendar, Route.Files,
+    Route.News, Route.Calendar, Route.Lists, Route.Files,
 )
 
 /**
@@ -179,6 +185,7 @@ val NavKeys: Map<Route, String> = mapOf(
     Route.Stations to "stations",
     Route.News to "news",
     Route.Calendar to "calendar",
+    Route.Lists to "lists",
     Route.Files to "files",
     Route.Home to "home",
     Route.People to "people",
@@ -215,6 +222,7 @@ val DefaultNav = NavDefaults(
         Route.Videos to "media",
         Route.News to "tools",
         Route.Calendar to "tools",
+        Route.Lists to "tools",
         Route.Files to "tools",
     ),
 )

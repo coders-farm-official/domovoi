@@ -547,12 +547,12 @@ class HomeModelsTest {
         // People: they are Settings sections.
         val all = everythingTiles(Capabilities.EMPTY, shared = false)
         assertEquals(
-            listOf(Route.Podcasts, Route.Audiobooks, Route.News, Route.Calendar, Route.Files,
+            listOf(Route.Podcasts, Route.Audiobooks, Route.News, Route.Calendar, Route.Lists, Route.Files,
                 Route.Settings, Route.Manual),
             all,
         )
         assertEquals(
-            listOf(Route.Podcasts, Route.Audiobooks, Route.Calendar, Route.Settings, Route.Manual),
+            listOf(Route.Podcasts, Route.Audiobooks, Route.Calendar, Route.Lists, Route.Settings, Route.Manual),
             everythingTiles(Capabilities.EMPTY, shared = true),
         )
         val radio = Capabilities(plugins = listOf(CapabilityPlugin(slug = "radio", androidCapabilities = listOf(CAP_STATIONS))))
@@ -568,7 +568,7 @@ class HomeModelsTest {
         assertEquals(
             listOf(
                 TileRun(media, listOf(Route.Podcasts, Route.Audiobooks)),
-                TileRun(tools, listOf(Route.News, Route.Calendar, Route.Files)),
+                TileRun(tools, listOf(Route.News, Route.Calendar, Route.Lists, Route.Files)),
                 TileRun(null, listOf(Route.Settings, Route.Manual)),
             ),
             tileRuns(everythingTiles(Capabilities.EMPTY, shared = false)),

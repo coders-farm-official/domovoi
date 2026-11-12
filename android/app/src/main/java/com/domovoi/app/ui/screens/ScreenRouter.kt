@@ -18,6 +18,7 @@ import com.domovoi.app.ui.screens.chat.ChatScreen
 import com.domovoi.app.ui.screens.containers.HealthPanel
 import com.domovoi.app.ui.screens.files.FilesScreen
 import com.domovoi.app.ui.screens.home.HomeScreen
+import com.domovoi.app.ui.screens.lists.ListsScreen
 import com.domovoi.app.ui.screens.manual.ManualScreen
 import com.domovoi.app.ui.screens.music.MusicScreen
 import com.domovoi.app.ui.screens.news.NewsScreen
@@ -69,6 +70,7 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.People -> PeopleScreen()
         Route.Satellites -> SatellitesScreen()
         Route.Calendar -> CalendarScreen()
+        Route.Lists -> ListsScreen()
         Route.Stations -> PluginScreenFrame(CAP_STATIONS, route.icon) { StationsScreen() }
         Route.Files -> SourceSwitchPage(DevicePage.Files, server = { FilesScreen() }, device = { YourDeviceFiles() })
         Route.Settings -> SettingsScreen(navigate)

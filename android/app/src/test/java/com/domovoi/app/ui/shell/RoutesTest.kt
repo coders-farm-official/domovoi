@@ -135,7 +135,7 @@ class RoutesTest {
             listOf(
                 NavEntry.Item(Route.Chat),
                 NavEntry.Group(media, listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images)),
-                NavEntry.Group(tools, listOf(Route.News, Route.Calendar, Route.Files)),
+                NavEntry.Group(tools, listOf(Route.News, Route.Calendar, Route.Lists, Route.Files)),
             ),
             navTree(visible(both, shared = false)),
         )
@@ -154,7 +154,7 @@ class RoutesTest {
         assertEquals(mapOf(Route.Stations to "media", Route.Images to "media"), PluginNavGroups)
         val t = navTree(visible(both, false), pluginGroups = mapOf(Route.Stations to "tools"))
         // Members keep the default order: Stations (position 5) leads News (7).
-        assertEquals(listOf(Route.Stations, Route.News, Route.Calendar, Route.Files), group(t, "tools")!!.routes)
+        assertEquals(listOf(Route.Stations, Route.News, Route.Calendar, Route.Lists, Route.Files), group(t, "tools")!!.routes)
         // A plugin group no group has: the page is top level, at its position.
         assertTrue(NavEntry.Item(Route.Images) in t)
     }
@@ -173,8 +173,9 @@ class RoutesTest {
         assertEquals(
             listOf(
                 NavEntry.Group(media, listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images)),
-                // Tools keeps only Calendar: one item, so flat.
-                NavEntry.Item(Route.Calendar),
+                // Tools keeps Calendar and Lists (the kitchen tablet's
+                // shopping list is the point of it).
+                NavEntry.Group(tools, listOf(Route.Calendar, Route.Lists)),
             ),
             navTree(visible(both, shared = true)),
         )
@@ -197,7 +198,7 @@ class RoutesTest {
         // Keeps the default group's icon and open-by-default.
         assertEquals(media.icon, m.group.icon)
         assertTrue(m.group.openByDefault)
-        assertEquals(listOf(Route.News, Route.Calendar), group(t, "tools")!!.routes)
+        assertEquals(listOf(Route.News, Route.Calendar, Route.Lists), group(t, "tools")!!.routes)
         assertEquals(listOf(NavEntry.Item(Route.Chat), m, group(t, "tools")), t)
     }
 
@@ -217,7 +218,7 @@ class RoutesTest {
         assertEquals(listOf(Route.Videos, Route.Stations), kids.routes)
         // Music's first mention (Media) wins over top.
         assertEquals(listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Images), group(t, "media")!!.routes)
-        assertEquals(listOf(Route.News, Route.Files), group(t, "tools")!!.routes)
+        assertEquals(listOf(Route.News, Route.Lists, Route.Files), group(t, "tools")!!.routes)
         // Sorted by default position: chat 0, media (music 1), kids (videos 4),
         // tools (news 7), calendar 8.
         assertEquals(
@@ -237,7 +238,7 @@ class RoutesTest {
             listOf(
                 NavEntry.Item(Route.Chat),
                 NavEntry.Group(media, listOf(Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Stations, Route.Images)),
-                NavEntry.Item(Route.News), NavEntry.Item(Route.Calendar), NavEntry.Item(Route.Files),
+                NavEntry.Item(Route.News), NavEntry.Item(Route.Calendar), NavEntry.Item(Route.Lists), NavEntry.Item(Route.Files),
             ),
             navTree(visible(both, false), o),
         )
@@ -245,6 +246,61 @@ class RoutesTest {
         assertEquals(
             visible(both, false).map { NavEntry.Item(it) },
             navTree(visible(both, false), NavOverride()),
+        )
+    }
+
+    // ─── Lists (design-notes/LISTS-MOBILE-HANDOFF.md §4, §7.5) ────────────
+
+    @Test fun listsIsInToolsAfterCalendarByDefault() {
+        assertEquals("lists", NavKeys[Route.Lists])
+        assertEquals(Route.Lists, routeForNavKey("lists"))
+        assertEquals("tools", DefaultNav.groupOf[Route.Lists])
+        assertEquals(listOf(Route.News, Route.Calendar, Route.Lists, Route.Files), WorkspaceRoutes.takeLast(4))
+        assertEquals(
+            listOf(Route.News, Route.Calendar, Route.Lists, Route.Files),
+            group(navTree(visible(Capabilities.EMPTY, false)), "tools")!!.routes,
+        )
+        // A bar choice, as Calendar is; on no launcher of the local shell
+        // (no server: nothing to read the lists from).
+        assertTrue(Route.Calendar in PhoneBar.Choices)
+        assertTrue(Route.Lists in PhoneBar.Choices)
+        val saved = listOf(Route.Home, Route.Lists, Route.Music)
+        assertEquals(saved, PhoneBar.routes(saved, Capabilities.EMPTY, shared = false))
+        listOf(true, false).forEach { a ->
+            listOf(true, false).forEach { sh ->
+                assertFalse(Route.Lists in localTabs(assistant = a, shared = sh, savedBooks = true))
+            }
+        }
+        assertNull(Route.Lists.requiredCapability())
+        assertTrue(Route.Lists.visibleOn(Capabilities.EMPTY, shared = true))
+    }
+
+    /** A layout saved before Lists existed never names it. With a Tools
+     *  group it lands there after the pages the layout lists (the web's
+     *  resolveNavTree); without one, top level at its default place. */
+    @Test fun aSavedLayoutThatNeverNamedListsStillShowsIt() {
+        onDeviceAssistant = { true }
+        val withTools = NavOverride(groups = listOf(
+            NavOverrideGroup("media", "Media", listOf("music", "videos")),
+            NavOverrideGroup("tools", "Things", listOf("files", "calendar")),
+        ))
+        val t = navTree(visible(Capabilities.EMPTY, false), withTools)
+        assertEquals(listOf(Route.Files, Route.Calendar, Route.News, Route.Lists), group(t, "tools")!!.routes)
+        assertEquals("Things", group(t, "tools")!!.group.label)
+
+        val noTools = NavOverride(
+            groups = listOf(NavOverrideGroup("media", "Media", listOf("music", "videos", "files"))),
+            top = listOf("calendar", "news"),
+        )
+        val u = navTree(visible(Capabilities.EMPTY, false), noTools)
+        assertTrue(u.none { it is NavEntry.Group && Route.Lists in it.routes })
+        assertEquals(
+            listOf(
+                NavEntry.Item(Route.Chat),
+                group(u, "media"),
+                NavEntry.Item(Route.News), NavEntry.Item(Route.Calendar), NavEntry.Item(Route.Lists),
+            ),
+            u,
         )
     }
 
