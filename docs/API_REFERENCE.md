@@ -949,6 +949,31 @@ without V021) — whenever it moves (the core's lyrics workers bump
 title and never a lyric: it tells the Jobs card, and a player that is still
 "looking for lyrics…", to read again.
 
+### 3.5d Music: the visualizer's presets
+
+`web/backend/api/visualizer.py`, `web/backend/visualizer_presets.py`. The
+Player tab's MilkDrop visualizer (`web/static/visualizer.jsx`, Butterchurn
+3 in the browser) offers Domovoi's standard set, plain static files
+(`/visualizer/presets/index.json` and the files it names), and the presets
+an admin added for the house, kept on the server in
+`VISUALIZER_PRESETS_DIR` (default `~/.domovoi/visualizer_presets`), one
+JSON file each, so every browser gets them. No database table.
+
+A preset is Butterchurn 3 JSON: `version` (1 or 2), `baseVals` (numbers),
+four `shapes` and four `waves` (`baseVals` and `*_eqs_eel`), the equations
+as MilkDrop EEL (`init_eqs_eel`, `frame_eqs_eel`, `pixel_eqs_eel`; the
+browser compiles them to WebAssembly) and `warp` / `comp` shaders as GLSL
+(empty: the engine's standard ones). Anything else is dropped. The older
+Butterchurn format, whose equations are JavaScript (`*_eqs_str`), is
+refused: the dashboard never runs a preset's code as JavaScript.
+
+| Method + Path | Auth | Notes |
+|---|---|---|
+| `GET /api/visualizer/presets` | Device read | `{presets: [{id, name, source: "json"\|"milk", added_at, notes}], limits: {max_bytes, max_presets, name_max, accepts}}`, sorted by name. The standard set isn't listed here. |
+| `GET /api/visualizer/presets/{id}` | Device read | `{id, name, preset}`. `404` for an id that isn't there or isn't id-shaped (`^[a-z0-9][a-z0-9-]{0,62}$`, checked before a path is built). |
+| `POST /api/visualizer/presets` | **Admin (Bearer)** · `{filename, content}` | Add one preset for the house: `content` is the file's text (256 KB at most), `filename` names it (the name is the file name without its extension and folders). `.json` must be a Butterchurn 3 preset (above). `.milk` is converted here: its settings and its per-frame, per-pixel, shape and wave equations come across as they are; its MilkDrop 2 shaders (`warp_N`, `comp_N`, HLSL) can't be converted without a shader compiler, so they are left out and `notes` says the preset uses the standard shaders. **201** `{id, name, source, added_at, notes}`; **400** with the reason in words (not a preset, JavaScript equations, too large, a value that isn't a number…); **409** when the same preset is already there; **400** past 300 added presets. |
+| `DELETE /api/visualizer/presets/{id}` | **Admin (Bearer)** | **204**; **404** when it isn't there. |
+
 ### 3.6 People
 
 What a person said and what the house keeps about them — their conversation

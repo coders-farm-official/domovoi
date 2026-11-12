@@ -1,0 +1,88 @@
+{
+ "version": 2,
+ "baseVals": {
+  "mv_a": 0,
+  "ob_size": 0.012,
+  "ob_a": 0.9,
+  "ib_size": 0,
+  "ib_a": 0,
+  "warp": 0,
+  "gammaadj": 1.8,
+  "wave_brighten": 0,
+  "wave_mode": 0,
+  "wave_scale": 0.9,
+  "wave_thick": 1,
+  "additivewave": 1,
+  "decay": 0.97,
+  "darken_center": 1
+ },
+ "shapes": [
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": ""
+  }
+ ],
+ "waves": [
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  },
+  {
+   "baseVals": {
+    "enabled": 0
+   },
+   "init_eqs_eel": "",
+   "frame_eqs_eel": "",
+   "point_eqs_eel": ""
+  }
+ ],
+ "init_eqs_eel": "",
+ "frame_eqs_eel": "zoom = 1.045 + 0.07*bass_att;\nrot = 0.02*sin(time*0.21) + 0.015*(mid_att - 1);\nob_r = 0.5 + 0.5*sin(time*1.13);\nob_g = 0.5 + 0.5*sin(time*0.91 + 2.1);\nob_b = 0.5 + 0.5*sin(time*1.37 + 4.2);\nob_a = 0.35 + 0.5*min(bass, 1.5)/1.5;\nwave_r = 1 - ob_r; wave_g = 1 - ob_g; wave_b = 1 - ob_b;\nq1 = 0.05*sin(time*0.5);",
+ "pixel_eqs_eel": "rot = rot + q1*rad;\nzoom = zoom - 0.03*rad;",
+ "warp": "",
+ "comp": ""
+}

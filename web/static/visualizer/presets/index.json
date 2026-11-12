@@ -1,0 +1,66 @@
+{
+ "version": 1,
+ "default": "hearth",
+ "presets": [
+  {
+   "id": "hearth",
+   "name": "Hearth",
+   "file": "hearth.json"
+  },
+  {
+   "id": "bass-tunnel",
+   "name": "Bass tunnel",
+   "file": "bass-tunnel.json"
+  },
+  {
+   "id": "spectrum-ring",
+   "name": "Spectrum ring",
+   "file": "spectrum-ring.json"
+  },
+  {
+   "id": "starfield-drift",
+   "name": "Starfield drift",
+   "file": "starfield-drift.json"
+  },
+  {
+   "id": "kaleido-bloom",
+   "name": "Kaleido bloom",
+   "file": "kaleido-bloom.json"
+  },
+  {
+   "id": "ripple-pool",
+   "name": "Ripple pool",
+   "file": "ripple-pool.json"
+  },
+  {
+   "id": "ember-swirl",
+   "name": "Ember swirl",
+   "file": "ember-swirl.json"
+  },
+  {
+   "id": "neon-lattice",
+   "name": "Neon lattice",
+   "file": "neon-lattice.json"
+  },
+  {
+   "id": "slow-nebula",
+   "name": "Slow nebula",
+   "file": "slow-nebula.json"
+  },
+  {
+   "id": "doorway",
+   "name": "Doorway",
+   "file": "doorway.json"
+  },
+  {
+   "id": "aurora",
+   "name": "Aurora",
+   "file": "aurora.json"
+  },
+  {
+   "id": "pulse-bloom",
+   "name": "Pulse bloom",
+   "file": "pulse-bloom.json"
+  }
+ ]
+}

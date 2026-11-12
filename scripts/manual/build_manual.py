@@ -46,6 +46,7 @@ ROUTES: dict[str, dict] = {
     "music": {"dashboard": "#music", "app": {"screen": "Music"}},
     "music/queue": {"dashboard": "#music/queue", "app": {"screen": "Music"}},
     "music/playlists": {"dashboard": "#music/playlists", "app": {"screen": "Music"}},
+    "music/player": {"dashboard": "#music/player", "app": {"screen": "Music"}},
     "podcasts": {"dashboard": "#podcasts", "app": {"screen": "Podcasts"}},
     "audiobooks": {"dashboard": "#audiobooks", "app": {"screen": "Audiobooks"}},
     "videos": {"dashboard": "#videos", "app": {"screen": "Videos"}},
@@ -129,7 +130,7 @@ PIECES: dict[str, tuple] = {
     "Everything it can do": ("everything", "every installed feature", ["what can you do", "features", "capabilities", "list", "help", "plugins"], {"live": "things-to-say"}),
     "When it mishears": ("mishears", "repeat, never mind, try again", ["repeat", "never mind", "misheard", "wake word not working", "doesn't hear", "sensitivity"], {}),
     # Music and media
-    "Music and room queues": ("music", "the library, every room", ["music", "queue", "playlist", "upload", "library", "favorites"], {}),
+    "Music and room queues": ("music", "the library, every room", ["music", "queue", "playlist", "upload", "library", "favorites", "visualizer", "milkdrop", "preset", "full screen"], {}),
     "Lyrics": ("lyrics", "see the words, find a song", ["lyrics", "words", "song that goes", "lrclib"], {}),
     "Podcasts": ("podcasts", "shows and episodes", ["podcast", "episode", "subscribe", "rss"], {}),
     "Audiobooks": ("audiobooks", "your books, with chapters", ["audiobook", "book", "chapter"], {}),
