@@ -606,6 +606,55 @@ public final class PlayerModel {
         clear()
     }
 
+    /// "Stop and close" (`PlayerController.kt:454-486`, d19efd9c; the web's
+    /// `closePlayer` in `player.jsx`): a room being cast to is stopped
+    /// **first** and waited for; then the phone stops watching it, the queue
+    /// is emptied and the player has nothing left to show. **False — and
+    /// nothing here changed — when the room says it did not stop**: the
+    /// player stays, and the caller says so.
+    ///
+    /// Before this, ``stop()`` while casting only sent the room a stop and
+    /// left the phone "casting to" it with the queue up, and ``clear()``
+    /// emptied the queue with the target still on the room and its poll
+    /// running.
+    ///
+    /// **In line with the casts** (``serialised(_:)``, Android's `castLock`),
+    /// so it stops the room a cast already on its way lands on rather than
+    /// the one it is leaving.
+    ///
+    /// **Keyed by generation and server, read after every wait.** The
+    /// generation is taken when the tap arrives, before the wait in line: a
+    /// play here that comes while this waits, or while the room's answer is
+    /// on its way, owns the queue by then and is left alone (Android's
+    /// `playHereGen` check, before and after `roomActionNow`). The server is
+    /// taken just before the stop is sent; an answer that lands after the
+    /// app moved house was about the old house's room, and nothing of the new
+    /// house's player is touched on its word.
+    public func stopAndClose() async -> Bool {
+        let gen = playHereGen
+        return await serialised { [weak self] () async -> Bool in
+            guard let self else { return true }
+            return await self.stopAndCloseBody(gen: gen)
+        }
+    }
+
+    private func stopAndCloseBody(gen: Int) async -> Bool {
+        // A play here came while this waited behind a cast: the queue is its.
+        guard playHereGen == gen else { return true }
+        if let room = target.roomID {
+            let server = activeServer
+            guard await roomActionNow("stop", room) else { return false }
+            // Read after await: the room stopped, but the player may no longer
+            // be the one that asked — a play here, room mode, another house.
+            guard playHereGen == gen, target.roomID == room, sameServer(server) else { return true }
+            stopPoll()
+            roomReading = nil
+            target = .thisPhone
+        }
+        clear()
+        return true
+    }
+
     /// `PlayerController.kt:447`. A book's next is its next **chapter**.
     public func next() {
         if let room = target.roomID { roomAction("skip", room); return }
@@ -1174,7 +1223,7 @@ public final class PlayerModel {
     /// **model-held** `Task` and the caller awaits its value, which is also
     /// NIGHT-RULES §3's "a lazy row never holds a `Task`".
     public func cast(to room: String?) async -> PlayerCastOutcome {
-        await serialised { [weak self] in
+        await serialised { [weak self] () async -> PlayerCastOutcome in
             guard let self else { return .superseded(room: room) }
             return await self.castBody(to: room)
         }
@@ -1184,7 +1233,7 @@ public final class PlayerModel {
     /// (`PlayerController.kt:778`). Waits in line with the casts, and a play
     /// here meanwhile wins the same way.
     public func cast(fromQueueRow i: Int) async -> PlayerCastOutcome {
-        await serialised { [weak self] in
+        await serialised { [weak self] () async -> PlayerCastOutcome in
             guard let self else { return .superseded(room: nil) }
             return await self.castFromRowBody(i)
         }
@@ -1198,11 +1247,14 @@ public final class PlayerModel {
     /// target as it was: office then den from this phone started **both**
     /// rooms, office playing on with nothing watching or pausing it. Now the
     /// second pick waits for the first and starts from where it left things.
-    private func serialised(
-        _ body: @escaping @MainActor () async -> PlayerCastOutcome
-    ) async -> PlayerCastOutcome {
+    ///
+    /// Generic since "Stop and close" (``stopAndClose()``) waits in the same
+    /// line and answers a `Bool` rather than an outcome.
+    private func serialised<Answer: Sendable>(
+        _ body: @escaping @MainActor () async -> Answer
+    ) async -> Answer {
         let previous = castChain
-        let work = Task { @MainActor () -> PlayerCastOutcome in
+        let work = Task { @MainActor () -> Answer in
             await previous?.value
             return await body()
         }

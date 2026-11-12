@@ -126,6 +126,18 @@ struct MusicPlayerTabView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
+                // **"Stop and close"** — the "×" Android and the web put on
+                // the mini player (`MiniPlayer.kt`, d19efd9c; `player.jsx`).
+                // This app has no docked bar: this tab is where the phone's
+                // queue is shown, so this is where it is shut. It stops,
+                // empties the queue and the tab goes back to "nothing
+                // queued"; while casting it stops the room first, and a room
+                // that says it didn't keeps everything and is said
+                // (``MusicLocalQueueModel/stopAndClose()``). The transport's
+                // `stop` below is `PlayerTab.kt:392`'s and is unchanged.
+                control("xmark", MusicMoreStrings.stopAndClose) {
+                    player.stopAndClose()
+                }
             }
         }
     }

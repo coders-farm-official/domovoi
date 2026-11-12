@@ -68,10 +68,20 @@ extension StubHouseUITests {
     /// `testMusicMore_PlaylistsSurviveAnAccessibilityTextSize` (AX5). This is
     /// the shape `openMusic` uses (`StubHouseUITests+Shell.swift`), kept the
     /// same on purpose.
+    ///
+    /// **`roomsOpen`** — the room cards are folded behind `Show rooms` since
+    /// d19efd9c's port (`StubHouseUITests+MusicRooms.swift`), so a case that
+    /// reads a card asks for them open. It is the `UserDefaults` argument
+    /// domain (`-domovoi.music.roomsOpen YES`), which the app's own store
+    /// reads and nothing persists: the next launch is back to the phone's
+    /// own choice.
     @MainActor
-    func openMusicMore(_ mode: String = StubHouseUITests.ordinaryTypeSize)
+    func openMusicMore(_ mode: String = StubHouseUITests.ordinaryTypeSize, roomsOpen: Bool = false)
         -> (app: XCUIApplication, landed: Bool) {
-        let app = launch(mode: mode, push: "Music", pushDelay: Self.pushDelay)
+        let app = launch(
+            mode: mode, push: "Music", pushDelay: Self.pushDelay,
+            args: roomsOpen ? ["-domovoi.music.roomsOpen", "YES"] : []
+        )
         let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
         if !crumb.waitForExistence(timeout: 40) {
             let title = app.navigationBars.staticTexts[ShellStringsUnderTest.musicTitleAtAX5]
@@ -1196,7 +1206,7 @@ extension StubHouseUITests {
     @MainActor
     func testMusicMore_LyricsFollowTheRoom() throws {
         musicMoreReset()
-        let (app, landed) = openMusicMore()
+        let (app, landed) = openMusicMore(roomsOpen: true)
         XCTAssertTrue(landed, "Music never drew")
 
         let line = startingWith(app, MusicMoreUnderTest.activeSyncedLine)
@@ -1378,7 +1388,7 @@ extension StubHouseUITests {
     @MainActor
     func testMusicMore_RoomCardShowsALineForALibraryTrackAndNoneForAStream() throws {
         musicMoreReset()
-        let (app, landed) = openMusicMore()
+        let (app, landed) = openMusicMore(roomsOpen: true)
         XCTAssertTrue(landed, "Music never drew")
 
         XCTAssertTrue(

@@ -384,6 +384,13 @@ public enum MusicMoreStrings {
     public static func queueHeader(_ count: Int) -> String { "queue · \(count)" }
     public static let saveAsPlaylist = "save as playlist"
     public static let clear = "clear"
+    /// The mini player's "×" on Android and the web (`MiniPlayer.kt`,
+    /// `player.jsx`), here on the player tab's head: this app has no docked
+    /// bar, and the tab is where this phone's queue is shown and shut.
+    public static let stopAndClose = "Stop and close"
+    /// What "Stop and close" says when the cast room refuses the stop — the
+    /// web's words (`player.jsx:1426`), and Android's `STOP_AND_CLOSE_REFUSED`.
+    public static let stopAndCloseRefused = "couldn't stop the room — the player is still open"
     public static let saveQueueAsPlaylist = "save queue as playlist"
 
     public static let speed = "speed"

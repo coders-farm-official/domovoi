@@ -250,6 +250,10 @@ public protocol MusicMorePlayerEngine: AnyObject {
     func castFrom(_ index: Int) async -> MusicCastOutcome
     /// Come back to this phone.
     func playHere() async -> MusicCastOutcome
+    /// "Stop and close" (``PlayerModel/stopAndClose()``): stop the room being
+    /// cast to first, then stop watching it and empty the queue. False, with
+    /// nothing changed, when the room says it did not stop.
+    func stopAndClose() async -> Bool
 }
 
 // `MusicMoreCastResult` stood here, a two-case wrapper — `went(MusicCastOutcome)`
@@ -488,6 +492,8 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
     public func playHere() async -> MusicCastOutcome {
         Self.outcome(await player.cast(to: nil))
     }
+
+    public func stopAndClose() async -> Bool { await player.stopAndClose() }
 
     // MARK: - the three maps
 

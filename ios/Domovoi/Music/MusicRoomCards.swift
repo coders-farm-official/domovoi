@@ -52,6 +52,56 @@ struct MusicNowPlayingStrip: View {
     }
 }
 
+/// "Show rooms" / "Show rooms (2 playing)" / "Hide rooms": the text link the
+/// strip is folded behind (`RoomsToggleLink`, `RoomsToggle.kt:67-87`).
+///
+/// A **button**, read out as expanded or collapsed — `accessibilityValue`,
+/// which is where iOS puts what Android's `stateDescription` says — and
+/// underlined in the brand ink, as Android draws it. ``HomeLink``'s shape:
+/// a 44-point target whose frame, not its glyphs, is what a tap hits.
+struct MusicRoomsToggleLink: View {
+
+    let open: Bool
+    let playingCount: Int
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            Text(MusicRoomsToggle.label(open: open, playingCount: playingCount))
+                .font(.subheadline)
+                .underline()
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+                .frame(minHeight: 44, alignment: .center)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.brandInk)
+        .accessibilityValue(MusicRoomsToggle.accessibilityValue(open: open))
+    }
+}
+
+/// The strip's place when the now-playing read **failed** with nothing to
+/// show from before it: said, with a retry, rather than drawn as a house
+/// with no rooms (`MusicScreen.kt:430-437`, `ErrorState` in a card).
+struct MusicRoomsUnavailableCard: View {
+
+    let message: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        HomeCard(title: MusicRoomsStrings.unavailableTitle) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                HomeLink(MusicRoomsStrings.retry, action: onRetry)
+            }
+        }
+    }
+}
+
 /// One room: what it is playing, how far in, and what can be done to it.
 struct MusicRoomCard: View {
 
