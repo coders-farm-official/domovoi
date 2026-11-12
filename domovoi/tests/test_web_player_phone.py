@@ -374,6 +374,7 @@ SCENARIOS = {
         "await h.click(b('remove Track 3'));"
         "await h.click((e) => e.type === 'button' && inSheet(e) && e.text.includes('office'));"
         "const openAfterCast = !!sheet();"
+        "await h.click((e) => e.type === 'button' && /save as playlist/.test(e.text || '') && inSheet(e));"
         "await h.type((e) => e.type === 'input' && e.props['aria-label'] === 'playlist name', 'road trip');"
         "await h.click((e) => e.type === 'button' && e.text === 'save' && inSheet(e));"
         "return { acts: acts(), openAfterCast, calls: h.calls };",
@@ -852,7 +853,8 @@ def test_the_sheet_carries_everything_the_bar_left_out(driven) -> None:
     s = driven["sheet_contents"]
     labels = [c["aria"] for c in s["controls"] if c["aria"]]
     for want in ("close player", "previous", "pause", "next", "mute", "volume",
-                 "clear queue", "remove Track 1", "remove Track 2", "remove Track 3", "playlist name"):
+                 "clear queue", "remove Track 1", "remove Track 2", "remove Track 3",
+                 "search the library to add to the queue"):
         assert want in labels, (want, labels)
     assert s["name"] == "Track 1" and s["by"] == "Artist 1"
     assert s["times"] == ["0:50", "3:20"]

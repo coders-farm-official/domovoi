@@ -2009,7 +2009,7 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed }) => {
             <PlayerQueueRows queue={p.queue} index={p.index}
                              jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
           </div>
-          <PlayerQueueSave queue={p.queue}/>
+          <PlayerQueueAdd p={p}/>
         </>
       )}
     </div>
@@ -2145,28 +2145,228 @@ const PlayerQueueRows = React.memo(function PlayerQueueRows({ queue, index, jump
   );
 });
 
-/* "Save queue as playlist" — the library tracks in the queue, in order. */
+/* "Save queue as playlist" — the library tracks in the queue, in order.
+ * A secondary control under the queue's search: a button that opens a small
+ * name prompt (2026-11-12; it used to take the place of the search box). */
 const PlayerQueueSave = ({ queue }) => {
+  const [open, setOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [name, setName] = React.useState('');
+  const [note, setNote] = React.useState('');
+  const trackIds = queue.filter((it) => it.kind === 'library' && it.trackId != null).map((it) => it.trackId);
   const saveAsPlaylist = async () => {
-    const trackIds = queue.filter((it) => it.kind === 'library' && it.trackId != null).map((it) => it.trackId);
-    if (!trackIds.length || !name.trim()) return;
-    setSaving(true);
+    if (!trackIds.length || !name.trim() || saving) return;
+    setSaving(true); setNote('');
     try {
       const pl = await apiPost('/api/playlists', { name: name.trim() });
       for (const tid of trackIds) {
         try { await apiPost(`/api/playlists/${pl.id}/tracks`, { track_id: tid }); } catch {}
       }
-      setName(''); setSaving(false);
-    } catch (e) { setSaving(false); console.warn('save queue failed', e); }
+      setNote(`Saved as "${name.trim()}".`);
+      setName(''); setSaving(false); setOpen(false);
+    } catch (e) {
+      setSaving(false);
+      console.warn('save queue failed', e);
+      // A refused sign-in already has its own prompt on screen.
+      if (!isAuthFailure(e)) setNote(`Couldn't save the playlist: ${apiErrorText(e)}`);
+    }
   };
+  if (!open) {
+    return (
+      <div className="mp-q-saverow">
+        <Button icon="save" onClick={() => { setOpen(true); setNote(''); }}
+                disabled={!trackIds.length}
+                title={trackIds.length ? 'save this queue as a playlist' : 'no library songs in the queue to save'}>
+          save as playlist
+        </Button>
+        {note && <span className="mp-q-note" role="status">{note}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="mp-q-saverow" role="group" aria-label="save queue as playlist">
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name your playlist…"
+             aria-label="playlist name" autoFocus
+             onKeyDown={(e) => {
+               if (e.key === 'Enter') saveAsPlaylist();
+               if (e.key === 'Escape') { if (e.stopPropagation) e.stopPropagation(); e.preventDefault(); setOpen(false); }
+             }}/>
+      <Button variant="primary" icon="save" onClick={saveAsPlaylist} disabled={saving || !name.trim()}>save</Button>
+      <Button onClick={() => setOpen(false)}>cancel</Button>
+      {note && <span className="mp-q-note" role="status">{note}</span>}
+    </div>
+  );
+};
+
+/* What the queue's search box asks, one picked at random each time the panel
+ * opens (and kept while typing). Warm and light; no brands. */
+const _QUEUE_ASK_PROMPTS = [
+  "What's next? Name a song, artist or vibe…",
+  'Feed me a song…',
+  'Who should we hear from next?',
+  'Something for the mood…',
+  'Got a song stuck in your head?',
+  'What are we in the mood for?',
+  'Add a little something…',
+  'Name a tune, an album, a feeling…',
+  "Who's up next on the stage?",
+  'Whisper a song title…',
+  'Hungry for a genre? Say which…',
+  'Keep it going: what else?',
+  'An old favorite, or something new?',
+  'Tell the house what to play next…',
+  'Dig up a song, any song…',
+];
+const _queueAskPrompt = () => _QUEUE_ASK_PROMPTS[Math.floor(Math.random() * _QUEUE_ASK_PROMPTS.length)];
+const _QUEUE_SEARCH_MIN = 2;
+const _QUEUE_GENRE_TAKE = 25;   // songs a genre row adds, shuffled
+
+/* Search the library from the queue panel and add what is found: by title,
+ * artist or album (GET /api/music/library?q=, the library search) and by
+ * genre (GET /api/music/genres?q=; a genre row adds up to 25 of its songs,
+ * shuffled). Only library songs: that is what the browser queue plays.
+ * Combobox + listbox; Enter adds the highlighted row, Shift+Enter plays it
+ * next, Up/Down move, Esc clears. While casting, the panel still shows the
+ * queue this browser keeps for the room, and an add goes to both it and the
+ * room's own queue (POST /api/music/queue/{room}/add); "play next" has no
+ * room counterpart, so it is not offered then. */
+const PlayerQueueAdd = ({ p }) => {
+  const [prompt] = React.useState(_queueAskPrompt);
+  const [q, setQ] = React.useState('');
+  const dq = useDebouncedValue(q.trim(), 250);
+  const [rows, setRows] = React.useState(null);        // null = nothing asked yet
+  const [busy, setBusy] = React.useState(false);
+  const [active, setActive] = React.useState(0);
+  const [status, setStatus] = React.useState('');
+  const casting = !!(p.target && p.target.kind === 'room');
+  const asking = dq.length >= _QUEUE_SEARCH_MIN && dq === q.trim();
+  React.useEffect(() => {
+    if (dq.length < _QUEUE_SEARCH_MIN) { setRows(null); setBusy(false); return undefined; }
+    let live = true;
+    setBusy(true);
+    const enc = encodeURIComponent(dq);
+    (async () => {
+      try {
+        const [songs, genres] = await Promise.all([
+          apiGet(`/api/music/library?q=${enc}&limit=8`, { quiet: true }),
+          apiGet(`/api/music/genres?q=${enc}&limit=2`, { quiet: true }).catch(() => null),
+        ]);
+        if (!live) return;
+        const out = [];
+        for (const t of ((songs && songs.items) || [])) out.push({ kind: 'song', key: `s${t.id}`, track: t });
+        for (const g of ((genres && genres.items) || [])) {
+          if (g && g.key) out.push({ kind: 'genre', key: `g${g.key}`, genre: g });
+        }
+        setRows(out); setActive(0); setStatus('');
+      } catch (e) {
+        if (!live) return;
+        setRows([]);
+        if (!isAuthFailure(e)) setStatus(`Couldn't search the library: ${apiErrorText(e)}`);
+      } finally { if (live) setBusy(false); }
+    })();
+    return () => { live = false; };
+  }, [dq]);
+
+  const tracksOf = async (row) => {
+    if (row.kind === 'song') return [row.track];
+    const r = await apiGet(`/api/music/library?genre=${encodeURIComponent(row.genre.key)}&limit=200`);
+    const all = ((r && r.items) || []).slice();
+    for (let i = all.length - 1; i > 0; i--) {      // shuffled: a genre is a mood, not an order
+      const j = Math.floor(Math.random() * (i + 1));
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    return all.slice(0, _QUEUE_GENRE_TAKE);
+  };
+  const label = (row) => (row.kind === 'song' ? (row.track.title || 'that song') : `${row.genre.name} songs`);
+  const add = async (row, next) => {
+    if (!p.available) { setStatus("The browser player isn't available here."); return; }
+    try {
+      const tracks = await tracksOf(row);
+      if (!tracks.length) { setStatus(`Nothing to add from ${label(row)}.`); return; }
+      const items = tracks.map(itemFromTrack);
+      if (next && !casting) {
+        for (let i = items.length - 1; i >= 0; i--) p.playNext(items[i]);
+      } else {
+        p.enqueue(items);
+        if (casting) {
+          try {
+            await apiPost(`/api/music/queue/${encodeURIComponent(p.target.roomId)}/add`,
+              { track_ids: tracks.map((t) => t.id), device_id: DeviceIdentity.id() });
+          } catch (e) {
+            if (!isAuthFailure(e)) {
+              setStatus(`Added "${label(row)}" here, but ${p.target.roomId} didn't take it: ${apiErrorText(e)}`);
+            }
+            return;
+          }
+        }
+      }
+      const n = items.length;
+      setStatus(`${next && !casting ? 'Playing next' : 'Added'}: ${label(row)}${n > 1 ? ` (${n} songs)` : ''}`);
+    } catch (e) {
+      if (!isAuthFailure(e)) setStatus(`Couldn't add ${label(row)}: ${apiErrorText(e)}`);
+    }
+  };
+  const list = rows || [];
+  const onKey = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!list.length) return;
+      e.preventDefault();
+      setActive((a) => (e.key === 'ArrowDown' ? (a + 1) % list.length : (a - 1 + list.length) % list.length));
+    } else if (e.key === 'Enter') {
+      const row = list[active];
+      if (row) { e.preventDefault(); add(row, !!e.shiftKey); }
+    } else if (e.key === 'Escape' && q) {
+      if (e.stopPropagation) e.stopPropagation();
+      e.preventDefault();
+      setQ(''); setStatus('');
+    }
+  };
+  const showList = rows !== null && asking;
   return (
     <div className="mp-q-save">
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="save queue as playlist…"
-             aria-label="playlist name"
-             onKeyDown={(e) => { if (e.key === 'Enter') saveAsPlaylist(); }}/>
-      <Button variant="primary" icon="save" onClick={saveAsPlaylist} disabled={saving || !name.trim()}>save</Button>
+      <input type="search" className="mp-q-search" value={q} placeholder={prompt}
+             onChange={(e) => { setQ(e.target.value); setStatus(''); }} onKeyDown={onKey}
+             role="combobox" aria-label="search the library to add to the queue"
+             aria-autocomplete="list" aria-expanded={showList && list.length > 0}
+             aria-controls="mp-q-results"
+             aria-activedescendant={showList && list[active] ? `mp-q-opt-${active}` : undefined}
+             autoComplete="off"/>
+      {showList && (
+        <div className="mp-q-results" id="mp-q-results" role="listbox" aria-label="songs to add">
+          {list.map((row, i) => (
+            <div key={row.key} id={`mp-q-opt-${i}`} role="option" aria-selected={i === active}
+                 className={`mp-q-res${i === active ? ' on' : ''}`}
+                 onMouseEnter={() => setActive(i)}>
+              <div className="mp-q-res-main" onClick={() => add(row, false)}>
+                {row.kind === 'song' ? (
+                  <>
+                    <div className="mp-q-title">{row.track.title || 'unknown'}{row.track.artist ? ` · ${row.track.artist}` : ''}</div>
+                    <div className="mp-q-sub mono">{row.track.album || '—'}</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="mp-q-title">{row.genre.name}</div>
+                    <div className="mp-q-sub mono">genre · {row.genre.track_count} song{row.genre.track_count === 1 ? '' : 's'}, shuffled</div>
+                  </>
+                )}
+              </div>
+              {!casting && (
+                <IconButton name="corner-down-right" tabIndex={-1} onClick={() => add(row, true)}
+                            title="play next" aria-label={`play ${label(row)} next`}/>
+              )}
+              <IconButton name="list-plus" tabIndex={-1} onClick={() => add(row, false)}
+                          title="add to queue" aria-label={`add ${label(row)} to the queue`}/>
+            </div>
+          ))}
+          {list.length === 0 && !busy && (
+            <div className="mp-q-empty" role="status">Nothing matches "{dq}". Try an artist, an album or a genre.</div>
+          )}
+        </div>
+      )}
+      <div className="mp-q-note" role="status" aria-live="polite">
+        {status || (busy && asking ? 'searching…' : '')}
+      </div>
+      <PlayerQueueSave queue={p.queue}/>
     </div>
   );
 };
@@ -2189,7 +2389,7 @@ const QueuePanel = ({ p, onClose }) => (
         <PlayerQueueRows queue={p.queue} index={p.index}
                          jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
       </div>
-      <PlayerQueueSave queue={p.queue}/>
+      <PlayerQueueAdd p={p}/>
     </div>
   </>
 );

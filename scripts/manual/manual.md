@@ -416,6 +416,14 @@ Your music library, on the server, played in any room or in the browser.
   **Lyrics**, the **Equalizer** or the **Queue**, or nothing (**Hide**);
   it starts on Lyrics when the song has words, and a tab you pick stays
   picked for the visit.
+- **Dashboard:** add to the queue from the queue itself: under the songs
+  in the **Queue** panel (in the player and in the bar's queue), the
+  search box finds songs by title, artist, album or genre. **Enter** adds
+  the highlighted result, **Shift+Enter** plays it next, the arrow keys
+  move, **Esc** clears. A genre result adds up to 25 of its songs,
+  shuffled. While playing in a room, an add goes to the room's queue too
+  (and **play next** is not offered). **Save as playlist** is the
+  smaller button below: it asks for a name and keeps the queue's songs.
 - **Dashboard:** a MilkDrop visualizer: in the player, switch on
   **milkdrop visualizer**. It draws what this browser is playing (not a
   room), behind the panel. Its bar has previous and next preset, random,

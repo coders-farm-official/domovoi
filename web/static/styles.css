@@ -655,7 +655,16 @@ html.mp-docked { --player-h: 64px; }
 .mp-q-title { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-q-sub { font-size: 10px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-q-empty { padding: 20px; text-align: center; font-size: 12px; color: var(--fg-muted); }
-.mp-q-save { padding: 10px; border-top: 1px solid var(--border); display: flex; gap: 6px; }
+.mp-q-save { padding: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.mp-q-saverow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mp-q-saverow input { flex: 1 1 140px; }
+.mp-q-note { font-size: 11px; color: var(--fg-muted); }
+.mp-q-note:empty { display: none; }
+.mp-q-results { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--card); }
+.mp-q-res { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; border-bottom: 1px solid var(--border-soft); }
+.mp-q-res:last-child { border-bottom: none; }
+.mp-q-res.on { background: var(--brand-soft); }
+.mp-q-res-main { min-width: 0; padding: 6px 10px; cursor: pointer; }
 .mp-q-save input {
   flex: 1; min-width: 0; font: inherit; font-size: 12px; height: 30px; padding: 0 10px;
   border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg);
@@ -767,6 +776,9 @@ html.mp-docked { --player-h: 64px; }
 .mp-sheet .mp-q-save { padding: 12px; gap: 8px; }
 .mp-sheet .mp-q-save input { height: 44px; font-size: 13px; }
 .mp-sheet .mp-q-save .btn { height: 44px; }
+.mp-sheet .mp-q-save .btn-icon { width: 44px; }
+.mp-sheet .mp-q-res-main { min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+.mp-sheet .mp-q-results { max-height: 36vh; }
 .mp-sheet .np-eq-presets { flex-wrap: wrap; }
 
 /* The panel's tabs: Lyrics · Equalizer · Queue · Hide. */
