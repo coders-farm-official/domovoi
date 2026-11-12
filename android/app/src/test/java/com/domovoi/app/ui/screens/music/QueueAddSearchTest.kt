@@ -242,6 +242,14 @@ class QueueAddSearchTest {
                 names = setOf("rememberSongQueue"),
             )
             assertTrue("$facade's song rows don't route Play next / Add to queue", calls.isNotEmpty())
+            // And none of them queues on the phone behind the router's back
+            // (a casting phone's row would then miss the room).
+            val direct = Bytecode.callers(
+                fileFacade = "com.domovoi.app.ui.screens.music.$facade",
+                owner = "com/domovoi/app/player/PlayerController",
+                names = setOf("playNext", "enqueue"),
+            )
+            assertTrue("$facade queues on the phone directly: $direct", direct.isEmpty())
         }
         // And the track drawer names the room or the phone itself.
         val drawer = Bytecode.callers(
@@ -291,8 +299,8 @@ class QueueAddSearchTest {
     }
 
     @Test fun aRoomNameIsEncodedInTheRoute() = runBlocking {
-        rooms.clear("living room")
-        assertEquals("""POST /api/music/queue/living%20room/clear {"device_id":"phone-7"}""", calls.single())
+        rooms.clear("kids/den")
+        assertEquals("""POST /api/music/queue/kids%2Fden/clear {"device_id":"phone-7"}""", calls.single())
     }
 
     @Test fun playNowMovesTheSongUpThenSkipsToIt() = runBlocking {
