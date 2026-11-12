@@ -70,12 +70,18 @@ const vizSupported = (() => {
 
 /* The engine, imported once. A plain dynamic import(): the module is
  * served from this dashboard like every vendored script. */
-const _vizEngine = { p: null };
+// A browser remembers a failed module fetch for the rest of the page's
+// life (a load while the server was restarting after an update failed with
+// "Failed to fetch dynamically imported module" until a reload,
+// 2026-11-12), so each retry asks for the same file under a new query.
+const _vizEngine = { p: null, tries: 0 };
 const vizLoadEngine = () => {
   if (!_vizEngine.p) {
     // eslint-disable-next-line no-new-func
     const load = new Function('u', 'return import(u)');
-    _vizEngine.p = load('/vendor/butterchurn/butterchurn.min.js')
+    const url = '/vendor/butterchurn/butterchurn.min.js' + (_vizEngine.tries ? `?retry=${_vizEngine.tries}` : '');
+    _vizEngine.tries += 1;
+    _vizEngine.p = load(url)
       .then((m) => {
         const bc = m && (m.default || m);
         if (!bc || typeof bc.createVisualizer !== 'function') throw new Error('the visualizer engine did not load');
@@ -370,6 +376,7 @@ const VizMilkdrop = ({ p }) => {
   const clickTimer = React.useRef(0);
   const loadSeq = React.useRef(0);
   const [engineErr, setEngineErr] = React.useState('');
+  const [engineTry, setEngineTry] = React.useState(0);
   const [ready, setReady] = React.useState(false);
   const [catalog, setCatalog] = React.useState({ list: [], defaultKey: null, canRead: true });
   const [current, setCurrent] = React.useState(() => vizStore.get(VIZ_PRESET_KEY, ''));
@@ -410,10 +417,21 @@ const VizMilkdrop = ({ p }) => {
       viz.connectAudio(analyser);
       vizRef.current = viz;
       analyserRef.current = analyser;
+      setEngineErr('');
       setReady(true);
-    }).catch((e) => { if (!dead) setEngineErr((e && e.message) || 'the visualizer engine did not load'); });
-    return () => { dead = true; };
-  }, [analyser]);
+    }).catch((e) => {
+      if (dead) return;
+      // Usually the server restarting (an update): try again a few times
+      // on a fresh address before saying so for good.
+      try { console.warn('visualizer engine load failed:', e); } catch { /* no console */ }
+      if (engineTry < 3) {
+        setEngineErr('retry');
+        retryTimer = setTimeout(() => { if (!dead) setEngineTry((n) => n + 1); }, 3000);
+      } else setEngineErr('fail');
+    });
+    let retryTimer = null;
+    return () => { dead = true; if (retryTimer) clearTimeout(retryTimer); };
+  }, [analyser, engineTry]);
 
   // Let it go with the component: our analysers off the graph, the GL
   // context back to the browser.
@@ -572,7 +590,9 @@ const VizMilkdrop = ({ p }) => {
 
   const waiting = !analyser
     ? 'starts when music plays in this browser'
-    : engineErr ? `visualizer: ${engineErr}` : (!ready ? 'loading…' : '');
+    : engineErr === 'retry' ? "the visualizer couldn't load yet — trying again…"
+    : engineErr === 'fail' ? "the visualizer couldn't load. Reload the page, or turn it off and on, to try again."
+    : (!ready ? 'loading…' : '');
 
   return (
     <div ref={stageRef} className={`viz-stage${isFs ? ' fs' : ''}`} tabIndex={0}
