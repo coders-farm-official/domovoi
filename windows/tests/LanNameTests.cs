@@ -46,8 +46,8 @@ static partial class Tests
 
         public FakeNet(string name, string sticky, ICollection<byte[]> own, bool on, string ip)
         {
-            R = new MdnsResponder(() => own ?? new List<byte[]>(), () => 0.0);
-            Sent.AddRange(R.Configure(name, on, ip, T, sticky));
+            R = new MdnsResponder(() => 0.0);
+            Sent.AddRange(R.Configure(name, on, ip, T, sticky, 24));
         }
 
         public FakeNet(string name) : this(name, null, null, true, "192.168.1.20") { }
@@ -195,15 +195,97 @@ static partial class Tests
             n.Run(3);
             Eq("domovoi3", n.R.Claimed, "kept"); Eq("taken", n.R.State, "says taken"); Eq("kitchen", n.R.Taken, "what was taken");
         });
-        Run("lan name: already ours is held without a second copy", delegate
+        Run("lan name: held only for our LAN address, reported as held, looked at again (L4)", delegate
         {
-            var own = new List<byte[]> { new byte[] { 10, 0, 0, 5 } };
-            var n = new FakeNet("domovoi", null, own, true, "192.168.1.20");
+            var n = new FakeNet("domovoi");
             n.Run(0.1);
-            n.Feed(MdnsPacket.Response(MdnsPacket.NameOf("domovoi"), new byte[] { 10, 0, 0, 5 }, 120), new IPEndPoint(IPAddress.Parse("192.168.1.20"), 5353));
+            n.Feed(MdnsPacket.Response(MdnsPacket.NameOf("domovoi"), LanIp, 120), new IPEndPoint(IPAddress.Parse("192.168.1.20"), 5353));
             n.Run(3);
-            Eq("held", n.R.Phase, "held"); Eq("announced", n.R.State, "state");
+            Eq("held", n.R.Phase, "held"); Eq("held", n.R.State, "state says held");
             Eq(0, n.Kinds().Count(k => k == "answer"), "no copy of ours");
+            True(n.R.NextAt.Value - n.T <= MdnsResponder.HeldRecheck, "looked at again within a minute");
+            n.Run(n.R.NextAt.Value - n.T + 0.1);
+            Eq("held", n.R.State, "while it looks again");
+            n.Run(3);
+            Eq("announced", n.R.State, "nobody answered: ours now");
+            var m = new FakeNet("domovoi");
+            m.Run(0.1);
+            m.Feed(MdnsPacket.Response(MdnsPacket.NameOf("domovoi"), new byte[] { 192, 168, 1, 99 }, 120));
+            m.Run(3);
+            Eq("domovoi2", m.R.Claimed, "another address is someone else, never held");
+        });
+        Run("lan name: every name taken tries again later; a pause's answers count for nothing (L1)", delegate
+        {
+            var n = new FakeNet("domovoi");
+            for (int i = 0; i < 5000 && n.R.Phase != "gave_up"; i++)
+            {
+                n.Run(0.05);
+                if (n.R.Candidate != null) n.Feed(TakenBy(n.R.Candidate));
+            }
+            Eq("gave_up", n.R.Phase, "all 99 forged away"); Eq("taken", n.R.State, "says taken");
+            True(n.R.NextAt.HasValue, "but tries again");
+            n.Run(MdnsResponder.RetryAfterGivingUp + 5, 5);
+            n.Run(3);
+            Eq("announced", n.R.State, "after the back-off");
+            var r = new MdnsResponder(() => 1.0);
+            r.Configure("domovoi", true, "192.168.1.20", 0, null, 24);
+            Eq(0, r.Probes, "first probe still waiting");
+            r.OnPacket(TakenBy("domovoi"), TakenBy("domovoi").Length, Peer, 0.1);
+            Eq("domovoi", r.Candidate, "not counted"); Eq(null, r.Taken, "nothing taken");
+        });
+        Run("lan name: legacy answers have their own small budget (L2)", delegate
+        {
+            var n = new FakeNet("domovoi");
+            n.Run(3);
+            n.T += 2;
+            n.Sent.Clear();
+            Eq(1, n.Feed(Question("domovoi", 1, 1), new IPEndPoint(IPAddress.Parse("192.168.1.41"), 50000)).Count, "first");
+            Eq(0, n.Feed(Question("domovoi", 1, 2), new IPEndPoint(IPAddress.Parse("192.168.1.41"), 50001)).Count, "same source, same second");
+            for (int i = 0; i < 200; i++) n.Feed(Question("domovoi", 1, i), new IPEndPoint(IPAddress.Parse("192.168.1." + (50 + i % 150)), 40000 + i));
+            True(n.Sent.Count <= MdnsResponder.LegacyPerSec, "legacy capped: " + n.Sent.Count);
+            n.T += 1.1;
+            var a = n.Feed(Question("domovoi", 1, 0));
+            Eq(1, a.Count, "multicast still answered"); True(a[0].Dest == null, "to the group");
+        });
+        Run("lan name: responses not from 5353 and packets from off the LAN are dropped (L3)", delegate
+        {
+            var n = new FakeNet("domovoi");
+            n.Run(0.1);
+            n.Feed(TakenBy("domovoi"), new IPEndPoint(IPAddress.Parse("192.168.1.30"), 40000));
+            n.Feed(TakenBy("domovoi"), new IPEndPoint(IPAddress.Parse("172.17.0.2"), 5353));
+            n.Feed(TakenBy("domovoi"), new IPEndPoint(IPAddress.Parse("10.0.0.9"), 5353));
+            n.Run(3);
+            Eq("domovoi", n.R.Claimed, "kept");
+            Eq(0, n.Feed(Question("domovoi", 1, 3), new IPEndPoint(IPAddress.Parse("10.0.0.7"), 50000)).Count, "no legacy answer off the LAN");
+        });
+        Run("lan name: inbound packets are rate-limited before parsing; the worst packet is cheap (M1)", delegate
+        {
+            var n = new FakeNet("domovoi");
+            n.Run(3);
+            n.T += 2;
+            n.Sent.Clear();
+            int answered = 0;
+            for (int i = 0; i < 1000; i++)
+            {
+                n.T += 0.0001;
+                answered += n.Feed(Question("domovoi", 1, i), new IPEndPoint(IPAddress.Parse("192.168.1." + (2 + i % 200)), 40000 + i)).Count;
+            }
+            True(answered <= MdnsResponder.LegacyPerSec, "bounded");
+            var bad = (Dictionary<string, object>)LanVectors()["bad_packets"];
+            byte[] bomb = Unhex((string)bad["label_bomb_query"]);
+            Eq(MdnsPacket.MaxLabelsPerPacket, Json.Int(LanVectors(), "label_budget").Value, "the shared budget");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < 1000; i++) { try { MdnsPacket.Parse(bomb); } catch (MdnsParseError) { } }
+            True(sw.Elapsed.TotalMilliseconds < 500, "1000 worst packets in " + sw.Elapsed.TotalMilliseconds + " ms");
+            var q = new List<byte> { 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0 };
+            for (int i = 0; i < 32; i++)
+            {
+                foreach (byte[] lab in MdnsPacket.NameOf("n" + i)) { q.Add((byte)lab.Length); q.AddRange(lab); }
+                q.Add(0); q.AddRange(new byte[] { 0, 1, 0, 1 });
+            }
+            Eq(32, MdnsPacket.Parse(q.ToArray()).Questions.Count, "32 ordinary questions still parse");
+            var resp = Question("domovoi", 1, 0); resp[2] = 0x84;
+            Eq(0, MdnsPacket.Parse(resp).Questions.Count, "a response's questions are not kept");
         });
         Run("lan name: our own echo is not a conflict", delegate
         {
@@ -309,11 +391,17 @@ static partial class Tests
         });
         Run("lan name: the LAN adapter only, never a virtual one", delegate
         {
-            var wifi = new NicFacts { Name = "Wi-Fi", Description = "Intel Wi-Fi 6E", Up = true, HasGateway = true, Addresses = { "192.168.1.30" } };
-            var wsl = new NicFacts { Name = "vEthernet (WSL (Hyper-V firewall))", Description = "Hyper-V Virtual Ethernet Adapter", Up = true, HasGateway = true, Addresses = { "172.20.0.1" } };
+            var wifi = new NicFacts { Name = "Wi-Fi", Description = "Intel Wi-Fi 6E", Up = true, LanType = true, HasGateway = true, Index = 12, Addresses = { "192.168.1.30" }, Prefixes = { 24 } };
+            var wsl = new NicFacts { Name = "vEthernet (WSL (Hyper-V firewall))", Description = "Hyper-V Virtual Ethernet Adapter", Up = true, LanType = true, HasGateway = true, Addresses = { "172.20.0.1" } };
             var vpn = new NicFacts { Name = "Office", Description = "WireGuard Tunnel", Up = true, HasGateway = true, Addresses = { "10.8.0.2" } };
-            var nics = new List<NicFacts> { wsl, vpn, wifi };
+            // L5: by type: an adapter Windows doesn't call Ethernet or Wi-Fi is
+            // never used, whatever it is named.
+            var oddType = new NicFacts { Name = "Ethernet 3", Description = "Some Adapter", Up = true, LanType = false, HasGateway = true, Addresses = { "10.1.1.5" } };
+            var nics = new List<NicFacts> { wsl, vpn, oddType, wifi };
             Eq("192.168.1.30", MdnsAdapter.Pick(nics, "192.168.1.30"), "the route's adapter");
+            var pick = MdnsAdapter.PickNic(nics, "192.168.1.30");
+            Eq(24, pick.Prefix, "its prefix"); Eq(12, pick.Index, "its index");
+            Eq(null, MdnsAdapter.Pick(nics, "10.1.1.5"), "not an Ethernet or Wi-Fi type");
             Eq(null, MdnsAdapter.Pick(nics, "172.20.0.1"), "never vEthernet");
             Eq(null, MdnsAdapter.Pick(nics, "10.8.0.2"), "never a VPN");
             Eq(null, MdnsAdapter.Pick(nics, "100.64.1.1"), "never CGNAT");

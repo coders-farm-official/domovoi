@@ -23,7 +23,8 @@ and the previous name stays.
 install: Setup adds one Windows firewall rule, `Domovoi-mDNS-5353` (inbound
 UDP 5353 for DomovoiHost.exe, from the local subnet, Private and Domain
 networks only; the uninstaller removes it). Until then Settings says
-`not announced`. Setup's last page and the tray's **Open as domovoi.local**
+`not announced`. Nothing is announced while Windows marks the network
+Public. Setup's last page and the tray's **Open as domovoi.local**
 show the name; **Copy address** and the phone code keep the address.
 Satellites now try the name the server tells them first, then
 `domovoi.local`; they still check the server's key wherever a name leads.

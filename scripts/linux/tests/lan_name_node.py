@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import os
 import random
@@ -44,12 +45,21 @@ def say(**kw) -> None:
     print(json.dumps(kw), flush=True)
 
 
-async def respond(name: str, seconds: float) -> int:
+async def respond(name: str, seconds: float, ip: str | None = None) -> int:
     os.environ["DOMOVOI_LAN_NAME_DIR"] = tempfile.mkdtemp()
     svc.requested_name = lambda raw=None: name   # no domovoi.config in here
     svc.enabled = lambda: True
-    ip = my_ip()
-    s = svc.LanNameService(lan_ip=lambda: ip)
+    ip = ip or my_ip()
+
+    def iface(addr):
+        # A container's eth0 is a veth (under /sys/devices/virtual), which a
+        # real server refuses to announce on; here it IS the test's LAN. The
+        # interface index and prefix are the real ones (IP_PKTINFO and the
+        # subnet check stay on).
+        found = svc.lan_interface(addr)
+        return dataclasses.replace(found, virtual=None) if found else None
+
+    s = svc.LanNameService(lan_ip=lambda: ip, iface=iface)
     s.start()
     last = None
     end = time.monotonic() + seconds
@@ -138,18 +148,44 @@ def goodbye(fqdn: str, wait: float) -> int:
     return 1
 
 
+def forge(fqdn: str, target: str, seconds: float) -> int:
+    """A hostile device: claim ``fqdn`` for 10.9.9.9, from port 5353, sent
+    by unicast to ``target`` (or the group with ``group``) every 50 ms."""
+    labels = tuple(x.encode() for x in fqdn.lower().split("."))
+    pkt = packet.response(labels, socket.inet_aton("10.9.9.9"), 120)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("", packet.PORT))
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(my_ip()))
+    dest = (packet.GROUP, packet.PORT) if target == "group" else (target, packet.PORT)
+    say(event="forging", name=fqdn, to=target)
+    sent = 0
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        s.sendto(pkt, dest)
+        sent += 1
+        time.sleep(0.05)
+    s.close()
+    say(event="forged", sent=sent)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("what", choices=("respond", "query", "goodbye"))
+    ap.add_argument("what", choices=("respond", "query", "goodbye", "forge"))
     ap.add_argument("--name", required=True)
     ap.add_argument("--seconds", type=float, default=20)
     ap.add_argument("--wait", type=float, default=2)
     ap.add_argument("--legacy", action="store_true")
+    ap.add_argument("--target", default="group")
+    ap.add_argument("--ip", default=None, help="respond: the LAN address (default: the host name's)")
     a = ap.parse_args()
     if a.what == "respond":
-        return asyncio.run(respond(a.name, min(a.seconds, 120)))
+        return asyncio.run(respond(a.name, min(a.seconds, 120), a.ip))
     if a.what == "query":
         return query(a.name, a.legacy, a.wait)
+    if a.what == "forge":
+        return forge(a.name, a.target, min(a.seconds, 30))
     return goodbye(a.name, a.wait)
 
 

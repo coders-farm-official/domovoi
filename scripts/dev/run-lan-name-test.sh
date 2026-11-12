@@ -11,7 +11,11 @@
 #   typed-taken   a typed name someone holds is not changed: state "taken"
 #   goodbye       a stopping server's goodbye (TTL 0) is heard
 #   avahi         beside avahi-daemon in the same container: both bind 5353,
-#                 and the name Avahi publishes for the box counts as ours
+#                 and the name Avahi publishes for the box (with its LAN
+#                 address) is left to Avahi: state "held"
+#   other-net     a server on two networks ignores a flood of forged answers
+#                 that arrive on the other one (interface + subnet check);
+#                 the same flood on a server's own network does take its name
 #
 # Usage: scripts/dev/run-lan-name-test.sh [--rebuild] [--keep-logs]
 #
@@ -52,11 +56,16 @@ fi
 
 WORK=$(mktemp -d)
 NET=domovoi-lanname-test-$$
+NET_SUBNET=172.29.77.0/24
+ISO_IP=172.29.77.10
+NET2=domovoi-lanname-test2-$$
+NET2_SUBNET=172.30.99.0/24
+NET2_IP=172.30.99.10
 CONTAINERS=()
 cleanup() {
   local c
   for c in ${CONTAINERS[@]+"${CONTAINERS[@]}"}; do docker rm -f "$c" >/dev/null 2>&1; done
-  docker network rm "$NET" >/dev/null 2>&1
+  docker network rm "$NET" "$NET2" >/dev/null 2>&1
   if [ "$KEEP" = 1 ]; then echo "logs kept: $WORK" >&2; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
@@ -65,7 +74,7 @@ trap 'exit 130' INT TERM
 # Only what the node needs: the responder package and the node script.
 (cd "$SRC" && tar -cf "$WORK/tree.tar" domovoi/__init__.py domovoi/lan_name scripts/linux/tests/lan_name_node.py) \
   || { echo "copying the tree failed" >&2; exit 2; }
-docker network create "$NET" >/dev/null || { echo "can't create the bridge" >&2; exit 2; }
+docker network create --subnet "$NET_SUBNET" "$NET" >/dev/null || { echo "can't create the bridge" >&2; exit 2; }
 
 # node NAME [docker run args --] node-args...: one container in the background,
 # its output in $WORK/NAME.log.
@@ -76,7 +85,7 @@ node() {
   while [ $# -gt 0 ] && [ "$1" != -- ]; do extra+=("$1"); shift; done
   [ "${1:-}" = -- ] && shift
   CONTAINERS+=("$cname")
-  docker run --rm -i --name "$cname" --network "$NET" ${extra[@]+"${extra[@]}"} "$IMAGE" \
+  docker run --rm -i --name "$cname" --network "${NODE_NET:-$NET}" ${extra[@]+"${extra[@]}"} "$IMAGE" \
     bash -c 'mkdir -p /root/src && tar -xf - -C /root/src && exec python3 /root/src/scripts/linux/tests/lan_name_node.py "$@"' \
     node "$@" <"$WORK/tree.tar" >"$WORK/$name.log" 2>&1 &
   PIDS[$name]=$!
@@ -173,11 +182,41 @@ CONTAINERS+=("domovoi-lanname-av-$$")
 docker run --rm -i --name "domovoi-lanname-av-$$" --network "$NET" --hostname avahibox "$IMAGE" \
   bash -c "$(cat "$WORK/avahi.sh")" <"$WORK/tree.tar" >"$WORK/av.log" 2>&1
 if grep -q '"event": "avahi-running"' "$WORK/av.log" \
-   && grep -q '"phase": "held", "requested": "avahibox", "claimed": "avahibox", "state": "announced"' "$WORK/av.log" \
+   && grep -q '"phase": "held", "requested": "avahibox", "claimed": "avahibox", "state": "held"' "$WORK/av.log" \
    && grep -q '"event": "avahi-still-running"' "$WORK/av.log"; then
   ok avahi
 else
   bad avahi "beside avahi-daemon the responder should bind and hold avahibox.local as ours" av
+fi
+
+# --- other-net: a server on two networks; a device on the second floods
+# forged answers for the server's name at its second address. They arrive
+# on the other interface, from outside the LAN's subnet: ignored. The
+# control: the same flood on a server's own network takes its name.
+if docker network create --subnet "$NET2_SUBNET" "$NET2" >/dev/null; then
+  ISO=domovoi-lanname-iso-$$
+  CONTAINERS+=("$ISO")
+  docker create -i --name "$ISO" --network "$NET" --ip "$ISO_IP" --hostname srv-iso "$IMAGE" \
+    bash -c 'mkdir -p /root/src && tar -xf - -C /root/src && exec python3 /root/src/scripts/linux/tests/lan_name_node.py "$@"' \
+    node respond --name isolated --ip "$ISO_IP" --seconds 8 >/dev/null
+  docker network connect --ip "$NET2_IP" "$NET2" "$ISO"
+  NODE_NET=$NET2 node f1 -- forge --name isolated.local --target "$NET2_IP" --seconds 10
+  NODE_NET=$NET2 node f2 -- forge --name isolated2.local --target group --seconds 10
+  sleep 1
+  docker start -ai "$ISO" <"$WORK/tree.tar" >"$WORK/iso.log" 2>&1 &
+  PIDS[iso]=$!
+  NODE_NET=$NET2 node ctl --hostname srv-ctl -- respond --name isolated2 --seconds 8
+  done_with iso; done_with ctl; done_with f1; done_with f2
+  if grep -q "\"ip\": \"$ISO_IP\", \"phase\": \"announced\", \"requested\": \"isolated\", \"claimed\": \"isolated\", \"state\": \"announced\"" "$WORK/iso.log" \
+     && grep -q '"claimed": null, "state": "taken", "taken": "isolated2"' "$WORK/ctl.log" \
+     && grep -q '"event": "forged"' "$WORK/f1.log"; then
+    ok other-net
+  else
+    bad other-net "forged answers on the other network must be ignored, and must win on the control's own network" iso
+    sed 's/^/     | /' "$WORK/ctl.log" "$WORK/f1.log"
+  fi
+else
+  bad other-net "can't create the second bridge" a
 fi
 
 done_with a

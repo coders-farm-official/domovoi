@@ -14,6 +14,13 @@ attacker-facing part of the feature (a security review reads this file):
   of name (RFC 1035 s3.1) per name;
 * the 0x40 / 0x80 label types (extended, unused) are refused;
 * every length is checked against the packet before it is read;
+* every label read, through pointers too, counts against one budget for
+  the whole packet (:data:`MAX_LABELS_PER_PACKET`): a packet of names that
+  all point back at one long name costs a few hundred label reads at most,
+  not tens of thousands (security review 2026-11-12, M1). The responder
+  also parses at most a couple of hundred packets a second;
+* the questions of a response are walked (to find the records) but not
+  kept: RFC 6762 s6 says to ignore them;
 * labels stay bytes, lowercased in ASCII only: a name is compared, never
   decoded, printed or stored.
 
@@ -35,6 +42,8 @@ MAX_RECORDS = 64
 MAX_POINTER_JUMPS = 16
 MAX_LABELS = 128
 MAX_NAME_BYTES = 255
+#: Labels read per packet, every name and every pointer jump included.
+MAX_LABELS_PER_PACKET = 256
 
 T_A = 1
 T_AAAA = 28
@@ -103,9 +112,12 @@ def _lower(label: bytes) -> bytes:
     return label.lower()
 
 
-def read_name(buf: bytes, off: int) -> tuple[Name, int]:
+def read_name(buf: bytes, off: int, budget: list[int] | None = None) -> tuple[Name, int]:
     """The name at ``off``: (labels lowercased, offset just past the name
-    where it was written). :class:`ParseError` for anything malformed."""
+    where it was written). :class:`ParseError` for anything malformed.
+    ``budget``: the packet's label budget (a one-item list, counted down)."""
+    if budget is None:
+        budget = [MAX_LABELS_PER_PACKET]
     labels: list[bytes] = []
     total = 1                    # the root's zero byte
     end: int | None = None
@@ -139,6 +151,9 @@ def read_name(buf: bytes, off: int) -> tuple[Name, int]:
             raise ParseError("unsupported label type")
         if off + 1 + ln > n:
             raise ParseError("label runs past the packet")
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise ParseError("too many labels in the packet")
         total += 1 + ln
         if total > MAX_NAME_BYTES:
             raise ParseError("name too long")
@@ -149,8 +164,8 @@ def read_name(buf: bytes, off: int) -> tuple[Name, int]:
     return tuple(labels), (end if end is not None else off)
 
 
-def _read_record(buf: bytes, off: int) -> tuple[Record, int]:
-    name, off = read_name(buf, off)
+def _read_record(buf: bytes, off: int, budget: list[int]) -> tuple[Record, int]:
+    name, off = read_name(buf, off, budget)
     if off + 10 > len(buf):
         raise ParseError("record header runs past the packet")
     rtype, rclass, ttl, rdlen = struct.unpack_from("!HHIH", buf, off)
@@ -176,18 +191,21 @@ def parse(buf: bytes) -> Message:
     if an + ns + ar > MAX_RECORDS:
         raise ParseError("too many records")
     off = 12
+    budget = [MAX_LABELS_PER_PACKET]
+    response = bool(flags & FLAG_QR)
     questions: list[Question] = []
     for _ in range(qd):
-        name, off = read_name(buf, off)
+        name, off = read_name(buf, off, budget)
         if off + 4 > len(buf):
             raise ParseError("question runs past the packet")
         qtype, qclass = struct.unpack_from("!HH", buf, off)
         off += 4
-        questions.append(Question(name, qtype, qclass & ~TOP_BIT, bool(qclass & TOP_BIT)))
+        if not response:
+            questions.append(Question(name, qtype, qclass & ~TOP_BIT, bool(qclass & TOP_BIT)))
     sections: list[list[Record]] = [[], [], []]
     for i, count in enumerate((an, ns, ar)):
         for _ in range(count):
-            rec, off = _read_record(buf, off)
+            rec, off = _read_record(buf, off, budget)
             sections[i].append(rec)
     return Message(qid, flags, tuple(questions), tuple(sections[0]), tuple(sections[1]), tuple(sections[2]))
 

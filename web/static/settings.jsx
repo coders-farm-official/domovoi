@@ -3600,6 +3600,12 @@ const LAN_STATE = {
   no_lan: { tone: 'warn', word: 'no network address' },
   failed: { tone: 'err', word: 'failed' },
   no_host: { tone: 'idle', word: 'not announced' },
+  // This computer's own name service (Avahi, or Windows for a PC with the
+  // same name) answers to it with this server's address: Domovoi leaves it
+  // to that and looks again every minute.
+  held: { tone: 'ok', word: 'answered by this computer' },
+  // DomovoiHost: Windows marks the network Public; nothing is announced.
+  public: { tone: 'warn', word: 'not announced' },
 };
 const lanOutcome = (d) => {
   if (!d) return '';
@@ -3685,7 +3691,12 @@ const NetworkNameCard = () => {
             {`${data.requested}.local is taken on this network; no name is announced`}
           </div>
         )}
-        {data.error && ['failed', 'no_host', 'taken'].includes(data.state) && (
+        {data.state === 'held' && (
+          <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>
+            this computer's own name service announces it, not Domovoi
+          </div>
+        )}
+        {data.error && ['failed', 'no_host', 'taken', 'public', 'no_lan'].includes(data.state) && (
           <div style={{ color: 'var(--fg-muted)', paddingLeft: 108 }}>{data.error}</div>
         )}
         {editing && (

@@ -763,13 +763,13 @@ namespace Domovoi.Windows.Host
             }
             string address;
             MdnsSnapshot s = l.Snapshot(out address);
-            if (s.Claimed != null && s.Claimed != lanLastClaimed && (s.State == "announced" || s.State == "taken"))
+            if (s.Claimed != null && s.Claimed != lanLastClaimed && (s.State == "announced" || s.State == "taken" || s.State == "held"))
             {
                 var d = StoredLanName();
                 d["claimed"] = s.Claimed;
                 if (UpdateState("lan_name", d)) lanLastClaimed = s.Claimed;
             }
-            string fqdn = (s.State == "announced" || s.State == "taken") ? LanName.Fqdn(s.Claimed) : null;
+            string fqdn = (s.State == "announced" || s.State == "taken" || s.State == "held") ? LanName.Fqdn(s.Claimed) : null;
             lock (statusGate) status.LanName = fqdn;
             string tray = LanNameFiles.TrayText(s);
             if (tray != lanLastTray)

@@ -15,7 +15,11 @@
 // whole; names are read in a loop, never by recursion; a compression pointer
 // must point strictly before the run of labels it was found in, so every
 // jump goes backwards and no loop can be built; at most MaxPointerJumps
-// jumps, MaxLabels labels and 255 bytes per name; every length is checked
+// jumps, MaxLabels labels and 255 bytes per name, and MaxLabelsPerPacket
+// labels for the whole packet (M1 of the review of 2026-11-12: names that
+// all point back at one long name); at most InboundPerSec packets a second
+// are parsed at all; a response not from port 5353 or a packet from outside
+// the LAN's subnet is dropped; every length is checked
 // against the packet before it is read; labels stay bytes, compared after
 // an ASCII-only lowercase, never decoded or logged.
 //
@@ -60,6 +64,10 @@ namespace Domovoi.Windows
         public static string Normalize(string raw)
         {
             if (raw == null) throw new BadLanName("no name given");
+            // ASCII only, checked first: no Unicode whitespace trimmed, no
+            // Unicode letter lowercased into an ASCII one (U+212A), so the
+            // Python copy can't disagree (review 2026-11-12, I1/I2).
+            foreach (char c in raw) if (c > 127) throw new BadLanName("letters, digits and hyphens only");
             string s = raw.Trim(' ', '\t', '\n', '\r', '\f', '\v');
             if (s.Length > MaxInput) throw new BadLanName("too long: up to 63 letters, digits and hyphens");
             s = s.ToLowerInvariant();
@@ -67,9 +75,7 @@ namespace Domovoi.Windows
             if (s.EndsWith(".local", StringComparison.Ordinal)) s = s.Substring(0, s.Length - 6);
             if (s.Length == 0) throw new BadLanName("no name given");
             if (s.Length > MaxLen) throw new BadLanName("too long: up to 63 letters, digits and hyphens");
-            bool ascii = true;
-            foreach (char c in s) if (c > 127) { ascii = false; break; }
-            if (!ascii || !Label.IsMatch(s))
+            if (!Label.IsMatch(s))
             {
                 if (s.IndexOf('.') >= 0) throw new BadLanName("one word only: no dots");
                 if (s.StartsWith("-", StringComparison.Ordinal) || s.EndsWith("-", StringComparison.Ordinal))
@@ -164,6 +170,8 @@ namespace Domovoi.Windows
         public const int MaxPointerJumps = 16;
         public const int MaxLabels = 128;
         public const int MaxNameBytes = 255;
+        // Labels read per packet, every name and pointer jump included (M1).
+        public const int MaxLabelsPerPacket = 256;
         public const int TA = 1, TAAAA = 28, TNsec = 47, TAny = 255, CIn = 1;
         public const int TopBit = 0x8000;
         public const int HostTtl = 120, LegacyTtl = 10;
@@ -176,6 +184,13 @@ namespace Domovoi.Windows
         // The name at off: labels lowercased (ASCII only), and the offset just
         // past it where it was written.
         public static byte[][] ReadName(byte[] buf, int off, out int next)
+        {
+            int budget = MaxLabelsPerPacket;
+            return ReadName(buf, off, out next, ref budget);
+        }
+
+        // budget: the packet's label budget, counted down.
+        public static byte[][] ReadName(byte[] buf, int off, out int next, ref int budget)
         {
             var labels = new List<byte[]>();
             int total = 1;
@@ -202,6 +217,7 @@ namespace Domovoi.Windows
                 }
                 if (kind != 0) throw new MdnsParseError("unsupported label type");
                 if (off + 1 + ln > n) throw new MdnsParseError("label runs past the packet");
+                if (--budget < 0) throw new MdnsParseError("too many labels in the packet");
                 total += 1 + ln;
                 if (total > MaxNameBytes) throw new MdnsParseError("name too long");
                 var label = new byte[ln];
@@ -214,10 +230,10 @@ namespace Domovoi.Windows
             return labels.ToArray();
         }
 
-        static MdnsRecord ReadRecord(byte[] buf, int off, out int next)
+        static MdnsRecord ReadRecord(byte[] buf, int off, out int next, ref int budget)
         {
             var r = new MdnsRecord();
-            r.Name = ReadName(buf, off, out off);
+            r.Name = ReadName(buf, off, out off, ref budget);
             if (off + 10 > buf.Length) throw new MdnsParseError("record header runs past the packet");
             r.Type = U16(buf, off);
             int cls = U16(buf, off + 2);
@@ -252,21 +268,24 @@ namespace Domovoi.Windows
             if (qd > MaxQuestions) throw new MdnsParseError("too many questions");
             if (an + ns + ar > MaxRecords) throw new MdnsParseError("too many records");
             int off = 12;
+            int budget = MaxLabelsPerPacket;
             for (int i = 0; i < qd; i++)
             {
                 var q = new MdnsQuestion();
-                q.Name = ReadName(buf, off, out off);
+                q.Name = ReadName(buf, off, out off, ref budget);
                 if (off + 4 > buf.Length) throw new MdnsParseError("question runs past the packet");
                 q.Type = U16(buf, off);
                 int c = U16(buf, off + 2);
                 q.Class = c & ~TopBit;
                 q.Unicast = (c & TopBit) != 0;
                 off += 4;
-                m.Questions.Add(q);
+                // RFC 6762 s6: a response's questions are ignored (walked
+                // to find the records, not kept).
+                if (!m.IsResponse) m.Questions.Add(q);
             }
-            for (int i = 0; i < an; i++) m.Answers.Add(ReadRecord(buf, off, out off));
-            for (int i = 0; i < ns; i++) m.Authority.Add(ReadRecord(buf, off, out off));
-            for (int i = 0; i < ar; i++) m.Additional.Add(ReadRecord(buf, off, out off));
+            for (int i = 0; i < an; i++) m.Answers.Add(ReadRecord(buf, off, out off, ref budget));
+            for (int i = 0; i < ns; i++) m.Authority.Add(ReadRecord(buf, off, out off, ref budget));
+            for (int i = 0; i < ar; i++) m.Additional.Add(ReadRecord(buf, off, out off, ref budget));
             return m;
         }
 
@@ -388,6 +407,25 @@ namespace Domovoi.Windows
         public string Error;
     }
 
+    // A token bucket on the caller's clock.
+    sealed class MdnsBucket
+    {
+        readonly double rate;
+        double tokens;
+        double? at;
+
+        public MdnsBucket(double rate) { this.rate = rate; tokens = rate; }
+
+        public bool Take(double now, bool force)
+        {
+            if (at.HasValue) tokens = Math.Min(rate, tokens + Math.Max(0, now - at.Value) * rate);
+            at = now;
+            if (tokens < 1 && !force) return false;
+            tokens = Math.Max(0, tokens - 1);
+            return true;
+        }
+    }
+
     public sealed class MdnsResponder
     {
         public const int ProbeCount = 3;
@@ -395,23 +433,39 @@ namespace Domovoi.Windows
         public const int AnnounceCount = 2;
         public const int ConflictBurst = 15;
         public const double ConflictWindow = 10, ConflictPause = 5;
-        public const double HeldRecheck = 15 * 60, ReprobeGap = 10;
+        // This machine's own name service answers with our LAN address: looked
+        // at again this often (review 2026-11-12, L4).
+        public const double HeldRecheck = 60, ReprobeGap = 10;
         public const int MaxForcedRenames = 3;
         public const double RenameWindow = 3600;
+        // Every name taken: start again after this, never give up for good (L1).
+        public const double RetryAfterGivingUp = RenameWindow;
         public const int MaxSendsPerSec = 20;
+        // Legacy-unicast answers have their own budget, in all and per source (L2).
+        public const int LegacyPerSec = 5;
+        public const double LegacyPerSourceGap = 1;
+        const int LegacySourcesKept = 256;
+        // Packets parsed a second; the rest are dropped unread (M1).
+        public const int InboundPerSec = 200;
         const double EchoWindow = 2;
         const int EchoMax = 32;
 
-        // The API's words (domovoi/lan_name/responder.py STATES).
-        public static readonly string[] States = { "announced", "checking", "taken", "off", "no_lan", "failed" };
+        // The API's words (domovoi/lan_name/responder.py STATES); "public" is
+        // set by the host only (a network marked Public in Windows).
+        public static readonly string[] States = { "announced", "held", "checking", "taken", "off", "no_lan", "failed", "public" };
+        static readonly string[] Configured = { "off", "no_lan", "probing", "announcing", "announced", "held", "waiting", "gave_up" };
+        static readonly string[] Listening = { "probing", "announcing", "announced", "held" };
 
-        readonly Func<ICollection<byte[]>> own;
         readonly Func<double> rng;
 
         public string Requested;
         public bool Enabled;
         public byte[] Address;
-        // off, no_lan, probing, announcing, announced, held, waiting, gave_up, failed
+        // The LAN adapter's subnet (network bytes and prefix); null: unknown.
+        public byte[] SubnetNet;
+        public int SubnetPrefix;
+        // off, no_lan, probing, announcing, announced, held, waiting, gave_up,
+        // failed, public
         public string Phase = "off";
         public string Candidate;
         public string Claimed;
@@ -420,9 +474,11 @@ namespace Domovoi.Windows
         public double? NextAt;
         List<string> queue = new List<string>();
         HashSet<string> tried = new HashSet<string>();
+        public int Probes { get { return probes; } }
         int probes;
         int announces;
         bool reprobe;
+        bool fromHeld;
         double reprobeNotBefore;
         readonly Queue<double> renames = new Queue<double>();
         readonly Queue<double> conflicts = new Queue<double>();
@@ -430,13 +486,15 @@ namespace Domovoi.Windows
         byte[] announcedAddr;
         readonly List<KeyValuePair<byte[], double>> sent = new List<KeyValuePair<byte[], double>>();
         readonly Dictionary<int, double> lastMcast = new Dictionary<int, double>();
-        double budget = MaxSendsPerSec;
-        double? budgetAt;
+        readonly MdnsBucket outBudget = new MdnsBucket(MaxSendsPerSec);
+        readonly MdnsBucket legacyBudget = new MdnsBucket(LegacyPerSec);
+        Dictionary<string, double> legacyBySource = new Dictionary<string, double>();
+        readonly MdnsBucket inbound = new MdnsBucket(InboundPerSec);
 
-        public MdnsResponder(Func<ICollection<byte[]>> ownAddresses, Func<double> random)
+        public MdnsResponder(Func<double> random)
         {
-            own = ownAddresses ?? (() => new List<byte[]>());
-            rng = random ?? (() => new Random().NextDouble());
+            var r = new Random();
+            rng = random ?? (() => r.NextDouble());
         }
 
         public static bool PrivateSource(IPAddress ip)
@@ -459,17 +517,40 @@ namespace Domovoi.Windows
             return true;
         }
 
+        static uint U32(byte[] b) { return ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3]; }
+
+        static uint Mask(int prefix) { return prefix == 0 ? 0u : ~(0xFFFFFFFFu >> prefix); }
+
+        public bool InSubnet(IPAddress ip)
+        {
+            if (SubnetNet == null) return true;
+            if (ip == null || ip.AddressFamily != AddressFamily.InterNetwork) return false;
+            return (U32(ip.GetAddressBytes()) & Mask(SubnetPrefix)) == U32(SubnetNet);
+        }
+
+        static bool In(string[] set, string s) { return Array.IndexOf(set, s) >= 0; }
+
         // -- configuration -----------------------------------------------
 
-        public List<MdnsOut> Configure(string requested, bool enabled, string address, double now, string sticky)
+        // prefix: the LAN adapter's (packets from outside its subnet are
+        // dropped); 0 when unknown.
+        public List<MdnsOut> Configure(string requested, bool enabled, string address, double now, string sticky, int prefix)
         {
             byte[] addr = AddrBytes(address);
+            byte[] net = null;
+            if (addr != null && prefix >= 8 && prefix <= 32)
+            {
+                uint n = U32(addr) & Mask(prefix);
+                net = new[] { (byte)(n >> 24), (byte)(n >> 16), (byte)(n >> 8), (byte)n };
+            }
             bool sameAddr = addr == null ? Address == null : SameBytes(addr, Address);
-            if (requested == Requested && enabled == Enabled && sameAddr && Phase != "failed")
+            bool sameNet = net == null ? SubnetNet == null : (SameBytes(net, SubnetNet) && prefix == SubnetPrefix);
+            if (requested == Requested && enabled == Enabled && sameAddr && sameNet && In(Configured, Phase))
                 return new List<MdnsOut>();
             var outs = Goodbye(now);
             string previous = Claimed ?? sticky;
             Requested = requested; Enabled = enabled; Address = addr;
+            SubnetNet = net; SubnetPrefix = net == null ? 0 : prefix;
             Candidate = null; Claimed = null; Taken = null; Error = null;
             tried = new HashSet<string>();
             reprobe = false;
@@ -483,12 +564,22 @@ namespace Domovoi.Windows
             return outs;
         }
 
-        public void Fail(string error)
+        public List<MdnsOut> Configure(string requested, bool enabled, string address, double now, string sticky)
         {
-            Phase = "failed";
+            return Configure(requested, enabled, address, now, sticky, 0);
+        }
+
+        // Nothing can be announced: the socket couldn't be opened ("failed"),
+        // or the network is marked Public ("public").
+        public void Fail(string error, string state)
+        {
+            Phase = In(States, state) ? state : "failed";
             Error = error;
             NextAt = null;
+            Requested = null;
         }
+
+        public void Fail(string error) { Fail(error, "failed"); }
 
         public static List<string> Order(string requested, string previous)
         {
@@ -520,7 +611,8 @@ namespace Domovoi.Windows
             foreach (string n in queue) if (!tried.Contains(n)) { nxt = n; break; }
             if (nxt == null)
             {
-                Phase = "gave_up"; Candidate = null; Claimed = null; NextAt = null;
+                Phase = "gave_up"; Candidate = null; Claimed = null;
+                NextAt = now + RetryAfterGivingUp;
                 return;
             }
             StartProbe(nxt, now, delay.HasValue ? delay.Value : (first ? rng() * ProbeGap : 0));
@@ -572,14 +664,16 @@ namespace Domovoi.Windows
                 }
                 if (Phase == "held" || Phase == "announced")
                 {
+                    fromHeld = Phase == "held";
                     StartProbe(Claimed, now, 0);
                     reprobe = true;
                     continue;
                 }
-                if (Phase == "waiting")
+                if (Phase == "waiting" || Phase == "gave_up")
                 {
                     renames.Clear();
                     tried = new HashSet<string>();
+                    Error = null;
                     NextCandidate(now, false, null);
                     continue;
                 }
@@ -593,23 +687,23 @@ namespace Domovoi.Windows
         public List<MdnsOut> OnPacket(byte[] data, int length, IPEndPoint src, double now)
         {
             var none = new List<MdnsOut>();
-            if (Phase == "off" || Phase == "no_lan" || Phase == "failed" || Phase == "gave_up" || Address == null) return none;
-            if (data == null || length < 0 || length > data.Length || length > MdnsPacket.MaxPacket) return none;
+            if (!In(Listening, Phase) || Address == null) return none;
+            if (data == null || src == null || length < 0 || length > data.Length || length > MdnsPacket.MaxPacket) return none;
+            if (!InSubnet(src.Address)) return none;
+            // The cheap checks above; the rate limit before any parsing (M1).
+            if (!inbound.Take(now, false)) return none;
             byte[] exact = data;
             if (length != data.Length) { exact = new byte[length]; Buffer.BlockCopy(data, 0, exact, 0, length); }
             if (IsEcho(exact, now)) return none;
             MdnsMessage m;
             try { m = MdnsPacket.Parse(exact); }
             catch (MdnsParseError) { return none; }
-            if (m.IsResponse) return OnResponse(m, now);
+            if (m.IsResponse)
+            {
+                if (src.Port != MdnsPacket.Port) return none;   // RFC 6762 s11
+                return OnResponse(m, now);
+            }
             return OnQuery(m, src, now);
-        }
-
-        bool IsOwn(byte[] a)
-        {
-            if (SameBytes(a, Address)) return true;
-            foreach (byte[] o in own()) if (SameBytes(a, o)) return true;
-            return false;
         }
 
         List<MdnsOut> OnResponse(MdnsMessage m, double now)
@@ -617,8 +711,9 @@ namespace Domovoi.Windows
             var none = new List<MdnsOut>();
             if (Phase == "probing")
             {
+                if (probes == 0) return none;   // nothing asked yet
                 var name = MdnsPacket.NameOf(Candidate);
-                bool any = false, allOwn = true;
+                bool any = false, allOurs = true;
                 int aCount = 0;
                 foreach (var r in m.Records())
                 {
@@ -627,12 +722,14 @@ namespace Domovoi.Windows
                     if (r.Type == MdnsPacket.TA && r.Data.Length == 4)
                     {
                         aCount++;
-                        if (!IsOwn(r.Data)) allOwn = false;
+                        if (!SameBytes(r.Data, Address)) allOurs = false;
                     }
                 }
                 if (!any) return none;
-                if (aCount > 0 && allOwn)
+                if (aCount > 0 && allOurs)
                 {
+                    // This machine's own name service answers with our LAN
+                    // address: leave it to it, look again soon.
                     Claimed = Candidate;
                     Phase = "held";
                     NextAt = now + HeldRecheck;
@@ -647,7 +744,7 @@ namespace Domovoi.Windows
                 foreach (var r in m.Records())
                 {
                     if (MdnsPacket.SameName(r.Name, name) && r.Type == MdnsPacket.TA && r.Class == MdnsPacket.CIn && r.Ttl > 0
-                        && r.Data.Length == 4 && !IsOwn(r.Data))
+                        && r.Data.Length == 4 && !SameBytes(r.Data, Address))
                         return ConflictAfterAnnounce(now);
                 }
             }
@@ -657,6 +754,7 @@ namespace Domovoi.Windows
         List<MdnsOut> ConflictAfterAnnounce(double now)
         {
             if (Phase == "announced" && NextAt.HasValue) return new List<MdnsOut>();
+            fromHeld = false;
             double when = Math.Max(now, reprobeNotBefore);
             reprobeNotBefore = when + ReprobeGap;
             if (when > now)
@@ -707,7 +805,7 @@ namespace Domovoi.Windows
             if (Phase == "probing") return Tiebreak(m, now);
             if (Phase != "announced" || Claimed == null) return none;
             var name = MdnsPacket.NameOf(Claimed);
-            bool legacy = src == null || src.Port != MdnsPacket.Port;
+            bool legacy = src.Port != MdnsPacket.Port;
             bool isProbe = false;
             foreach (var r in m.Authority) if (MdnsPacket.SameName(r.Name, name)) { isProbe = true; break; }
             bool known = false;
@@ -718,11 +816,7 @@ namespace Domovoi.Windows
             {
                 if (!MdnsPacket.SameName(q.Name, name) || (q.Class != MdnsPacket.CIn && q.Class != MdnsPacket.TAny)) continue;
                 if (q.Type != MdnsPacket.TA && q.Type != MdnsPacket.TAAAA && q.Type != MdnsPacket.TAny) continue;
-                if (legacy)
-                {
-                    if (src == null || !PrivateSource(src.Address) || src.Port == 0) return none;
-                    return Send(MdnsPacket.LegacyResponse(m.Id, name, Address, q.Type), src, now, false);
-                }
+                if (legacy) return LegacyAnswer(m.Id, name, q.Type, src, now);
                 if (known && q.Type != MdnsPacket.TAAAA) continue;
                 double gap = isProbe ? ProbeGap : 1.0;
                 double last;
@@ -731,6 +825,27 @@ namespace Domovoi.Windows
                 return Send(MdnsPacket.Response(name, Address, MdnsPacket.HostTtl, q.Type), null, now, false);
             }
             return none;
+        }
+
+        // A unicast answer: only to a source on the LAN, at most one a second
+        // per source and LegacyPerSec in all, apart from the main budget.
+        List<MdnsOut> LegacyAnswer(int id, byte[][] name, int qtype, IPEndPoint src, double now)
+        {
+            var none = new List<MdnsOut>();
+            if (src.Port == 0 || !PrivateSource(src.Address)) return none;
+            string key = src.Address.ToString();
+            double last;
+            if (legacyBySource.TryGetValue(key, out last) && now - last < LegacyPerSourceGap) return none;
+            if (!legacyBudget.Take(now, false)) return none;
+            if (legacyBySource.Count >= LegacySourcesKept)
+            {
+                var keep = new Dictionary<string, double>();
+                foreach (var kv in legacyBySource) if (now - kv.Value < LegacyPerSourceGap) keep[kv.Key] = kv.Value;
+                legacyBySource = keep;
+                if (legacyBySource.Count >= LegacySourcesKept) return none;
+            }
+            legacyBySource[key] = now;
+            return Remember(MdnsPacket.LegacyResponse(id, name, Address, qtype), src, now);
         }
 
         List<MdnsOut> Tiebreak(MdnsMessage m, double now)
@@ -786,13 +901,15 @@ namespace Domovoi.Windows
 
         List<MdnsOut> Send(byte[] data, IPEndPoint dest, double now, bool force)
         {
-            if (budgetAt.HasValue) budget = Math.Min(MaxSendsPerSec, budget + (now - budgetAt.Value) * MaxSendsPerSec);
-            budgetAt = now;
-            var outs = new List<MdnsOut>();
-            if (budget < 1 && !force) return outs;
-            budget = Math.Max(0, budget - 1);
+            if (!outBudget.Take(now, force)) return new List<MdnsOut>();
+            return Remember(data, dest, now);
+        }
+
+        List<MdnsOut> Remember(byte[] data, IPEndPoint dest, double now)
+        {
             sent.Add(new KeyValuePair<byte[], double>(data, now));
             while (sent.Count > EchoMax) sent.RemoveAt(0);
+            var outs = new List<MdnsOut>();
             outs.Add(new MdnsOut { Data = data, Dest = dest });
             return outs;
         }
@@ -809,11 +926,12 @@ namespace Domovoi.Windows
             get
             {
                 string p = Phase;
-                if (p == "off" || p == "no_lan" || p == "failed") return p;
                 if (p == "gave_up" || p == "waiting") return "taken";
+                if (In(States, p) && p != "announced") return p;
                 if (p == "probing" || (p == "announcing" && announces == 0))
                 {
                     if (!(reprobe && Claimed != null)) return "checking";
+                    if (fromHeld) return "held";
                 }
                 if (Requested != null && Claimed != null && !LanName.InFamily(Requested, Claimed)) return "taken";
                 return "announced";
@@ -920,7 +1038,7 @@ namespace Domovoi.Windows
         {
             var d = new Dictionary<string, object>();
             d["v"] = 1;
-            d["fqdn"] = (s.State == "announced" || s.State == "taken") ? LanName.Fqdn(LanName.Exact(s.Claimed)) : null;
+            d["fqdn"] = (s.State == "announced" || s.State == "taken" || s.State == "held") ? LanName.Fqdn(LanName.Exact(s.Claimed)) : null;
             d["state"] = s.State;
             return Json.Serialize(d) + "\n";
         }
@@ -947,8 +1065,22 @@ namespace Domovoi.Windows
         public string Description;
         public bool Up;
         public bool LoopbackOrTunnel;
+        // An Ethernet or Wi-Fi adapter by its type (NetworkInterfaceType), the
+        // only kinds a name goes on (review 2026-11-12, L5).
+        public bool LanType;
         public bool HasGateway;
+        public int Index;
         public List<string> Addresses = new List<string>();
+        // The prefix of each address in Addresses, same order (0: unknown).
+        public List<int> Prefixes = new List<int>();
+    }
+
+    public sealed class NicPick
+    {
+        public string Address;
+        public int Prefix;
+        public int Index;
+        public string Name;
     }
 
     public static class MdnsAdapter
@@ -964,18 +1096,28 @@ namespace Domovoi.Windows
         }
 
         // The address to announce: routeAddress (the one Windows picks for a
-        // route out, the UDP-connect trick) when a real adapter that is up,
-        // has a gateway and isn't virtual holds it and it is RFC 1918; null
-        // otherwise. v1 answers on that one adapter only.
-        public static string Pick(IEnumerable<NicFacts> nics, string routeAddress)
+        // route out, the UDP-connect trick) when an Ethernet or Wi-Fi adapter
+        // (by type) that is up, has a gateway and isn't virtual (Hyper-V's
+        // vEthernet adapters report the Ethernet type, so the names are
+        // checked too) holds it and it is RFC 1918; null otherwise. v1
+        // answers on that one adapter only.
+        public static NicPick PickNic(IEnumerable<NicFacts> nics, string routeAddress)
         {
             if (routeAddress == null || !Lan.IsPrivateIPv4(routeAddress)) return null;
             foreach (NicFacts n in nics)
             {
-                if (!n.Up || n.LoopbackOrTunnel || !n.HasGateway || LooksVirtual(n)) continue;
-                if (n.Addresses.Contains(routeAddress)) return routeAddress;
+                if (!n.Up || n.LoopbackOrTunnel || !n.LanType || !n.HasGateway || LooksVirtual(n)) continue;
+                int i = n.Addresses.IndexOf(routeAddress);
+                if (i < 0) continue;
+                return new NicPick { Address = routeAddress, Prefix = i < n.Prefixes.Count ? n.Prefixes[i] : 0, Index = n.Index, Name = n.Name };
             }
             return null;
+        }
+
+        public static string Pick(IEnumerable<NicFacts> nics, string routeAddress)
+        {
+            NicPick p = PickNic(nics, routeAddress);
+            return p == null ? null : p.Address;
         }
     }
 }

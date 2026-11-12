@@ -446,17 +446,21 @@ one on the network), so DomovoiHost does, from the moment the service
 starts, also while Domovoi restarts or updates: our own small mDNS
 responder (`windows/common/MdnsResponder.cs`, the same rules and packets as
 the Linux core's `domovoi/lan_name/`) on UDP 5353, beside Windows' own
-responder, on the adapter that leads to your router only (never a
-vEthernet, Hyper-V, WSL, VPN or Docker adapter). Setup's firewall rule
-`Domovoi-mDNS-5353` lets the questions in, on Private and Domain networks
-only: if Windows calls your home network **Public**, other devices won't
-find the name (the address still works).
+responder, on the adapter that leads to your router only: an Ethernet or
+Wi-Fi adapter by its type, never a vEthernet, Hyper-V, WSL, VPN or Docker
+one, and only packets that arrive on it from its subnet are read. Setup's
+firewall rule `Domovoi-mDNS-5353` lets the questions in, on Private and
+Domain networks only, and while Windows calls that network **Public**
+DomovoiHost announces nothing (Settings: `not announced: this network is
+marked Public in Windows`; the address still works).
 
 - If something else already answers to `domovoi.local` (another Domovoi,
   a PC called DOMOVOI elsewhere), DomovoiHost takes `domovoi2.local`, then
   `domovoi3.local`, and keeps it after restarts (`host\out\host-state.json`,
   `lan_name`), so bookmarks and rooms don't move about. A PC that is itself
-  named DOMOVOI already answers to the name: that counts as Domovoi's.
+  named DOMOVOI already answers to the name with its own address: Domovoi
+  leaves it to Windows (Settings: `answered by this computer`) and looks
+  again every minute.
 - **Settings > System > About & updates** shows the name and its state; an
   admin changes it or turns it off there. The core writes the request
   `~/.domovoi/lan_name/request.json`; DomovoiHost reads it as the service

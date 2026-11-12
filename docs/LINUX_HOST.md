@@ -2470,9 +2470,11 @@ sudo ufw allow from 192.168.0.0/16 to any port 5353 proto udp
 network, so a browser on the same network opens
 `http://domovoi.local:6369` instead of an address. The core announces it
 itself (`domovoi/lan_name/`, our own standard-library mDNS responder; no
-package to install). It shares UDP `5353` with Avahi when Avahi is there,
-and a box whose own host name is `domovoi` (Avahi already publishing
-`domovoi.local` for it) counts as holding the name already.
+package to install). It shares UDP `5353` with Avahi when Avahi is there.
+On a box whose own host name is `domovoi`, Avahi already publishes
+`domovoi.local` with this box's LAN address: Domovoi leaves the name to
+Avahi, Settings says `answered by this computer`, and Domovoi looks again
+every minute.
 
 - If another device already answers to `domovoi.local` (a second Domovoi,
   say), the server takes `domovoi2.local`, then `domovoi3.local`, and
@@ -2484,7 +2486,10 @@ and a box whose own host name is `domovoi` (Avahi already publishing
   previous name stays. In `.env`: `LAN_NAME` and `LAN_NAME_ENABLED`.
 - The name goes on the default-route network adapter, with its private
   (RFC 1918) address; a box with no such address has no name (`no network
-  address`).
+  address`). Nor does one whose default route goes through a tunnel, VPN or
+  virtual interface (`tun`, `wg`, `ppp`, a bridge or anything else under
+  `/sys/devices/virtual`). Only packets that arrive on that adapter, from its
+  subnet, are read.
 - A name is a convenience, not proof: satellites resolve it and still
   check the server's key at the address they reach. Phones keep the
   address they paired with.

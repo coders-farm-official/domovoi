@@ -19,7 +19,7 @@ ANNOUNCES it (:func:`mode`):
   probes, and writes ``/var/lib/domovoi-windows/lan_name.json`` as root::
 
       {"schema": 1, "request_id": "<id it acted on>"|null, "requested": "kitchen",
-       "claimed": "domovoi2"|null, "state": "announced"|"checking"|"taken"|"off"|"no_lan"|"failed",
+       "claimed": "domovoi2"|null, "state": "announced"|"held"|"checking"|"taken"|"off"|"no_lan"|"failed"|"public",
        "taken": "kitchen"|null, "addresses": ["192.168.1.30"], "error": null|"...",
        "written_at": "<UTC>"}
 
@@ -47,6 +47,7 @@ import stat
 import struct
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -277,39 +278,73 @@ def write_state(requested: str, claimed: str) -> None:
 
 # ─── the socket (core mode, Linux) ──────────────────────────────────────
 
+#: Interfaces a name is never announced on (security review 2026-11-12,
+#: L5): tunnels, VPNs and container or VM bridges. Besides these names, any
+#: interface under /sys/devices/virtual (a bridge, veth, dummy, tun) counts
+#: as virtual too.
+VIRTUAL_PREFIXES = ("tun", "tap", "wg", "ppp", "docker", "veth", "br-", "virbr", "lxc", "lxd", "vnet",
+                    "zt", "tailscale", "cni", "flannel", "cali", "vxlan", "dummy", "lo")
 
-def local_ipv4s() -> set[bytes]:
-    """Every IPv4 address of this machine, for "already ours". Linux: each
-    interface's address (SIOCGIFADDR); elsewhere what the host name
-    resolves to."""
-    out: set[bytes] = set()
-    if sys.platform.startswith("linux"):
-        import fcntl
+_SIOCGIFADDR = 0x8915
+_SIOCGIFNETMASK = 0x891B
+_IP_PKTINFO = getattr(socket, "IP_PKTINFO", 8)
+#: Room for one in_pktinfo control message (Linux; the tests run anywhere).
+_ANC_SPACE = socket.CMSG_SPACE(12) if hasattr(socket, "CMSG_SPACE") else 64
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            for _, ifname in socket.if_nameindex()[:64]:
-                try:
-                    req = struct.pack("256s", ifname.encode()[:15])
-                    res = fcntl.ioctl(s.fileno(), 0x8915, req)  # SIOCGIFADDR
-                    out.add(res[20:24])
-                except OSError:
-                    continue
-        finally:
-            s.close()
+
+@dataclass(frozen=True)
+class Iface:
+    name: str
+    index: int
+    prefix: int | None
+    #: Why a name can't go on it (a tunnel, a bridge), or None.
+    virtual: str | None = None
+
+
+def is_virtual(name: str, sys_class_net: Path = Path("/sys/class/net")) -> str | None:
+    if name.startswith(VIRTUAL_PREFIXES):
+        return name
     try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            out.add(socket.inet_aton(info[4][0]))
+        if "/devices/virtual/" in os.path.realpath(sys_class_net / name):
+            return name
     except OSError:
         pass
-    return out
+    return None
+
+
+def lan_interface(ip: str) -> Iface | None:
+    """The interface that holds ``ip`` (Linux): its name, index, prefix and
+    whether it is virtual. None elsewhere, or when none holds it."""
+    if not sys.platform.startswith("linux"):
+        return None
+    import fcntl
+
+    want = socket.inet_aton(ip)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for index, ifname in socket.if_nameindex()[:256]:
+            req = struct.pack("256s", ifname.encode()[:15])
+            try:
+                if fcntl.ioctl(s.fileno(), _SIOCGIFADDR, req)[20:24] != want:
+                    continue
+                mask = fcntl.ioctl(s.fileno(), _SIOCGIFNETMASK, req)[20:24]
+            except OSError:
+                continue
+            bits = int.from_bytes(mask, "big")
+            prefix = bin(bits).count("1") if bits else None
+            return Iface(ifname, index, prefix, is_virtual(ifname))
+    finally:
+        s.close()
+    return None
 
 
 def open_socket(lan_ip: str) -> socket.socket:
     """UDP 5353 beside any other responder on the box (SO_REUSEADDR: Avahi
     sets it too), the group joined on the LAN address only, multicast sent
     from it only (the spike: without IP_MULTICAST_IF, packets leave by a
-    virtual adapter)."""
+    virtual adapter), and each packet's arriving interface reported
+    (IP_PKTINFO), so one from another interface (a container's unicast to
+    the docker0 address, say) is dropped."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -318,6 +353,7 @@ def open_socket(lan_ip: str) -> socket.socket:
                 s.setsockopt(socket.IPPROTO_IP, 49, 0)   # IP_MULTICAST_ALL off: our group only
             except OSError:
                 pass
+            s.setsockopt(socket.IPPROTO_IP, _IP_PKTINFO, 1)
         s.bind(("", packet.PORT))
         s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
                      socket.inet_aton(packet.GROUP) + socket.inet_aton(lan_ip))
@@ -331,48 +367,75 @@ def open_socket(lan_ip: str) -> socket.socket:
     return s
 
 
-class _Proto(asyncio.DatagramProtocol):
-    def __init__(self, svc: "LanNameService") -> None:
-        self.svc = svc
+def arrived_on(ancdata: list) -> int | None:
+    """The interface index from an IP_PKTINFO control message, or None."""
+    for level, kind, data in ancdata:
+        if level == socket.IPPROTO_IP and kind == _IP_PKTINFO and len(data) >= 4:
+            return struct.unpack("i", data[:4])[0]
+    return None
 
-    def datagram_received(self, data: bytes, addr: Any) -> None:
-        if len(data) > packet.MAX_PACKET or not isinstance(addr, tuple):
-            return
-        self.svc._packet(data, (str(addr[0]), int(addr[1])))
 
-    def error_received(self, exc: Exception) -> None:
-        log.debug("network name: socket error %s", exc)
+class SocketWire:
+    """The real socket on the event loop: read with recvmsg (at most
+    :data:`READS_PER_WAKE` packets a wake-up), a packet that arrived on
+    another interface than ``ifindex`` dropped unread."""
+
+    READS_PER_WAKE = 64
+
+    def __init__(self, sock: socket.socket, ifindex: int | None, on_packet) -> None:
+        self.sock = sock
+        self.ifindex = ifindex
+        self.on_packet = on_packet
+        self.loop = asyncio.get_running_loop()
+        self.loop.add_reader(sock.fileno(), self._readable)
+
+    def _readable(self) -> None:
+        for _ in range(self.READS_PER_WAKE):
+            try:
+                data, anc, flags, addr = self.sock.recvmsg(packet.MAX_PACKET + 1, _ANC_SPACE)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError as e:
+                log.debug("network name: receive failed: %s", e)
+                return
+            if flags & getattr(socket, "MSG_TRUNC", 0) or not isinstance(addr, tuple):
+                continue
+            if self.ifindex is not None and arrived_on(anc) != self.ifindex:
+                continue
+            self.on_packet(data, (str(addr[0]), int(addr[1])))
+
+    def sendto(self, data: bytes, dest: tuple[str, int]) -> None:
+        self.sock.sendto(data, dest)
+
+    def close(self) -> None:
+        try:
+            self.loop.remove_reader(self.sock.fileno())
+        except (ValueError, OSError):
+            pass
+        self.sock.close()
+
+
+def open_wire(ip: str, iface: Iface | None, on_packet) -> SocketWire:
+    return SocketWire(open_socket(ip), iface.index if iface else None, on_packet)
 
 
 class LanNameService:
     """The core-mode announcer: one socket, one :class:`Responder`, one
-    task. ``lan_ip`` and ``open_sock`` are for the tests."""
+    task. ``lan_ip``, ``iface`` and ``wire`` are for the tests."""
 
-    def __init__(self, *, lan_ip=None, open_sock=open_socket, own=local_ipv4s, clock=time.monotonic) -> None:
+    def __init__(self, *, lan_ip=None, iface=None, wire=open_wire, clock=time.monotonic) -> None:
         self._lan_ip = lan_ip or _default_lan_ip
-        self._open = open_sock
+        self._iface = iface or lan_interface
+        self._open = wire
         self._clock = clock
-        self.responder = Responder(own_addresses=self._own_cached)
-        self._own_fn = own
-        self._own: set[bytes] = set()
-        self._own_at = -1e9
+        self.responder = Responder()
         self._task: asyncio.Task | None = None
-        self._transport: asyncio.DatagramTransport | None = None
+        self._wire = None
         self._ip: str | None = None
         self._wake = asyncio.Event()
         self._saved: tuple[str, str] | None = None
         self._kick = False
         self.running = False
-
-    def _own_cached(self) -> set[bytes]:
-        now = self._clock()
-        if now - self._own_at > 60:
-            try:
-                self._own = set(self._own_fn())
-            except OSError:
-                self._own = set()
-            self._own_at = now
-        return self._own
 
     def start(self) -> None:
         if self._task is None:
@@ -404,24 +467,24 @@ class LanNameService:
     # ─── internals ─────────────────────────────────────────────────────
 
     def _close(self) -> None:
-        if self._transport is not None:
-            self._transport.close()
-            self._transport = None
+        if self._wire is not None:
+            self._wire.close()
+            self._wire = None
 
     def _emit(self, outs: list[Out]) -> None:
-        t = self._transport
-        if t is None:
+        w = self._wire
+        if w is None:
             return
         for o in outs:
             try:
-                t.sendto(o.data, o.dest or (packet.GROUP, packet.PORT))
+                w.sendto(o.data, o.dest or (packet.GROUP, packet.PORT))
             except OSError as e:
                 log.debug("network name: send failed: %s", e)
         self._save_claim()
 
     def _save_claim(self) -> None:
         r = self.responder
-        if r.claimed and r.requested and r.state in ("announced", "taken") and r.phase in ("announced", "held"):
+        if r.claimed and r.requested and r.state in ("announced", "taken", "held") and r.phase in ("announced", "held"):
             pair = (r.requested, r.claimed)
             if pair != self._saved:
                 self._saved = pair
@@ -432,16 +495,14 @@ class LanNameService:
         self._emit(self.responder.on_packet(data, src, self._clock()))
         self._wake.set()
 
-    async def _ensure_socket(self, ip: str | None) -> None:
-        if ip == self._ip and self._transport is not None:
+    def _ensure_wire(self, ip: str | None, iface: Iface | None) -> None:
+        if ip == self._ip and self._wire is not None:
             return
         self._close()
         self._ip = ip
         if ip is None:
             return
-        loop = asyncio.get_running_loop()
-        sock = self._open(ip)
-        self._transport, _ = await loop.create_datagram_endpoint(lambda: _Proto(self), sock=sock)
+        self._wire = self._open(ip, iface, self._packet)
 
     async def _run(self) -> None:
         sticky = read_state().get("claimed")
@@ -453,10 +514,19 @@ class LanNameService:
                 last_check = now
                 ip = await asyncio.to_thread(self._lan_ip)
                 ip = ip if lan_address_ok(ip) else None
+                iface = await asyncio.to_thread(self._iface, ip) if ip else None
+                why_not = None
+                if iface is not None and iface.virtual:
+                    why_not = f"the default route goes through {iface.virtual}, a virtual or tunnel interface"
+                    ip = None
                 want_on = enabled()
                 if failed_at is None or now - failed_at >= REBIND_SEC:
+                    if self._ip is not None and self._ip != (ip if want_on else None):
+                        # A new address, or none: the goodbye leaves by the
+                        # old socket first.
+                        self._emit(self.responder.stop(now))
                     try:
-                        await self._ensure_socket(ip if want_on else None)
+                        self._ensure_wire(ip if want_on else None, iface)
                         failed_at = None
                     except OSError as e:
                         failed_at = now
@@ -465,7 +535,10 @@ class LanNameService:
                         log.warning("network name: can't listen on UDP 5353: %s", e)
                 if failed_at is None:
                     old = self.responder
-                    outs = old.configure(requested_name(), want_on, ip, now, sticky=sticky)
+                    outs = old.configure(requested_name(), want_on, ip, now, sticky=sticky,
+                                         prefix=iface.prefix if iface else None)
+                    if why_not and old.phase == "no_lan":
+                        old.error = why_not
                     sticky = None if old.claimed else sticky
                     self._emit(outs)
             self._emit(self.responder.on_timer(self._clock()))
@@ -558,7 +631,7 @@ def claimed_name() -> str | None:
         st = status()
     except Exception:  # noqa: BLE001 - never break a satellite's hello
         return None
-    if st.get("state") in ("announced", "taken", "checking") and st.get("claimed"):
+    if st.get("state") in ("announced", "held", "taken", "checking") and st.get("claimed"):
         return names.fqdn(st["claimed"])
     return None
 

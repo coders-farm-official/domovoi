@@ -19,8 +19,10 @@ MAX_LEN = 63
 
 #: The ``_HOST_LABEL`` rule of domovoi/streaming.py: letters, digits and
 #: hyphens, 1-63, no hyphen at either end.
-_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")   # fullmatch only
 _RESERVED = frozenset({"localhost", "local"})
+#: The only characters trimmed: ASCII whitespace, as C#'s copy trims.
+_ASCII_SPACE = " \t\n\r\f\v"
 #: The longest thing :func:`normalize` looks at, typed ".local" included.
 _MAX_INPUT = 80
 
@@ -33,10 +35,17 @@ class BadName(ValueError):
 
 def normalize(raw: object) -> str:
     """The label a typed name stands for: trimmed, lowercased, a trailing
-    dot and ``.local`` taken off. :class:`BadName` when it isn't one."""
+    dot and ``.local`` taken off. :class:`BadName` when it isn't one.
+
+    ASCII only, checked first: no Unicode whitespace is trimmed and no
+    Unicode letter lowercased into an ASCII one (U+212A KELVIN SIGN
+    lowercases to "k"), so the C# copy, which trims and lowercases ASCII
+    only, can't disagree (security review 2026-11-12, I1/I2)."""
     if not isinstance(raw, str):
         raise BadName("no name given")
-    s = raw.strip()
+    if not raw.isascii():
+        raise BadName("letters, digits and hyphens only")
+    s = raw.strip(_ASCII_SPACE)
     if len(s) > _MAX_INPUT:
         raise BadName("too long: up to 63 letters, digits and hyphens")
     s = s.lower()
@@ -48,7 +57,7 @@ def normalize(raw: object) -> str:
         raise BadName("no name given")
     if len(s) > MAX_LEN:
         raise BadName("too long: up to 63 letters, digits and hyphens")
-    if not s.isascii() or not _LABEL.match(s):
+    if not _LABEL.fullmatch(s):
         if "." in s:
             raise BadName("one word only: no dots")
         if s.startswith("-") or s.endswith("-"):

@@ -5,9 +5,12 @@
 // One UDP socket on 5353, shared with Windows' own responder (dnscache):
 // ExclusiveAddressUse off and ReuseAddress on, the spike's finding 3. It
 // joins 224.0.0.251 and sends on the LAN adapter only (finding 5): the
-// address Windows picks for a route out, when a real adapter that is up and
-// has a gateway holds it (MdnsAdapter.Pick), never a vEthernet, Hyper-V, WSL,
-// VPN or Docker one. Probes and QU questions are answered by multicast
+// address Windows picks for a route out, when an Ethernet or Wi-Fi adapter
+// (by type) that is up and has a gateway holds it (MdnsAdapter.PickNic),
+// never a vEthernet, Hyper-V, WSL, VPN or Docker one. A packet that arrived
+// on another interface (IP_PKTINFO) or from outside that adapter's subnet is
+// dropped. Nothing is announced while Windows marks that network Public
+// (state "public"). Probes and QU questions are answered by multicast
 // (finding 4). Inbound UDP 5353 for DomovoiHost.exe is allowed by Setup's
 // firewall rule Domovoi-mDNS-5353 (Private and Domain networks only).
 //
@@ -18,6 +21,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Management;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -29,7 +33,9 @@ namespace Domovoi.Windows.Host
     {
         static readonly TimeSpan Recheck = TimeSpan.FromSeconds(5);
         static readonly TimeSpan Rebind = TimeSpan.FromSeconds(60);
+        static readonly TimeSpan CategoryEvery = TimeSpan.FromSeconds(30);
         const int SioUdpConnReset = -1744830452;
+        public const string PublicWhy = "not announced: this network is marked Public in Windows";
 
         readonly Action<string> log;
         readonly object gate = new object();
@@ -45,13 +51,15 @@ namespace Domovoi.Windows.Host
         string shotAddress;
         Socket sock;
         string sockAddress;
-        List<byte[]> own = new List<byte[]>();
-        DateTime ownAt = DateTime.MinValue;
+        int sockIndex = -1;
+        DateTime categoryAt = DateTime.MinValue;
+        int categoryIndex = -1;
+        bool categoryPublic;
 
         public LanNameHost(Action<string> log)
         {
             this.log = log;
-            responder = new MdnsResponder(() => own, null);
+            responder = new MdnsResponder(null);
         }
 
         double Now { get { return clock.Elapsed.TotalSeconds; } }
@@ -108,8 +116,18 @@ namespace Domovoi.Windows.Host
                         string name, stickyName;
                         bool enabled;
                         lock (gate) { name = wantName; enabled = wantEnabled; stickyName = sticky; }
-                        string address = enabled ? LanAddress() : null;
-                        RefreshOwn();
+                        NicPick nic = enabled ? LanNic() : null;
+                        if (nic != null && IsPublic(nic.Index))
+                        {
+                            // Nothing on a network Windows calls Public.
+                            if (sock != null) Send(responder.Stop(Now));
+                            CloseSocket();
+                            if (responder.Phase != "public") log("network name: " + PublicWhy);
+                            responder.Fail(PublicWhy, "public");
+                            Publish(null);
+                            continue;
+                        }
+                        string address = nic != null ? nic.Address : null;
                         if (enabled && address != null && (sock == null || sockAddress != address))
                         {
                             if (DateTime.UtcNow - failedAt >= Rebind || kick)
@@ -117,11 +135,10 @@ namespace Domovoi.Windows.Host
                                 // A new address: the goodbye for the old one
                                 // leaves by the old socket first.
                                 if (sock != null) Send(responder.Stop(Now));
-                                string why = OpenSocket(address);
+                                string why = OpenSocket(nic);
                                 if (why != null)
                                 {
                                     failedAt = DateTime.UtcNow;
-                                    Send(responder.Stop(Now));
                                     responder.Fail("can't listen on UDP 5353: " + why);
                                     log("network name: can't listen on UDP 5353: " + why);
                                     Publish(null);
@@ -130,7 +147,8 @@ namespace Domovoi.Windows.Host
                             }
                             else { Publish(null); Pause(250); continue; }
                         }
-                        List<MdnsOut> outs = responder.Configure(name ?? LanName.Default, enabled, address, Now, stickyName);
+                        List<MdnsOut> outs = responder.Configure(name ?? LanName.Default, enabled, address, Now, stickyName,
+                                                                 nic != null ? nic.Prefix : 0);
                         Send(outs);
                         if (!enabled || address == null) CloseSocket();
                         if (responder.Claimed != null) lock (gate) sticky = null;
@@ -154,6 +172,36 @@ namespace Domovoi.Windows.Host
 
         void Pause(int ms) { stopping.WaitOne(ms); }
 
+        // Windows' network category for the adapter, asked at most every
+        // CategoryEvery (a WMI query); unknown counts as not Public.
+        bool IsPublic(int ifIndex)
+        {
+            if (ifIndex == categoryIndex && DateTime.UtcNow - categoryAt < CategoryEvery) return categoryPublic;
+            categoryIndex = ifIndex;
+            categoryAt = DateTime.UtcNow;
+            categoryPublic = Category(ifIndex) == "Public";
+            return categoryPublic;
+        }
+
+        // The query Setup's preflight uses (helper\Preflight.cs Category).
+        public static string Category(int ifIndex)
+        {
+            try
+            {
+                using (var s = new ManagementObjectSearcher(@"root\StandardCimv2", "SELECT NetworkCategory FROM MSFT_NetConnectionProfile WHERE InterfaceIndex = " + Inv.S(ifIndex)))
+                    foreach (ManagementObject m in s.Get())
+                        using (m)
+                        {
+                            int c = Convert.ToInt32(m["NetworkCategory"]);
+                            return c == 0 ? "Public" : (c == 1 ? "Private" : (c == 2 ? "Domain" : "unknown"));
+                        }
+            }
+            catch (ManagementException) { }
+            catch (System.Runtime.InteropServices.COMException) { }
+            catch (UnauthorizedAccessException) { }
+            return "unknown";
+        }
+
         // Wait for a packet until the responder's next deadline (at most
         // 250 ms, so a Stop or a Desire is seen quickly).
         void Receive(byte[] buf)
@@ -165,8 +213,12 @@ namespace Domovoi.Windows.Host
             {
                 if (!sock.Poll((int)(wait * 1000000), SelectMode.SelectRead)) return;
                 EndPoint from = new IPEndPoint(IPAddress.Any, 0);
-                int n = sock.ReceiveFrom(buf, ref from);
-                if (n > MdnsPacket.MaxPacket) return;
+                SocketFlags flags = SocketFlags.None;
+                IPPacketInformation info;
+                int n = sock.ReceiveMessageFrom(buf, 0, buf.Length, ref flags, ref from, out info);
+                if (n > MdnsPacket.MaxPacket || (flags & SocketFlags.Truncated) != 0) return;
+                // Only what arrived on the LAN adapter (L3).
+                if (sockIndex >= 0 && info.Interface != sockIndex) return;
                 Send(responder.OnPacket(buf, n, from as IPEndPoint, Now));
             }
             catch (SocketException) { }
@@ -190,7 +242,7 @@ namespace Domovoi.Windows.Host
             lock (gate) { shot = s; shotAddress = s.Claimed != null ? address : null; }
         }
 
-        string OpenSocket(string address)
+        string OpenSocket(NicPick nic)
         {
             CloseSocket();
             var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -199,10 +251,11 @@ namespace Domovoi.Windows.Host
                 s.ExclusiveAddressUse = false;
                 s.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 // An ICMP "port unreachable" for a legacy-unicast answer would
-                // otherwise fail the next ReceiveFrom.
+                // otherwise fail the next receive.
                 try { s.IOControl(SioUdpConnReset, new byte[4], null); } catch (SocketException) { }
+                s.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.PacketInformation, true);
                 s.Bind(new IPEndPoint(IPAddress.Any, MdnsPacket.Port));
-                IPAddress local = IPAddress.Parse(address);
+                IPAddress local = IPAddress.Parse(nic.Address);
                 s.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, new MulticastOption(IPAddress.Parse(MdnsPacket.Group), local));
                 s.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, local.GetAddressBytes());
                 s.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
@@ -214,8 +267,9 @@ namespace Domovoi.Windows.Host
                 return e.Message;
             }
             sock = s;
-            sockAddress = address;
-            log("network name: listening on UDP 5353 on " + address);
+            sockAddress = nic.Address;
+            sockIndex = nic.Index > 0 ? nic.Index : -1;
+            log("network name: listening on UDP 5353 on " + nic.Address + " (" + nic.Name + ")");
             return null;
         }
 
@@ -227,20 +281,12 @@ namespace Domovoi.Windows.Host
                 sock = null;
             }
             sockAddress = null;
-        }
-
-        void RefreshOwn()
-        {
-            if (DateTime.UtcNow - ownAt < TimeSpan.FromSeconds(60)) return;
-            ownAt = DateTime.UtcNow;
-            var l = new List<byte[]>();
-            foreach (NicFacts n in Nics()) foreach (string a in n.Addresses) l.Add(IPAddress.Parse(a).GetAddressBytes());
-            own = l;
+            sockIndex = -1;
         }
 
         // The address Windows picks for a route out (nothing is sent),
-        // announced only on a real adapter that holds it.
-        public static string LanAddress()
+        // announced only on an Ethernet or Wi-Fi adapter that holds it.
+        public static NicPick LanNic()
         {
             string route = null;
             using (var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
@@ -252,7 +298,13 @@ namespace Domovoi.Windows.Host
                 }
                 catch (SocketException) { route = null; }
             }
-            return MdnsAdapter.Pick(Nics(), route);
+            return MdnsAdapter.PickNic(Nics(), route);
+        }
+
+        static bool IsLanType(NetworkInterfaceType t)
+        {
+            return t == NetworkInterfaceType.Ethernet || t == NetworkInterfaceType.GigabitEthernet || t == NetworkInterfaceType.FastEthernetT
+                || t == NetworkInterfaceType.FastEthernetFx || t == NetworkInterfaceType.Ethernet3Megabit || t == NetworkInterfaceType.Wireless80211;
         }
 
         public static List<NicFacts> Nics()
@@ -270,14 +322,24 @@ namespace Domovoi.Windows.Host
                     Up = n.OperationalStatus == OperationalStatus.Up,
                     LoopbackOrTunnel = n.NetworkInterfaceType == NetworkInterfaceType.Loopback || n.NetworkInterfaceType == NetworkInterfaceType.Tunnel
                         || n.NetworkInterfaceType == NetworkInterfaceType.Ppp,
+                    LanType = IsLanType(n.NetworkInterfaceType),
                 };
                 try
                 {
                     IPInterfaceProperties p = n.GetIPProperties();
+                    try { IPv4InterfaceProperties v4 = p.GetIPv4Properties(); if (v4 != null) f.Index = v4.Index; }
+                    catch (NetworkInformationException) { }
                     foreach (GatewayIPAddressInformation g in p.GatewayAddresses)
                         if (g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any)) f.HasGateway = true;
                     foreach (UnicastIPAddressInformation u in p.UnicastAddresses)
-                        if (u.Address.AddressFamily == AddressFamily.InterNetwork) f.Addresses.Add(u.Address.ToString());
+                    {
+                        if (u.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                        f.Addresses.Add(u.Address.ToString());
+                        int prefix = 0;
+                        try { if (u.IPv4Mask != null) prefix = Lan.PrefixFromMask(u.IPv4Mask.ToString()); }
+                        catch (ArgumentException) { prefix = 0; }
+                        f.Prefixes.Add(prefix);
+                    }
                 }
                 catch (NetworkInformationException) { continue; }
                 list.Add(f);
