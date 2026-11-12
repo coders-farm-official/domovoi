@@ -28,7 +28,20 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
         house.install()
     }
 
+    /// Every player a case built, so its room poll is stopped when the case
+    /// ends: a refusal leaves the phone casting, and a poll left running reads
+    /// `now-playing` into the next case's house two seconds later.
+    private var built: [PlayerHarness] = []
+
+    private func harness() -> PlayerHarness {
+        let h = PlayerHarness()
+        built.append(h)
+        return h
+    }
+
     override func tearDown() {
+        for h in built { h.model.detachForRoomMode() }
+        built = []
         house.releaseAll()
         StubURLProtocol.reset()
         PlayerMicArbiter.shared.reset()
@@ -49,7 +62,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     // MARK: - on the phone
 
     func testOnThePhoneItStopsEmptiesTheQueueAndClosesThePlayer() async {
-        let h = PlayerHarness()
+        let h = harness()
         h.model.play(three, startAt: 1)
         XCTAssertTrue(h.model.isPlaying)
 
@@ -73,7 +86,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     /// queue and target are still the room's — and only once the room has
     /// said it stopped is the room let go of and the queue emptied.
     func testWhileCastingItStopsTheRoomThenClears() async {
-        let h = PlayerHarness()
+        let h = harness()
         await castingToOffice(h)
         house.hold("/api/music/stop/office")
 
@@ -108,7 +121,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     /// A room that refuses keeps everything: the target, the queue, the poll
     /// — the player stays up, and the caller says so.
     func testARoomThatRefusesTheStopChangesNothing() async {
-        let h = PlayerHarness()
+        let h = harness()
         await castingToOffice(h)
         house.failing.set(["/api/music/stop/office": 502])
 
@@ -123,7 +136,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
 
     /// A 2xx that says `ok: false` is a no as well (`roomActionNow`).
     func testARoomThatSaysItDidNotStopKeepsThePlayerToo() async {
-        let h = PlayerHarness()
+        let h = harness()
         await castingToOffice(h)
         house.answers.set(["/api/music/stop/office": #"{"ok":false}"#])
 
@@ -136,7 +149,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
 
     /// The player tab's model says the web's sentence, through the adapter.
     func testTheTabSaysTheRoomCouldNotBeStopped() async {
-        let h = PlayerHarness()
+        let h = harness()
         await castingToOffice(h)
         house.failing.set(["/api/music/stop/office": 502])
         let tab = MusicLocalQueueModel(deviceID: "phone-1")
@@ -150,7 +163,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     }
 
     func testTheTabClosesThroughTheAdapter() async {
-        let h = PlayerHarness()
+        let h = harness()
         h.model.play(three)
         let tab = MusicLocalQueueModel(deviceID: "phone-1")
         tab.use(PlayerModelMusicEngine(h.model))
@@ -167,7 +180,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     /// A play here that lands **while the room's answer is on its way** owns
     /// the queue by the time it comes: the stop's answer must not wipe it.
     func testAPlayHereDuringTheStopIsKept() async {
-        let h = PlayerHarness()
+        let h = harness()
         await castingToOffice(h)
         house.hold("/api/music/stop/office")
 
@@ -186,7 +199,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     /// cast** on its way: the tap was about the queue before it, so nothing is
     /// stopped or cleared once the line moves.
     func testAPlayHereWhileTheCloseWaitsBehindACastIsKept() async {
-        let h = PlayerHarness()
+        let h = harness()
         h.model.play(three)
         house.hold("/api/music/play-tracks")
 
@@ -210,7 +223,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     /// **that cast lands on** — not the phone's queue from under a room left
     /// playing with nothing watching it.
     func testTheCloseWaitsForACastOnItsWayAndStopsThatRoom() async {
-        let h = PlayerHarness()
+        let h = harness()
         h.model.play(three)
         house.hold("/api/music/play-tracks")
 
@@ -233,7 +246,7 @@ final class PlayerModelStopAndCloseTests: XCTestCase {
     /// the old house's room, and the new house's player is not touched on its
     /// word — here the phone's own song, which the move kept, still plays.
     func testAStopAnsweredAfterTheAppMovedHouseLeavesTheNewHouseAlone() async {
-        let h = PlayerHarness()
+        let h = harness()
         let first = PlayerServerScope(address: "http://10.0.0.42:6369", fingerprint: "AA")
         let second = PlayerServerScope(address: "http://10.0.0.99:6369", fingerprint: "BB")
         h.model.serverChanged(to: first)
