@@ -350,10 +350,34 @@ const _deviceIdHeader = () => {
   } catch { return {}; }
 };
 
+// The claim key this browser was handed when it said "this is me" on a
+// person's People page (web/backend/api/devices.py): it proves this browser
+// is that person's when it acts as them (clearing their listening history).
+// Kept per server, like the household token; sent on every API call to that
+// server, never anywhere else. Only its hash is on the server.
+const CLAIM_KEY_HEADER = 'X-Domovoi-Claim-Key';
+const _claimKeyName = () => {
+  try { return (typeof Auth !== 'undefined' && Auth.perServerKey) ? Auth.perServerKey('domovoi-claim-key') : 'domovoi-claim-key'; }
+  catch { return 'domovoi-claim-key'; }
+};
+const ClaimKey = {
+  get: () => { try { return localStorage.getItem(_claimKeyName()) || null; } catch { return null; } },
+  set: (key) => {
+    try {
+      if (key) localStorage.setItem(_claimKeyName(), key);
+      else localStorage.removeItem(_claimKeyName());
+    } catch { /* no storage: this browser can't act as its person, and says so */ }
+  },
+};
+const _claimKeyHeader = () => {
+  const k = ClaimKey.get();
+  return k ? { [CLAIM_KEY_HEADER]: k } : {};
+};
+
 // Every header an /api call carries. Exported because a handful of callers
 // need a RAW fetch (streamed downloads with progress, uploads that report
 // bytes) and must send the same set these helpers do.
-const apiHeaders = () => ({ ..._authHeaders(), ..._deviceIdHeader(), ...REQUESTED_WITH });
+const apiHeaders = () => ({ ..._authHeaders(), ..._deviceIdHeader(), ..._claimKeyHeader(), ...REQUESTED_WITH });
 
 // Media the BROWSER fetches by URL — <img src>, <video src>, window.open —
 // can't carry a header, so the household device token rides in the query
@@ -1667,8 +1691,14 @@ const DeviceIdentity = (() => {
   const rememberOwner = (row) => {
     if (!row || !('owner_person_id' in row)) return;
     const next = row.owner_person_id != null
-      ? { id: Number(row.owner_person_id), name: row.owner_person_name || '' } : null;
+      ? { id: Number(row.owner_person_id), name: row.owner_person_name || '',
+          claimedAt: row.owner_claimed_at || null } : null;
     const before = owner();
+    // The claim key comes once, in the answer to the claim that made it.
+    // A device that is nobody's, or whose person changed without a new key
+    // (an admin set it), holds none: the old one no longer works.
+    if (row.claim_key) ClaimKey.set(row.claim_key);
+    else if (!next || (before && before.id !== next.id)) ClaimKey.set(null);
     lastOwner = next;
     try { localStorage.setItem(OWNER_KEY, JSON.stringify(next)); } catch {}
     if ((before && before.id) !== (next && next.id) || (before && before.name) !== (next && next.name)) {
@@ -1900,7 +1930,7 @@ Object.assign(window, {
   apiGet, apiPost, apiPatch, apiPut, apiDelete, deviceDownload,
   apiFetch, apiFetchRaw, apiUpload,
   apiHeaders, withDeviceToken,
-  stateBus, ServerStore, ServerRestart, DeviceIdentity, apiErrorText, isAuthFailure,
+  stateBus, ServerStore, ServerRestart, DeviceIdentity, ClaimKey, apiErrorText, isAuthFailure,
   mutationErrorText, reportMutationFailure, deviceBlockReason, clipSentence,
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,

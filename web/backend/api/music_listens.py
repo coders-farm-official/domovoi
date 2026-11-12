@@ -38,7 +38,7 @@ device's person's from then on (:func:`note_room_start`).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from uuid import UUID
 
@@ -121,24 +121,86 @@ def _player(platform: str | None) -> str:
     return p if p in ("android", "ios") else "browser"
 
 
+#: How many listens one device may add in a day. A phone playing music
+#: all day long logs a few hundred; past this a client is misbehaving or
+#: flooding, and the rest of the day's rows are dropped.
+DEVICE_DAILY_CAP = 3000
+#: Slack on the "no more played time than time passed" rule (clock
+#: rounding, a song's last second).
+PLAYED_SLACK_SEC = 60
+
+
+async def _recent_count(s: Any, device_id: str) -> int:
+    return int((
+        await s.execute(
+            text(
+                "SELECT COUNT(*) FROM music_listens WHERE device_id = :d "
+                "AND recorded_at > now() - interval '24 hours'"
+            ),
+            {"d": device_id},
+        )
+    ).scalar_one() or 0)
+
+
+def _aware(t: datetime) -> datetime:
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def _impossible_device(items: list[ListenIn], now: datetime) -> str | None:
+    """A device whose rows in this batch played longer, in total, than the
+    time since its earliest row began: one player can't do that. None when
+    every device's rows add up."""
+    by_device: dict[str, list[ListenIn]] = {}
+    for item in items:
+        by_device.setdefault(item.device_id, []).append(item)
+    for device_id, rows in by_device.items():
+        span = (now - min(_aware(r.started_at) for r in rows)).total_seconds()
+        if sum(r.played_sec for r in rows) > span + PLAYED_SLACK_SEC:
+            return device_id
+    return None
+
+
 @router.post("", dependencies=[Depends(require_device)])
 async def post_listens(body: ListensIn) -> dict[str, Any]:
     """Record a batch of a browser's or phone's listens. ``{accepted,
     dropped, recording}``: ``accepted`` the rows that were new, ``dropped``
-    the rest (too old, too far ahead, unknown song, already recorded),
-    ``recording`` false while the household keeps no listening history."""
+    the rest (too old, too far ahead, unknown song, already recorded, or
+    past the device's daily cap), ``recording`` false while the household
+    keeps no listening history.
+
+    Checked here, not taken on the player's word (review 2026-11-12): the
+    outcome is worked out again from the seconds played and the length
+    (only the player's "skipped" is kept: a skip is something only the
+    player saw); a shared screen's rows are the household's whatever person
+    they name; a batch in which one device played longer in total than the
+    time since its first song began is refused (422); and a device adds at
+    most ``DEVICE_DAILY_CAP`` listens a day."""
     keep = live_keep()
     if not music_listens.recording(keep):
         return {"accepted": 0, "dropped": len(body.listens), "recording": False}
     now = datetime.now(timezone.utc)
+    bad = _impossible_device(body.listens, now)
+    if bad is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{bad}: more seconds played than have passed since its first song began",
+        )
     async with session_scope() as s:
         devices = await _devices(s, {item.device_id for item in body.listens})
+        room_left: dict[str, int] = {}
+        for d in {item.device_id for item in body.listens}:
+            room_left[d] = max(0, DEVICE_DAILY_CAP - await _recent_count(s, d))
         rows = []
         for item in body.listens:
+            if room_left[item.device_id] <= 0:
+                continue
             owner, shared, platform = devices.get(item.device_id, (None, False, None))
-            person = None if item.as_household else item.listener_person_id
-            if person is None and not shared and not item.as_household:
-                person = owner
+            if shared or item.as_household:
+                # A shared screen is the household's: a "listening as" pick
+                # there is ignored.
+                person = None
+            else:
+                person = item.listener_person_id or owner
             row = music_listens.clean_listen(
                 {
                     "track_id": item.track_id,
@@ -151,12 +213,15 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
                     "started_at": item.started_at,
                     "played_sec": item.played_sec,
                     "duration_sec": item.duration_sec,
-                    "outcome": item.outcome,
+                    "outcome": music_listens.outcome_for(
+                        item.played_sec, item.duration_sec, item.outcome == "skipped",
+                    ),
                 },
                 now=now,
             )
             if row is not None:
                 rows.append(row)
+                room_left[item.device_id] -= 1
         accepted = await music_listens.insert_listens(s, rows)
     return {"accepted": accepted, "dropped": len(body.listens) - accepted, "recording": True}
 
@@ -182,13 +247,25 @@ async def get_summary() -> dict[str, Any]:
 NOT_YOURS_DETAIL = (
     "only {name}'s own phone or browser, or an admin, can clear {name}'s listening history"
 )
+#: After a device says "this is me", clearing that person's history from it
+#: waits this long; until then it is an admin's (review 2026-11-12: claiming
+#: an unclaimed person is easy on purpose, so a claim alone must not be
+#: enough to wipe their history at once).
+FRESH_CLAIM = timedelta(minutes=10)
+FRESH_CLAIM_DETAIL = (
+    "this phone or browser said it was {name}'s less than 10 minutes ago, so "
+    "until then only an admin can clear {name}'s listening history"
+)
 
 
 @router.delete("/people/{person_id}", dependencies=[Depends(require_device)])
 async def clear_person(person_id: int, request: Request) -> dict[str, Any]:
-    """Clear one person's listening history. An admin, or a phone or
-    browser claimed as that person that isn't a shared screen; ``{deleted}``.
-    404 for a person nobody has; 403 (naming who may) for anyone else."""
+    """Clear one person's listening history: ``{deleted}``. An admin, or
+    a phone or browser claimed as that person that isn't a shared screen,
+    proves it with its claim key (``X-Domovoi-Claim-Key``, compared in
+    constant time) and claimed more than 10 minutes ago. 404 for a person
+    nobody has; 403, saying why and who may, for anything else (the
+    dashboard answers it with the admin sign-in)."""
     admin = await devices_api.caller_is_admin(request)
     caller = devices_api.caller_device(request)
     async with session_scope() as s:
@@ -197,20 +274,28 @@ async def clear_person(person_id: int, request: Request) -> dict[str, Any]:
         ).first()
         if person is None:
             raise HTTPException(status_code=404, detail=f"person {person_id} not found")
+        name = person[0]
         if not admin:
             device = (
                 await s.execute(
                     text(
-                        "SELECT owner_person_id, shared_screen FROM devices WHERE device_id = :id"
+                        "SELECT owner_person_id, shared_screen, claim_key_hash, owner_claimed_at "
+                        "FROM devices WHERE device_id = :id"
                     ),
                     {"id": caller},
                 )
             ).first() if caller else None
-            mine = device is not None and device[0] == person_id and not device[1]
-            if not mine:
+            if device is None or device[0] != person_id or device[1]:
+                raise HTTPException(status_code=403, detail=NOT_YOURS_DETAIL.format(name=name))
+            if not device[2]:
                 raise HTTPException(
-                    status_code=403, detail=NOT_YOURS_DETAIL.format(name=person[0]),
-                )
+                    status_code=403, detail=devices_api.RECLAIM_DETAIL.format(name=name))
+            if not devices_api.claim_key_matches(device[2], devices_api.presented_claim_key(request)):
+                raise HTTPException(
+                    status_code=403, detail=devices_api.WRONG_KEY_DETAIL.format(name=name))
+            claimed = device[3]
+            if claimed is None or claimed > datetime.now(timezone.utc) - FRESH_CLAIM:
+                raise HTTPException(status_code=403, detail=FRESH_CLAIM_DETAIL.format(name=name))
         deleted = await music_listens.delete_person(s, person_id)
     log.info("listening history: %d listen%s of person %s cleared (%s)",
              deleted, "" if deleted == 1 else "s", person_id, "admin" if admin else "their device")

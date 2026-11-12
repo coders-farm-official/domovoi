@@ -46,6 +46,20 @@
 -- on every start. ON DELETE SET NULL: forgetting a person makes their room
 -- the household's.
 --
+-- ── devices.claim_key_hash, devices.owner_claimed_at ───────────────────
+--
+-- "This is me" (devices.owner_person_id, V035) lets a phone or browser act
+-- as its person: clear that person's listening history (favourites later).
+-- A device id is self-asserted, so acting as the person needs more than the
+-- id: when the device ITSELF claims a person it is handed a claim key once
+-- (web/backend/api/devices.py), and only the key's SHA-256 is kept here.
+-- The person's own actions must present the key (X-Domovoi-Claim-Key). An
+-- admin setting or clearing a device's person, marking it a shared screen,
+-- or the device letting go of its claim clears the hash. NULL on every row
+-- from before (a V035 claim): such a device says "this is me" again.
+-- owner_claimed_at: when the device last claimed (a person's history can
+-- only be cleared by an admin in the first 10 minutes after a claim).
+
 -- IF NOT EXISTS throughout, so a test lane patched by hand takes it again
 -- cleanly. No semicolon or double dash inside a statement: the test kits
 -- split this file naively.
@@ -91,3 +105,6 @@ CREATE TABLE IF NOT EXISTS music_room_listeners (
     device_id  TEXT,
     set_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
+
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS claim_key_hash TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS owner_claimed_at TIMESTAMPTZ;

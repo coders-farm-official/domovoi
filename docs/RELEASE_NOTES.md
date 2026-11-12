@@ -28,15 +28,20 @@ docs/SECURITY_PRIVACY.md, "Listening history".
 
 **"This is me."** On People, a person's page has **this is me** for the
 phone or browser in your hand: what it plays then counts as that person's,
-and that person can **clear** their own listening history from it. A
-browser that isn't theirs asks for the admin password instead, or offers
-"this is me" first. The first phone or browser to claim a person needs no
+and that person can **clear** their own listening history from it, from
+10 minutes after the claim (an admin can at any time). A browser that isn't
+theirs asks for the admin password instead. Saying "this is me" hands the
+device a **claim key** (kept in the browser's storage; only its hash on the
+server) that it must show to act as that person; a phone or browser that
+was marked as someone's before this update says "this is me" again once. The first phone or browser to claim a person needs no
 password; a second one, or changing another device's person, needs an
 admin (Settings → Phones & browsers → Known devices has a **person**
 column). A shared screen can't be anyone's, and marking a device shared
 drops its person. The Android app's "This phone belongs to" follows the
 same rule: a phone that names a person another device already has
-registers as before but stays unclaimed until an admin says yes.
+registers as before but stays unclaimed until an admin says yes. Room queues no longer show
+the adding device's id to anyone but an admin (`added_by_device_id`; the
+name is still shown).
 
 ## 2026-11-12 — a playlist plays in this browser
 

@@ -216,15 +216,37 @@ async def set_room_listener(
     )
 
 
-async def room_listener(session: Any, room_id: str) -> int | None:
-    """The person ``room_id``'s music is for, or None (the household)."""
+async def room_listener(
+    session: Any, room_id: str, *, since: datetime | None = None,
+) -> int | None:
+    """The person ``room_id``'s music is for, or None (the household).
+
+    ``since``: when the room last stopped. A record from before that is
+    about music that has since ended, so it is ignored (the household):
+    a room someone started yesterday is not theirs today because nobody
+    said otherwise (review 2026-11-12)."""
     row = (
         await session.execute(
-            text("SELECT person_id FROM music_room_listeners WHERE room_id = :room"),
+            text("SELECT person_id, set_at FROM music_room_listeners WHERE room_id = :room"),
             {"room": room_id},
         )
     ).first()
-    return int(row[0]) if row is not None and row[0] is not None else None
+    if row is None or row[0] is None:
+        return None
+    if since is not None and row[1] is not None and row[1] < since:
+        return None
+    return int(row[0])
+
+
+async def forget_room_listener(session: Any, room_id: str, *, before: datetime) -> int:
+    """A room stopped long enough: whose its music was (recorded before
+    ``before``) is forgotten, and the room is the household's until someone
+    starts music there again."""
+    result = await session.execute(
+        text("DELETE FROM music_room_listeners WHERE room_id = :room AND set_at < :before"),
+        {"room": room_id, "before": before},
+    )
+    return result.rowcount or 0
 
 
 async def note_voice_start(room_id: str | None, person_id: int | None) -> None:
@@ -312,6 +334,8 @@ async def summary(session: Any) -> dict[str, Any]:
 # ─── The setting's save (core) ───────────────────────────────────────────
 
 _PRUNE_TASKS: set[asyncio.Task] = set()
+#: Under "Don't keep", the second prune after a save (see schedule_prune_now).
+SECOND_PRUNE_AFTER_SEC = 60.0
 
 
 def schedule_prune_now() -> None:
@@ -321,7 +345,7 @@ def schedule_prune_now() -> None:
     it on its next tick anyway."""
     from domovoi.config import settings
 
-    async def _run() -> None:
+    async def _once() -> None:
         try:
             from domovoi.db.session import session_scope
 
@@ -331,6 +355,17 @@ def schedule_prune_now() -> None:
                 log.info("listening history: %d listen%s deleted on save", n, "" if n == 1 else "s")
         except Exception as e:  # noqa: BLE001
             log.warning("listening history: prune on save failed: %s", e)
+
+    async def _run() -> None:
+        await _once()
+        if not recording(settings.music_listens_keep):
+            # "Don't keep": a player that was mid-batch when the setting was
+            # saved (a phone's outbox, a browser's flush already accepted
+            # before the web saw the new value) may still land rows. Prune
+            # once more a minute later (review 2026-11-12).
+            await asyncio.sleep(SECOND_PRUNE_AFTER_SEC)
+            if not recording(settings.music_listens_keep):
+                await _once()
 
     try:
         task = asyncio.get_running_loop().create_task(_run())

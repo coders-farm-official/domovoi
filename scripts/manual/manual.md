@@ -1793,8 +1793,9 @@ each room's **Conversations** tab.
   at once. People, voice samples, memories, notes, timers and chats stay.
 - Clear your own listening history: your name on
   [Settings → Household → People](#settings/people) → **listening history**
-  → **clear**. On a phone or browser that isn't yours, it asks for the admin
-  password, or lets you say **this is me** first.
+  → **clear**, from your own phone or browser, from 10 minutes after you
+  said **this is me** there. Anywhere else, or sooner, it asks for the admin
+  password.
 - *(admin)* [Settings → Privacy → Listening history](#settings/listening-history):
   **Keep listening history** for 1 year (the default), 90 days, or
   **Don't keep**; and **Delete all listening history**, for everyone.

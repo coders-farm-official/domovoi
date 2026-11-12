@@ -1351,7 +1351,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Command recordings for tuning** (audio of what was said in a room an admin opted in; see [below](#command-recordings-for-tuning-opt-in-per-room)) | Dashboard: `PUT` / `DELETE /api/captures/rooms/{room_id}` (turn a room on; turn it off, which deletes everything it kept), `PATCH` / `DELETE /api/captures/clips/{room_id}/{capture_id}` (label, delete one), and the reads `GET /api/captures` and `GET /api/captures/clips/{room_id}/{capture_id}/audio`. | **Fails closed** — 501 until setup, reads included. Reads and writes are Bearer-only (the dashboard cookie alone reads nothing here since 2026-10-14). The household token never reads these, unlike the rest of the household's speech. |
 | **Shared screens** (marks a device, such as the kitchen tablet, as one the whole household uses) | Dashboard: `PATCH /api/devices/{device_id}/shared-screen`; the flag reads back on `GET /api/devices` and on the device's own `POST /api/devices/register`. | Pre-setup grace. Admin tier, not the device tier the device's own rename takes, so the tablet's own household token cannot switch it back to personal. **Presentational, not a boundary, and a thin one.** The dashboard leaves personal content off a shared screen: calendar titles and locations, a reminder's text on Home and in the timer alert cards, the problem detail on Home, and People, Chat, Files and News on every launcher. But the tablet is paired, so it can read everything Home hides that way — the calendar and the rooms are household reads (since 2026-10-08) it holds the credential for — and the rest is an **open read** that anyone on the network can fetch with no credential at all (`/api/health`, `/api/plugins`). A reminder's words are the exception since 2026-09-30: every open timer read masks them for a caller without a household credential (rule M1, [Timers and reminders](#timers-and-reminders-house-wide)) — but the shared screen IS paired, so it receives them (and the `/ws/state` push carries them) and hides them only on screen. The pages dropped from the launchers still open by URL, and the tablet is paired, so it can read every device-tier page too (chat threads, files). Home also never masks a browser that can't register: an unpaired browser, **including a private window on the tablet itself**, gets the full Home. And the flag hangs off a **self-asserted device id** that the browser keeps in its own storage (`domovoi-client-id`). Clearing the tablet's site data, or registering under a new id, gives an unmarked device until an admin marks it again. A device that already holds the flag learns a change within about two minutes. The Android app applies the same masking to its own Home and launchers, from the same register answer, with the same limits: its device id lives in the app's own storage, an app that can't register (unpaired, on a claimed box) is never masked, and a web backend too old to send the flag is taken as "not shared". Enforcement would take a restricted display pairing of its own, which this is not. |
-| **Listening history: delete all; another person's clear; another device's person** (2026-11-12) | Dashboard: `POST /api/music/listens/delete-all` (security tier); `DELETE /api/music/listens/people/{id}` and `PUT /api/devices/{device_id}/person` are device tier with the person's own device allowed too (see [Listening history](#listening-history-whats-kept-for-how-long-who-clears-it)). | Delete-all **fails closed** (501); the other two keep the pre-setup grace (before setup everyone is the admin). |
+| **Listening history: delete all; another person's clear; another device's person** (2026-11-12) | Dashboard: `POST /api/music/listens/delete-all` (security tier); `DELETE /api/music/listens/people/{id}` and `PUT /api/devices/{device_id}/person` are device tier, with the person's own device allowed too when it presents its claim key (see [Listening history](#listening-history-whats-kept-for-how-long-who-clears-it)). | Delete-all **fails closed** (501); the other two keep the pre-setup grace: **before setup anyone on the LAN can set or clear any device's person and clear anyone's listening history** (everyone is the admin then). |
 | **Guest bans** (takes a playing room's queue and transport away from a guest, every room — 2026-10-10) | Dashboard: `POST /api/music/guest-bans`, `DELETE /api/music/guest-bans/{id}`; reads via `GET /api/music/guest-bans` and `GET /api/music/guests` (the guests seen in the last week). | Pre-setup grace (there are no guests before setup). Gated so a ban can't be lifted by the guest it bans — not because a ban is a security boundary (it isn't; see [Guests on a playing room](#guests-on-a-playing-room)). |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
 | **Documents: deleting one, or zipping a selection** (not saving one) | Dashboard: `POST /api/documents/delete` and `POST /api/documents/download-zip`. Everything else on that surface is **device tier**: the reads (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`, `/drawings/read`) AND the saves (`POST /api/documents/create`, `/upload`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`), and the same saves through `/api/files` when the target library is `core:documents`. | Pre-setup grace. Saving is a household action — a phone or a tablet writes a shopping list without the admin password (2026-09-24). Deleting is not, and neither is `/download-zip`: it is the one request that turns "can read the library" into "holds a copy of the library". |
@@ -1870,10 +1870,10 @@ Privacy → **Listening history** and each person's People page.
 | | |
 |---|---|
 | **What is recorded** | One row per **library song** a player played (`music_listens`): the song (by id; no title is copied), the room or the phone/browser id, which kind of player, when it started, how many seconds really played, its length, and how it ended (`finished` at 90 % or more, `skipped`, `stopped`), plus the person it was for, or nobody (the household). Streams, podcasts, audiobooks, radio and files outside the library are never recorded. No words anybody said, no address. |
-| **Who writes it** | **Rooms**: the core watches each room's music player every few seconds and writes a song when it ends; a skip from any skip path (voice "next", the dashboard's and the app's skip) marks it skipped. **Browsers and phones**: the player posts its own songs (`POST /api/music/listens`, household token), in batches, up to 7 days late from a phone that was offline; a batch sent twice lands once. |
-| **Whose a song is** | **A room's**: the person whose recognised voice last started music there (an unrecognised voice: the household), or the person the phone or browser that last replaced the room's queue is claimed by (`music_room_listeners`, one row per room). **A phone's or browser's**: the person picked in its "listening as", else the person the device is claimed by ("this is me", below), unless it is a shared screen, else the household. The "listening as" pick and every device id are **self-asserted** within the household, exactly like the spoken-audio resume positions: the household tier trusts the household, so a family member can file a song under someone else. Room queues and their "added by" stay household-visible; nothing here shows a person on a guest's screen. |
-| **How long** | **Keep listening history**: **1 year (the default)**, 90 days, or **Don't keep** (`MUSIC_LISTENS_KEEP`: `365`, `90`, `off`). The core deletes what is older every 6 hours and at once when the setting is saved (the page asks first when the new choice keeps less). **Don't keep** records nothing new and deletes everything kept; Up next then picks from the library alone. A value written in `.env` by hand never deletes more than asked: a number rounds up (30 keeps 90 days; 0 or more than a year keeps a year), and only `off` / `don't keep` / `none` / `no` turn it off; anything unreadable keeps a year, and the log says so once. |
-| **Each person clears their own** | People → a person → **listening history · clear** deletes that person's songs, everywhere (`DELETE /api/music/listens/people/{id}`). The server allows it to **an admin** (Bearer, or a box before setup) and to **a phone or browser claimed as that person** that is not a shared screen. Anyone else is refused (`403`, naming who may): the dashboard then offers the admin password, or "this is me" for this browser first (which itself needs an admin when the person already has another phone or browser). The household's songs and other people's stay. |
+| **Who writes it** | **Rooms**: the core watches each room's music player every few seconds and writes a song when it ends; a skip from any skip path (voice "next", the dashboard's and the app's skip) marks it skipped. **Browsers and phones**: the player posts its own songs (`POST /api/music/listens`, household token), in batches, up to 7 days late from a phone that was offline; a batch sent twice lands once. The server doesn't take the player's word for everything: it works the outcome out again from the seconds played and the length (only "skipped" is the player's), refuses a batch in which one device played longer in total than the time since its first song began, and drops a device's rows past 3,000 in a day. |
+| **Whose a song is** | **A room's**: the person whose recognised voice last started music there (an unrecognised voice: the household), or the person the phone or browser that last replaced the room's queue is claimed by (`music_room_listeners`, one row per room). That record holds only for the music it started: once the room stops, a song played after it is the household's until someone starts music again, and a room stopped for 30 minutes forgets it. **A phone's or browser's**: the person picked in its "listening as", else the person the device is claimed by ("this is me", below), else the household. **A shared screen's** are always the household's: a "listening as" pick there is ignored by the server, and the browser forgets a saved pick when it is marked shared. The "listening as" pick and every device id are **self-asserted** within the household, exactly like the spoken-audio resume positions: the household tier trusts the household, so a family member can file a song under someone else. Room queues and their "added by" stay household-visible; nothing here shows a person on a guest's screen. |
+| **How long** | **Keep listening history**: **1 year (the default)**, 90 days, or **Don't keep** (`MUSIC_LISTENS_KEEP`: `365`, `90`, `off`). The core deletes what is older every 6 hours and at once when the setting is saved (the page asks first when the new choice keeps less). **Don't keep** records nothing new and deletes everything kept, and prunes once more a minute after the save (a batch a player had on its way when the setting changed); Up next then picks from the library alone. A value written in `.env` by hand never deletes more than asked: a number rounds up (30 keeps 90 days; 0 or more than a year keeps a year), and only `off` / `don't keep` / `none` / `no` turn it off; anything unreadable keeps a year, and the log says so once. |
+| **Each person clears their own** | People → a person → **listening history · clear** deletes that person's songs, everywhere (`DELETE /api/music/listens/people/{id}`). The server allows it to **an admin** (Bearer, or a box before setup), and to **a phone or browser claimed as that person** that is not a shared screen, **presents its claim key** (below), and said "this is me" **more than 10 minutes ago**. Anything else is refused (`403`, saying why and who may) and the dashboard offers the admin password. The household's songs and other people's stay. |
 | **Deleting it all** | Settings → Privacy → Listening history → **Delete all listening history** (`POST /api/music/listens/delete-all`): every song, everyone's and the household's, from every room and device, and whose each room's music was. **Admin, security tier**: Bearer only, `501` before setup, like "Delete all voice history". |
 | **Forgetting a person** | Deletes their listening history with them (`ON DELETE CASCADE`), whichever way the person is forgotten; a room whose music was for them becomes the household's, and a phone or browser claimed as them becomes nobody's. |
 | **Who can read it** | `GET /api/music/listens/summary` (how long it is kept and how many songs each person has, never a song) is the **device read** tier, like the rest of the People page. No route returns the songs themselves yet; Up next (a later phase) reads them on the server. |
@@ -1888,30 +1888,52 @@ me**, or the app's "This phone belongs to"). What it plays is then that
 person's listening history (and, in a later phase, their favourites), and
 it may clear that person's history without the admin password. That second
 part is why a claim is not free for all. The rules, in one place
-(`claim_refusal` in `web/backend/api/devices.py`), also applied to the
-`owner_person_id` the Android app sends with every registration (where a
-refusal is quiet: the device registers and keeps the person it had):
+(`claim_decision` in `web/backend/api/devices.py`), also applied to the
+`owner_person_id` the Android app sends with a registration that changes it
+(where a refusal is quiet: the device registers and keeps the person it
+had; a registration that names the same person, or none, touches nothing):
 
 | Who asks | To do what | Answer |
 |---|---|---|
 | A guest (no household credential) | anything | `401` — the route is device tier |
 | A shared screen (`devices.shared_screen`) | claim anyone, even with an admin | `409` — a shared screen is nobody's; marking a device shared drops its person |
-| The device itself | claim a person **nobody** has claimed, or the one it already is | allowed |
-| The device itself | let go of its own claim, or switch to a person nobody has claimed | allowed |
+| The device itself, claimed by nobody | claim a person **nobody** has claimed | allowed; the answer carries its **claim key**, once |
+| The device itself, claimed | claim the same person again, let go, or switch to a person nobody has claimed | allowed **with its claim key** (`X-Domovoi-Claim-Key`); a new key on a claim, none after letting go. Without the key: `403` |
+| The device itself, claimed before keys (V035, or set by an admin) | say "this is me" again for the same person | allowed, and it gets a key; letting go or switching first: `403`, "say this is me again" |
 | The device itself | claim a person **another device already has** | `403` — an admin's yes (the dashboard opens the sign-in prompt and sends it again); so a person's second phone takes an admin once |
 | Any device | change **another** device's person (claim or release) | `403` — an admin's |
-| An admin (Bearer, or a box before setup) | set or clear any device's person (Settings → Phones & browsers → Known devices) | allowed, except on a shared screen |
+| An admin (Bearer) | set or clear any device's person (Settings → Phones & browsers → Known devices) | allowed, except on a shared screen; the device's claim key is wiped (it says "this is me" again to act as the person) |
+| Anyone on the LAN, **before first-run setup** | set or clear any device's person | allowed — before setup everyone is the admin, as on every surface that keeps the pre-setup grace |
 
-**What this does not stop.** "The device itself" means the id the request
-names itself by (the registration cookie, `X-Device-Id`,
-`X-Domovoi-Device-Id` or `?device_id=`), and device ids are self-asserted
-within the household like everywhere else on the `devices` table. Someone
-holding the household token who copies a claimed device's id can act as
-that device, and so clear its person's listening history or attribute songs
-to them. The rules stop a slip and a casual grab (the first claim wins; a
-second needs an admin), not a determined household member. Binding a claim
-to a secret only the claiming device holds would close that; it is not
-built (see the hardening backlog).
+**The claim key.** A device id is self-asserted within the household (the
+registration cookie, `X-Device-Id`, `X-Domovoi-Device-Id` or
+`?device_id=`), and the household could read other devices' ids (a room
+queue's entries carried the adding device's id until 2026-11-12; now only an
+admin's read does). So the id alone never lets a device act as its person.
+When the device itself says "this is me", the answer carries a **claim key**
+once (`secrets.token_urlsafe(32)`); the server keeps only its SHA-256
+(`devices.claim_key_hash`, V051) and compares a presented key in constant
+time. The browser keeps it in its storage, per server, and sends it on its
+API calls; the app keeps it in its own storage. Acting as the person —
+clearing their listening history, switching or letting go of the claim,
+later their favourites — needs it; an admin doesn't. A new claim issues a
+new key; an admin setting or clearing the device's person, marking it a
+shared screen, or the device letting go wipes it. A claim and an admin
+marking the device shared at the same moment take turns (the device row is
+locked, and the write refuses a shared screen).
+
+**What this still allows.** Claiming a person **nobody has claimed** stays
+easy on purpose (owner decision 2026-11-12: "this is me" should just work).
+So any household device can claim, for example, a child or anyone else who
+only uses voice and never claimed a phone, and after 10 minutes clear that
+person's listening history. The 10 minutes is the brake: within them only
+an admin can clear it, so a claim made to wipe someone's history at once
+doesn't; after them it is a household member deleting another's music
+history, visible on the People page (the device shows as theirs). Whoever
+can read a device's own storage (the browser's site data, the phone's app
+data) holds its key. Song attribution (a "listening as" pick, a room's
+starter) stays self-asserted: a household member can still file songs under
+someone else.
 
 ## Command recordings for tuning (opt-in per room)
 
@@ -4187,22 +4209,24 @@ the question. Its spoken replies come from the phone's own voice, opened
 without asking the server for anything. Debug builds alone can be fed test
 audio in place of the microphone, from the app's private storage.
 
-### 2. "This is me" rides a self-asserted device id
+### 2. "This is me": anyone may claim a person nobody has claimed
 
-A phone or browser claimed as a person (2026-11-12) may clear that
-person's listening history and files the songs it plays under them. The
-claim is checked against the id the request names itself by, which within
-the household is self-asserted ([Whose phone or browser this is](#whose-phone-or-browser-this-is-this-is-me)).
+A phone or browser claimed as a person (2026-11-12) files the songs it
+plays under them and, holding its claim key, may clear their listening
+history ([Whose phone or browser this is](#whose-phone-or-browser-this-is-this-is-me)).
+The key closed the copied-device-id hole; what stays open is the first
+claim itself, which needs no password by the owner's choice.
 
-**Risk accepted:** a household member holding the household token who
-copies a claimed device's id can clear that person's listening history or
-file songs under them. Nothing else rides on a claim yet.
+**Risk accepted:** any household device can claim a person nobody has
+claimed yet — a child, or anyone who only uses voice — and 10 minutes later
+clear their listening history from it. Song attribution ("listening as", a
+room's starter) stays self-asserted.
 
-**Until it lands:** an admin can see and change every device's person in
-Settings → Phones & browsers → Known devices. The fix, if later phases hang
-more on a claim (per-person favourites are next), is a claim key: minted to
-the claiming device once, kept only as a hash, and required for the
-person's own actions.
+**Until it lands:** the People page shows whose each device is, and an
+admin can see and change every device's person in Settings → Phones &
+browsers → Known devices (which wipes that device's key). If later phases
+hang more on a claim than listening history and favourites, the next step
+is an admin's yes for the first claim of a person, too.
 
 ---
 

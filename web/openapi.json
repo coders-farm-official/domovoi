@@ -2648,7 +2648,7 @@
           "music"
         ],
         "summary": "Post Listens",
-        "description": "Record a batch of a browser's or phone's listens. ``{accepted,\ndropped, recording}``: ``accepted`` the rows that were new, ``dropped``\nthe rest (too old, too far ahead, unknown song, already recorded),\n``recording`` false while the household keeps no listening history.",
+        "description": "Record a batch of a browser's or phone's listens. ``{accepted,\ndropped, recording}``: ``accepted`` the rows that were new, ``dropped``\nthe rest (too old, too far ahead, unknown song, already recorded, or\npast the device's daily cap), ``recording`` false while the household\nkeeps no listening history.\n\nChecked here, not taken on the player's word (review 2026-11-12): the\noutcome is worked out again from the seconds played and the length\n(only the player's \"skipped\" is kept: a skip is something only the\nplayer saw); a shared screen's rows are the household's whatever person\nthey name; a batch in which one device played longer in total than the\ntime since its first song began is refused (422); and a device adds at\nmost ``DEVICE_DAILY_CAP`` listens a day.",
         "operationId": "post_listens_api_music_listens_post",
         "requestBody": {
           "content": {
@@ -2716,7 +2716,7 @@
           "music"
         ],
         "summary": "Clear Person",
-        "description": "Clear one person's listening history. An admin, or a phone or\nbrowser claimed as that person that isn't a shared screen; ``{deleted}``.\n404 for a person nobody has; 403 (naming who may) for anyone else.",
+        "description": "Clear one person's listening history: ``{deleted}``. An admin, or\na phone or browser claimed as that person that isn't a shared screen,\nproves it with its claim key (``X-Domovoi-Claim-Key``, compared in\nconstant time) and claimed more than 10 minutes ago. 404 for a person\nnobody has; 403, saying why and who may, for anything else (the\ndashboard answers it with the admin sign-in).",
         "operationId": "clear_person_api_music_listens_people__person_id__delete",
         "parameters": [
           {
@@ -3480,7 +3480,7 @@
           "devices"
         ],
         "summary": "Set Device Person",
-        "description": "\"This is me\": set the person this phone or browser is, or\n``person_id: null`` for nobody in particular. Device tier, with the\nclaim rules on top (:func:`claim_refusal`, the module docstring): the\ndevice itself may claim a person nobody has claimed yet and release its\nown claim; anything else is an admin's. 403 names what an admin can do\n(the dashboard answers it with the sign-in prompt and sends it again),\n409 a shared screen, 404 an unknown device or person, 503 a database\nwithout V035.",
+        "description": "\"This is me\": set the person this phone or browser is, or\n``person_id: null`` for nobody in particular. Device tier, with the\nclaim rules on top (:func:`claim_decision`, the module docstring): the\ndevice itself may claim a person nobody has claimed yet and release its\nown claim; anything else is an admin's. 403 names what an admin can do\n(the dashboard answers it with the sign-in prompt and sends it again),\n409 a shared screen, 404 an unknown device or person, 503 a database\nwithout V035.",
         "operationId": "set_device_person_api_devices__device_id__person_put",
         "parameters": [
           {
@@ -21090,6 +21090,20 @@
               }
             ],
             "title": "Owner Person Name"
+          },
+          "owner_claimed_at": {
+            "title": "Owner Claimed At"
+          },
+          "claim_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Key"
           }
         },
         "type": "object",

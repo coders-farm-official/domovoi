@@ -255,11 +255,28 @@ const peopleSignedInAsAdmin = () => {
 
 const songsWord = (n) => `${n} song${n === 1 ? '' : 's'}`;
 
+/* Whether this browser can act as its person: it holds the claim key the
+ * server handed it when it said "this is me" (data.js ClaimKey). A claim
+ * from before keys, or one whose key this browser lost, can't. */
+const peopleHoldsClaimKey = () => {
+  try { return !!(typeof ClaimKey !== 'undefined' && ClaimKey.get()); } catch { return false; }
+};
+
+/* The first 10 minutes after "this is me": clearing the person's history
+ * from this browser is an admin's until then (the server's rule too). */
+const PEOPLE_FRESH_CLAIM_MS = 10 * 60 * 1000;
+const peopleClaimIsFresh = (owner) => {
+  if (!owner || !owner.claimedAt) return true;
+  const t = Date.parse(owner.claimedAt);
+  return !Number.isFinite(t) || Date.now() - t < PEOPLE_FRESH_CLAIM_MS;
+};
+
 const PersonThisBrowser = ({ person, fire, onChanged }) => {
   const owner = usePeopleDeviceOwner();
   const shared = useSharedScreen();
   const [busy, setBusy] = React.useState(false);
   const mine = !!owner && owner.id === person.id;
+  const proven = mine && peopleHoldsClaimKey();
   const elsewhere = Math.max(0, (person.device_count || 0) - (mine ? 1 : 0));
 
   const claim = async (pid) => {
@@ -277,6 +294,11 @@ const PersonThisBrowser = ({ person, fire, onChanged }) => {
   let action = null;
   if (shared) {
     line = 'This is a shared screen, so it isn’t anyone’s: what plays here counts for the whole household.';
+  } else if (mine && !proven) {
+    // A claim from before claim keys (or this browser lost its key): saying
+    // "this is me" again is how it gets one.
+    line = `This browser is ${person.name}’s, but it can’t prove it yet. Say “this is me” again to act as ${person.name} here.`;
+    action = <Button variant="primary" icon="user-check" disabled={busy} onClick={() => claim(person.id)}>this is me</Button>;
   } else if (mine) {
     line = `This browser is ${person.name}’s. What plays here counts as ${person.name}’s listening, and ${person.name} can clear it from here.`;
     action = <Button icon="user-x" disabled={busy} onClick={() => claim(null)}>not me</Button>;
@@ -339,26 +361,18 @@ const PersonListening = ({ person, listens, fire, onChanged }) => {
   const row = data && (data.people || []).find((r) => r.person_id === person.id);
   const count = row ? row.listens : 0;
   const mine = !shared && !!owner && owner.id === person.id;
+  // This browser may clear it itself: it is the person's, holds its claim
+  // key, and said "this is me" more than 10 minutes ago (the server checks
+  // all three; an admin skips them).
+  const ownClear = mine && peopleHoldsClaimKey() && !peopleClaimIsFresh(owner);
   const off = data && data.keep === 'off';
 
-  const start = () => setAsk(mine || peopleSignedInAsAdmin() ? 'confirm' : 'who');
+  const start = () => setAsk(ownClear || peopleSignedInAsAdmin() ? 'confirm' : 'who');
   const signIn = async () => {
     setAsk(null);
     let ok = false;
     try { ok = await Auth.ensureLoggedIn(); } catch { ok = false; }
     if (ok) setAsk('confirm');
-  };
-  const claimFirst = async () => {
-    setBusy(true);
-    try {
-      await DeviceIdentity.setPerson(person.id);
-      fire(`this browser is ${person.name}’s now`);
-      onChanged();
-      setAsk('confirm');
-    } catch (e) {
-      setAsk(null);
-      reportMutationFailure(fire, 'claim', e);
-    } finally { setBusy(false); }
   };
   const clear = async () => {
     setBusy(true);
@@ -370,6 +384,13 @@ const PersonListening = ({ person, listens, fire, onChanged }) => {
       reportMutationFailure(fire, 'clear', e);
     } finally { setBusy(false); setAsk(null); }
   };
+
+  // Why this browser can't clear it itself, in one line.
+  const why = shared ? 'This is a shared screen, so it can’t be anyone’s.'
+    : mine && !peopleHoldsClaimKey() ? `This browser is ${person.name}’s but can’t prove it yet: say “this is me” again on this page.`
+    : mine ? `This browser said it was ${person.name}’s less than 10 minutes ago. Until then only an admin can clear it.`
+    : owner ? `This browser is ${owner.name}’s.`
+    : `If this is ${person.name}’s browser, say “this is me” on this page; from 10 minutes later ${person.name} can clear it from here.`;
 
   return (
     <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
@@ -392,23 +413,13 @@ const PersonListening = ({ person, listens, fire, onChanged }) => {
       {ask === 'who' && (
         <PeopleChoiceDialog title={`Clear ${person.name}’s listening history?`} icon="lock"
                             onCancel={() => setAsk(null)}
-                            actions={<>
-                              {!shared && !owner && (
-                                <Button icon="user-check" disabled={busy} onClick={claimFirst}>
-                                  this is me
-                                </Button>
-                              )}
+                            actions={
                               <Button variant="primary" icon="log-in" disabled={busy} onClick={signIn}>
                                 sign in as admin
                               </Button>
-                            </>}>
+                            }>
           <div>Each person clears their own. Only {person.name}’s own phone or browser, or an admin, can clear it.</div>
-          {shared ? <div>This is a shared screen, so it can’t be anyone’s.</div>
-            : owner ? <div>This browser is {owner.name}’s.</div>
-            : <div>
-                If this is {person.name}’s browser, say so with “this is me” first
-                {(person.device_count || 0) > 0 ? ` (${person.name} already has another phone or browser, so an admin has to say yes)` : ''}.
-              </div>}
+          <div>{why}</div>
         </PeopleChoiceDialog>
       )}
       {ask === 'confirm' && (

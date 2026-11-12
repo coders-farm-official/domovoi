@@ -955,7 +955,8 @@ async def test_web_guest_sees_guest_entries_but_no_household_device(web_side) ->
     async with _web(**{HEADER: DEVICE_TOKEN}) as c:
         household = (await c.get(f"/api/music/queue/{ACTIVE}")).json()
     assert [i["added_by"] for i in household["items"]] == ["Kitchen iPad", "a guest", None]
-    assert household["items"][0]["added_by_device_id"] == "android-kitchen"
+    # The device id is an admin's (2026-11-12); the household reads the name.
+    assert household["items"][0]["added_by_device_id"] is None
     assert household["guest"] is False
 
 
@@ -1335,12 +1336,13 @@ async def test_db_guest_provenance_and_names_round_trip(real_web_side) -> None:
     async with _web(**{HEADER: DEVICE_TOKEN}) as house:
         full = (await house.get(f"/api/music/queue/{ACTIVE}")).json()
     assert [i["added_by"] for i in full["items"]] == ["Kitchen iPad", "a guest"]
-    assert [i["added_by_device_id"] for i in full["items"]] == ["android-kitchen", None]
+    assert [i["added_by_device_id"] for i in full["items"]] == [None, None]   # an admin's
     assert all(i["guest_device_id"] is None for i in full["items"])   # not an admin
     async with _web(**bearer(ADMIN_TOKEN)) as admin:
         as_admin = (await admin.get(f"/api/music/queue/{ACTIVE}")).json()
     assert [(i["guest_device_id"], i["guest_source"]) for i in as_admin["items"]] == [
         (None, None), ("android-kitchen", "127.0.0.1")]
+    assert as_admin["items"][0]["added_by_device_id"] == "android-kitchen"
 
 
 @requires_db

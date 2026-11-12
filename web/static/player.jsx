@@ -322,7 +322,10 @@ const SpokenAudio = (() => {
     try { await apiPost(u.post, body); } catch {}
   };
 
-  return { clientId, getPerson, setPerson, explicitPerson, devicePerson,
+  // Forget the "listening as" pick (a device marked a shared screen).
+  const forgetPick = () => { try { localStorage.removeItem(PERSON_KEY); } catch {} };
+
+  return { clientId, getPerson, setPerson, explicitPerson, devicePerson, forgetPick,
            fetchPosition, savePosition };
 })();
 
@@ -366,7 +369,13 @@ const ListenLog = (() => {
   const save = (rows) => {
     try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(rows.slice(-OUTBOX_MAX))); } catch {}
   };
-  const dropSent = (n) => save(load().slice(n));
+  // Remove exactly the rows a flush sent, by their uid: a song that ended
+  // while that flush was on its way is not dropped with them.
+  const dropSent = (uids) => {
+    const gone = new Set(uids);
+    save(load().filter((r) => !gone.has(r.uid)));
+  };
+  const newUid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const outcome = (played, duration, skipped) => {
     if (duration > 0 && played >= FINISHED_SHARE * duration) return 'finished';
     return skipped ? 'skipped' : 'stopped';
@@ -401,11 +410,15 @@ const ListenLog = (() => {
     if (natural && duration > 0) played = Math.max(played, duration);
     if (duration > 0) played = Math.min(played, duration);
     const row = {
+      uid: newUid(),
       track_id: cur.trackId, device_id: DeviceIdentity.id(), started_at: cur.startedAt,
       played_sec: Math.round(played), outcome: outcome(played, duration, cur.skipped && !natural),
     };
     if (duration > 0) row.duration_sec = Math.round(duration);
-    const picked = SpokenAudio.explicitPerson();
+    // A shared screen's songs are the household's (the server says so too).
+    let shared = false;
+    try { shared = !!(DeviceIdentity.sharedScreen && DeviceIdentity.sharedScreen() === true); } catch {}
+    const picked = shared ? undefined : SpokenAudio.explicitPerson();
     if (picked === 'none') row.as_household = true;
     else if (picked !== undefined) row.listener_person_id = picked;
     cur = null;
@@ -431,16 +444,18 @@ const ListenLog = (() => {
     const rows = load();
     if (!rows.length) return;
     const batch = rows.slice(0, keepalive ? PAGEHIDE_BATCH : BATCH);
-    const body = JSON.stringify({ listens: batch });
+    const uids = batch.map((r) => r.uid);
+    // The uid is this outbox's own; the server isn't sent it.
+    const body = JSON.stringify({ listens: batch.map((r) => { const o = Object.assign({}, r); delete o.uid; return o; }) });
     sending = !keepalive;
     try {
       await apiFetch('/api/music/listens', { method: 'POST', body, noPrompt: true, keepalive });
-      dropSent(batch.length);
+      dropSent(uids);
       if (!keepalive && load().length) setTimeout(() => flush(), 1000);
     } catch (e) {
       const st = e && e.status;
       // A batch the server can't take as it is would fail forever: drop it.
-      if (st >= 400 && st < 500 && !KEPT_ERRORS.includes(st)) dropSent(batch.length);
+      if (st >= 400 && st < 500 && !KEPT_ERRORS.includes(st)) dropSent(uids);
     } finally { if (!keepalive) sending = false; }
   };
 
@@ -683,7 +698,11 @@ const PlaybackProvider = ({ children }) => {
   // this browser is ("this is me", People page) or that it is a shared
   // screen, "listening as" moves with it.
   React.useEffect(() => {
-    const sync = () => setListenerPersonIdState(SpokenAudio.getPerson());
+    const sync = () => {
+      // Marked a shared screen: a "listening as" pick saved here goes.
+      try { if (DeviceIdentity.sharedScreen && DeviceIdentity.sharedScreen() === true) SpokenAudio.forgetPick(); } catch {}
+      setListenerPersonIdState(SpokenAudio.getPerson());
+    };
     const offs = [];
     try {
       if (DeviceIdentity.subscribeOwner) offs.push(DeviceIdentity.subscribeOwner(sync));

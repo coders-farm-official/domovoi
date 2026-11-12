@@ -266,7 +266,7 @@ async def test_whose_a_listen_is(_db, clean) -> None:
             _listen(ids["t1"], "android-p1"),                                   # the claimed person
             _listen(ids["t2"], "android-p1", listener_person_id=ids["sam"]),    # listening as Sam
             _listen(ids["t1"], "browser-tab", played_sec=5),                    # shared screen: household
-            _listen(ids["t2"], "browser-tab", played_sec=6, listener_person_id=ids["sam"]),
+            _listen(ids["t2"], "browser-tab", played_sec=6, listener_person_id=ids["sam"]),  # ignored
             _listen(ids["t2"], "browser-new", played_sec=7, listener_person_id=4242),  # nobody: household
             _listen(ids["t1"], "android-p1", played_sec=8, as_household=True,   # lent out: household
                     started_at=(datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()),
@@ -275,7 +275,7 @@ async def test_whose_a_listen_is(_db, clean) -> None:
     rows = await _listens()
     assert [(r.device_id, r.person_id, r.player) for r in rows] == [
         ("android-p1", ids["alex"], "android"), ("android-p1", ids["sam"], "android"),
-        ("browser-tab", None, "browser"), ("browser-tab", ids["sam"], "browser"),
+        ("browser-tab", None, "browser"), ("browser-tab", None, "browser"),   # shared: pick ignored
         ("browser-new", None, "browser"), ("android-p1", None, "android")]
 
 
@@ -306,6 +306,20 @@ async def _insert(track, person, device="browser-x", room=None, ago_days=0.0):
              "ago": ago_days * 86400 + (person or 0) + (1 if room else 0)})
 
 
+KEY = "X-Domovoi-Claim-Key"
+
+
+def _k(key: str | None) -> dict:
+    return {KEY: key} if key else {}
+
+
+async def _age_claim(device_id: str, minutes: float = 11) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "UPDATE devices SET owner_claimed_at = now() - make_interval(mins => :m) "
+            "WHERE device_id = :d"), {"m": minutes, "d": device_id})
+
+
 @requires_db
 @pytest.mark.asyncio
 async def test_each_person_clears_their_own(_db, clean) -> None:
@@ -317,19 +331,30 @@ async def test_each_person_clears_their_own(_db, clean) -> None:
     async with _dev(token, "browser-alex") as alex, _dev(token, "browser-none") as nobody:
         await _register(alex, "browser-alex")
         await _register(nobody, "browser-none")
-        await alex.put("/api/devices/browser-alex/person", json={"person_id": ids["alex"]})
+        claimed = (await alex.put("/api/devices/browser-alex/person", json={"person_id": ids["alex"]})).json()
+        key = claimed["claim_key"]
+        assert key and len(key) >= 40
+        url = f"/api/music/listens/people/{ids['alex']}"
 
         # Not anyone's: refused, naming who may.
-        r = await nobody.delete(f"/api/music/listens/people/{ids['alex']}")
+        r = await nobody.delete(url)
         assert r.status_code == 403
         assert "only Alex's own phone or browser, or an admin" in r.json()["detail"]
         # Alex's device can't clear Sam's.
-        assert (await alex.delete(f"/api/music/listens/people/{ids['sam']}")).status_code == 403
-        # ...nor can it name itself as Alex's device from another id.
-        async with _dev(token, "browser-none") as pretend:
-            assert (await pretend.delete(f"/api/music/listens/people/{ids['alex']}")).status_code == 403
-        assert (await alex.delete("/api/music/listens/people/999")).status_code == 404
-        ok = await alex.delete(f"/api/music/listens/people/{ids['alex']}")
+        assert (await alex.delete(f"/api/music/listens/people/{ids['sam']}", headers=_k(key))).status_code == 403
+        # Within 10 minutes of the claim: an admin's, key or not.
+        r = await alex.delete(url, headers=_k(key))
+        assert r.status_code == 403 and "less than 10 minutes ago" in r.json()["detail"]
+        await _age_claim("browser-alex")
+        # Without the key, or with a wrong one: refused, saying why.
+        r = await alex.delete(url)
+        assert r.status_code == 403 and "can't prove" in r.json()["detail"]
+        assert (await alex.delete(url, headers=_k("x" * 43))).status_code == 403
+        # Copying Alex's device id AND key from another browser still needs both.
+        async with _dev(token, "browser-alex") as pretend:
+            assert (await pretend.delete(url)).status_code == 403
+        assert (await alex.delete("/api/music/listens/people/999", headers=_k(key))).status_code == 404
+        ok = await alex.delete(url, headers=_k(key))
         assert ok.status_code == 200 and ok.json() == {"deleted": 1}
     assert [r.person_id for r in await _listens()] == [ids["sam"], None]
     async with web_client(headers={"X-Requested-With": "t", **bearer(admin)}) as adm:
@@ -337,6 +362,114 @@ async def test_each_person_clears_their_own(_db, clean) -> None:
     assert [r.person_id for r in await _listens()] == [None]
     async with web_client() as anon:
         assert (await anon.delete(f"/api/music/listens/people/{ids['sam']}")).status_code == 401
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_claim_from_before_keys_says_this_is_me_again(_db, clean) -> None:
+    """A V035 claim (owner set, no key hash): acting as the person is refused
+    with "say this is me again"; saying it again for the same person mints a
+    key; switching or releasing first is refused."""
+    ids = await _seed()
+    _, token = await _setup_household()
+    async with _dev(token, "android-old") as phone:
+        await _register(phone, "android-old")
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "UPDATE devices SET owner_person_id = :p, owner_claimed_at = now() - interval '1 day' "
+                "WHERE device_id = 'android-old'"), {"p": ids["alex"]})
+        await _insert(ids["t1"], ids["alex"], device="android-old")
+        r = await phone.delete(f"/api/music/listens/people/{ids['alex']}")
+        assert r.status_code == 403 and "this is me" in r.json()["detail"]
+        r = await phone.put("/api/devices/android-old/person", json={"person_id": None})
+        assert r.status_code == 403 and "this is me" in r.json()["detail"]
+        r = await phone.put("/api/devices/android-old/person", json={"person_id": ids["sam"]})
+        assert r.status_code == 403
+        again = (await phone.put("/api/devices/android-old/person", json={"person_id": ids["alex"]})).json()
+        assert again["claim_key"] and again["owner_person_id"] == ids["alex"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_claim_keys(_db, clean) -> None:
+    ids = await _seed()
+    admin, token = await _setup_household()
+    alex, sam = ids["alex"], ids["sam"]
+
+    async def stored(device_id):
+        async with engine.begin() as conn:
+            return (await conn.execute(text(
+                "SELECT claim_key_hash, owner_claimed_at FROM devices WHERE device_id = :d"),
+                {"d": device_id})).first()
+
+    async with _dev(token, "browser-a") as a, \
+            web_client(headers={"X-Requested-With": "t", **bearer(admin)}) as adm:
+        await _register(a, "browser-a")
+        k1 = (await a.put("/api/devices/browser-a/person", json={"person_id": alex})).json()["claim_key"]
+        h1 = (await stored("browser-a"))[0]
+        # Only the hash is kept, and it is the key's SHA-256.
+        import hashlib
+        assert h1 == hashlib.sha256(k1.encode()).hexdigest() and k1 not in str(await stored("browser-a"))
+        # Never shown again: not on a plain registration, not on the roster.
+        again = await _register(a, "browser-a")
+        assert again["claim_key"] is None and (await stored("browser-a"))[0] == h1
+        assert all(d["claim_key"] is None for d in (await adm.get("/api/devices")).json())
+        # Re-claiming needs the key and issues a new one; the old one stops working.
+        assert (await a.put("/api/devices/browser-a/person", json={"person_id": alex})).status_code == 403
+        k2 = (await a.put("/api/devices/browser-a/person", json={"person_id": alex},
+                          headers=_k(k1))).json()["claim_key"]
+        assert k2 and k2 != k1
+        assert (await a.put("/api/devices/browser-a/person", json={"person_id": sam},
+                            headers=_k(k1))).status_code == 403
+        # Switching with the key works and mints; releasing wipes the hash.
+        k3 = (await a.put("/api/devices/browser-a/person", json={"person_id": sam},
+                          headers=_k(k2))).json()["claim_key"]
+        assert k3
+        r = await a.put("/api/devices/browser-a/person", json={"person_id": None}, headers=_k(k3))
+        assert r.status_code == 200 and r.json()["claim_key"] is None
+        assert tuple(await stored("browser-a")) == (None, None)
+        # An admin setting a device's person wipes any key.
+        k4 = (await a.put("/api/devices/browser-a/person", json={"person_id": alex})).json()["claim_key"]
+        assert k4
+        r = await adm.put("/api/devices/browser-a/person", json={"person_id": sam})
+        assert r.status_code == 200 and r.json()["claim_key"] is None
+        assert (await stored("browser-a"))[0] is None
+        # ...and so does marking it a shared screen.
+        await adm.put("/api/devices/browser-a/person", json={"person_id": None})
+        k5 = (await a.put("/api/devices/browser-a/person", json={"person_id": alex})).json()["claim_key"]
+        assert k5 and (await stored("browser-a"))[0]
+        await adm.patch("/api/devices/browser-a/shared-screen", json={"shared_screen": True})
+        assert tuple(await stored("browser-a")) == (None, None)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_claim_never_lands_on_a_shared_screen(_db, clean) -> None:
+    """The race: decided while the device wasn't shared, written after an
+    admin marked it. The write's `AND NOT shared_screen` refuses it."""
+    from web.backend.api import devices as devices_api
+    from web.backend.db import session_scope
+
+    ids = await _seed()
+    _, token = await _setup_household()
+    async with _dev(token, "browser-a") as a:
+        await _register(a, "browser-a")
+    async with session_scope() as s:
+        decision = await devices_api.claim_decision(
+            s, "browser-a", ids["alex"], admin=False, caller="browser-a", key=None)
+        assert decision.refusal is None and decision.mint
+    async with engine.begin() as conn:
+        await conn.execute(text("UPDATE devices SET shared_screen = TRUE WHERE device_id = 'browser-a'"))
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as e:
+        async with session_scope() as s:
+            await devices_api.apply_claim(s, "browser-a", ids["alex"], decision)
+    assert e.value.status_code == 409
+    async with engine.begin() as conn:
+        row = (await conn.execute(text(
+            "SELECT owner_person_id, claim_key_hash FROM devices WHERE device_id = 'browser-a'"))).first()
+    assert tuple(row) == (None, None)
 
 
 @requires_db
@@ -423,11 +556,14 @@ async def test_claim_rules_matrix(_db, clean) -> None:
         await _register(b, "browser-b")
         alex, sam = ids["alex"], ids["sam"]
 
-        # A person nobody has claimed: the device itself may.
+        # A person nobody has claimed: the device itself may (no key needed).
         r = await a.put("/api/devices/browser-a/person", json={"person_id": alex})
         assert r.status_code == 200 and r.json()["owner_person_name"] == "Alex"
-        # The one it already is: fine, again.
-        assert (await a.put("/api/devices/browser-a/person", json={"person_id": alex})).status_code == 200
+        ka = r.json()["claim_key"]
+        # The one it already is: fine again, with its key.
+        r = await a.put("/api/devices/browser-a/person", json={"person_id": alex}, headers=_k(ka))
+        assert r.status_code == 200
+        ka = r.json()["claim_key"]
         # A person another device has claimed: an admin's.
         r = await b.put("/api/devices/browser-b/person", json={"person_id": alex})
         assert r.status_code == 403 and "already claimed" in r.json()["detail"]
@@ -435,9 +571,15 @@ async def test_claim_rules_matrix(_db, clean) -> None:
         # Another device's person, claiming or releasing: an admin's.
         assert (await a.put("/api/devices/browser-b/person", json={"person_id": sam})).status_code == 403
         assert (await a.put("/api/devices/browser-b/person", json={"person_id": None})).status_code == 403
-        # Its own: releasing is always fine, and switching to someone unclaimed too.
-        assert (await b.put("/api/devices/browser-b/person", json={"person_id": None})).json()["owner_person_id"] is None
-        assert (await a.put("/api/devices/browser-a/person", json={"person_id": sam})).json()["owner_person_id"] == sam
+        # b was set by an admin, so it holds no key: it says "this is me"
+        # again before it can let go.
+        assert (await b.put("/api/devices/browser-b/person", json={"person_id": None})).status_code == 403
+        kb = (await b.put("/api/devices/browser-b/person", json={"person_id": alex})).json()["claim_key"]
+        r = await b.put("/api/devices/browser-b/person", json={"person_id": None}, headers=_k(kb))
+        assert r.json()["owner_person_id"] is None
+        # Its own, with its key: switching to someone unclaimed.
+        r = await a.put("/api/devices/browser-a/person", json={"person_id": sam}, headers=_k(ka))
+        assert r.json()["owner_person_id"] == sam
         # Unknown device / person.
         assert (await adm.put("/api/devices/browser-zz/person", json={"person_id": sam})).status_code == 404
         assert (await a.put("/api/devices/browser-a/person", json={"person_id": 999})).status_code == 404
@@ -462,13 +604,21 @@ async def test_registration_owner_follows_the_same_rules(_db, clean) -> None:
     async with _dev(token, "android-1") as p1, _dev(token, "android-2") as p2:
         first = await _register(p1, "android-1", owner_person_id=ids["alex"])
         assert first["owner_person_id"] == ids["alex"] and first["owner_person_name"] == "Alex"
+        key = first["claim_key"]
+        assert key   # a registration that claims hands out a key, once
         # A second phone saying Alex is refused quietly: it registers, unclaimed.
         second = await _register(p2, "android-2", owner_person_id=ids["alex"])
-        assert second["owner_person_id"] is None
-        # Registering again with its own person keeps it; null releases it.
-        assert (await _register(p1, "android-1", owner_person_id=ids["alex"]))["owner_person_id"] == ids["alex"]
+        assert second["owner_person_id"] is None and second["claim_key"] is None
+        # A plain registration (same person, or none sent) touches nothing.
+        same = await _register(p1, "android-1", owner_person_id=ids["alex"])
+        assert same["owner_person_id"] == ids["alex"] and same["claim_key"] is None
         assert (await _register(p1, "android-1"))["owner_person_id"] == ids["alex"]   # not sent: kept
-        assert (await _register(p1, "android-1", owner_person_id=None))["owner_person_id"] is None
+        # null without the key: refused quietly (an app sending null on every
+        # start can't undo a claim); with the key: released.
+        assert (await _register(p1, "android-1", owner_person_id=None))["owner_person_id"] == ids["alex"]
+        r = await p1.post("/api/devices/register", headers=_k(key),
+                          json={"device_id": "android-1", "platform": "browser", "owner_person_id": None})
+        assert r.json()["owner_person_id"] is None
 
 
 # ─── the rooms ───────────────────────────────────────────────────────────
@@ -659,3 +809,132 @@ async def test_two_devices_claiming_one_person_at_once_get_one_yes(_db, clean) -
             b.put("/api/devices/browser-b/person", json={"person_id": ids["alex"]}),
         )
     assert sorted([ra.status_code, rb.status_code]) == [200, 403]
+
+
+# ─── review fixes, 2026-11-12 ────────────────────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_server_works_out_the_outcome_and_ignores_a_shared_screens_pick(_db, clean) -> None:
+    ids = await _seed()
+    admin, token = await _setup_household()
+    async with _dev(token, "browser-tab") as tab, \
+            web_client(headers={"X-Requested-With": "t", **bearer(admin)}) as adm:
+        await _register(tab, "browser-tab")
+        await adm.patch("/api/devices/browser-tab/shared-screen", json={"shared_screen": True})
+        now = datetime.now(timezone.utc)
+        r = await tab.post("/api/music/listens", json={"listens": [
+            # says finished at 10 of 200 s: stopped
+            _listen(ids["t1"], "browser-tab", played_sec=10, outcome="finished",
+                    listener_person_id=ids["sam"], started_at=(now - timedelta(minutes=30)).isoformat()),
+            # says stopped at 195 of 200: finished
+            _listen(ids["t2"], "browser-tab", played_sec=195, outcome="stopped",
+                    started_at=(now - timedelta(minutes=20)).isoformat()),
+            # a skip is the player's word, kept
+            _listen(ids["t1"], "browser-tab", played_sec=20, outcome="skipped",
+                    started_at=(now - timedelta(minutes=5)).isoformat()),
+        ]})
+        assert r.json()["accepted"] == 3
+    rows = await _listens()
+    assert [(r.outcome, r.person_id) for r in rows] == [
+        ("stopped", None), ("finished", None), ("skipped", None)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_volume_caps(_db, clean, monkeypatch) -> None:
+    ids = await _seed()
+    _, token = await _setup_household()
+    now = datetime.now(timezone.utc)
+    async with _dev(token, "browser-a1") as c:
+        # More seconds played than have passed since the first song began.
+        r = await c.post("/api/music/listens", json={"listens": [
+            _listen(ids["t1"], "browser-a1", played_sec=500, started_at=(now - timedelta(minutes=5)).isoformat()),
+            _listen(ids["t2"], "browser-a1", played_sec=500, started_at=(now - timedelta(minutes=4)).isoformat()),
+        ]})
+        assert r.status_code == 422 and "more seconds played" in r.json()["detail"]
+        # The daily cap: past it, the rest is dropped.
+        monkeypatch.setattr(listens_api, "DEVICE_DAILY_CAP", 2)
+        r = await c.post("/api/music/listens", json={"listens": [
+            _listen(ids["t1"], "browser-a1", played_sec=10, started_at=(now - timedelta(minutes=50 - i)).isoformat())
+            for i in range(4)
+        ]})
+        assert r.json() == {"accepted": 2, "dropped": 2, "recording": True}
+        r = await c.post("/api/music/listens", json={"listens": [
+            _listen(ids["t2"], "browser-a1", played_sec=10, started_at=(now - timedelta(minutes=9)).isoformat())]})
+        assert r.json()["accepted"] == 0
+    assert len(await _listens()) == 2
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_rooms_listener_expires_with_its_music(clean, room_player) -> None:
+    from domovoi.workers import listen_logger as ll
+
+    ids = await _seed()
+    wall = [datetime(2026, 11, 12, 20, 0, tzinfo=timezone.utc)]
+    clock = _Clock()
+    worker = ll.ListenLogger(clock=clock, now=lambda: wall[0])
+
+    def step(sec: float) -> None:
+        clock.t += sec
+        wall[0] = wall[0] + timedelta(seconds=sec)
+
+    async def set_listener(person, at):
+        async with engine.begin() as conn:
+            await music_listens.set_room_listener(conn, "kitchen", person)
+            await conn.execute(text("UPDATE music_room_listeners SET set_at = :t"), {"t": at})
+
+    # Sam started it; it plays, then stops.
+    await set_listener(ids["sam"], wall[0])
+    step(1)
+    _play(room_player, "Nina/Feeling Good.flac", 1, elapsed=0.0)
+    await worker.tick()
+    step(30)
+    room_player._song["_elapsed"] = 30.0
+    await worker.tick()
+    room_player._state = "stop"
+    step(5)
+    await worker.tick()
+    # Music starts again with nobody saying whose: Sam's record is from
+    # before the stop, so the new song is the household's.
+    step(60)
+    _play(room_player, "Otis/Dock.mp3", 2, elapsed=0.0)
+    await worker.tick()
+    step(40)
+    room_player._song["_elapsed"] = 40.0
+    await worker.tick()
+    room_player._state = "stop"
+    step(5)
+    await worker.tick()
+    rows = await _listens()
+    assert [(r.track_id, r.person_id) for r in rows] == [(ids["t1"], ids["sam"]), (ids["t2"], None)]
+    # Stopped 30 minutes: the record is forgotten.
+    step(31 * 60)
+    await worker.tick()
+    async with engine.begin() as conn:
+        assert (await conn.execute(text("SELECT COUNT(*) FROM music_room_listeners"))).scalar_one() == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_dont_keep_prunes_again_a_minute_later(clean, monkeypatch) -> None:
+    import asyncio
+
+    from domovoi.config import settings
+
+    ids = await _seed()
+    monkeypatch.setattr(settings, "music_listens_keep", "off")
+    monkeypatch.setattr(music_listens, "SECOND_PRUNE_AFTER_SEC", 0.3)
+    await _insert(ids["t1"], ids["alex"])
+    music_listens.schedule_prune_now()
+    await asyncio.sleep(0.1)
+    assert await _listens() == []
+    # A row a player landed after the first prune...
+    await _insert(ids["t2"], ids["sam"])
+    await asyncio.sleep(0.6)
+    # ...goes with the second.
+    assert await _listens() == []
+    for t in list(music_listens._PRUNE_TASKS):
+        await t

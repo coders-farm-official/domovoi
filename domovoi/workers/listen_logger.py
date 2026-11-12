@@ -16,7 +16,10 @@ row for it (domovoi/music_listens.py):
 * ``started_at``: when it began (the first look, less how far in it was);
 * ``person_id``: who the room's music was for when the song began
   (``music_room_listeners``: the voice that started it, or the claimed
-  person of the phone or browser that replaced the queue).
+  person of the phone or browser that replaced the queue). A record from
+  before the room last stopped is ignored, and one a room has been stopped
+  for 30 minutes is forgotten, so yesterday's starter doesn't own today's
+  music (review 2026-11-12).
 
 Only songs in the library are written (a stream, a podcast, a file the
 library doesn't know is watched and not recorded), nothing is written under
@@ -50,6 +53,10 @@ log = logging.getLogger(__name__)
 #: that came late (a busy loop, the worker paused) must not credit a song
 #: with minutes nobody saw.
 _MAX_GAP_SEC = 30.0
+
+#: A room stopped this long is the household's again: whose its music was
+#: is forgotten (music_listens.forget_room_listener).
+ROOM_LISTENER_IDLE = timedelta(minutes=30)
 
 
 @dataclass
@@ -108,6 +115,15 @@ class ListenLogger(Worker):
         self._clock = clock
         self._now = now
         self._songs: dict[str, _Song] = {}
+        # room -> wall time of the last look that found it playing or
+        # paused (the stop happened after it); and room -> when it stopped
+        # (that last playing look), while it stays stopped.
+        self._last_active: dict[str, datetime] = {}
+        self._stopped_at: dict[str, datetime] = {}
+        # room -> when it last stopped, kept once it plays again: whose its
+        # music is must have been said after that.
+        self._last_stop: dict[str, datetime] = {}
+        self._forgotten: set[str] = set()
 
     async def tick(self) -> int:
         """One look at every room. Returns the listens written."""
@@ -134,6 +150,7 @@ class ListenLogger(Worker):
         elapsed = float(snap.get("elapsed") or 0.0)
         current = self._songs.get(room_id)
         playing = state in ("play", "pause") and songid is not None
+        await self._track_stops(room_id, playing)
 
         if current is not None and playing and current.songid == songid:
             self._advance(current, now, elapsed, state)
@@ -146,6 +163,29 @@ class ListenLogger(Worker):
         if playing:
             self._songs[room_id] = await self._open(room_id, snap, now, elapsed, state)
         return written
+
+    async def _track_stops(self, room_id: str, playing: bool) -> None:
+        wall = self._now()
+        if playing:
+            self._last_active[room_id] = wall
+            if room_id in self._stopped_at:
+                self._last_stop[room_id] = self._stopped_at.pop(room_id)
+            self._forgotten.discard(room_id)
+            return
+        stopped = self._stopped_at.get(room_id)
+        if stopped is None:
+            # Stopped since the last look that found it active (or since now,
+            # for a room never seen playing in this run).
+            stopped = self._last_active.get(room_id, wall)
+            self._stopped_at[room_id] = stopped
+        if room_id not in self._forgotten and wall - stopped >= ROOM_LISTENER_IDLE:
+            self._forgotten.add(room_id)
+            try:
+                async with session_scope() as s:
+                    await music_listens.forget_room_listener(s, room_id, before=stopped)
+            except Exception as e:  # noqa: BLE001 — retried by the next idle room
+                self._forgotten.discard(room_id)
+                log.debug("listen logger: forgetting %s's listener failed: %s", room_id, e)
 
     def _advance(self, song: _Song, now: float, elapsed: float, state: str) -> None:
         moved = elapsed - song.last_elapsed
@@ -167,7 +207,10 @@ class ListenLogger(Worker):
             async with session_scope() as s:
                 track = await track_for_file(s, snap.get("file"))
                 if track is not None:
-                    person = await music_listens.room_listener(s, room_id)
+                    # A record from before the room last stopped is about
+                    # music that has ended.
+                    person = await music_listens.room_listener(
+                        s, room_id, since=self._last_stop.get(room_id))
         except Exception as e:  # noqa: BLE001 — unknown song: watched, not written
             log.debug("listen logger: song lookup for %s failed: %s", room_id, e)
         duration = snap.get("duration")
