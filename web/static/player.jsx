@@ -1618,7 +1618,17 @@ const MiniPlayer = () => {
                         onClick={() => { setShowLyrics(false); setShowCast((s) => !s); }}
                         title="cast target"
                         style={remote ? { color: 'var(--brand-ink)' } : undefined}/>
-            <IconButton name="chevron-up" onClick={() => { window.location.hash = 'music'; }} title="open full player"/>
+            {/* The Music page's Player tab (#music/player), not the page's
+               * default tab: '#music' landed on Library, and on #music itself
+               * it did nothing at all (2026-11-12). Already there: bring the
+               * tab into view. */}
+            <IconButton name="chevron-up" title="open full player"
+                        onClick={() => {
+                          if (window.location.hash.replace(/^#/, '') === 'music/player') {
+                            const main = document.querySelector('.main');
+                            if (main) main.scrollTo({ top: 0, behavior: 'smooth' });
+                          } else window.location.hash = 'music/player';
+                        }}/>
           </div>
           <button ref={expandRef} className="btn btn-ghost btn-icon mp-phone mp-expand" onClick={openSheet}
                   title="open player" aria-label="open player"

@@ -758,7 +758,7 @@ def test_the_desktop_queue_and_cast_panels_still_work(driven) -> None:
     assert d["cast"]["rows"] == [["This browser", None], ["kitchen", None], ["office", None]]
     assert d["castClosed"] is True          # a successful pick closes the menu
     assert d["acts"] == [["castTo", '{"kind":"room","roomId":"office"}']]
-    assert d["hash"] == "music" and d["sheet"] is False
+    assert d["hash"] == "music/player" and d["sheet"] is False
     player = _src("player.jsx")
     # The floating panels move with the bar, as before.
     assert player.count("bottom: 'calc(var(--dock-bottom, 0px) + 76px)'") == 2
