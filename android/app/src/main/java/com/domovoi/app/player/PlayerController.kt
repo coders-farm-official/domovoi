@@ -451,6 +451,40 @@ class PlayerController(
         clearQueue()
     }
 
+    /**
+     * The mini player's "Stop and close" (web/static/player.jsx closePlayer):
+     * a room being cast to is stopped first and waited for; then the phone
+     * stops watching it, the queue is emptied and the bar goes. False — and
+     * nothing here changed — when the room says it didn't stop: the bar
+     * stays and the caller says so.
+     *
+     * In line with the casts ([castLock]), so it stops the room a cast in
+     * flight lands on. A "play here" that comes while the room's answer is
+     * on its way ([playHereGen]) owns the queue and the bar by then, and
+     * they are left to it.
+     */
+    suspend fun stopAndClose(): Boolean {
+        val gen = playHereGen.get()
+        return withContext(NonCancellable) {
+            castLock.withLock {
+                if (playHereGen.get() != gen) return@withLock true
+                val room = (_target.value as? PlayTarget.Room)?.roomId
+                if (room != null) {
+                    if (!roomActionNow("stop", room)) return@withLock false
+                    if (playHereGen.get() != gen || (_target.value as? PlayTarget.Room)?.roomId != room) {
+                        return@withLock true
+                    }
+                    remotePollJob?.cancel()
+                    remotePollJob = null
+                    _remote.value = null
+                    _target.value = PlayTarget.Local
+                }
+                clearQueue()
+                true
+            }
+        }
+    }
+
     fun next() {
         val t = _target.value
         if (t is PlayTarget.Room) return roomAction("skip", t.roomId)
