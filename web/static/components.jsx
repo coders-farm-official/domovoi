@@ -4854,6 +4854,66 @@ const VoiceMatchLine = ({ vm, style }) => {
   );
 };
 
+/* ═══ Up next: the shared bits (V053 P3/P4) ════════════════════════════
+ * Used by the player (player.jsx), the Music page's Room queue tab
+ * (music.jsx) and a room's drawer (satellites.jsx). */
+/* The Up next header's "why": what the mix is built from. */
+const upNextBasis = (u) => {
+  if (!u || !u.seed) return '';
+  const list = u.seed.list && u.seed.list.name;
+  if (u.mode === 'list' && list) return `shuffled from ${list}`;
+  if (u.mode === 'continue' && list) return `more like ${list}`;
+  if (u.seed.title) return `based on ${u.seed.title}`;
+  return '';
+};
+
+/* ── A room's queue (Up next, phase P4) ─────────────────────────────────
+ * The room's own MPD queue (GET /api/music/queue/{room}): each entry says
+ * where it came from (`origin`: 'auto' for an Up next pick, with its
+ * `reason_label` and `up_next_seq`), and the queue its room's session
+ * (`session_id`, `autoplay`, `up_next`). These are the calls every room
+ * queue view makes: the Music page's Room queue tab, the player's queue
+ * while casting, a room's drawer. `send` is how a guest's page posts
+ * (music.jsx guestSend); apiPost otherwise. */
+const roomQueuePath = (room, suffix = '') => `/api/music/queue/${encodeURIComponent(room)}${suffix}`;
+/* Play one entry now: the real jump (MPD playid), not a re-cast. */
+const roomPlayEntry = (room, songId, send) => (send || apiPost)(
+  roomQueuePath(room, '/play'), { song_id: songId, device_id: DeviceIdentity.id() });
+/* The room's waiting Up next picks: auto entries after the one playing. */
+const roomUpNextRows = (items) => {
+  const list = items || [];
+  const cur = list.findIndex((it) => it && it.playing);
+  return list.map((it, i) => ({ it, i })).filter(({ it, i }) => it && it.origin === 'auto' && i > cur);
+};
+/* The Up next head's "why", from a room queue's `up_next`. */
+const roomUpNextBasis = (q) => (q && q.up_next ? upNextBasis({ mode: q.up_next.mode, seed: q.up_next.seed }) : '');
+/* The one muted line a room's Up next may show. */
+const roomUpNextLine = (q, rows) => {
+  if (!q || !q.session_id) return null;
+  const u = q.up_next || {};
+  if (!q.autoplay) {
+    const name = u.seed && u.seed.list ? u.seed.list.name : null;
+    return u.mode === 'list' && rows.length
+      ? `autoplay is off — stops after the last song of ${name || 'this list'}`
+      : 'autoplay is off — the queue stops at the end';
+  }
+  return rows.length ? null : 'similar songs join here when the queue is nearly over';
+};
+
+/* What saving a room's queue said: how many songs, and what was left out
+ * (streams, podcasts and files the library doesn't know aren't songs a
+ * playlist can hold). */
+const roomSaveNote = (r, fallbackName) => {
+  const n = (r && r.saved) || 0;
+  const left = (r && r.skipped) || 0;
+  const dup = (r && r.duplicates) || 0;
+  let out = `Saved as "${(r && r.name) || fallbackName}" (${n} song${n === 1 ? '' : 's'})`;
+  const why = [];
+  if (left) why.push(`${left} left out: not songs from the library`);
+  if (dup) why.push(`${dup} repeat${dup === 1 ? '' : 's'} saved once`);
+  return why.length ? `${out}; ${why.join(', ')}.` : `${out}.`;
+};
+
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
@@ -4878,4 +4938,5 @@ Object.assign(window, {
   CONTAINER_GUARD_GUEST_TEXT,
   DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,
   VoiceMatchLine, voiceMatchText,
+  upNextBasis, roomQueuePath, roomPlayEntry, roomUpNextRows, roomUpNextBasis, roomUpNextLine, roomSaveNote,
 });

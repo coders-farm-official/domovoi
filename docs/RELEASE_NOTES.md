@@ -4,6 +4,56 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — Up next in the rooms; a room's queue jumps, inserts and saves
+
+A room now keeps the music going too. A song played in a room — "play in
+kitchen" from a song's details, the room-play buttons of an artist or a
+genre, a cast from the browser or the app, or a spoken "play <song>" /
+"play something" — is followed by songs like it, which the server adds to
+the room's own queue as it plays (5 songs before the end, 30 at a time).
+A whole list played in a room (a cast, "play <artist>", "play <album>")
+plays as it is, and similar songs join when it is nearly over. A cast from
+the browser hands its Up next to the room, and casting back brings it
+home. Whose taste the mix follows is the person who spoke, or the phone's
+or browser's "listening as" / claimed person; never shown to a guest.
+
+**Limits.** A playlist played in a room ("play road trip", a playlist's
+play button) still plays one song at a time and starts no Up next; it ends
+the room's Up next. A stream, a podcast or an audiobook does the same. A
+room's Up next ends when the room is stopped, cleared, or left paused or
+stopped for two hours.
+
+Where it shows, in the existing queue views:
+
+- **Music → Room queue**: the room's picks are marked with why each was
+  picked under an **up next** head with the room's **autoplay** switch; tap
+  any song to play it now; **less like this** on a pick; **save as
+  playlist** keeps the room's queue as a new playlist (streams, podcasts and
+  files that aren't in the library are left out, and it says how many).
+- **The player while casting**: the Queue tab's up next section is the
+  room's; a queue row plays that song in the room straight away (it used
+  to re-send the whole queue); **play next** is offered in the queue search
+  while casting; save as playlist saves the room's queue.
+- **Settings → Rooms → a room**: under now playing, the room's next three
+  picks and "open queue".
+
+API (docs/API_REFERENCE.md §3.5a, §3.5f): `POST /api/music/queue/{room}/add`
+takes `where: next | end` — **`end`, the default, now lands before the
+room's Up next picks**, not after them; new `POST …/queue/{room}/play`
+(a real jump; household, and a guest on a playing room like skip) and
+`POST …/queue/{room}/save-playlist` (household); the queue read adds
+`origin`, `reason_label`, `up_next_seq`, `track_id` per entry and
+`session_id`, `autoplay`, `up_next`; `play-track` starts the room's Up
+next (`up_next: false` for the old one-song play) and takes `context` and
+the listener; `play-tracks` takes `up_next_session_id`; `POST
+/api/music/up-next/sessions` takes a room target; new `POST
+…/sessions/{id}/move` and `GET /api/music/up-next/room/{room}`. A room's
+refill is the server's: `next` on a room's session is `409`.
+
+The core's `listen_logger` worker is now `up_next_extender` (the same
+listening history, one read of each room per tick, plus the rooms' Up
+next). No migration (V053's tables).
+
 ## 2026-11-12 — a genre from MusicBrainz for recognised songs
 
 A song whose file names no genre but which song recognition matched (it

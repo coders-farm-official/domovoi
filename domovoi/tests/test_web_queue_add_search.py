@@ -329,9 +329,10 @@ def test_escape_clears_the_search_and_keeps_the_player_open(driven) -> None:
 def test_casting_adds_to_the_queue_shown_and_to_the_room(driven) -> None:
     c = driven["casting"]
     assert c["acts"][0][0] == "enqueue"
-    assert c["posts"] == [["/api/music/queue/kitchen/add", {"track_ids": [11], "device_id": "dev-1"}]]
-    assert c["playNext"] == 0           # a room has no insert-next: the control is not offered
-    assert "Added: Blue Monday" in c["status"]
+    # "add" lands before the room's Up next picks (where: end, P4).
+    assert c["posts"] == [["/api/music/queue/kitchen/add", {"track_ids": [11], "device_id": "dev-1", "where": "end"}]]
+    assert c["playNext"] == 3           # play next is offered in a room too (where: next, P4)
+    assert "Added in kitchen: Blue Monday" in c["status"]
     r = driven["casting_room_refuses"]
     assert "kitchen didn't take it" in r["status"]
 

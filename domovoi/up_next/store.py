@@ -236,3 +236,77 @@ async def removed_seqs(db: "AsyncSession", session_id: str) -> list[int]:
     return [int(r[0]) for r in (await db.execute(
         text("SELECT seq FROM up_next_picks WHERE session_id = :s AND status = 'removed' ORDER BY seq"),
         {"s": session_id})).all()]
+
+
+# ─── Rooms (phase P4) ─────────────────────────────────────────────────────
+
+
+async def end_active(db: "AsyncSession", target: str) -> list[str]:
+    """End ``target``'s active session, if any; returns the ids ended."""
+    rows = (await db.execute(
+        text("UPDATE up_next_sessions SET ended_at = now(), updated_at = now(), version = version + 1 "
+             "WHERE target = :t AND ended_at IS NULL RETURNING id"),
+        {"t": target})).all()
+    return [str(r[0]) for r in rows]
+
+
+async def end(db: "AsyncSession", session_id: str) -> bool:
+    res = await db.execute(
+        text("UPDATE up_next_sessions SET ended_at = now(), updated_at = now(), version = version + 1 "
+             "WHERE id = :id AND ended_at IS NULL"),
+        {"id": str(session_id)})
+    return res.rowcount == 1
+
+
+async def move(db: "AsyncSession", st: Stored, target: str) -> bool:
+    """Casting: the session carries on on ``target``, whose own active
+    session (if another) ends first. False when someone saved the session
+    since it was read."""
+    if st.sess.target == target:
+        return True
+    await db.execute(
+        text("UPDATE up_next_sessions SET ended_at = now(), updated_at = now() "
+             "WHERE target = :t AND ended_at IS NULL AND id <> :id"),
+        {"t": target, "id": st.sess.id})
+    st.sess.move(target)
+    return await save(db, st)
+
+
+async def set_song_ids(db: "AsyncSession", session_id: str, song_ids: Mapping[int, int | None]) -> None:
+    """Record (or clear) the room queue entry each pick (by seq) sits in."""
+    for seq, song_id in song_ids.items():
+        await db.execute(
+            text("UPDATE up_next_picks SET mpd_song_id = :m WHERE session_id = :s AND seq = :q"),
+            {"m": song_id, "s": session_id, "q": int(seq)})
+
+
+async def picks_by_song(db: "AsyncSession", session_id: str, song_ids: Iterable[int]) -> dict[int, dict[str, Any]]:
+    """The session's picks sitting in these room queue entries, by songid
+    (the newest pick when one songid was handed to two)."""
+    want = sorted({int(i) for i in song_ids})
+    if not want:
+        return {}
+    rows = (await db.execute(
+        text("SELECT seq, track_id, reason_code, reason_label, status, mpd_song_id "
+             "FROM up_next_picks WHERE session_id = :s AND mpd_song_id = ANY(CAST(:ids AS int[])) "
+             "ORDER BY seq"),
+        {"s": session_id, "ids": want})).mappings().all()
+    return {int(r["mpd_song_id"]): dict(r) for r in rows}
+
+
+async def set_status_by_seq(db: "AsyncSession", session_id: str, seqs: Iterable[int], status: str,
+                            *, only_queued: bool = True) -> list[int]:
+    """:func:`set_status`, also for picks no longer queued when
+    ``only_queued`` is False (a pick that played, then was skipped back to)."""
+    if only_queued:
+        return await set_status(db, session_id, seqs, status)
+    if status not in PICK_STATUSES:
+        raise ValueError(f"unknown pick status {status!r}")
+    want = sorted({int(s) for s in seqs})
+    if not want:
+        return []
+    rows = (await db.execute(
+        text("UPDATE up_next_picks SET status = :st WHERE session_id = :s "
+             "AND seq = ANY(CAST(:seqs AS int[])) RETURNING seq"),
+        {"st": status, "s": session_id, "seqs": want})).all()
+    return sorted(int(r[0]) for r in rows)

@@ -29,6 +29,11 @@ the player moved on to by itself was never logged anywhere.
 
 Skipped under ``USE_STUBS`` like the playback sweeper; the tick is tested
 with stub players (domovoi/tests/test_music_listens.py).
+
+Since Up next P4 the core registers :class:`~domovoi.workers.up_next_extender.UpNextExtender`,
+which is this logger with the rooms' Up next on top (its two hooks,
+:meth:`ListenLogger._after_look` and :meth:`ListenLogger._song_ended`), so
+each room's player is still read once per tick.
 """
 
 from __future__ import annotations
@@ -135,6 +140,17 @@ class ListenLogger(Worker):
                 log.debug("listen logger: room %s: %s", room_id, e)
         return written
 
+    # ── Hooks (the Up next extender, workers/up_next_extender.py) ──
+
+    async def _after_look(self, room_id: str, client: Any, snap: dict[str, Any]) -> None:
+        """Called after each successful look at a room, with its snapshot."""
+
+    async def _song_ended(self, room_id: str, song: "_Song", played: float,
+                          outcome: str) -> tuple[str | None, str]:
+        """A song ended (whatever gets written): ``(session_id, origin)`` for
+        its listen row. Here: no session, ``explicit``."""
+        return None, "explicit"
+
     async def _look(self, room_id: str, client: Any) -> int:
         snap_fn = getattr(client, "playback_snapshot", None)
         if snap_fn is None:
@@ -144,6 +160,12 @@ class ListenLogger(Worker):
         except Exception as e:  # noqa: BLE001 — unreachable: look again next tick
             log.debug("listen logger: probe of %s failed: %s", room_id, e)
             return 0
+        try:
+            return await self._observe(room_id, snap)
+        finally:
+            await self._after_look(room_id, client, snap)
+
+    async def _observe(self, room_id: str, snap: dict[str, Any]) -> int:
         now = self._clock()
         state = snap.get("state") or "stop"
         songid = snap.get("songid")
@@ -243,6 +265,8 @@ class ListenLogger(Worker):
                 extra = min(extra, max(0.0, song.duration - song.last_elapsed))
             played += max(0.0, extra)
         skipped = music_listens.take_skip(room_id, song.first_seen)
+        outcome = music_listens.outcome_for(played, song.duration, skipped)
+        session_id, origin = await self._song_ended(room_id, song, played, outcome)
         if song.track_id is None or played < 1.0:
             return 0
         if not music_listens.recording(settings.music_listens_keep):
@@ -254,12 +278,12 @@ class ListenLogger(Worker):
                 "room_id": room_id,
                 "device_id": None,
                 "player": "room",
-                "session_id": None,
-                "origin": "explicit",
+                "session_id": session_id,
+                "origin": origin,
                 "started_at": song.started_at,
                 "played_sec": played,
                 "duration_sec": song.duration,
-                "outcome": music_listens.outcome_for(played, song.duration, skipped),
+                "outcome": outcome,
             },
             now=self._now(),
         )

@@ -1097,7 +1097,22 @@ button.lyr-line:hover { background: var(--brand-soft); }
 .rq-main { grid-area: main; min-width: 0; }
 .rq-dur { grid-area: dur; }
 .rq-ctrls { grid-area: ctrls; display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+/* The room's Up next (P4): the head before its first pick (what the mix is
+   built from, the Autoplay switch, one muted line), why each pick was
+   picked after its artist, and the save-as-playlist strip. */
+.rq-un-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+  padding: 10px 16px 6px; border-top: 1px solid var(--border-soft); background: var(--sunken);
+}
+.rq-un-basis { font-size: 11px; color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rq-un-line { flex-basis: 100%; font-size: 11px; color: var(--fg-muted); }
+.rq-why { color: var(--fg-muted); }
+.rq-save .mp-q-saverow { padding: 0; }
+/* A room's drawer: its next few picks under now playing. */
+.sat-upnext { border-top: none; border-bottom: 1px solid var(--border-soft); }
 @media (max-width: 760px) {
+  .rq-un-head { padding: 8px 12px 6px; }
+  .rq-un-head .mp-un-auto { min-height: 44px; }
   .rq-rooms { padding: 8px 12px; }
   .rq-room { min-height: 44px; padding: 0 14px; }
   .rq-rooms .btn { min-height: 44px; }

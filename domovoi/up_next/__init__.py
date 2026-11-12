@@ -9,10 +9,13 @@ and app sessions, the core for rooms):
 * :mod:`.data` — the SQL that builds the picker's inputs, behind two
   small interfaces (the library; listening history);
 * :mod:`.session` — a session's state and the events that change it;
-* :mod:`.engine` — one refill: read, pick, advance the session.
-
-No API, no UI and no tables of its own yet: sessions and picks are kept
-by phase P3, rooms refilled by phase P4.
+* :mod:`.engine` — one refill: read, pick, advance the session;
+* :mod:`.store` — sessions and picks in the database (V053, phase P3);
+* :mod:`.service` — what both processes share around a stored session
+  (seeds from a request, drawing a batch, the answer shapes);
+* :mod:`.rooms` — a room's session: started by the room's play paths and
+  refilled in the room's own queue by the core's ``up_next_extender``
+  worker (phase P4).
 """
 
 from .engine import next_batch

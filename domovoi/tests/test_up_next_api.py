@@ -244,8 +244,10 @@ async def test_start_validation(_db, clean) -> None:
                                   context={"kind": "album", "ref": "no bar"}))).status_code == 422
         assert (await post(_start("browser-a1", track_id=d["ids"][0],
                                   context={"kind": "ids", "track_ids": list(range(1, 502))}))).status_code == 422
-        room = {"target": {"kind": "room", "room_id": "kitchen"}, "start": {"track_id": d["ids"][0]}}
-        assert (await post(room)).status_code == 422                                      # rooms: phase P4
+        # A room plays a whole list as it is (play-tracks): not a session start.
+        room = {"target": {"kind": "room", "room_id": "kitchen"},
+                "start": {"context": {"kind": "playlist", "ref": str(d["playlist"])}, "whole_list": True}}
+        assert (await post(room)).status_code == 422
         assert (await post(_start("browser-a1", track_id=d["ids"][0], listener_person_id=4242))).status_code == 422
 
 

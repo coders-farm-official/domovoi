@@ -3,7 +3,14 @@
 Up next keeps a player going with songs like the ones it has been playing
 (the engine: :mod:`domovoi.up_next`). A browser or a phone asks for them
 here; the web process runs the engine and keeps the session
-(:mod:`domovoi.up_next.store`). Rooms come in phase P4.
+(:mod:`domovoi.up_next.store`). A ROOM's session (phase P4) is the core's:
+it starts with the room's play paths and the core refills the room's queue
+as it plays (:mod:`domovoi.up_next.rooms`, the ``up_next_extender``
+worker); here a room target starts one through the core's play-track,
+``move`` carries a session between a phone or browser and a room (a cast,
+a hand-back), and ``GET /room/{room_id}`` reads a room's on the queue's
+tier. ``next`` on a room's session is 409; PATCH and feedback work on it
+like a phone's, for any household caller the room's queue block allows.
 
 * ``POST /sessions`` — start one for this device (``target.kind`` is
   ``device``). ``start``:
@@ -68,52 +75,54 @@ from sqlalchemy import text
 
 from domovoi import music_listens
 from domovoi.admin_auth import require_device, require_device_read
-from domovoi.up_next import store
-from domovoi.up_next.data import MusicListens, SqlLibrary, playlist_label
-from domovoi.up_next.engine import next_batch
-from domovoi.up_next.model import DEFAULT_CONFIG, FROM_LIST, Track
-from domovoi.up_next.pick import era_label
-from domovoi.up_next.session import IDS_CAP, SeedRef, UpNextSession, device_listener
+from domovoi.up_next import service, store
+from domovoi.up_next.data import SqlLibrary
+from domovoi.up_next.service import ContextIn  # noqa: F401 — the request shape, re-exported
+from domovoi.up_next.session import SeedRef, UpNextSession, device_listener
 from web.backend.api import devices as devices_api
 from web.backend.db import session_scope
+from web.backend.domovoi_client import auth_forward_headers, bridge_response, get_admin, post_admin
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/music/up-next", tags=["music"])
 
 _DEVICE_ID = r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$"
-NAME_MAX = 120
-#: The artists of the last few picks, for spacing across a batch's seam.
-SPACING_TAIL = 5
+_ROOM_ID = r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$"
+NAME_MAX = service.NAME_MAX
+SPACING_TAIL = service.SPACING_TAIL
 
 NOT_YOURS_DETAIL = "this up next belongs to another phone or browser"
 UNKNOWN_SESSION_DETAIL = "no such up next session"
+ROOM_LIST_DETAIL = (
+    "a room plays a whole list as it is: cast it with /api/music/play-tracks "
+    "(or play-playlist), and the room's up next follows it"
+)
+ROOM_REFILL_DETAIL = "a room's up next is refilled by the home server as it plays"
 
 
 # ─── Shapes ───────────────────────────────────────────────────────────────
 
 
 class TargetIn(BaseModel):
-    kind: Literal["device"]
-    device_id: str = Field(..., pattern=_DEVICE_ID)
+    """``{kind:'device', device_id}`` (a browser or a phone) or
+    ``{kind:'room', room_id}`` (a room's music player, phase P4)."""
 
-
-class ContextIn(BaseModel):
-    kind: Literal["playlist", "album", "artist", "genre", "ids"]
-    ref: str | None = Field(default=None, max_length=600)
-    track_ids: list[int] | None = Field(default=None, max_length=IDS_CAP)
-    name: str | None = Field(default=None, max_length=NAME_MAX)
+    kind: Literal["device", "room"]
+    device_id: str | None = Field(default=None, pattern=_DEVICE_ID)
+    room_id: str | None = Field(default=None, pattern=_ROOM_ID)
 
     @model_validator(mode="after")
-    def _shape(self) -> "ContextIn":
-        if self.kind == "ids":
-            if not self.track_ids:
-                raise ValueError("an ids list needs track_ids")
-        elif not (self.ref or "").strip():
-            raise ValueError(f"a {self.kind} list needs its ref")
-        if self.kind == "album" and "|" not in (self.ref or ""):
-            raise ValueError("an album's ref is '<artist>|<album>'")
+    def _shape(self) -> "TargetIn":
+        if self.kind == "device" and not self.device_id:
+            raise ValueError("a device target needs its device_id")
+        if self.kind == "room" and not self.room_id:
+            raise ValueError("a room target needs its room_id")
         return self
+
+    @property
+    def target(self) -> str:
+        return f"device:{self.device_id}" if self.kind == "device" else f"room:{self.room_id}"
 
 
 class StartIn(BaseModel):
@@ -162,7 +171,20 @@ class PatchIn(BaseModel):
     listener_person_id: int | None = Field(default=None, ge=1)
 
 
+class MoveIn(BaseModel):
+    target: TargetIn
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────
+
+# Kept under their P3 names (tests and callers use them).
+_person = service.person_json
+_track_row = service.track_row
+_pick_json = service.pick_json
+_session_json = service.session_json
+_list_reason = service.list_reason
+_draw = service.draw
+_take_back = service.take_back
 
 
 def _check_caller(request: Request, device_id: str) -> None:
@@ -171,23 +193,16 @@ def _check_caller(request: Request, device_id: str) -> None:
         raise HTTPException(status_code=403, detail=NOT_YOURS_DETAIL)
 
 
-async def _person(s: Any, person_id: int | None) -> dict[str, Any] | None:
-    if person_id is None:
-        return None
-    r = (await s.execute(text("SELECT id, name FROM people WHERE id = :p"), {"p": person_id})).first()
-    return {"id": int(r[0]), "name": r[1]} if r is not None else None
-
-
 async def _require_person(s: Any, person_id: int) -> None:
     if await _person(s, person_id) is None:
         raise HTTPException(status_code=422, detail=f"person {person_id} not found")
 
 
-async def _listener(s: Any, device_id: str, body: SessionIn) -> int | None:
+async def _listener(s: Any, device_id: str | None, body: SessionIn) -> int | None:
     if body.listener_person_id is not None:
         await _require_person(s, body.listener_person_id)
         return body.listener_person_id
-    if body.as_household:
+    if body.as_household or not device_id:
         return None
     row = (await s.execute(
         text("SELECT owner_person_id, shared_screen FROM devices WHERE device_id = :d"),
@@ -196,82 +211,28 @@ async def _listener(s: Any, device_id: str, body: SessionIn) -> int | None:
     return device_listener(listener_person_id=None, owner_person_id=owner, shared_screen=shared)
 
 
-async def _seed(s: Any, start: StartIn) -> tuple[SeedRef, str | None]:
+async def room_listener_for(
+    request: Request, *, device_id: str | None, listener_person_id: int | None, as_household: bool,
+) -> int | None:
+    """Whose mix a room's session follows when a phone or browser starts it
+    (plan §2.3): the "listening as" it sent, else its claimed person unless
+    it is a shared screen, else the household. Self-asserted within the
+    household, like every listener choice. A person nobody has is a 422."""
+    from web.backend.api import files as files_api
+
+    caller = files_api.caller_device_id(request, device_id) or devices_api.caller_device(request)
+    body = SessionIn(target=TargetIn(kind="room", room_id="x"), start=StartIn(track_id=1),
+                     listener_person_id=listener_person_id, as_household=as_household)
+    async with session_scope() as s:
+        return await _listener(s, caller, body)
+
+
+async def _seed(s: Any, start: "StartIn") -> tuple[SeedRef, str | None]:
     """The SeedRef for a start, and the list's name as people know it."""
-    c = start.context
-    if c is None:
-        return SeedRef(track_id=start.track_id), None
-    name = (c.name or "").strip() or None
-    if c.kind == "ids":
-        return SeedRef(track_id=start.track_id, kind="ids", track_ids=tuple(c.track_ids or ()),
-                       label=playlist_label(name or "this list")), name or "this list"
-    ref = (c.ref or "").strip()
-    if c.kind == "playlist":
-        try:
-            pid = int(ref)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="a playlist's ref is its id") from None
-        row = (await s.execute(text("SELECT name FROM playlists WHERE id = :p"), {"p": pid})).first()
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"playlist {pid} not found")
-        name = row[0]
-        ref = str(pid)
-    elif c.kind == "artist":
-        name = name or ref
-        ref = (await s.execute(text("SELECT library_search_norm(:n)"), {"n": ref})).scalar() or ""
-    elif c.kind == "album":
-        artist, _, album = ref.partition("|")
-        norm = (await s.execute(text("SELECT library_search_norm(:n)"), {"n": artist})).scalar() or ""
-        name = name or album or "this album"
-        ref = f"{norm}|{album}"
-    else:  # genre: a genre key
-        name = name or ref
-    if not ref:
-        raise HTTPException(status_code=422, detail=f"a {c.kind} list needs its ref")
-    return SeedRef(track_id=start.track_id, kind=c.kind, ref=ref, label=playlist_label(name)), name
-
-
-async def _track_row(s: Any, track_id: int | None) -> dict[str, Any] | None:
-    if track_id is None:
-        return None
-    r = (await s.execute(text("SELECT id, title, artist FROM library_tracks WHERE id = :t"),
-                         {"t": track_id})).mappings().first()
-    return dict(r) if r is not None else None
-
-
-def _pick_json(p: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "seq": p["seq"], "track_id": p["track_id"], "title": p["title"] or "", "artist": p["artist"] or "",
-        "album": p["album"] or "", "duration_sec": p["duration_sec"], "reason_code": p["reason_code"],
-        "reason_label": p["reason_label"], "status": p["status"], "mpd_song_id": p["mpd_song_id"],
-        "batch_no": p["batch_no"],
-    }
-
-
-async def _session_json(s: Any, st: store.Stored, *, picks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    sess = st.sess
-    kind, ident = sess.target_kind, sess.target_id
-    seed_track = await _track_row(s, sess.seed.track_id)
-    if picks is None:
-        picks = await store.picks(s, sess.id, statuses=("queued",))
-    return {
-        "id": sess.id,
-        "target": {"kind": kind, ("device_id" if kind == "device" else "room_id"): ident},
-        "mode": sess.mode,
-        "autoplay": sess.autoplay,
-        "person": await _person(s, sess.person_id),
-        "seed": {
-            "track_id": sess.seed.track_id,
-            "title": (seed_track or {}).get("title"),
-            "artist": (seed_track or {}).get("artist"),
-            "label": sess.seed.label,
-            "list": ({"kind": sess.seed.kind, "name": st.list_name} if sess.seed.kind else None),
-        },
-        "picks": [_pick_json(p) for p in picks],
-        "batch_no": sess.batch_no,
-        "have_through_seq": await store.max_seq(s, sess.id),
-        "ended": sess.ended or st.ended_at is not None,
-    }
+    try:
+        return await service.build_seed(s, start.track_id, start.context)
+    except service.SeedError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from None
 
 
 async def _load(s: Any, request: Request, session_id: str, *, lock: bool) -> store.Stored:
@@ -283,55 +244,13 @@ async def _load(s: Any, request: Request, session_id: str, *, lock: bool) -> sto
     return st
 
 
-def _list_reason(seed: Track | None, t: Track, fallback: str) -> str:
-    """A list pick's label, said the way a person would: what it shares with
-    the song the session started from (the list is weighted toward those),
-    else the list itself."""
-    if seed is not None:
-        if seed.artist_norm and t.artist_norm == seed.artist_norm:
-            return "same artist"
-        if seed.year is not None and t.year is not None and abs(seed.year - t.year) <= DEFAULT_CONFIG.era_years:
-            return era_label(seed.year, t.year)
-        shared = [g for g in t.genre_keys if g in set(seed.genre_keys)]
-        if shared:
-            return shared[0]
-    return fallback
+async def _assert_room_editable(request: Request, room_id: str) -> None:
+    """A room's session is the household's: any household phone or browser
+    may change it, unless an admin took that room's queue away from the one
+    asking (the queue block, WEB-11)."""
+    from web.backend.api.music import _assert_may_replace_queue
 
-
-async def _draw(s: Any, st: store.Stored) -> tuple[int, list[dict[str, Any]], bool]:
-    """Draw the session's next batch and keep it: ``(batch_no, picks, ended)``."""
-    sess = st.sess
-    library = SqlLibrary(s)
-    tail = await store.picks(s, sess.id, newest=SPACING_TAIL)
-    prev_keys = [p["artist_norm"] or f"#{p['track_id']}" for p in tail]
-    batch = await next_batch(sess, library=library, listens=MusicListens(s),
-                             now=datetime.now(timezone.utc), prev_keys=prev_keys)
-    labels: dict[int, str] = {}
-    if sess.mode == "list" and batch.picks:
-        ids = [p.track_id for p in batch.picks]
-        if sess.seed.track_id is not None:
-            ids.append(sess.seed.track_id)
-        known = await library.tracks(ids)
-        seed_t = known.get(sess.seed.track_id) if sess.seed.track_id is not None else None
-        fallback = playlist_label(st.list_name) if st.list_name else "from this list"
-        for i, p in enumerate(batch.picks):
-            if p.reason_code == FROM_LIST and p.track_id in known:
-                labels[i] = _list_reason(seed_t, known[p.track_id], fallback)
-    first = None
-    if batch.picks:
-        first = await store.add_picks(s, sess.id, batch.batch_no, batch.picks, labels)
-    await store.save(s, st)
-    if first is None:
-        return batch.batch_no, [], batch.ended
-    return batch.batch_no, await store.picks(s, sess.id, after_seq=first - 1, batch_no=batch.batch_no), batch.ended
-
-
-async def _take_back(s: Any, st: store.Stored, track: Track) -> list[int]:
-    """The waiting picks by ``track``'s artist (or that very track, when it
-    has none), taken out of the session."""
-    seqs = await store.queued_by(s, st.sess.id, artist_norm=track.artist_norm or None,
-                                 track_id=None if track.artist_norm else track.id)
-    return await store.set_status(s, st.sess.id, seqs, "removed")
+    await _assert_may_replace_queue(request, None, room_id)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────
@@ -342,7 +261,15 @@ async def start_session(body: SessionIn, request: Request) -> dict[str, Any]:
     """Start Up next on this device (it replaces the device's previous
     session). The answer is the session with its first batch: ``list`` and
     ``library`` modes draw it now, ``continue`` mode when the list is
-    nearly over (``POST …/next``)."""
+    nearly over (``POST …/next``).
+
+    A ROOM target (phase P4) plays the song in that room and starts the
+    room's session there (the core's play-track: it replaces the room's
+    queue, so the queue block applies); the room's player then holds the
+    song and the first batch, and the core refills it as it plays. A whole
+    list is cast with play-tracks instead (422 here)."""
+    if body.target.kind == "room":
+        return await _start_in_room(body, request)
     device_id = body.target.device_id
     _check_caller(request, device_id)
     async with session_scope() as s:
@@ -362,6 +289,50 @@ async def start_session(body: SessionIn, request: Request) -> dict[str, Any]:
     return out
 
 
+async def _start_in_room(body: SessionIn, request: Request) -> Any:
+    room_id = body.target.room_id or ""
+    if body.start.whole_list:
+        raise HTTPException(status_code=422, detail=ROOM_LIST_DETAIL)
+    await _assert_room_editable(request, room_id)
+    person = await room_listener_for(request, device_id=None,
+                                     listener_person_id=body.listener_person_id,
+                                     as_household=body.as_household)
+    out: dict[str, Any] = {"room_id": room_id, "track_id": body.start.track_id,
+                           "person_id": person, "autoplay": body.autoplay}
+    if body.start.context is not None:
+        out["context"] = body.start.context.model_dump(exclude_none=True)
+    status, payload = await post_admin("/v1/admin/music/play-track", out,
+                                       headers=auth_forward_headers(request))
+    if status != 200 or not isinstance(payload, dict):
+        return bridge_response(status, payload)
+    from web.backend.api.music_listens import note_room_start
+
+    await note_room_start(request, None, room_id)
+    sid = ((payload.get("up_next") or {}).get("session_id"))
+    async with session_scope() as s:
+        st = await store.get(s, sid) if sid else None
+        if st is None:
+            # The song plays; its Up next couldn't start (the core said why
+            # in its log). Nothing that pretends otherwise.
+            raise HTTPException(status_code=503, detail="the song plays, but up next couldn't start there")
+        return await _session_json(s, st)
+
+
+@router.get("/room/{room_id}")
+async def room_session(room_id: str, request: Request) -> Any:
+    """The room's active session, or ``null``. Read like the room's queue
+    (``GET /api/music/queue/{room}``): open to the household, and to a
+    guest while the room plays; the core decides, and leaves ``person``
+    out for a guest."""
+    status, payload = await get_admin(f"/v1/admin/music/up-next/room/{room_id}",
+                                      headers=auth_forward_headers(request))
+    if status == 0:
+        raise HTTPException(status_code=502, detail="domovoi core unreachable; can't read the room's up next")
+    if status != 200:
+        return bridge_response(status, payload)
+    return (payload or {}).get("session") if isinstance(payload, dict) else None
+
+
 @router.get("/sessions/{session_id}", dependencies=[Depends(require_device_read)])
 async def get_session(session_id: str, request: Request) -> dict[str, Any]:
     """The session and the picks it still has waiting."""
@@ -376,6 +347,8 @@ async def next_picks(session_id: str, body: NextIn, request: Request) -> dict[st
     ``have_through_seq``, the same batch comes back."""
     async with session_scope() as s:
         st = await _load(s, request, session_id, lock=True)
+        if st.sess.target_kind == "room":
+            raise HTTPException(status_code=409, detail=ROOM_REFILL_DETAIL)
         removed = await store.removed_seqs(s, st.sess.id)
         ahead = await store.picks(s, st.sess.id, after_seq=body.have_through_seq,
                                   statuses=("queued", "played", "skipped"))
@@ -394,9 +367,13 @@ async def next_picks(session_id: str, body: NextIn, request: Request) -> dict[st
 @router.post("/sessions/{session_id}/feedback", dependencies=[Depends(require_device)])
 async def feedback(session_id: str, body: FeedbackIn, request: Request) -> dict[str, Any]:
     """``{removed}``: the seqs of the picks this took out of the session
-    (the player drops them from its queue)."""
+    (the player drops them from its queue). For a ROOM's session the core's
+    extender takes them out of the room's queue on its next look (within
+    a few seconds), never the song playing now."""
     async with session_scope() as s:
         st = await _load(s, request, session_id, lock=True)
+        if st.sess.target_kind == "room":
+            await _assert_room_editable(request, st.sess.target_id)
         sid = st.sess.id
         seq, track_id = body.seq, body.track_id
         if seq is not None:
@@ -435,9 +412,14 @@ async def feedback(session_id: str, body: FeedbackIn, request: Request) -> dict[
 
 @router.patch("/sessions/{session_id}", dependencies=[Depends(require_device)])
 async def patch_session(session_id: str, body: PatchIn, request: Request) -> dict[str, Any]:
-    """Turn Autoplay on or off, or change whose taste the mix follows."""
+    """Turn Autoplay on or off, or change whose taste the mix follows. For
+    a room's session, Autoplay off takes the waiting picks out of the room's
+    queue (the core's extender, on its next look); a list keeps the rest of
+    itself, as on a phone."""
     async with session_scope() as s:
         st = await _load(s, request, session_id, lock=True)
+        if st.sess.target_kind == "room":
+            await _assert_room_editable(request, st.sess.target_id)
         sess = st.sess
         if body.autoplay is not None:
             sess.autoplay = body.autoplay
@@ -449,6 +431,39 @@ async def patch_session(session_id: str, body: PatchIn, request: Request) -> dic
             sess.set_listener(body.listener_person_id)
         await store.save(s, st)
         return await _session_json(s, st)
+
+
+@router.post("/sessions/{session_id}/move", dependencies=[Depends(require_device)])
+async def move_session(session_id: str, body: MoveIn, request: Request) -> dict[str, Any]:
+    """Casting: the session carries on on another player (plan §2.1).
+
+    * to a ROOM — after the phone or browser cast its queue there
+      (``play-tracks``, which can also move it in the same call:
+      ``up_next_session_id``). The room's own session, if any, ends; the
+      core's extender finds the picks in the room's queue by their files
+      and refills it as it plays. The room's queue block applies.
+    * to a DEVICE — when playback comes back to this phone or browser: only
+      to the device that asks (403 otherwise).
+
+    A device's session moves only at that device's request."""
+    new = body.target
+    if new.kind == "device":
+        _check_caller(request, new.device_id or "")
+    else:
+        await _assert_room_editable(request, new.room_id or "")
+    async with session_scope() as s:
+        st = await _load(s, request, session_id, lock=True)
+        if st.ended_at is not None:
+            raise HTTPException(status_code=409, detail="this up next has ended")
+        if not await store.move(s, st, new.target):
+            raise HTTPException(status_code=409, detail="the session changed meanwhile; try again")
+        if new.kind == "room":
+            # The room holds what was cast; which picks it holds, the
+            # extender finds out by their files on its next look.
+            await store.set_song_ids(s, st.sess.id, {p["seq"]: None for p in await store.picks(s, st.sess.id)})
+        out = await _session_json(s, st)
+    log.info("up next: session %s moved to %s", session_id, new.target)
+    return out
 
 
 # ─── The listening history feeds the session ──────────────────────────────

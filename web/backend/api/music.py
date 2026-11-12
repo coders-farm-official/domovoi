@@ -1080,6 +1080,43 @@ async def _note_room_start(
         await note_room_start(request, body_device_id, room_id)
 
 
+async def _room_up_next_fields(request: Request, body: Any) -> dict[str, Any]:
+    """What a play that replaces a room's queue tells the core about the
+    room's Up next (phase P4): whose taste the mix follows (worked out here,
+    where the calling device is known; a person nobody has is a 422), the
+    list, autoplay. Only what differs from the core's defaults is sent."""
+    from web.backend.api.up_next import room_listener_for
+
+    if not body.up_next:
+        return {"up_next": False}
+    out: dict[str, Any] = {}
+    person = await room_listener_for(request, device_id=body.device_id,
+                                     listener_person_id=body.listener_person_id,
+                                     as_household=body.as_household)
+    if person is not None:
+        out["person_id"] = person
+    if body.context is not None:
+        out["context"] = body.context.model_dump(exclude_none=True)
+    if not body.autoplay:
+        out["autoplay"] = False
+    return out
+
+
+async def _callers_session(request: Request, session_id: str) -> bool:
+    """Is ``session_id`` an active Up next session of the device asking?
+    A cast hands the caster's own session to the room, never another
+    device's (403). An unknown or ended one is just not carried (False)."""
+    from domovoi.up_next import store as up_next_store
+    from web.backend.api import up_next as up_next_api
+
+    async with session_scope() as s:
+        st = await up_next_store.get(s, session_id)
+    if st is None or st.ended_at is not None or st.sess.target_kind != "device":
+        return False
+    up_next_api._check_caller(request, st.sess.target_id)
+    return True
+
+
 @router.post("/play", dependencies=DEVICE)
 async def play(body: PlayRequest, request: Request):
     await _assert_may_replace_queue(request, body.device_id, body.room_id)
@@ -1166,11 +1203,19 @@ async def play_track(body: PlayTrackRequest, request: Request):
     file straight to MPD without going through the router — so a UI
     click doesn't write to ``conversation_log`` and never falls
     through to an external streaming provider the way the fuzzy
-    ``/play`` text-query path can."""
+    ``/play`` text-query path can.
+
+    The song starts the room's Up next (phase P4): ``list`` mode when
+    ``context`` names the list it was clicked in, else ``library``; the
+    mix follows the listener this phone or browser sends, else its claimed
+    person (not on a shared screen), else the household. ``up_next:
+    false`` plays the song alone."""
     await _assert_may_replace_queue(request, body.device_id, body.room_id)
+    out: dict[str, Any] = {"room_id": body.room_id, "track_id": body.track_id}
+    out.update(await _room_up_next_fields(request, body))
     status, payload = await post_admin(
         "/v1/admin/music/play-track",
-        {"room_id": body.room_id, "track_id": body.track_id},
+        out,
         headers=auth_forward_headers(request),
     )
     await _note_room_start(status, request, body.device_id, body.room_id)
@@ -1824,6 +1869,10 @@ async def play_tracks(body: CastTracksRequest, request: Request):
         payload_out["start_sec"] = body.start_sec
     if body.start_paused:
         payload_out["start_paused"] = True
+    payload_out.update(await _room_up_next_fields(request, body))
+    if body.up_next and body.up_next_session_id:
+        if await _callers_session(request, body.up_next_session_id):
+            payload_out["up_next_session_id"] = body.up_next_session_id
     status, payload = await post_admin(
         "/v1/admin/music/play-tracks",
         payload_out,

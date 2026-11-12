@@ -91,8 +91,21 @@ class MPDClient(Protocol):
     # wrong song". Every dict carries at least ``id`` and ``pos``.
     async def queue_list(self) -> list[dict[str, Any]]: ...
     # Append without clearing; returns the songs actually queued, each with
-    # the ``id`` MPD assigned.
-    async def queue_add_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]: ...
+    # the ``id`` MPD assigned. ``position``: insert there instead, in order
+    # (``addid uri pos``) — "play next" / "add before Up next's picks".
+    async def queue_add_tracks(
+        self, specs: list[dict[str, str]], *, position: int | None = None
+    ) -> list[dict[str, Any]]: ...
+    # Library files by their EXACT MPD path (no search), appended or inserted
+    # at ``position``: one answer per URI, ``{file, id}`` or None for a path
+    # MPD refused. What Up next's room refill appends (domovoi/up_next/rooms.py).
+    async def queue_add_files(
+        self, uris: list[str], *, position: int | None = None
+    ) -> list[dict[str, Any] | None]: ...
+    # Play one queue entry by songid (``playid``): the queue's "play this
+    # one" jump. ``paused`` leaves it paused there (a stopped room, whose
+    # stream handshake then resumes it). False when the songid is gone.
+    async def play_id(self, song_id: int, *, paused: bool = False) -> bool: ...
     # Returns the songids actually removed (a stale id is skipped, not fatal).
     async def queue_remove(self, song_ids: list[int]) -> list[int]: ...
     async def queue_move(self, song_id: int, to_position: int) -> bool: ...
@@ -119,7 +132,8 @@ class MPDClient(Protocol):
     async def seek_to(self, position_sec: float) -> None: ...
     async def elapsed_sec(self) -> float | None: ...
     # One status read for the listen logger: state, the current song's
-    # songid, file, elapsed and length (workers/listen_logger.py).
+    # songid, file, elapsed and length (workers/listen_logger.py), and its
+    # place in the queue and the queue's length (Up next's extender).
     async def playback_snapshot(self) -> dict[str, Any]: ...
     # Open the http stream output of a PAUSED daemon without playing
     # anything: `pause 0` then `pause 1`. Returns the state MPD was in
@@ -141,6 +155,9 @@ class MPDStubClient:
         self._next_song_id = 1
         # Every `update` asked of this daemon, in order ("" = the whole library).
         self.updated_paths: list[str] = []
+        # Bumped by every call that REPLACES the queue (Up next ends a room's
+        # session whose queue something else replaced; up_next/rooms.py).
+        self.queue_generation = 0
 
     def _assign_ids(self, songs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -153,10 +170,14 @@ class MPDStubClient:
 
     async def play_search(self, query: dict[str, str]) -> dict[str, Any] | None:
         # Fake match from the first query value.
+        self.queue_generation += 1
         title = next(iter(query.values()), "unknown")
-        self._song = {"file": f"stub/{title}.mp3", "title": title, "artist": "Stub Artist"}
+        # Like MPD: a play replaces the queue with the one song.
+        self._song = self._assign_ids([{"file": f"stub/{title}.mp3", "title": title, "artist": "Stub Artist"}])[0]
+        self._queue = [self._song]
         self._state = "play"
-        return self._song
+        # The search hit, as MPD's search answers it (no queue id).
+        return {k: v for k, v in self._song.items() if k != "id"}
 
     async def search_only(self, query: dict[str, str]) -> dict[str, Any] | None:
         # Read-only: return a hit WITHOUT mutating playback state.
@@ -167,14 +188,19 @@ class MPDStubClient:
         if not substrings:
             return None
         joined = " ".join(substrings)
-        self._song = {"file": f"stub/{joined}.mp3"}
+        self.queue_generation += 1
+        self._song = self._assign_ids([{"file": f"stub/{joined}.mp3"}])[0]
+        self._queue = [self._song]
         self._state = "play"
-        return self._song
+        # The search hit, as MPD's search answers it (no queue id).
+        return {k: v for k, v in self._song.items() if k != "id"}
 
     async def play_url(self, url: str, *, title: str | None = None, artist: str | None = None) -> bool:
         if refuses_stream_url(url):
             return False
-        self._song = {"file": url, "title": title or "stream", "artist": artist or ""}
+        self.queue_generation += 1
+        self._song = self._assign_ids([{"file": url, "title": title or "stream", "artist": artist or ""}])[0]
+        self._queue = [self._song]
         self._state = "play"
         return True
 
@@ -197,14 +223,20 @@ class MPDStubClient:
         return ok
 
     def _songs_for(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]:
-        return [
-            {
-                "file": f"stub/{spec.get('title') or spec.get('file_path') or 'unknown'}.mp3",
+        # A spec whose file is inside the music folder resolves to its MPD
+        # path, as the real client's search finds it; anything else gets a
+        # made-up one.
+        from domovoi.handlers.shared.library_match import mpd_file_for_library_path
+
+        out = []
+        for spec in specs:
+            uri = mpd_file_for_library_path(spec.get("file_path") or "")
+            out.append({
+                "file": uri or f"stub/{spec.get('title') or spec.get('file_path') or 'unknown'}.mp3",
                 "title": spec.get("title"),
                 "artist": spec.get("artist"),
-            }
-            for spec in specs
-        ]
+            })
+        return out
 
     async def prepare_tracks(
         self, specs: list[dict[str, str]], *, start_sec: float = 0.0
@@ -213,6 +245,7 @@ class MPDStubClient:
         # the counter is — never reused, matching MPD. The stub resolves
         # every spec, so the first queued song is always the first spec.
         queued = self._assign_ids(self._songs_for(specs))
+        self.queue_generation += 1
         self._queue = list(queued)
         if queued:
             self._song = queued[0]
@@ -237,6 +270,7 @@ class MPDStubClient:
         # Where the start URI lands once the blanks are dropped.
         at = min(sum(1 for u in uris[: max(0, start_index)] if u), len(songs) - 1)
         queued = self._assign_ids(songs)
+        self.queue_generation += 1
         self._queue = list(queued)
         if queued:
             self._song = queued[at]
@@ -250,10 +284,48 @@ class MPDStubClient:
     async def queue_list(self) -> list[dict[str, Any]]:
         return [dict(e, pos=i) for i, e in enumerate(self._queue)]
 
-    async def queue_add_tracks(self, specs: list[dict[str, str]]) -> list[dict[str, Any]]:
+    async def queue_add_tracks(
+        self, specs: list[dict[str, str]], *, position: int | None = None
+    ) -> list[dict[str, Any]]:
         queued = self._assign_ids(self._songs_for(specs))
-        self._queue.extend(queued)
+        self._insert(queued, position)
         return queued
+
+    def _insert(self, entries: list[dict[str, Any]], position: int | None) -> None:
+        if position is None:
+            self._queue.extend(entries)
+            return
+        at = max(0, min(int(position), len(self._queue)))
+        self._queue[at:at] = entries
+
+    #: Paths the stub refuses (as MPD refuses a file not in its database).
+    refused_files: frozenset[str] = frozenset()
+
+    async def queue_add_files(
+        self, uris: list[str], *, position: int | None = None
+    ) -> list[dict[str, Any] | None]:
+        from pathlib import PurePosixPath
+
+        out: list[dict[str, Any] | None] = []
+        taken: list[dict[str, Any]] = []
+        for uri in uris:
+            if not uri or uri in self.refused_files:
+                out.append(None)
+                continue
+            entry = self._assign_ids([{"file": uri, "title": PurePosixPath(uri).stem}])[0]
+            taken.append(entry)
+            out.append({"file": uri, "id": entry["id"]})
+        self._insert(taken, position)
+        return out
+
+    async def play_id(self, song_id: int, *, paused: bool = False) -> bool:
+        for entry in self._queue:
+            if int(entry["id"]) == int(song_id):
+                self._song = entry
+                self._song.pop("_elapsed", None)
+                self._state = "pause" if paused else "play"
+                return True
+        return False
 
     async def queue_remove(self, song_ids: list[int]) -> list[int]:
         wanted = set(song_ids)
@@ -274,6 +346,7 @@ class MPDStubClient:
         return True
 
     async def queue_clear(self) -> None:
+        self.queue_generation += 1
         self._queue = []
         self._state = "stop"
         self._song = None
@@ -377,12 +450,15 @@ class MPDStubClient:
 
     async def playback_snapshot(self) -> dict[str, Any]:
         song = self._song if self._state != "stop" else None
+        pos = self._queue_index() if song is not None else None
         return {
             "state": self._state,
             "songid": (song or {}).get("id"),
             "file": (song or {}).get("file"),
             "elapsed": float((song or {}).get("_elapsed", 0.0)) if song else None,
             "duration": (song or {}).get("duration"),
+            "pos": pos,
+            "playlistlength": len(self._queue),
         }
 
 
@@ -432,6 +508,9 @@ class RealMPDClient:
         # player once (mpd_provisioner.heal_room) and then connects again;
         # without one (the provisioner's own volume pin) a failure is final.
         self.room_id = room_id
+        # Bumped by every call that REPLACES the queue (Up next ends a room's
+        # session whose queue something else replaced; up_next/rooms.py).
+        self.queue_generation = 0
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[Any]:
@@ -494,6 +573,7 @@ class RealMPDClient:
         if not results:
             return None
         first = results[0]
+        self.queue_generation += 1
         await c.clear()
         await c.add(first["file"])
         if start:
@@ -585,6 +665,7 @@ class RealMPDClient:
             # queue (and whatever it holds) exactly as it is.
             return False
         try:
+            self.queue_generation += 1
             await c.clear()
             song_id = await c.addid(url)
             if title:
@@ -707,6 +788,7 @@ class RealMPDClient:
         if not specs:
             return []
         async with self._connect() as c:
+            self.queue_generation += 1
             await c.clear()
             queued: list[dict[str, Any]] = []
             first_spec_queued = False
@@ -783,6 +865,7 @@ class RealMPDClient:
                 return []
             if start_pos is None:  # nothing from the start on was taken:
                 start_pos = added - 1  # the last one that was, from its top
+            self.queue_generation += 1
             if old_len:
                 await c.delete(f"0:{old_len}")
             started = False
@@ -848,14 +931,17 @@ class RealMPDClient:
         return [e for e in out if e["id"] is not None]
 
     async def queue_add_tracks(
-        self, specs: list[dict[str, str]]
+        self, specs: list[dict[str, str]], *, position: int | None = None
     ) -> list[dict[str, Any]]:
         """APPEND to the queue — deliberately no ``clear()``, which is the
         whole difference from :meth:`prepare_tracks`. Uses ``addid`` so the
         new songid comes back in the same round trip; a spec MPD can't resolve
-        is skipped (a renamed file shouldn't abort the whole add)."""
+        is skipped (a renamed file shouldn't abort the whole add).
+        ``position``: insert there instead, the songs in order
+        (``addid uri pos``)."""
         if not specs:
             return []
+        at = None if position is None else max(0, int(position))
         async with self._connect() as c:
             queued: list[dict[str, Any]] = []
             for spec in specs:
@@ -863,7 +949,7 @@ class RealMPDClient:
                 if song is None:
                     continue
                 try:
-                    song_id = await c.addid(song["file"])
+                    song_id = await c.addid(song["file"], *(() if at is None else (at,)))
                 except Exception as e:
                     log.warning(
                         "MPD queue_add_tracks addid %r failed: %s",
@@ -878,7 +964,62 @@ class RealMPDClient:
                     # song IS queued, it just won't carry provenance.
                     entry["id"] = None
                 queued.append(entry)
+                if at is not None:
+                    at += 1
             return queued
+
+    async def queue_add_files(
+        self, uris: list[str], *, position: int | None = None
+    ) -> list[dict[str, Any] | None]:
+        """Add library files by their exact MPD path (``addid``), appended
+        or inserted at ``position`` in order. A path MPD refuses with an ACK
+        (not in its database: added since its last update, or gone) answers
+        None in its place; any other failure is the connection and
+        propagates. Up next's room refill (domovoi/up_next/rooms.py)."""
+        out: list[dict[str, Any] | None] = []
+        if not uris:
+            return out
+        at = None if position is None else max(0, int(position))
+        async with self._connect() as c:
+            for uri in uris:
+                if not uri:
+                    out.append(None)
+                    continue
+                try:
+                    song_id = await c.addid(uri, *(() if at is None else (at,)))
+                except Exception as e:
+                    if not _is_ack(e):
+                        raise
+                    log.debug("MPD queue_add_files: %r refused: %s", uri, e)
+                    out.append(None)
+                    continue
+                try:
+                    out.append({"file": uri, "id": int(song_id)})
+                except (TypeError, ValueError):
+                    out.append({"file": uri, "id": None})
+                if at is not None:
+                    at += 1
+        return out
+
+    async def play_id(self, song_id: int, *, paused: bool = False) -> bool:
+        """``playid``: play that queue entry now (the queue's "play this
+        one"). A paused daemon is unpaused first, on the same connection
+        (:meth:`_unpause_before_moving`: MPD 0.23.12 dies on a move while
+        paused on an undecoded song). ``paused`` pauses it there at once,
+        for a stopped room whose stream handshake then resumes it. False
+        when MPD no longer has that songid."""
+        async with self._connect() as c:
+            try:
+                await self._unpause_before_moving(c)
+                await c.playid(int(song_id))
+            except Exception as e:
+                if _is_ack(e):
+                    log.debug("MPD playid %s refused: %s", song_id, e)
+                    return False
+                raise
+            if paused:
+                await c.pause(1)
+        return True
 
     async def queue_remove(self, song_ids: list[int]) -> list[int]:
         """``deleteid`` each id. A stale id (already played off the queue, or
@@ -908,6 +1049,7 @@ class RealMPDClient:
                 return False
 
     async def queue_clear(self) -> None:
+        self.queue_generation += 1
         async with self._connect() as c:
             await c.clear()
 
@@ -1097,12 +1239,16 @@ class RealMPDClient:
 
         state = status.get("state", "stop")
         songid = status.get("songid")
+        pos = _num(status.get("song"))
+        length = _num(status.get("playlistlength"))
         return {
             "state": state if state in ("play", "pause", "stop") else "stop",
             "songid": int(songid) if songid is not None and str(songid).isdigit() else None,
             "file": (song or {}).get("file"),
             "elapsed": _num(status.get("elapsed")),
             "duration": _num(status.get("duration")) or _num((song or {}).get("duration")),
+            "pos": int(pos) if pos is not None else None,
+            "playlistlength": int(length) if length is not None else None,
         }
 
 
