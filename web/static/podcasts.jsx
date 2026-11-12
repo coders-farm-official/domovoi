@@ -34,6 +34,20 @@ const usePodcastsInternet = () => (
 const podcastsFailText = (e, fallback) => (
   typeof isInternetOffError === 'function' && isInternetOffError(e) ? INTERNET_OFF_MESSAGE : fallback
 );
+/* The "poll now" toast: the counts, then any show whose feed couldn't be
+   read, by name, with the server's plain-words reason (POST
+   /api/podcasts/poll `failures`; an older server sends none). */
+const podcastsPollText = (r) => {
+  const head = `Polled — ${(r && r.downloaded) || 0} downloaded, ${(r && r.new) || 0} new`;
+  const failures = (r && Array.isArray(r.failures)) ? r.failures : [];
+  if (!failures.length) return head;
+  const n = failures.length;
+  const named = failures.slice(0, 3)
+    .map((f) => `${(f && f.title) || 'a show'} — ${(f && f.message) || "couldn't read the feed"}`)
+    .join('; ');
+  const more = n > 3 ? `; and ${n - 3} more` : '';
+  return `${head}. ${n} ${n === 1 ? 'show' : 'shows'} couldn't be read: ${named}${more}`;
+};
 const podcastsNeedsInternetTitle = (off) => (
   off ? (typeof NEEDS_INTERNET_TEXT === 'string' ? NEEDS_INTERNET_TEXT : 'needs internet') : undefined
 );
@@ -74,7 +88,7 @@ const PodcastsPage = () => {
     setPolling(true);
     try {
       const r = await apiPost('/api/podcasts/poll', {});
-      fire(`Polled — ${r.downloaded || 0} downloaded, ${r.new || 0} new`);
+      fire(podcastsPollText(r));
       refresh();
     } catch (e) { fire(podcastsFailText(e, 'Poll failed (offline?)')); }
     setPolling(false);

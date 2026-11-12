@@ -19,10 +19,22 @@ acquisition fulfillers own music downloads:
 Every URL this worker fetches — the feed itself and each enclosure —
 comes from outside, so both go through ``domovoi.net_safety``: http(s)
 only, resolved, never an address inside the house or on the box, and
-re-checked on every redirect. The feed body is fetched here (capped at
-``MAX_FEED_BYTES``) and handed to feedparser as bytes rather than letting
-feedparser open the URL itself, and an enclosure download stops at
-``MAX_ENCLOSURE_BYTES``.
+re-checked on every redirect. The feed body is fetched here and handed to
+feedparser as bytes rather than letting feedparser open the URL itself,
+and an enclosure download stops at ``MAX_ENCLOSURE_BYTES``.
+
+A feed longer than ``MAX_FEED_BYTES`` (a show with thousands of episodes
+can run to 30 MB) is not refused: only its first ``MAX_FEED_BYTES`` are
+read, cut after the last complete item (``domovoi.feed_prefix``) and
+parsed, at most ``MAX_ITEMS_FROM_A_CUT_FEED`` of them. Feeds list the
+newest episodes first, so that is hundreds of recent episodes, far
+beyond any keep-N. A feed that lists them oldest
+first is logged: what was read (its oldest episodes) is still recorded.
+Each feed's ETag / Last-Modified is remembered in memory, per process,
+so an unchanged feed answers 304 and is not read again.
+
+``tick()`` returns which shows could not be read and why, in plain words,
+for the dashboard's "poll now".
 
 ``requires network`` — the whole worker is gated OFF by default
 (``podcast_feed_poller_enabled``; it follows ``INTERNET_ACCESS`` when not
@@ -50,12 +62,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
 
-from domovoi import connectivity, egress, net_safety, podcast_artwork
+from domovoi import connectivity, egress, feed_prefix, net_safety, podcast_artwork
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.mpd_library_sync import update_rooms_for
@@ -66,9 +80,17 @@ log = logging.getLogger(__name__)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 # A podcast feed is XML in the low hundreds of KB; a show with a decade of
-# episodes and long show notes can reach a few MB. 8 MB is generous and
-# still bounded.
+# episodes and long show notes can reach a few MB, and a daily show with
+# its whole back catalogue tens of MB. At most this much of a feed is read
+# and kept in memory; a longer one is cut after its last complete item.
 MAX_FEED_BYTES = 8 * 1024 * 1024
+# A feed cut at MAX_FEED_BYTES keeps at most this many of its first
+# (newest) episodes, far above any keep-N: parsing and upserting every
+# item of an 8 MB prefix (1,300+ episodes, ~16 s of feedparser) on each
+# poll costs far more than keep-N will ever use. Paging links (RFC 5005
+# rel="next" / "prev-archive") are not followed: the newest page is all
+# keep-N needs.
+MAX_ITEMS_FROM_A_CUT_FEED = 200
 # One episode. Long-form shows run 100-200 MB; 512 MB is far above any real
 # episode and stops a "download" that is really a firehose.
 MAX_ENCLOSURE_BYTES = 512 * 1024 * 1024
@@ -139,29 +161,208 @@ def _entry_enclosure(entry: Any) -> str | None:
     return None
 
 
-def fetch_feed_bytes(feed_url: str) -> bytes:
+class FeedUnreadable(Exception):
+    """A feed that was fetched but can't be used. ``reason`` is one of
+    :data:`FAILURE_WORDS`' keys; the message is for the log."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+# Why a show couldn't be read, in the words the dashboard shows.
+FAILURE_WORDS = {
+    "too_large": "feed too large",
+    "not_found": "feed not found",
+    "http_error": "the feed's server answered with an error",
+    "not_a_feed": "not a podcast feed",
+    "unreachable": "couldn't reach the feed",
+    "refused": "the feed's address isn't allowed",
+    "error": "couldn't read the feed",
+}
+
+
+@dataclass(frozen=True)
+class FeedDocument:
+    content: bytes          # empty when ``not_modified``
+    not_modified: bool = False
+    truncated: bool = False
+    etag: str | None = None
+    last_modified: str | None = None
+
+
+# Cache validators from each feed's last successful poll, per process (no
+# DB column holds them): feed URL -> (etag, last_modified). A fetch files
+# its answer's validators under _FETCHED; tick() moves them to _VALIDATORS
+# only once that poll's episodes are committed, so a poll that failed
+# halfway never turns the next one into a 304 that skips them.
+_VALIDATORS: dict[str, tuple[str | None, str | None]] = {}
+_FETCHED: dict[str, tuple[str | None, str | None]] = {}
+_VALIDATORS_LOCK = threading.Lock()
+
+
+def _conditional_headers(feed_url: str) -> dict[str, str]:
+    with _VALIDATORS_LOCK:
+        etag, modified = _VALIDATORS.get(feed_url, (None, None))
+    out: dict[str, str] = {}
+    if etag:
+        out["If-None-Match"] = etag
+    if modified:
+        out["If-Modified-Since"] = modified
+    return out
+
+
+def confirm_validators(feed_url: str) -> None:
+    """The poll of ``feed_url`` is committed: its fetch's validators may
+    make the next fetch conditional."""
+    with _VALIDATORS_LOCK:
+        got = _FETCHED.pop(feed_url, None)
+        if got is not None and (got[0] or got[1]):
+            _VALIDATORS[feed_url] = got
+
+
+def forget_validators(feed_url: str | None = None) -> None:
+    """Drop the remembered validators (one feed, or all): its next poll
+    reads the whole document again."""
+    with _VALIDATORS_LOCK:
+        if feed_url is None:
+            _VALIDATORS.clear()
+            _FETCHED.clear()
+        else:
+            _VALIDATORS.pop(feed_url, None)
+            _FETCHED.pop(feed_url, None)
+
+
+def fetch_feed(feed_url: str, *, conditional: bool = True) -> FeedDocument:
     """The feed document, fetched through the outbound-URL check (http(s)
-    only, public addresses only, redirects re-checked) and capped at
-    :data:`MAX_FEED_BYTES`. Blocking — call it in a thread."""
+    only, public addresses only, redirects re-checked). At most
+    :data:`MAX_FEED_BYTES` are read; a longer feed comes back cut after its
+    last complete item (``truncated``), or raises :class:`FeedUnreadable`
+    ('too_large') when not even one item fits. With ``conditional``, the
+    validators of the last committed poll are sent and an unchanged feed
+    comes back ``not_modified``. Blocking: call it in a thread."""
+    headers = {"User-Agent": "Domovoi-podcasts/1.0"}
+    if conditional:
+        headers.update(_conditional_headers(feed_url))
     result = net_safety.fetch_bytes_sync(
         feed_url,
         max_bytes=MAX_FEED_BYTES,
         timeout=30.0,
-        headers={"User-Agent": "Domovoi-podcasts/1.0"},
+        headers=headers,
+        truncate=True,
     )
+    if result.status_code == 304 and conditional:
+        return FeedDocument(content=b"", not_modified=True)
     if result.status_code >= 400:
-        raise RuntimeError(f"feed returned {result.status_code}")
-    return result.content
+        reason = "not_found" if result.status_code in (404, 410) else "http_error"
+        raise FeedUnreadable(reason, f"feed returned {result.status_code}")
+    content = result.content
+    if result.truncated:
+        try:
+            content = feed_prefix.cut_to_last_item(
+                content, max_items=MAX_ITEMS_FROM_A_CUT_FEED
+            )
+        except feed_prefix.NoCompleteItem as e:
+            raise FeedUnreadable(
+                "too_large",
+                f"feed is larger than {MAX_FEED_BYTES} bytes and {e}",
+            ) from e
+    with _VALIDATORS_LOCK:
+        _FETCHED[feed_url] = (result.etag, result.last_modified)
+    return FeedDocument(
+        content=content,
+        truncated=result.truncated,
+        etag=result.etag,
+        last_modified=result.last_modified,
+    )
+
+
+def fetch_feed_bytes(feed_url: str) -> bytes:
+    """The whole feed document (unconditional; cut as in
+    :func:`fetch_feed` when it is longer than :data:`MAX_FEED_BYTES`)."""
+    return fetch_feed(feed_url, conditional=False).content
+
+
+# What :func:`_parse_feed_blocking` answers for a feed that hasn't changed.
+NOT_MODIFIED = object()
+
+
+def _published_ts(entry: Any) -> float | None:
+    pp = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+    if pp is None:
+        return None
+    import calendar
+
+    return float(calendar.timegm(pp))
+
+
+def _lists_oldest_first(entries: list[Any]) -> bool:
+    dated = [t for t in (_published_ts(e) for e in entries) if t is not None]
+    return len(dated) >= 2 and dated[0] < dated[-1]
 
 
 def _parse_feed_blocking(feed_url: str) -> Any:
     """Fetch the feed ourselves, then parse the BYTES. feedparser would
     otherwise open the URL itself, and it accepts local paths and
     non-http schemes — this keeps every podcast fetch on the one checked
-    path."""
+    path. Answers :data:`NOT_MODIFIED` when the feed hasn't changed since
+    the last committed poll.
+
+    A cut feed is read on the promise that it lists newest first. When its
+    dates say oldest first, the part read is the show's OLDEST episodes:
+    they are still recorded (and the newest of THEM downloaded under
+    keep-N), the recent ones are missing, and the log says so."""
     import feedparser  # local import — optional dep
 
-    return feedparser.parse(fetch_feed_bytes(feed_url))
+    doc = fetch_feed(feed_url)
+    if doc.not_modified:
+        return NOT_MODIFIED
+    parsed = feedparser.parse(doc.content)
+    entries = list(getattr(parsed, "entries", []) or [])
+    feed = getattr(parsed, "feed", {}) or {}
+    if not entries and not feed.get("title") and getattr(parsed, "bozo", False):
+        raise FeedUnreadable("not_a_feed", "the document is not a feed")
+    if doc.truncated:
+        if _lists_oldest_first(entries):
+            log.warning(
+                "podcast feed %s is larger than %d bytes and lists its oldest "
+                "episodes first: only its oldest %d were read, newer ones are missing",
+                feed_url, MAX_FEED_BYTES, len(entries),
+            )
+        else:
+            log.info(
+                "podcast feed %s is larger than %d bytes: read its newest %d episodes",
+                feed_url, MAX_FEED_BYTES, len(entries),
+            )
+    return parsed
+
+
+def describe_poll_failure(e: BaseException) -> str:
+    """The :data:`FAILURE_WORDS` key for why a poll failed."""
+    if isinstance(e, FeedUnreadable):
+        return e.reason
+    if isinstance(e, net_safety.ResponseTooLarge):
+        return "too_large"
+    if is_transient_fetch_error(e):
+        return "unreachable"
+    if isinstance(e, net_safety.UnsafeOutboundURL):
+        return "refused"
+    if isinstance(e, net_safety.OutboundFetchError):
+        return "unreachable"
+    return "error"
+
+
+def _show_name(sub: dict[str, Any]) -> str:
+    """The show's title; a show never read yet has its feed URL there, so
+    name its host instead."""
+    from urllib.parse import urlsplit
+
+    title = (sub.get("title") or "").strip()
+    feed_url = sub.get("feed_url") or ""
+    if title and title != feed_url:
+        return title
+    host = urlsplit(feed_url).hostname if feed_url else None
+    return f"the show at {host}" if host else "a show"
 
 
 async def poll_subscription(session, sub: dict[str, Any]) -> int:
@@ -172,6 +373,12 @@ async def poll_subscription(session, sub: dict[str, Any]) -> int:
     artwork URL changed)."""
     feed_url = sub["feed_url"]
     parsed = await asyncio.to_thread(_parse_feed_blocking, feed_url)
+    if parsed is NOT_MODIFIED:
+        await session.execute(
+            text("UPDATE podcast_subscriptions SET last_polled_at = now() WHERE id = :id"),
+            {"id": sub["id"]},
+        )
+        return 0
     feed = getattr(parsed, "feed", {}) or {}
 
     # Refresh subscription-level metadata.
@@ -533,15 +740,20 @@ class PodcastFeedPoller(Worker):
     # cadence) while the probe says offline, instead of failing every feed.
     requires_online = True
 
-    async def tick(self) -> dict[str, int]:
+    async def tick(self) -> dict[str, Any]:
         """One full pass: poll every subscription, enqueue+download newest-N,
-        evict older. Returns coarse counts for logging/tests. Does nothing
-        when internet access is turned off for this box (the web's "poll
-        now" runs this directly, outside the worker's online gate)."""
+        evict older. Returns coarse counts for logging/tests, plus
+        ``failed`` and ``failures``: the shows whose feed couldn't be read
+        (``subscription_id``, ``title``, ``reason`` code, ``message`` in
+        plain words, never exception text). Does nothing when internet
+        access is turned off for this box (the web's "poll now" runs this
+        directly, outside the worker's online gate)."""
         polled = new_eps = downloaded = evicted = 0
+        failures: list[dict[str, Any]] = []
         if egress.internet_turned_off():
             log.info("podcast poller: internet access is turned off; not polling")
-            return {"polled": 0, "new": 0, "downloaded": 0, "evicted": 0}
+            return {"polled": 0, "new": 0, "downloaded": 0, "evicted": 0,
+                    "failed": 0, "failures": []}
         async with session_scope() as session:
             subs = (
                 await session.execute(
@@ -554,15 +766,26 @@ class PodcastFeedPoller(Worker):
                 )
             ).mappings().all()
 
+            read: list[str] = []
             for sub in subs:
                 try:
                     new_eps += await poll_subscription(session, dict(sub))
                     polled += 1
                 except Exception as e:
-                    log.warning("poll failed for sub=%s: %s", sub["id"], e)
+                    reason = describe_poll_failure(e)
+                    log.warning("poll failed for sub=%s (%s): %s", sub["id"], reason, e)
+                    failures.append({
+                        "subscription_id": sub["id"],
+                        "title": _show_name(dict(sub)),
+                        "reason": reason,
+                        "message": FAILURE_WORDS[reason],
+                    })
                     continue
+                read.append(sub["feed_url"])
                 await enqueue_newest(session, sub["id"], sub["keep_n"])
             await session.commit()
+            for feed_url in read:
+                confirm_validators(feed_url)
 
             # Download pending episodes (carry the sub title for the dest path).
             pending = (
@@ -592,12 +815,15 @@ class PodcastFeedPoller(Worker):
             await session.commit()
 
         log.info(
-            "podcast poller: polled=%d new=%d downloaded=%d evicted=%d",
-            polled, new_eps, downloaded, evicted,
+            "podcast poller: polled=%d new=%d downloaded=%d evicted=%d failed=%d",
+            polled, new_eps, downloaded, evicted, len(failures),
         )
         if downloaded or evicted:
             # The rooms' MPDs play an episode from their own database, which
             # a Windows or network folder never tells about new or removed
             # files (F-V023): ask them to read the podcasts folder.
             await update_rooms_for(tops=["podcasts"], reason="podcast poller")
-        return {"polled": polled, "new": new_eps, "downloaded": downloaded, "evicted": evicted}
+        return {
+            "polled": polled, "new": new_eps, "downloaded": downloaded, "evicted": evicted,
+            "failed": len(failures), "failures": failures,
+        }

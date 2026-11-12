@@ -14330,7 +14330,7 @@
           "podcasts"
         ],
         "summary": "Poll Now",
-        "description": "Run one feed-poll + download + keep-N pass immediately (network).\nThe web process runs the poller functions directly against the shared DB\n\u2014 the same code the background worker ticks.\n\nDevice tier: it makes the server fetch every subscribed feed now.",
+        "description": "Run one feed-poll + download + keep-N pass immediately (network).\nThe web process runs the poller functions directly against the shared DB\n\u2014 the same code the background worker ticks.\n\nThe answer says which shows couldn't be read (``failures``), so a\n\"poll now\" that read nothing isn't silent.\n\nDevice tier: it makes the server fetch every subscribed feed now.",
         "operationId": "poll_now_api_podcasts_poll_post",
         "responses": {
           "200": {
@@ -14338,11 +14338,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "integer"
-                  },
-                  "type": "object",
-                  "title": "Response Poll Now Api Podcasts Poll Post"
+                  "$ref": "#/components/schemas/PollResult"
                 }
               }
             }
@@ -24586,6 +24582,73 @@
           "track_id"
         ],
         "title": "PlaylistTrackAdd"
+      },
+      "PollFailure": {
+        "properties": {
+          "subscription_id": {
+            "type": "integer",
+            "title": "Subscription Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "subscription_id",
+          "title",
+          "reason",
+          "message"
+        ],
+        "title": "PollFailure",
+        "description": "One show whose feed couldn't be read on this pass."
+      },
+      "PollResult": {
+        "properties": {
+          "polled": {
+            "type": "integer",
+            "title": "Polled",
+            "default": 0
+          },
+          "new": {
+            "type": "integer",
+            "title": "New",
+            "default": 0
+          },
+          "downloaded": {
+            "type": "integer",
+            "title": "Downloaded",
+            "default": 0
+          },
+          "evicted": {
+            "type": "integer",
+            "title": "Evicted",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/PollFailure"
+            },
+            "type": "array",
+            "title": "Failures"
+          }
+        },
+        "type": "object",
+        "title": "PollResult"
       },
       "PositionClear": {
         "properties": {

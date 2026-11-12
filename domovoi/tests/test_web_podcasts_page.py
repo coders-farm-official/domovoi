@@ -12,6 +12,9 @@ Driven outside a browser through domovoi/tests/jsx_interact_harness.js:
   the "needs internet" title, the subscribe dialog opens on "by RSS URL",
   and that tab still works.
 * With no internet helpers at all the page renders as before.
+* "poll now" names each show whose feed couldn't be read, with the
+  server's plain-words reason (POST /api/podcasts/poll ``failures``), and
+  an answer without ``failures`` (an older server) toasts as before.
 """
 
 from __future__ import annotations
@@ -46,6 +49,19 @@ DISCOVER = [
 ]
 API = {"GET /api/podcasts/subscriptions": SUBS, "GET /api/podcasts/discover?q=npr": DISCOVER}
 NEVER_API = {**API, "GET /api/config": {"internet_access": "never"}}
+POLL_FAILED_API = {**API, "POST /api/podcasts/poll": {
+    "polled": 1, "new": 3, "downloaded": 0, "evicted": 0, "failed": 1,
+    "failures": [{"subscription_id": 7, "title": "The Big Show",
+                  "reason": "too_large", "message": "feed too large"}]}}
+POLL_OLD_API = {**API, "POST /api/podcasts/poll": {
+    "polled": 2, "new": 1, "downloaded": 2, "evicted": 0}}
+POLL_SCRIPT = r"""
+  h.render();
+  await h.settle();
+  await h.click({ type: 'button', text: 'poll now' });
+  await h.settle();
+  return { texts: h.text() };
+"""
 
 BASE_SETUP = "globalThis.ListeningAsSelector = () => null;"
 # Stand-ins for the components.jsx internet helpers, for a tree that doesn't
@@ -96,6 +112,14 @@ SCENARIOS = {
           return { poll, note, urlField, search, query, calls: h.calls };
         """,
     },
+    "poll_failed": {
+        "files": FILES, "component": "PodcastsPage", "api": POLL_FAILED_API,
+        "setup": BASE_SETUP, "script": POLL_SCRIPT,
+    },
+    "poll_old": {
+        "files": FILES, "component": "PodcastsPage", "api": POLL_OLD_API,
+        "setup": BASE_SETUP, "script": POLL_SCRIPT,
+    },
 }
 
 
@@ -145,3 +169,20 @@ def test_under_never_subscribing_by_url_still_posts(driven) -> None:
     posts = [c for c in driven["never"]["calls"] if c["method"] == "POST"]
     assert posts == [{"method": "POST", "path": "/api/podcasts/subscriptions",
                       "body": {"feed_url": "https://f.example/new.xml"}}]
+
+
+def _toast(texts: list[str]) -> str:
+    hits = [t for t in texts if t.startswith("Polled")]
+    assert len(hits) == 1, texts
+    return hits[0]
+
+
+def test_poll_now_names_a_show_that_could_not_be_read(driven) -> None:
+    assert _toast(driven["poll_failed"]["texts"]) == (
+        "Polled — 0 downloaded, 3 new. "
+        "1 show couldn't be read: The Big Show — feed too large"
+    )
+
+
+def test_poll_now_from_an_older_server_toasts_the_counts(driven) -> None:
+    assert _toast(driven["poll_old"]["texts"]) == "Polled — 2 downloaded, 1 new"
