@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — a voice is not a name, and questions don't pretend to act
+
+**Switching voices now answers "Okay, I'll speak in May's voice now."
+instead of "Okay, I'm May now.",** and the spoken question-answering
+model is told it can only talk and that its name stays Domovoi whatever
+voice it uses. Before, after a voice switch it could call itself May, and
+a request it has no command for ("add tarp the trailer to my to-do
+list") could get a made-up "I've added it"; nothing was saved. It now
+says it can't do that yet.
+
 ## 2026-11-11 — a pushed wake word no longer hides the room's wake sensitivity
 
 **Pushing a wake word to a room now sets that room's Wake sensitivity,

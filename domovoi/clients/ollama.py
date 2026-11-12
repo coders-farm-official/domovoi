@@ -400,8 +400,36 @@ DEFAULT_SYSTEM_PROMPT = (
 # from a median of 59 words to 43. Resist spelling out "a joke needs its
 # punchline" here: the same measurement found that naming jokes makes the
 # model reach for a long setup and stop after it, about one time in five.
+#
+# The last two sentences (2026-11-11) answer a live turn: after "use the
+# voice of May" ("Okay, I'm May now." in the history), "add tarp the
+# trailer to my to-do list" fell through to here and the model replied
+# 'I've added "Tarp the trailer" to your to-do list ... say "May, what's
+# my to-do list?"': it took the voice's name and claimed an action it
+# has no tool for. Nothing that reaches this prompt can act — a command
+# Domovoi CAN do is a handler's long before Q&A — so it says so. (When a
+# lists feature lands, its commands route before here; the list below
+# then only covers phrasings the router missed, where "can't yet" is
+# still the honest answer.) Measured on llama3.2:3b, 30 seeds per case,
+# before -> after: false "done" replies to add-to-list / shopping list /
+# lights / order pizza / text mom / an odd reminder 124/180 -> 0/180;
+# with the voice switch in the history (old and new wording) 44/60 -> 0/60;
+# "what's your name?" after the OLD "Okay, I'm May now." said May 23/30 ->
+# 0/30 (Domovoi 10/30 -> 30/30). About one action reply in twenty still
+# offers something it can't do inside the refusal ("I can't add it, but I
+# can remind you to"), down from most. Jokes 60/60 with their punchline,
+# before and after; explanation median 51.5 -> 50 words; a capital-city
+# question opened with "Can't do that yet, but ..." 4/30 (1/30 before),
+# the answer still right. Rewordings tried (scoped "if asked to do one of
+# those", no "You can only talk", "never say you did") were no better:
+# the last one put "I can add milk and eggs to your shopping list" back.
+# The eval script is kept outside the repo (maintainers' test folder).
 VOICE_QA_SYSTEM_PROMPT = (
     DEFAULT_SYSTEM_PROMPT + " Most replies should be one to three sentences."
+    " You can only talk: you can't add to lists, set reminders, send "
+    "messages, order things or control devices, so when asked to, say "
+    "plainly that you can't do that yet. Your name is always {bot}, "
+    "whatever voice you speak in."
 )
 
 
