@@ -15,6 +15,16 @@ Two callers, one client:
   year" for an outage. The recording lookup above keeps the same date
   from its search answer (:attr:`MusicBrainzMatch.first_release_date`),
   so a new enrichment carries the year with no extra request.
+* **Recording details** (:meth:`HttpMusicBrainzClient.recording_details`)
+  is the same lookup with ``inc=genres+artist-credits+releases+release-groups``
+  (one request): the year as above, and a genre for a track whose file
+  names none (:func:`recording_genres`: the recording's own genres, else
+  its albums' (release groups'), else its first credited artist's — the
+  ``genres`` inc applies to the linked release groups and artists in the
+  same answer, so no per-artist request is made). A recording on hundreds
+  of releases can answer more than :attr:`HttpMusicBrainzClient.MAX_BODY_BYTES`;
+  then it is asked once more without ``releases`` (recording and artist
+  genres only), so it is never "no answer" for ever.
 * **Artist search** (:meth:`HttpMusicBrainzClient.search_artists`) feeds the
   opt-in "also called" fetch (``domovoi/workers/library_alias_fetch.py``):
   the spoken names people use for an artist ("Tec 9" for Tech N9ne).
@@ -133,12 +143,141 @@ class MusicBrainzRejected(Exception):
     retry later with a backoff, never "no such artist"."""
 
 
+class MusicBrainzTooLarge(MusicBrainzUnavailable):
+    """The answer was longer than the client reads (``MAX_BODY_BYTES``)."""
+
+
+@dataclass(frozen=True)
+class MbRecordingDetails:
+    """What the library asks MusicBrainz about one recording: its
+    first-release year, and its genre keys (``domovoi.library_genres``
+    keys, best first, at most :data:`MAX_MB_GENRES`) with where they came
+    from: "recording", "release-group", "artist", or None (no genre)."""
+
+    year: int | None = None
+    genres: tuple[str, ...] = ()
+    genre_from: str | None = None
+
+
+#: Most genres kept from MusicBrainz for one track (the top-voted).
+MAX_MB_GENRES = 3
+#: Most genre entries looked at in one list, releases looked at in one
+#: answer, and artist credits looked at: an answer is whatever the server
+#: (or something in between) says.
+MAX_MB_GENRE_ENTRIES = 64
+MAX_MB_RELEASES = 500
+MAX_MB_CREDITS = 16
+
+
+def _vote_count(value: Any) -> int:
+    """A genre's vote count: an int above zero, else 0 (ignored). A bool
+    is not a count; a float or a string is not either."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value if value > 0 else 0
+
+
+def _genre_votes(genres: Any) -> dict[str, int]:
+    """Normalised genre key -> votes, of one MusicBrainz ``genres`` list
+    (``[{"name": "hip hop", "count": 4}, ...]``). Names go through
+    ``domovoi.library_genres`` (bounded first, then normalised and
+    aliased) so they match the keys the files' tags give; a name that
+    normalises to nothing, or a vote count of 0 or less, is dropped."""
+    from domovoi.library_genres import MAX_RAW_CHARS, genre_keys
+
+    out: dict[str, int] = {}
+    if not isinstance(genres, list):
+        return out
+    for entry in genres[:MAX_MB_GENRE_ENTRIES]:
+        if not isinstance(entry, Mapping):
+            continue
+        name, votes = entry.get("name"), _vote_count(entry.get("count"))
+        if votes <= 0 or not isinstance(name, str) or len(name) > MAX_RAW_CHARS:
+            continue
+        keys = genre_keys([name])
+        if keys:
+            out[keys[0]] = out.get(keys[0], 0) + votes
+    return out
+
+
+def _top(votes: Mapping[str, int]) -> tuple[str, ...]:
+    """The top-voted keys, most votes first (ties: first seen), at most
+    :data:`MAX_MB_GENRES`."""
+    order = {k: i for i, k in enumerate(votes)}
+    ranked = sorted(votes, key=lambda k: (-votes[k], order[k]))
+    return tuple(ranked[:MAX_MB_GENRES])
+
+
+def recording_genres(data: Any) -> tuple[tuple[str, ...], str | None]:
+    """The genre keys of a recording lookup answered with
+    ``inc=genres+artist-credits+releases+release-groups``, and where they
+    came from. In order, the first that has any:
+
+    1. the recording's own ``genres``;
+    2. its release groups' (each album or single it is on, once): votes
+       added up over the plain ones (no secondary type: not a compilation,
+       live album, soundtrack, remix ...), or over all of them when no
+       plain one has a genre;
+    3. its first credited artist's.
+
+    Only the top-voted :data:`MAX_MB_GENRES` are kept; votes of 0 or less
+    are ignored. ``((), None)`` when none has a genre or the answer is not
+    a lookup at all."""
+    if not isinstance(data, Mapping):
+        return (), None
+    own = _genre_votes(data.get("genres"))
+    if own:
+        return _top(own), "recording"
+
+    plain: dict[str, int] = {}
+    every: dict[str, int] = {}
+    seen: set[str] = set()
+    releases = data.get("releases")
+    for rel in (releases if isinstance(releases, list) else [])[:MAX_MB_RELEASES]:
+        rg = rel.get("release-group") if isinstance(rel, Mapping) else None
+        if not isinstance(rg, Mapping):
+            continue
+        rg_id = rg.get("id")
+        if isinstance(rg_id, str):
+            if rg_id in seen:
+                continue
+            seen.add(rg_id)
+        votes = _genre_votes(rg.get("genres"))
+        secondary = rg.get("secondary-types")
+        is_plain = not (isinstance(secondary, list) and secondary)
+        for k, n in votes.items():
+            every[k] = every.get(k, 0) + n
+            if is_plain:
+                plain[k] = plain.get(k, 0) + n
+    if plain or every:
+        return _top(plain or every), "release-group"
+
+    credits = data.get("artist-credit")
+    for credit in (credits if isinstance(credits, list) else [])[:MAX_MB_CREDITS]:
+        artist = credit.get("artist") if isinstance(credit, Mapping) else None
+        if isinstance(artist, Mapping):
+            votes = _genre_votes(artist.get("genres"))
+            return (_top(votes), "artist") if votes else ((), None)
+    return (), None
+
+
+def recording_details_of(data: Any) -> MbRecordingDetails:
+    """:class:`MbRecordingDetails` of one recording lookup's JSON."""
+    if not isinstance(data, Mapping):
+        return MbRecordingDetails()
+    genres, source = recording_genres(data)
+    return MbRecordingDetails(year=year_of_date(data.get("first-release-date")),
+                              genres=genres, genre_from=source)
+
+
 class MusicBrainzClient(Protocol):
     async def lookup(self, *, title: str, artist: str | None) -> MusicBrainzMatch | None: ...
 
     async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]: ...
 
     async def recording_year(self, recording_id: str) -> int | None: ...
+
+    async def recording_details(self, recording_id: str) -> MbRecordingDetails: ...
 
 
 class MusicBrainzStubClient:
@@ -152,6 +291,9 @@ class MusicBrainzStubClient:
 
     async def recording_year(self, recording_id: str) -> int | None:
         return None
+
+    async def recording_details(self, recording_id: str) -> MbRecordingDetails:
+        return MbRecordingDetails()
 
 
 _NOISE_PATTERNS = [
@@ -344,6 +486,53 @@ class HttpMusicBrainzClient:
             raise MusicBrainzUnavailable("not JSON")
         return year_of_date(data.get("first-release-date"))
 
+    #: The lookup's ``inc``: genres of the recording AND of the release
+    #: groups and artists linked in the same answer (MusicBrainz applies
+    #: ``genres`` to the linked entities a lookup includes).
+    DETAILS_INC = "genres+artist-credits+releases+release-groups"
+    #: Asked once more with this when the full answer is too large (a
+    #: recording on hundreds of releases): recording and artist genres.
+    DETAILS_INC_SMALL = "genres+artist-credits"
+
+    async def recording_details(self, recording_id: str) -> MbRecordingDetails:
+        """One recording's year and genres (:func:`recording_details_of`):
+        ``GET /ws/2/recording/<id>?fmt=json&inc=``:attr:`DETAILS_INC`. An
+        answer over :attr:`MAX_BODY_BYTES` is asked again with
+        :attr:`DETAILS_INC_SMALL` (that second request, paced like any
+        other, is the only one; too large again is :class:`MusicBrainzRejected`).
+        Answers and raises like
+        :meth:`recording_year`: a 404 is a verdict with nothing in it.
+        Only the id leaves the house."""
+        if not is_mbid(recording_id):
+            raise MusicBrainzRejected("not a MusicBrainz id")
+        try:
+            status, data = await self._rate_limited_fetch(
+                f"recording/{recording_id}", {"fmt": "json", "inc": self.DETAILS_INC},
+                timeout=self.REQUEST_TIMEOUT_SEC,
+            )
+        except MusicBrainzTooLarge:
+            try:
+                status, data = await self._rate_limited_fetch(
+                    f"recording/{recording_id}", {"fmt": "json", "inc": self.DETAILS_INC_SMALL},
+                    timeout=self.REQUEST_TIMEOUT_SEC,
+                )
+            except MusicBrainzTooLarge as e:
+                # Too large even without releases: not an answer this
+                # client will ever read, so a refusal (the track is marked
+                # asked), never an outage retried for ever.
+                raise MusicBrainzRejected("answer too large") from e
+        if status in (429, 503):
+            raise MusicBrainzRateLimited(f"HTTP {status}")
+        if status == 404:
+            return MbRecordingDetails()
+        if status >= 500:
+            raise MusicBrainzUnavailable(f"HTTP {status}")
+        if status != 200:
+            raise MusicBrainzRejected(f"HTTP {status}")
+        if not isinstance(data, Mapping):
+            raise MusicBrainzUnavailable("not JSON")
+        return recording_details_of(data)
+
     async def search_artists(self, name: str, *, limit: int = 5) -> list[MbArtist]:
         """Artists whose name matches ``name`` (MusicBrainz ranks them; the
         caller verifies). Only a 200 with a JSON body answers — an empty
@@ -446,7 +635,7 @@ class HttpMusicBrainzClient:
                 for chunk in r.iter_content(64 * 1024):
                     body += chunk
                     if len(body) > self.MAX_BODY_BYTES:
-                        raise MusicBrainzUnavailable("answer too large")
+                        raise MusicBrainzTooLarge("answer too large")
             except MusicBrainzUnavailable:
                 raise
             except Exception as e:

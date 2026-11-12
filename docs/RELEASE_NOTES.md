@@ -4,6 +4,28 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — a genre from MusicBrainz for recognised songs
+
+A song whose file names no genre but which song recognition matched (it
+has a MusicBrainz recording id) now gets a genre from MusicBrainz: the
+recording's own genres, else its album's, else its artist's, the top-voted
+three at most, named the way the Genres tab names the files' genres. A
+genre in the file always wins: when a file later gets a genre tag, the
+server's next read of it replaces the MusicBrainz one. It is the same
+background lookup as the MusicBrainz year, now one request for both
+(`inc=genres+artist-credits+releases+release-groups`): still the recording
+id only, paced, and only while song recognition is on, the Internet answer
+is not **No** and the server is online (docs/SECURITY_PRIVACY.md). Songs
+already asked for their year are asked once more, for the genre.
+
+On the Genres tab such a song stays in the **no genre** row until it has
+been asked, and that row says how many are waiting ("3 tracks · 2 waiting
+for MusicBrainz"); `GET /api/music/genres` adds `musicbrainz_pending`
+(0 when the lookup can't run).
+
+**Migration V052** adds `library_tracks.genre_source` ('tag' or
+'musicbrainz'; existing genres are marked 'tag') and `genre_checked_at`.
+
 ## 2026-11-12 — add to the queue from the queue
 
 The Queue panel in the web player (the player's Queue tab and the bar's

@@ -1,11 +1,28 @@
-"""A year from MusicBrainz for tracks whose tags give none (V050, Up next P0).
+"""A year and a genre from MusicBrainz for tracks whose tags give none
+(V050 year, V052 genre; Up next P0).
 
-A track's year comes from its own tags first (the indexer and the tag
-backfill). Some files carry no date at all; when such a track has a
-MusicBrainz recording id (song recognition or a provider download found
-it), MusicBrainz knows the recording's first release, and this worker
-asks for it: ``GET /ws/2/recording/<id>?fmt=json``, reading
-``first-release-date``.
+A track's year and genre come from its own tags first (the indexer and the
+tag backfill). Some files carry no date or no genre; when such a track has
+a MusicBrainz recording id (song recognition or a provider download found
+it), MusicBrainz knows the recording's first release and genres, and this
+worker asks for both in ONE request:
+``GET /ws/2/recording/<id>?fmt=json&inc=genres+artist-credits+releases+release-groups``
+(``MusicBrainzClient.recording_details``), reading ``first-release-date``
+and the genres: the recording's own, else its albums' (release groups'),
+else its first credited artist's — the top-voted three at most, normalised
+by ``domovoi.library_genres`` so they match the Genres page's
+(``domovoi.clients.musicbrainz.recording_genres``). MusicBrainz includes
+the linked release groups' and artists' genres in that same answer, so
+there is no per-artist request. A recording on so many releases that the
+answer is over the client's 2 MB cap is asked once more without releases
+(recording and artist genres only).
+
+**Due:** a track with a recording id whose tags have been read and that
+has no year and was never asked for one (``year_checked_at``), or has no
+genre and was never asked for one (``genre_checked_at``, V052). So tracks
+the V050 year fetch already asked about are asked once more, for the
+genre; a track with both a year and a genre is never asked. One answer
+fills both, where each is empty, and marks both asked.
 
 **What leaves the house:** the recording id (a public MusicBrainz
 identifier) in the request path, and the project User-Agent. No title, no
@@ -39,8 +56,10 @@ cannot block the queue, and pauses too, so a refusal of every request
 costs one track per pause, not the library.
 
 **Only rows the tags already had their say on** (``tags_version`` at the
-reader's version) and with no year; a year MusicBrainz gives never
-replaces one from the file, and ``year_source`` says which it is.
+reader's version); a year or genre MusicBrainz gives never replaces one
+from the file, and ``year_source`` / ``genre_source`` say which it is. A
+file that later gains a genre tag replaces the MusicBrainz one when the
+tag backfill or the indexer reads it (``library_tag_backfill.py``).
 """
 
 from __future__ import annotations
@@ -54,6 +73,7 @@ from sqlalchemy import text
 
 from domovoi import egress, lifecycle
 from domovoi.clients.musicbrainz import (
+    MbRecordingDetails,
     MusicBrainzClient,
     MusicBrainzRateLimited,
     MusicBrainzRejected,
@@ -63,7 +83,7 @@ from domovoi.clients.musicbrainz import (
 )
 from domovoi.config import settings
 from domovoi.workers.base import Worker
-from domovoi.library_genres import TAGS_VERSION
+from domovoi.library_genres import MAX_GENRE_CHARS, TAGS_VERSION, genre_label
 
 log = logging.getLogger(__name__)
 
@@ -118,27 +138,47 @@ def reset_status_for_tests() -> None:
 class YearFetchStore(Protocol):
     async def due(self, version: int, limit: int) -> list[str]: ...
 
-    async def record(self, recording_id: str, year: int | None) -> None: ...
+    async def record(self, recording_id: str, details: MbRecordingDetails) -> None: ...
 
     async def record_refused(self, recording_id: str) -> None: ...
 
 
+# The two halves are the two partial indexes (V050 year, V052 genre).
 _DUE_SQL = text(
     "SELECT musicbrainz_recording_id, min(id) AS first FROM library_tracks "
-    "WHERE year IS NULL AND musicbrainz_recording_id IS NOT NULL "
-    "AND year_checked_at IS NULL AND tags_version >= :v "
+    "WHERE musicbrainz_recording_id IS NOT NULL AND tags_version >= :v "
+    "AND ((year IS NULL AND year_checked_at IS NULL) "
+    "OR (genre_keys IS NULL AND genre_checked_at IS NULL)) "
     "GROUP BY musicbrainz_recording_id ORDER BY first LIMIT :n"
 )
-# Every track with this recording id: a year only where there is none yet
-# (the CASEs read the row as it was before this UPDATE).
+# Every track with this recording id: a year only where there is none yet,
+# a genre only where there is none yet (the CASEs read the row as it was
+# before this UPDATE), both marked asked — the genre only on a row with no
+# genre, so a row whose tag genre is later removed is still asked.
 _RECORD_SQL = text(
     "UPDATE library_tracks SET "
     "year = CASE WHEN year IS NULL THEN CAST(:y AS smallint) ELSE year END, "
     "year_source = CASE WHEN year IS NULL AND CAST(:y AS smallint) IS NOT NULL "
     "THEN 'musicbrainz' ELSE year_source END, "
-    "year_checked_at = now() "
-    "WHERE musicbrainz_recording_id = :mbid AND year_checked_at IS NULL"
+    "genre = CASE WHEN genre_keys IS NULL AND CAST(:gk AS text[]) IS NOT NULL "
+    "THEN CAST(:g AS text) ELSE genre END, "
+    "genre_source = CASE WHEN genre_keys IS NULL AND CAST(:gk AS text[]) IS NOT NULL "
+    "THEN 'musicbrainz' ELSE genre_source END, "
+    "genre_keys = COALESCE(genre_keys, CAST(:gk AS text[])), "
+    "year_checked_at = COALESCE(year_checked_at, now()), "
+    "genre_checked_at = CASE WHEN genre_keys IS NULL THEN COALESCE(genre_checked_at, now()) "
+    "ELSE genre_checked_at END "
+    "WHERE musicbrainz_recording_id = :mbid "
+    "AND (year_checked_at IS NULL OR genre_checked_at IS NULL)"
 )
+
+
+def _record_params(recording_id: str, details: MbRecordingDetails) -> dict[str, Any]:
+    """The UPDATE's parameters: the keys as they are, and ``genre`` (the
+    display name) their labels joined, as the Genres page names them."""
+    keys = list(details.genres) or None
+    display = "; ".join(genre_label(k) for k in keys)[:MAX_GENRE_CHARS] if keys else None
+    return {"mbid": recording_id, "y": details.year, "gk": keys, "g": display}
 
 
 class DbYearFetchStore:
@@ -149,15 +189,15 @@ class DbYearFetchStore:
             res = await s.execute(_DUE_SQL, {"v": version, "n": limit})
             return [str(r[0]) for r in res.all()]
 
-    async def record(self, recording_id: str, year: int | None) -> None:
+    async def record(self, recording_id: str, details: MbRecordingDetails) -> None:
         from domovoi.db.session import session_scope
 
         async with session_scope() as s:
-            await s.execute(_RECORD_SQL, {"mbid": recording_id, "y": year})
+            await s.execute(_RECORD_SQL, _record_params(recording_id, details))
             await s.commit()
 
     async def record_refused(self, recording_id: str) -> None:
-        await self.record(recording_id, None)
+        await self.record(recording_id, MbRecordingDetails())
 
 
 class LibraryYearFetch(Worker):
@@ -180,7 +220,7 @@ class LibraryYearFetch(Worker):
         return self._client or get_musicbrainz_client()
 
     async def tick(self) -> dict[str, int]:
-        result = {"asked": 0, "years": 0}
+        result = {"asked": 0, "years": 0, "genres": 0}
         if not _egress_allowed():
             _STATUS.state = "off" if not settings.library_enricher_enabled else "offline"
             return result
@@ -203,7 +243,7 @@ class LibraryYearFetch(Worker):
                 await self._store.record_refused(mbid)
                 continue
             try:
-                year = await client.recording_year(mbid)
+                details = await client.recording_details(mbid)
             except MusicBrainzRateLimited:
                 _STATUS.paused_until = time.time() + RATE_LIMIT_PAUSE_SEC
                 _STATUS.state, _STATUS.last_error = "rate_limited", "rate_limited"
@@ -218,13 +258,15 @@ class LibraryYearFetch(Worker):
                 _STATUS.state, _STATUS.last_error = "paused", f"rejected: {e}"[:64]
                 break
             result["asked"] += 1
-            await self._store.record(mbid, year)
-            if year is not None:
+            await self._store.record(mbid, details)
+            if details.year is not None:
                 result["years"] += 1
+            if details.genres:
+                result["genres"] += 1
             _STATUS.last_error = None
         if result["asked"]:
-            log.info("MusicBrainz year fetch: %d recordings asked, %d years",
-                     result["asked"], result["years"])
+            log.info("MusicBrainz year/genre fetch: %d recordings asked, %d years, %d genres",
+                     result["asked"], result["years"], result["genres"])
         return result
 
 
