@@ -56,6 +56,10 @@ Client → Server
                            server logs a WARNING per connection without it:
                            it cannot hear that such a satellite played
                            silence and records the announcement as spoken.
+                           `dropin_ready` (optional, default false,
+                           2026-11-12) says a `dropin_start` marked
+                           `await_ready` waits for the reply still playing
+                           and is answered with `dropin_ready` (below).
                            `supports` (optional list, 2026-10-12) names what
                            the device can do (domovoi/satellite_abilities.py:
                            restart, code_sync, plugin_payloads, config, wifi,
@@ -228,6 +232,13 @@ Client → Server
                            client-detected hang-up). The spoken "hang up"
                            path instead routes a normal utterance to
                            DropInHandler, which ends the call server-side.
+  text  dropin_ready       {"type":"dropin_ready"} — ONLY in answer to a
+                           `dropin_start` marked `await_ready`: the reply
+                           that was playing when the call started has played
+                           out and the call is open on the satellite. Until
+                           it (or DROPIN_READY_WAIT_SEC) the server sends that
+                           room nothing of the call — no start chime, no
+                           relay from the peer.
   text  display_status     {"type":"display_status","on":bool,"kiosk_alive":bool,
                             "brightness":int|null,"idle_mode":"clock"|"blank"|"art"}
                            — video satellites only: reports screen power
@@ -373,6 +384,9 @@ Server → Client
                            chipmunks) without the response_start/response_end
                            lifecycle. openWakeWord keeps running so "hey
                            jarvis, hang up" can end the call.
+                           `await_ready: true` (only to a satellite whose
+                           hello said `dropin_ready`): finish the reply still
+                           playing, then enter and send `dropin_ready`.
   text  dropin_end         {"type":"dropin_end","reason":...} — exit open-mic
                            mode, restore the wake-word loop and any suppressed
                            music.
@@ -711,6 +725,15 @@ CORE_FEATURES: tuple[str, ...] = (
 # neither sends them nor lets go of its `prev_health` record; and the
 # handlers drop them from such a session regardless.
 AUTHENTICATED_FEATURES: frozenset[str] = frozenset({"health", "log_push"})
+
+# A drop-in leg whose satellite declared `dropin_ready` (hello key, see
+# domovoi/satellite_abilities.py) finishes the reply it is still playing
+# ("Dropping in on the kitchen.") before it opens the call, and says so with
+# `dropin_ready`; until then nothing of the call is sent to it (the start
+# chime, the peer's relay audio). The satellite gives up waiting on its own
+# playback after 8 s; this is the core's backstop for a `dropin_ready` that
+# never comes (2026-11-12: the call's audio used to cut the announcement off).
+DROPIN_READY_WAIT_SEC = 10.0
 
 # When a room can take an out-of-turn announcement (a timer or reminder
 # going off elsewhere, domovoi/timer_delivery.py): StreamSession.
@@ -1571,6 +1594,29 @@ class _InterimSpeech:
             sess._note_audio_sent(len(chunk), sr)
 
 
+def _awaits_dropin_ready(sess: Any) -> bool:
+    """Whether this drop-in leg's satellite declared `dropin_ready`: it
+    finishes the reply it is playing before it opens a call, and says
+    `dropin_ready` when it has. A phone leg, and every satellite from
+    before 2026-11-12, opens at once and gets the call's audio at once."""
+    abilities = getattr(sess, "abilities", None)
+    return isinstance(abilities, Abilities) and abilities.allows("dropin_ready") is True
+
+
+async def _send_dropin_start_chime(sess: Any) -> None:
+    """The soft "connected" chime, down the call's own 16 kHz path."""
+    from domovoi.dropin_chimes import START_CHIME_PCM
+    try:
+        await sess.ws.send_bytes(START_CHIME_PCM)
+    except Exception as e:
+        log.debug("drop-in: start chime to %s failed: %s", sess.room_id, e)
+        return
+    # A phone leg (PhoneDropinSession) has no speaker estimate.
+    note = getattr(sess, "_note_audio_sent", None)
+    if note is not None:
+        note(len(START_CHIME_PCM), PCM_INPUT_SAMPLE_RATE)
+
+
 class StreamSession:
     """Per-connection state machine.
 
@@ -1647,6 +1693,12 @@ class StreamSession:
         self.dropin_call_id: int | None = None
         self._dropin_last_audio: float = 0.0
         self._dropin_silence_task: asyncio.Task[None] | None = None
+        # Set from `dropin_start` until this satellite's `dropin_ready`
+        # (or DROPIN_READY_WAIT_SEC): it is still playing the reply that
+        # announced the call, so nothing of the call is sent to it yet.
+        # Only for a satellite whose hello declared `dropin_ready`.
+        self._dropin_awaiting_ready: bool = False
+        self._dropin_ready_task: asyncio.Task[None] | None = None
         # ── Conversational chat mode (Feature 8) ─────────────────────
         # In-memory mirror of sessions.context["conversational_mode"], refreshed
         # at the top of every turn so the tool bridge + watchdog can read it
@@ -1981,6 +2033,10 @@ class StreamSession:
             if gate > -120.0 and _pcm_dbfs(data) < gate:
                 return
             self._dropin_last_audio = asyncio.get_running_loop().time()
+            if getattr(peer, "_dropin_awaiting_ready", False) is True:
+                # The peer is still playing the reply that announced the
+                # call: its speaker isn't the call's yet (`dropin_ready`).
+                return
             try:
                 await peer.ws.send_bytes(data)
             except Exception as e:
@@ -3488,6 +3544,12 @@ class StreamSession:
             self._response_task = asyncio.create_task(
                 self._respond_noisy_capture(), name="noisy-apology"
             )
+            return
+        if t == "dropin_ready":
+            # The satellite has finished the reply it was playing when its
+            # dropin_start came, and is in the call now: its start chime
+            # and the peer's audio may go out. A stray one is a no-op.
+            await self._dropin_leg_ready(why="satellite")
             return
         if t == "dropin_end":
             # Pi-side end of an active drop-in (hardware button or a
@@ -7188,6 +7250,13 @@ class StreamSession:
                     fd.get(near.room_id, False) and fd.get(far.room_id, False)
                 ),
             }
+            if _awaits_dropin_ready(near):
+                # It finishes the reply still playing there ("Dropping in on
+                # the kitchen.") before it opens the call, then says
+                # `dropin_ready`; until then nothing of the call goes to it.
+                # Set before the frame goes out: the peer's relay checks it.
+                frame["await_ready"] = True
+                near._dropin_awaiting_ready = True
             try:
                 await near.ws.send_text(json.dumps(frame))
             except Exception as e:
@@ -7201,17 +7270,16 @@ class StreamSession:
 
         # Soft "connected" chime to both ends. Both Pis are in open-mic now,
         # so this plays straight through the relay/playback path (16 kHz).
-        from domovoi.dropin_chimes import START_CHIME_PCM
+        # A leg still finishing its reply gets its chime with its
+        # `dropin_ready` instead (`_dropin_leg_ready`), or at the backstop.
         for sess in (self, peer):
-            try:
-                await sess.ws.send_bytes(START_CHIME_PCM)
-            except Exception as e:
-                log.debug("drop-in: start chime to %s failed: %s", sess.room_id, e)
-            else:
-                # A phone leg (PhoneDropinSession) has no speaker estimate.
-                note = getattr(sess, "_note_audio_sent", None)
-                if note is not None:
-                    note(len(START_CHIME_PCM), PCM_INPUT_SAMPLE_RATE)
+            if getattr(sess, "_dropin_awaiting_ready", False) is True:
+                sess._dropin_ready_task = asyncio.create_task(
+                    sess._dropin_ready_backstop(DROPIN_READY_WAIT_SEC),
+                    name=f"dropin-ready-{sess.room_id}",
+                )
+                continue
+            await _send_dropin_start_chime(sess)
 
         log.info(
             "drop-in: %s ↔ %s connected (call_id=%s)",
@@ -7252,17 +7320,33 @@ class StreamSession:
             active = app.state.active_dropins
             active.pop(self.room_id, None)
             active.pop(peer.room_id, None)
+            # A leg that never said `dropin_ready` never heard the start
+            # chime either: it gets no end chime (its satellite drops the
+            # pending call on the dropin_end below).
+            never_opened: set[str] = set()
+            ready_tasks: list[Any] = []
+            for sess in (self, peer):
+                if getattr(sess, "_dropin_awaiting_ready", False) is True:
+                    never_opened.add(sess.room_id)
+                sess._dropin_awaiting_ready = False
+                ready_tasks.append(getattr(sess, "_dropin_ready_task", None))
+                sess._dropin_ready_task = None
 
         # Outside the lock: the watchdog may itself be ending the call, so
         # don't cancel ourselves.
         if sil is not None and not sil.done() and sil is not asyncio.current_task():
             sil.cancel()
+        for task in ready_tasks:
+            if task is not None and not task.done() and task is not asyncio.current_task():
+                task.cancel()
 
         # Soft "disconnected" chime BEFORE the end frame. The Pi doesn't
         # force-drain on dropin_end, so the queued chime plays out as the
         # call closes — no server-side sleep needed.
         from domovoi.dropin_chimes import END_CHIME_PCM
         for sess in (self, peer):
+            if sess.room_id in never_opened:
+                continue
             try:
                 await sess.ws.send_bytes(END_CHIME_PCM)
             except Exception as e:
@@ -7302,6 +7386,38 @@ class StreamSession:
             "drop-in: %s ↔ %s ended (by=%s, status=%s)",
             self.room_id, peer.room_id, ended_by, status,
         )
+
+    async def _dropin_leg_ready(self, *, why: str) -> None:
+        """This leg's satellite is in the call now (its `dropin_ready`, or
+        the backstop gave up waiting for one): send its start chime, and
+        let the peer's relay through (`_on_audio` checks the flag)."""
+        if not self._dropin_awaiting_ready:
+            return
+        self._dropin_awaiting_ready = False
+        task, self._dropin_ready_task = self._dropin_ready_task, None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        if self.dropin_peer is None:
+            return  # the call ended while the reply was still playing
+        if why == "timeout":
+            log.warning(
+                "drop-in: %s never said dropin_ready within %.0fs; opening "
+                "the call there anyway", self.room_id, DROPIN_READY_WAIT_SEC,
+            )
+        else:
+            log.info("drop-in: %s finished its reply; call open there", self.room_id)
+        # The silence clock starts when the call is open on this side.
+        self._dropin_last_audio = asyncio.get_running_loop().time()
+        await _send_dropin_start_chime(self)
+
+    async def _dropin_ready_backstop(self, wait: float) -> None:
+        """Open the call on this leg after ``wait`` seconds without its
+        `dropin_ready` (the satellite caps its own wait at 8 s)."""
+        try:
+            await asyncio.sleep(wait)
+            await self._dropin_leg_ready(why="timeout")
+        except asyncio.CancelledError:
+            return
 
     async def _dropin_silence_watchdog(self, timeout: float) -> None:
         """Auto-end a call after ``timeout`` seconds with no relayed audio

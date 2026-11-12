@@ -258,6 +258,10 @@ class PhoneDropinSession:
             if _pcm_dbfs(data) < gate:
                 return
         self._dropin_last_audio = asyncio.get_running_loop().time()
+        if getattr(peer, "_dropin_awaiting_ready", False) is True:
+            # The room is still playing the reply that announced the call
+            # (StreamSession._dropin_leg_ready opens it there).
+            return
         try:
             await peer.ws.send_bytes(data)
         except Exception as e:  # noqa: BLE001

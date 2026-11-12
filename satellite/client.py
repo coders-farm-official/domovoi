@@ -1675,6 +1675,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # response_start TTS rate). UNTESTED on the dev host — Pi-only.
         self.dropin_active = threading.Event()
         self._dropin_rate = 16_000
+        # A `dropin_start` with `await_ready` that came while a reply was
+        # still playing ("Dropping in on the kitchen."): its number, until
+        # the reply has played out and the call opens (`_open_dropin`), or a
+        # dropin_end / disconnect drops it. None when no call is waiting.
+        self._dropin_pending: int | None = None
+        self._dropin_seq = 0
         # Wake-word training (Feature #5) — clip-recording mode. Like
         # `dropin_active`, this is a mic-thread STATE (set by the receiver
         # thread on a `start_wake_recording` frame, observed by the mic
@@ -6727,8 +6733,88 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # Solid red while the call is live.
         self._leds.set_state("dropin")
 
+    # How long a call waits for the reply still playing when its
+    # dropin_start came (the core's backstop is DROPIN_READY_WAIT_SEC, 10 s).
+    DROPIN_REPLY_WAIT_SEC = 8.0
+    DROPIN_REPLY_POLL_SEC = 0.05
+
+    def _reply_still_playing(self) -> bool:
+        """A reply is still coming out of the speaker: in flight
+        (response_start .. response_end), held in the prebuffer, queued, or
+        draining through an output stream that hasn't closed yet."""
+        return (
+            self.playback_active.is_set()
+            or self._prebuffer_active
+            or self._post_playback_state is not None
+            or not self.playback_q.empty()
+            or not self._playback_idle.is_set()
+        )
+
+    def _dropin_start_after_reply(self, payload: dict[str, Any]) -> None:
+        """Receiver-side: a `dropin_start` with `await_ready` (a core from
+        2026-11-12, to a satellite whose hello said `dropin_ready`).
+
+        Entering the call at once cut off the reply that announced it: the
+        call's audio (the start chime, then the peer's mic) goes into the
+        same playback queue, and the drop-in backlog bound
+        (`_DROPIN_MAX_PLAYBACK_FRAMES`) drops the OLDEST queued audio, which
+        was the rest of "Dropping in on the kitchen." So the call opens once
+        that reply has played out (at most DROPIN_REPLY_WAIT_SEC), and
+        `dropin_ready` tells the core to start sending the call's audio."""
+        self._dropin_seq += 1
+        seq = self._dropin_seq
+        self._dropin_pending = seq
+        if not self._reply_still_playing():
+            self._open_dropin(seq, payload)
+            return
+        log.info("drop-in: finishing the reply before opening the call")
+        threading.Thread(
+            target=self._wait_reply_then_dropin,
+            args=(seq, payload),
+            daemon=True,
+            name="dropin-after-reply",
+        ).start()
+
+    def _wait_reply_then_dropin(self, seq: int, payload: dict[str, Any]) -> None:
+        """Worker thread: wait for the reply to play out (capped), then
+        open the call back on the receiver's loop."""
+        deadline = time.monotonic() + self.DROPIN_REPLY_WAIT_SEC
+        while self._reply_still_playing():
+            if self._dropin_pending != seq or self.shutdown_event.is_set():
+                return
+            if time.monotonic() >= deadline:
+                log.warning(
+                    "drop-in: the reply is still playing after %.0fs; "
+                    "opening the call anyway", self.DROPIN_REPLY_WAIT_SEC,
+                )
+                break
+            time.sleep(self.DROPIN_REPLY_POLL_SEC)
+        loop = self.loop
+        if loop is None:
+            self._open_dropin(seq, payload)
+            return
+        try:
+            loop.call_soon_threadsafe(self._open_dropin, seq, payload)
+        except RuntimeError:
+            pass  # the loop is closed: the session is gone, and the call with it
+
+    def _open_dropin(self, seq: int, payload: dict[str, Any]) -> None:
+        """Enter the call that waited for the reply, unless a dropin_end,
+        a newer dropin_start or a disconnect dropped it meanwhile; then say
+        `dropin_ready` so the core sends the call's audio."""
+        if self._dropin_pending != seq:
+            return
+        self._dropin_pending = None
+        self._enter_dropin(payload)
+        if self.dropin_active.is_set():
+            self._emit_text({"type": "dropin_ready"})
+
     def _exit_dropin(self, payload: dict[str, Any]) -> None:
         """Receiver-side: handle a `dropin_end` frame — leave open-mic mode."""
+        if self._dropin_pending is not None:
+            # The call ended before the reply announcing it had finished.
+            log.info("drop-in ended before it opened (reason=%s)", payload.get("reason"))
+            self._dropin_pending = None
         if not self.dropin_active.is_set():
             return
         log.info("drop-in ended (reason=%s)", payload.get("reason"))
@@ -8088,7 +8174,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 log.warning("ignoring dropin_start: voice input is disabled")
                 self._emit_text({"type": "dropin_end"})
                 return
-            self._enter_dropin(payload)
+            if payload.get("await_ready"):
+                # The core holds the call's audio until our dropin_ready:
+                # finish the reply that announced the call first.
+                self._dropin_start_after_reply(payload)
+            else:
+                # An older core: it sends the call's audio straight away.
+                self._enter_dropin(payload)
         elif t == "dropin_end":
             # Exit open-mic mode; the server sends a music_start after
             # this if the room had music suppressed.
@@ -8239,6 +8331,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # warns in its journal for a satellite that does not
             # say so: it records such announcements as spoken.
             "announce_after_session_end": True,
+            # A dropin_start that comes while a reply is still playing
+            # ("Dropping in on the kitchen.") waits for it to finish, and
+            # `dropin_ready` says when the call is open here: a core that
+            # knows it holds the call's audio until then and marks the
+            # dropin_start `await_ready`. An older core ignores the field.
+            "dropin_ready": True,
         }
         # The previous life's last-health record, carried until a
         # core acknowledges it with `ready` (an older core ignores
@@ -8482,6 +8580,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self.chat_active.clear()
         if self.dropin_active.is_set():
             self.dropin_active.clear()
+        # A call still waiting for its announcement to finish is gone too.
+        self._dropin_pending = None
         # Squash any deferred post-response LED state — we're forcing
         # idle here, and don't want close_stream to overwrite it back to
         # "listening" once the (now-drained) stream closes.

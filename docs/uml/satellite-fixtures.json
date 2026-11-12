@@ -110,6 +110,11 @@
       "unlocks": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
       "assumed_without_supports": true,
       "hello_key": null
+    },
+    "dropin_ready": {
+      "unlocks": "a drop-in call's start chime and the peer's audio wait for the device's `dropin_ready` (it finishes the reply announcing the call first; the core marks such a dropin_start `await_ready`)",
+      "assumed_without_supports": false,
+      "hello_key": "dropin_ready"
     }
   },
   "always_sent": [
@@ -196,7 +201,8 @@
         "mic_enabled": true,
         "speech_pause": true,
         "capture_control": true,
-        "announce_after_session_end": true
+        "announce_after_session_end": true,
+        "dropin_ready": true
       },
       "ready": {
         "type": "ready",
@@ -223,6 +229,7 @@
           "code_sync",
           "config",
           "display",
+          "dropin_ready",
           "leds",
           "logs",
           "mic_gain",
@@ -388,7 +395,8 @@
         "mic_enabled": true,
         "speech_pause": true,
         "capture_control": true,
-        "announce_after_session_end": true
+        "announce_after_session_end": true,
+        "dropin_ready": true
       },
       "ready": {
         "type": "ready",
@@ -415,6 +423,7 @@
           "code_sync",
           "config",
           "display",
+          "dropin_ready",
           "full_duplex",
           "leds",
           "logs",
@@ -579,6 +588,7 @@
         "speech_pause": true,
         "capture_control": true,
         "announce_after_session_end": true,
+        "dropin_ready": true,
         "board": "linux_pc",
         "supports": [
           "restart",
@@ -612,6 +622,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "dropin_ready",
           "logs",
           "restart",
           "sounds",
@@ -628,6 +639,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "dropin_ready",
           "logs",
           "restart",
           "sounds",
@@ -786,6 +798,7 @@
         "speech_pause": true,
         "capture_control": true,
         "announce_after_session_end": true,
+        "dropin_ready": true,
         "board": "windows_pc",
         "supports": [
           "restart",
@@ -819,6 +832,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "dropin_ready",
           "logs",
           "restart",
           "sounds",
@@ -835,6 +849,7 @@
           "capture_control",
           "code_sync",
           "config",
+          "dropin_ready",
           "logs",
           "restart",
           "sounds",
@@ -1037,6 +1052,7 @@
           "code_sync",
           "config",
           "display",
+          "dropin_ready",
           "leds",
           "logs",
           "mic_gain",

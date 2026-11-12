@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — a drop-in no longer cuts off "Dropping in on the kitchen"
+
+When you start a drop-in, the room now finishes saying "Dropping in on the
+kitchen." (or, when the other room says yes, "Okay, connecting you with the
+office.") before the call opens and the chime plays. Before, the call's
+audio cut the sentence off before the room name. This needs **both** the
+new server and the new room software: **update each satellite** (the
+dashboard's Upgrade satellite) to get it. A room on older software still
+works and still calls; it just keeps cutting the sentence short.
+
 ## 2026-11-12 — saving a setting that needs a restart asks to restart
 
 After you save a setting that only a restart applies (the AcoustID key, a

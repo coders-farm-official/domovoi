@@ -73,6 +73,7 @@ sequenceDiagram
 | `music_ready` | — | The Pi's player subprocess has primed against MPD's always-on silence stream; the server resumes MPD so song frames land in a primed buffer (kills the first-second stutter) — unless a person paused that room's music (`domovoi/music_pause.py`: the player comes back on the paused stream, MPD stays paused until a person resumes, stops or starts something). Older satellites that never send it still get music via a fallback timer, which follows the same rule. |
 | `music_failed` | `stream_url`, `reason`, `attempts` | **Only when `ready.features` lists `"music_failed"`.** The Pi's stream player was refused or dropped and the Pi has stopped retrying (it retries a refused stream with a short backoff for ~8 s after the start); its music LEDs are back to idle. `reason` is mpg123's last stderr line, or `bad_url` (with `attempts: 0`) for a `music_start` whose `stream_url` was not an http(s) URL. The server logs these bounded and quoted. Never sent for an attempt a `music_stop`, a newer `music_start`, a wake or a response superseded. The server pauses the room's MPD so it doesn't play on to nobody, unless a newer `music_start` handshake is pending or the room has stopped or moved on; `resumable_music` is kept, so the next turn's auto-resume tries again. |
 | `dropin_end` | — | Pi-side end of an active drop-in call (hardware button / client hang-up). The *spoken* "hang up" instead routes as a normal utterance. |
+| `dropin_ready` | — | **Since 2026-11-12; only in answer to a `dropin_start` marked `await_ready`.** The reply that was still playing when the call started ("Dropping in on the kitchen.", or the target's "Okay, connecting you with the office.") has played out and the call is open here; the server now sends this room the start chime and the peer's audio. A satellite waits at most 8 s for its playback; the server opens the call there anyway after `DROPIN_READY_WAIT_SEC` (10 s). A stray one is ignored. |
 | `chat_end` | — | Pi-side exit of conversational chat mode (e.g. a non-AEC board refusing `chat_start`). Clears the mode server-side. |
 | `ping` | — | Keep-alive probe; answered with `pong`. |
 | *binary* | raw PCM | Normally meaningful only between `utterance_start`/`utterance_end`. **During a drop-in** the Pi streams every mic frame continuously (no framing) and the server relays each frame verbatim to the peer room — except while an utterance is active (a mid-call wake command like "hang up"), which is captured for STT instead. |
@@ -100,7 +101,7 @@ sequenceDiagram
 | `set_display` | `action: "on" \| "off" \| "restart_kiosk"` | **Video satellites only** (the admin endpoint refuses other rooms with `409`). Switch the panel's power via the configured `[display] power_method` (wlopm → xset → backlight under `auto`), or bounce `domovoi-kiosk.service`. The Pi applies and re-reports via `display_status`. |
 | `restart` | — | Ask the satellite to restart its own systemd service (`domovoi-satellite.service`), draining TTS playback first. |
 | `upgrade` | `expected_sha`, `manifest_path`, `files_base`, `reconnect_timeout_sec` | Self-serve code sync: tarball the current tree (rollback backup), mirror the manifest (per-file sha256 verification), record `expected_sha`, restart. If the Pi doesn't reconnect within the timeout, its on-Pi watchdog rolls back to the tarball. |
-| `dropin_start` | `peer_room`, `peer_label`, `audio_sample_rate:16000`, `full_duplex` | Enter open-mic mode: stream every mic frame (unframed) for relay and play inbound binary PCM straight through at **16 kHz** (not the last TTS rate). The wake loop keeps running so "hang up" works. |
+| `dropin_start` | `peer_room`, `peer_label`, `audio_sample_rate:16000`, `full_duplex`, `await_ready?` | Enter open-mic mode: stream every mic frame (unframed) for relay and play inbound binary PCM straight through at **16 kHz** (not the last TTS rate). The wake loop keeps running so "hang up" works. `await_ready: true` (2026-11-12, only to a client whose `hello` declared `dropin_ready`): finish the reply still playing first, then enter and send `dropin_ready`; the server sends this room nothing of the call (no start chime, no relay) until then. Without it a client enters at once, and the call's audio follows at once. |
 | `dropin_end` | `reason` | Exit open-mic mode; restore the wake loop and any suppressed music. |
 | `chat_start` | — | Enter conversational chat mode: the Pi loops normal STT→reply turns **without re-waking** between them. No peer relay — each utterance routes to the Letta agent. Requires an AEC board; a non-AEC Pi must refuse (send `chat_end`). |
 | `chat_end` | `reason` | Exit chat mode; restore the wake loop. |
@@ -135,11 +136,12 @@ Android phone in room mode can do some of that and not the rest, so a
   dashboard badges `linux_pc` and `android_room` (and any board of a
   device that declared a list); a Pi card has no badge, as before.
 * **The boolean keys still work.** `supports_full_duplex`, `speech_pause`,
-  `capture_control` and `announce_after_session_end` set to `true` count
-  the same as listing `full_duplex`, `speech_pause`, `capture_control` and
-  `announce_after_session_end`; the core takes the union of the two. The
-  first three are behaviours negotiated per connection, so they are never
-  *assumed*: for a Pi they come from the booleans exactly as before.
+  `capture_control`, `announce_after_session_end` and `dropin_ready` set to
+  `true` count the same as listing `full_duplex`, `speech_pause`,
+  `capture_control`, `announce_after_session_end` and `dropin_ready`; the
+  core takes the union of the two. All but `announce_after_session_end` are
+  behaviours negotiated per connection, so they are never *assumed*: for a
+  Pi they come from the booleans exactly as before.
 * No `PROTOCOL_VERSION` bump: both keys are optional new fields on an
   existing message, which an older core ignores.
 
@@ -165,6 +167,7 @@ Android phone in room mode can do some of that and not the rest, so a
 | `speech_pause` | no — `speech_pause` | the core reads the device's `speech_pause` / `speech_resume` and last voiced frame |
 | `capture_control` | no — `capture_control` | `end_capture` (early commit, which also needs `speech_pause`) |
 | `turn_progress` | yes | `working` (2026-11-09): every 30 s while a request is still being worked out, so the device's reply backstop doesn't give up on a slow but working server |
+| `dropin_ready` | no — `dropin_ready` | 2026-11-12: `dropin_start` marked `await_ready`: the device finishes the reply announcing the call before it opens it, and the server holds the call's audio to it until its `dropin_ready` (see the frame tables). Without it the call's audio follows `dropin_start` at once, which cut that reply off |
 
 Always sent, whatever the list: `ready`, `error`, `pong`, `transcript`,
 `response_start` / PCM / `response_end` for the device's own turns,
@@ -484,8 +487,14 @@ sequenceDiagram
 
     A->>S: "drop in on the office" (normal routed utterance)
     Note over S: DropInHandler pairs the two StreamSessions,<br/>writes a dropin_calls audit row.<br/>Refused if either room lacks AEC<br/>(supports_full_duplex=false).
-    S-->>A: dropin_start {peer_room:"office", audio_sample_rate:16000}
+    S-->>A: response_start … "Dropping in on the office." … response_end
+    S-->>A: dropin_start {peer_room:"office", audio_sample_rate:16000, await_ready:true}
     S-->>B: dropin_start {peer_room:"kitchen", …}
+    S-->>B: start chime (16 kHz PCM)
+    Note over A: still playing the reply: the call opens<br/>when it has played out (at most 8 s)
+    A->>S: dropin_ready
+    S-->>A: start chime (16 kHz PCM)
+    Note over S: until A's dropin_ready nothing of the call goes to A<br/>(hello key dropin_ready; a client without it<br/>gets no await_ready and the chime at once)
     par continuous relay
         A->>S: binary mic PCM (unframed)
         S-->>B: relayed verbatim

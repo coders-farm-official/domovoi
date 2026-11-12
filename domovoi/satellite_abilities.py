@@ -22,13 +22,14 @@ the rest, so a hello may now say which:
   it; a hello without it never clears a stored board.
 
 The older boolean hello keys keep working and mean the same as listing the
-ability (:data:`BOOLEAN_KEYS`); the core takes the union of the two. Three
-of them (``full_duplex``, ``speech_pause``, ``capture_control``) are
-behaviours the core has always negotiated per connection, so they are NOT
-assumed for a hello without ``supports``: they come from the booleans, as
-before. ``name`` is the name in ``supports``; ``chat_start`` additionally
-needs ``full_duplex``, so a phone that declares echo cancellation for
-drop-in calls doesn't get chat mode it never said it handles.
+ability (:data:`BOOLEAN_KEYS`); the core takes the union of the two. Four
+of them (``full_duplex``, ``speech_pause``, ``capture_control``, and since
+2026-11-12 ``dropin_ready``) are behaviours the core negotiates per
+connection, so they are NOT assumed for a hello without ``supports``: they
+come from the booleans, as before. ``name`` is the name in ``supports``;
+``chat_start`` additionally needs ``full_duplex``, so a phone that declares
+echo cancellation for drop-in calls doesn't get chat mode it never said it
+handles.
 
 No ``PROTOCOL_VERSION`` bump: both keys are optional new fields on an
 existing message, which an older core ignores. The table of names, frames
@@ -70,6 +71,7 @@ ABILITIES: dict[str, str] = {
     "speech_pause": "the device reports `speech_pause` / `speech_resume` and its last voiced frame",
     "capture_control": "`end_capture` (early commit; also needs speech_pause)",
     "turn_progress": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
+    "dropin_ready": "a drop-in call's audio (its start chime and the peer's relay) waits for the device's `dropin_ready`: it finishes the reply it is still playing (\"Dropping in on the kitchen\") before it opens the call",
 }
 
 #: The boolean hello keys from before ``supports``, and the ability each is.
@@ -78,11 +80,14 @@ BOOLEAN_KEYS: dict[str, str] = {
     "speech_pause": "speech_pause",
     "capture_control": "capture_control",
     "announce_after_session_end": "announce_after_session_end",
+    "dropin_ready": "dropin_ready",
 }
 
 #: Behaviours negotiated per connection by their boolean key, with or
 #: without ``supports``: never assumed.
-NEGOTIATED: frozenset[str] = frozenset({"full_duplex", "speech_pause", "capture_control"})
+NEGOTIATED: frozenset[str] = frozenset(
+    {"full_duplex", "speech_pause", "capture_control", "dropin_ready"}
+)
 
 #: What a hello WITHOUT ``supports`` (every Pi in the field) is taken to
 #: have: everything the core has always pushed to a satellite. Out-of-turn
