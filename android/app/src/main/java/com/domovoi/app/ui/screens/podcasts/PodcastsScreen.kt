@@ -70,9 +70,6 @@ import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 @Composable
 fun PodcastsScreen() {
@@ -112,11 +109,10 @@ fun PodcastsScreen() {
         if (polling) return
         polling = true
         scope.launch {
-            runCatching { app.api.post("/api/podcasts/poll").jsonObject }
+            runCatching { app.api.post("/api/podcasts/poll") }
                 .onSuccess { r ->
-                    val downloaded = r["downloaded"]?.jsonPrimitive?.intOrNull ?: 0
-                    val fresh = r["new"]?.jsonPrimitive?.intOrNull ?: 0
-                    toast("Polled — $downloaded downloaded, $fresh new")
+                    // The counts, then any show whose feed couldn't be read.
+                    toast(PodFormat.pollText(r))
                     pager.reload()
                 }
                 .onFailure { toast(failureText("Poll", it)) }
@@ -254,7 +250,7 @@ private fun SubscriptionCard(sub: PodcastSubscription, onClick: () -> Unit) {
                     )
                 }
                 Text(
-                    "${sub.downloaded_count}/${sub.episode_count} downloaded",
+                    "${sub.downloaded_count}/${sub.episode_count ?: 0} downloaded",
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
                     color = Domovoi.colors.fgMuted,
                 )
