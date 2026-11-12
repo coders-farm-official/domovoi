@@ -308,7 +308,9 @@ def _src(name: str) -> str:
 def test_play_next_is_offered_while_casting_and_goes_to_the_room() -> None:
     src = _src("player.jsx")
     assert "where: next ? 'next' : 'end'" in src
-    assert "title={casting ? `play next in ${p.target.roomId}` : 'play next'}" in src
+    # The search is shared (QueueSearchAdd); the player names the room it casts to.
+    assert "title={where ? `play next in ${where}` : 'play next'}" in src
+    assert "where={casting ? p.target.roomId : null}" in src
     assert "{!casting && (\n                <IconButton name=\"corner-down-right\"" not in src
 
 

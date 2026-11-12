@@ -4,6 +4,21 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — Add songs from a room's queue, and a quicker Room queue tab
+
+Music → Room queue now has a search box at the top, under the room
+picker: type a song, artist, album or genre and press **play next** or
+**add to queue** to put it in that room's queue. Guests get it on a room
+that is playing; where a phone or browser isn't allowed to change the
+queue, there is no box and the queue says why.
+
+The tab is also quicker, mostly on phones: it no longer redraws the whole
+Music page every second, a song changing in another room no longer
+reloads this room's queue, a long queue (a whole playlist) shows 100
+songs at a time with **show more**, and the room you looked at last loads
+straight away instead of after every room's status. Each browser now
+remembers that room.
+
 ## 2026-11-12 — A short list no longer repeats itself in Up next
 
 Click a song in a short list, such as two search results or a 10-song
