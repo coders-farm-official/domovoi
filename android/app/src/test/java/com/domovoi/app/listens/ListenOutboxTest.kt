@@ -50,6 +50,11 @@ class ListenOutboxTest {
     private fun sender(outbox: ListenOutbox, onOff: () -> Unit = {}) =
         ListenSender(outbox, ApiClient(baseUrlProvider = { base }), server = { base }, onRecordingOff = onOff)
 
+    /** The next request the server got; a failure, not a hang, when none
+     *  came (a lost batch must turn the test red, not stall the run). */
+    private fun take(): okhttp3.mockwebserver.RecordedRequest =
+        web.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS) ?: throw AssertionError("no request reached the server")
+
     private fun ok(recording: Boolean = true) =
         MockResponse().setHeader("Content-Type", "application/json")
             .setBody("""{"accepted":1,"dropped":0,"recording":$recording}""")
@@ -89,7 +94,7 @@ class ListenOutboxTest {
         val o = fill(500)
         repeat(3) { web.enqueue(ok()) }
         assertEquals(ListenSender.Result.Sent, sender(o).flush())
-        val sizes = (1..3).map { Json.parseToJsonElement(web.takeRequest().body.readUtf8()).jsonObject["listens"]!!.jsonArray.size }
+        val sizes = (1..3).map { Json.parseToJsonElement(take().body.readUtf8()).jsonObject["listens"]!!.jsonArray.size }
         assertEquals(listOf(200, 200, 100), sizes)
         assertTrue(o.all().isEmpty())
     }
@@ -132,8 +137,8 @@ class ListenOutboxTest {
             }
         }
         sender(o).flush()
-        val firstBatch = Json.parseToJsonElement(web.takeRequest().body.readUtf8()).jsonObject["listens"]!!.jsonArray
-        val secondBatch = Json.parseToJsonElement(web.takeRequest().body.readUtf8()).jsonObject["listens"]!!.jsonArray
+        val firstBatch = Json.parseToJsonElement(take().body.readUtf8()).jsonObject["listens"]!!.jsonArray
+        val secondBatch = Json.parseToJsonElement(take().body.readUtf8()).jsonObject["listens"]!!.jsonArray
         assertEquals(2, firstBatch.size)
         assertEquals(listOf(1099L), secondBatch.map { it.jsonObject["track_id"]!!.jsonPrimitive.long })
         assertTrue(o.all().isEmpty())
@@ -146,7 +151,7 @@ class ListenOutboxTest {
         web.enqueue(ok())
         sender(o).flush()
         assertEquals(1, web.requestCount)
-        val sent = Json.parseToJsonElement(web.takeRequest().body.readUtf8()).jsonObject["listens"]!!.jsonArray
+        val sent = Json.parseToJsonElement(take().body.readUtf8()).jsonObject["listens"]!!.jsonArray
         assertEquals(1, sent.size)
         assertEquals(1002L, sent[0].jsonObject["track_id"]!!.jsonPrimitive.long)
         assertEquals(listOf("row-1"), o.all().map { it.id })
