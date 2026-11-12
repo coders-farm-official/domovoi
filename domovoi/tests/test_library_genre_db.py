@@ -13,6 +13,9 @@
 * ``GET /api/music/genres`` / ``/api/music/genre`` / ``/api/music/library?
   genre=``: counts, the "no genre" bucket, the read's progress, paging,
   search, 404.
+* V052: a MusicBrainz genre only where the file has none, the file's
+  genre replacing it on a re-read, rows the year fetch already asked asked
+  once more, and the Genres page's "waiting for MusicBrainz" count.
 
 Needs the database (``requires_db``); every test starts from an empty
 ``library_tracks`` (``db_session`` truncates it, the web tests do the same).
@@ -28,6 +31,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from domovoi.clients.musicbrainz import MbRecordingDetails
 from domovoi.config import settings
 from domovoi.library_genres import TAGS_VERSION
 from domovoi.tests import media_writer as mw
@@ -197,9 +201,9 @@ async def test_the_year_fetch_store(db_session) -> None:
     ), {"a": MBID_A, "b": MBID_B, "v": TAGS_VERSION})
     await db_session.commit()
     store = DbYearFetchStore()
-    assert await store.due(TAGS_VERSION, 25) == [MBID_A]
-    await store.record(MBID_A, 1971)
-    await store.record(MBID_B, 2001)                     # every track of B is marked asked
+    assert await store.due(TAGS_VERSION, 25) == [MBID_A, MBID_B]   # 4 has no genre (V052)
+    await store.record(MBID_A, MbRecordingDetails(year=1971))
+    await store.record(MBID_B, MbRecordingDetails(year=2001))  # every track of B is marked asked
     rows = (await db_session.execute(text(
         "SELECT title, year, year_source, year_checked_at IS NOT NULL FROM library_tracks ORDER BY title"
     ))).all()
@@ -355,3 +359,145 @@ def test_reading_is_done_when_every_track_is_read(client) -> None:
     asyncio.run(read_all())
     d = client.get("/api/music/genres").json()
     assert (d["tags_read"], d["tags_total"], d["reading"], d["untagged_count"]) == (7, 7, False, 3)
+
+
+# ─── V052: a genre from MusicBrainz ───────────────────────────────────────
+
+MBID_C = "33333333-3333-4333-8333-333333333333"
+
+
+@requires_db
+async def test_v052_columns_check_and_index(db_session) -> None:
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title) VALUES ('/m/a.mp3', 'A')"))
+    row = (await db_session.execute(text(
+        "SELECT genre_source, genre_checked_at FROM library_tracks"))).one()
+    assert tuple(row) == (None, None)
+    names = {r[0] for r in (await db_session.execute(text(
+        "SELECT indexname FROM pg_indexes WHERE tablename = 'library_tracks'"))).all()}
+    assert "idx_library_tracks_genre_pending" in names
+    with pytest.raises(DBAPIError):
+        await db_session.execute(text("UPDATE library_tracks SET genre_source = 'guess'"))
+
+
+@requires_db
+async def test_the_fetch_stores_a_musicbrainz_genre_only_where_the_file_has_none(db_session) -> None:
+    from domovoi.workers.library_year_fetch import DbYearFetchStore
+
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title, musicbrainz_recording_id, genre, genre_keys, "
+        "genre_source, year, year_source, year_checked_at, tags_version) VALUES "
+        "('/m/1.mp3', '1', :a, NULL, NULL, NULL, NULL, NULL, NULL, :v), "
+        "('/m/2.mp3', '2', :a, 'Jazz', ARRAY['jazz'], 'tag', NULL, NULL, NULL, :v), "   # a tag genre
+        # Already year-checked by the V050 fetch, no genre: asked once more.
+        "('/m/3.mp3', '3', :b, NULL, NULL, NULL, 1990, 'musicbrainz', now(), :v), "
+        # A year and a genre: never asked.
+        "('/m/4.mp3', '4', :c, 'Pop', ARRAY['pop'], 'tag', 2000, 'tag', NULL, :v)"
+    ), {"a": MBID_A, "b": MBID_B, "c": MBID_C, "v": TAGS_VERSION})
+    await db_session.commit()
+    store = DbYearFetchStore()
+    assert await store.due(TAGS_VERSION, 25) == [MBID_A, MBID_B]
+    await store.record(MBID_A, MbRecordingDetails(year=1959, genres=("hip hop", "r&b"),
+                                                  genre_from="recording"))
+    await store.record(MBID_B, MbRecordingDetails(year=None, genres=()))
+    rows = (await db_session.execute(text(
+        "SELECT title, genre, genre_keys, genre_source, year, year_source, "
+        "genre_checked_at IS NOT NULL FROM library_tracks ORDER BY title"))).all()
+    assert [tuple(r) for r in rows] == [
+        ("1", "Hip Hop; R&B", ["hip hop", "r&b"], "musicbrainz", 1959, "musicbrainz", True),
+        # The file's genre wins; the year was empty, so it is filled.
+        ("2", "Jazz", ["jazz"], "tag", 1959, "musicbrainz", False),
+        # Asked: no genre, so marked asked and "no genre" from now on.
+        ("3", None, None, None, 1990, "musicbrainz", True),
+        ("4", "Pop", ["pop"], "tag", 2000, "tag", False),
+    ]
+    assert await store.due(TAGS_VERSION, 25) == []
+    # Already-asked rows are never asked again; a refusal marks asked too.
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title, musicbrainz_recording_id, tags_version) "
+        "VALUES ('/m/5.mp3', '5', :c, :v)"), {"c": MBID_C, "v": TAGS_VERSION})
+    await db_session.commit()
+    assert await store.due(TAGS_VERSION, 25) == [MBID_C]
+    await store.record_refused(MBID_C)
+    assert await store.due(TAGS_VERSION, 25) == []
+
+
+@requires_db
+async def test_a_file_genre_replaces_a_musicbrainz_one_and_none_keeps_it(db_session, monkeypatch, tmp_path) -> None:
+    """Tag wins: the backfill re-reading a file that now names a genre
+    replaces the MusicBrainz genre; a file that still names none keeps it;
+    a tag genre the file dropped is gone (and may be asked for)."""
+    from domovoi.workers.library_tag_backfill import LibraryTagBackfill
+
+    music = tmp_path / "music"
+    tagged = mw.write_mp3(music / "a.mp3", [mw.text_frame("TCON", "Blues")])
+    bare = mw.write_mp3(music / "b.mp3", [mw.text_frame("TIT2", "B")])
+    dropped = mw.write_mp3(music / "c.mp3", [mw.text_frame("TIT2", "C")])
+    monkeypatch.setattr(settings, "music_dir", str(music))
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title, genre, genre_keys, genre_source, "
+        "genre_checked_at, musicbrainz_recording_id) VALUES "
+        "(:a, 'A', 'Soul', ARRAY['soul'], 'musicbrainz', now(), :m), "
+        "(:b, 'B', 'Soul', ARRAY['soul'], 'musicbrainz', now(), :m), "
+        "(:c, 'C', 'Rock', ARRAY['rock'], 'tag', NULL, :m)"
+    ), {"a": str(tagged), "b": str(bare), "c": str(dropped), "m": MBID_A})
+    await db_session.commit()
+    assert (await LibraryTagBackfill().tick())["read"] == 3
+    rows = (await db_session.execute(text(
+        "SELECT title, genre, genre_keys, genre_source FROM library_tracks ORDER BY title"))).all()
+    assert [tuple(r) for r in rows] == [
+        ("A", "Blues", ["blues"], "tag"),
+        ("B", "Soul", ["soul"], "musicbrainz"),
+        ("C", None, None, None),
+    ]
+
+
+@requires_db
+async def test_the_indexer_marks_a_file_genre_as_tag(db_session, monkeypatch, tmp_path) -> None:
+    from domovoi.workers.library_indexer import index_music_dir
+
+    music = tmp_path / "music"
+    mw.write_mp3(music / "a.mp3", [mw.text_frame("TIT2", "A"), mw.text_frame("TCON", "Soul")])
+    mw.write_mp3(music / "b.mp3", [mw.text_frame("TIT2", "B")])
+    monkeypatch.setattr("domovoi.workers.library_indexer.settings.music_dir", str(music))
+    assert (await index_music_dir())["inserted"] == 2
+    rows = (await db_session.execute(text(
+        "SELECT title, genre_source FROM library_tracks ORDER BY title"))).all()
+    assert [tuple(r) for r in rows] == [("A", "tag"), ("B", None)]
+
+
+async def _seed_pending() -> None:
+    from web.backend.db import session_scope
+
+    async with session_scope() as s:
+        # N1 / N2 (no genre) and U1 (unread) are in ROWS; add two matched
+        # songs with no genre: one waiting, one already asked.
+        await s.execute(text(
+            "INSERT INTO library_tracks (file_path, title, musicbrainz_recording_id, tags_version, "
+            "genre_checked_at) VALUES "
+            "('/srv/music/g/m1.mp3', 'M1', :a, :v, NULL), "
+            "('/srv/music/g/m2.mp3', 'M2', :b, :v, now()), "
+            "('/srv/music/g/m3.mp3', 'M3', :c, 0, NULL)"            # not read yet: not counted
+        ), {"a": MBID_A, "b": MBID_B, "c": MBID_C, "v": TAGS_VERSION})
+        await s.commit()
+
+
+@requires_db
+def test_the_genres_page_counts_songs_waiting_for_musicbrainz(client, monkeypatch) -> None:
+    """A matched song with no genre is in the "no genre" row (it has none
+    yet) and counted as waiting for MusicBrainz until it has been asked;
+    the count is 0 whenever the lookup can't run (song recognition off,
+    Internet "never"), so a wait that would never end is never shown."""
+    from domovoi import egress
+
+    asyncio.run(_seed_pending())
+    monkeypatch.setattr(settings, "library_enricher_enabled", True)
+    with egress.override_policy("always"):
+        d = client.get("/api/music/genres").json()
+        assert (d["untagged_count"], d["musicbrainz_pending"]) == (4, 1)
+        monkeypatch.setattr(settings, "library_enricher_enabled", False)
+        assert client.get("/api/music/genres").json()["musicbrainz_pending"] == 0
+    monkeypatch.setattr(settings, "library_enricher_enabled", True)
+    with egress.override_policy("never"):
+        d = client.get("/api/music/genres").json()
+        assert (d["untagged_count"], d["musicbrainz_pending"]) == (4, 0)

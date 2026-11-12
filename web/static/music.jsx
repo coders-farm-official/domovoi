@@ -1042,7 +1042,10 @@ const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack 
  * so ("reading genres from your files… N of M") and re-reads itself every
  * GENRE_READ_POLL_MS, rather than passing a partial list off as the whole
  * one. Read tracks whose tags name no genre are one last row, "no genre",
- * so nothing is hidden. A row opens GenreDrawer. */
+ * so nothing is hidden. Songs song recognition matched get a genre from
+ * MusicBrainz in the background; until they are asked, that row says how
+ * many are waiting ("· 4 waiting for MusicBrainz"; the server sends 0 when
+ * the lookup can't run). A row opens GenreDrawer. */
 const GENRE_READ_POLL_MS = 10000;
 const genreReadingLine = (page) => (page && page.reading
   ? `reading genres from your files… ${fmtCount(page.tags_read)} of ${fmtCount(page.tags_total)}`
@@ -1071,6 +1074,7 @@ const GenresTab = ({ onOpen }) => {
   const items = list.items || [];
   const total = list.total ?? 0;
   const untagged = (page && page.untagged_count) || 0;
+  const mbPending = (page && page.musicbrainz_pending) || 0;
   const showLoading = list.loading && items.length === 0 && !page;
   const showNoGenre = !q && !list.hasMore && untagged > 0;
   const showEmpty = !list.loading && items.length === 0 && !showNoGenre;
@@ -1086,6 +1090,7 @@ const GenresTab = ({ onOpen }) => {
         <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
           {g.track_count} track{g.track_count === 1 ? '' : 's'}
+          {g.note ? ` · ${g.note}` : ''}
         </div>
       </div>
       <Icon name="chevron-right" size={14}/>
@@ -1137,7 +1142,8 @@ const GenresTab = ({ onOpen }) => {
       ) : (
         <div className="artist-list">
           {items.map((g, i) => row(g, i === items.length - 1 && !showNoGenre, false))}
-          {showNoGenre && row({ key: '', name: 'no genre', track_count: untagged }, true, true)}
+          {showNoGenre && row({ key: '', name: 'no genre', track_count: untagged,
+                                note: mbPending > 0 ? `${fmtCount(mbPending)} waiting for MusicBrainz` : null }, true, true)}
         </div>
       )}
       {!showLoading && (

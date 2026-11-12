@@ -526,6 +526,7 @@ class _YearStore:
         self._due = list(due)
         self.due_calls = 0
         self.recorded: list[tuple[str, Any]] = []
+        self.details: list[tuple[str, Any]] = []
         self.refused: list[str] = []
 
     async def due(self, version: int, limit: int) -> list[str]:
@@ -533,8 +534,9 @@ class _YearStore:
         done = {m for m, _ in self.recorded} | set(self.refused)
         return [m for m in self._due if m not in done][:limit]
 
-    async def record(self, recording_id: str, year) -> None:
-        self.recorded.append((recording_id, year))
+    async def record(self, recording_id: str, details) -> None:
+        self.recorded.append((recording_id, details.year))
+        self.details.append((recording_id, details))
 
     async def record_refused(self, recording_id: str) -> None:
         self.refused.append(recording_id)
@@ -545,12 +547,16 @@ class _Client:
         self.answers = answers or {}
         self.asked: list[str] = []
 
-    async def recording_year(self, recording_id: str):
+    async def recording_details(self, recording_id: str):
+        """An answer is an exception (raised), MbRecordingDetails (as is),
+        or a year."""
+        from domovoi.clients.musicbrainz import MbRecordingDetails
+
         self.asked.append(recording_id)
         a = self.answers.get(recording_id)
         if isinstance(a, Exception):
             raise a
-        return a
+        return a if isinstance(a, MbRecordingDetails) else MbRecordingDetails(year=a)
 
 
 @pytest.fixture
@@ -576,7 +582,8 @@ async def test_year_fetch_asks_and_records(year_fetch) -> None:
     a, b = _ids(2)
     store, client = _YearStore([a, b]), _Client({a: 1971, b: None})
     with egress.override_policy("always"):
-        assert await yf.LibraryYearFetch(client=client, store=store).tick() == {"asked": 2, "years": 1}
+        assert await yf.LibraryYearFetch(client=client, store=store).tick() == {
+            "asked": 2, "years": 1, "genres": 0}
     assert store.recorded == [(a, 1971), (b, None)]
 
 
@@ -599,7 +606,8 @@ async def test_year_fetch_gate_sends_nothing(year_fetch, monkeypatch, why) -> No
     else:
         connectivity.set_current_probe(None)
     with egress.override_policy(policy):
-        assert await yf.LibraryYearFetch(client=client, store=store).tick() == {"asked": 0, "years": 0}
+        assert await yf.LibraryYearFetch(client=client, store=store).tick() == {
+            "asked": 0, "years": 0, "genres": 0}
     assert client.asked == []
     # Nothing is read either: the gate comes before the database.
     assert store.due_calls == 0
@@ -612,8 +620,8 @@ async def test_the_gate_is_checked_before_every_request(year_fetch) -> None:
     ids = _ids(5)
 
     class _GoesDark(_Client):
-        async def recording_year(self, recording_id):
-            got = await super().recording_year(recording_id)
+        async def recording_details(self, recording_id):
+            got = await super().recording_details(recording_id)
             probe.online = False                     # the connection dropped meanwhile
             return got
 
@@ -673,3 +681,204 @@ def test_year_fetch_worker_shape() -> None:
     assert settings.library_year_fetch_interval_sec == 30.0
     assert LibraryTagBackfill.interval_setting == "library_tag_backfill_interval_sec"
     assert settings.library_tag_backfill_interval_sec == 1.0
+
+
+# ─── MusicBrainz genres (V052) ────────────────────────────────────────────
+
+RG_ALBUM = "aaaaaaaa-0000-4000-8000-000000000001"
+RG_SINGLE = "aaaaaaaa-0000-4000-8000-000000000002"
+RG_COMP = "aaaaaaaa-0000-4000-8000-000000000003"
+
+
+def _g(*pairs) -> list[dict]:
+    return [{"name": n, "count": c, "id": f"g{i}", "disambiguation": ""} for i, (n, c) in enumerate(pairs)]
+
+
+def _answer(*, own=None, groups=(), artist=None, date="1994-03-08") -> dict:
+    """A recording lookup as MusicBrainz answers it with
+    inc=genres+artist-credits+releases+release-groups (abridged)."""
+    return {
+        "id": MBID, "title": "Song", "first-release-date": date,
+        "genres": own or [],
+        "artist-credit": [{"name": "Band", "joinphrase": "",
+                           "artist": {"id": "b", "name": "Band", "genres": artist or []}}],
+        "releases": [{"id": f"r{i}", "title": "R", "release-group": {
+            "id": rg_id, "primary-type": "Album", "secondary-types": list(sec), "genres": genres,
+        }} for i, (rg_id, sec, genres) in enumerate(groups)],
+    }
+
+
+def test_mb_genres_the_recordings_own_win() -> None:
+    from domovoi.clients.musicbrainz import recording_genres
+
+    data = _answer(own=_g(("trip hop", 3), ("electronic", 5)),
+                   groups=[(RG_ALBUM, [], _g(("rock", 9)))], artist=_g(("pop", 9)))
+    assert recording_genres(data) == (("electronic", "trip hop"), "recording")
+
+
+def test_mb_genres_fall_back_to_the_album_then_the_artist() -> None:
+    from domovoi.clients.musicbrainz import recording_genres
+
+    album = _answer(groups=[(RG_ALBUM, [], _g(("Hip-Hop", 2), ("jazz rap", 1)))], artist=_g(("pop", 9)))
+    assert recording_genres(album) == (("hip hop", "jazz rap"), "release-group")
+    artist = _answer(groups=[(RG_ALBUM, [], [])], artist=_g(("soul", 4), ("funk", 2)))
+    assert recording_genres(artist) == (("soul", "funk"), "artist")
+    assert recording_genres(_answer()) == ((), None)
+
+
+def test_mb_genres_plain_albums_before_compilations_and_each_album_once() -> None:
+    from domovoi.clients.musicbrainz import recording_genres
+
+    data = _answer(groups=[
+        (RG_COMP, ["Compilation"], _g(("pop", 50))),         # a hits compilation
+        (RG_ALBUM, [], _g(("rock", 2), ("grunge", 3))),
+        (RG_ALBUM, [], _g(("rock", 2), ("grunge", 3))),      # the same album on another release
+        (RG_SINGLE, [], _g(("rock", 4))),
+    ])
+    # Plain groups only, each once: rock 2 + 4 = 6, grunge 3.
+    assert recording_genres(data) == (("rock", "grunge"), "release-group")
+    only_comp = _answer(groups=[(RG_COMP, ["Compilation"], _g(("pop", 50)))])
+    assert recording_genres(only_comp) == (("pop",), "release-group")
+
+
+def test_mb_genres_keep_the_top_three_and_ignore_no_votes() -> None:
+    from domovoi.clients.musicbrainz import recording_genres
+
+    data = _answer(own=_g(("a", 1), ("b", 5), ("c", 0), ("d", -3), ("e", 4), ("f", 2), ("rap", 1),
+                          ("hip hop", 1)))
+    # "rap" and "hip hop" are one key: 2 votes, tied with f, f first seen.
+    assert recording_genres(data) == (("b", "e", "f"), "recording")
+    # Only zero / negative votes: no genre from the recording, so the next level.
+    nothing = _answer(own=_g(("rock", 0), ("pop", -1)), artist=_g(("jazz", 1)))
+    assert recording_genres(nothing) == (("jazz",), "artist")
+
+
+@pytest.mark.parametrize("hostile", [
+    None, [], "rock", 7, {"genres": "rock"}, {"genres": [None, 1, "x", []]},
+    {"genres": [{"name": None, "count": 5}, {"name": 5, "count": 5}, {"name": "rock", "count": "9"},
+                {"name": "rock", "count": True}, {"name": "rock", "count": 1.5},
+                {"name": "x" * 300, "count": 9}, {"name": "unknown", "count": 9},
+                {"name": "‮\x00", "count": 9}]},
+    {"releases": "x", "artist-credit": {"artist": {}}},
+    {"releases": [None, {"release-group": "x"}, {"release-group": {"genres": {"rock": 1}}}],
+     "artist-credit": [None, "x", {"artist": None}]},
+])
+def test_mb_genres_hostile_answers_give_no_genre(hostile) -> None:
+    from domovoi.clients.musicbrainz import recording_details_of, recording_genres
+
+    assert recording_genres(hostile) == ((), None)
+    assert recording_details_of(hostile).genres == ()
+
+
+def test_mb_genres_huge_answers_are_bounded() -> None:
+    from domovoi.clients.musicbrainz import MAX_MB_GENRE_ENTRIES, MAX_MB_RELEASES, recording_genres
+
+    many = _answer(own=[{"name": "noise", "count": 1}] * 100_000
+                   + [{"name": "late", "count": 1_000}])
+    # Only the first MAX_MB_GENRE_ENTRIES entries are looked at.
+    assert recording_genres(many) == (("noise",), "recording")
+    groups = [(f"aaaaaaaa-0000-4000-8000-{i:012d}", [], _g(("filler", 1))) for i in range(MAX_MB_RELEASES)]
+    data = _answer(groups=groups + [(RG_ALBUM, [], _g(("late", 10_000)))])
+    assert recording_genres(data) == (("filler",), "release-group")
+    assert MAX_MB_GENRE_ENTRIES == 64
+
+
+def test_mb_genre_names_match_the_genres_page_keys() -> None:
+    """Names go through the files' rules: what MusicBrainz calls a genre
+    lands on the same key as a tag naming it."""
+    from domovoi.clients.musicbrainz import recording_genres
+
+    data = _answer(own=_g(("Rhythm and Blues", 3), ("drum n bass", 2), ("Alt Rock", 1)))
+    keys, _src = recording_genres(data)
+    assert keys == ("r&b", "drum and bass", "alternative rock")
+    assert list(keys) == genre_keys(["R&B", "Drum & Bass", "alt-rock"])
+
+
+@pytest.mark.asyncio
+async def test_recording_details_is_one_request_with_the_genre_incs(mb_http) -> None:
+    client, calls, queue = mb_http
+    queue.append(_Resp(200, _answer(groups=[(RG_ALBUM, [], _g(("shoegaze", 2)))], date="1991-11-04")))
+    got = await client.recording_details(MBID)
+    assert (got.year, got.genres, got.genre_from) == (1991, ("shoegaze",), "release-group")
+    assert calls == [(f"https://musicbrainz.org/ws/2/recording/{MBID}",
+                      {"fmt": "json", "inc": "genres+artist-credits+releases+release-groups"})]
+
+
+@pytest.mark.asyncio
+async def test_recording_details_answers(mb_http) -> None:
+    from domovoi.clients.musicbrainz import (
+        MusicBrainzRateLimited,
+        MusicBrainzRejected,
+        MusicBrainzUnavailable,
+    )
+
+    client, calls, queue = mb_http
+    queue.extend([_Resp(404), _Resp(429), _Resp(502), _Resp(403), _Resp(200, None)])
+    got = await client.recording_details(MBID)                    # no such recording: a verdict
+    assert (got.year, got.genres) == (None, ())
+    with pytest.raises(MusicBrainzRateLimited):
+        await client.recording_details(MBID)
+    with pytest.raises(MusicBrainzUnavailable):
+        await client.recording_details(MBID)
+    with pytest.raises(MusicBrainzRejected):
+        await client.recording_details(MBID)
+    with pytest.raises(MusicBrainzUnavailable):
+        await client.recording_details(MBID)                      # a 200 that is not JSON
+    with pytest.raises(MusicBrainzRejected):
+        await client.recording_details("../artist/x")              # never sent
+    assert len(calls) == 5
+
+
+@pytest.mark.asyncio
+async def test_a_too_large_answer_is_asked_again_without_releases(mb_http, monkeypatch) -> None:
+    from domovoi.clients.musicbrainz import MusicBrainzRejected
+
+    client, calls, queue = mb_http
+    monkeypatch.setattr(client, "MAX_BODY_BYTES", 2000)
+    big = _answer(groups=[(f"aaaaaaaa-0000-4000-8000-{i:012d}", [], _g(("rock", 1))) for i in range(40)])
+    small = _answer(artist=_g(("britpop", 3)))
+    small.pop("releases")
+    queue.extend([_Resp(200, big), _Resp(200, small)])
+    got = await client.recording_details(MBID)
+    assert (got.genres, got.genre_from, got.year) == (("britpop",), "artist", 1994)
+    assert [c[1]["inc"] for c in calls] == ["genres+artist-credits+releases+release-groups",
+                                            "genres+artist-credits"]
+    # Too large even then: a refusal (marked asked), never an outage retried for ever.
+    queue.extend([_Resp(200, big), _Resp(200, big)])
+    with pytest.raises(MusicBrainzRejected, match="too large"):
+        await client.recording_details(MBID)
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_recording_details_sends_nothing_under_never(mb_http) -> None:
+    from domovoi.clients.musicbrainz import MusicBrainzUnavailable
+
+    client, calls, _queue = mb_http
+    with egress.override_policy("never"):
+        with pytest.raises(MusicBrainzUnavailable, match="internet off"):
+            await client.recording_details(MBID)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_fetch_records_genres_with_the_year(year_fetch) -> None:
+    from domovoi.clients.musicbrainz import MbRecordingDetails
+
+    yf, _probe = year_fetch
+    a, b = _ids(2)
+    store = _YearStore([a, b])
+    client = _Client({a: MbRecordingDetails(year=None, genres=("soul",), genre_from="artist"),
+                      b: MbRecordingDetails(year=1999, genres=())})
+    with egress.override_policy("always"):
+        assert await yf.LibraryYearFetch(client=client, store=store).tick() == {
+            "asked": 2, "years": 1, "genres": 1}
+    assert [(m, d.genres) for m, d in store.details] == [(a, ("soul",)), (b, ())]
+
+
+def test_the_stub_client_answers_nothing() -> None:
+    import asyncio
+
+    from domovoi.clients.musicbrainz import MbRecordingDetails, MusicBrainzStubClient
+
+    assert asyncio.run(MusicBrainzStubClient().recording_details(MBID)) == MbRecordingDetails()

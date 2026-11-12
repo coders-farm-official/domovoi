@@ -22127,6 +22127,11 @@
             "type": "integer",
             "title": "Untagged Count",
             "default": 0
+          },
+          "musicbrainz_pending": {
+            "type": "integer",
+            "title": "Musicbrainz Pending",
+            "default": 0
           }
         },
         "type": "object",
