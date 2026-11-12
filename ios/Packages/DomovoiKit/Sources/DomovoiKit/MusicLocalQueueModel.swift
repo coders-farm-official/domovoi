@@ -293,6 +293,25 @@ public final class MusicLocalQueueModel {
         return true
     }
 
+    /// "Stop and close" (`MiniPlayer.kt`, d19efd9c): stop, empty the queue
+    /// and put the tab back to "nothing queued"; while casting the room is
+    /// stopped first. A room that says it did not stop keeps everything as
+    /// it was and is said (``MusicMoreStrings/stopAndCloseRefused``).
+    ///
+    /// The work is the **engine's** `Task`-held call, awaited from a `Task`
+    /// this model owns — not the tab's, which is gone the moment the tab
+    /// draws "nothing queued" (Android launches it on `app.scope` for the
+    /// same reason). Returns whether anything was asked.
+    @discardableResult
+    public func stopAndClose() -> Bool {
+        guard let engine else { return false }
+        Task { @MainActor [weak self] in
+            let closed = await engine.stopAndClose()
+            if !closed { self?.toast = MusicMoreStrings.stopAndCloseRefused }
+        }
+        return true
+    }
+
     /// The body a cast of this plan would send, for the engine to post.
     ///
     /// Here rather than in the engine so that the bytes are stated by a test

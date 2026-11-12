@@ -147,22 +147,54 @@ struct MusicView: View {
     /// this view stays in the hierarchy with its `onChange` live.
     @State private var visible = false
 
+    /// Whether the rooms strip is open: closed until someone opens it, and
+    /// the choice kept on this phone (``MusicRoomsOpenStore``, the web's
+    /// `domovoi.music.roomsOpen`). Read once when the screen is built and
+    /// written on every tap.
+    @State private var roomsOpen = MusicRoomsOpenStore().open
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
                 if let music, let covers {
-                    MusicNowPlayingStrip(
-                        music: music,
-                        covers: covers,
-                        // Looked **up**, never built: a view's body may not
-                        // write `@State`, and a model made in here would be
-                        // a fresh one every redraw — which resets the
-                        // anchor, the follow flag and the position, and is
-                        // the shape a lyrics line that never moves takes.
-                        // ``syncRoomLyrics(_:)`` below owns the dictionary.
-                        lyrics: { roomLyrics[$0.roomID] }
-                    )
+                    // The rooms strip is folded away until asked for, and
+                    // this phone remembers the choice (`MusicScreen.kt:418`,
+                    // d19efd9c). The count is the now-playing read the page
+                    // already holds — no request is made for it.
+                    MusicRoomsToggleLink(open: roomsOpen, playingCount: music.playingCount) {
+                        roomsOpen.toggle()
+                        MusicRoomsOpenStore().open = roomsOpen
+                    }
+                    switch MusicRoomsToggle.section(
+                        open: roomsOpen,
+                        hasData: music.nowPlaying.data != nil,
+                        loading: music.nowPlaying.loading,
+                        rooms: music.rooms,
+                        error: music.nowPlaying.error
+                    ) {
+                    case .hidden:
+                        EmptyView()
+                    case .loading:
+                        ProgressView()
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    case .unavailable(let message):
+                        MusicRoomsUnavailableCard(message: message) {
+                            music.nowPlaying.refresh()
+                        }
+                    case .rooms:
+                        MusicNowPlayingStrip(
+                            music: music,
+                            covers: covers,
+                            // Looked **up**, never built: a view's body may not
+                            // write `@State`, and a model made in here would be
+                            // a fresh one every redraw — which resets the
+                            // anchor, the follow flag and the position, and is
+                            // the shape a lyrics line that never moves takes.
+                            // ``syncRoomLyrics(_:)`` below owns the dictionary.
+                            lyrics: { roomLyrics[$0.roomID] }
+                        )
+                    }
                     MusicTabBar(
                         tab: $tab,
                         libraryTotal: music.libraryTotal,
