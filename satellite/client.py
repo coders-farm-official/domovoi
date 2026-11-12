@@ -355,9 +355,15 @@ VOICE_SIDECAR = CONFIG_DIR / "voice"
 # `_effective_voice` sidecar-override pattern exactly.
 WAKE_SIDECAR = CONFIG_DIR / "wake"
 WAKE_MODELS_DIR = CONFIG_DIR / "wake_models"
-# Per-word detection threshold pushed alongside a dashboard-selected wake
-# model. Overrides the [wake] threshold so a registry word's tuned sensitivity
-# travels with it. Absent → the config threshold. Mirrors WAKE_SIDECAR.
+# LEGACY: the per-word detection threshold older satellites stored beside a
+# pushed wake model. It overrode the [wake] threshold, so a room woke at the
+# pushed word's 0.5 while its Settings tab showed the 0.8 set there
+# (2026-11-11). A push now writes the threshold into [wake] threshold itself
+# (`_store_wake_threshold`), and `_migrate_wake_threshold_sidecar` moves a
+# leftover file into the config at start and deletes it. The file is only
+# written now when that config write fails, so the value the push carried
+# still takes effect (and the health report's wake_threshold vs
+# wake_threshold_setting shows the difference).
 WAKE_THRESHOLD_SIDECAR = CONFIG_DIR / "wake_threshold"
 
 # Satellite pairing token (WS auth, V002). A per-device secret generated on
@@ -539,9 +545,12 @@ def _effective_wake_model_path(cfg: "Config") -> str | None:
 
 def _effective_wake_threshold(cfg: "Config") -> float:
     """The detection threshold to compare openWakeWord scores against: the
-    per-word threshold pushed with a dashboard model (WAKE_THRESHOLD_SIDECAR)
-    if present + parseable, else the configured ``[wake] threshold``. So a
-    registry word's tuned sensitivity rides along with its pushed model."""
+    configured ``[wake] threshold``, unless a legacy WAKE_THRESHOLD_SIDECAR
+    is still on disk (present + parseable). Normally there is none: the
+    start-up migration moves it into the config and deletes it. It survives
+    only when that config write failed, and then it is what this device has
+    been using, so it stays in effect rather than silently changing the
+    room's sensitivity; the health report shows it beside the setting."""
     try:
         if WAKE_THRESHOLD_SIDECAR.is_file():
             raw = WAKE_THRESHOLD_SIDECAR.read_text(encoding="utf-8").strip()
@@ -558,11 +567,128 @@ def _clear_wake_threshold_sidecar(why: str) -> None:
     after the next start. Best-effort."""
     try:
         if WAKE_THRESHOLD_SIDECAR.is_file():
-            old = WAKE_THRESHOLD_SIDECAR.read_text(encoding="utf-8").strip()
+            old = WAKE_THRESHOLD_SIDECAR.read_text(encoding="utf-8", errors="replace").strip()
             WAKE_THRESHOLD_SIDECAR.unlink()
             log.info("wake threshold override %s removed: %s", old or "(empty)", why)
     except OSError as e:
         log.warning("could not remove the wake threshold override: %s", e)
+
+
+def _merge_into_config(
+    config_path: Path, changes: dict[str, Any], current: "Config | None", what: str,
+) -> Path | None:
+    """Merge ``changes`` ({"section.key": value}) into the config file at
+    ``config_path``, preserving comments: the merged text must parse and load
+    as this satellite's Config, and must not make it ignore a setting it uses
+    now (``current``), or nothing is written. Keeps the original as
+    ``<name>.bak``. Returns the backup path, or None when nothing was written
+    (logged, prefixed with ``what``). The one write path for a dashboard
+    set_config and a pushed wake word's threshold."""
+    try:
+        original = config_path.read_text(encoding="utf-8")
+    except OSError as e:
+        log.warning("%s: can't read %s: %s", what, config_path, e)
+        return None
+    try:
+        merged = config_writer.apply_changes(original, changes)
+        loaded = Config.from_toml(tomllib.loads(merged))
+    except Exception as e:
+        log.error(
+            "%s: merged config doesn't load (%s); aborting, "
+            "nothing written", what, e,
+        )
+        return None
+    # A Pi loads a stored value it can't use on its profile's default
+    # (and says so); a change must not be the one that makes it do that.
+    newly = set(loaded.settings_ignored) - set(getattr(current, "settings_ignored", ()) or ())
+    if newly:
+        log.error("%s: the change would be ignored at load (%s); aborting, nothing written",
+                  what, "; ".join(sorted(newly)))
+        return None
+    backup = config_path.with_name(config_path.name + ".bak")
+    try:
+        backup.write_text(original, encoding="utf-8")
+        config_path.write_text(merged, encoding="utf-8")
+    except OSError as e:
+        log.error("%s: failed to write %s: %s", what, config_path, e)
+        return None
+    return backup
+
+
+def _wake_threshold_value(raw: object) -> float | None:
+    """A wake threshold as the [wake] setting stores it (0-1, the range the
+    dashboard's Wake sensitivity slider offers), or None if ``raw`` isn't
+    one."""
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 <= value <= 1.0):  # also refuses NaN
+        return None
+    return round(value, 4)
+
+
+def _store_wake_threshold(
+    value: float, current: "Config | None", why: str, config_path: Path | None = None,
+) -> bool:
+    """Write ``value`` into ``[wake] threshold`` (the setting the Settings tab
+    shows and the device uses), through the same merge + backup as a
+    dashboard set_config, and drop any legacy WAKE_THRESHOLD_SIDECAR so the
+    one number is the one in effect. True when the config now holds it."""
+    path = config_path if config_path is not None else CONFIG_PATH
+    if _merge_into_config(path, {"wake.threshold": value}, current, "wake threshold") is None:
+        return False
+    removed = ""
+    try:
+        if WAKE_THRESHOLD_SIDECAR.is_file():
+            WAKE_THRESHOLD_SIDECAR.unlink()
+            removed = f"; {WAKE_THRESHOLD_SIDECAR} removed"
+    except OSError as e:
+        removed = f"; {WAKE_THRESHOLD_SIDECAR} could not be removed ({e})"
+    log.info("wake sensitivity set to %s in %s: %s%s", value, path, why, removed)
+    return True
+
+
+def _migrate_wake_threshold_sidecar(cfg: "Config", config_path: Path) -> float | None:
+    """At start: move a legacy WAKE_THRESHOLD_SIDECAR (left by older software
+    after a wake-word push) into ``[wake] threshold`` and delete it, so the
+    Settings tab shows the sensitivity the device has been using. Behaviour
+    is unchanged: the file's value was the one in effect. An empty or
+    not-a-number file was being ignored already (the config value was in
+    effect), so it is just deleted. If the config can't be written the file
+    stays and keeps applying (see `_effective_wake_threshold`); the next
+    start tries again. Returns the value now in ``[wake] threshold`` when it
+    changed, else None. Never raises."""
+    try:
+        if not WAKE_THRESHOLD_SIDECAR.is_file():
+            return None
+        raw = WAKE_THRESHOLD_SIDECAR.read_text(encoding="utf-8").strip()
+    except UnicodeDecodeError:
+        raw = "(not text)"                       # ignored at load too: garbage, below
+    except OSError as e:
+        log.warning("legacy wake threshold file %s can't be read (%s); left in place",
+                    WAKE_THRESHOLD_SIDECAR, e)
+        return None
+    value = _wake_threshold_value(raw)
+    if value is None:
+        _clear_wake_threshold_sidecar(
+            f"it held {raw[:32]!r}, not a threshold, so the [wake] threshold "
+            f"{cfg.wake_threshold} was already the one in effect")
+        return None
+    try:
+        if value == round(float(cfg.wake_threshold), 4):
+            _clear_wake_threshold_sidecar("the [wake] threshold already matches it")
+            return None
+        if _store_wake_threshold(
+            value, cfg,
+            "moved from the legacy wake threshold file a wake-word push left; "
+            "the device was already using it",
+            config_path=config_path,
+        ):
+            return value
+    except Exception as e:  # noqa: BLE001 — a start-up tidy-up never stops the satellite
+        log.warning("could not move the legacy wake threshold into the config: %s", e)
+    return None
 
 
 def _resolve_sound(relpath: str) -> Path:
@@ -4236,9 +4362,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # wait, so it stays below that unless the deadline is off.
             "awaiting_response_s": self._awaiting_response_s(now),
             # The wake threshold the detector compares scores against, and
-            # the [wake] threshold setting: they differ when a model pushed
-            # from the dashboard left its own threshold behind
-            # (~/.domovoi/wake_threshold), which the Settings tab can't show.
+            # the [wake] threshold setting: they differ only while a legacy
+            # threshold file (~/.domovoi/wake_threshold) is still in effect,
+            # on older software or when moving it into the config failed.
             **self._health_wake_facts(),
             "ws": "up" if ws_up else "down",
             "ws_down_for_s": down_for,
@@ -4893,33 +5019,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         ", ".join(sorted(refused)))
         if not changes:
             return
-        try:
-            original = CONFIG_PATH.read_text(encoding="utf-8")
-        except OSError as e:
-            log.warning("set_config: can't read %s: %s", CONFIG_PATH, e)
-            return
-        try:
-            merged = config_writer.apply_changes(original, changes)
-            loaded = Config.from_toml(tomllib.loads(merged))
-        except Exception as e:
-            log.error(
-                "set_config: merged config doesn't load (%s); aborting, "
-                "nothing written", e,
-            )
-            return
-        # A Pi loads a stored value it can't use on its profile's default
-        # (and says so); a change must not be the one that makes it do that.
-        newly = set(loaded.settings_ignored) - set(getattr(getattr(self, "cfg", None), "settings_ignored", ()) or ())
-        if newly:
-            log.error("set_config: the change would be ignored at load (%s); aborting, nothing written",
-                      "; ".join(sorted(newly)))
-            return
-        backup = CONFIG_PATH.with_name(CONFIG_PATH.name + ".bak")
-        try:
-            backup.write_text(original, encoding="utf-8")
-            CONFIG_PATH.write_text(merged, encoding="utf-8")
-        except OSError as e:
-            log.error("set_config: failed to write %s: %s", CONFIG_PATH, e)
+        backup = _merge_into_config(CONFIG_PATH, changes, getattr(self, "cfg", None), "set_config")
+        if backup is None:
             return
         if "wake.threshold" in changes:
             # The sensitivity set on the dashboard is the one in effect from
@@ -7060,8 +7161,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
         """Persist a wake-model switch (a model pushed from the dashboard) so
         it survives restarts, mirror the model into the local cache, then
         restart the service to load it. ``threshold`` (the registry word's
-        per-word detection threshold) is persisted alongside so the rebooted
-        process compares scores against it instead of the [wake] config value.
+        detection threshold), when the push carries one, is written into
+        ``[wake] threshold`` itself, so the room's Settings tab shows the
+        sensitivity the device uses (one number; the old separate threshold
+        file overrode the setting unseen, 2026-11-11). No threshold → the
+        [wake] setting stays as it is.
 
         Writing the slug to WAKE_SIDECAR makes `_effective_wake_word` /
         `_effective_wake_model_path` resolve to ``<slug>`` + ``<slug>.onnx`` on
@@ -7075,19 +7179,35 @@ class Satellite(pc_engine.SpareDeviceEngine):
         if not slug:
             log.warning("set_wake_word: no slug provided; ignoring")
             return
+        value = None
+        if threshold is not None:
+            value = _wake_threshold_value(threshold)
+            if value is None:
+                log.warning("set_wake_word: ignoring threshold %r (not a 0-1 value); "
+                            "the [wake] threshold stays", threshold)
         try:
             WAKE_SIDECAR.parent.mkdir(parents=True, exist_ok=True)
             WAKE_SIDECAR.write_text(slug.strip() + "\n", encoding="utf-8")
-            if threshold is not None:
-                WAKE_THRESHOLD_SIDECAR.write_text(f"{float(threshold)}\n", encoding="utf-8")
-            else:
-                # A word pushed without a threshold of its own uses the
-                # [wake] setting, not one an earlier word left behind.
-                _clear_wake_threshold_sidecar("the new wake word has no threshold of its own")
             log.info("set_wake_word: switching to %r (restart to apply)", slug)
         except (OSError, ValueError) as e:
             log.warning("set_wake_word: could not persist %r: %s", slug, e)
             return
+        if value is None:
+            # A word pushed without a threshold of its own uses the [wake]
+            # setting, not one an earlier word left behind.
+            _clear_wake_threshold_sidecar("the new wake word has no threshold of its own")
+        elif not _store_wake_threshold(value, getattr(self, "cfg", None),
+                                       f"pushed with wake word {slug.strip()!r}"):
+            # The config couldn't take it: keep the pushed value in effect
+            # the old way rather than drop it. The health report then shows
+            # it beside the setting (the dashboard's override pill), and the
+            # next start tries to move it into the config again.
+            try:
+                WAKE_THRESHOLD_SIDECAR.write_text(f"{value}\n", encoding="utf-8")
+                log.warning("set_wake_word: [wake] threshold could not be written; "
+                            "%s kept in %s instead", value, WAKE_THRESHOLD_SIDECAR)
+            except OSError as e:
+                log.warning("set_wake_word: could not keep threshold %s: %s", value, e)
         # Pull the matching <slug>.onnx into the cache BEFORE restarting, so
         # the freshly-booted process finds it and doesn't fall back to the
         # config wake word (which would silently never fire on this slug).
@@ -9740,6 +9860,13 @@ def main(argv: list[str] | None = None) -> int:
     # been disconnected for a while first.
     LOG_SPOOL_HANDLER.setFormatter(logging.Formatter(LOG_FORMAT))
     logging.getLogger().addHandler(LOG_SPOOL_HANDLER)
+
+    # A wake threshold older software kept in its own file (after a
+    # wake-word push) moves into [wake] threshold, so the Settings tab shows
+    # the sensitivity in effect.
+    migrated = _migrate_wake_threshold_sidecar(cfg, args.config)
+    if migrated is not None:
+        cfg.wake_threshold = migrated
 
     # Find this boot's server: the core's name, the last-known address,
     # then (only then) a subnet sweep; every candidate proves the pinned

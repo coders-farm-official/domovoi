@@ -2603,6 +2603,19 @@ const WakeClipGrid = ({ wid, wname, canScore, canDeleteAll = true, fire }) => {
   );
 };
 
+/* A push sets the room's Wake sensitivity (its [wake] threshold) to the
+ * word's own threshold: the satellite writes it into its setting, which the
+ * room's ⚙ tab shows. Two decimals, like the slider there; '' when the row
+ * has no number (then the push leaves the room's setting alone). */
+const wakePushSensitivity = (w) => {
+  const v = Number(w && w.threshold);
+  return w && w.threshold != null && isFinite(v) ? v.toFixed(2) : '';
+};
+const wakePushLabel = (w) => {
+  const sens = wakePushSensitivity(w);
+  return sens ? `Push to room (wake sensitivity ${sens})` : 'Push to room';
+};
+
 const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onRecordStop, onTrain,
                    onRename, onThreshold, onSetDefault, onPush, onDelete, internetOff = false,
                    trainerOn = true, onTrainStop, preview, onPhrase, onSyntheticCopy,
@@ -2730,8 +2743,9 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
         )}
         {w.is_default && <Pill tone="live">default</Pill>}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>threshold</span>
-          <input type="number" step="0.05" min="0" max="1" value={thr}
+          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}
+                title="the Wake sensitivity a room gets when this word is pushed to it">wake sensitivity</span>
+          <input type="number" step="0.05" min="0" max="1" value={thr} aria-label="wake sensitivity"
                  onChange={(e) => setThr(e.target.value)} onBlur={commitThreshold}
                  onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
                  style={{ ..._wakeFieldStyle, width: 72 }}/>
@@ -2852,9 +2866,14 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
         {!internetOff && !trainerOn && canTrain && (
           <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>turn on training above first</span>
         )}
+        {/* The push sets the room's Wake sensitivity to this word's value
+            (the satellite writes it into its own setting), so the button
+            says which number the room will get (2026-11-11). */}
         <Button variant="secondary" icon="upload" disabled={!haveRooms || !canPush || !canPushHere}
-                title={canPushHere ? undefined : "this room's device doesn't take wake-word models"}
-                onClick={() => onPush(w, roomFor)}>Push to room</Button>
+                title={!canPushHere ? "this room's device doesn't take wake-word models"
+                  : wakePushSensitivity(w) ? `the room's Wake sensitivity becomes ${wakePushSensitivity(w)}`
+                  : undefined}
+                onClick={() => onPush(w, roomFor)}>{wakePushLabel(w)}</Button>
         {canPush && !w.is_default &&
           <Button variant="ghost" onClick={() => onSetDefault(w)}>make default</Button>}
         {!synthetic && (
@@ -3396,13 +3415,14 @@ const WakeWordsPanel = () => {
   const rename = (w, name) =>
     guard(() => apiPatch(`/api/wake-words/${w.id}`, { name }), 'wake word renamed');
   const threshold = (w, value) =>
-    guard(() => apiPatch(`/api/wake-words/${w.id}`, { threshold: value }), 'threshold updated');
+    guard(() => apiPatch(`/api/wake-words/${w.id}`, { threshold: value }), 'wake sensitivity updated');
   const setDefault = (w) =>
     guard(() => apiPatch(`/api/wake-words/${w.id}`, { set_default: true }), `${w.name} is now the default`);
   const push = (w, room) => {
     if (!room) { fire('no room online to push to'); return; }
+    const sens = wakePushSensitivity(w);
     return guard(() => apiPost(`/api/wake-words/${w.id}/push`, { room_id: room }),
-      `pushed “${w.name}” to ${room}`);
+      sens ? `pushed “${w.name}” to ${room} (wake sensitivity ${sens})` : `pushed “${w.name}” to ${room}`);
   };
   // Deletes confirm first (F-009): a wake word is recorded clips plus a
   // trained model — the most expensive thing on this page to lose.

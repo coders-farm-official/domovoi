@@ -4250,7 +4250,7 @@
        "text": "What it needs: a server with 24 GB of memory, about 22 GB of downloads and about 32 GB of disk. A word takes about 20 minutes to train with an NVIDIA graphics card, and over an hour on the processor."
       },
       {
-       "text": "The steps: **Create** the word, **Record** 15 or more clips on the room device itself, press **Train**, then **Push to room**."
+       "text": "The steps: **Create** the word, **Record** 15 or more clips on the room device itself, press **Train**, then **Push to room**. The button shows the wake sensitivity the room gets with the word; the room's Settings tab shows it after the push, and you can change it there."
       },
       {
        "text": "Each **Record** adds to the clips already there, from any room, until you train; each clip shows the room it came from. **Delete all clips** starts over."

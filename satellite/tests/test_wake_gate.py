@@ -341,6 +341,182 @@ def test_another_setting_leaves_the_threshold_file_alone(monkeypatch, config_hom
     assert side.read_text(encoding="utf-8") == "0.45\n"
 
 
+# ─── a pushed wake word's threshold is the [wake] setting (2026-11-11) ──
+# A push used to park its threshold in a separate file that overrode the
+# setting: every room woke at 0.5 while its Settings tab showed 0.8.
+
+
+def _sat_for_push(monkeypatch, tmp_path, cfg: dict | None = None):
+    sat, restarts = _sat_for_config(monkeypatch)
+    if cfg is not None:
+        sat.cfg = client.Config.from_toml(cfg)
+    synced: list[int] = []
+    monkeypatch.setattr(sat, "_sync_wake_models", lambda: synced.append(1), raising=False)
+    monkeypatch.setattr(client, "WAKE_SIDECAR", tmp_path / "wake")
+    return sat, restarts, synced
+
+
+def _threshold_in(cfg_path) -> float:
+    import tomllib
+    return tomllib.loads(cfg_path.read_text(encoding="utf-8"))["wake"]["threshold"]
+
+
+def test_a_push_writes_its_threshold_into_the_wake_setting(monkeypatch, config_home, tmp_path) -> None:
+    cfg_path, side = config_home
+    cfg_path.write_text('[wake]\n# how easily it wakes\nthreshold = 0.8\n', encoding="utf-8")
+    sat, restarts, synced = _sat_for_push(monkeypatch, tmp_path, {"wake": {"threshold": 0.8}})
+    sat._apply_wake_switch("home_word", threshold=0.5)
+    assert _threshold_in(cfg_path) == 0.5
+    assert "# how easily it wakes" in cfg_path.read_text(encoding="utf-8")   # merged, not rewritten
+    assert cfg_path.with_name("config.toml.bak").read_text(encoding="utf-8").endswith("threshold = 0.8\n")
+    assert not side.exists()                     # one number: no override file
+    assert (tmp_path / "wake").read_text(encoding="utf-8") == "home_word\n"
+    assert synced == [1] and restarts == [1]
+    # What the rebooted device uses is what the Settings tab shows.
+    loaded = client.Config.from_toml({"wake": {"threshold": _threshold_in(cfg_path)}})
+    assert client._effective_wake_threshold(loaded) == 0.5
+
+
+def test_a_push_also_removes_a_threshold_an_older_push_left(monkeypatch, config_home, tmp_path) -> None:
+    cfg_path, side = config_home
+    side.write_text("0.3\n", encoding="utf-8")
+    sat, _restarts, _synced = _sat_for_push(monkeypatch, tmp_path)
+    sat._apply_wake_switch("home_word", threshold=0.6)
+    assert _threshold_in(cfg_path) == 0.6
+    assert not side.exists()
+
+
+def test_a_push_without_a_threshold_leaves_the_setting(monkeypatch, config_home, tmp_path) -> None:
+    cfg_path, side = config_home
+    cfg_path.write_text('[wake]\nthreshold = 0.8\n', encoding="utf-8")
+    side.write_text("0.45\n", encoding="utf-8")   # an earlier word's leftover
+    sat, restarts, synced = _sat_for_push(monkeypatch, tmp_path, {"wake": {"threshold": 0.8}})
+    sat._apply_wake_switch("home_word", threshold=None)
+    assert cfg_path.read_text(encoding="utf-8") == '[wake]\nthreshold = 0.8\n'
+    assert not cfg_path.with_name("config.toml.bak").exists()
+    assert not side.exists()
+    assert synced == [1] and restarts == [1]
+
+
+@pytest.mark.parametrize("bad", [1.7, -0.1, float("nan"), "loud"])
+def test_a_push_with_a_threshold_out_of_range_leaves_the_setting(monkeypatch, config_home, tmp_path, bad) -> None:
+    cfg_path, side = config_home
+    sat, restarts, _synced = _sat_for_push(monkeypatch, tmp_path)
+    sat._apply_wake_switch("home_word", threshold=bad)
+    assert cfg_path.read_text(encoding="utf-8") == '[wake]\nthreshold = 0.5\n'
+    assert not side.exists()
+    assert restarts == [1]
+
+
+def test_a_push_whose_config_cant_be_written_keeps_the_value_in_effect(monkeypatch, config_home, tmp_path) -> None:
+    cfg_path, side = config_home
+    cfg_path.unlink()                            # nothing to merge into
+    sat, restarts, _synced = _sat_for_push(monkeypatch, tmp_path)
+    sat._apply_wake_switch("home_word", threshold=0.55)
+    assert side.read_text(encoding="utf-8") == "0.55\n"
+    # ...and the health report shows it beside the setting (the dashboard's pill).
+    assert client._effective_wake_threshold(client.Config.from_toml({})) == 0.55
+    assert restarts == [1]
+
+
+# ─── a leftover threshold file moves into [wake] threshold at start ──
+
+
+def test_start_moves_a_leftover_threshold_into_the_setting(config_home, caplog) -> None:
+    cfg_path, side = config_home
+    cfg_path.write_text('[wake]\nthreshold = 0.8\n', encoding="utf-8")
+    side.write_text("0.5\n", encoding="utf-8")
+    cfg = client.Config.from_toml({"wake": {"threshold": 0.8}})
+    with caplog.at_level(logging.INFO, logger=client.log.name):
+        assert client._migrate_wake_threshold_sidecar(cfg, cfg_path) == 0.5
+    assert _threshold_in(cfg_path) == 0.5         # what the device was using
+    assert not side.exists()
+    lines = [r.getMessage() for r in caplog.records if r.name == client.log.name]
+    assert len(lines) == 1, lines                 # one line says what happened
+    assert "wake sensitivity set to 0.5" in lines[0] and "removed" in lines[0]
+    # Nothing left to do on the next start.
+    assert client._migrate_wake_threshold_sidecar(
+        client.Config.from_toml({"wake": {"threshold": 0.5}}), cfg_path) is None
+
+
+def test_start_removes_a_leftover_that_matches_the_setting(config_home) -> None:
+    cfg_path, side = config_home
+    side.write_text("0.5\n", encoding="utf-8")
+    assert client._migrate_wake_threshold_sidecar(client.Config.from_toml({}), cfg_path) is None
+    assert not side.exists()
+    assert not cfg_path.with_name("config.toml.bak").exists()   # nothing to write
+
+
+@pytest.mark.parametrize("garbage", [b"", b"   \n", b"loud\n", b"7\n", b"nan\n", b"\xff\xfe\x00"])
+def test_start_removes_a_garbage_leftover_and_keeps_the_setting(config_home, garbage) -> None:
+    cfg_path, side = config_home
+    cfg_path.write_text('[wake]\nthreshold = 0.8\n', encoding="utf-8")
+    side.write_bytes(garbage)
+    cfg = client.Config.from_toml({"wake": {"threshold": 0.8}})
+    assert client._migrate_wake_threshold_sidecar(cfg, cfg_path) is None
+    assert not side.exists()
+    assert cfg_path.read_text(encoding="utf-8") == '[wake]\nthreshold = 0.8\n'
+
+
+def test_start_leaves_an_unreadable_leftover_in_place(monkeypatch, config_home) -> None:
+    cfg_path, side = config_home
+    side.write_text("0.65\n", encoding="utf-8")
+    real_read = type(side).read_text
+
+    def denied(self, *a, **k):
+        if self == side:
+            raise PermissionError("denied")
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(type(side), "read_text", denied)
+    assert client._migrate_wake_threshold_sidecar(client.Config.from_toml({}), cfg_path) is None
+    monkeypatch.undo()
+    assert side.read_text(encoding="utf-8") == "0.65\n"
+    assert cfg_path.read_text(encoding="utf-8") == '[wake]\nthreshold = 0.5\n'
+
+
+def test_start_keeps_the_leftover_when_the_config_cant_take_it(config_home) -> None:
+    cfg_path, side = config_home
+    cfg_path.unlink()
+    side.write_text("0.65\n", encoding="utf-8")
+    cfg = client.Config.from_toml({})
+    assert client._migrate_wake_threshold_sidecar(cfg, cfg_path) is None
+    assert side.read_text(encoding="utf-8") == "0.65\n"     # still in effect, nothing changes
+    assert client._effective_wake_threshold(cfg) == 0.65
+
+
+def test_start_wires_the_migration_before_connecting(monkeypatch, config_home) -> None:
+    """main() moves the leftover and hands the moved value to the Satellite."""
+    cfg_path, side = config_home
+    side.write_text("0.35\n", encoding="utf-8")
+    seen: list[float] = []
+
+    def stop(cfg, _path):
+        seen.append(cfg.wake_threshold)
+        return False                             # exit 3 before any network
+
+    # A stand-in, never the real module: importing that here would fix its
+    # paths to this test's home for every later test.
+    import sys
+    import types
+    import satellite
+    fake = types.SimpleNamespace(provisioning_active=lambda: False)
+    monkeypatch.setitem(sys.modules, "satellite.provisioning_mode", fake)
+    monkeypatch.setattr(satellite, "provisioning_mode", fake, raising=False)
+    monkeypatch.setattr(client, "_resolve_server_url", stop)
+    monkeypatch.setattr(client, "_ensure_config", lambda _p: True)
+    monkeypatch.setattr(client.engine_platform, "is_windows_pc", lambda _c: client.sys.platform == "win32")
+    monkeypatch.setattr(client.engine_platform, "windows_runtime_problem", lambda *_a, **_k: None)
+    monkeypatch.setattr(client.pc_engine, "is_pc", lambda _c: False)
+    monkeypatch.setattr(client.logging, "basicConfig", lambda **_k: None)
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", list(root.handlers))   # main() adds the ring + spool
+    assert client.main(["--config", str(cfg_path)]) == 3
+    assert seen == [0.35]
+    assert not side.exists()
+    assert _threshold_in(cfg_path) == 0.35
+
+
 # ─── the tuning log: scores around a wake, and near misses (2026-11-11) ──
 
 
