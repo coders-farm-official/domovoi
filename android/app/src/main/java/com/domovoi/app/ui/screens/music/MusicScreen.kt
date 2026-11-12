@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -44,6 +45,8 @@ import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayKind
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.ui.components.DomovoiCard
+import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadMoreNearEnd
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.PageHeader
@@ -348,7 +351,10 @@ fun MusicScreen() {
     }
 
     // ── Header derived counts ─────────────────────────────────────────
-    val playingCount = npList.count { it.state == "play" }
+    val playingCount = RoomsToggle.playingCount(npList)
+    // The rooms strip starts folded away; this phone remembers the choice.
+    val roomsStore = remember(context) { RoomsOpenStore.forApp(context) }
+    var roomsOpen by remember(roomsStore) { mutableStateOf(roomsStore.open) }
     val libraryTotal: Int? = stats.data?.totalTracks
     val tabLabels = listOf(
         "library" + (libraryTotal?.let { " · $it" } ?: ""),
@@ -409,9 +415,26 @@ fun MusicScreen() {
                 )
             }
 
-            item(key = "now-playing") {
+            item(key = "rooms-toggle") {
+                RoomsToggleLink(roomsOpen, playingCount) {
+                    roomsOpen = !roomsOpen
+                    roomsStore.open = roomsOpen
+                }
+            }
+
+            if (roomsOpen) item(key = "now-playing") {
+                val npError = nowPlaying.error
                 if (nowPlaying.data == null && nowPlaying.loading) {
                     LoadingState()
+                } else if (npList.isEmpty() && npError != null) {
+                    // A failed read is said, not shown as "no rooms yet".
+                    DomovoiCard(Modifier.fillMaxWidth()) {
+                        ErrorState(
+                            message = "couldn't load now-playing: $npError",
+                            onRetry = nowPlaying.refresh,
+                            title = "rooms unavailable",
+                        )
+                    }
                 } else {
                     NowPlayingStrip(
                         npList, tick,

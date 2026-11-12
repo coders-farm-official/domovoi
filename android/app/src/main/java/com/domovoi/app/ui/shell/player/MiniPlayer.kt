@@ -29,12 +29,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
+import com.domovoi.app.LocalToast
 import com.domovoi.app.player.CoverArt
 import com.domovoi.app.player.PlayTarget
 import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.launch
+
+/** What "Stop and close" says when the cast room refuses the stop (the web's words). */
+internal const val STOP_AND_CLOSE_REFUSED = "couldn't stop the room — the player is still open"
 
 /**
  * Global docked mini player (web MiniPlayer analog). Collapses to nothing
@@ -43,6 +48,7 @@ import com.domovoi.app.ui.theme.Domovoi
 @Composable
 fun MiniPlayer(onOpenPlayer: () -> Unit) {
     val app = LocalApp.current
+    val toast = LocalToast.current
     val queue by app.player.queue.collectAsState()
     val index by app.player.index.collectAsState()
     val playing by app.player.isPlaying.collectAsState()
@@ -118,8 +124,16 @@ fun MiniPlayer(onOpenPlayer: () -> Unit) {
                         tint = if (canNext) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint,
                     )
                 }
-                IconButton(onClick = { app.player.stop() }) {
-                    Icon(Icons.Filled.Close, contentDescription = "stop", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(16.dp))
+                // "Stop and close", as on the web: stops, empties the queue and
+                // takes the bar away; while casting it stops the room first,
+                // and a room that says it didn't keeps the bar (and says so).
+                // The app's scope: the bar leaves the screen as this works.
+                IconButton(onClick = {
+                    app.scope.launch {
+                        if (!app.player.stopAndClose()) toast(STOP_AND_CLOSE_REFUSED)
+                    }
+                }) {
+                    Icon(Icons.Filled.Close, contentDescription = "Stop and close", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(16.dp))
                 }
             }
         }
