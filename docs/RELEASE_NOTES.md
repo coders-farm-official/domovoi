@@ -14,6 +14,21 @@ a request it has no command for ("add tarp the trailer to my to-do
 list") could get a made-up "I've added it"; nothing was saved. It now
 says it can't do that yet.
 
+## 2026-11-11 — the dashboard's player bar can be closed
+
+**The bar at the bottom of the dashboard has an "×" (Stop and close).**
+It stops playback, empties the player's queue and removes the bar; while
+the bar is playing on a room it stops that room too, and if the room
+can't be stopped it says so and keeps the bar. A podcast or audiobook
+keeps its place for next time.
+
+## 2026-11-11 — Music page: rooms start folded away
+
+**The room cards on the Music page are now hidden until you press
+"Show rooms"** (it reads "Show rooms (2 playing)" while rooms are
+playing). The choice is kept per browser; the Room queue tab and the
+room queue buttons work as before.
+
 ## 2026-11-11 — a pushed wake word no longer hides the room's wake sensitivity
 
 **Pushing a wake word to a room now sets that room's Wake sensitivity,

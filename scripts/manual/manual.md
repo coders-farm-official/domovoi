@@ -391,6 +391,8 @@ Your music library, on the server, played in any room or in the browser.
 
 - Add music: [Music](#music) → **Upload**, or copy files into the server's
   music folder.
+- **Dashboard:** the room cards are folded away on [Music](#music); press
+  **Show rooms** to see them (it remembers your choice in that browser).
 - Each room has one shared queue, and anyone in the house can add to it.
 - **Dashboard:** [Music → Room queue](#music/queue): drag to reorder. A
   room card's **queue** button goes straight there.
