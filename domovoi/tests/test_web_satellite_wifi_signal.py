@@ -31,6 +31,9 @@ const card = h.find((e) => w.__cls(e).includes('sat-card'));
 const cardText = w.__deep(card);
 const signalEl = h.find((e) => e.props && typeof e.props.title === 'string' && e.props.title.startsWith('signal '));
 await h.click((e) => w.__cls(e).includes('sat-card')); await w.__settle(h, 8);
+const overviewTab = h.text().join(' | ');
+// The Health section (wi-fi included) lives on the drawer's Settings tab.
+await h.click({ type: 'button', title: 'Settings' }); await w.__settle(h, 8);
 const overview = h.text().join(' | ');
 const tones = {
   good: w.wifiTone({ signal_dbm: -52, rx_mbits: 1.0 }),
@@ -43,7 +46,7 @@ const tones = {
   oldFast: w.wifiTone(54.0),
   none: w.wifiTone(null),
 };
-return { cardText, signalTitle: signalEl ? signalEl.props.title : null, overview, tones };
+return { cardText, signalTitle: signalEl ? signalEl.props.title : null, overview, overviewTab, tones };
 """
 
 
@@ -135,14 +138,16 @@ def test_an_idle_link_with_a_good_signal_is_good(driven):
     assert "-52 dBm" in r["cardText"]
     assert "1 Mbit/s" in r["cardText"]
     assert r["signalTitle"].startswith("signal good")
-    assert "-52 dBm |  good" in r["overview"]
+    assert "-52 dBm" in r["overview"] and "good" in r["overview"]
+    tab = r["overviewTab"].split("last heard from", 1)[1]
+    assert "dBm" not in tab and "memory" not in tab
 
 
 def test_a_weak_signal_reads_weak_whatever_the_rate(driven):
     r = driven["weak"]
     assert "-78 dBm" in r["cardText"]
     assert r["signalTitle"].startswith("signal weak")
-    assert "-78 dBm |  weak" in r["overview"]
+    assert "-78 dBm" in r["overview"] and "weak" in r["overview"]
 
 
 def test_the_bands(driven):
