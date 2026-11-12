@@ -72,23 +72,33 @@ def test_play_playlist_regex_does_not_swallow_music() -> None:
 # ─── Happy-path play ─────────────────────────────────────────────────────
 
 
+def _in_music(name: str) -> str:
+    """A library path inside the music folder (so it has an MPD path)."""
+    from pathlib import Path
+
+    from domovoi.config import settings
+
+    return str(Path(settings.music_dir).expanduser() / name)
+
+
 @requires_db
 @pytest.mark.asyncio
-async def test_play_playlist_ordered_picks_first_position(db_session) -> None:
-    """`play the X playlist` (ordered mode) starts at the lowest
-    position. Sets app.state.current_playlist with mode=ordered."""
+async def test_play_playlist_ordered_queues_the_whole_list_in_order(db_session) -> None:
+    """`play the X playlist` (ordered mode) puts the WHOLE playlist in the
+    room's queue, by position (not insertion order), starting at the top,
+    and arms a continue Up next session with the playlist as its source."""
+    from domovoi.db.session import session_scope
+    from domovoi.up_next import store as up_next_store
+
     mpd = MPDStubClient()
     mpd_module._clients = {"kitchen": mpd}
 
-    # Seed a playlist with two tracks at positions 1 and 0 (out of
-    # insertion order on purpose so we can verify ORDER BY position
-    # ASC, not insertion order, drives the pick).
     await db_session.execute(
         sql_text(
             "INSERT INTO library_tracks (id, file_path, title, artist) VALUES "
-            "(100, '/music/A.mp3', 'A-track', 'A'), "
-            "(200, '/music/B.mp3', 'B-track', 'B')"
-        )
+            "(100, :a, 'A-track', 'A'), (200, :b, 'B-track', 'B'), (300, :c, 'C-track', 'C')"
+        ),
+        {"a": _in_music("A.mp3"), "b": _in_music("B.mp3"), "c": _in_music("C.mp3")},
     )
     await db_session.execute(
         sql_text("INSERT INTO playlists (id, name) VALUES (50, 'workout')")
@@ -96,40 +106,40 @@ async def test_play_playlist_ordered_picks_first_position(db_session) -> None:
     await db_session.execute(
         sql_text(
             "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES "
-            "(50, 100, 1), (50, 200, 0)"
+            "(50, 100, 1), (50, 200, 0), (50, 300, 2)"
         )
     )
     await db_session.commit()
 
-    class _FakeApp:
-        class state:
-            current_playlist: dict = {}
-
     handler = PlaylistHandler()
-    ctx = Context(room_id="kitchen", online=True, app=_FakeApp)
+    ctx = Context(room_id="kitchen", online=True)
     response = await handler._play_by_name(
         "workout", ctx, db_session, mode="ordered"
     )
     assert response.music_action == "start"
-    entry = _FakeApp.state.current_playlist["kitchen"]
-    # Position 0 (track id 200, "B-track") should be picked first.
-    assert entry["mode"] == "ordered"
-    assert entry["last_track_id"] == 200
-    assert entry["last_position"] == 0
-    assert entry["playlist_id"] == 50
+    assert response.text == "Playing workout."
+    assert [e["file"] for e in await mpd.queue_list()] == ["B.mp3", "A.mp3", "C.mp3"]
+    assert (await mpd.current_song())["file"] == "B.mp3"
+    assert response.data["track_id"] == 200 and response.data["skipped"] == 0
+    async with session_scope() as s:
+        st = await up_next_store.active_for(s, "room:kitchen")
+    assert st is not None and st.sess.mode == "continue"
+    assert st.sess.seed.kind == "playlist" and st.sess.seed.ref == "50"
+    assert st.list_name == "workout"
 
 
 @requires_db
 @pytest.mark.asyncio
-async def test_play_playlist_shuffle_marks_state_as_shuffle(db_session) -> None:
+async def test_play_playlist_shuffle_queues_every_song(db_session) -> None:
     mpd = MPDStubClient()
     mpd_module._clients = {"kitchen": mpd}
 
     await db_session.execute(
         sql_text(
             "INSERT INTO library_tracks (id, file_path, title, artist) VALUES "
-            "(300, '/music/C.mp3', 'C', 'C')"
-        )
+            "(300, :c, 'C', 'C'), (301, :d, 'D', 'D')"
+        ),
+        {"c": _in_music("C.mp3"), "d": _in_music("D.mp3")},
     )
     await db_session.execute(
         sql_text("INSERT INTO playlists (id, name) VALUES (60, 'chill')")
@@ -137,24 +147,20 @@ async def test_play_playlist_shuffle_marks_state_as_shuffle(db_session) -> None:
     await db_session.execute(
         sql_text(
             "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES "
-            "(60, 300, 0)"
+            "(60, 300, 0), (60, 301, 1)"
         )
     )
     await db_session.commit()
 
-    class _FakeApp:
-        class state:
-            current_playlist: dict = {}
-
     handler = PlaylistHandler()
-    ctx = Context(room_id="kitchen", online=True, app=_FakeApp)
+    ctx = Context(room_id="kitchen", online=True)
     response = await handler._play_by_name(
         "chill", ctx, db_session, mode="shuffle"
     )
     assert response.music_action == "start"
-    entry = _FakeApp.state.current_playlist["kitchen"]
-    assert entry["mode"] == "shuffle"
-    assert entry["last_track_id"] == 300
+    assert response.text == "Shuffling chill."
+    assert response.data["mode"] == "shuffle"
+    assert sorted(e["file"] for e in await mpd.queue_list()) == ["C.mp3", "D.mp3"]
 
 
 @requires_db
@@ -181,12 +187,8 @@ async def test_play_empty_playlist_polite_error(db_session) -> None:
     )
     await db_session.commit()
 
-    class _FakeApp:
-        class state:
-            current_playlist: dict = {}
-
     handler = PlaylistHandler()
-    ctx = Context(room_id="kitchen", online=True, app=_FakeApp)
+    ctx = Context(room_id="kitchen", online=True)
     response = await handler._play_by_name(
         "empty", ctx, db_session, mode="ordered"
     )
@@ -347,32 +349,16 @@ async def test_play_playlist_multi_match_parks_confirmation(db_session) -> None:
 # ─── Fetch-missing-track → media acquisition seam (design §4.8/§10.2) ────
 
 
-def _playing_playlist_app(playlist_id: int = 70, name: str = "roadtrip"):
-    class _FakeApp:
-        class state:
-            current_playlist = {
-                "kitchen": {
-                    "playlist_id": playlist_id,
-                    "name": name,
-                    "mode": "ordered",
-                    "last_track_id": 1,
-                    "last_position": 0,
-                    "last_file_path": "X.mp3",
-                }
-            }
-
-    return _FakeApp
-
-
 @requires_db
 @pytest.mark.asyncio
 async def test_add_after_missing_track_enqueues_acquisition_graceful_absence(
     db_session,
 ) -> None:
     """'add <unknown song> after this' with no library hit becomes a
-    'query'-kind media_acquisitions row soft-attached to the playlist,
-    and — with NO acquisition fulfiller registered — the reply is the
-    canonical graceful-absence copy (locked 6)."""
+    'query'-kind media_acquisitions row attached to NO playlist (a room's
+    queue edit never writes a playlist, 2026-11-12), and — with NO
+    acquisition fulfiller registered — the reply is the canonical
+    graceful-absence copy (locked 6)."""
     from domovoi.capabilities import CAPABILITIES, MEDIA_ACQUISITION_FULFILLER
 
     await db_session.execute(
@@ -382,10 +368,7 @@ async def test_add_after_missing_track_enqueues_acquisition_graceful_absence(
 
     assert CAPABILITIES.absent(MEDIA_ACQUISITION_FULFILLER)
     handler = PlaylistHandler()
-    ctx = Context(
-        session_id=None, room_id="kitchen", online=True,
-        app=_playing_playlist_app(),
-    )
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
     response = await handler._add_after_this("uncatalogued banger", ctx, db_session)
     await db_session.commit()
 
@@ -402,7 +385,7 @@ async def test_add_after_missing_track_enqueues_acquisition_graceful_absence(
     assert row[0] == "query"
     assert row[1] == "uncatalogued banger"
     assert row[2] == "voice:playlist"
-    assert row[3] == 70
+    assert row[3] is None
     assert row[4] == "pending"
 
 
@@ -429,10 +412,7 @@ async def test_add_after_missing_track_promises_download_when_fulfiller_present(
     )
     try:
         handler = PlaylistHandler()
-        ctx = Context(
-            session_id=None, room_id="kitchen", online=True,
-            app=_playing_playlist_app(playlist_id=71),
-        )
+        ctx = Context(session_id=None, room_id="kitchen", online=True)
         response = await handler._add_after_this(
             "uncatalogued banger", ctx, db_session
         )
@@ -441,10 +421,13 @@ async def test_add_after_missing_track_promises_download_when_fulfiller_present(
         CAPABILITIES.unregister(MEDIA_ACQUISITION_FULFILLER, slug="extfetch")
 
     assert "queued it to download" in response.text.lower()
-    assert "roadtrip" in response.text.lower()
+    assert "roadtrip" not in response.text.lower()
     count = (
         await db_session.execute(
-            sql_text("SELECT COUNT(*) FROM media_acquisitions WHERE attach_to_playlist_id = 71")
+            sql_text("SELECT COUNT(*) FROM media_acquisitions WHERE attach_to_playlist_id IS NULL")
         )
     ).scalar()
     assert count == 1
+    # The playlist itself is untouched.
+    assert (await db_session.execute(
+        sql_text("SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = 71"))).scalar() == 0

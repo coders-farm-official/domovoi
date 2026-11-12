@@ -5070,7 +5070,6 @@ class StreamSession:
             and not getattr(response, "dropin_action", None)
         ):
             resumable: dict[str, str] = self.ws.app.state.resumable_music
-            current_pl: dict[str, Any] = self.ws.app.state.current_playlist
             suppress_music_start = bool(getattr(response, "expect_followup", False))
             if response.music_action == "start" and response.music_stream_url:
                 # Recorded FIRST, as `_admin_dispatch_music` does: the send
@@ -5102,7 +5101,7 @@ class StreamSession:
                     # follow-up window has closed with no turn to do it.
                     self.hold_music_start(response.music_stream_url, "followup")
                 # See _admin_dispatch_music for the symmetric comment:
-                # now-playing stamps / current_playlist aren't cleared
+                # now-playing stamps aren't cleared
                 # on start because matched_handler isn't a reliable
                 # source signal at this layer. The freshness check
                 # plus the playback-state sweeper handle invalidation.
@@ -5117,7 +5116,6 @@ class StreamSession:
                 # Generic now-playing stamp pop (design §4.7) — no
                 # provider-specific state dicts to clear.
                 NOW_PLAYING.clear(self.room_id)
-                current_pl.pop(self.room_id, None)
                 # Any pending handshake is moot once the user has asked
                 # to stop. The receiver-side fallback also clears its
                 # own entry on cancel.

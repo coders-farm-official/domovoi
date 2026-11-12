@@ -64,7 +64,6 @@ async def dispatch_music(
 
     sessions: dict[str, Any] = app.state.active_sessions
     resumable: dict[str, str] = app.state.resumable_music
-    current_pl: dict[str, Any] = app.state.current_playlist
     sess = sessions.get(room_id)
     if response.music_action == "start" and response.music_stream_url:
         resumable[room_id] = response.music_stream_url
@@ -79,9 +78,6 @@ async def dispatch_music(
         # The web backend's stream_url-vs-file freshness check makes
         # the dashboard pill follow the real source instantly anyway;
         # the playback-state sweeper handles stamp hygiene within 5 s.
-        # Same logic for current_playlist — the sweeper invalidates
-        # entries whose last_file_path doesn't match MPD currentsong
-        # once the new track is actually playing.
         if sess is not None:
             # The same helper the voice path uses: the stream is made to
             # serve first (a cast is very often the first play since the
@@ -112,7 +108,6 @@ async def dispatch_music(
         # Generic stamp pop (design §4.7) — no provider-specific
         # state dicts to clear.
         NOW_PLAYING.clear(room_id)
-        current_pl.pop(room_id, None)
         pending: dict[str, dict[str, Any]] = app.state.pending_music_start
         stale = pending.pop(room_id, None)
         if stale is not None:

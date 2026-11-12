@@ -28,9 +28,9 @@ core keeps it going:
     still works.
 
 * **End** — a new start (:func:`store.create` ends the old one), the queue
-  replaced by anything else (a stream, a podcast, a playlist played one
-  song at a time: the client's ``queue_generation`` moved on since the
-  session started), the queue cleared, the room stopped once it had
+  replaced by anything else (a stream, a podcast: the client's
+  ``queue_generation`` moved on since the session started), the queue
+  cleared, the room stopped once it had
   played, or paused / stopped for :data:`IDLE_END`.
 
 Everything here is best-effort: a failure is logged and the music plays on
@@ -59,6 +59,9 @@ TRIM_KEEP_BEHIND = 50
 IDLE_END_SEC = 2 * 3600.0
 #: After a refill that found nothing to add, wait this long before the next.
 EMPTY_BACKOFF_SEC = 60.0
+#: Rooms whose queue is still being loaded (the rest of a long playlist,
+#: domovoi/handlers/shared/room_playlist.py): no picks join until it is in.
+LOADING: set[str] = set()
 
 
 def target_for(room_id: str) -> str:
@@ -393,7 +396,7 @@ async def look(room_id: str, client: Any, snap: dict[str, Any], *,
         cur = ids.index(int(songid))
     left = len(ids) - cur - 1
     may_draw = not st.sess.ended and (st.sess.autoplay or st.sess.mode == "list")
-    if left <= refill_at and may_draw and now >= seen.backoff_until:
+    if left <= refill_at and may_draw and now >= seen.backoff_until and room_id not in LOADING:
         did["queued"] = await fill(room_id, client, sid)
     return did
 

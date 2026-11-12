@@ -1140,10 +1140,11 @@ class CastTracksRequest(BaseModel):
 
 
 class PlayPlaylistRequest(BaseModel):
-    """Direct play of a playlist by id. ``playlist_id == 0`` is the
-    virtual Favorites view. ``shuffle=True`` randomizes the pick;
-    otherwise playback starts at the first track and ``next``
-    advances by position."""
+    """Play a playlist in a room by id. ``playlist_id == 0`` is the
+    virtual Favorites view. The whole playlist becomes the room's queue
+    (2026-11-12), in order, or shuffled with ``shuffle=True``; the room's
+    queue tools then edit it like any queue (a copy: the playlist itself
+    never changes)."""
     room_id: str
     playlist_id: int = Field(..., ge=0)
     shuffle: bool = False
@@ -1152,6 +1153,12 @@ class PlayPlaylistRequest(BaseModel):
     # refused here too. Optional — the server also reads X-Device-Id,
     # ?device_id= and the registration cookie (files.caller_device_id).
     device_id: str | None = Field(default=None, max_length=64)
+    # Up next, as for play-tracks: a session armed with the playlist as its
+    # source adds similar songs once it is nearly over. All optional.
+    listener_person_id: int | None = Field(default=None, ge=1)
+    as_household: bool = False
+    autoplay: bool = True
+    up_next: bool = True
 
 
 class AddByQueryRequest(BaseModel):

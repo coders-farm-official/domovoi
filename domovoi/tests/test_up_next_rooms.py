@@ -14,7 +14,8 @@
   extender's tick writes the listen with its session and origin;
 * every start path: play-track (list / library / none), play-tracks (armed
   continue, the caster's own session moved), voice "play something" and a
-  resolved song / artist, play-playlist and anything else ending it, the
+  resolved song / artist, play-playlist arming its own session and anything
+  else ending it, the
   web's room start and casting move;
 * the room queue routes: insert next / end, the real jump, origins and
   reasons in the read, clear ending the session, the room's session read
@@ -512,16 +513,27 @@ async def test_a_cast_arms_continue_or_carries_the_casters_session(_db, clean, r
 
 
 @requires_db
-async def test_play_playlist_and_other_plays_end_the_rooms_session(_db, clean, room, dispatched, monkeypatch) -> None:
+async def test_play_playlist_replaces_the_rooms_session(_db, clean, room, dispatched) -> None:
     d = await _seed()
-    await _library_start(room, d)
-    monkeypatch.setattr(core_main.app.state, "current_playlist", {}, raising=False)
+    old = await _library_start(room, d)
     async with _core() as c:
         r = await c.post("/v1/admin/music/play-playlist", json={"room_id": ROOM, "playlist_id": d["playlist"]})
         assert r.status_code == 200, r.text
+    # The whole playlist is the queue now, with its own continue session
+    # (domovoi/tests/test_up_next_room_playlist.py has the rest).
+    st = await _active()
+    assert st.sess.id != old and st.sess.mode == "continue" and st.sess.seed.kind == "playlist"
     await room.resume()
-    # A playlist plays one song at a time (the core advances it): the
-    # session whose queue it replaced ends on the next look.
+    assert (await _look(room))["ended"] is None
+    assert len(await room.queue_list()) == 20
+
+
+@requires_db
+async def test_other_plays_end_the_rooms_session(_db, clean, room) -> None:
+    d = await _seed()
+    await _library_start(room, d)
+    await room.play_search({"title": "Song 3"})
+    await room.resume()
     assert (await _look(room))["ended"] == "the queue was replaced"
 
 
