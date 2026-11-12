@@ -601,9 +601,10 @@ table.tbl .actions { text-align: right; }
    the whole screen above the tab strip: seek, transport, volume, sleep,
    play on, queue.
    Designed for 320, 375, 414 and 760px wide. The bar's fixed parts are
-   156px (12 + 4 padding, two 4px gaps, play + next 88, open 44), so the
-   title column gets W - 156 and its text W - 210 after the cover and its
-   gap: 110 / 165 / 204 / 550px, ellipsized. The sheet's content column
+   200px (12 + 4 padding, two 4px gaps, play + next 88, open 44, close 44),
+   so the title column gets W - 200 and its text W - 254 after the cover
+   and its gap: 66 / 121 / 160 / 506px at 320 / 375 / 414 / 760 (106 at
+   360), ellipsized. The sheet's content column
    is W - 32: 288 / 343 / 382 / 728px, the 200px cover fits all four.
    ================================================================ */
 .mini-player {
@@ -663,6 +664,7 @@ html.mp-docked { --player-h: 64px; }
   .mini-player .mp-line { display: block; }
   .mini-player .mp-expand { display: inline-flex; }
   .mini-player .mp-center { min-width: 0; }
+  .mini-player .mp-side { gap: 0; }
   .mini-player .mp-transport { gap: 0; }
   .mini-player .btn-icon { width: 44px; height: 44px; }
 

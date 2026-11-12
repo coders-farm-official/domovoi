@@ -473,7 +473,8 @@ def _px(decl: str, prop: str) -> list[int]:
 def test_the_phone_bar_is_cover_title_play_next_and_open(driven) -> None:
     bar = driven["bar"]
     phone = [(c["icon"], c["aria"]) for c in bar["controls"] if c["phone"]]
-    assert phone == [("pause", "pause"), ("skip-forward", "next"), ("chevron-up", "open player")], phone
+    assert phone == [("pause", "pause"), ("skip-forward", "next"), ("chevron-up", "open player"),
+                     ("x", "Stop and close")], phone
     # Title and artist stay in the row (ellipsized in CSS); the seek bar,
     # the sleep countdown and the rest are desktop-only.
     assert bar["title"] == "Track 1" and bar["sub"] == "Artist 1"
@@ -489,11 +490,12 @@ def test_the_desktop_bar_keeps_every_control_it_had(driven) -> None:
         ("skip-back", "previous"), ("pause", "pause"), ("skip-forward", "next"),
         ("volume-2", None), ("input", None), ("list-music", "queue"),
         ("monitor-speaker", "cast target"), ("chevron-up", "open full player"),
+        ("x", "Stop and close"),
     ], desk
     # One element per control: nothing the phone shows is a second copy of
     # a desktop control, except the phone's own "open player".
     both = [c["icon"] for c in driven["bar"]["controls"] if c["desk"] and c["phone"]]
-    assert both == ["pause", "skip-forward"]
+    assert both == ["pause", "skip-forward", "x"]
 
 
 def test_every_phone_bar_control_is_a_44px_target(driven) -> None:
@@ -528,10 +530,10 @@ def test_no_bar_without_something_queued(driven) -> None:
 # ─── the widths the bar was designed for ─────────────────────────────────
 
 
-@pytest.mark.parametrize(("width", "title_text"), [(320, 110), (375, 165), (414, 204), (760, 550)])
+@pytest.mark.parametrize(("width", "title_text"), [(320, 66), (375, 121), (414, 160), (760, 506)])
 def test_the_phone_bar_leaves_the_title_room_at_each_width(width, title_text) -> None:
     """The bar's fixed parts, read from the CSS: padding, the gaps between
-    its three columns, play + next, "open player" — then the 44px cover and
+    its three columns, play + next, "open player", "Stop and close" — then the 44px cover and
     its 10px gap. What's left is the title's text, ellipsized."""
     desktop, phone = _player_css()
     bar = _rule(phone, ".mini-player")
@@ -539,8 +541,8 @@ def test_the_phone_bar_leaves_the_title_room_at_each_width(width, title_text) ->
     _, right, _, left = _px(bar, "padding")
     (gap,) = _px(bar, "gap")
     (target,) = _px(_rule(phone, ".mini-player .btn-icon"), "width")
-    fixed = left + right + 2 * gap + 3 * target
-    assert fixed == 156
+    fixed = left + right + 2 * gap + 4 * target
+    assert fixed == 200
     (cover_gap,) = _px(_rule(desktop, ".mp-info"), "gap")
     assert width - fixed - 44 - cover_gap == title_text
     assert f"{title_text}" in desktop     # the section comment states them
@@ -815,3 +817,16 @@ def test_every_previous_button_works_while_casting(driven) -> None:
     panel = driven["casting_previous_panel"]
     assert panel["disabled"] is False
     assert panel["acts"] == [["prev"]]
+
+
+def test_stop_and_close_saves_stops_the_room_then_clears() -> None:
+    """Order matters: the spoken position is saved before anything is
+    paused, a cast room is stopped (and a refusal throws, keeping the bar)
+    before the queue is emptied, and the media controls are cleared."""
+    player = _src("player.jsx")
+    body = player[player.index("const closePlayer = async"):player.index("const toggle = ()")]
+    order = [body.index(t) for t in (
+        "saveSpokenPosition(true)", "_roomControl('stop', target.roomId)",
+        "setQueue([])", "mediaSession.metadata = null")]
+    assert order == sorted(order), body
+    assert 'title="Stop and close"' in player and 'aria-label="Stop and close"' in player

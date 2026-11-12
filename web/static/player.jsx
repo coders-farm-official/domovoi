@@ -435,7 +435,7 @@ const PlaybackContext = React.createContext({
   itemFromEpisode: (x) => x, itemFromBook: (x) => x, itemsFromBook: (x) => [x],
   playItems: _noop, enqueue: _noop, playNext: _noop,
   removeAt: _noop, moveItem: _noop, clearQueue: _noop, jumpTo: _noop,
-  toggle: _noop, play: _noop, pause: _noop, stop: _noop,
+  toggle: _noop, play: _noop, pause: _noop, stop: _noop, closePlayer: _noop,
   next: _noop, prev: _noop, seek: _noop, seekBy: _noop,
   setVolume: _noop, toggleMute: _noop,
   setEqBand: _noop, resetEq: _noop, setEqEnabled: _noop,
@@ -968,6 +968,22 @@ const PlaybackProvider = ({ children }) => {
     setStatus('stopped');
     setPositionSec(0);
   }
+  /* The bar's "Stop and close": the spoken-audio resume position is saved
+   * first (before anything is paused or cleared), a cast room is really
+   * stopped (a refusal rejects, and the caller keeps the bar), then the
+   * queue is emptied — which is what removes the bar — and the browser's
+   * media controls are cleared. Nothing of the queue is kept in storage,
+   * so a reload does not bring the bar back. */
+  const closePlayer = async () => {
+    saveSpokenPosition(true);
+    if (target.kind === 'room') await _roomControl('stop', target.roomId);
+    stop();
+    setQueue([]);
+    setIndex(-1);
+    if ('mediaSession' in navigator) {
+      try { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = 'none'; } catch {}
+    }
+  };
   const toggle = () => { (status === 'playing') ? pause() : play(); };
 
   const next = React.useCallback(() => {
@@ -1347,7 +1363,7 @@ const PlaybackProvider = ({ children }) => {
     volume, muted, eqBands, eqEnabled, playbackRate,
     target, remoteNp, sleepRemainingSec, recent,
     playItems, enqueue, playNext, removeAt, moveItem, clearQueue, jumpTo,
-    toggle, play, pause, stop, next, prev, seek, seekBy,
+    toggle, play, pause, stop, closePlayer, next, prev, seek, seekBy,
     setVolume, toggleMute,
     setEqBand, resetEq, setEqEnabled, setPlaybackRate,
     setSleep, cancelSleep,
@@ -1400,6 +1416,16 @@ const MiniPlayer = () => {
   const [showLyrics, setShowLyrics] = React.useState(false);
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const hasItem = !!(p.available && p.current);
+  // A failed "Stop and close" is said here, in the page's usual toast.
+  const [fire, toastNode] = (typeof useToast === 'function' ? useToast : () => [null, null])();
+  const closeBar = async () => {
+    try { await p.closePlayer(); }
+    catch (e) {
+      if (typeof fire !== 'function') return;
+      if (typeof reportMutationFailure === 'function') reportMutationFailure(fire, 'stop', e);
+      else fire("couldn't stop the room — the player is still open", { tone: 'err' });
+    }
+  };
   // The library song whose lyrics the bar offers (lyrics.jsx, loaded after
   // this file); none for radio, podcasts, audiobooks and plugin streams. A
   // lyrics.jsx that failed to load must not take the player down with it.
@@ -1521,6 +1547,7 @@ const MiniPlayer = () => {
                      onClose={() => setShowLyrics(false)}/>
       )}
       {sheetOpen && <PlayerSheet p={p} onClose={() => closeSheet()}/>}
+      {toastNode}
       {/* `--dock-bottom` is 0 on a desktop and the phone strip's height at
           760px and below (styles.css), so on a phone the player docks ON
           TOP of the five tabs instead of covering them. */}
@@ -1597,6 +1624,10 @@ const MiniPlayer = () => {
                   title="open player" aria-label="open player"
                   aria-haspopup="dialog" aria-expanded={sheetOpen}>
             <Icon name="chevron-up" size={16}/>
+          </button>
+          <button className="btn btn-ghost btn-icon mp-close" onClick={closeBar}
+                  title="Stop and close" aria-label="Stop and close">
+            <Icon name="x" size={16}/>
           </button>
         </div>
       </div>

@@ -4,6 +4,14 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — the dashboard's player bar can be closed
+
+**The bar at the bottom of the dashboard has an "×" (Stop and close).**
+It stops playback, empties the player's queue and removes the bar; while
+the bar is playing on a room it stops that room too, and if the room
+can't be stopped it says so and keeps the bar. A podcast or audiobook
+keeps its place for next time.
+
 ## 2026-11-11 — Music page: rooms start folded away
 
 **The room cards on the Music page are now hidden until you press
