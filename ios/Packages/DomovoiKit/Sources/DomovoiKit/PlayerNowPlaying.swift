@@ -60,17 +60,37 @@ public final class MPNowPlayingPublisher: PlayerNowPlayingPublisher {
             return
         }
         var d = centre.nowPlayingInfo ?? [:]
-        d[MPMediaItemPropertyTitle] = info.title
-        d[MPMediaItemPropertyArtist] = info.artist
-        d[MPMediaItemPropertyAlbumTitle] = info.album
-        d[MPNowPlayingInfoPropertyElapsedPlaybackTime] = info.elapsedSec
-        d[MPMediaItemPropertyPlaybackDuration] = info.durationSec
-        d[MPNowPlayingInfoPropertyPlaybackRate] = info.rate
-        // While casting the room's place is not ours to be scrubbed to, so the
-        // default rate says "not seekable here" as well as the disabled
-        // command does.
-        d[MPNowPlayingInfoPropertyDefaultPlaybackRate] = info.scrubbable ? 1.0 : 0.0
+        // Every field, an absent one as nil: the merge keeps the artwork, and
+        // must not keep the last item's author or duration with it.
+        let fields = info.fields()
+        for field in PlayerNowPlayingField.allCases {
+            d[Self.key(field)] = fields[field].map(Self.object)
+        }
+        d[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
         centre.nowPlayingInfo = d
+    }
+
+    /// The `MediaPlayer` key for a field — the one thing the package tests
+    /// cannot read, so it is a plain exhaustive switch.
+    static func key(_ field: PlayerNowPlayingField) -> String {
+        switch field {
+        case .title: return MPMediaItemPropertyTitle
+        case .artist: return MPMediaItemPropertyArtist
+        case .album: return MPMediaItemPropertyAlbumTitle
+        case .elapsed: return MPNowPlayingInfoPropertyElapsedPlaybackTime
+        case .duration: return MPMediaItemPropertyPlaybackDuration
+        case .rate: return MPNowPlayingInfoPropertyPlaybackRate
+        case .defaultRate: return MPNowPlayingInfoPropertyDefaultPlaybackRate
+        case .isLiveStream: return MPNowPlayingInfoPropertyIsLiveStream
+        }
+    }
+
+    private static func object(_ value: PlayerNowPlayingValue) -> Any {
+        switch value {
+        case .text(let s): return s
+        case .number(let n): return NSNumber(value: n)
+        case .flag(let b): return NSNumber(value: b)
+        }
     }
 
     public func setEnabled(_ commands: Set<PlayerRemoteCommand>) {
@@ -150,6 +170,11 @@ public final class MPNowPlayingPublisher: PlayerNowPlayingPublisher {
         guard !wired else { return }
         wired = true
         let centre = MPRemoteCommandCenter.shared()
+        // The skip buttons say what they do: back 15, forward 30
+        // (``PlayerRemoteCommands/skipBackSec``, `SessionMedia.kt:26-29`).
+        // The lock screen draws the first interval in each list.
+        centre.skipBackwardCommand.preferredIntervals = [NSNumber(value: PlayerRemoteCommands.skipBackSec)]
+        centre.skipForwardCommand.preferredIntervals = [NSNumber(value: PlayerRemoteCommands.skipForwardSec)]
         // The remote command centre calls its handlers on the main thread, but
         // the closure's type is not isolated, so the hop is stated rather than
         // assumed by the compiler.

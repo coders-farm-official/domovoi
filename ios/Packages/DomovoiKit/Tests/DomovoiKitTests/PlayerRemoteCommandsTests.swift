@@ -14,10 +14,12 @@ final class PlayerRemoteCommandsTests: XCTestCase {
         _ target: PlayerTarget,
         _ item: PlayerItem?,
         canNext: Bool = true,
-        canPrevious: Bool = true
+        canPrevious: Bool = true,
+        hasPreviousItem: Bool = false
     ) -> Set<PlayerRemoteCommand> {
         PlayerRemoteCommands.enabled(
-            target: target, current: item, canNext: canNext, canPrevious: canPrevious
+            target: target, current: item, canNext: canNext, canPrevious: canPrevious,
+            hasPreviousItem: hasPreviousItem
         )
     }
 
@@ -28,11 +30,13 @@ final class PlayerRemoteCommandsTests: XCTestCase {
         )
     }
 
-    func testOnThisPhoneASongOffersEverything() {
+    func testOnThisPhoneASongOffersEverythingButTheSkipButtons() {
+        // Music has no skip buttons (Android 814e86e1, `SessionMedia.buttons`):
+        // on the iPhone lock screen a skip would take previous/next's place.
         let set = enabled(.thisPhone, PlayerSeed.transmission)
         XCTAssertEqual(set, [
             .play, .pause, .togglePlayPause, .nextTrack, .previousTrack,
-            .changePlaybackPosition, .skipForward, .skipBackward, .changePlaybackRate,
+            .changePlaybackPosition, .changePlaybackRate,
         ])
     }
 
