@@ -240,6 +240,10 @@ TABLES_TO_TRUNCATE = [
     # test that needs them puts them back (test_lists_handler.seed_defaults).
     "list_items",
     "lists",
+    # Listening history (V051): every player's songs, and whose a room's
+    # music is (event data).
+    "music_listens",
+    "music_room_listeners",
 ]
 
 

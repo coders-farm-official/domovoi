@@ -73,6 +73,8 @@ from typing import Callable, Literal
 from domovoi.config import (
     HOME_PROBLEMS_VISIBILITY_CHOICES,
     QA_THINK_CHOICES,
+    MUSIC_LISTENS_KEEP_CHOICES,
+    MUSIC_LISTENS_KEEP_LABELS,
     VOICE_HISTORY_KEEP_CHOICES,
     VOICE_HISTORY_KEEP_LABELS,
 )
@@ -524,6 +526,20 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "choice", tier="reapply",
         choices=list(VOICE_HISTORY_KEEP_CHOICES),
         choice_labels=dict(VOICE_HISTORY_KEEP_LABELS),
+    ),
+    # Also on Settings → Privacy → Listening history, beside "Delete all
+    # listening history" (domovoi/music_listens.py). 'reapply': a save
+    # prunes at once.
+    FieldSpec(
+        "music_listens_keep", "Keep listening history", "Privacy",
+        "How long Domovoi keeps the songs each room, browser and phone "
+        "played, and who they were played for. Up next learns from it. "
+        "Anything older is deleted every few hours, and right away when "
+        "you save. Don't keep records nothing and deletes what is kept; "
+        "Up next then picks from the library alone.",
+        "choice", tier="reapply",
+        choices=list(MUSIC_LISTENS_KEEP_CHOICES),
+        choice_labels=dict(MUSIC_LISTENS_KEEP_LABELS),
     ),
 
     # ─── Search (Settings → Chat & AI → Search; domovoi/lookup_web.py) ──

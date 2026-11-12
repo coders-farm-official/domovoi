@@ -42,19 +42,80 @@ content off Home and off its launchers. Presentational, and thin:
   page too.
 
 Enforcement would take a restricted display pairing of its own (V014).
+
+**Whose device this is** (``devices.owner_person_id``, V035; "claim a
+person", Up next P1, owner decisions 2026-11-12). A phone or browser can
+say "this is me" for a person on the People page (and in the apps): from
+then on what it plays is that person's listening history, and later their
+favourites. Because a claimed device may also CLEAR its person's listening
+history (web/backend/api/music_listens.py), a claim is not free-for-all.
+The rules (:func:`claim_decision`, the only place they live; also applied,
+quietly, to the ``owner_person_id`` the Android app sends with its
+registration):
+
+* an ADMIN (Bearer, or a box before setup) may set or clear any device's
+  person, except on a shared screen; that wipes the device's claim key
+  (below) — except an admin's own browser saying "this is me", which gets
+  one like any device;
+* a SHARED SCREEN is nobody's: it cannot be claimed (409), by an admin
+  either — unmark it first; marking a device shared drops its person and
+  key;
+* otherwise only the device ITSELF may change whose it is (the id in the
+  path is the id the caller names itself by: the registration cookie,
+  ``X-Device-Id``, ``X-Domovoi-Device-Id`` or ``?device_id=``), and:
+
+  * claiming a person nobody has claimed yet, from nobody, is allowed;
+  * claiming a person another device has already claimed needs an admin
+    (403, which the dashboard answers with the sign-in prompt) — so a
+    second phone of the same person takes an admin's yes once;
+  * anything a CLAIMED device does about its claim — let go, switch to
+    someone unclaimed, or claim the same person again (a new key) — acts
+    as its person, so it must present its claim key (below); a claim from
+    before keys (V035, or one an admin set) holds none, and may only say
+    "this is me" again for the same person, which mints one;
+  * changing ANOTHER device's person (claiming or releasing) needs an
+    admin.
+
+**The claim key** (review 2026-11-12). A device id is self-asserted, so a
+claim alone can't prove a request comes from the claiming device. When the
+device itself claims successfully (``PUT /{device_id}/person``, or a
+registration that changes its person), the answer carries ``claim_key``
+once — 32 random bytes, url-safe — and only its SHA-256 is stored
+(``devices.claim_key_hash``, V051). Acting as the person — clearing their
+listening history, switching or releasing the claim, later their
+favourites — needs the key in ``X-Domovoi-Claim-Key``, compared in constant
+time (an admin skips the check). A re-claim issues a new key; an admin
+setting or clearing the person, marking the device shared, or the device
+releasing its claim wipes it. A plain registration (an app start) never
+touches it.
+
+A guest (no household credential) never gets this far: the route is device
+tier. Who can still act as a person: whoever holds that device's key
+(it sits in the browser's storage or the app's), and anyone who claims a
+person nobody has claimed yet, ten minutes later (music_listens.py) —
+docs/SECURITY_PRIVACY.md, "Whose phone or browser this is".
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import re
+import secrets
+from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_admin_read, require_device
+from domovoi.admin_auth import (
+    check_admin_request,
+    require_admin_mutation,
+    require_admin_read,
+    require_device,
+)
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -95,6 +156,12 @@ class DeviceRename(BaseModel):
     name: str = Field(..., min_length=1, max_length=_MAX_NAME)
 
 
+class DevicePerson(BaseModel):
+    # The person this device is ("this is me"), or null: nobody in
+    # particular (the household). Rules: claim_decision.
+    person_id: int | None = Field(default=None, ge=1)
+
+
 class DeviceSharedScreen(BaseModel):
     shared_screen: bool
 
@@ -110,6 +177,18 @@ class Device(BaseModel):
     # Home page shows a shared-screen view on it. False on a database that
     # has not had V014 yet.
     shared_screen: bool = False
+    # The person this device says it is (V035, claimed on the People page
+    # or in the app), with their current name; null for nobody in
+    # particular. What the browser player's "listening as" starts from.
+    owner_person_id: int | None = None
+    owner_person_name: str | None = None
+    # When this device last said "this is me" itself (it holds a claim key
+    # since then); null after an admin set its person, or for nobody.
+    owner_claimed_at: Any = None
+    # The claim key, ONLY in the answer to the claim that minted it: the
+    # device keeps it and sends it as X-Domovoi-Claim-Key to act as its
+    # person. The server keeps its SHA-256 alone and never shows it again.
+    claim_key: str | None = None
 
 
 def _clean_name(raw: str | None) -> str | None:
@@ -190,10 +269,17 @@ def _validate_id(device_id: str) -> str:
     return ident
 
 
+def _owner_of(r: Any) -> int | None:
+    return int(r[7]) if r is not None and len(r) > 7 and r[7] is not None else None
+
+
 def _row_to_device(r: Any) -> Device:
     return Device(
         device_id=r[0], name=r[1], platform=r[2], user_agent=r[3],
         first_seen_at=r[4], last_seen_at=r[5], shared_screen=bool(r[6]),
+        owner_person_id=int(r[7]) if len(r) > 7 and r[7] is not None else None,
+        owner_person_name=r[8] if len(r) > 8 else None,
+        owner_claimed_at=r[9] if len(r) > 9 else None,
     )
 
 
@@ -250,15 +336,232 @@ async def _has_owner(s: Any) -> bool:
     return _HAS_OWNER
 
 
+_HAS_CLAIM_KEYS = False
+
+
+async def _has_claim_keys(s: Any) -> bool:
+    """Whether V051's ``claim_key_hash`` / ``owner_claimed_at`` are there
+    (cached once they are). Without them a device registers as before and
+    no claim can be made (503)."""
+    global _HAS_CLAIM_KEYS
+    if not _HAS_CLAIM_KEYS:
+        row = (
+            await s.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'devices'
+                      AND column_name = 'claim_key_hash'
+                    """
+                )
+            )
+        ).first()
+        _HAS_CLAIM_KEYS = row is not None
+    return _HAS_CLAIM_KEYS
+
+
 async def _columns(s: Any) -> str:
     """The select / RETURNING list for a :class:`Device`, ``shared_screen``
     last — read as FALSE until V014 is applied."""
     flag = "shared_screen" if await _has_shared_screen(s) else "FALSE AS shared_screen"
-    return f"{_BASE_COLUMNS}, {flag}"
+    owner = (
+        "owner_person_id, "
+        "(SELECT p.name FROM people p WHERE p.id = devices.owner_person_id) AS owner_person_name, "
+        + ("owner_claimed_at" if await _has_claim_keys(s) else "NULL AS owner_claimed_at")
+        if await _has_owner(s)
+        else "NULL AS owner_person_id, NULL AS owner_person_name, NULL AS owner_claimed_at"
+    )
+    return f"{_BASE_COLUMNS}, {flag}, {owner}"
+
+
+# ─── Whose device this is: the claim rules ───────────────────────────────
+
+
+def caller_device(request: Request) -> str | None:
+    """The id the caller names itself by: the registration cookie,
+    ``X-Device-Id``, ``?device_id=`` (files.caller_device_id), then the
+    ``X-Domovoi-Device-Id`` header the dashboard puts on every call.
+    Self-asserted, like every device id."""
+    # Inside the call: files imports music, which imports this module's
+    # neighbours at import time.
+    from web.backend.api import files as files_api
+
+    return files_api.caller_device_id(request, None) or valid_device_id(
+        request.headers.get("X-Domovoi-Device-Id")
+    )
+
+
+async def caller_is_admin(request: Request) -> bool:
+    """A live admin Bearer, or a box nobody has claimed yet (everything is
+    the household's before setup). The dashboard cookie alone is not: it
+    renders state and never authorizes a change."""
+    return await check_admin_request(request) in ("ok", "pre-setup")
+
+
+SHARED_SCREEN_CLAIM_DETAIL = (
+    "this is a shared screen, so it is the whole household's and can't be "
+    "anyone's. An admin can unmark it in Settings → Phones & browsers first."
+)
+
+#: The header a device proves its claim with (the key it was handed when it
+#: said "this is me"). Never logged, never forwarded to the core.
+CLAIM_KEY_HEADER = "X-Domovoi-Claim-Key"
+
+RECLAIM_DETAIL = (
+    "this phone or browser said it was {name}'s before claims had keys: "
+    "say \"this is me\" again on {name}'s People page first"
+)
+WRONG_KEY_DETAIL = (
+    "this phone or browser can't prove it is {name}'s (its claim key is "
+    "missing or out of date). An admin can change it, or set it to nobody so "
+    "it can say \"this is me\" again."
+)
+
+
+def claim_key_hash(key: str) -> str:
+    """What is stored of a claim key: its SHA-256, hex."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def presented_claim_key(request: Request) -> str | None:
+    raw = (request.headers.get(CLAIM_KEY_HEADER) or "").strip()
+    return raw[:200] or None
+
+
+def claim_key_matches(stored_hash: str | None, presented: str | None) -> bool:
+    """Constant-time: does the presented key hash to the stored one?"""
+    if not stored_hash or not presented:
+        return False
+    return hmac.compare_digest(stored_hash, claim_key_hash(presented))
+
+
+@dataclass
+class ClaimDecision:
+    """What :func:`claim_decision` decided: ``refusal`` ``(status, detail)``
+    or None; on a yes, ``mint`` (hand the device a new claim key) or not
+    (the stored key is wiped)."""
+
+    refusal: tuple[int, str] | None
+    mint: bool = False
+
+
+async def claim_decision(
+    s: Any, device_id: str, person_id: int | None, *, admin: bool, caller: str | None,
+    key: str | None,
+) -> ClaimDecision:
+    """Whether ``caller`` may set ``device_id``'s person to ``person_id``
+    (None = release). The rules are the module docstring's; this is the
+    only place they live.
+
+    Locks the device row and the person row (FOR UPDATE), so a claim and an
+    admin marking the device shared, or two devices claiming one person,
+    take turns instead of both passing their checks."""
+    shared_col = "shared_screen" if await _has_shared_screen(s) else "FALSE"
+    row = (
+        await s.execute(
+            text(
+                f"SELECT owner_person_id, {shared_col}, claim_key_hash "
+                "FROM devices WHERE device_id = :id FOR UPDATE"
+            ),
+            {"id": device_id},
+        )
+    ).first()
+    if row is None:
+        return ClaimDecision((404, f"device {device_id!r} hasn't registered yet"))
+    current = int(row[0]) if row[0] is not None else None
+    stored = row[2]
+    if row[1] and person_id is not None:
+        return ClaimDecision((409, SHARED_SCREEN_CLAIM_DETAIL))
+    name = None
+    if person_id is not None:
+        found = (
+            await s.execute(
+                text("SELECT name FROM people WHERE id = :p FOR UPDATE"), {"p": person_id},
+            )
+        ).first()
+        if found is None:
+            return ClaimDecision((404, f"person {person_id} not found"))
+        name = found[0]
+    self_claim = caller == device_id and person_id is not None
+    if admin:
+        # An admin on its own browser saying "this is me" gets a key like
+        # anyone; an admin setting or clearing a device's person wipes it.
+        return ClaimDecision(None, mint=self_claim)
+    if caller != device_id:
+        return ClaimDecision((403, "only that phone or browser itself, or an admin, can change whose it is"))
+    if current is not None:
+        # Acting as the person it is now: releasing, switching, or claiming
+        # them again (a new key) needs the key it holds.
+        cur_name = (
+            await s.execute(text("SELECT name FROM people WHERE id = :p"), {"p": current})
+        ).scalar_one_or_none() or "that person"
+        if not stored:
+            # A claim from before keys: saying "this is me" again for the
+            # same person is how it gets one; anything else waits for that.
+            if person_id != current:
+                return ClaimDecision((403, RECLAIM_DETAIL.format(name=cur_name)))
+        elif not claim_key_matches(stored, key):
+            return ClaimDecision((403, WRONG_KEY_DETAIL.format(name=cur_name)))
+    if person_id is None:
+        return ClaimDecision(None, mint=False)
+    if person_id != current:
+        others = (
+            await s.execute(
+                text(
+                    "SELECT COUNT(*) FROM devices "
+                    "WHERE owner_person_id = :p AND device_id <> :id"
+                ),
+                {"p": person_id, "id": device_id},
+            )
+        ).scalar_one()
+        if others:
+            return ClaimDecision((403, (
+                f"{name} is already claimed by another phone or browser. "
+                "An admin can add this one too."
+            )))
+    return ClaimDecision(None, mint=True)
+
+
+async def apply_claim(
+    s: Any, device_id: str, person_id: int | None, decision: ClaimDecision,
+) -> str | None:
+    """Write a decided claim. Returns the new claim key when one was minted
+    (shown to the device once; only its hash is kept), else None and the
+    stored hash is wiped. Never on a shared screen (``AND NOT
+    shared_screen``: the mark won the race)."""
+    key = secrets.token_urlsafe(32) if decision.mint else None
+    shared_guard = " AND NOT shared_screen" if await _has_shared_screen(s) else ""
+    result = await s.execute(
+        text(
+            "UPDATE devices SET owner_person_id = (SELECT id FROM people WHERE id = :o), "
+            "claim_key_hash = :h, "
+            "owner_claimed_at = CASE WHEN :minted THEN now() ELSE NULL END "
+            "WHERE device_id = :id"
+            + (shared_guard if person_id is not None else "")
+        ),
+        {"o": person_id, "id": device_id, "h": claim_key_hash(key) if key else None,
+         "minted": key is not None},
+    )
+    if not (result.rowcount or 0):
+        # Marked a shared screen between the decision and the write.
+        raise HTTPException(status_code=409, detail=SHARED_SCREEN_CLAIM_DETAIL)
+    return key
+
+
+async def _read_device(s: Any, device_id: str) -> Any:
+    columns = await _columns(s)
+    return (
+        await s.execute(
+            text(f"SELECT {columns} FROM devices WHERE device_id = :id"), {"id": device_id}
+        )
+    ).first()
 
 
 @router.post("/register", response_model=Device, dependencies=DEVICE)
-async def register_device(payload: DeviceRegistration, response: Response) -> Device:
+async def register_device(
+    payload: DeviceRegistration, response: Response, request: Request,
+) -> Device:
     """Upsert this client's row and bump ``last_seen_at``.
 
     Idempotent and cheap — clients call it on every boot. ``name`` is only
@@ -292,20 +595,42 @@ async def register_device(payload: DeviceRegistration, response: Response) -> De
             },
         )
         result = row.first()
-        if "owner_person_id" in payload.model_fields_set and await _has_owner(s):
-            await s.execute(
-                text(
-                    "UPDATE devices SET owner_person_id = (SELECT id FROM people WHERE id = :o) "
-                    "WHERE device_id = :id"
-                ),
-                {"o": payload.owner_person_id, "id": ident},
+        minted: str | None = None
+        if (
+            "owner_person_id" in payload.model_fields_set
+            and await _has_claim_keys(s)
+            and _owner_of(result) != payload.owner_person_id
+        ):
+            # "This phone belongs to" from the app's registration, when it
+            # CHANGES whose the phone is: the same rules as PUT
+            # /{device_id}/person, with the registering device as the caller
+            # and the claim key it presents. A plain registration (the same
+            # person, or none sent) never touches the claim or its key. A
+            # change the rules refuse is NOT an error here (the app registers
+            # on every start): the row keeps the person it had, and the
+            # answer says which that is.
+            owner = payload.owner_person_id
+            decision = await claim_decision(
+                s, ident, owner, admin=await caller_is_admin(request), caller=ident,
+                key=presented_claim_key(request),
             )
+            if decision.refusal is None:
+                try:
+                    minted = await apply_claim(s, ident, owner, decision)
+                except HTTPException as e:
+                    log.info("device %s: owner from its registration lost a race: %s", ident, e.detail)
+                result = await _read_device(s, ident)
+            else:
+                log.info("device %s: owner %s from its registration not applied: %s",
+                         ident, owner, decision.refusal[1])
     if result is None:  # pragma: no cover — RETURNING always yields on upsert
         raise HTTPException(status_code=500, detail="upsert returned no row")
     # From here the browser carries its own name on every request, including
     # the ones whose body has no field for it. See DEVICE_ID_COOKIE.
     _remember_device(response, ident)
-    return _row_to_device(result)
+    out = _row_to_device(result)
+    out.claim_key = minted
+    return out
 
 
 @router.patch("/{device_id}", response_model=Device, dependencies=DEVICE)
@@ -338,6 +663,39 @@ async def rename_device(device_id: str, payload: DeviceRename) -> Device:
     return _row_to_device(result)
 
 
+@router.put("/{device_id}/person", response_model=Device, dependencies=DEVICE)
+async def set_device_person(device_id: str, payload: DevicePerson, request: Request) -> Device:
+    """"This is me": set the person this phone or browser is, or
+    ``person_id: null`` for nobody in particular. Device tier, with the
+    claim rules on top (:func:`claim_decision`, the module docstring): the
+    device itself may claim a person nobody has claimed yet and release its
+    own claim; anything else is an admin's. 403 names what an admin can do
+    (the dashboard answers it with the sign-in prompt and sends it again),
+    409 a shared screen, 404 an unknown device or person, 503 a database
+    without V035."""
+    ident = _validate_id(device_id)
+    async with session_scope() as s:
+        if not await _has_claim_keys(s):
+            raise HTTPException(
+                status_code=503,
+                detail="this database has no devices.claim_key_hash column yet — run the migrations (V051)",
+            )
+        decision = await claim_decision(
+            s, ident, payload.person_id,
+            admin=await caller_is_admin(request), caller=caller_device(request),
+            key=presented_claim_key(request),
+        )
+        if decision.refusal is not None:
+            raise HTTPException(status_code=decision.refusal[0], detail=decision.refusal[1])
+        minted = await apply_claim(s, ident, payload.person_id, decision)
+        result = await _read_device(s, ident)
+    if result is None:  # pragma: no cover — claim_decision found the row
+        raise HTTPException(status_code=404, detail=f"device {ident!r} hasn't registered yet")
+    out = _row_to_device(result)
+    out.claim_key = minted
+    return out
+
+
 @router.patch(
     "/{device_id}/shared-screen",
     response_model=Device,
@@ -361,11 +719,20 @@ async def set_shared_screen(device_id: str, payload: DeviceSharedScreen) -> Devi
                 ),
             )
         columns = await _columns(s)
+        # A shared screen is nobody's: marking one drops the person it was
+        # claimed for (claim_decision keeps it that way).
+        owner_reset = (
+            ", owner_person_id = CASE WHEN :shared THEN NULL ELSE owner_person_id END"
+            + (", claim_key_hash = CASE WHEN :shared THEN NULL ELSE claim_key_hash END"
+               ", owner_claimed_at = CASE WHEN :shared THEN NULL ELSE owner_claimed_at END"
+               if await _has_claim_keys(s) else "")
+            if await _has_owner(s) else ""
+        )
         row = await s.execute(
             text(
                 f"""
                 UPDATE devices
-                SET shared_screen = :shared
+                SET shared_screen = :shared{owner_reset}
                 WHERE device_id = :id
                 RETURNING {columns}
                 """

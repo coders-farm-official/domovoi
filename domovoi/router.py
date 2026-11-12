@@ -528,6 +528,18 @@ async def _persist_turn(
         response.text,
         settings.session_recent_turns_cap,
     )
+    # A turn that started music in its own room: that music is for the
+    # person who spoke (None, the household, when nobody was recognised).
+    # The listening history attributes the room's songs by it
+    # (domovoi/music_listens.py). Its own session, best-effort.
+    if (
+        response.music_action == "start"
+        and ctx.room_id
+        and not getattr(ctx, "from_phone", False)
+    ):
+        from domovoi import music_listens
+
+        await music_listens.note_voice_start(ctx.room_id, ctx.person_id)
 
 
 async def _maybe_offer_pending_memory(

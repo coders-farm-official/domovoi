@@ -496,6 +496,12 @@ async def read_queue(
                 name = None
                 added_at = None   # nor when a household device queued it
             dev_id = None
+        elif not admin:
+            # The household sees which device added an entry by its NAME;
+            # the device id is an admin's (review 2026-11-12). A device id
+            # is what a phone or browser names itself by, and "this is me"
+            # rides on it, so the queue no longer hands it out.
+            dev_id = None
         who_guest = guest_ids.get(song_id, (None, None))
         items.append(
             QueueItem(

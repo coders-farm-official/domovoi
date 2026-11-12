@@ -639,7 +639,7 @@ def test_settings_opens_on_the_tab_it_was_sent_to(driven) -> None:
     assert o["second"]["hash"] == "settings/greetings"              # the tab's address
     assert o["second"]["stored"] is None                            # nothing rides storage
     # Internet is in Privacy, beside Voice history (regroup, 2026-10-21).
-    assert o["privacy"] == ["internet", "voice-history"]
+    assert o["privacy"] == ["internet", "voice-history", "listening-history"]
     # A section Settings doesn't have: the list of groups, and the address says so.
     assert driven["settings_default_tab"] == {"onInternet": False, "hash": "#settings"}
 

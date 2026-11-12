@@ -66,6 +66,7 @@ SCENARIOS = {
     "tab_empty": _tab([], {**DONE, "untagged_count": 0}),
     "tab_empty_reading": _tab([], {**READING, "untagged_count": 0}),
     "tab_only_untagged": _tab([], DONE),
+    "tab_mb_pending": _tab(GENRES, {**DONE, "musicbrainz_pending": 2}),
     "drawer": {"file": MUSIC, "component": "GenreDrawer",
                "props": {"genre": SOUL, "rooms": ["kitchen", "den"]}, "fnProps": DRAWER_FNS,
                "apiObject": {"data": DETAIL, "loading": False},
@@ -125,6 +126,15 @@ def test_tracks_with_no_genre_are_the_last_row(rendered) -> None:
     assert len(_rows(rendered["tab"])) == 3
     # Not until the last page has loaded (it would sit in the middle).
     assert "no genre" not in _texts(rendered["tab_more_pages"])
+
+
+def test_the_no_genre_row_says_how_many_wait_for_musicbrainz(rendered) -> None:
+    """V052: a song song recognition matched is "no genre" until
+    MusicBrainz is asked; the row says how many are waiting, and says
+    nothing when none are (the server sends 0 when the lookup can't run)."""
+    texts = _texts(rendered["tab_mb_pending"])
+    assert "3 tracks · 2 waiting for MusicBrainz" in texts
+    assert not any("MusicBrainz" in t for t in _texts(rendered["tab"]))
 
 
 def test_while_reading_the_tab_says_so(rendered) -> None:

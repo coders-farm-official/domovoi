@@ -402,12 +402,17 @@ Your music library, on the server, played in any room or in the browser.
 - Playlists and favorites: [Music → Playlists](#music/playlists).
 - **Dashboard:** browse by genre: [Music → Genres](#music/genres). Each
   genre opens its songs, with **play**, **shuffle** and **add to queue**
-  for a room, and **play here** / **shuffle here** for this browser. The
-  genres come from your files' own tags ("Rock; Indie" counts under both;
-  "Hip-Hop" and "Rap" are one). Songs whose tags name no genre are the
-  **no genre** row at the end. Right after an update the server reads the
-  genres of the songs already in your library in the background; until it
-  is done the tab says "reading genres from your files… N of M".
+  for a room, and **play here** / **shuffle here** for this browser.
+  Genres come from your files, or from MusicBrainz for songs song
+  recognition matched: a song whose file names no genre gets the
+  genres MusicBrainz has for it (the song's own, else its album's, else
+  its artist's). A genre in the file always wins. "Rock; Indie" counts
+  under both; "Hip-Hop" and "Rap" are one. Songs with no genre are the
+  **no genre** row at the end; while some of them are still waiting for
+  MusicBrainz, the row says how many. Right after an update the server
+  reads the genres of the songs already in your library in the
+  background; until it is done the tab says "reading genres from your
+  files… N of M".
 - Each queued song says which device added it.
 - **Dashboard:** the [player](#music/player) opens from the player bar at
   the bottom of any page: click the song's cover or title, the up chevron,
@@ -1725,6 +1730,11 @@ are personal.
   memories.
 - *(admin)* **rename**, **forget person**, or delete one wrong voice
   sample.
+- Make this phone or browser yours: open your name there and press
+  **this is me**. What you play on it then counts as your listening, and
+  the player's "listening as" starts at you. Someone who already has a
+  phone or browser needs an admin to add a second one. A shared screen
+  can't be anyone's.
 
 **If something's wrong:** two people with the same name: an admin renames
 one on [Settings → Household → People](#settings/people).
@@ -1762,7 +1772,10 @@ on the server itself. Ask whoever set up Domovoi.
 [Settings → Household → Phones & browsers](#settings/phones-and-browsers):
 
 - **This device**: give this browser or phone a name. It's what queues
-  show as "added by".
+  show as "added by". It also says whose it is (set with **this is me**
+  on People).
+- **Known devices** *(admin)*: the **person** column says whose each
+  phone or browser is; an admin can change it.
 - **Queue access**, **Files access** *(admin)*: stop one device changing a
   room's music or the files.
 - **Guests** *(admin)*: ban a guest who keeps changing the music.
@@ -1789,6 +1802,7 @@ Everything stays on your server, or on your phone.
 | Timers and reminders that went off | 7 days |
 | Command recordings (off unless an admin turns them on for a room) | 14 days |
 | Play history | 90 days |
+| The songs each room, phone and browser played, and who for | 1 year, or what **Keep listening history** says |
 | The list of recent print jobs | 90 days (an admin can clear it) |
 | News stories | 90 days (saved ones always) |
 | The server's own log | no words, only how many |
@@ -1806,6 +1820,14 @@ each room's **Conversations** tab.
   Advanced](#settings/advanced) → **show the settings** → **Privacy**.
 - *(admin)* **Delete all voice history**, on the same page, deletes it all
   at once. People, voice samples, memories, notes, timers and chats stay.
+- Clear your own listening history: your name on
+  [Settings → Household → People](#settings/people) → **listening history**
+  → **clear**, from your own phone or browser, from 10 minutes after you
+  said **this is me** there. Anywhere else, or sooner, it asks for the admin
+  password.
+- *(admin)* [Settings → Privacy → Listening history](#settings/listening-history):
+  **Keep listening history** for 1 year (the default), 90 days, or
+  **Don't keep**; and **Delete all listening history**, for everyone.
 - *(admin)* **forget person** on [Settings → Household → People](#settings/people) does what "forget me"
   does, for anyone: it deletes only what that person said.
 - "never save my voice": Domovoi stops learning it.

@@ -494,7 +494,7 @@ sequenceDiagram
     Note over A: still playing the reply: the call opens<br/>when it has played out (at most 8 s)
     A->>S: dropin_ready
     S-->>A: start chime (16 kHz PCM)
-    Note over S: until A's dropin_ready nothing of the call goes to A<br/>(hello key dropin_ready; a client without it<br/>gets no await_ready and the chime at once)
+    Note over S: until A's dropin_ready nothing of the call goes to A<br/>(hello key dropin_ready, a client without it<br/>gets no await_ready and the chime at once)
     par continuous relay
         A->>S: binary mic PCM (unframed)
         S-->>B: relayed verbatim

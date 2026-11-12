@@ -4,6 +4,28 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — a genre from MusicBrainz for recognised songs
+
+A song whose file names no genre but which song recognition matched (it
+has a MusicBrainz recording id) now gets a genre from MusicBrainz: the
+recording's own genres, else its album's, else its artist's, the top-voted
+three at most, named the way the Genres tab names the files' genres. A
+genre in the file always wins: when a file later gets a genre tag, the
+server's next read of it replaces the MusicBrainz one. It is the same
+background lookup as the MusicBrainz year, now one request for both
+(`inc=genres+artist-credits+releases+release-groups`): still the recording
+id only, paced, and only while song recognition is on, the Internet answer
+is not **No** and the server is online (docs/SECURITY_PRIVACY.md). Songs
+already asked for their year are asked once more, for the genre.
+
+On the Genres tab such a song stays in the **no genre** row until it has
+been asked, and that row says how many are waiting ("3 tracks · 2 waiting
+for MusicBrainz"); `GET /api/music/genres` adds `musicbrainz_pending`
+(0 when the lookup can't run).
+
+**Migration V052** adds `library_tracks.genre_source` ('tag' or
+'musicbrainz'; existing genres are marked 'tag') and `genre_checked_at`.
+
 ## 2026-11-12 — add to the queue from the queue
 
 The Queue panel in the web player (the player's Queue tab and the bar's
@@ -94,6 +116,45 @@ the recording's first-release year from MusicBrainz: the recording id only,
 paced, and only while song recognition (`library_enricher_enabled`) is on,
 the Internet answer is not **No** and the server is online
 (docs/SECURITY_PRIVACY.md).
+
+## 2026-11-12 — listening history, and "this is me" on a phone or browser
+
+**Domovoi now keeps a listening history** (migration V051): each library
+song a room, browser or phone plays, how long it played, how it ended
+(finished, skipped, stopped) and who it was for. Up next will learn from it.
+It is kept **1 year** by default; Settings → Privacy → **Listening history**
+(an admin) sets 90 days or **Don't keep** (`MUSIC_LISTENS_KEEP`: `365`,
+`90`, `off`) and has **Delete all listening history**. Forgetting a person
+deletes theirs. What is recorded and who may clear it:
+docs/SECURITY_PRIVACY.md, "Listening history".
+
+- **Rooms** log by themselves: the core reads each room's player every few
+  seconds, so a song the player moved on to by itself is recorded now too.
+  A room's song is the person whose voice started the music, or the person
+  of the phone or browser that last replaced the room's queue.
+- **The browser player** sends its songs when each ends (and when the tab
+  closes); the "listening as" choice on Podcasts now starts at the person
+  this browser is (see below) and offers "household" for nobody in
+  particular.
+- **The apps** send theirs with the next app updates
+  (`POST /api/music/listens`; docs/API_REFERENCE.md §3.5e).
+
+**"This is me."** On People, a person's page has **this is me** for the
+phone or browser in your hand: what it plays then counts as that person's,
+and that person can **clear** their own listening history from it, from
+10 minutes after the claim (an admin can at any time). A browser that isn't
+theirs asks for the admin password instead. Saying "this is me" hands the
+device a **claim key** (kept in the browser's storage; only its hash on the
+server) that it must show to act as that person; a phone or browser that
+was marked as someone's before this update says "this is me" again once. The first phone or browser to claim a person needs no
+password; a second one, or changing another device's person, needs an
+admin (Settings → Phones & browsers → Known devices has a **person**
+column). A shared screen can't be anyone's, and marking a device shared
+drops its person. The Android app's "This phone belongs to" follows the
+same rule: a phone that names a person another device already has
+registers as before but stays unclaimed until an admin says yes. Room queues no longer show
+the adding device's id to anyone but an admin (`added_by_device_id`; the
+name is still shown).
 
 ## 2026-11-12 — a playlist plays in this browser
 

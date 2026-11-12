@@ -307,6 +307,10 @@ class Person(BaseModel):
     # guess between them when the name is said, and the People page says
     # so until one is renamed or removed.
     namesakes: int = 0
+    # How many phones and browsers say "this is me" for this person
+    # (devices.owner_person_id; claimed on the People page or in the app).
+    # Their listens, and later their favourites, are this person's.
+    device_count: int = 0
 
 
 class PersonRename(BaseModel):
