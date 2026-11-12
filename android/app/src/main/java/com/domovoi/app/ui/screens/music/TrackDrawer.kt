@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
@@ -84,6 +85,8 @@ internal fun TrackDrawer(
     var confirmDelete by remember(track.id) { mutableStateOf(false) }
 
     fun saveToDevice() = saveTrackToDevice(context, app, toast, track)
+    // Play next / add to queue, in the picked room or on this phone (batch 2 §2).
+    val queueTo = rememberSongQueueTo()
 
     fun playInRoom() {
         val room = room ?: return
@@ -191,6 +194,32 @@ internal fun TrackDrawer(
                         Spacer(Modifier.size(6.dp))
                         Text(if (room != null) "play in $room" else "no rooms online")
                     }
+                    if (room != null) {
+                        OutlinedButton(onClick = { queueTo(QueueTarget.Room(room), track, true) }) {
+                            Icon(
+                                Icons.Filled.SubdirectoryArrowRight, contentDescription = null,
+                                modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("play next in $room", color = Domovoi.colors.fg)
+                        }
+                        OutlinedButton(onClick = { queueTo(QueueTarget.Room(room), track, false) }) {
+                            Icon(
+                                Icons.Filled.QueueMusic, contentDescription = null,
+                                modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("add to $room's queue", color = Domovoi.colors.fg)
+                        }
+                    }
+                }
+                Spacer(Modifier.size(12.dp))
+                SectionLabel("this device")
+                Spacer(Modifier.size(8.dp))
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedButton(onClick = { onBrowserPlay(track) }) {
                         Icon(
                             Icons.Filled.Headphones, contentDescription = null,
@@ -199,13 +228,21 @@ internal fun TrackDrawer(
                         Spacer(Modifier.size(6.dp))
                         Text("play here", color = Domovoi.colors.fg)
                     }
+                    OutlinedButton(onClick = { queueTo(QueueTarget.Phone, track, true) }) {
+                        Icon(
+                            Icons.Filled.SubdirectoryArrowRight, contentDescription = null,
+                            modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text("play next", color = Domovoi.colors.fg)
+                    }
                     OutlinedButton(onClick = { onQueueTrack(track) }) {
                         Icon(
                             Icons.Filled.QueueMusic, contentDescription = null,
                             modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
                         )
                         Spacer(Modifier.size(6.dp))
-                        Text("queue", color = Domovoi.colors.fg)
+                        Text("add to queue", color = Domovoi.colors.fg)
                     }
                     OutlinedButton(onClick = { saveToDevice() }) {
                         Icon(

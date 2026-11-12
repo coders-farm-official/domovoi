@@ -77,6 +77,7 @@ import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
+import com.domovoi.app.ui.screens.music.RoomQueueButton
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.delay
 import java.time.ZoneId
@@ -561,6 +562,8 @@ internal fun HomeRooms(
     onOpenRoom: (String) -> Unit,
     onAct: (String, String) -> Unit,
     onStopAll: (List<String>) -> Unit,
+    /** The room's queue button ([RoomQueueSheet], batch 2 §2). */
+    onOpenQueue: (String) -> Unit = {},
 ) {
     val playing = if (stale) emptyList() else rooms.filter { roomRank(it) == 0 }.map { it.room_id }
     Column(Modifier.fillMaxWidth()) {
@@ -606,6 +609,7 @@ internal fun HomeRooms(
                             r = r, stale = stale, sinceReadSec = sinceReadSec,
                             nextTimerLeft = timerLeftByRoom[r.room_id], busy = busy[r.room_id] == true,
                             tile = tile, onOpen = { onOpenRoom(r.room_id) }, onAct = onAct,
+                            onQueue = { onOpenQueue(r.room_id) },
                         )
                     }
                     if (compact) {
@@ -694,6 +698,7 @@ private fun HomeRoomRow(
     tile: Boolean,
     onOpen: () -> Unit,
     onAct: (String, String) -> Unit,
+    onQueue: () -> Unit,
 ) {
     val online = r.online
     val np = r.now_playing
@@ -785,6 +790,8 @@ private fun HomeRoomRow(
             }
             if (online && !stale) {
                 Row(Modifier.padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // The room's queue, one tap from the room (batch 2 §2).
+                    RoomQueueButton(r.room_id, onQueue)
                     when {
                         playing -> {
                             TransportButton(Icons.Filled.Pause, "pause ${r.room_id}", canAct) { onAct(r.room_id, "pause") }

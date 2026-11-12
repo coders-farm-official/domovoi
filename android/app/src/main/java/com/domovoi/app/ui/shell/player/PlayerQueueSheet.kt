@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +44,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -64,6 +67,14 @@ import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.screens.music.LyricsFollow
+import com.domovoi.app.ui.screens.music.QueueAddBox
+import com.domovoi.app.ui.screens.music.QueueDragHandle
+import com.domovoi.app.ui.screens.music.QueueDragState
+import com.domovoi.app.ui.screens.music.QueueTarget
+import com.domovoi.app.ui.screens.music.RoomQueueDialogs
+import com.domovoi.app.ui.screens.music.queueTab
+import com.domovoi.app.ui.screens.music.rememberRoomQueue
+import com.domovoi.app.ui.screens.music.savableTrackIds
 import com.domovoi.app.player.LyricsResult
 import com.domovoi.app.ui.screens.music.LyricsBody
 import com.domovoi.app.ui.screens.music.rememberLyricsLoad
@@ -121,6 +132,9 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
         lyricsLoading = lyrics != null && lyrics.result == null,
     )
     val tabs = sheetTabs(lyricsTab)
+    // The room's own queue while casting (a new room, a new model).
+    val roomQueue = room?.let { r -> key(r.roomId) { rememberRoomQueue(listOf(r.roomId), r.roomId) } }
+    val phoneDrag = remember { QueueDragState() }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -163,67 +177,70 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                 }
 
                 // ── Queue ─────────────────────────────────────────────────
-                if (tab == SheetTab.Queue) item(key = "sheet-queue-head") {
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        SectionLabel("queue · ${queue.size}")
-                        Spacer(Modifier.weight(1f))
-                        if (!isRemote && queue.isNotEmpty()) {
-                            TextButton(onClick = { app.player.clearQueue(); onDismiss() }) {
-                                Icon(
-                                    Icons.Filled.DeleteSweep, contentDescription = null,
-                                    tint = Domovoi.colors.fgMuted, modifier = Modifier.size(16.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text("clear", color = Domovoi.colors.fgMuted)
+                // While casting, the queue shown is the ROOM's: its rows,
+                // edits and search box (batch 2 §2). Otherwise this phone's,
+                // with the search box at its top.
+                if (tab != SheetTab.Queue) {
+                    // Lyrics or Hide: no queue rows.
+                } else if (roomQueue != null) {
+                    queueTab(listOf(roomQueue.sel.room.orEmpty()), roomQueue, picker = false)
+                } else {
+                    item(key = "sheet-queue-head") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SectionLabel("queue · ${queue.size}")
+                            Spacer(Modifier.weight(1f))
+                            if (queue.isNotEmpty()) {
+                                TextButton(
+                                    onClick = { app.player.clearQueue(); onDismiss() },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.DeleteSweep, contentDescription = null,
+                                        tint = Domovoi.colors.fgMuted, modifier = Modifier.size(16.dp),
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("clear", color = Domovoi.colors.fgMuted)
+                                }
                             }
                         }
                     }
-                }
-
-                if (tab != SheetTab.Queue) {
-                    // Lyrics or Hide: no queue rows.
-                } else if (isRemote) {
-                    item(key = "sheet-queue-casting") {
-                        Text(
-                            "casting — the queue lives on the room's speaker; transport controls act on the room",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Domovoi.colors.fgSubtle,
-                            modifier = Modifier.padding(vertical = 16.dp),
-                        )
+                    item(key = "sheet-queue-add") {
+                        QueueAddBox(QueueTarget.Phone, saveIds = savableTrackIds(queue), modifier = Modifier.padding(bottom = 4.dp))
                     }
-                } else if (queue.isEmpty()) {
-                    item(key = "sheet-queue-empty") {
-                        Text(
-                            "queue is empty — play something from the library",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Domovoi.colors.fgSubtle,
-                            modifier = Modifier.padding(vertical = 16.dp),
-                        )
-                    }
-                } else {
-                    itemsIndexed(queue, key = { i, it -> "${it.uid}-$i" }) { i, item ->
-                        QueueRow(
-                            position = i,
-                            title = item.title,
-                            artist = item.artist,
-                            durationSec = item.durationSec,
-                            isCurrent = i == index,
-                            isPlaying = effPlaying,
-                            canMoveUp = i > 0,
-                            canMoveDown = i < queue.lastIndex,
-                            onJump = { app.player.jumpTo(i) },
-                            onUp = { app.player.moveItem(i, i - 1) },
-                            onDown = { app.player.moveItem(i, i + 1) },
-                            onRemove = { app.player.removeAt(i) },
-                        )
+                    if (queue.isEmpty()) {
+                        item(key = "sheet-queue-empty") {
+                            Text(
+                                "queue is empty — search above, or play something from the library",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Domovoi.colors.fgSubtle,
+                                modifier = Modifier.padding(vertical = 16.dp),
+                            )
+                        }
+                    } else {
+                        itemsIndexed(queue, key = { i, it -> "${it.uid}-$i" }) { i, item ->
+                            QueueRow(
+                                position = i,
+                                count = queue.size,
+                                title = item.title,
+                                artist = item.artist,
+                                durationSec = item.durationSec,
+                                isCurrent = i == index,
+                                isPlaying = effPlaying,
+                                drag = phoneDrag,
+                                onJump = { app.player.jumpTo(i) },
+                                onMove = { from, to -> app.player.moveItem(from, to) },
+                                onRemove = { app.player.removeAt(i) },
+                            )
+                        }
                     }
                 }
             }
         }
     }
+    roomQueue?.let { RoomQueueDialogs(it) }
 }
 
 /** The sheet's now-playing header: the cover (this phone's playback), the
@@ -379,30 +396,57 @@ private fun SheetSeek(current: PlayItem?, isRemote: Boolean) {
     }
 }
 
+/** A row of this phone's queue: hold the handle and drag to reorder (TalkBack:
+ *  move up / move down on it), tap to jump, × to remove. 48dp targets. */
 @Composable
 private fun QueueRow(
+    position: Int,
+    count: Int,
+    title: String,
+    artist: String?,
+    durationSec: Double?,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    drag: QueueDragState,
+    onJump: () -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(
+        drag.rowModifier(position)
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .onSizeChanged { if (it.height > 0) drag.rowPx = it.height.toFloat() }
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (isCurrent || drag.from == position) Domovoi.colors.brandSoft
+                else androidx.compose.ui.graphics.Color.Transparent,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        QueueDragHandle(drag, position, count, title, onMove)
+        Row(
+            Modifier.weight(1f).clickable(onClickLabel = "play", onClick = onJump).padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            QueueRowText(position, title, artist, durationSec, isCurrent, isPlaying)
+        }
+        IconButton(onClick = onRemove, modifier = Modifier.size(48.dp)) {
+            Icon(Icons.Filled.Close, "remove $title from the queue", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.QueueRowText(
     position: Int,
     title: String,
     artist: String?,
     durationSec: Double?,
     isCurrent: Boolean,
     isPlaying: Boolean,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onJump: () -> Unit,
-    onUp: () -> Unit,
-    onDown: () -> Unit,
-    onRemove: () -> Unit,
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (isCurrent) Domovoi.colors.brandSoft else androidx.compose.ui.graphics.Color.Transparent)
-            .clickable(onClick = onJump)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    run {
         Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) {
             if (isCurrent) {
                 com.domovoi.app.ui.components.StatusDot(Tone.Brand, live = isPlaying)
@@ -436,14 +480,5 @@ private fun QueueRow(
             color = Domovoi.colors.fgFaint,
             modifier = Modifier.padding(end = 2.dp),
         )
-        IconButton(onClick = onUp, enabled = canMoveUp, modifier = Modifier.size(30.dp)) {
-            Icon(Icons.Filled.KeyboardArrowUp, "move up", tint = Domovoi.colors.fgMuted, modifier = Modifier.size(18.dp))
-        }
-        IconButton(onClick = onDown, enabled = canMoveDown, modifier = Modifier.size(30.dp)) {
-            Icon(Icons.Filled.KeyboardArrowDown, "move down", tint = Domovoi.colors.fgMuted, modifier = Modifier.size(18.dp))
-        }
-        IconButton(onClick = onRemove, modifier = Modifier.size(30.dp)) {
-            Icon(Icons.Filled.Close, "remove", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(15.dp))
-        }
     }
 }

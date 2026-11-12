@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.satellites
 
+import com.domovoi.app.ui.screens.music.RoomQueueButton
+import com.domovoi.app.ui.screens.music.RoomQueueSheet
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -76,6 +78,10 @@ fun SatelliteDetail(
     onRefresh: () -> Unit = {},
 ) {
     var tab by remember(s.room_id) { mutableStateOf(SatTab.Overview) }
+    // Out here, not in the header: the header leaves while a keyboard
+    // crowds the window, and the sheet's search box raises one.
+    var queueOpen by remember(s.room_id) { mutableStateOf(false) }
+    if (queueOpen) RoomQueueSheet(s.room_id) { queueOpen = false }
 
     Surface(
         modifier = modifier,
@@ -84,7 +90,7 @@ fun SatelliteDetail(
         border = BorderStroke(1.dp, Domovoi.colors.border),
     ) {
         Column(Modifier.fillMaxSize()) {
-            CardHeader(s, onClose)
+            CardHeader(s, onClose) { queueOpen = true }
             CardTabStrip(tab) { tab = it }
 
             Column(
@@ -127,7 +133,7 @@ fun SatelliteDetail(
  * on every frame of the IME animation — cannot invalidate the card body.
  */
 @Composable
-private fun CardHeader(s: Satellite, onClose: () -> Unit) {
+private fun CardHeader(s: Satellite, onClose: () -> Unit, onQueue: () -> Unit) {
     if (keyboardCrowdsTheWindow()) return
     Row(
         Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
@@ -144,6 +150,8 @@ private fun CardHeader(s: Satellite, onClose: () -> Unit) {
             modifier = Modifier.weight(1f),
         )
         Pill(s.status ?: "offline", if (s.online) Tone.Brand else Tone.Idle, live = s.online)
+        // The room's queue, one tap from the room (batch 2 §2).
+        RoomQueueButton(s.room_id, onQueue)
         IconButton(onClick = onClose) {
             Icon(Icons.Filled.Close, contentDescription = "close", tint = Domovoi.colors.fgMuted)
         }

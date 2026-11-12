@@ -97,6 +97,7 @@ fun MusicScreen() {
     val scope = app.scope
     val context = LocalContext.current
     val ui = rememberSaveable(saver = MusicUi.Saver) { MusicUi() }
+    var queueRoom by remember { mutableStateOf<String?>(null) }
 
     // ── Data ──────────────────────────────────────────────────────────
     var qDebounced by remember { mutableStateOf("") }
@@ -163,14 +164,11 @@ fun MusicScreen() {
     val onBrowserPlay: (LibraryTrack) -> Unit = { t ->
         playHereAndSay(app.player, toItem(t), t.title ?: "track", toast) { scope.launch { it() } }
     }
-    val onQueueTrack: (LibraryTrack) -> Unit = { t ->
-        app.player.enqueue(listOf(toItem(t)))
-        toast("queued \"${t.title ?: "track"}\"")
-    }
-    val onPlayNext: (LibraryTrack) -> Unit = { t ->
-        app.player.playNext(listOf(toItem(t)))
-        toast("playing next: \"${t.title ?: "track"}\"")
-    }
+    // Play next / Add to queue: this phone's queue, or the room it casts to.
+    val queueSong = rememberSongQueue()
+    val queueSongTo = rememberSongQueueTo()
+    val onQueueTrack: (LibraryTrack) -> Unit = { t -> queueSong(t, false) }
+    val onPlayNext: (LibraryTrack) -> Unit = { t -> queueSong(t, true) }
     val onSaveToDevice: (LibraryTrack) -> Unit = { t -> saveTrackToDevice(context, app, toast, t) }
 
     // ── Room transport ────────────────────────────────────────────────
@@ -439,6 +437,7 @@ fun MusicScreen() {
                         onPlayRandom = onPlayRandom,
                         transport = RoomTransport { action, room -> roomCtl(action, room, action) },
                         onFavorite = onFavoriteNp,
+                        onOpenQueue = { queueRoom = it },
                     )
                 }
             }
@@ -505,7 +504,8 @@ fun MusicScreen() {
                 rooms = rooms,
                 onClose = { ui.detailTrack = null },
                 onBrowserPlay = onBrowserPlay,
-                onQueueTrack = onQueueTrack,
+                // The drawer's "this device" button: always this phone's queue.
+                onQueueTrack = { t -> queueSongTo(QueueTarget.Phone, t, false) },
                 refreshLib = { libPager.reload() },
                 refreshStats = stats.refresh,
                 refreshNP = nowPlaying.refresh,
@@ -547,38 +547,24 @@ fun MusicScreen() {
     }
 
     roomQueue?.let { RoomQueueDialogs(it) }
+    // A room card's queue button: that room's queue, one tap from the room.
+    queueRoom?.let { r -> RoomQueueSheet(r) { queueRoom = null } }
 
     if (ui.saveQueueOpen) {
+        // "Save as playlist" asks for a name (the web's PlayerQueueSave words).
         PromptDialog(
-            title = "save queue as playlist",
-            placeholder = "playlist name…",
-            confirmLabel = "create",
+            title = SAVE_AS_PLAYLIST,
+            placeholder = PLAYLIST_NAME_PROMPT,
+            confirmLabel = "save",
             onConfirm = { name ->
+                val ids = savableTrackIds(app.player.queue.value)
                 scope.launchAction(
-                    action = {
-                        val created = app.api.post("/api/playlists", buildJsonObject {
-                            put("name", name)
-                        })
-                        val pid = created.jsonObject["id"]?.jsonPrimitive?.longOrNull
-                            ?: error("no playlist id returned")
-                        val ids = app.player.queue.value
-                            .filter { it.kind == PlayKind.Library }
-                            .map { it.id }
-                        var added = 0
-                        ids.forEach { tid ->
-                            runAction {
-                                app.api.post("/api/playlists/$pid/tracks", buildJsonObject {
-                                    put("track_id", tid)
-                                })
-                            }.onSuccess { added++ }
-                        }
-                        added
-                    },
-                    onSuccess = { added ->
-                        toast("created $name · added $added track" + (if (added == 1) "" else "s"))
+                    action = { saveQueueAsPlaylist(app.api, name, ids) },
+                    onSuccess = {
+                        toast(savedAsNote(name.trim()))
                         playlists.refresh()
                     },
-                    onFailure = { toast("save failed: ${it.message}") },
+                    onFailure = { toast(saveFailedNote(apiErrorText(it))) },
                 )
             },
             onDismiss = { ui.saveQueueOpen = false },

@@ -378,6 +378,8 @@ internal fun GenreDrawer(
         onClose()
     }
 
+    val queueSong = rememberSongQueue()
+
     fun queueInRoom() {
         val r = room ?: return
         val send = roomTrackIds(ids, shuffle = false)
@@ -512,14 +514,9 @@ internal fun GenreDrawer(
                         t,
                         onClick = { onSelectTrack(t) },
                         onPlay = { playHereAndSay(app.player, libraryPlayItem(t), t.title ?: "track", toast) { scope.launch { it() } } },
-                        onPlayNext = {
-                            app.player.playNext(listOf(libraryPlayItem(t)))
-                            toast("playing next: \"${t.title ?: "track"}\"")
-                        },
-                        onQueue = {
-                            app.player.enqueue(listOf(libraryPlayItem(t)))
-                            toast("queued \"${t.title ?: "track"}\"")
-                        },
+                        // This phone's queue, or the room it casts to (batch 2 §2).
+                        onPlayNext = { queueSong(t, true) },
+                        onQueue = { queueSong(t, false) },
                     )
                 }
             }

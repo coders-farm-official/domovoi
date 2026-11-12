@@ -303,16 +303,16 @@ class LyricsPanelTest {
 
     @Test fun theLyricsItemComesRightAfterTheHeadWhenThereIsATrack() {
         assertEquals(
-            listOf("player-head", "player-lyrics", "player-queue-label", playerQueueKey(0, lantern)),
+            listOf("player-head", "player-lyrics", "player-queue-label", "player-queue-add", playerQueueKey(0, lantern)),
             keys(listOf(lantern), lyrics = 12),
         )
         // Casting with an empty phone queue: the room's song has lyrics too.
         assertEquals(
-            listOf("player-head", "player-lyrics", "player-queue-label", "player-queue-empty"),
+            listOf("player-head", "player-lyrics", "player-queue-label", "player-queue-add", "player-queue-empty"),
             keys(emptyList(), PlayTarget.Room("kitchen"), lyrics = 12),
         )
         val station = PlayItem.fromStation(3, "Harbor FM")
-        assertEquals(listOf("player-head", "player-queue-label", playerQueueKey(0, station)), keys(listOf(station)))
+        assertEquals(listOf("player-head", "player-queue-label", "player-queue-add", playerQueueKey(0, station)), keys(listOf(station)))
     }
 
     @Test fun onlyALibraryTrackHasLyrics() {

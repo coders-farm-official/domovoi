@@ -205,6 +205,9 @@ internal fun LazyListScope.playerTab(
     item(key = "player-queue-label") {
         PlayerQueueHeader(queue.size, canSave = model.hasLibraryItems, onSaveQueue = onSaveQueue)
     }
+    // The queue's search box (batch 2 §2): adds where the player plays.
+    val addTarget = model.roomTarget?.let { QueueTarget.Room(it.roomId) } ?: QueueTarget.Phone
+    item(key = "player-queue-add") { QueueAddBox(addTarget) }
     if (queue.isEmpty()) {
         item(key = "player-queue-empty") {
             Text(
