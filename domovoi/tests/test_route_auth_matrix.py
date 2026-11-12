@@ -105,9 +105,12 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("core", "POST", "/v1/admin/music/queue/{room_id}/add"): _GUEST,
     ("core", "POST", "/v1/admin/music/queue/{room_id}/remove"): _GUEST,
     ("core", "POST", "/v1/admin/music/queue/{room_id}/move"): _GUEST,
+    # The queue's "play this one" jump (Up next P4, 2026-11-12): the skip's tier.
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/play"): _GUEST,
     ("web", "POST", "/api/music/queue/{room_id}/add"): _GUEST + "; blocks/bans/switch at this hop",
     ("web", "POST", "/api/music/queue/{room_id}/remove"): _GUEST + "; blocks/bans/switch at this hop",
     ("web", "POST", "/api/music/queue/{room_id}/move"): _GUEST + "; blocks/bans/switch at this hop",
+    ("web", "POST", "/api/music/queue/{room_id}/play"): _GUEST + "; blocks/bans/switch at this hop",
     ("web", "POST", "/api/music/previous/{room_id}"): _GUEST + "; bans/switch at this hop",
     ("core", "POST", "/v1/admin/music/add-by-url"): (
         "outbound-fetch tier — check_outbound_fetch inside the handler (admin "
@@ -521,6 +524,10 @@ UP_NEXT_DEVICE_WRITES = [
     ("POST", "/api/music/up-next/sessions/{session_id}/next"),
     ("POST", "/api/music/up-next/sessions/{session_id}/feedback"),
     ("PATCH", "/api/music/up-next/sessions/{session_id}"),
+    # P4 (rooms): casting carries a session to a room and back; a room's
+    # queue saved as a playlist is a playlist write like any other.
+    ("POST", "/api/music/up-next/sessions/{session_id}/move"),
+    ("POST", "/api/music/queue/{room_id}/save-playlist"),
 ]
 
 

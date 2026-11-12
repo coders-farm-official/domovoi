@@ -50,7 +50,7 @@ guests-seen list (:data:`guests_router`, :data:`guest_bans_router`).
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -211,6 +211,16 @@ class QueueItem(BaseModel):
     guest_source: str | None = None
     # True for the entry MPD is currently on.
     playing: bool = False
+    # Up next (phase P4): ``auto`` for a song the room's Up next picked,
+    # with why (``reason_label``: "same artist", "90s", "from road trip" —
+    # never a person) and its number in the session (``up_next_seq``, for
+    # "less like this"); ``explicit`` for one somebody asked for. The
+    # library song the entry is (``track_id``), null for a stream, a
+    # podcast or a file the library doesn't know.
+    origin: Literal["explicit", "auto"] = "explicit"
+    reason_label: str | None = None
+    up_next_seq: int | None = None
+    track_id: int | None = None
 
 
 class RoomQueue(BaseModel):
@@ -229,6 +239,13 @@ class RoomQueue(BaseModel):
     # True when the caller holds an ADMIN session: the entries a guest
     # queued then carry guest_device_id / guest_source, for a ban.
     admin: bool = False
+    # The room's Up next session (phase P4), null without one: its id (for
+    # PATCH / feedback on /api/music/up-next/sessions/{id}), Autoplay, and
+    # what the mix is built from (``up_next``: mode, seed, list). Whose
+    # taste it follows is not here: GET /api/music/up-next/room/{room}.
+    session_id: str | None = None
+    autoplay: bool | None = None
+    up_next: dict[str, Any] | None = None
 
 
 # `device_id` is REQUIRED on every edit, optional only on the read.
@@ -240,6 +257,19 @@ class RoomQueue(BaseModel):
 class QueueAddRequest(BaseModel):
     track_ids: list[int] = Field(..., min_length=1, max_length=500)
     device_id: str = Field(..., min_length=3, max_length=64)
+    # ``next``: right after the song playing now. ``end`` (the default):
+    # after what somebody asked for, before the room's Up next picks.
+    where: Literal["next", "end"] = "end"
+
+
+class QueuePlayRequest(BaseModel):
+    song_id: int = Field(..., ge=0)
+    device_id: str = Field(..., min_length=3, max_length=64)
+
+
+class QueueSaveRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    device_id: str | None = Field(default=None, max_length=64)
 
 
 class QueueRemoveRequest(BaseModel):
@@ -518,6 +548,10 @@ async def read_queue(
                 guest_device_id=who_guest[0],
                 guest_source=who_guest[1],
                 playing=current is not None and song_id == int(current),
+                origin="auto" if raw.get("origin") == "auto" else "explicit",
+                reason_label=raw.get("reason_label"),
+                up_next_seq=raw.get("up_next_seq"),
+                track_id=raw.get("track_id"),
             )
         )
     return RoomQueue(
@@ -528,6 +562,9 @@ async def read_queue(
         blocked_reason=blocked_reason,
         guest=guest,
         admin=admin,
+        session_id=payload.get("session_id"),
+        autoplay=payload.get("autoplay"),
+        up_next=payload.get("up_next") if isinstance(payload.get("up_next"), dict) else None,
     )
 
 
@@ -547,9 +584,12 @@ async def add_to_queue(room_id: str, request: Request, body: QueueAddRequest):
     if _is_guest(request):
         guest = (body.device_id, request_source(request))
         device_id, device_name = None, GUEST_ADDED_BY
+    hop: dict[str, Any] = {"track_ids": body.track_ids}
+    if body.where != "end":
+        hop["where"] = body.where
     status, payload = await post_admin(
         f"/v1/admin/music/queue/{room_id}/add",
-        {"track_ids": body.track_ids},
+        hop,
         headers=await _guest_hop_headers(request, body.device_id),
     )
     if status == 200 and isinstance(payload, dict):
@@ -652,6 +692,101 @@ async def move_in_queue(room_id: str, request: Request, body: QueueMoveRequest):
         headers=await _guest_hop_headers(request, body.device_id),
     )
     return bridge_response(status, payload)
+
+
+@router.post("/{room_id}/play", dependencies=GUEST_OR_DEVICE)
+async def play_queue_entry(room_id: str, request: Request, body: QueuePlayRequest):
+    """Play one entry of the room's queue now (MPD ``playid``): the real
+    jump a queue row's tap does (Up next phase P4), where the browser used
+    to re-cast the rest of its own copy and the app moved the entry up and
+    skipped. The tier of the skip: the household, and a guest while the
+    room is playing unless an admin banned it (the core decides "playing").
+    A device blocked from this room's queue is refused, as for its edits."""
+    await _assert_can_edit(body.device_id, room_id, guest=_is_guest(request))
+    status, payload = await post_admin(
+        f"/v1/admin/music/queue/{room_id}/play",
+        {"song_id": body.song_id},
+        headers=await _guest_hop_headers(request, body.device_id),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/{room_id}/save-playlist", dependencies=DEVICE, status_code=201)
+async def save_queue_as_playlist(room_id: str, request: Request, body: QueueSaveRequest):
+    """Save the room's queue, in order, as a new playlist (owner, 2026-11-12).
+
+    The queue holds the player's files; each becomes its library song (the
+    core's queue read names it, ``track_id``: the same matching the room's
+    listening history uses). What isn't a library song — a stream, a
+    podcast, an audiobook, a file the library doesn't know — is left out
+    and counted (``skipped``); a song in the queue twice is saved once
+    (``duplicates``). A playlist's name is the household's: a name already
+    taken is a 409, as for any new playlist. Household device tier, like
+    every playlist write; never a guest's. 422 when nothing in the queue is
+    a library song. ``{playlist_id, name, saved, skipped, duplicates}``."""
+    name = " ".join(body.name.split())
+    if not name:
+        raise HTTPException(status_code=422, detail="the playlist needs a name")
+    status, payload = await get_admin(
+        f"/v1/admin/music/queue/{room_id}", headers=auth_forward_headers(request)
+    )
+    if status == 0:
+        raise HTTPException(
+            status_code=502, detail="domovoi core unreachable; can't read the queue"
+        )
+    if status != 200 or not isinstance(payload, dict):
+        return bridge_response(status, payload)
+    raw_items = payload.get("items") or []
+    ids: list[int] = []
+    seen: set[int] = set()
+    skipped = duplicates = 0
+    for raw in raw_items:
+        tid = raw.get("track_id")
+        if tid is None:
+            skipped += 1
+        elif int(tid) in seen:
+            duplicates += 1
+        else:
+            seen.add(int(tid))
+            ids.append(int(tid))
+    if not ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"nothing in {room_id}'s queue is a song from the library",
+        )
+    async with session_scope() as s:
+        dup = (await s.execute(
+            text("SELECT id FROM playlists WHERE LOWER(name) = LOWER(:n)"), {"n": name}
+        )).first()
+        if dup is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"playlist named {name!r} already exists (id={int(dup[0])})",
+            )
+        pid = int((await s.execute(
+            text("INSERT INTO playlists (name) VALUES (:n) RETURNING id"), {"n": name}
+        )).scalar_one())
+        # Songs deleted from the library between the read and now drop out.
+        kept = (await s.execute(
+            text(
+                """
+                INSERT INTO playlist_tracks (playlist_id, track_id, position)
+                SELECT :pid, t.id, o.ord - 1
+                FROM unnest(CAST(:ids AS int[])) WITH ORDINALITY AS o(id, ord)
+                JOIN library_tracks t ON t.id = o.id
+                ORDER BY o.ord
+                RETURNING track_id
+                """
+            ),
+            {"pid": pid, "ids": ids},
+        )).all()
+        await s.execute(text("SELECT pg_notify('playlists_changed', 'created')"))
+    saved = len(kept)
+    skipped += len(ids) - saved
+    log.info("room queue: %s's queue saved as playlist %d (%d songs, %d left out)",
+             room_id, pid, saved, skipped)
+    return {"playlist_id": pid, "name": name, "saved": saved, "skipped": skipped,
+            "duplicates": duplicates}
 
 
 @router.post("/{room_id}/clear", dependencies=DEVICE)

@@ -1348,6 +1348,14 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         </div>
       </div>
 
+      {/* What the room's Up next plays after this (P4): its next few picks,
+          why each was picked, tap to play one now; the whole queue is a tap
+          away. Nothing when the room has no Up next. */}
+      {(playing || (np?.state === 'pause' && np.song)) && typeof RoomUpNext === 'function' && (
+        <RoomUpNext roomId={s.room_id} limit={3} className="sat-upnext"
+                    onOpenQueue={() => { if (typeof openRoomQueue === 'function') openRoomQueue(s.room_id); }}/>
+      )}
+
       <VolumeControl s={s} fire={fire}/>
 
       {s.sat_type === 'video' && satCan(s, 'display') && <VideoControls s={s} fire={fire}/>}

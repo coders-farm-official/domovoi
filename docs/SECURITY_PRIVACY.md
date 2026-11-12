@@ -828,7 +828,15 @@ no `Authorization`, no dashboard cookie) on a box that has finished setup —
 may, for a room that is **actively playing**:
 
 * read that room's queue, add to it, remove entries and move them;
+* play one of its entries now (the queue's "play this one", Up next P4 —
+  a skip by another name);
+* read the room's Up next session (`GET /api/music/up-next/room/{room}`),
+  without whose taste it follows (`person` is left out for a guest);
 * pause, resume, skip and go back.
+
+A guest never changes a room's Up next itself: its Autoplay switch and
+"less like this" are household writes (`/api/music/up-next/sessions/…`,
+device tier), and so is saving a room's queue as a playlist.
 
 "Playing" is MPD `play` or `pause` with a current song, decided by the
 **core** at the moment of each request (`domovoi/guest_queue.py`): only the
@@ -858,6 +866,8 @@ guest.
 | `POST /v1/admin/music/queue/{room}/add` (web: `/api/music/queue/{room}/add`) | Playing room only; at most 50 tracks a call, never past 500 entries in the queue (`400` / `409`); never starts a stopped room | Any room, as before |
 | `POST /v1/admin/music/queue/{room}/remove` | Playing room only; one song a call (`400`); not the entry playing now (`403`) | Any room, as before |
 | `POST /v1/admin/music/queue/{room}/move` | Playing room only | Any room, as before |
+| `POST /v1/admin/music/queue/{room}/play` (web: `/api/music/queue/{room}/play`, Up next P4) | Playing room only; never starts a stopped room | Any room; a stopped room is left paused on the entry and told to play |
+| `GET /v1/admin/music/up-next/room/{room}` (web: `/api/music/up-next/room/{room}`) | Playing room only; no `person` | Any room |
 | `POST /v1/admin/music/queue/{room}/clear` | **No** (`401`) | As before |
 | `POST /v1/admin/music/{pause,resume,skip,next,previous}/{room}` (web: `/api/music/{verb}/{room}`) | Playing room only | Any room, as before |
 | `POST /v1/admin/music/stop/{room}` | **No** (`401`) | As before |

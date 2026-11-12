@@ -1789,7 +1789,7 @@
           "music"
         ],
         "summary": "Play Track",
-        "description": "Direct play of a library track by id. Proxies to the\nDomovoi server's ``/v1/admin/music/play-track``, which hands the\nfile straight to MPD without going through the router \u2014 so a UI\nclick doesn't write to ``conversation_log`` and never falls\nthrough to an external streaming provider the way the fuzzy\n``/play`` text-query path can.",
+        "description": "Direct play of a library track by id. Proxies to the\nDomovoi server's ``/v1/admin/music/play-track``, which hands the\nfile straight to MPD without going through the router \u2014 so a UI\nclick doesn't write to ``conversation_log`` and never falls\nthrough to an external streaming provider the way the fuzzy\n``/play`` text-query path can.\n\nThe song starts the room's Up next (phase P4): ``list`` mode when\n``context`` names the list it was clicked in, else ``library``; the\nmix follows the listener this phone or browser sends, else its claimed\nperson (not on a shared screen), else the household. ``up_next:\nfalse`` plays the song alone.",
         "operationId": "play_track_api_music_play_track_post",
         "requestBody": {
           "content": {
@@ -2969,7 +2969,7 @@
           "music"
         ],
         "summary": "Start Session",
-        "description": "Start Up next on this device (it replaces the device's previous\nsession). The answer is the session with its first batch: ``list`` and\n``library`` modes draw it now, ``continue`` mode when the list is\nnearly over (``POST \u2026/next``).",
+        "description": "Start Up next on this device (it replaces the device's previous\nsession). The answer is the session with its first batch: ``list`` and\n``library`` modes draw it now, ``continue`` mode when the list is\nnearly over (``POST \u2026/next``).\n\nA ROOM target (phase P4) plays the song in that room and starts the\nroom's session there (the core's play-track: it replaces the room's\nqueue, so the queue block applies); the room's player then holds the\nsong and the first batch, and the core refills it as it plays. A whole\nlist is cast with play-tracks instead (422 here).",
         "operationId": "start_session_api_music_up_next_sessions_post",
         "requestBody": {
           "content": {
@@ -2990,6 +2990,49 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Start Session Api Music Up Next Sessions Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/room/{room_id}": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Room Session",
+        "description": "The room's active session, or ``null``. Read like the room's queue\n(``GET /api/music/queue/{room}``): open to the household, and to a\nguest while the room plays; the core decides, and leaves ``person``\nout for a guest.",
+        "operationId": "room_session_api_music_up_next_room__room_id__get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Room Session Api Music Up Next Room  Room Id  Get"
                 }
               }
             }
@@ -3056,7 +3099,7 @@
           "music"
         ],
         "summary": "Patch Session",
-        "description": "Turn Autoplay on or off, or change whose taste the mix follows.",
+        "description": "Turn Autoplay on or off, or change whose taste the mix follows. For\na room's session, Autoplay off takes the waiting picks out of the room's\nqueue (the core's extender, on its next look); a list keeps the rest of\nitself, as on a phone.",
         "operationId": "patch_session_api_music_up_next_sessions__session_id__patch",
         "parameters": [
           {
@@ -3166,7 +3209,7 @@
           "music"
         ],
         "summary": "Feedback",
-        "description": "``{removed}``: the seqs of the picks this took out of the session\n(the player drops them from its queue).",
+        "description": "``{removed}``: the seqs of the picks this took out of the session\n(the player drops them from its queue). For a ROOM's session the core's\nextender takes them out of the room's queue on its next look (within\na few seconds), never the song playing now.",
         "operationId": "feedback_api_music_up_next_sessions__session_id__feedback_post",
         "parameters": [
           {
@@ -3198,6 +3241,61 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Feedback Api Music Up Next Sessions  Session Id  Feedback Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/up-next/sessions/{session_id}/move": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Move Session",
+        "description": "Casting: the session carries on on another player (plan \u00a72.1).\n\n* to a ROOM \u2014 after the phone or browser cast its queue there\n  (``play-tracks``, which can also move it in the same call:\n  ``up_next_session_id``). The room's own session, if any, ends; the\n  core's extender finds the picks in the room's queue by their files\n  and refills it as it plays. The room's queue block applies.\n* to a DEVICE \u2014 when playback comes back to this phone or browser: only\n  to the device that asks (403 otherwise).\n\nA device's session moves only at that device's request.",
+        "operationId": "move_session_api_music_up_next_sessions__session_id__move_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Move Session Api Music Up Next Sessions  Session Id  Move Post"
                 }
               }
             }
@@ -3517,6 +3615,108 @@
         },
         "responses": {
           "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue/{room_id}/play": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Play Queue Entry",
+        "description": "Play one entry of the room's queue now (MPD ``playid``): the real\njump a queue row's tap does (Up next phase P4), where the browser used\nto re-cast the rest of its own copy and the app moved the entry up and\nskipped. The tier of the skip: the household, and a guest while the\nroom is playing unless an admin banned it (the core decides \"playing\").\nA device blocked from this room's queue is refused, as for its edits.",
+        "operationId": "play_queue_entry_api_music_queue__room_id__play_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueuePlayRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/queue/{room_id}/save-playlist": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Save Queue As Playlist",
+        "description": "Save the room's queue, in order, as a new playlist (owner, 2026-11-12).\n\nThe queue holds the player's files; each becomes its library song (the\ncore's queue read names it, ``track_id``: the same matching the room's\nlistening history uses). What isn't a library song \u2014 a stream, a\npodcast, an audiobook, a file the library doesn't know \u2014 is left out\nand counted (``skipped``); a song in the queue twice is saved once\n(``duplicates``). A playlist's name is the household's: a name already\ntaken is a 409, as for any new playlist. Household device tier, like\nevery playlist write; never a guest's. 422 when nothing in the queue is\na library song. ``{playlist_id, name, saved, skipped, duplicates}``.",
+        "operationId": "save_queue_as_playlist_api_music_queue__room_id__save_playlist_post",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -21001,6 +21201,55 @@
               }
             ],
             "title": "Device Id"
+          },
+          "up_next_session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up Next Session Id"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "listener_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listener Person Id"
+          },
+          "as_household": {
+            "type": "boolean",
+            "title": "As Household",
+            "default": false
+          },
+          "autoplay": {
+            "type": "boolean",
+            "title": "Autoplay",
+            "default": true
+          },
+          "up_next": {
+            "type": "boolean",
+            "title": "Up Next",
+            "default": true
           }
         },
         "type": "object",
@@ -21292,7 +21541,8 @@
         "required": [
           "kind"
         ],
-        "title": "ContextIn"
+        "title": "ContextIn",
+        "description": "The list a song was clicked in: ``playlist`` (ref = its id),\n``album`` (``\"<artist>|<album>\"``), ``artist`` (a name), ``genre`` (a\ngenre key) or ``ids`` (up to 500 track ids: search results, the\nlibrary page). ``name`` is what the queue's head calls the list."
       },
       "ConversationTurn": {
         "properties": {
@@ -24625,6 +24875,18 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MoveIn": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/TargetIn"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "title": "MoveIn"
+      },
       "MoveRequest": {
         "properties": {
           "source_library_id": {
@@ -25617,6 +25879,43 @@
               }
             ],
             "title": "Device Id"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "listener_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listener Person Id"
+          },
+          "as_household": {
+            "type": "boolean",
+            "title": "As Household",
+            "default": false
+          },
+          "autoplay": {
+            "type": "boolean",
+            "title": "Autoplay",
+            "default": true
+          },
+          "up_next": {
+            "type": "boolean",
+            "title": "Up Next",
+            "default": true
           }
         },
         "type": "object",
@@ -26192,6 +26491,15 @@
             "maxLength": 64,
             "minLength": 3,
             "title": "Device Id"
+          },
+          "where": {
+            "type": "string",
+            "enum": [
+              "next",
+              "end"
+            ],
+            "title": "Where",
+            "default": "end"
           }
         },
         "type": "object",
@@ -26439,6 +26747,48 @@
             "type": "boolean",
             "title": "Playing",
             "default": false
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "explicit",
+              "auto"
+            ],
+            "title": "Origin",
+            "default": "explicit"
+          },
+          "reason_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Label"
+          },
+          "up_next_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up Next Seq"
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
           }
         },
         "type": "object",
@@ -26476,6 +26826,27 @@
         ],
         "title": "QueueMoveRequest"
       },
+      "QueuePlayRequest": {
+        "properties": {
+          "song_id": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Song Id"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "song_id",
+          "device_id"
+        ],
+        "title": "QueuePlayRequest"
+      },
       "QueueRemoveRequest": {
         "properties": {
           "song_ids": {
@@ -26500,6 +26871,33 @@
           "device_id"
         ],
         "title": "QueueRemoveRequest"
+      },
+      "QueueSaveRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "QueueSaveRequest"
       },
       "RecentlyPlayed": {
         "properties": {
@@ -27018,6 +27416,40 @@
             "type": "boolean",
             "title": "Admin",
             "default": false
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "autoplay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
+          },
+          "up_next": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Up Next"
           }
         },
         "type": "object",
@@ -28270,21 +28702,43 @@
         "properties": {
           "kind": {
             "type": "string",
-            "const": "device",
+            "enum": [
+              "device",
+              "room"
+            ],
             "title": "Kind"
           },
           "device_id": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$",
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Device Id"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
           }
         },
         "type": "object",
         "required": [
-          "kind",
-          "device_id"
+          "kind"
         ],
-        "title": "TargetIn"
+        "title": "TargetIn",
+        "description": "``{kind:'device', device_id}`` (a browser or a phone) or\n``{kind:'room', room_id}`` (a room's music player, phase P4)."
       },
       "TextWriteRequest": {
         "properties": {

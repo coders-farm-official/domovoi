@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domovoi.models import MAX_CONFIG_CHANGES
+from domovoi.up_next.service import ContextIn as UpNextContext
 
 
 # ─── Music ────────────────────────────────────────────────────────────────
@@ -1090,6 +1091,16 @@ class PlayTrackRequest(BaseModel):
     # refused here too. Optional — the server also reads X-Device-Id,
     # ?device_id= and the registration cookie (files.caller_device_id).
     device_id: str | None = Field(default=None, max_length=64)
+    # The song starts the room's Up next (phase P4). ``context``: the list the song was clicked in
+    # (the /api/music/up-next shape); ``listener_person_id`` /
+    # ``as_household``: whose taste the room's mix follows (else this
+    # device's claimed person, unless it is a shared screen); ``autoplay``:
+    # the player's switch; ``up_next: false`` plays without one.
+    context: UpNextContext | None = None
+    listener_person_id: int | None = Field(default=None, ge=1)
+    as_household: bool = False
+    autoplay: bool = True
+    up_next: bool = True
 
 
 class CastTracksRequest(BaseModel):
@@ -1114,6 +1125,18 @@ class CastTracksRequest(BaseModel):
     # refused here too. Optional — the server also reads X-Device-Id,
     # ?device_id= and the registration cookie (files.caller_device_id).
     device_id: str | None = Field(default=None, max_length=64)
+    # Up next (phase P4). ``up_next_session_id``: this phone's or browser's
+    # session, which carries on in the room (its picks are among
+    # ``track_ids``). Without one the room arms a session that adds similar
+    # songs once what was cast is nearly over (``context``: the list it is;
+    # else "this queue"). ``listener_person_id`` / ``as_household`` /
+    # ``autoplay`` / ``up_next`` as for play-track.
+    up_next_session_id: str | None = Field(default=None, max_length=64)
+    context: UpNextContext | None = None
+    listener_person_id: int | None = Field(default=None, ge=1)
+    as_household: bool = False
+    autoplay: bool = True
+    up_next: bool = True
 
 
 class PlayPlaylistRequest(BaseModel):

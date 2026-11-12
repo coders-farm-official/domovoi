@@ -763,7 +763,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #
     # Registration order is the canonical start order (shutdown reverses it):
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
-    #   listen_logger → music_listens_pruner →
+    #   up_next_extender → music_listens_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
@@ -795,11 +795,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(PlaybackStateSweeper(app), owner="core")
     WORKERS.add_worker(MediaPlaysPruner(), owner="core")
     # The listening history (V051, Up next P1): each room's songs as they
-    # end, and the retention (domovoi/music_listens.py).
-    from domovoi.workers.listen_logger import ListenLogger
+    # end, and the retention (domovoi/music_listens.py). The extender is the
+    # listen logger with the rooms' Up next on top (V053, P4): one read of
+    # each room's player per tick for both.
     from domovoi.workers.music_listens_pruner import MusicListensPruner
+    from domovoi.workers.up_next_extender import UpNextExtender
 
-    WORKERS.add_worker(ListenLogger(), owner="core")
+    WORKERS.add_worker(UpNextExtender(), owner="core")
     WORKERS.add_worker(MusicListensPruner(), owner="core")
     WORKERS.add_worker(MemoryExtractor(), owner="core")
     # Lyric search's line index (V021 track_lyric_lines; domovoi/workers/lyrics_index.py).
@@ -5154,6 +5156,16 @@ async def admin_music_play(body: _AdminPlayBody) -> dict[str, Any]:
 class _AdminPlayTrackBody(BaseModel):
     room_id: str
     track_id: int = Field(..., ge=1)
+    # Up next (phase P4): the song starts the room's session — ``list``
+    # mode when it was clicked in a list (``context``, the same shape as
+    # /api/music/up-next), else ``library``. ``person_id`` is whose taste
+    # the mix follows (the web hop works it out from the phone or browser
+    # that asked; null = the household). ``up_next: false`` plays the song
+    # alone, as before 2026-11-12.
+    context: dict[str, Any] | None = None
+    person_id: int | None = Field(default=None, ge=1)
+    autoplay: bool = True
+    up_next: bool = True
 
 
 @app.post(
@@ -5195,8 +5207,17 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
     from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
     from domovoi.db.repositories import IntentLogRepository
     from domovoi.handlers.shared.play_history import record_media_play
+    from domovoi.up_next import rooms as up_next_rooms
+    from domovoi.up_next import service as up_next_service
 
     started = time.monotonic()
+
+    context = None
+    if body.up_next and body.context is not None:
+        try:
+            context = up_next_service.ContextIn(**body.context)
+        except Exception as e:  # pydantic's ValidationError: a malformed list
+            raise HTTPException(status_code=422, detail=f"context: {e}") from e
 
     async with session_scope() as s:
         row = await s.execute(
@@ -5210,6 +5231,13 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
             {"id": body.track_id},
         )
         track = row.first()
+        if track is not None and context is not None:
+            # A list the house doesn't have is refused before the room is
+            # touched (the play would otherwise start without its Up next).
+            try:
+                await up_next_service.build_seed(s, body.track_id, context)
+            except up_next_service.SeedError as e:
+                raise HTTPException(status_code=e.status, detail=e.detail) from e
     if track is None:
         raise HTTPException(
             status_code=404,
@@ -5285,6 +5313,20 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
             library_track_id=body.track_id,
         )
 
+    # Up next: the room's session, with its first batch queued after the
+    # song, before the room is told to play. Never fails the play.
+    session_id = None
+    if body.up_next:
+        try:
+            session_id = await up_next_rooms.start_from_request(
+                body.room_id, track_id=body.track_id, context=context,
+                person_id=body.person_id, autoplay=body.autoplay, client=mpd,
+            )
+        except Exception as e:  # noqa: BLE001 — the song plays without its Up next
+            log.warning("up next: %s's session didn't start: %s", body.room_id, e)
+    else:
+        await up_next_rooms.end(body.room_id, "a song on its own")
+
     # Build a synthetic Response so _admin_dispatch_music can send
     # the music_start frame to the Pi. Reuses the same one-liner
     # every other admin music path uses.
@@ -5302,6 +5344,7 @@ async def admin_music_play_track(body: _AdminPlayTrackBody) -> dict[str, Any]:
         "title": title,
         "artist": artist,
         "latency_ms": latency_ms,
+        "up_next": {"session_id": session_id} if session_id else None,
     }
 
 
@@ -5379,6 +5422,17 @@ class _AdminPlayTracksBody(BaseModel):
     # phone or browser started the room playing. Absent (an older client):
     # the room plays, as it always has.
     start_paused: bool = False
+    # Up next (phase P4). ``up_next_session_id``: the phone's or browser's
+    # session carries on in the room (its picks are in ``track_ids``; the
+    # web hop checked the session is the caller's). Without one the room
+    # arms a ``continue`` session for what was cast — the list named by
+    # ``context``, else these songs ("this queue") — that adds similar
+    # songs once the cast is nearly over. ``up_next: false``: neither.
+    up_next_session_id: str | None = Field(default=None, max_length=64)
+    context: dict[str, Any] | None = None
+    person_id: int | None = Field(default=None, ge=1)
+    autoplay: bool = True
+    up_next: bool = True
 
 
 @app.post(
@@ -5497,6 +5551,8 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
             library_track_id=int(first[0]),
         )
 
+    session_id = await _cast_up_next(body, mpd, int(first[0]))
+
     response = Response(
         text="ok",
         matched_handler="music",
@@ -5511,7 +5567,34 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
         "requested": len(body.track_ids),
         "latency_ms": latency_ms,
         "paused": body.start_paused,
+        "up_next": {"session_id": session_id} if session_id else None,
     }
+
+
+async def _cast_up_next(body: _AdminPlayTracksBody, mpd: Any, first_track_id: int) -> str | None:
+    """A cast's Up next (play-tracks): the caster's own session moved to the
+    room, else a ``continue`` session armed for what was cast. Never fails
+    the cast."""
+    from domovoi.up_next import rooms as up_next_rooms
+
+    if not body.up_next:
+        await up_next_rooms.end(body.room_id, "a cast without up next")
+        return None
+    if body.up_next_session_id:
+        if await up_next_rooms.move_here(body.room_id, body.up_next_session_id, mpd):
+            return body.up_next_session_id
+    context = body.context or {
+        "kind": "ids", "track_ids": list(body.track_ids), "name": "this queue",
+    }
+    try:
+        return await up_next_rooms.start_from_request(
+            body.room_id, track_id=first_track_id, context=context, person_id=body.person_id,
+            autoplay=body.autoplay, client=mpd, whole_list=True,
+        )
+    except Exception as e:  # noqa: BLE001 — a list the house doesn't have: no Up next
+        log.info("up next: the cast to %s armed nothing: %s", body.room_id, e)
+        await up_next_rooms.end(body.room_id, "a cast")
+        return None
 
 
 # ─── Room queue editing (design: the dashboard/app queue surface) ─────────
@@ -5549,6 +5632,15 @@ class _AdminQueueAddBody(BaseModel):
     # Same cap as play-tracks: a runaway client must not ask MPD to resolve
     # an unbounded list in one request.
     track_ids: list[int] = Field(..., min_length=1, max_length=500)
+    # Where they go (Up next, phase P4): ``next`` right after the song
+    # playing now; ``end`` (the default) after the last song somebody
+    # asked for and before Up next's own picks — the end of the queue when
+    # the room has no picks waiting.
+    where: Literal["next", "end"] = "end"
+
+
+class _AdminQueuePlayBody(BaseModel):
+    song_id: int = Field(..., ge=0)
 
 
 class _AdminQueueRemoveBody(BaseModel):
@@ -5636,15 +5728,45 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
     except Exception as e:
         log.warning("admin queue list MPD raised: %s", e)
         raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+    from domovoi.up_next import rooms as up_next_rooms
+
+    items = [_queue_entry_dict(e) for e in entries]
+    # Up next (P4): each entry's origin (``auto`` for a pick) and reason,
+    # its library song, and the room's session. Never a person's name.
+    view = await up_next_rooms.queue_view(room_id, items)
     return {
         "room_id": room_id,
-        "items": [_queue_entry_dict(e) for e in entries],
+        "items": items,
         "current_song_id": await _current_song_id(mpd),
         # Who this answer was given to: the web hop shows a guest's view
         # whenever the core says so (review finding 2) — it cannot tell
         # from what it forwarded alone.
         "guest": guest_activity(request) is not None,
+        **view,
     }
+
+
+async def _insert_position(room_id: str, mpd: Any, where: str) -> int | None:
+    """Where an add goes in the room's queue: ``next`` — right after the
+    song playing now; ``end`` — before the first Up next pick waiting after
+    it (so what somebody asked for always plays before the picks). None:
+    append (nothing current, or no pick waiting)."""
+    from domovoi.up_next import rooms as up_next_rooms
+
+    entries = await mpd.queue_list()
+    current = await _current_song_id(mpd)
+    ids = [int(e["id"]) for e in entries if e.get("id") is not None]
+    if current is None or current not in ids:
+        return None
+    cur = ids.index(current)
+    if where == "next":
+        return cur + 1
+    items = [_queue_entry_dict(e) for e in entries if e.get("id") is not None]
+    await up_next_rooms.queue_view(room_id, items)
+    for n, it in enumerate(items):
+        if n > cur and it.get("origin") == "auto":
+            return n
+    return None
 
 
 @app.post(
@@ -5715,8 +5837,17 @@ async def admin_music_queue_add(
                 "songs) — pair this phone to add more"
             ),
         )
+    position: int | None = None
+    if not was_empty:
+        try:
+            position = await _insert_position(room_id, mpd, body.where)
+        except Exception as e:  # noqa: BLE001 — appended, as before P4
+            log.debug("admin queue add: no insert position (%s); appending", e)
     try:
-        queued = await mpd.queue_add_tracks(specs)
+        if position is None:
+            queued = await mpd.queue_add_tracks(specs)
+        else:
+            queued = await mpd.queue_add_tracks(specs, position=position)
     except Exception as e:
         log.warning("admin queue add MPD raised: %s", e)
         raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
@@ -5770,7 +5901,65 @@ async def admin_music_queue_add(
         ],
         "requested": len(body.track_ids),
         "started": started,
+        "position": position,
     }
+
+
+@app.post(
+    "/v1/admin/music/queue/{room_id}/play",
+    # The queue's "play this one" (Up next P4): a jump, on the tier of the
+    # skip it is a kind of — the device tier, and a guest while the room is
+    # playing, unless an admin banned it (domovoi/guest_queue.py).
+    dependencies=[Depends(require_device_or_active_room_guest)],
+)
+async def admin_music_queue_play(
+    room_id: str, body: _AdminQueuePlayBody, request: Request
+) -> dict[str, Any]:
+    """Play queue entry ``song_id`` now (MPD ``playid``): a real jump
+    within the queue the room has, where a client used to re-cast the rest
+    of its own copy (the browser) or move the entry up and skip (the app).
+    The song that was playing ends as a skip (the listening history).
+
+    A room that was stopped is left paused on the entry and told to play
+    (the stream handshake resumes it) — a household caller's; a guest only
+    reaches a playing room. 404 when the entry is gone (played off the
+    queue, removed by someone else)."""
+    from domovoi import music_listens
+    from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
+    from domovoi.music_pause import note_paused_by_person
+
+    guest = guest_activity(request) is not None
+    await _ensure_room_mpd_unless_guest(request, room_id)
+    mpd = get_mpd_client_for(room_id)
+    try:
+        state_before = await mpd.state()
+        current = await _current_song_id(mpd)
+        start = state_before == "stop" and not guest
+        if current is not None and current != body.song_id and state_before != "stop":
+            music_listens.note_skip(room_id)
+        played = await mpd.play_id(body.song_id, paused=start)
+    except Exception as e:
+        log.warning("admin queue play MPD raised: %s", e)
+        raise _music_player_down(room_id) from e
+    if not played:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"song {body.song_id} isn't in {room_id}'s queue "
+                "(already played, or someone else removed it)"
+            ),
+        )
+    # MPD plays the entry it moved to, paused or not: a person's pause no
+    # longer describes the room.
+    note_paused_by_person(app, room_id, False)
+    await _log_queue_edit(room_id, f"queue play {body.song_id}")
+    if start:
+        await _admin_dispatch_music(
+            Response(text="ok", matched_handler="music", music_action="start",
+                     music_stream_url=mpd_stream_url_for(room_id)),
+            room_id,
+        )
+    return {"played": True, "song_id": body.song_id, "started": start}
 
 
 @app.post(
@@ -5869,10 +6058,35 @@ async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
         log.warning("admin queue clear MPD raised: %s", e)
         raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
     await _log_queue_edit(room_id, "queue clear")
+    from domovoi.up_next import rooms as up_next_rooms
+
+    await up_next_rooms.end(room_id, "the queue was cleared")
     await _admin_dispatch_music(
         Response(text="ok", matched_handler="music", music_action="stop"), room_id
     )
     return {"cleared": True, "room_id": room_id}
+
+
+@app.get(
+    "/v1/admin/music/up-next/room/{room_id}",
+    # Read like the room's queue: the device tier's read half, and a guest
+    # while the room is playing (domovoi/guest_queue.py).
+    dependencies=[Depends(require_device_read_or_active_room_guest)],
+)
+async def admin_up_next_room(room_id: str, request: Request) -> dict[str, Any]:
+    """``{session}``: the room's active Up next session (the ``Session``
+    shape of /api/music/up-next), or null. A guest's answer leaves out whose
+    taste it follows (``person``)."""
+    from domovoi.up_next import rooms as up_next_rooms
+    from domovoi.up_next import service as up_next_service
+    from domovoi.up_next import store as up_next_store
+
+    guest = guest_activity(request) is not None
+    async with session_scope() as s:
+        st = await up_next_store.active_for(s, up_next_rooms.target_for(room_id))
+        if st is None:
+            return {"session": None}
+        return {"session": await up_next_service.session_json(s, st, with_person=not guest)}
 
 
 class _AdminAddByQueryBody(BaseModel):

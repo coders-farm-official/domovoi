@@ -358,7 +358,17 @@ Core's own workers live in `domovoi/workers/`: the timer watcher, library
 indexer + enricher, playback-state sweeper, media-plays pruner, news fetcher,
 podcast feed poller, audiobook indexer, memory extractor, wake-word trainer,
 the pruners for command recordings, guest sightings and voice history, the
-per-room audiobook positions, the MusicBrainz alias fetch, the three lyrics
+per-room audiobook positions, the MusicBrainz alias fetch, the **Up next
+extender** (`up_next_extender`, `domovoi/workers/up_next_extender.py`,
+V053/P4: the rooms' listen logger with Up next on top — one read of each
+room's music player every `playback_sweeper_interval_sec` writes the
+listening history and, for a room with an active Up next session, finds the
+session's picks in the queue, takes out picks removed by "less like this"
+or Autoplay off (never the song playing), appends the next batch by exact
+file once five or fewer songs are left, trims the queue to 50 songs behind
+the current one, and ends the session when the room stopped, sat idle two
+hours or had its queue replaced; the logic is `domovoi/up_next/rooms.py`,
+which the room start paths call too), the three lyrics
 workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics"), the
 three printing workers (§6 "Printing and scanning"), and the container guard (`container_guard`, `domovoi/container_guard/`): every
 30 s it compares the Docker containers the core expects — the compose

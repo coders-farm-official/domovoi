@@ -904,6 +904,17 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             artist=row.artist or first.get("artist"),
             library_track_id=row.id,
         )
+        # Up next (plan §5): a song starts a library session seeded by it;
+        # an artist or an album stays the queue it is, with a continue
+        # session armed for when it is nearly over.
+        if ref.type in ("title", "track") or n <= 1:
+            await self._start_room_up_next(ctx, mpd, track_id=int(row.id))
+        else:
+            await self._start_room_up_next(
+                ctx, mpd, track_id=int(row.id), whole_list=True,
+                context={"kind": "ids", "track_ids": [int(r.id) for r in rows][:500],
+                         "name": name},
+            )
         text_ = self._candidate_text(
             ref, n, row.title or first.get("title"), name, said_artist, lyrics_note=lyrics_note,
         )
@@ -917,6 +928,27 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             music_action="start",
             music_stream_url=mpd_stream_url_for(ctx.room_id),
         )
+
+    async def _start_room_up_next(
+        self, ctx: Context, mpd: Any, *, track_id: int, context: dict | None = None,
+        whole_list: bool = False,
+    ) -> None:
+        """Start the room's Up next after a voice play replaced its queue
+        (domovoi/up_next/rooms.py): the mix is for the person who spoke
+        (None: an unrecognised voice, the household). Best-effort: a play
+        never fails for it."""
+        if ctx.from_phone or not ctx.room_id:
+            return
+        try:
+            from domovoi.up_next import rooms as up_next_rooms
+
+            await up_next_rooms.start_from_request(
+                ctx.room_id, track_id=track_id, context=context,
+                person_id=getattr(ctx, "person_id", None), autoplay=True,
+                client=mpd, whole_list=whole_list,
+            )
+        except Exception as e:  # noqa: BLE001 — the music plays without it
+            log.warning("up next: %s's session didn't start: %s", ctx.room_id, e)
 
     @staticmethod
     def _candidate_text(
@@ -1310,8 +1342,13 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
         await self._stamp_stream_play(ctx, session, provider, query, response)
         return response
 
-    async def _play_random(self, ctx: Context, session: AsyncSession) -> Response:
+    async def _play_random(
+        self, ctx: Context, session: AsyncSession, *, up_next: bool = True,
+    ) -> Response:
         """Pick a random track from ``library_tracks`` and play via MPD.
+
+        In a room it starts the room's Up next (``library`` mode, seeded by
+        the song; ``up_next=False`` for the skip cascade).
 
         Used by "play a song / play something / shuffle / surprise me."
         Bypasses the external-provider fallthrough — random play that
@@ -1416,6 +1453,8 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             artist=song.get("artist") or row.artist,
             library_track_id=row.id,
         )
+        if up_next:
+            await self._start_room_up_next(ctx, mpd, track_id=int(row.id))
         return Response(
             text=f"Playing {_format_song(song)}.",
             session_id=ctx.session_id,
@@ -1528,7 +1567,9 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
                 log.debug("smart_skip: MPD inspect failed: %s", e)
 
         if local_play:
-            return await self._play_random(ctx, session)
+            # The one-song cascade starts no Up next of its own (plan §5:
+            # with Autoplay off, or no session, "next" is what it was).
+            return await self._play_random(ctx, session, up_next=False)
         return await self._simple_ack("next", ctx)
 
     async def _queue_place(self, room_id: str | None) -> tuple[int, int] | None:

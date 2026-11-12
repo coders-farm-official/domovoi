@@ -972,11 +972,11 @@ const TrackSetActions = ({ rooms, room, onRoom, ids, songs, what, context = null
       <RoomChips rooms={rooms} room={room} onPick={onRoom}/>
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
         <Button variant="primary" icon="play" disabled={!room || ids.length === 0}
-                onClick={() => { if (room) { onPlayTracks(roomIds(false), room, what, false); onClose(); } }}>
+                onClick={() => { if (room) { onPlayTracks(roomIds(false), room, what, false, context); onClose(); } }}>
           play
         </Button>
         <Button icon="shuffle" disabled={!room || ids.length === 0}
-                onClick={() => { if (room) { onPlayTracks(roomIds(true), room, what, true); onClose(); } }}>
+                onClick={() => { if (room) { onPlayTracks(roomIds(true), room, what, true, context); onClose(); } }}>
           shuffle
         </Button>
         <Button icon="list-plus" disabled={!room || ids.length === 0}
@@ -1406,7 +1406,15 @@ const queueTapTarget = (kind, idx, cur, count) => {
 };
 
 /* The Room queue tab. `room` is the Music page's (a room card's queue
- * button picks it); null falls back to a room that's playing. */
+ * button picks it); null falls back to a room that's playing.
+ *
+ * Up next (P4): the songs the room's Up next picked are marked (a sparkle
+ * and why: "same artist", "90s", "from road trip") under an "up next"
+ * head that holds the room's Autoplay switch; tap any song to play it now
+ * (a real jump in the room's queue); "less like this" on a pick takes that
+ * artist out of the mix; "save as playlist" keeps the queue. A guest gets
+ * the jump, the moves and remove on a playing room — no switch, no "less
+ * like this", no saving. */
 const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }) => {
   // Default to a room that's actually playing — that's the queue you came
   // here to look at.
@@ -1513,6 +1521,47 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
     } finally { setBusy(false); }
   };
 
+  // Tap a song: the room plays it now (POST …/play, a real jump).
+  const playNow = async (item) => {
+    if (!editable || item.playing || busy) return;
+    setBusy(true);
+    try {
+      await roomPlayEntry(room, item.song_id, send);
+      fire(`playing "${item.title || 'track'}" in ${room}`);
+      refresh();
+    } catch (e) {
+      refused('play', e);
+    } finally { setBusy(false); }
+  };
+
+  // The room's Up next: its Autoplay switch and "less like this" (both the
+  // household's, never a guest's).
+  const sessionId = queue?.session_id || null;
+  const setAutoplay = async (on) => {
+    if (!sessionId) return;
+    setBusy(true);
+    try {
+      await apiPatch(`/api/music/up-next/sessions/${sessionId}`, { autoplay: !!on });
+      fire(on ? `autoplay on in ${room}` : `autoplay off in ${room} — the queue stops at the end`);
+      refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'autoplay', e);
+    } finally { setBusy(false); }
+  };
+  const lessLike = async (item) => {
+    if (!sessionId || item.up_next_seq == null) return;
+    setBusy(true);
+    try {
+      const r = await apiPost(`/api/music/up-next/sessions/${sessionId}/feedback`,
+        { seq: item.up_next_seq, kind: 'less_like_this' });
+      const n = Math.max(0, ((r && r.removed) || []).length - 1);
+      fire(`no more ${item.artist || 'of that'} in this mix${n ? ` (${n} more taken out)` : ''}`);
+      refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'less like this', e);
+    } finally { setBusy(false); }
+  };
+
   const clearQueue = async () => {
     if (!window.confirm(`Clear ${room}'s queue and stop playback?`)) return;
     setBusy(true);
@@ -1549,6 +1598,29 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
     try { if (typeof ConnectAsk !== 'undefined') { ConnectAsk.open(); return; } } catch { /* below */ }
     try { Auth.requestPairing(); } catch {}
   };
+  // The "up next" head: before the first pick still to come, or after the
+  // list when the room's Up next has none waiting. Nothing without one.
+  const pickRows = roomUpNextRows(items);
+  const firstPick = pickRows.length ? pickRows[0].i : -1;
+  const unLine = queue ? roomUpNextLine(queue, pickRows) : null;
+  const unBasis = roomUpNextBasis(queue);
+  const upNextHead = sessionId ? (
+    <div className="rq-un-head" role="group" aria-label={`up next in ${room}`}>
+      <span className="label">up next</span>
+      {unBasis && <span className="rq-un-basis">{unBasis}</span>}
+      <span style={{ flex: 1 }}/>
+      {!guest && editable && (
+        <label className="mp-un-auto" title="keep playing similar songs when the queue ends">
+          <input type="checkbox" role="switch" checked={!!queue.autoplay} aria-checked={!!queue.autoplay}
+                 disabled={busy} aria-label={`autoplay in ${room}: keep playing similar songs when the queue ends`}
+                 onChange={(e) => setAutoplay(!!e.target.checked)}/>
+          <span>autoplay</span>
+        </label>
+      )}
+      {unLine && <div className="rq-un-line" role="status">{unLine}</div>}
+    </div>
+  ) : null;
+
   const tapButton = (name, title, to, from) => (
     <IconButton name={name} title={title} disabled={busy || to == null}
                 onClick={() => moveTo(from, to)}/>
@@ -1586,8 +1658,14 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
       {editable && guest && items.length > 0 && (
         <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--fg-muted)',
                       borderBottom: '1px solid var(--border-soft)' }}>
-          You're a guest: while {room} is playing you can reorder, play next and
-          remove songs, and add them from a track's details.
+          You're a guest: while {room} is playing you can play a song now, reorder,
+          play next and remove songs, and add them from a track's details.
+        </div>
+      )}
+
+      {!guest && items.length > 0 && typeof PlayerQueueSave === 'function' && (
+        <div className="rq-save" style={{ padding: '6px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <PlayerQueueSave queue={[]} roomId={room}/>
         </div>
       )}
 
@@ -1621,8 +1699,12 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
           {items.map((item, idx) => {
             const canRemove = editable && !(guest && item.playing);
             const canBan = admin && (item.guest_device_id || item.guest_source);
+            const pick = item.origin === 'auto' && idx > cur;
+            const head = idx === firstPick ? upNextHead : null;
             return (
-              <div key={item.song_id} className="rq-row"
+              <React.Fragment key={item.song_id}>
+              {head}
+              <div className="rq-row"
                    draggable={editable}
                    onDragStart={() => { dragFrom.current = idx; }}
                    onDragOver={(e) => { if (editable) e.preventDefault(); }}
@@ -1637,16 +1719,26 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
                     ? <Icon name="volume-2" size={13} style={{ color: 'var(--brand-ink)' }}/>
                     : <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{idx + 1}</span>}
                 </span>
-                <div className="rq-main">
+                <div className="rq-main"
+                     role={editable && !item.playing ? 'button' : undefined}
+                     tabIndex={editable && !item.playing ? 0 : undefined}
+                     title={editable && !item.playing ? `play now in ${room}` : undefined}
+                     style={{ cursor: editable && !item.playing ? 'pointer' : undefined }}
+                     onClick={() => playNow(item)}
+                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playNow(item); } }}>
                   <div style={{ fontSize: 13, fontWeight: item.playing ? 600 : 400,
                                 overflow: 'hidden', textOverflow: 'ellipsis',
                                 whiteSpace: 'nowrap' }}>
+                    {pick && <Icon name="sparkles" size={11} style={{ color: 'var(--fg-muted)', marginRight: 4 }}/>}
                     {item.title || item.file || 'unknown'}
                   </div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)',
                                                  overflow: 'hidden', textOverflow: 'ellipsis',
                                                  whiteSpace: 'nowrap' }}>
                     {item.artist || 'unknown artist'}
+                    {item.origin === 'auto' && item.reason_label && (
+                      <span className="rq-why"> · {item.reason_label}</span>
+                    )}
                     {item.added_by && (
                       <span style={{ color: 'var(--fg-faint)' }}> · added by {item.added_by}</span>
                     )}
@@ -1665,6 +1757,11 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
                       {tapButton('chevron-down', 'move down', queueTapTarget('down', idx, cur, items.length), idx)}
                     </>
                   )}
+                  {pick && editable && !guest && sessionId && (
+                    <IconButton name="thumbs-down" disabled={busy}
+                                title={`less like this: no more ${item.artist || 'of this artist'} in this mix`}
+                                onClick={() => lessLike(item)}/>
+                  )}
                   {canBan && (
                     <IconButton name="user-x" title="ban the guest that added this"
                                 onClick={() => banGuest(item)}/>
@@ -1675,8 +1772,10 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
                   )}
                 </span>
               </div>
+              </React.Fragment>
             );
           })}
+          {firstPick < 0 && upNextHead}
         </div>
       )}
     </div>
@@ -2382,6 +2481,11 @@ const MusicPage = () => {
     catch (e) { reportMutationFailure(fire, verb, e); }
     finally { playsInFlight.current.delete(key); }
   };
+  // What every room start sends for its Up next: who is asking, whose
+  // taste the mix follows, and this browser's Autoplay switch.
+  const roomStartBody = (body) => Object.assign({ device_id: DeviceIdentity.id() }, body,
+    typeof upNextListenerFields === 'function' ? upNextListenerFields() : {},
+    typeof upNextAutoplayPref === 'function' && !upNextAutoplayPref() ? { autoplay: false } : {});
   const onPlayRandom = (room_id) => playInRoom(room_id, 'random', 'play', `shuffle requested in ${room_id}…`,
     () => apiPost('/api/music/play', { room_id, query: 'something random' }));
   const onPlayInRoom = (track, room_id) => {
@@ -2392,8 +2496,9 @@ const MusicPage = () => {
     // Direct-play by id: skips the router entirely, so no
     // conversation_log entry, and no fuzzy-match streaming-provider
     // fallthrough when ID3 tags don't line up with what MPD indexed.
+    // The song starts the room's Up next (P4): songs like it follow it there.
     return playInRoom(room_id, `track ${track.id}`, 'play', `playing "${track.title || 'track'}" in ${room_id}…`,
-      () => apiPost('/api/music/play-track', { room_id, track_id: track.id }));
+      () => apiPost('/api/music/play-track', roomStartBody({ room_id, track_id: track.id })));
   };
   // Append to what the room is playing (the room queue), rather than
   // replacing it — the one way a guest adds a song (owner decision
@@ -2417,10 +2522,14 @@ const MusicPage = () => {
   // The Artists drawer: a list of library tracks into a room — replacing
   // what it plays (play / shuffle, POST /api/music/play-tracks) or after
   // it (the room queue, as onQueueInRoom).
-  const onPlayTracks = (track_ids, room_id, label, shuffle) => playInRoom(
+  // The list plays as it is; the room's Up next carries on with songs like
+  // it when it is nearly over (P4: `context` names the list).
+  const onPlayTracks = (track_ids, room_id, label, shuffle, context = null) => playInRoom(
     room_id, `tracks ${label}${shuffle ? ' shuffled' : ''}`, shuffle ? 'shuffle' : 'play',
     `${shuffle ? 'shuffling' : 'playing'} ${label} in ${room_id}…`,
-    () => apiPost('/api/music/play-tracks', { room_id, track_ids, device_id: DeviceIdentity.id() }));
+    () => apiPost('/api/music/play-tracks', roomStartBody({
+      room_id, track_ids, context: context && context.kind !== 'ids' ? context : { kind: 'ids', name: label, track_ids },
+    })));
   const onQueueTracksInRoom = async (track_ids, room_id, label) => {
     if (guest && !activeRooms.has(room_id)) {
       fire(`${room_id} isn't playing — connect this browser to start music there`);
