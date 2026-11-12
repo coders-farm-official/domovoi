@@ -14,7 +14,7 @@ import Synchronization
 /// into an AudioTrack." The wire protocol itself is written out in
 /// `domovoi/phone_dropin.py:19-42` and read from there, not from the Kotlin.
 ///
-/// Kamron, answer 54: "yes: phone-to-room drop-in is an iPhone feature; build
+/// The owner, answer 54: "yes: phone-to-room drop-in is an iPhone feature; build
 /// it (shared audio layer with the chat mic and room mode)".
 ///
 /// ### A phone never starts a room-to-room call
@@ -38,7 +38,7 @@ import Synchronization
 ///   being told, which is the one thing this whole socket's tier is about.
 /// * **No background call.** `UIBackgroundModes` is `audio` only
 ///   (`project.yml:239`); CallKit and VoIP pushes would make this an app that
-///   rings, which Kamron has not asked for. The call ends with the screen, as
+///   rings, which the owner has not asked for. The call ends with the screen, as
 ///   Android's dialog ends it on dispose (`PhoneDropinCall.kt:125-127`).
 @MainActor
 @Observable

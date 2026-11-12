@@ -5,7 +5,7 @@ import SwiftUI
 /// "Drop in from this phone" — the control, and the call it opens.
 ///
 /// A port of `PhoneDropinRow` (`PhoneDropinCall.kt:61-108`): one button under
-/// the drop-in section, and a presentation while the call is on. Kamron,
+/// the drop-in section, and a presentation while the call is on. The owner,
 /// answer 54: "yes: phone-to-room drop-in is an iPhone feature; build it
 /// (shared audio layer with the chat mic and room mode)."
 ///
@@ -30,7 +30,7 @@ import SwiftUI
 ///
 /// ### What is not here, and why there is no control for it
 ///
-/// * **No `start` for a call between two rooms.** Kamron, answers 5 and 53:
+/// * **No `start` for a call between two rooms.** The owner, answers 5 and 53:
 ///   "phones never create room-to-room drop-ins; a phone can only drop into a
 ///   room." ``RoomsStrings/dropInStartIsOnTheDashboard`` says where that one
 ///   is done.

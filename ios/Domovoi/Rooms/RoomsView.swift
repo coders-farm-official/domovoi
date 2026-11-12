@@ -17,7 +17,7 @@ import SwiftUI
 ///
 /// This phone holds the **household device token** and never an admin session
 /// (`require_admin_*` is Bearer or dashboard-cookie only), so each of the
-/// following would 401, 403 or 501 **every time**. Under Kamron's
+/// following would 401, 403 or 501 **every time**. Under the owner's
 /// no-misleading-controls rule the control is left out and the fact is kept,
 /// with one line saying where the button is. Each entry names the gate.
 ///
@@ -46,13 +46,13 @@ import SwiftUI
 ///   dead one.
 ///
 /// **"Drop in from this phone" IS here now** (`PhoneDropinRow`,
-/// `PhoneDropinCall.kt:61`): Kamron, answer 54. It is a device-tier socket of
+/// `PhoneDropinCall.kt:61`): The owner, answer 54. It is a device-tier socket of
 /// its own, ``DropInCallModel`` drives it, and ``RoomsDropInRow`` draws the
 /// control inside the opened room's drop-in section.
 ///
 /// ### A room is its own pushed screen (D56)
 ///
-/// Kamron, answer 56: "take the recommendation: a room opens as its own
+/// The owner, answer 56: "take the recommendation: a room opens as its own
 /// pushed screen with swipe back." It used to be a swap in place — the roster
 /// replaced by the detail, with an explicit `close this room` control — which
 /// was Android's compact behaviour (`SatellitesScreen.kt:119-131`) minus the

@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DomovoiKit
 
-/// The three things Kamron answered for Calendar on 2026-11-03, where they are
+/// The three things the owner answered for Calendar on 2026-11-03, where they are
 /// cheapest to pin: the week view's groups (answer 14), the bounded read and
 /// its reuse (answer 16), and the hour an open-ended event keeps (answer 17).
 ///
@@ -153,7 +153,7 @@ final class CalendarWindowTests: XCTestCase {
     /// Fifty minutes after it started it is still there; seventy minutes
     /// after, it is gone.
     ///
-    /// The two instants Kamron's "keep it for an hour" means, measured through
+    /// The two instants the owner's "keep it for an hour" means, measured through
     /// the thing that actually decides it — the **agenda's window**, not
     /// `calendarEndMs` on its own. The anchor has to move with the clock here
     /// because the agenda's floor is the anchor's midnight: the discriminating

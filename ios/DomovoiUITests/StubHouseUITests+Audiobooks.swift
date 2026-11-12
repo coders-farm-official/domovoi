@@ -20,7 +20,7 @@ import XCTest
 /// **One case `MAP.md` §11 planned is deliberately not here**: switching
 /// houses inside a list read. The only way to change servers from the app is
 /// the connection sheet, and NIGHT-RULES §1 forbids opening it on a
-/// Simulator — it starts a LAN discovery sweep across Kamron's real home
+/// Simulator — it starts a LAN discovery sweep across the owner's real home
 /// network. That property is covered where it can be: the package tests
 /// `testAStartInFlightWhenTheHouseChangesNeitherAsksNorPlays`,
 /// `testAChapterTapInFlightWhenTheHouseChangesPlaysNothing` and

@@ -142,7 +142,7 @@ final class ChatSendRuleTests: XCTestCase {
     /// **Answer 70's state, at the model**: the composer still has a send to
     /// draw while a reply is being written, and the send it draws cannot send.
     ///
-    /// Kamron's answer 70 (2026-11-04) took Android's greyed-out send over the
+    /// The owner's answer 70 (2026-11-04) took Android's greyed-out send over the
     /// empty spot this screen shipped (`ChatScreen.kt:1166-1171`,
     /// `enabled = canSend`). The composer draws the button whenever
     /// ``ChatRules/sendOffered(typed:)`` says there is something in the box and

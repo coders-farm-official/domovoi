@@ -15,7 +15,7 @@ import UniformTypeIdentifiers
 ///
 /// That makes this the **mass-appeal default** — tap, pick, it goes home —
 /// with the folder list and the photo-library browse as the extra step for
-/// somebody who wants to see everything at once (Kamron's standing note:
+/// somebody who wants to see everything at once (the owner's standing note:
 /// keep defaults simple, extra steps optional).
 ///
 /// ### What is not, and why there is no control for it

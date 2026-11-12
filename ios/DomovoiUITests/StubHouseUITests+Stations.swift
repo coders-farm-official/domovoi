@@ -8,7 +8,7 @@ import XCTest
 ///
 /// ### Bunched on purpose
 ///
-/// Kamron's standing ask for this night is that testing not pay the
+/// The owner's standing ask for this night is that testing not pay the
 /// build-and-launch cost once per assertion. XCTest gives every case its own
 /// process, so "fewer launches" can only mean **fewer, fatter cases**: each
 /// one below drives one launch and asserts everything that launch can be
@@ -35,7 +35,7 @@ import XCTest
 /// **A server switch inside a round trip** — the top defect class on this
 /// track. The only way to change the address from a UI case is the app's
 /// connection sheet, which NIGHT-RULES §1 forbids on a Simulator: it starts a
-/// LAN discovery sweep across Kamron's real home network. The case exists in
+/// LAN discovery sweep across the owner's real home network. The case exists in
 /// the package, where the round trip can be parked:
 /// `StationsModelTests.testAPlayThatLandsAfterTheHouseChangedIsDropped`.
 /// [[read-after-await-wrong-key]].

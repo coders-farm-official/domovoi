@@ -99,7 +99,7 @@ public struct PrintingControls: Equatable, Sendable {
 }
 
 /// `printControls` (`PrintModels.kt:270-280`). A picker with one option
-/// cannot change anything, so it is not drawn — Kamron's
+/// cannot change anything, so it is not drawn — the owner's
 /// no-misleading-controls rule in its smallest form.
 public func printingControls(
     choices: PrintingChoices?,

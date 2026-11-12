@@ -34,7 +34,7 @@ import DomovoiKit
 ///   (`GET /api/models/ai`, `GET /api/config`'s `internet_access`) and could
 ///   show the answer read-only. Android shows neither, and rule 6 says take
 ///   the Android-faithful choice; it is DECISIONS §1's one open call to
-///   Kamron.
+///   the owner.
 /// * **The "no browser found to open the dashboard" toast**
 ///   (`SettingsScreen.kt:425`, `:457`). Android needs it because
 ///   `startActivity(ACTION_VIEW)` can genuinely resolve to nothing. An iPhone

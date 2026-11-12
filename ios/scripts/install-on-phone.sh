@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-on-phone.sh — Kamron's script. Builds Domovoi with HIS signing and
+# install-on-phone.sh — the owner's script. Builds Domovoi with HIS signing and
 # installs it on HIS iPhone.
 #
 # Run it in your own Mac account, in a Terminal window, with your iPhone
@@ -40,7 +40,7 @@ What it does NOT do
   It holds no password, no certificate, no profile and no App Store Connect
   key. It asks Xcode to sign with whatever your account already has
   (-allowProvisioningUpdates), and it builds the Debug configuration, which
-  carries the throwaway bundle ID org.codersfarm.domovoi.dev.kamron — never
+  carries the throwaway bundle ID org.codersfarm.domovoi.dev — never
   com.domovoi.app, so your personal team can never register the real id
   before the Coders Farm account does (plan 4.1).
 
@@ -72,7 +72,7 @@ done
 # plain sentence than that error.
 me="$(id -un)"
 if [ "$me" = "domovoibuild" ]; then
-	die "this is Kamron's script, and you are the build user (domovoibuild).
+	die "this is the owner's script, and you are the build user (domovoibuild).
 Device builds are signed with his Apple ID in his own account. Switch to his
 account at the Mac's screen and run it there. Agents build for the Simulator:
 ios/scripts/build-sim.sh."

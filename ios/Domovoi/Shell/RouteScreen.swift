@@ -425,7 +425,7 @@ struct SettingsPlaceholder: View {
             // throughout this app: it makes text smaller for the person who
             // asked for bigger.
             //
-            // **And every one of them is 44 pt tall**, which is Kamron's
+            // **And every one of them is 44 pt tall**, which is the owner's
             // answer 57 ("fix it once in the shell") read the way the
             // measurement left it. A bare `Button("some words")` is drawn
             // 20.3 pt tall here, and train I004 returned one

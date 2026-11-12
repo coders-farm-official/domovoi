@@ -204,7 +204,7 @@ public struct AttentionRow: Equatable, Sendable, Identifiable {
 /// server too old to have the guard, and ``healthGuardOutcome(household:previous:summary:)``
 /// ports that branch faithfully (`HealthGuard.swift`).
 ///
-/// Kamron's answers 7 and 24, 2026-11-03: `not checked yet` on both apps. So
+/// The owner's answers 7 and 24, 2026-11-03: `not checked yet` on both apps. So
 /// the green arm now asks ``checkedSomething`` rather than `loaded`, which is
 /// `loaded && tier != .none` — **a read answered, and what it answered was a
 /// verdict about containers.**
@@ -287,7 +287,7 @@ public struct ContainerGuardState: Equatable, Sendable {
     /// two cases that `loaded` ran together.
     ///
     /// Derived, and not a stored flag, so that a caller cannot be the thing
-    /// that gets it wrong. Kamron's answers 7 and 24.
+    /// that gets it wrong. The owner's answers 7 and 24.
     public var checkedSomething: Bool { loaded && tier != .none }
 }
 
@@ -594,7 +594,7 @@ public func healthChecks(
 /// attention`; one, **its own words** with a trailing `.` trimmed and the
 /// first character lower-cased.
 ///
-/// **One divergence from `HealthChecks.kt:234`, and it is Kamron's answer
+/// **One divergence from `HealthChecks.kt:234`, and it is the owner's answer
 /// 24**: the grey arm asks ``ContainerGuardState/checkedSomething`` rather
 /// than `loaded`, so a server with no container guard — and a phone the guard
 /// refuses — reads `not checked yet` instead of green. The whole of it is

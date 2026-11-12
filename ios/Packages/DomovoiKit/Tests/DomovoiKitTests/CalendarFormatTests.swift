@@ -191,7 +191,7 @@ final class CalendarFormatTests: XCTestCase {
     // MARK: - the view words
 
     /// The toggle's words are the Kotlin's `CalView.label`s, **week among
-    /// them** since Kamron's answer 14. The order is the toggle's order.
+    /// them** since the owner's answer 14. The order is the toggle's order.
     ///
     /// It used to assert that `week` was not a case at all (DECISIONS §3,
     /// which asked whether the week was wanted as a grouped list rather than

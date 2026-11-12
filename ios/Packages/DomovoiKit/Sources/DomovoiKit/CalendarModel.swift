@@ -29,7 +29,7 @@ import Synchronization
 /// route is `ORDER BY starts_at ASC LIMIT 500` **from the dawn of time**, so a
 /// house whose oldest 500 events are all in the past drew an empty agenda.
 ///
-/// **Kamron's answer 16 (2026-11-03): "yes: ask the server for a window per
+/// **The owner's answer 16 (2026-11-03): "yes: ask the server for a window per
 /// view (`?start=&end=`)."** So:
 ///
 /// * ``wantedWindow`` is the visible range as the route's two bounds

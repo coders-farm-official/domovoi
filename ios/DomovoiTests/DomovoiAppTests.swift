@@ -16,7 +16,7 @@ final class DomovoiAppTests: XCTestCase {
         XCTAssertFalse(CleartextPolicy.cleartextPermitted("203.0.113.5"))
     }
 
-    /// The Local Network prompt's wording is the I0 gate on Kamron's phone,
+    /// The Local Network prompt's wording is the I0 gate on the owner's phone,
     /// and App Transport Security is the platform half of
     /// ``CleartextPolicy``. Both are written in `ios/project.yml`, generated
     /// into the Info.plist, and easy to lose in a regeneration — so the build

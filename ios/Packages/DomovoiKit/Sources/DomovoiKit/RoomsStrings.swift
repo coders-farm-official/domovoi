@@ -246,7 +246,7 @@ public enum RoomsStrings {
     /// `start` button for a call between two *rooms*; the core's
     /// `/v1/admin/dropin/start` is admin *security* tier
     /// (`domovoi/main.py:2649-2658`) and the web hop forwards this phone's
-    /// household token, so from here it can only fail. Kamron settled it
+    /// household token, so from here it can only fail. The owner settled it
     /// (answers 5 and 53): "phones never create room-to-room drop-ins; a
     /// phone can only drop into a room", and Android's button comes out too.
     ///

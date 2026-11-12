@@ -75,7 +75,7 @@ public enum AudiobooksStrings {
     /// The meta line's chapter count (`AudiobooksScreen.kt:314`,
     /// `BookPage.kt:163`), **pluralised**.
     ///
-    /// D48, Kamron 2026-11-03: "yes: fix `1 chapters` to `1 chapter` on both
+    /// D48, the owner 2026-11-03: "yes: fix `1 chapters` to `1 chapter` on both
     /// apps." Android interpolates `"${chapters.size} chapters"` with no
     /// singular form, so a one-chapter book read `1 chapters` on both phones.
     /// The Android half is the android unit's.

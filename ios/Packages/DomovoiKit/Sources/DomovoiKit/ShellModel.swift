@@ -1161,7 +1161,7 @@ public final class ShellModel {
     /// The one ``PlayerModel`` in the app, or nil on a build that has no
     /// audio engine.
     ///
-    /// Kamron, 2026-11-03 (answer 2 / 49): one shared player, "as the next
+    /// The owner, 2026-11-03 (answer 2 / 49): one shared player, "as the next
     /// batch". Android holds it on its own container — `app.player`,
     /// `AppContainer.kt:95`, reached by `BookPlay.kt:19`, `StationPlay.kt:71`,
     /// `PlayerTab.kt` and the phone-media screens alike — so that Podcasts,
@@ -1303,7 +1303,7 @@ public final class ShellModel {
 
     /// Who the house's resume positions are saved under, on this phone.
     ///
-    /// Kamron, 2026-11-03 (answer 11): "yes, match Android: build the
+    /// The owner, 2026-11-03 (answer 11): "yes, match Android: build the
     /// 'listening as' picker". ``PlayerListenerStore`` is this phone's own
     /// record of it, exactly as `prefs.listenerPersonId` is on Android
     /// (`Prefs.kt:115`) — **one value for the install**, not one per house,

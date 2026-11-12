@@ -49,7 +49,7 @@ public struct ChatMoreReport: Equatable, Sendable {
     public static let titleChars = 60
 
     /// Where a report goes, the owner's one line (`ReplyReport.kt:334`,
-    /// Kamron's choice 2026-10-15): an email draft to the address the Play
+    /// the owner's choice 2026-10-15): an email draft to the address the Play
     /// listing gives as its contact.
     public static let destination = "info@codersfarm.org"
 

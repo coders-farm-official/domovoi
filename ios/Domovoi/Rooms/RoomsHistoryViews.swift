@@ -385,7 +385,7 @@ struct RoomsPendingPoll: ViewModifier {
 ///
 /// ### D55 is this condition, and the server has not landed it yet
 ///
-/// Kamron, answer 55: "no fulfiller means no button and no error: the server
+/// The owner, answer 55: "no fulfiller means no button and no error: the server
 /// computes `can_add` against the fulfiller allowlist, so both phones draw it
 /// honestly." Then `can_add` alone is the whole rule and the refusal
 /// sentence has nothing left to say — but the change is the **server's**, and

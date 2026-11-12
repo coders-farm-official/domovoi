@@ -55,7 +55,7 @@ public enum ManualPlace: Equatable, Hashable, Sendable {
 }
 
 /// What a swipe back — from the left edge, or VoiceOver's escape — does on
-/// the manual (Kamron's answer 74).
+/// the manual (the owner's answer 74).
 ///
 /// Android's `BackHandler(enabled = at != "start") { up() }`
 /// (`ManualScreen.kt:315`): the system back goes up one level from the map, a
@@ -407,7 +407,7 @@ public struct ManualLive: Equatable, Sendable {
 ///
 /// **Nothing on this screen writes.** Every route it touches is a GET, so
 /// there is no control that could 401 from a phone and nothing is left out
-/// for Kamron's no-misleading-controls rule. The two ornaments the first pass
+/// for the owner's no-misleading-controls rule. The two ornaments the first pass
 /// left out — the node-name scramble (`ManualScreen.kt:683`) and the nodes'
 /// float (`:570`) — are built as of his answers 30 and 31, both in the view
 /// and both stopped by Reduce Motion. What is still given up is one frame of
@@ -444,7 +444,7 @@ public final class ManualModel {
     /// times the screen actually moved — the map's own arrival counter.
     ///
     /// Android's node names retype on every level change, up as well as down
-    /// (Kamron's answer 76): `levelKey` is computed in **one** composition
+    /// (the owner's answer 76): `levelKey` is computed in **one** composition
     /// (`ManualScreen.kt:593`) and handed to every `MapNode` (`:633`), so
     /// `LaunchedEffect(key, text)` (`:686`) re-fires whenever `focus` changes.
     ///
@@ -770,7 +770,7 @@ public final class ManualModel {
     /// `up` (`ManualScreen.kt:308`), and the system back on Android.
     ///
     /// Three callers, one walk: `zoom out` in the crumbs, the swipe back
-    /// (``ManualBack/upALevel``, at every text size — Kamron's answer 74) and
+    /// (``ManualBack/upALevel``, at every text size — the owner's answer 74) and
     /// VoiceOver's escape. Back from Start here leaves the screen on both
     /// platforms (``manualBack(at:manualIsOnTop:)``).
     public func up() {

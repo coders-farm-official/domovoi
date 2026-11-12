@@ -13,7 +13,7 @@ import Foundation
 /// *removed* the core's job table.
 ///
 /// **Every shape here is now verified against the plugin's own code**
-/// (Kamron's answers 6 and 25, 2026-11-03):
+/// (the owner's answers 6 and 25, 2026-11-03):
 /// `domovoi-project/domovoi-plugin-imagegen`, which is read-only to this
 /// batch. The row the three reads share is `_job_row`
 /// (`domovoi_plugin_imagegen/web.py:114-127`) over the columns `_JOB_COLS`
@@ -377,7 +377,7 @@ public struct ImagesJob: Equatable, Sendable, Decodable, Identifiable {
     /// Whether this generation made more pictures than its card can show.
     ///
     /// Android shows three and says nothing, so a fourth picture was neither
-    /// drawn nor mentioned. Kamron's answer 27 is that the card says so in
+    /// drawn nor mentioned. The owner's answer 27 is that the card says so in
     /// words — ``ImagesStrings/moreImages(total:shown:)``, `4 images,
     /// showing 3`. There is still no "+1 more" **control**, because there is
     /// no route to open one with: the picture sheet takes a file name and the

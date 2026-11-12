@@ -28,7 +28,7 @@ import Observation
 ///
 /// **Still not built, and no control claims otherwise**: uploading a file from
 /// the phone, and saving a track to it. The rule they are left out under is
-/// Kamron's own: a control that cannot do what it says is not drawn
+/// the owner's own: a control that cannot do what it says is not drawn
 /// ([[no-misleading-controls]]).
 ///
 /// The player tab — this phone's own playback — **is** built: it needed an

@@ -176,7 +176,7 @@ final class ServerPickerTests: XCTestCase {
         }
     }
 
-    /// **The second test this file exists for**, and the one Kamron found by
+    /// **The second test this file exists for**, and the one the owner found by
     /// installing the app.
     ///
     /// The connection sheet sweeps as it opens, and on a first install that

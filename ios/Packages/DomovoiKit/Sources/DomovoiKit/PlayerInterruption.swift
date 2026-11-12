@@ -48,6 +48,6 @@ public enum PlayerInterruption {
     ///
     /// The engine has to be rebuilt and the session reactivated, so this is
     /// its own answer rather than a pause — a pause would leave a play button
-    /// that does nothing, which is the control Kamron's rule forbids.
+    /// that does nothing, which is the control the owner's rule forbids.
     public static let mediaServicesReset = Reaction.pause
 }

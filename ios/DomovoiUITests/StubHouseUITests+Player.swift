@@ -20,7 +20,7 @@ import XCTest
 /// 2. **The player is built on first use and never at launch**, and there is
 ///    **no screen of its own**. The second half of what was
 ///    `testPlayer_NothingInTheAppOffersPhonePlaybackYet`: a Player tab, or any
-///    harness screen, is still a thing that must not exist (Kamron's answer
+///    harness screen, is still a thing that must not exist (the owner's answer
 ///    46: no harness screen, the real buttons are what prove the player), and
 ///    laziness is measurable from the outside because an audio session
 ///    activated at launch stops whatever the person was already listening to.
@@ -91,7 +91,7 @@ extension StubHouseUITests {
     ///
     /// This case was `testPlayer_NothingInTheAppOffersPhonePlaybackYet` and it
     /// had two halves. The first — no Player tab, no `Now playing` tab — is
-    /// unchanged and is now the owner's decision rather than a gap: Kamron's
+    /// unchanged and is now the owner's decision rather than a gap: The owner's
     /// answer 46 was *"no harness screen; the real play buttons are added in
     /// this same work, and that is what proves the player"*, so a screen of
     /// its own appearing is a regression and this is where it is caught.
@@ -182,7 +182,7 @@ extension StubHouseUITests {
 
     /// There is no `-player-harness` screen, and no other hidden way in.
     ///
-    /// Kamron's answer 46 in as many words: *"No, lets wait until real
+    /// The owner's answer 46 in as many words: *"No, lets wait until real
     /// buttons are added, they should be added here in the overall work we're
     /// doing here to publish a usable app"*. A harness screen is the thing
     /// this unit was asked **not** to build, so its absence is asserted the
@@ -249,7 +249,7 @@ extension StubHouseUITests {
     ///   reason the player hands `AVPlayer` a plain absolute URL instead of
     ///   repeating `VideoStream.swift`'s query-string token. A fixture that
     ///   demanded a header would make that design look fine here and break on
-    ///   Kamron's house.
+    ///   the owner's house.
     /// * **A cover that 404s.** Track 9404 has none, which is the only way to
     ///   reach `PlayerArtwork.noteFailure` and the placeholder.
     @MainActor
@@ -343,9 +343,9 @@ extension StubHouseUITests {
     ///
     /// ### Why Chevy
     ///
-    /// `fixtures/people.py` seeds four — `Kamron`, `Chevy`, `Alex` and
+    /// `fixtures/people.py` seeds four — `Jordan`, `Chevy`, `Alex` and
     /// `alex ` — and Chevy is the only one of them that appears nowhere else
-    /// in this app's chrome. `Kamron` is the house's own name in other
+    /// in this app's chrome. `Jordan` is the house's own name in other
     /// fixtures and the two Alexes are a deliberate duplicate-name pair, so
     /// either would make a `label CONTAINS` query ambiguous.
     @MainActor

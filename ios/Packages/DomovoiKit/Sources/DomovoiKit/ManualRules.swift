@@ -845,7 +845,7 @@ public func manualNodeReading(title: String, subtitle: String) -> String {
 /// Android's `warnSoft`, `idleSoft` and `okSoft` are translucencies
 /// (`Color.kt:56-64`, `:84-92`). A translucency over an unknown parent has no
 /// contrast ratio, which is why the port drew one opaque grey for every word
-/// until Kamron's answer 75 ("match Android"). Every one of these words is
+/// until the owner's answer 75 ("match Android"). Every one of these words is
 /// drawn on the **page** — a paragraph, a label block, a piece's heading, a
 /// live slot's bordered box with no fill (`ManualLiveBox`) — so the surface is
 /// the page's own background, ``manualPageLight``/``manualPageDark``.

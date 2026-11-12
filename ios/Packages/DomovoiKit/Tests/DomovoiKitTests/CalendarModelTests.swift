@@ -210,7 +210,7 @@ final class CalendarModelTests: XCTestCase {
 
     // MARK: - the read
 
-    /// **One read, bounded to the agenda's window** — Kamron's answer 16.
+    /// **One read, bounded to the agenda's window** — the owner's answer 16.
     ///
     /// It used to be one read with **no parameters** at all
     /// (`CalendarScreen.kt:84`, DECISIONS §7), relying on the server's default

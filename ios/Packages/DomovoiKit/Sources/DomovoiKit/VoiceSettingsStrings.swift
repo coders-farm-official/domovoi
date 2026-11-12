@@ -12,7 +12,7 @@ import Foundation
 /// no model store — so the section's subject is different, not smaller: it
 /// reads what the **server** says about its voice and plays a sample the
 /// server renders. A sentence about downloading a voice to this phone would
-/// be false, and Kamron's rule is that a control (or a sentence) that cannot
+/// be false, and the owner's rule is that a control (or a sentence) that cannot
 /// do what it says is not drawn. Every changed sentence is listed, with its
 /// reason, in `design-notes/ios/overnight/voicesettings/IOS-ONLY-STRINGS.md`.
 ///

@@ -27,7 +27,7 @@ import SwiftUI
 /// ### There is no close control (D56)
 ///
 /// The header used to end in an `xmark` button labelled `close this room`.
-/// A room is its own pushed screen now (Kamron, answer 56), so the system's
+/// A room is its own pushed screen now (the owner, answer 56), so the system's
 /// back button and its swipe-back gesture close it; one of ours beside them
 /// would be a second way to do one thing, and a test that tapped `close this
 /// room` would be testing a control no iPhone app draws.
@@ -120,7 +120,7 @@ struct RoomsDetailView: View {
 
 /// One room as its own pushed screen (D56).
 ///
-/// Kamron, answer 56. What this adds over ``RoomsDetailView`` is the three
+/// The owner, answer 56. What this adds over ``RoomsDetailView`` is the three
 /// things being a screen means: a scroll view of its own (the roster's is
 /// left behind, and in the Settings mounting the section's is too), the
 /// navigation bar's title, and the lifetime — which room is open, and the

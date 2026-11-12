@@ -877,7 +877,7 @@ extension StubHouseUITests {
     /// The sheet draws only the controls that can change something.
     ///
     /// Printer 1 offers one colour mode, so a `colour` picker over it is a
-    /// control with one option — Kamron's no-misleading-controls rule in its
+    /// control with one option — the owner's no-misleading-controls rule in its
     /// smallest form. Printer 1 offers two `sides`, so that picker is there,
     /// and the pair of assertions together say the gate is `choices` and not a
     /// blanket "draw everything".

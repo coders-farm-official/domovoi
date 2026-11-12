@@ -12,7 +12,7 @@ import Synchronization
 ///
 /// ### §6.5, and which of its cards is now here
 ///
-/// **Listening as** is here, as of the 2026-11-03 batch: Kamron's answer 11,
+/// **Listening as** is here, as of the 2026-11-03 batch: The owner's answer 11,
 /// "yes, match Android: build the 'listening as' picker". Its store is
 /// ``PlayerListenerStore`` and its rows are ``listenerOptions(people:)``.
 ///

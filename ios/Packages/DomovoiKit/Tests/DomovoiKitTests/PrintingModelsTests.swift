@@ -129,7 +129,7 @@ final class PrintingModelsTests: XCTestCase {
         {"id":41,"printer_id":1,"printer_name":"office printer","title":"notes",
          "pages":3,"copies":2,"sheets":3,"options":{"copies":2,"sides":"one-sided"},
          "state":"printing","pages_done":1,"progress":"printing · 1 of 3","error":null,
-         "who":"Kamron's iPhone","source":"app","created_at":"2026-11-02T10:01:00+00:00",
+         "who":"Jordan's iPhone","source":"app","created_at":"2026-11-02T10:01:00+00:00",
          "finished_at":null,"can_cancel":true}
         """, as: PrintingJob.self)
         XCTAssertEqual(job.progressLine, "printing · 1 of 3")

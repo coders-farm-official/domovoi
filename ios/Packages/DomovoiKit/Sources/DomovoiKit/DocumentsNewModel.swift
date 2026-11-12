@@ -41,7 +41,7 @@ import Observation
 /// Android-faithful choice rather than inventing a client-side name rule the
 /// dashboard does not have. It is written down here as the behaviour it is,
 /// and in the unit's DECISIONS.md under "What `+ New > Document` does with a
-/// typed extension", for Kamron to settle.
+/// typed extension", for the owner to settle.
 ///
 /// A person who wants a **markdown** file can type `notes.md` into either
 /// Text file (whose name the server takes verbatim) or Document; the hint

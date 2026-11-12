@@ -22,7 +22,7 @@ import Foundation
 /// while the person has not allowed Photos, and the screen draws the gate;
 /// this source always answers. A UI case about the gate would therefore be a
 /// case about this type rather than about the app, so there is none — the
-/// gate is covered by the hand pass on Kamron's phone, which DECISIONS says.
+/// gate is covered by the hand pass on the owner's phone, which DECISIONS says.
 public struct PhoneMemorySource: PhoneMediaReading {
 
     /// The libraries, **in the order a screen's picker will show them**.

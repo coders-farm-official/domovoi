@@ -20,9 +20,9 @@ final class PersonDetailModelTests: XCTestCase {
     private let server = "http://10.0.0.42:6369"
     private let now: Int64 = 1_762_000_000_000
 
-    private let kamron = Person(
+    private let jordan = Person(
         id: 1,
-        name: "Kamron",
+        name: "Jordan",
         createdAt: "2026-01-02T03:04:05Z",
         lastSeenAt: "2026-11-02T09:59:00Z",
         notes: "prefers the kitchen satellite",
@@ -232,7 +232,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testShowingSomebodyReadsTheirFiveListsWithTheLimitsAndroidAsksFor() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         // Filtered to this person's own reads, so an unrelated request the
         // client makes for its own reasons cannot make this a false failure.
@@ -263,12 +263,12 @@ final class PersonDetailModelTests: XCTestCase {
     /// roster's push may have changed their `last_seen_at`.
     func testReShowingTheSamePersonTakesTheNewerRowAndAsksForNothing() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
         let asked = StubURLProtocol.recorded.count
 
         let newer = Person(
-            id: 1, name: "Kamron", createdAt: kamron.createdAt,
-            lastSeenAt: "2026-11-02T10:00:00Z", notes: kamron.notes,
+            id: 1, name: "Jordan", createdAt: jordan.createdAt,
+            lastSeenAt: "2026-11-02T10:00:00Z", notes: jordan.notes,
             voiceProfileCount: 4, presenceTier: "high"
         )
         model.show(newer)
@@ -305,7 +305,7 @@ final class PersonDetailModelTests: XCTestCase {
         let house = House()
         house.failing.set(["memories": 500])
         let (model, _) = rig(house)
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         XCTAssertNotNil(model.errors.memories)
         XCTAssertTrue(model.memoryRows.isEmpty)
@@ -321,7 +321,7 @@ final class PersonDetailModelTests: XCTestCase {
         let house = House()
         house.failing.set(["sessions": 503, "conversations": 503])
         let (model, _) = rig(house)
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         XCTAssertNil(model.sessionsEmptyNote)
         XCTAssertNil(model.conversationsEmptyNote)
@@ -335,7 +335,7 @@ final class PersonDetailModelTests: XCTestCase {
         let house = House()
         house.failing.set(["sessions": 500, "memories": 500])
         let (model, _) = rig(house)
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         let said = try? XCTUnwrap(model.toast)
         XCTAssertTrue(said?.hasPrefix("couldn't load sessions, memories: ") ?? false, said ?? "nil")
@@ -348,7 +348,7 @@ final class PersonDetailModelTests: XCTestCase {
         let house = House()
         house.preferencesBody.set(#"{"preferences":{"a":1}}"#)
         let (model, _) = rig(house)
-        await showing(model, kamron)
+        await showing(model, jordan)
         // A wrapper IS an object, so it decodes — into one key called
         // `preferences`, which is exactly why the shape was checked against
         // the route's own code and not guessed.
@@ -365,7 +365,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testTheThreeMemoryStatusesAreThreeLists() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         XCTAssertEqual(model.activeMemories.map(\.body), ["allergic to peanuts"])
         XCTAssertEqual(model.pendingMemories.map(\.body), ["bakes sourdough on fridays"])
@@ -398,7 +398,7 @@ final class PersonDetailModelTests: XCTestCase {
             }
             return request.url?.path == "/api/people/1/preferences" ? .json("{}") : .json("[]")
         }
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         XCTAssertTrue(model.activeMemories.isEmpty)
         XCTAssertEqual(model.pendingMemories.count, 1)
@@ -407,7 +407,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testFavoritesKeepTheirKindsInFirstAppearanceOrder() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         XCTAssertEqual(model.favoriteGroups.map(\.kind), ["team", "coffee"])
         XCTAssertEqual(model.favoriteGroups[0].favorites.map(\.value), ["Mariners", "Sounders"])
@@ -422,7 +422,7 @@ final class PersonDetailModelTests: XCTestCase {
     /// empty.
     func testASessionsTurnsAreItsOwnAndASessionWithNoneSaysSo() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         let kitchen = model.sessionRows[0]
         let study = model.sessionRows[1]
@@ -438,7 +438,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testTheSearchCountsWhatItFoundOutOfTheWholeLot() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         XCTAssertEqual(model.conversationCount, "4 of 4")
 
@@ -461,7 +461,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testALongAnswerIsOnlyWholeWhenItIsExpanded() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         let long = try? XCTUnwrap(model.turnRows.first)
         XCTAssertEqual(long?.handlerLabel, "qa")
@@ -474,7 +474,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testAddingAMemoryPostsItClearsTheFieldAndRereads() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         model.typedMemory("  allergic to shellfish  ")
         XCTAssertTrue(model.canSaveMemory)
@@ -499,7 +499,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testABlankMemoryIsNeverSent() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         model.typedMemory("   ")
         XCTAssertFalse(model.canSaveMemory)
@@ -510,7 +510,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testApprovingAndRejectingArePatchesOfOneField() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
         let pending = model.pendingMemories[0]
 
         model.setStatus(pending, to: .active)
@@ -529,7 +529,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testForgettingAMemoryAndAFavoriteAreDeletes() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         model.deleteMemory(model.activeMemories[0])
         await settleUntil({ model.toast == "deleted" }, "the memory delete")
@@ -548,7 +548,7 @@ final class PersonDetailModelTests: XCTestCase {
     /// otherwise be two kinds.
     func testAFavoriteNeedsBothFieldsAndItsKindIsLowerCased() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
 
         model.typedFavoriteKind("Team")
         XCTAssertFalse(model.canSaveFavorite)
@@ -572,7 +572,7 @@ final class PersonDetailModelTests: XCTestCase {
 
     func testAFailedWriteSaysSoAndKeepsWhatWasTyped() async {
         let (model, _) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
         StubURLProtocol.dispatch { request in
             if request.url?.path == "/api/health" {
                 let parts = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
@@ -612,7 +612,7 @@ final class PersonDetailModelTests: XCTestCase {
             otherwise: { house.answer($0) }
         )
 
-        model.show(kamron)
+        model.show(jordan)
         await settleUntil({ park.arrived.current }, "person 1's sessions read")
 
         // Still inside person 1's round trip: go back and open somebody else.
@@ -639,7 +639,7 @@ final class PersonDetailModelTests: XCTestCase {
     /// re-read their lists.
     func testAWriteThatLandsAfterASwitchSaysNothingAboutTheNewPerson() async {
         let (model, house) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
         let park = parkRequest(
             to: "/api/people/1/memories",
             answering: { .json("", status: 204) },
@@ -671,7 +671,7 @@ final class PersonDetailModelTests: XCTestCase {
     /// killed all six writes this screen allows until the detail was closed.
     func testARefreshDuringAWriteDoesNotStrandTheWriteFlag() async {
         let (model, house) = rig()
-        await showing(model, kamron)
+        await showing(model, jordan)
         let park = parkRequest(
             to: "/api/people/1/memories",
             answering: { .json("", status: 204) },
@@ -706,7 +706,7 @@ final class PersonDetailModelTests: XCTestCase {
             otherwise: { house.answer($0) }
         )
 
-        model.show(kamron)
+        model.show(jordan)
         await settleUntil({ park.arrived.current }, "person 1's sessions read")
         model.close()
         park.release.set(true)

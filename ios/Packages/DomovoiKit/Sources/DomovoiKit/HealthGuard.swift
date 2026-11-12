@@ -157,7 +157,7 @@ public struct HealthGuardSnapshot: Equatable, Sendable {
 ///
 ///    What changed on 2026-11-03 is what the **check** makes of it. `loaded`
 ///    with a hidden banner used to read `every container Domovoi expects
-///    looks right` — green, for something nobody checked — and Kamron's
+///    looks right` — green, for something nobody checked — and the owner's
 ///    answers 7 and 24 are `not checked yet` on both apps. So
 ///    ``guardCheck(_:)`` asks ``ContainerGuardState/checkedSomething``
 ///    (`loaded && tier != .none`) and this state now reads grey. The engine

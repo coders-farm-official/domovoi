@@ -5252,7 +5252,7 @@ final class StubHouseUITests: XCTestCase {
             "a thread that exists on the server is offered no share"
         )
         // What a message sent from another device is attributed to. Thread
-        // 11's fifth message carries `device_name: "Kamron's iPhone"`, and
+        // 11's fifth message carries `device_name: "Jordan's iPhone"`, and
         // this phone's own id is not that one — so the name is the device's
         // and not ``ChatStrings/thisPhone``, which is the pair of branches
         // ``ChatMessage/live(ordinal:thisDeviceID:)`` decides between.
@@ -5817,7 +5817,7 @@ enum StubChat {
 
     /// Thread 11's fifth message came from another phone, which the house has
     /// a name for.
-    static let otherDevice = "Kamron's iPhone"
+    static let otherDevice = "Jordan's iPhone"
 
     /// The two archived threads.
     static let kitten = "Names for the kitten"

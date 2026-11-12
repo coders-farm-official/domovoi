@@ -42,7 +42,7 @@ import SwiftUI
 ///   camera: during the zoom glide they are redrawn every frame, as
 ///   Android's are.)
 ///
-/// ### One screen holds every level (Kamron's answer 73)
+/// ### One screen holds every level (the owner's answer 73)
 ///
 /// Android draws the manual in one composition: the top bar, then a `when`
 /// over `at` (`ManualScreen.kt:344-347`) whose map arm is **one** `ManualMap`

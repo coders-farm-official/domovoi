@@ -75,7 +75,7 @@ final class MusicLibraryTests: XCTestCase {
     /// The third case is the one that matters: nil is not zero. Telling
     /// someone with five thousand tracks that their library is empty, because
     /// the stats read has not answered yet, is the same mistake as telling a
-    /// first install its server is down — which is the bug Kamron found on
+    /// first install its server is down — which is the bug the owner found on
     /// his own phone this week ([[reasoning-that-hides-a-bug]]).
     func testTheEmptyNoteSaysWhichKindOfEmptyItIs() {
         let narrowed = MusicLibraryQuery(search: "nothing matches this")
@@ -259,7 +259,7 @@ final class MusicLibraryTests: XCTestCase {
     /// **A filename is taken off either separator, because the server may be
     /// Windows.**
     ///
-    /// Kamron's house is ([[house-runs-in-wsl]]), so a stored path really does
+    /// The owner's house is ([[house-runs-in-wsl]]), so a stored path really does
     /// arrive as `C:\music\…`; splitting on `/` alone would put the whole
     /// path where a song title goes.
     func testAFilenameComesOffEitherSeparator() {

@@ -115,9 +115,9 @@ import WebKit
 /// `NSPhotoLibraryAddUsageDescription` (`:178`) have all been in the plist
 /// since before this batch. So the page's picture button works on the phone,
 /// this port drops no Android capability, and the shared change this unit
-/// asked Kamron for was a change already made. **It has no automated case**:
+/// asked the owner for was a change already made. **It has no automated case**:
 /// a UI case cannot drive the system photo picker, and the first proof will
-/// be Kamron's own.
+/// be the owner's own.
 ///
 /// ### What is not, and why there is no control for it
 ///

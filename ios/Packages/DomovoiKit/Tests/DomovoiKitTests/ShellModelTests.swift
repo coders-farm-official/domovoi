@@ -627,7 +627,7 @@ final class ShellModelTests: XCTestCase {
     }
 
     /// **Picking a server in the connection dialog has to move the app.** It
-    /// did not, and Kamron found it on the first install, on a real phone, on
+    /// did not, and the owner found it on the first install, on a real phone, on
     /// his own network — the one path no stub house can test.
     ///
     /// What he saw: the sweep found the house, he tapped it, the row said

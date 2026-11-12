@@ -25,7 +25,7 @@ import Foundation
 /// example. `SettingsModels.kt:30-36` states the same rule as a rule.
 ///
 /// So this type is the whole of those two sections' logic: one address.
-/// `DECISIONS.md` §1 puts the one open question to Kamron — two *reads* next
+/// `DECISIONS.md` §1 puts the one open question to the owner — two *reads* next
 /// door are genuinely open (`GET /api/models/ai`, `GET /api/config`) and
 /// could show the live answer read-only. Android shows neither, so neither
 /// does this.

@@ -23,7 +23,7 @@ import Observation
 ///
 /// This phone holds the **household device token** and never an admin session
 /// (`require_admin_*` is Bearer or dashboard-cookie only), so each of these
-/// would 401, 403 or 501 **every time** and is left out under Kamron's
+/// would 401, 403 or 501 **every time** and is left out under the owner's
 /// no-misleading-controls rule. Each line names the gate that decides it.
 ///
 /// * **`restart`** — `web/backend/api/satellites.py:1576-1581`, admin.
@@ -39,7 +39,7 @@ import Observation
 /// * **Starting a room-to-room drop-in** — the core's
 ///   `/v1/admin/dropin/start` is admin *security* (`domovoi/main.py:2649-2658`)
 ///   and the web hop adds no gate of its own, so the peer picker and `start`
-///   could only ever fail. Kamron settled it rather than leaving it to the
+///   could only ever fail. The owner settled it rather than leaving it to the
 ///   tier (answers 5 and 53): "phones never create room-to-room drop-ins; a
 ///   phone can only drop into a room", and Android's button comes out too.
 ///   **`hang up` is kept**: `/v1/admin/dropin/end` is device tier

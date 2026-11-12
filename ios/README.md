@@ -86,10 +86,10 @@ builds and tests.
    (`performAccessibilityAudit`), the twin of Android's TalkBack scan.
 5. A Simulator test that needs a throwaway server reaches it through
    `remote.sh --forward PORT`, which allows ports 6600–6699 only and refuses
-   6369, 6370, 6432 and 11434 outright. Kamron's live Domovoi is never
+   6369, 6370, 6432 and 11434 outright. The owner's live Domovoi is never
    reachable from the Mac's build user.
 6. Everything on the Mac runs under `caffeinate`, `nice` and `taskpolicy -b`,
-   and the Simulator is shut down at the end, so Kamron's own work on that Mac
+   and the Simulator is shut down at the end, so the owner's own work on that Mac
    stays smooth.
 
 **One thing known in advance** (plan 5.1, checked 2026-10-21): builds and
@@ -101,7 +101,7 @@ is the fallback if Simulator runs over SSH prove flaky.
 
 ## What runs where
 
-| | Build user on the Mac, over SSH | Kamron, in his own Mac account |
+| | Build user on the Mac, over SSH | the owner, in his own Mac account |
 |---|---|---|
 | `swift test` for the packages | yes | — |
 | Simulator builds and tests, screenshots | yes | — |
@@ -109,7 +109,7 @@ is the fallback if Simulator runs over SSH prove flaky.
 | A build on a real iPhone | **never** | `scripts/install-on-phone.sh` |
 | Archives, App Store Connect, TestFlight, releases | **never** | yes |
 
-Signing is Kamron's, and so is every decision that reaches Apple. No agent
+Signing is the owner's, and so is every decision that reaches Apple. No agent
 holds a certificate, a profile, an Apple ID or an App Store Connect key, and
 nothing here signs over SSH — it fails on a locked keychain anyway
 (`errSecInternalComponent`), which is the second reason to keep it his.
@@ -121,11 +121,11 @@ reachable only by key, with "allow full disk access for remote users" off.
 
 - **iOS 18 and up** (owner answer Q1): iPhone XS / XR and later. The iOS 26-only
   features — AlarmKit, SpeechAnalyzer — are extras that hide themselves below 26.
-- **iPhone and iPad** (Q4). Kamron has no iPad, so iPad layouts are tested in
+- **iPhone and iPad** (Q4). The owner has no iPad, so iPad layouts are tested in
   the Simulator only, and the review notes will say so. Not on Apple-silicon
   Macs until someone has used it there.
 - **`com.domovoi.app`** (Q2), the same as Android — but only in the Release
-  configuration. Debug builds carry `org.codersfarm.domovoi.dev.kamron`, so a
+  configuration. Debug builds carry `org.codersfarm.domovoi.dev`, so a
   personal-team build can never register the real ID before the Coders Farm
   organisation account does.
 - **Version `1.0.0`**, three integers, because Apple takes nothing else;
@@ -144,13 +144,13 @@ reachable only by key, with "allow full disk access for remote users" off.
 - **Background audio only** (Q9, and App Review 2.5.4). Room mode is a
   screen-on kiosk in v1: iOS cannot restart a microphone from the background.
 - **No increased-memory-limit entitlement yet.** Spike A0 decides it on
-  Kamron's iPhone 14, with numbers.
+  the owner's iPhone 14, with numbers.
 
 ## Where to look next
 
 - `design-notes/IOS-APP-PLAN-2026-10-20.md` — the plan, and the owner answers
   at the end, which override its recommendations.
-- `design-notes/IOS-SESSION-START.md` — Kamron's Mac setup (part A) and how
+- `design-notes/IOS-SESSION-START.md` — the owner's Mac setup (part A) and how
   this track is run (part B).
 - `design-notes/TESTING-PLAYBOOK.md` — the test tiers every batch here works to.
 - `licences/README.md` — before adding any package.

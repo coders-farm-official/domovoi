@@ -118,7 +118,7 @@ struct NewsTopicsCardView: View {
     /// Android keeps the button in place and disables it (`:268`). Drawn
     /// disabled it is a dimmed label on a dimmed fill, which is what train
     /// S002's `Contrast failed: news-add-topic` is — and a control that
-    /// cannot do what it says is not drawn here (Kamron's rule). Appearing
+    /// cannot do what it says is not drawn here (the owner's rule). Appearing
     /// with the first character is also what gives the field its full width
     /// back: the same run reported the placeholder clipped at 225 points
     /// beside the button. **329 points was not enough either** — train S005

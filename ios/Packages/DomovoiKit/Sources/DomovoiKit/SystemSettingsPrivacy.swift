@@ -48,7 +48,7 @@ public enum SystemSettingsPrivacy {
     /// So the sentence separates the two rather than claiming the Android
     /// guarantee. Shipping Android's wording unchanged would be a false
     /// privacy claim — worse than a misleading control, and this one is also
-    /// read on a store listing. Kamron may still want it put differently;
+    /// read on a store listing. The owner may still want it put differently;
     /// that question is open in `DECISIONS.md`.
     public static let storage =
         "What the app keeps stays in its own storage on this phone and goes when the app is deleted. "

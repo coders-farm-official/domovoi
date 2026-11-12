@@ -33,7 +33,7 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     /// the dialog is part 3's — but the **token-trouble card** has a
     /// `use this phone's media` button of its own (`TokenTroubleScreen.kt:155`,
     /// `app.prefs.setPreferLocal(true)`), and that card is drawn in this
-    /// batch. A button that cannot do what it says is the one thing Kamron
+    /// batch. A button that cannot do what it says is the one thing the owner
     /// has asked for twice not to ship, so the write comes with the button.
     func setPreferLocal(_ value: Bool)
 
@@ -127,7 +127,7 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     /// fail, finishes `.swept` with nothing found, and the picker said
     /// *"nothing answered on port 6369 — is the web backend running?"* — an
     /// accusation against the person's own server, for Apple's prompt.
-    /// Kamron hit it within a minute of the first install.
+    /// The owner hit it within a minute of the first install.
     ///
     /// Once something has answered, the permission is settled and an empty
     /// sweep really is about the house. Until then it is not, and the line

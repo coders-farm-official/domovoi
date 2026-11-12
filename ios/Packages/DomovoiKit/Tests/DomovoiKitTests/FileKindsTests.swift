@@ -239,7 +239,7 @@ final class FileKindsTests: XCTestCase {
         XCTAssertEqual("save to device", FileKinds.verb(.save))
     }
 
-    /// **A two-gigabyte film is a save** (D47, Kamron's answer 47).
+    /// **A two-gigabyte film is a save** (D47, the owner's answer 47).
     ///
     /// Two cases used to live here — `testAFileOverTheCapOffersNothingAndCarriesItsSize`
     /// and `testTheCapIsInclusive` — and both asserted the opposite:

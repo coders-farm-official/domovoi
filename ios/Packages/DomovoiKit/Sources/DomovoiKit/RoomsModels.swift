@@ -27,7 +27,7 @@ import Foundation
 
 /// Which room a pushed room screen is for.
 ///
-/// Kamron, answer 56: "take the recommendation: a room opens as its own
+/// The owner, answer 56: "take the recommendation: a room opens as its own
 /// pushed screen with swipe back." This is what names the room the pushed
 /// screen is for: a **wrapper around the room id** rather than the id itself,
 /// so that the thing a room screen is handed cannot be mistaken for any other
@@ -584,7 +584,7 @@ public struct RoomsTimer: Equatable, Sendable, Decodable, Identifiable {
 /// computed without consulting a fulfiller (`satellites.py:1035-1045`). So the
 /// button is drawn (it does not fail *every* time, which is where
 /// no-misleading-controls bites) and the server's own refusal text is what a
-/// person is shown. DECISIONS asks Kamron whether the route should compute it
+/// person is shown. DECISIONS asks the owner whether the route should compute it
 /// against the allowlist.
 public struct RoomsPlayed: Equatable, Sendable, Decodable, Identifiable {
 

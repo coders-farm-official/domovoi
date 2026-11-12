@@ -3,7 +3,7 @@ import XCTest
 @testable import DomovoiKit
 
 /// **A container read that answered and checked nothing is `not checked
-/// yet`** — Kamron's answers 7 and 24, 2026-11-03, on both apps.
+/// yet`** — the owner's answers 7 and 24, 2026-11-03, on both apps.
 ///
 /// Android's `IncidentEngine.kt:238` and `ui/screens/home/HealthChecks.kt:234`
 /// collapse "the read answered and found nothing" into the same green tick as

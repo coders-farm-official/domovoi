@@ -81,7 +81,7 @@ enum PhoneDeviceSources {
 /// upload button, progress ring or toast in this item is testable — and the
 /// night ends with a negative control that nothing would catch. DECISIONS
 /// records that the **real** pickers are therefore covered by a hand pass on
-/// Kamron's phone and not by this item's cases.
+/// the owner's phone and not by this item's cases.
 enum PhoneMediaFake {
 
     /// The shelf every fake row sits on. A folder id, so the views treat it

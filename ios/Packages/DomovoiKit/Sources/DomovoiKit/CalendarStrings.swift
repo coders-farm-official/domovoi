@@ -13,7 +13,7 @@ import Foundation
 ///
 /// * **No week GRID.** Android's week is a seven-column time grid of 9–11sp
 ///   text in fixed-height blocks, which cannot be built under the standing
-///   Dynamic Type rules on a 390pt phone (map §3.2, DECISIONS §3). Kamron's
+///   Dynamic Type rules on a 390pt phone (map §3.2, DECISIONS §3). The owner's
 ///   answer 14 chose the other shape instead — the agenda's rows under seven
 ///   day headers — so there is a `week` toggle word and
 ///   ``nothingOnThisDay`` under an empty day, and no grid words at all.

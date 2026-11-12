@@ -144,7 +144,7 @@ struct ManualPiecePage: View {
         //  - A tap 25 points above the word, in the white between the search
         //    field and the page, navigated to the topic. A 44-point target is
         //    there so the control is big enough to hit, not so it reaches up
-        //    into whitespace that draws nothing (Kamron's no-misleading-
+        //    into whitespace that draws nothing (the owner's no-misleading-
         //    controls rule). Every other 44-point text target in this app
         //    centres its text — ``ManualCrumb``, `HomeRoomsView:285`,
         //    `HomeTodayView:126`, `NewsSavedFeedView:139` — and
@@ -502,7 +502,7 @@ struct ManualPhraseChip: View {
 /// One word in a tone, on an opaque surface — Android's `Pill`
 /// (`ui/components/Kit.kt:83`).
 ///
-/// **The wash is the tone's, as Android's is** (Kamron's answer 75):
+/// **The wash is the tone's, as Android's is** (the owner's answer 75):
 /// `toneSoft(tone)` (`Kit.kt:53`) — amber behind `warn` (the `admin` badge on
 /// a label block, `ManualScreen.kt:802`), green behind `ok`, and behind
 /// `idle` the same grey the inline `preview`/`plugin` words sit on
@@ -571,7 +571,7 @@ enum ManualTextScale: Equatable {
 extension Color {
 
     /// The wash under an inline `code` or pill **run** — Android's
-    /// `background = c.sunken` (`ManualScreen.kt:872`), and **Kamron's answer
+    /// `background = c.sunken` (`ManualScreen.kt:872`), and **the owner's answer
     /// 34**, "tinted background on code spans".
     ///
     /// ### Opaque, and that is the whole point
@@ -617,7 +617,7 @@ extension Color {
     ///
     /// Nothing is *only* said by either wash — the monospaced face already
     /// tells code from prose and a pill's word is its own label — but a tint
-    /// that cannot be seen is a tint that was not built, which is Kamron's
+    /// that cannot be seen is a tint that was not built, which is the owner's
     /// no-misleading-controls rule pointed at decoration.
     ///
     /// ### Why it is not `secondarySystemBackground`
@@ -646,7 +646,7 @@ extension Color {
         opaque(traits.userInterfaceStyle == .dark ? manualNodeWashDark : manualNodeWashLight)
     })
 
-    /// The wash behind a manual word in this tone, light or dark — Kamron's
+    /// The wash behind a manual word in this tone, light or dark — the owner's
     /// answer 75, Android's `warnSoft`/`okSoft`/`idleSoft` composited onto the
     /// page (``ManualTone/wash(dark:)`` has the table and the arithmetic).
     ///
@@ -749,7 +749,7 @@ struct ManualRichText: View {
             // background (`:881`), so the wash has a space of air either side
             // of the word.
             //
-            // **Android's washes, one per name** (Kamron's answer 75):
+            // **Android's washes, one per name** (the owner's answer 75):
             // `admin` on `warnSoft`, `preview` and `plugin` on `idleSoft`
             // (`ManualScreen.kt:878-880`), each composited opaque onto the
             // page so it has a ratio (``Color/manualWash(_:)``). The ink is

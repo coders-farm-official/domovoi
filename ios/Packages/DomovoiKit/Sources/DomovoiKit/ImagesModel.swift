@@ -21,7 +21,7 @@ import Observation
 /// (`ImagesScreen.kt:70-74`). **No control for any of that is drawn**, here
 /// or in the view: Android's client has no route for them, inventing one
 /// would be inventing server behaviour (NIGHT-RULES §6), and a button that
-/// cannot do what it says is not drawn (Kamron's rule). The three engine
+/// cannot do what it says is not drawn (the owner's rule). The three engine
 /// states keep Android's own sentences, which point at the dashboard.
 @MainActor
 @Observable
@@ -254,7 +254,7 @@ public final class ImagesModel {
     // all three routes are `dependencies=ADMIN_ONLY` on the plugin and this
     // app sends only `X-Device-Token`, so every one answered 401 from every
     // phone. ``ImagesPaths``'s header carries the evidence and ``ImagesView``
-    // the decision; Kamron's answer 41 is "admin-only things stay off both
+    // the decision; the owner's answer 41 is "admin-only things stay off both
     // phones".
     //
     // They are kept rather than deleted because the fix is one line in the

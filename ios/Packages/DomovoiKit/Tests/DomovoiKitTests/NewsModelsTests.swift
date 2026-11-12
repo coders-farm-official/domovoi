@@ -27,7 +27,7 @@ final class NewsModelsTests: XCTestCase {
     func testAPersonDecodesEveryFieldTheServerSends() throws {
         let people = try decode(
             """
-            [{"id":1,"name":"Kamron","created_at":"2026-01-02T03:04:05Z",
+            [{"id":1,"name":"Jordan","created_at":"2026-01-02T03:04:05Z",
               "last_seen_at":"2026-11-01T11:00:00Z","notes":null,
               "voice_profile_count":3,"presence_tier":"high","namesakes":0}]
             """,
@@ -36,7 +36,7 @@ final class NewsModelsTests: XCTestCase {
         XCTAssertEqual(1, people.count, "a bare array, with no envelope around it")
         let person = people[0]
         XCTAssertEqual(1, person.id)
-        XCTAssertEqual("Kamron", person.name)
+        XCTAssertEqual("Jordan", person.name)
         XCTAssertEqual("2026-11-01T11:00:00Z", person.lastSeenAt)
         XCTAssertEqual(3, person.voiceProfileCount)
         XCTAssertEqual("high", person.presenceTier)
@@ -56,9 +56,9 @@ final class NewsModelsTests: XCTestCase {
     }
 
     func testAPersonsHeardLineAndInitial() {
-        let kamron = NewsPerson(id: 1, name: "  kamron ", lastSeenAt: "2026-11-01T09:00:00Z")
-        XCTAssertEqual("K", kamron.initial, "trimmed and upper-cased, Kit.kt:144")
-        XCTAssertEqual("heard 3h ago", kamron.heardLine(nowMs: now))
+        let jordan = NewsPerson(id: 1, name: "  jordan ", lastSeenAt: "2026-11-01T09:00:00Z")
+        XCTAssertEqual("J", jordan.initial, "trimmed and upper-cased, Kit.kt:144")
+        XCTAssertEqual("heard 3h ago", jordan.heardLine(nowMs: now))
 
         let never = NewsPerson(id: 2, name: "Chevy")
         XCTAssertEqual("heard —", never.heardLine(nowMs: now), "relTime(null) is an em dash")

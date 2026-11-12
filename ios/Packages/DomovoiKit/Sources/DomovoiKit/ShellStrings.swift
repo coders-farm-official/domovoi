@@ -82,7 +82,7 @@ public enum ShellStrings {
     /// (`AppShell.kt:892`).
     ///
     /// **This is a choice, not a transcription**, and the report flags it as
-    /// one for Kamron: `iphone` rather than `ios`, because every other string
+    /// one for the owner: `iphone` rather than `ios`, because every other string
     /// in both apps says "this phone" and "iphone" is the word a person uses.
     /// Nothing else in the app says which platform it is.
     public static let platformCrumb = "/ iphone"

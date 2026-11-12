@@ -2,7 +2,7 @@ import DomovoiKit
 import SwiftUI
 import UIKit
 
-/// The swipe back goes up one level — **at every text size** (Kamron's answer
+/// The swipe back goes up one level — **at every text size** (the owner's answer
 /// 74), and Android's `BackHandler(enabled = at != "start") { up() }`
 /// (`ManualScreen.kt:315`).
 ///

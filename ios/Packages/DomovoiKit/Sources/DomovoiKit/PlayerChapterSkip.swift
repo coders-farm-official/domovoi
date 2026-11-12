@@ -16,7 +16,7 @@ import Foundation
 /// is what **every** next button reads — the mini player, a sheet, a player
 /// tab and the lock screen's `MPRemoteCommandCenter.nextTrackCommand` — so one
 /// that would do nothing is greyed or disabled rather than drawn live and
-/// silent (Kamron's no-misleading-controls rule).
+/// silent (the owner's no-misleading-controls rule).
 public enum PlayerChapterSkip {
     /// Previous restarts the chapter past this far in (the web's 3 s).
     public static let restartAfterSec: Double = 3.0

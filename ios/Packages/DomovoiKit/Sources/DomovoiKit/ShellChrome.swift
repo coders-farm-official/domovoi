@@ -152,7 +152,7 @@ public struct ShellToast: Equatable, Sendable, Identifiable {
 /// `TokenTroubleScreen.kt:149` draws that button only for
 /// ``TokenTrouble/notRecognised(waitMs:)`` **with no wait left**, and its
 /// comment says why: "Only where it can do what it says — during a wait
-/// nothing is sent, so 'try again' would not." Which is Kamron's standing
+/// nothing is sent, so 'try again' would not." Which is the owner's standing
 /// rule, written down in Kotlin before it was written down as a rule.
 ///
 /// It is a function here rather than an `if` in a view because that is

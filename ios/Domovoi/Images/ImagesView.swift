@@ -44,7 +44,7 @@ import SwiftUI
 /// every shipped version from 1.0.1 on carries it.
 ///
 /// So: a control that cannot do what it says is not drawn (NIGHT-RULES §3),
-/// and Kamron settled it twice in the same answer set — answer 5 (hide
+/// and the owner settled it twice in the same answer set — answer 5 (hide
 /// Android's room-to-room `start`, which 401s from a phone the same way) and
 /// answer 41, "admin-only things stay off both phones". The four reads
 /// (`/models`, `/jobs`, `/history`, `/file/{name}`) are open and are the
@@ -77,7 +77,7 @@ import SwiftUI
 /// **A fourth picture in a generation.** Android draws three
 /// (`ImagesScreen.kt:398`) and so does this. A `+1 more` affordance would
 /// open nothing, which is the control this app is built not to draw; the card
-/// says `4 images, showing 3` instead (Kamron's answer 27). DECISIONS.
+/// says `4 images, showing 3` instead (the owner's answer 27). DECISIONS.
 ///
 /// **Re-running a past generation.** No Android control, no route.
 ///
@@ -154,7 +154,7 @@ struct ImagesView: View {
                     // here**: the route behind them is admin-only and this
                     // phone has no admin session, so the whole composer is
                     // out rather than drawn and dead (this type's own note,
-                    // Kamron's answer 41).
+                    // the owner's answer 41).
                     lane(images)
                     history(images)
                 }

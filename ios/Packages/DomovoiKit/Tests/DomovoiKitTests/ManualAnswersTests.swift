@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DomovoiKit
 
-/// The pure half of Kamron's manual answers 30–34, at the package layer.
+/// The pure half of the owner's manual answers 30–34, at the package layer.
 ///
 /// ### Why this file exists
 ///
@@ -478,7 +478,7 @@ final class ManualAnswersTests: XCTestCase {
     }
 
     /// **Amber behind `admin`, one grey behind the rest — and the badges'
-    /// grey is the inline words' grey** (Kamron's answer 75).
+    /// grey is the inline words' grey** (the owner's answer 75).
     ///
     /// The case the sabotage "every tag back on one grey" fails: `admin`'s
     /// wash has to be the amber one, and amber is a wash whose red channel is

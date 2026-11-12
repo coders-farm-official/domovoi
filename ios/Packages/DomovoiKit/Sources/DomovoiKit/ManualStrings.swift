@@ -64,7 +64,7 @@ public enum ManualStrings {
     // MARK: - what the swipe back does, said out loud
 
     /// `zoom out`'s VoiceOver hint: the swipe back does the same thing this
-    /// control does — at **every** text size since Kamron's answer 74.
+    /// control does — at **every** text size since the owner's answer 74.
     ///
     /// iOS-only, and there is no Android line for it — Android's way up is a
     /// hardware or gestural **back**, which the platform announces itself,
@@ -126,7 +126,7 @@ public enum ManualStrings {
         public static let pluginsNone = "no plugins installed"
         public static let sayNone = "no phrases listed"
         /// A checklist circle the app cannot judge, on a server whose document
-        /// predates the key — **Kamron's answer 33**, "can't tell from here on
+        /// predates the key — **the owner's answer 33**, "can't tell from here on
         /// both phones".
         ///
         /// These are the words the generator already writes:

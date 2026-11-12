@@ -408,7 +408,7 @@ public final class PlayerModel {
         guard !target.isCasting, current != nil else { return }
         if mediaServicesReset {
             // Every AVFoundation object below us is stale. A pause here would
-            // leave a play button that does nothing — the control Kamron's
+            // leave a play button that does nothing — the control the owner's
             // rule forbids — so the sources are set again, and playback picks
             // up only if it was going.
             let wasPlaying = isPlaying

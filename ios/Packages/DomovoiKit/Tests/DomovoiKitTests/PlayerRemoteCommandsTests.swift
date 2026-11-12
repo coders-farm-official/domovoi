@@ -7,7 +7,7 @@ import XCTest
 /// disabling is the half that is easy to forget and is the one that matters:
 /// a `changePlaybackPositionCommand` left enabled after a cast starts is a
 /// lock-screen scrubber that moves and does nothing, which is exactly the
-/// control Kamron's rule forbids.
+/// control the owner's rule forbids.
 final class PlayerRemoteCommandsTests: XCTestCase {
 
     private func enabled(

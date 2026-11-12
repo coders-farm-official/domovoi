@@ -1,7 +1,7 @@
 import XCTest
 @testable import DomovoiKit
 
-/// What VoiceOver says over each `warn again` button — Kamron's answer 2,
+/// What VoiceOver says over each `warn again` button — the owner's answer 2,
 /// 2026-11-03: `VoiceOver reads each warn again with its kind`.
 ///
 /// ### Why a package case for something a view sets
@@ -29,7 +29,7 @@ import XCTest
 /// `AiSettingsStringsTests`, which this unit does not own (BATCH-RULES §1).
 final class ScreensAiSettingsWordsTests: XCTestCase {
 
-    /// The shape, on the one kind Kamron's answer spells out.
+    /// The shape, on the one kind the owner's answer spells out.
     func testTheAnnouncementIsTheWordsAndThenTheKind() {
         XCTAssertEqual(
             "warn again, scanned pages",

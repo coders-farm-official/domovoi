@@ -9,7 +9,7 @@ import XCTest
 ///
 /// Reaching it is `launch(push: "News", …)` — ``AuditStrip``'s seeded route,
 /// which is the same push a tab tap makes — and **never** the connection
-/// sheet, which starts a LAN sweep across Kamron's real network.
+/// sheet, which starts a LAN sweep across the owner's real network.
 ///
 /// ### What identifies an element here
 ///
@@ -26,10 +26,10 @@ import XCTest
 ///
 /// `fixtures/people.py` claims `/api/people` and `fixtures/news.py` defers to
 /// it (DECISIONS.md, "Two screens need /api/people"), so the four people on
-/// screen are the People seed's: `Kamron`, `Chevy`, `Alex`, `alex `, in
+/// screen are the People seed's: `Jordan`, `Chevy`, `Alex`, `alex `, in
 /// `last_seen_at DESC` order. News seeds topics, stories and a briefing for
-/// **1 (Kamron)** and **2 (Chevy)** only. Two consequences for the cases
-/// below: the default selection is asserted as `Kamron's news` by name, and
+/// **1 (Jordan)** and **2 (Chevy)** only. Two consequences for the cases
+/// below: the default selection is asserted as `Jordan's news` by name, and
 /// `Alex` is a person with no news rather than a 404 — a change to that seed
 /// is a change these cases will name.
 extension StubHouseUITests {
@@ -267,10 +267,10 @@ extension StubHouseUITests {
         XCTAssertTrue(landed, "News never drew a person's heading")
 
         // The roster, as chips. Both seeded people, by identifier: the chip's
-        // *label* is `Kamron's news`, which the heading also says.
+        // *label* is `Jordan's news`, which the heading also says.
         XCTAssertTrue(
-            app.buttons["news-chip-Kamron"].exists,
-            "no chip for Kamron — the roster read did not reach the chip row"
+            app.buttons["news-chip-Jordan"].exists,
+            "no chip for Jordan — the roster read did not reach the chip row"
         )
         XCTAssertTrue(app.buttons["news-chip-Chevy"].exists, "no chip for Chevy")
 
@@ -278,11 +278,11 @@ extension StubHouseUITests {
         // server sorts `last_seen_at DESC` — "most recently heard".
         XCTAssertEqual(
             newsElement(app, "news-person-heading").label,
-            NewsStringsUnderTest.kamronsNews,
+            NewsStringsUnderTest.jordansNews,
             "the first roster row was not the one picked"
         )
 
-        // The briefing is Kamron's: `aurora` is in his and in nothing else in
+        // The briefing is Jordan's: `aurora` is in his and in nothing else in
         // the house.
         let briefing = newsElement(app, "news-briefing-body")
         XCTAssertTrue(
@@ -309,7 +309,7 @@ extension StubHouseUITests {
         let title = newsElement(app, "news-story-title-301")
         XCTAssertTrue(
             title.label.contains("trebuchet"),
-            "the saved feed did not draw Kamron's story"
+            "the saved feed did not draw Jordan's story"
         )
         XCTAssertEqual(
             newsElement(app, "news-story-summary-301").label,
@@ -335,7 +335,7 @@ extension StubHouseUITests {
         // S002) where the same word had to be *present*.
         XCTAssertFalse(
             containing(app, "Marmalade").exists,
-            "Chevy's story is on Kamron's screen"
+            "Chevy's story is on Jordan's screen"
         )
     }
 
@@ -347,7 +347,7 @@ extension StubHouseUITests {
     /// The read-after-await defect this track has paid for most: a reply for
     /// person A landing under person B. The switch happens **inside** a
     /// parked `items` round trip, which is the only form of this test that
-    /// works: `news-slow-items` holds Kamron's saved feed open for six
+    /// works: `news-slow-items` holds Jordan's saved feed open for six
     /// seconds, the chip is tapped while it is in flight, and the assertion
     /// is taken after it has had time to come back.
     @MainActor
@@ -357,7 +357,7 @@ extension StubHouseUITests {
             "news-slow-items",
             #"{"seconds": 6, "person": 1}"#,
             port: 6601,
-            what: "Kamron's saved feed parked for six seconds"
+            what: "Jordan's saved feed parked for six seconds"
         )
         let (app, landed) = openNews()
         XCTAssertTrue(landed, "News never drew a person's heading")
@@ -370,7 +370,7 @@ extension StubHouseUITests {
             newsElement(app, "news-story-title-401").waitForExistence(timeout: 30),
             "Chevy's saved feed never drew"
         )
-        // Long enough for Kamron's parked read to have answered — the whole
+        // Long enough for Jordan's parked read to have answered — the whole
         // point. Asserting before it could land would pass against an app
         // with no key at all.
         usleep(9_000_000)
@@ -387,7 +387,7 @@ extension StubHouseUITests {
         )
         XCTAssertFalse(
             containing(app, "trebuchet").exists,
-            "Kamron's late saved-feed answer landed under Chevy — the reply "
+            "Jordan's late saved-feed answer landed under Chevy — the reply "
                 + "was published against the current selection rather than "
                 + "the person it was asked for"
         )
@@ -1407,7 +1407,7 @@ extension StubHouseUITests {
         // (`fixtures/people.py`; this screen defers to it).
         // An explicit result type: a multi-statement closure whose branches
         // are `String` and `nil` is one Swift will not always infer.
-        return ["Kamron", "Chevy", "Alex", "alex "].compactMap { (name: String) -> String? in
+        return ["Jordan", "Chevy", "Alex", "alex "].compactMap { (name: String) -> String? in
             let chip = app.buttons["news-chip-\(name)"]
             guard chip.exists else { return "no chip for \(name)" }
             let leaves = chip.staticTexts.count
@@ -1443,7 +1443,7 @@ extension StubHouseUITests {
     //
     // **And the classification is not coming back, because its cause is
     // gone.** `newsChipArtefact(_:)` was deleted when the five findings were
-    // fixed in the app (round 3, above). Kamron's answer 39 then took the
+    // fixed in the app (round 3, above). The owner's answer 39 then took the
     // avatar bubble out of the chip altogether, which removes the last thing
     // in this row the auditor could sample and misattribute: a filled circle
     // inside a capsule was two overlapping fills under one 113 x 44
@@ -2430,7 +2430,7 @@ extension StubHouseUITests {
 enum NewsStringsUnderTest {
 
     /// ``NewsStrings/personsNews(_:)`` for the two seeded people.
-    static let kamronsNews = "Kamron's news"
+    static let jordansNews = "Jordan's news"
     static let chevysNews = "Chevy's news"
 
     /// ``NewsStrings/noBriefing``.

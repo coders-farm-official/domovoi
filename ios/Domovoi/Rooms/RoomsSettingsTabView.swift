@@ -14,7 +14,7 @@ import SwiftUI
 /// what a room is set to and can never change it. Android draws a switch per
 /// `bool`, a dropdown per `choice` and a numeric field per `int`/`float`
 /// (`SatSettingsTab.kt:268-330`); each of those here would be a control that
-/// looks like it saves and 401s every time, which is exactly what Kamron's
+/// looks like it saves and 401s every time, which is exactly what the owner's
 /// no-misleading-controls rule forbids. So every field is **words**
 /// (``roomsConfigValueText(_:)``) and one sentence says where they are
 /// changed.

@@ -176,7 +176,7 @@ public enum PodcastStrings {
 
     /// The meta line's chapter count, **pluralised**.
     ///
-    /// D48, Kamron 2026-11-03: "yes: fix `1 chapters` to `1 chapter` on both
+    /// D48, the owner 2026-11-03: "yes: fix `1 chapters` to `1 chapter` on both
     /// apps." Android had no singular form (`PodcastsEpisodes.kt:245`
     /// interpolates `"${it.chapters.size} chapters"`), so a one-chapter
     /// episode read `1 chapters` on both phones and a test here pinned the

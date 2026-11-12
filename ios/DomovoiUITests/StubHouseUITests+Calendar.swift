@@ -1288,7 +1288,7 @@ enum CalendarWords {
     /// what is in view.
     ///
     /// It used to be the whole sentence with the seeded `13` in it. Since
-    /// Kamron's answer 16 the read is a window per view, so the number is the
+    /// the owner's answer 16 the read is a window per view, so the number is the
     /// visible range's and the sentence says `in view`
     /// (``CalendarStrings/subtitle(count:)``) — and the agenda's window
     /// depends on the hour the train runs at.

@@ -438,7 +438,7 @@ final class VideoModelsTests: XCTestCase {
         }
 
         XCTAssertTrue(body("4").contains(#""person_id":4"#))
-        XCTAssertFalse(body("kamron").contains("person_id"))
+        XCTAssertFalse(body("jordan").contains("person_id"))
         XCTAssertFalse(body("").contains("person_id"))
         XCTAssertFalse(body(nil).contains("person_id"))
     }

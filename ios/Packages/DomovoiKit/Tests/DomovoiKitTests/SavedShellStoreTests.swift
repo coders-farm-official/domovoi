@@ -8,7 +8,7 @@ import XCTest
 ///
 ///  1. a second store over the same two places answers what the first one was
 ///     told — which is "the app does not forget the house when it is
-///     force-quit", and is what Kamron hit within a minute of the first
+///     force-quit", and is what the owner hit within a minute of the first
 ///     install;
 ///  2. the household token is in the Keychain and **not** in the plist, and
 ///     it leaves the Keychain when the person forgets the server;
@@ -357,7 +357,7 @@ final class SavedShellStoreTests: XCTestCase {
         book.setToken(token, for: server)
         book.rejected.insert(other)
         book.sharedScreens[server] = true
-        book.owners[server] = "kamron"
+        book.owners[server] = "jordan"
 
         let blob = try JSONEncoder().encode(book)
         let back = try JSONDecoder().decode(TrustBook.self, from: blob)

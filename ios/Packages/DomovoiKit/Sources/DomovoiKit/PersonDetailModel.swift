@@ -392,7 +392,7 @@ public final class PersonDetailModel {
 
     public var sessionsTabIsLoading: Bool { loading && sessionRows.isEmpty }
 
-    /// `"Kamron hasn't had a session yet"`, or nil when there are rows or the
+    /// `"Jordan hasn't had a session yet"`, or nil when there are rows or the
     /// read failed (`PersonTabs.kt:466`).
     public var sessionsEmptyNote: (title: String, detail: String)? {
         guard errors.sessions == nil, !sessionsTabIsLoading, sessionRows.isEmpty else { return nil }

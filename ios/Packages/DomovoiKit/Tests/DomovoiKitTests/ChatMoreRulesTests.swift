@@ -1046,7 +1046,7 @@ final class ChatMoreRulesTests: XCTestCase {
            {"version":2,"body":"# Dear landlord\\n\\nAbout the cat, with consent.",
             "display":"Dear landlord\\nAbout the cat, with consent.",
             "changes":[["=","Dear landlord"],["+",", with consent"],["-","!"]],
-            "author":"person","source":"edited","device_id":"ios-1","device_name":"Kamron's iPhone","words":7,
+            "author":"person","source":"edited","device_id":"ios-1","device_name":"Jordan's iPhone","words":7,
             "saved":[{"format":"docx","rel_path":"From Chat/To the landlord v2.docx",
                       "check":{"ok":true,"line":"text readable · single column"},"template":"letter-block"}]}],
          "templates":[{"id":"letter-block","label":"Block letter"}],

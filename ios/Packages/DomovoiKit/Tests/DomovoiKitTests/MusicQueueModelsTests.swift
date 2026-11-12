@@ -40,7 +40,7 @@ final class MusicQueueModelsTests: XCTestCase {
         {"room_id":"living room","current_song_id":7,"editable":true,"guest":false,
          "items":[{"song_id":7,"pos":0,"file":"/srv/a.mp3","title":"Hey Jude",
                    "artist":"The Beatles","album":"1","duration_sec":431,
-                   "added_by":"Kamron's iPhone","added_by_device_id":"ios-1",
+                   "added_by":"Jordan's iPhone","added_by_device_id":"ios-1",
                    "added_at":"2026-10-30T12:00:00Z","playing":true}]}
         """)
 
@@ -55,7 +55,7 @@ final class MusicQueueModelsTests: XCTestCase {
         XCTAssertEqual("The Beatles", item.artist)
         XCTAssertEqual("1", item.album)
         XCTAssertEqual(431, item.durationSec)
-        XCTAssertEqual("Kamron's iPhone", item.addedBy)
+        XCTAssertEqual("Jordan's iPhone", item.addedBy)
         XCTAssertEqual("ios-1", item.addedByDeviceID)
         XCTAssertEqual("2026-10-30T12:00:00Z", item.addedAt)
         XCTAssertTrue(item.playing)
@@ -94,11 +94,11 @@ final class MusicQueueModelsTests: XCTestCase {
     }
 
     /// The basename, off **either** separator — where Android shows the whole
-    /// stored path. Kamron's server is Windows.
+    /// stored path. The owner's server is Windows.
     func testAnUntaggedRowShowsTheFilenameAndNotTheWholeWindowsPath() {
         XCTAssertEqual(
             "song.mp3",
-            QueueItem(file: #"C:\Users\Kamron\Music\Artist\song.mp3"#).displayTitle
+            QueueItem(file: #"C:\Users\Jordan\Music\Artist\song.mp3"#).displayTitle
         )
         XCTAssertEqual("song.mp3", QueueItem(file: "/srv/music/artist/song.mp3").displayTitle)
     }
@@ -110,11 +110,11 @@ final class MusicQueueModelsTests: XCTestCase {
 
     func testTheSecondLineHasEveryPartThatExists() {
         XCTAssertEqual(
-            "The Beatles · 7:11 · added by Kamron's iPhone",
+            "The Beatles · 7:11 · added by Jordan's iPhone",
             QueueItem(
                 artist: "The Beatles",
                 durationSec: 431,
-                addedBy: "Kamron's iPhone"
+                addedBy: "Jordan's iPhone"
             ).subtitle
         )
     }
@@ -182,11 +182,11 @@ final class MusicQueueModelsTests: XCTestCase {
     func testTheWatchOnlyNoticeIsTheServersSentenceAndThenWhatItMeans() {
         let queue = RoomQueue(
             editable: false,
-            blockedReason: "Kamron's iPad isn't allowed to edit the queue in garage"
+            blockedReason: "Jordan's iPad isn't allowed to edit the queue in garage"
         )
 
         XCTAssertEqual(
-            "Kamron's iPad isn't allowed to edit the queue in garage. "
+            "Jordan's iPad isn't allowed to edit the queue in garage. "
                 + "You can watch the queue but not change it.",
             queue.watchOnlyNote
         )

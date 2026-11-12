@@ -244,7 +244,7 @@ final class PrintersPanelModelTests: XCTestCase {
                     return .json("""
                     {"jobs":[
                       {"id":1,"printer_id":1,"title":"a letter","state":"done","can_cancel":false,
-                       "who":"Kamron's iPhone","created_at":"2026-11-02T09:00:00+00:00"},
+                       "who":"Jordan's iPhone","created_at":"2026-11-02T09:00:00+00:00"},
                       {"id":2,"printer_id":1,"title":"a photo","state":"failed","can_cancel":false,
                        "error":"The printer said: cover open."},
                       {"id":3,"printer_id":1,"title":"notes","state":"printing","pages":3,"pages_done":1,

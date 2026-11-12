@@ -22,7 +22,7 @@ import SwiftUI
 /// All three were absent, and each for a reason that has been answered:
 ///
 /// * **`play`** needed an owner for the engine. There is one now —
-///   ``ShellModel/player``, D49 / Kamron's answer 2 — and this screen hands
+///   ``ShellModel/player``, D49 / the owner's answer 2 — and this screen hands
 ///   it to ``PodcastsModel/player``. Nil on a build with no audio engine —
 ///   not on a phone that has not joined a house (``ShellModel/player``,
 ///   corrected in review 2) — and nil still draws no control.

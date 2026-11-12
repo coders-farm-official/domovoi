@@ -154,7 +154,7 @@ extension StubHouseUITests {
     ///
     /// ### What says it opened, since D56
     ///
-    /// A room is its own **pushed screen** now (Kamron, answer 56, by
+    /// A room is its own **pushed screen** now (the owner, answer 56, by
     /// recommendation), so there is no `close this room` button left to wait
     /// for. The marker is ``roomsPushedTitle(_:_:)`` — the pushed screen's
     /// own inline navigation title, which is the room's id
@@ -701,7 +701,7 @@ extension StubHouseUITests {
     ///
     /// ### D56, and why the gesture is asserted here and nowhere else
     ///
-    /// Kamron, answer 56, by recommendation: a room is its own pushed screen
+    /// The owner, answer 56, by recommendation: a room is its own pushed screen
     /// with swipe-back, not a panel with a `close this room` button. Three
     /// things make that true and all three are asserted here — a navigation
     /// bar over the room, **no** `close this room` anywhere, and the edge
@@ -743,7 +743,7 @@ extension StubHouseUITests {
             app.buttons["close this room"].exists,
             "`close this room` is still drawn — a pushed screen is left by "
                 + "the back button or the edge swipe, and a second way out "
-                + "that says something else is the control Kamron's rule is "
+                + "that says something else is the control the owner's rule is "
                 + "about"
         )
         XCTAssertTrue(
@@ -1123,7 +1123,7 @@ extension StubHouseUITests {
     ///
     /// ### Where D55 got to, and why half of it is here
     ///
-    /// Kamron, answer 55: "no fulfiller means no button and no error: the
+    /// The owner, answer 55: "no fulfiller means no button and no error: the
     /// server computes `can_add` against the fulfiller allowlist, so both
     /// phones draw it honestly." Reading 3 is that behaviour, and the app
     /// already does its half — the condition is `can_add` and only `can_add`.
@@ -1598,7 +1598,7 @@ extension StubHouseUITests {
             // Simulator, so no pan is trusted to place this page.
             //
             // Instead the one row that lands across the bar's lower edge is
-            // handled by a **measured allowance** (Kamron's rule 3, in the
+            // handled by a **measured allowance** (the owner's rule 3, in the
             // shape of ``roomsClippedFootMeasured``):
             // ``roomsBarEdgeMeasured(_:straddlingOn:drawnWholeOn:picture:window:)``
             // lets a contrast finding through only on an element that crosses
@@ -2128,7 +2128,7 @@ extension StubHouseUITests {
     ///
     /// `POST …/volume` 404s when the room isn't connected
     /// (`web/backend/api/satellites.py:1557-1573`), so a slider that could be
-    /// dragged there is the control Kamron's rule forbids; Android gates all
+    /// dragged there is the control the owner's rule forbids; Android gates all
     /// three on `enabled = online` (`SatOverviewTab.kt:304-320`). The house's
     /// `study` is offline and its `kitchen` is not, so this discriminates: the
     /// same assertion is made the other way round on `kitchen`.
@@ -2242,7 +2242,7 @@ extension StubHouseUITests {
         // finding will not attribute, look at the picture.)
         //
         // So the fix is here rather than in `DomovoiApp.swift`'s ink, and
-        // ``roomsOursOnly(_:)`` excuses nothing any more. Kamron's rule reads
+        // ``roomsOursOnly(_:)`` excuses nothing any more. The owner's rule reads
         // the other way round too: the tint is honest, and a case that
         // quietly dropped a finding against a real control is the thing that
         // hides the next one.
@@ -2429,7 +2429,7 @@ extension StubHouseUITests {
         //    the audited area at all.)
         //
         // So it is real, it is a control, and it is not this item's file.
-        // Kamron's answer 57 is "fix it once in the shell", and the shell is
+        // The owner's answer 57 is "fix it once in the shell", and the shell is
         // where it was fixed: `Button(group.label)` (`RouteScreen.swift:404`),
         // `Button(section.label)` (`:414`),
         // `Button(ShellStrings.allSettings)` (`:419`) and
@@ -2626,7 +2626,7 @@ extension StubHouseUITests {
     /// draws in either rectangle — the bar's own `Back` and title, the phone
     /// bar's four words, a sheet over the top — is drawn *there*, and a
     /// finding against it is kept. It is the same class as D57's `back to Rooms &
-    /// devices`, which Kamron answered with "the fix is the case scrolling it
+    /// devices`, which the owner answered with "the fix is the case scrolling it
     /// into view, not a colour" — except that a page taller than its viewport
     /// cannot have both ends on the window at once, which is why the finding
     /// moved from the foot to the head when the foot was brought on.
@@ -3432,7 +3432,7 @@ enum RoomsStringsUnderTest {
     static let close = "close"
     /// ``DropInStrings/micRefused``. **The chevron is U+203A**, and the
     /// sentence has to name where the switch is: a refusal that only says
-    /// "no" is the silent failure Kamron's rule is about.
+    /// "no" is the silent failure the owner's rule is about.
     static let micRefused =
         "Domovoi needs the microphone to drop in. Turn it on in Settings › Domovoi."
 

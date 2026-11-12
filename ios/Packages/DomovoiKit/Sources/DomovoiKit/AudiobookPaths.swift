@@ -18,7 +18,7 @@ import Foundation
 /// slot — a different row from any person's
 /// (`domovoi/spoken_audio.py:145-147`) — which meant "continue from the
 /// kitchen" could not see a place the voice path had saved under a person.
-/// Kamron's answer 11: "yes, match Android: build the 'listening as' picker",
+/// The owner's answer 11: "yes, match Android: build the 'listening as' picker",
 /// and ``PlayerListenerStore`` is where the choice lives.
 ///
 /// **An id the server cannot read is left out rather than sent.** The server

@@ -3,7 +3,7 @@ import Foundation
 /// Which server the phone's queue came from, and what a move to another one
 /// leaves of it.
 ///
-/// `android/.../player/ServerScope.kt:1-78`. Found on Kamron's phone,
+/// `android/.../player/ServerScope.kt:1-78`. Found on the owner's phone,
 /// 2026-10-12: he played music from one Domovoi, connected the app to a fresh
 /// one at another address, and the mini player still showed the first one's
 /// song.
