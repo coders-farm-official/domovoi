@@ -284,5 +284,6 @@ testpaths = ["domovoi/tests", "plugins/radio/tests", "satellite/tests"]
 markers = [
     "spoken_gate: the spoken-name resolver on the frozen held-out audit set (opt-in, DOMOVOI_SPOKEN_GATE_DIR); it measures and never tunes",
     "bash_harness: runs a whole scripts/linux/tests harness under the host's bash (minutes to an hour on Git Bash); deselected under pytest -n, where scripts/dev/run-linux-harness.sh runs them instead",
+    "slow: a test that builds a large fixture (seconds, not minutes), such as Up next's 100k-track refill timing; runs by default, deselect with -m 'not slow'",
     "xdist_group(name): under pytest -n, tests of one group run on one worker, one at a time (they share something outside the process: Postgres roles, a fixed temp file); see domovoi/tests/conftest.py",
 ]
