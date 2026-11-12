@@ -1,0 +1,307 @@
+"""Genre and year in the database (V050, Up next P0), and the Genres API.
+
+* V050: the columns, their checks, ``artist_norm`` generated from
+  ``library_search_norm``, the indexes;
+* the indexer writes genre, year and the reader's version on a new row;
+* the tag backfill reads the rows the indexer never will, keeps a
+  MusicBrainz year a file does not contradict, and leaves title / artist /
+  album alone;
+* the year fetch's writes: only where there is no year, every track of the
+  recording, marked asked;
+* a provider download (``LibraryAPI.ingest_track``) carries a year and is
+  read again;
+* ``GET /api/music/genres`` / ``/api/music/genre`` / ``/api/music/library?
+  genre=``: counts, the "no genre" bucket, the read's progress, paging,
+  search, 404.
+
+Needs the database (``requires_db``); every test starts from an empty
+``library_tracks`` (``db_session`` truncates it, the web tests do the same).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+
+from domovoi.config import settings
+from domovoi.library_genres import TAGS_VERSION
+from domovoi.tests import media_writer as mw
+from domovoi.tests.conftest import requires_db
+
+MBID_A = "11111111-1111-4111-8111-111111111111"
+MBID_B = "22222222-2222-4222-8222-222222222222"
+
+
+# ─── V050 ─────────────────────────────────────────────────────────────────
+
+
+@requires_db
+async def test_v050_columns_and_defaults(db_session) -> None:
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title, artist) VALUES ('/m/a.mp3', 'A', 'T.I.')"
+    ))
+    row = (await db_session.execute(text(
+        "SELECT genre, genre_keys, year, year_source, year_checked_at, tags_version, artist_norm "
+        "FROM library_tracks"
+    ))).one()
+    assert tuple(row) == (None, None, None, None, None, 0, "ti")
+
+
+@requires_db
+@pytest.mark.parametrize("bad", [
+    "UPDATE library_tracks SET year = 999",
+    "UPDATE library_tracks SET year_source = 'guess'",
+    "UPDATE library_tracks SET genre = repeat('x', 201)",
+    "UPDATE library_tracks SET genre_keys = ARRAY(SELECT 'g' || i FROM generate_series(1, 17) i)",
+])
+async def test_v050_checks(db_session, bad) -> None:
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title) VALUES ('/m/a.mp3', 'A')"
+    ))
+    with pytest.raises(DBAPIError):
+        await db_session.execute(text(bad))
+
+
+@requires_db
+async def test_v050_indexes(db_session) -> None:
+    names = {r[0] for r in (await db_session.execute(text(
+        "SELECT indexname FROM pg_indexes WHERE tablename = 'library_tracks'"
+    ))).all()}
+    assert {"idx_library_tracks_artist_norm", "idx_library_tracks_year",
+            "idx_library_tracks_genre_keys", "idx_library_tracks_tags_pending",
+            "idx_library_tracks_year_pending"} <= names
+
+
+# ─── The indexer and the backfill ─────────────────────────────────────────
+
+
+@requires_db
+async def test_the_indexer_writes_genre_year_and_the_version(db_session, monkeypatch, tmp_path) -> None:
+    from domovoi.workers.library_indexer import index_music_dir
+
+    music = tmp_path / "music"
+    mw.write_mp3(music / "a.mp3", [mw.text_frame("TIT2", "A"), mw.text_frame("TCON", "Soul; Funk"),
+                                   mw.text_frame("TDRC", "1971")])
+    mw.write_mp3(music / "b.mp3", [mw.text_frame("TIT2", "B")])
+    monkeypatch.setattr("domovoi.workers.library_indexer.settings.music_dir", str(music))
+    assert (await index_music_dir())["inserted"] == 2
+    rows = (await db_session.execute(text(
+        "SELECT title, genre, genre_keys, year, year_source, tags_version FROM library_tracks ORDER BY title"
+    ))).all()
+    assert [tuple(r) for r in rows] == [
+        ("A", "Soul; Funk", ["soul", "funk"], 1971, "tag", TAGS_VERSION),
+        ("B", None, None, None, None, TAGS_VERSION),
+    ]
+
+
+@requires_db
+async def test_the_backfill_reads_rows_the_indexer_already_had(db_session, monkeypatch, tmp_path) -> None:
+    from domovoi.workers.library_tag_backfill import LibraryTagBackfill
+
+    music = tmp_path / "music"
+    a = mw.write_mp3(music / "a.mp3", [mw.text_frame("TCON", "(17)"), mw.text_frame("TDRC", "1994")])
+    b = mw.write_mp3(music / "b.mp3", [mw.text_frame("TCON", "Jazz")])          # no year in the file
+    monkeypatch.setattr(settings, "music_dir", str(music))
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title, artist, album, year, year_source) VALUES "
+        "(:a, 'Edited title', 'Edited artist', 'Edited album', NULL, NULL), "
+        "(:b, 'B', 'X', NULL, 1959, 'musicbrainz'), "
+        "(:gone, 'Gone', 'Y', NULL, NULL, NULL)"
+    ), {"a": str(a), "b": str(b), "gone": str(music / "gone.mp3")})
+    await db_session.commit()
+
+    assert await LibraryTagBackfill().tick() == {"read": 2, "missing": 1}
+    rows = (await db_session.execute(text(
+        "SELECT title, artist, album, genre, genre_keys, year, year_source, tags_version "
+        "FROM library_tracks ORDER BY id"
+    ))).all()
+    assert [tuple(r) for r in rows] == [
+        # Title / artist / album the household edited are left alone.
+        ("Edited title", "Edited artist", "Edited album", "Rock", ["rock"], 1994, "tag", TAGS_VERSION),
+        # The file has no year: the MusicBrainz one stays.
+        ("B", "X", None, "Jazz", ["jazz"], 1959, "musicbrainz", TAGS_VERSION),
+        # Not there: stamped read, so the pass ends.
+        ("Gone", "Y", None, None, None, None, None, TAGS_VERSION),
+    ]
+    assert await LibraryTagBackfill().tick() == {"read": 0, "missing": 0}
+
+
+# ─── The year fetch's writes ──────────────────────────────────────────────
+
+
+@requires_db
+async def test_the_year_fetch_store(db_session) -> None:
+    from domovoi.workers.library_year_fetch import DbYearFetchStore
+
+    await db_session.execute(text(
+        "INSERT INTO library_tracks (file_path, title, musicbrainz_recording_id, year, year_source, tags_version) VALUES "
+        "('/m/1.mp3', '1', :a, NULL, NULL, :v), "
+        "('/m/2.mp3', '2', :a, NULL, NULL, :v), "        # the same recording twice
+        "('/m/3.mp3', '3', :b, NULL, NULL, 0), "         # tags not read yet: not due
+        "('/m/4.mp3', '4', :b, 1988, 'tag', :v)"         # has a year: not due
+    ), {"a": MBID_A, "b": MBID_B, "v": TAGS_VERSION})
+    await db_session.commit()
+    store = DbYearFetchStore()
+    assert await store.due(TAGS_VERSION, 25) == [MBID_A]
+    await store.record(MBID_A, 1971)
+    await store.record(MBID_B, 2001)                     # every track of B is marked asked
+    rows = (await db_session.execute(text(
+        "SELECT title, year, year_source, year_checked_at IS NOT NULL FROM library_tracks ORDER BY title"
+    ))).all()
+    assert [tuple(r) for r in rows] == [
+        ("1", 1971, "musicbrainz", True),
+        ("2", 1971, "musicbrainz", True),
+        ("3", 2001, "musicbrainz", True),
+        ("4", 1988, "tag", True),                         # a tag year is never replaced
+    ]
+    assert await store.due(TAGS_VERSION, 25) == []
+
+
+# ─── A provider download ──────────────────────────────────────────────────
+
+
+@requires_db
+async def test_ingest_track_keeps_a_year_and_reads_tags_again(db_session, monkeypatch, tmp_path) -> None:
+    from domovoi.clients import mpd as mpd_mod
+    from domovoi.sdk.library import LibraryAPI
+
+    monkeypatch.setattr(settings, "music_dir", str(tmp_path))
+    mpd_mod._clients.clear()
+    raw = tmp_path / "dl" / "x.mp3"
+    raw.parent.mkdir(parents=True)
+    raw.write_bytes(b"ID3fake")
+    api = LibraryAPI("testplug")
+    track = await api.ingest_track(db_session, file_path=raw, title="Song", artist="Band",
+                                   source="testplug", source_id="v1", added_via="voice",
+                                   metadata={"year": 1983})
+    await db_session.execute(text("UPDATE library_tracks SET tags_version = :v WHERE id = :id"),
+                             {"v": TAGS_VERSION, "id": track.id})
+    row = (await db_session.execute(text(
+        "SELECT year, year_source FROM library_tracks WHERE id = :id"), {"id": track.id})).one()
+    assert tuple(row) == (1983, "musicbrainz")
+    # A new download of the same item: read again, the year kept.
+    await api.ingest_track(db_session, file_path=Path(track.file_path), title="Song", artist="Band",
+                           source="testplug", source_id="v1", added_via="voice",
+                           metadata={"year": "nonsense"})
+    row = (await db_session.execute(text(
+        "SELECT year, year_source, tags_version FROM library_tracks WHERE id = :id"), {"id": track.id})).one()
+    assert tuple(row) == (1983, "musicbrainz", 0)
+    mpd_mod._clients.clear()
+
+
+# ─── The web API ──────────────────────────────────────────────────────────
+
+ROWS = [
+    # (title, artist, genre_keys, tags_version)
+    ("S1", "Aretha", ["soul"], 1),
+    ("S2", "Otis", ["soul", "r&b"], 1),
+    ("S3", "Bill", ["soul"], 1),
+    ("H1", "Nas", ["hip hop"], 1),
+    ("N1", "Nobody", None, 1),             # read, no genre
+    ("N2", "Nobody", [], 1),               # read, an empty list counts the same
+    ("U1", "Unread", None, 0),             # not read yet
+]
+
+
+async def _seed() -> None:
+    from web.backend.db import session_scope
+
+    async with session_scope() as s:
+        await s.execute(text("TRUNCATE library_tracks RESTART IDENTITY CASCADE"))
+        for i, (title, artist, keys, tv) in enumerate(ROWS):
+            await s.execute(text(
+                "INSERT INTO library_tracks (file_path, title, artist, genre_keys, tags_version) "
+                "VALUES (:fp, :t, :a, CAST(:k AS text[]), :tv)"
+            ), {"fp": f"/srv/music/g/{i:02d}.mp3", "t": title, "a": artist, "k": keys, "tv": tv})
+        await s.commit()
+
+
+async def _clear() -> None:
+    from web.backend.db import session_scope
+
+    async with session_scope() as s:
+        await s.execute(text("TRUNCATE library_tracks RESTART IDENTITY CASCADE"))
+        await s.commit()
+
+
+@pytest.fixture
+def client():
+    from web.backend.main import app
+
+    asyncio.run(_seed())
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        asyncio.run(_clear())
+
+
+@requires_db
+def test_genres_list_counts_progress_and_untagged(client) -> None:
+    r = client.get("/api/music/genres")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert [(g["key"], g["name"], g["track_count"]) for g in d["items"]] == [
+        ("hip hop", "Hip Hop", 1), ("r&b", "R&B", 1), ("soul", "Soul", 3),
+    ]
+    assert d["total"] == 3
+    assert (d["tags_read"], d["tags_total"], d["reading"], d["untagged_count"]) == (6, 7, True, 2)
+    assert all(isinstance(g["cover_track_id"], int) for g in d["items"])
+
+
+@requires_db
+def test_genres_sorted_by_tracks_searched_and_paged(client) -> None:
+    d = client.get("/api/music/genres", params={"sort": "tracks"}).json()
+    assert [g["key"] for g in d["items"]] == ["soul", "hip hop", "r&b"]
+    d = client.get("/api/music/genres", params={"q": "hip"}).json()
+    assert [g["key"] for g in d["items"]] == ["hip hop"]
+    first = client.get("/api/music/genres", params={"limit": 2}).json()
+    assert first["has_more"] and first["next_cursor"]
+    rest = client.get("/api/music/genres", params={"limit": 2, "cursor": first["next_cursor"]}).json()
+    assert [g["key"] for g in first["items"] + rest["items"]] == ["hip hop", "r&b", "soul"]
+    assert not rest["has_more"]
+
+
+@requires_db
+def test_one_genre_and_its_tracks(client) -> None:
+    d = client.get("/api/music/genre", params={"key": "soul"}).json()
+    assert (d["name"], d["track_count"], len(d["track_ids"])) == ("Soul", 3, 3)
+    page = client.get("/api/music/library", params={"genre": "soul", "sort": "artist"}).json()
+    assert [t["artist"] for t in page["items"]] == ["Aretha", "Bill", "Otis"]
+    assert page["total"] == 3
+    # A track with two genres is under both.
+    assert [t["title"] for t in client.get("/api/music/library", params={"genre": "r&b"}).json()["items"]] == ["S2"]
+
+
+@requires_db
+def test_the_no_genre_bucket_is_read_tracks_only(client) -> None:
+    d = client.get("/api/music/genre", params={"key": ""}).json()
+    assert (d["name"], d["track_count"]) == ("no genre", 2)
+    titles = sorted(t["title"] for t in client.get("/api/music/library", params={"genre": ""}).json()["items"])
+    assert titles == ["N1", "N2"]                       # U1 is not read yet: not "no genre"
+
+
+@requires_db
+def test_an_unknown_genre_is_a_404(client) -> None:
+    assert client.get("/api/music/genre", params={"key": "polka"}).status_code == 404
+    assert client.get("/api/music/library", params={"genre": "polka"}).json()["total"] == 0
+    assert client.get("/api/music/genre", params={"key": "x" * 101}).status_code == 422
+
+
+@requires_db
+def test_reading_is_done_when_every_track_is_read(client) -> None:
+    async def read_all() -> None:
+        from web.backend.db import session_scope
+
+        async with session_scope() as s:
+            await s.execute(text("UPDATE library_tracks SET tags_version = :v"), {"v": TAGS_VERSION})
+            await s.commit()
+
+    asyncio.run(read_all())
+    d = client.get("/api/music/genres").json()
+    assert (d["tags_read"], d["tags_total"], d["reading"], d["untagged_count"]) == (7, 7, False, 3)

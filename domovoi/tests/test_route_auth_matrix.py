@@ -616,6 +616,34 @@ def test_the_reads_left_open_are_still_open(label, path) -> None:
     assert not gates.intersection(calls), f"{label} GET {path} is gated now"
 
 
+# The music library's names are open reads, like GET /api/music/library
+# (lyrics contract [A1]: no lyrics, no listening history, no person). The
+# Genres view (V050, owner 2026-11-12) takes the same tier as the Artists
+# view beside it; pinned so a gate on one of them, or a personal field
+# added to one, is a decision rather than a drift.
+MUSIC_LIBRARY_READS_OPEN: dict[tuple[str, str], str] = {
+    ("web", "/api/music/library"): "one page of tracks: titles, artists, albums, paths as shown",
+    ("web", "/api/music/artists"): "the library's performers and their counts",
+    ("web", "/api/music/artist"): "one performer's albums and track ids",
+    ("web", "/api/music/genres"): "the library's genres, their counts and the genre read's progress",
+    ("web", "/api/music/genre"): "one genre's name, count and track ids",
+}
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), sorted(MUSIC_LIBRARY_READS_OPEN),
+    ids=[f"{a} GET {p}" for a, p in sorted(MUSIC_LIBRARY_READS_OPEN)],
+)
+def test_the_music_library_reads_are_open(label, path) -> None:
+    assert MUSIC_LIBRARY_READS_OPEN[(label, path)].strip()
+    calls = _get_gates((label, path))
+    gates = {
+        admin_auth.require_device_read, admin_auth.require_device,
+        admin_auth.require_admin_read, admin_auth.require_admin_mutation,
+    }
+    assert not gates.intersection(calls), f"{label} GET {path} is gated now"
+
+
 # Open at the gate, tiered inside the handler: the route answers anyone,
 # but HOW MUCH depends on the caller's device check. Rule F1 (2026-09-30):
 # the timer fire ledger (V018) is 7 days of when every timer and reminder

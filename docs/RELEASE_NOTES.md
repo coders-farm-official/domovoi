@@ -4,6 +4,33 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — Music → Genres, and every track's genre and year
+
+**Music has a Genres tab** (`#music/genres`): the genres your files' tags
+name, each with its songs and the same play / shuffle / add to queue (in a
+room) and play here / shuffle here (in this browser) as an artist. Songs
+whose tags name no genre are the **no genre** row at the end. API:
+`GET /api/music/genres`, `GET /api/music/genre?key=`, and
+`GET /api/music/library?genre=` (docs/API_REFERENCE.md).
+
+**Migration V050** adds `genre`, `genre_keys`, `year`, `year_source`,
+`year_checked_at`, `tags_version` and a generated `artist_norm` to
+`library_tracks` (a table rewrite: a few seconds on a big library). The
+indexer never re-reads a song it already has, so **after the update the
+core reads the genre and year of every song already in the library in
+the background**, 50 files a second at most (measured: about two and a
+half minutes for 6,000 songs; budget three quarters of an hour or more for
+100,000, longer on a network share). Until it is done
+the Genres tab says "reading genres from your files… N of M" and fills in
+as it goes. Nothing leaves the house for this. A song whose file is gone
+is skipped; with the music folder missing (an unplugged drive) it waits.
+
+**A song with no year in its tags but a MusicBrainz recording id** gets
+the recording's first-release year from MusicBrainz: the recording id only,
+paced, and only while song recognition (`library_enricher_enabled`) is on,
+the Internet answer is not **No** and the server is online
+(docs/SECURITY_PRIVACY.md).
+
 ## 2026-11-12 — a playlist plays in this browser
 
 The playlist dialog (Music → Playlists) now has **play here** and **shuffle

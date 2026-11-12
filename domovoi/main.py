@@ -762,7 +762,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   podcast_feed_poller → audiobook_indexer → room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard →
-    #   library_alias_fetch → lyrics_scan → lyrics_fetch.
+    #   library_alias_fetch → lyrics_scan → lyrics_fetch →
+    #   library_tag_backfill → library_year_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -837,6 +838,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     WORKERS.add_worker(LyricsScanner(), owner="core")
     WORKERS.add_worker(LyricsFetcher(), owner="core")
+    # Genre and year for the tracks already in the library (V050): a paced,
+    # local re-read of their tags; then, for tracks whose tags give no year
+    # but which have a MusicBrainz recording id, that id's first-release
+    # year — self-gated per tick on library_enricher_enabled,
+    # INTERNET_ACCESS and the probe (domovoi/workers/library_tag_backfill.py,
+    # library_year_fetch.py).
+    from domovoi.workers.library_tag_backfill import LibraryTagBackfill
+    from domovoi.workers.library_year_fetch import LibraryYearFetch
+
+    WORKERS.add_worker(LibraryTagBackfill(), owner="core")
+    WORKERS.add_worker(LibraryYearFetch(), owner="core")
     # (The former office-suite stale-lock sweeper is gone with the
     # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 

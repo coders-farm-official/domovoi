@@ -1419,6 +1419,17 @@ class Settings(BaseSettings):
     # match and fall through to Shazam — protects against AcoustID's
     # occasional confident-but-wrong responses on noisy fingerprints.
     library_enricher_acoustid_min_score: float = 0.7
+    # Genre and year for the tracks already in the library (V050): the
+    # indexer never updates a row it has, so a paced backfill re-reads the
+    # tags of every row not yet read (domovoi/workers/library_tag_backfill.py),
+    # a batch per tick. Local only: nothing leaves the house.
+    library_tag_backfill_interval_sec: float = 1.0
+    # The year of a track whose tags give none but which has a MusicBrainz
+    # recording id: asked of MusicBrainz (first-release-date), the recording
+    # id only, a small batch per tick at one request a second — only while
+    # library_enricher_enabled is on, internet access is not "never" and the
+    # server is online (domovoi/workers/library_year_fetch.py).
+    library_year_fetch_interval_sec: float = 30.0
 
     # ─── Spoken-name matching (music) ───────────────────────────────────
     # "play suicide boys" finds $uicideboy$, "play generation" GENER8ION:

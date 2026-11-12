@@ -45,12 +45,29 @@ def _short(text):
     return {"sha256_16": _sha(text.encode("utf-8")), "chars": len(text)}
 
 
+_GENRE_YEAR = ("genre", "genre_keys", "year")
+
+
+def _library(path: Path) -> dict:
+    """The library indexer's title / artist / album / length answer (the
+    mutagen-era fields) — genre and year (V050) are their own answer."""
+    got = _safe(library_indexer._read_tags, path)
+    return {k: v for k, v in got.items() if k not in _GENRE_YEAR} if "raises" not in got else got
+
+
+def _genre_year(path: Path) -> dict:
+    got = _safe(library_indexer._read_tags, path)
+    return {k: got.get(k) for k in _GENRE_YEAR} if "raises" not in got else got
+
+
 def answers(path: Path) -> dict:
     pics = _safe(music._embedded_pictures, path)
     cover = _safe(music._read_embedded_cover, path)
     lyr = _safe(sources.read_embedded, path)
     got = {
-        "library": _safe(library_indexer._read_tags, path),
+        "library": _library(path),
+        # Recorded from this reader (V050, 2026-11-12): no mutagen answer.
+        "genre_year": _genre_year(path),
         "audiobook": _safe(audiobook_indexer._read_tags, path),
         "chapters": _safe(podcast_feed_poller._read_id3_chapters, path),
         "pictures": pics if isinstance(pics, dict) else [[t, _sha(d), len(d)] for t, d in pics],
@@ -81,7 +98,7 @@ def test_every_difference_from_mutagen_is_explained() -> None:
             assert old != EXPECTED["files"][name][field], (name, field)
     total = sum(len(v) for v in EXPECTED["files"].values())
     changed = sum(len(e["mutagen"]) for e in differed.values())
-    assert total == 6 * len(FILES) and changed == 23
+    assert total == 7 * len(FILES) and changed == 23
 
 
 @pytest.mark.parametrize("name", ["ff_id3v23.mp3", "ff_id3v24.mp3", "ff_tagged.flac", "ff_tagged.m4a",

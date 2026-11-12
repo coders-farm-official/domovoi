@@ -617,6 +617,17 @@ MPD text search that was always there.
   a 5xx, an HTML 200 or a 4xx is an error row (retried after 2^attempts
   hours, five times at most), never "no such artist"; one artist whose
   result cannot be saved gets an error row and the batch goes on.
+* **Genre and year** (V050, `domovoi/library_genres.py`): the indexer reads
+  them with the title (the original year first, then the date; every genre
+  value, split and normalised into `genre_keys`). It never updates a row it
+  has, so `workers/library_tag_backfill.py` re-reads the rows whose
+  `tags_version` is below the reader's, 50 a tick, locally; the web counts
+  the rows at the version for the Genres tab's "reading genres… N of M".
+  `workers/library_year_fetch.py` then asks MusicBrainz for the
+  `first-release-date` of a track that has a recording id and no year:
+  the id only, through the same paced client, under `library_enricher_enabled`,
+  never under Internet "never" and only while online; a tag year always
+  wins.
 * **The gate** (`scripts/eval_spoken_match.py`, test `spoken_gate`): the
   frozen held-out request set, parsed as production parses it, measures the
   resolver — and is never used to tune it. It reports every group over all

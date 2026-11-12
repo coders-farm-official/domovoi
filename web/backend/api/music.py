@@ -143,6 +143,12 @@ async def list_library(
         default=None, max_length=500,
         description="With artist: only this album of theirs ('' = tracks with no album).",
     ),
+    genre: str | None = Query(
+        default=None, max_length=100,
+        description="Only tracks of this genre, a key as GET /api/music/genres names "
+                    "it (a track with several genres is under each); '' = tracks whose "
+                    "tags have been read and have no genre.",
+    ),
     source: str | None = Query(
         default=None,
         description="Filter by source column. Use 'manual' for rows with NULL source; "
@@ -179,7 +185,8 @@ async def list_library(
     equally well; when no row holds every word, the rows most like the
     query (typos). ``artist`` (the Artists view): only that performer's
     tracks, every credit that names them ("Jeezy, T.I." is T.I.'s too);
-    ``album`` narrows that to one of their albums.
+    ``album`` narrows that to one of their albums. ``genre`` (the Genres
+    view, V050): only that genre's tracks.
     """
     where_parts: list[str] = []
     params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
@@ -204,6 +211,10 @@ async def list_library(
         if album is not None:
             where_parts.append("album IS NOT DISTINCT FROM :artist_album")
             params["artist_album"] = album or None
+    if genre is not None:
+        from web.backend.api import music_genres
+
+        where_parts.append(music_genres.genre_where(genre, params))
     if source:
         if source == "manual":
             where_parts.append("source IS NULL")
