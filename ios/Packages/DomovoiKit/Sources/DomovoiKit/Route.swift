@@ -34,6 +34,11 @@ public enum Route: String, CaseIterable, Sendable {
     /// survives as the name a link uses.
     case satellites = "Satellites"
     case calendar = "Calendar"
+    /// The household's lists — To-do, Shopping and any it names — the web's
+    /// `#lists` (`Routes.kt:69-72`, Android 3a3b6422). Household data like
+    /// Calendar's, so a workspace screen only: never a local tab
+    /// (``localTabs(phoneCanChat:sharedScreen:savedBooks:)``).
+    case lists = "Lists"
     case stations = "Stations"
     case files = "Files"
     case settings = "Settings"
@@ -77,6 +82,7 @@ public enum Route: String, CaseIterable, Sendable {
         case .people: return "person.2.fill"
         case .satellites: return "dot.radiowaves.left.and.right"
         case .calendar: return "calendar"
+        case .lists: return "checklist"
         case .stations: return "antenna.radiowaves.left.and.right"
         case .files: return "folder.fill"
         case .settings: return "gearshape.fill"
@@ -120,7 +126,7 @@ public let sharedScreenHidden: Set<Route> = [.people, .chat, .files, .news]
 public let workspaceRoutes: [Route] = [
     .chat,
     .music, .podcasts, .audiobooks, .videos, .stations, .images,
-    .news, .calendar, .files,
+    .news, .calendar, .lists, .files,
 ]
 
 /// The phone bar's default, left to right: home · music · videos · chat

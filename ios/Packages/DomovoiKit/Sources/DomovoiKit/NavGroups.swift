@@ -32,6 +32,7 @@ public let navKeys: [Route: String] = [
     .stations: "stations",
     .news: "news",
     .calendar: "calendar",
+    .lists: "lists",
     .files: "files",
     .home: "home",
     .people: "people",
@@ -99,6 +100,7 @@ public let defaultNav = NavDefaults(
         .videos: "media",
         .news: "tools",
         .calendar: "tools",
+        .lists: "tools",
         .files: "tools",
     ]
 )

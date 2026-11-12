@@ -58,7 +58,7 @@ final class RouteTests: XCTestCase {
 
     func testTheTableIsTheKotlinsTableReadFromTheKotlin() {
         let entries = Self.kotlinEntries
-        XCTAssertEqual(16, entries.count, "the Kotlin enum was not parsed; the table below proves nothing")
+        XCTAssertEqual(17, entries.count, "the Kotlin enum was not parsed; the table below proves nothing")
         XCTAssertEqual(entries.map(\.name), Route.allCases.map(\.name), "names, in declaration order")
         XCTAssertEqual(entries.map(\.label), Route.allCases.map(\.label), "labels, in declaration order")
         // The one place the two diverge, said out loud so a change to either

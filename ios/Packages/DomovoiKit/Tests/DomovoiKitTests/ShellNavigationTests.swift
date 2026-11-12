@@ -243,7 +243,7 @@ final class ShellNavigationTests: XCTestCase {
         XCTAssertEqual([.settings, .manual], sections.system)
         // The workspace order is the web's grouped order, with the gated
         // screens absent until their plugin is, and People gone to Settings.
-        XCTAssertEqual([.chat, .music, .podcasts, .audiobooks, .videos, .news, .calendar, .files],
+        XCTAssertEqual([.chat, .music, .podcasts, .audiobooks, .videos, .news, .calendar, .lists, .files],
                        sections.workspace)
         XCTAssertFalse(sections.workspace.contains(.satellites))
         XCTAssertFalse(sections.workspace.contains(.containers))
@@ -260,7 +260,7 @@ final class ShellNavigationTests: XCTestCase {
             [
                 .item(.chat),
                 .group(media, [.music, .podcasts, .audiobooks, .videos]),
-                .group(tools, [.news, .calendar, .files]),
+                .group(tools, [.news, .calendar, .lists, .files]),
             ],
             tree
         )
