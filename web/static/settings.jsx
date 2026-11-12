@@ -1879,6 +1879,9 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
   return (
     <React.Fragment>
     <div data-settings-mark="admin"><AdminSection setupAsked={setupAsked}/></div>
+    {/* The server's name on the home network: under Admin, above the
+     * configuration (owner, 2026-11-12; it was in About & updates). */}
+    <div data-settings-mark="network-name"><NetworkNameCard/></div>
     <Card title="Domovoi configuration"
           sub="Live-editable settings. Some changes apply instantly; those marked “restart” need a Domovoi server restart."
           action={folded && (
@@ -3759,7 +3762,6 @@ const AboutPanel = () => {
   return (
     <>
       <AboutCard/>
-      {household && <div data-settings-mark="network-name"><NetworkNameCard/></div>}
       <div data-settings-mark="updates">
         {household ? <VersionSection/> : (
           <Card title="Version and updates" padded>
@@ -5407,7 +5409,7 @@ const SETTINGS_SEARCH_ITEMS = [
   { label: 'Who may edit a room’s queue', section: 'phones-and-browsers', mark: 'queue-access', words: 'queue access block' },
   { label: 'Guest access', section: 'phones-and-browsers', mark: 'guest-access', words: 'guest guests visitor' },
   { label: 'Files access', section: 'phones-and-browsers', mark: 'files-access', words: 'files documents' },
-  { label: 'Network name', section: 'about', mark: 'network-name', words: 'network name local domovoi.local mdns hostname address' },
+  { label: 'Network name', section: 'advanced', mark: 'network-name', words: 'network name local domovoi.local mdns hostname address' },
   { label: 'Updates', section: 'about', mark: 'updates', words: 'update check pull restart version channel' },
   { label: 'User manual', section: 'about', mark: 'manual', words: 'manual help guide' },
   { label: 'Admin account', section: 'advanced', mark: 'admin', words: 'admin password sign in sign out claim setup' },

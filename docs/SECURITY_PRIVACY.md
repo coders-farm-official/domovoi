@@ -1177,7 +1177,7 @@ Everything that executes code or rewrites configuration. Details next.
 
 **The network name is a convenience, not proof of which server you
 reached.** The server announces `domovoi.local` (or `domovoi2.local`, or a
-name set in Settings > System > About & updates) with its own small mDNS
+name set in Settings > System > Advanced) with its own small mDNS
 responder: the core on Linux, DomovoiHost on the Windows install
 (`domovoi/lan_name/`, `windows/common/MdnsResponder.cs`). Anyone on the
 LAN can answer for any `.local` name, before Domovoi does or instead of

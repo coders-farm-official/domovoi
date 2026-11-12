@@ -461,7 +461,7 @@ marked Public in Windows`; the address still works).
   named DOMOVOI already answers to the name with its own address: Domovoi
   leaves it to Windows (Settings: `answered by this computer`) and looks
   again every minute.
-- **Settings > System > About & updates** shows the name and its state; an
+- **Settings > System > Advanced** (under Admin) shows the name and its state; an
   admin changes it or turns it off there. The core writes the request
   `~/.domovoi/lan_name/request.json`; DomovoiHost reads it as the service
   user every 5 s, checks it again, probes the new name, and reports to

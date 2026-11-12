@@ -2480,7 +2480,7 @@ every minute.
   say), the server takes `domovoi2.local`, then `domovoi3.local`, and
   keeps it after restarts (`~/.domovoi/lan_name/state.json`), so bookmarks
   and satellites don't move about.
-- Settings → System → About & updates shows the name and its state, and
+- Settings → System → Advanced (under Admin) shows the name and its state, and
   an admin can change it there (or turn it off). A name you type that
   another device already holds isn't changed: the row says `taken` and the
   previous name stays. In `.env`: `LAN_NAME` and `LAN_NAME_ENABLED`.

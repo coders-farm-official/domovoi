@@ -13,7 +13,7 @@ it from the LAN: `sudo ufw allow from 192.168.0.0/16 to any port 5353 proto udp`
 If another device already answers to `domovoi.local`, the server takes
 `domovoi2.local` (then `domovoi3` ...) and keeps it. `LAN_NAME` and
 `LAN_NAME_ENABLED` in `.env` (docs/LINUX_HOST.md, "The network name").
-**Settings → System → About & updates** shows it ("network name") with its
+**Settings → System → Advanced** (under Admin) shows it ("network name") with its
 state, and an admin can change it or turn it off there; a typed name that
 another device already holds is not changed or numbered: it says `taken`
 and the previous name stays.
