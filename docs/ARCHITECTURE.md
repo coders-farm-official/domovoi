@@ -368,7 +368,14 @@ or Autoplay off (never the song playing), appends the next batch by exact
 file once five or fewer songs are left, trims the queue to 50 songs behind
 the current one, and ends the session when the room stopped, sat idle two
 hours or had its queue replaced; the logic is `domovoi/up_next/rooms.py`,
-which the room start paths call too; a playlist played in a room is the
+which the room start paths call too; a streaming-search provider's song
+(`sdk.playback.play_url` from a plugin holding that capability) arms the
+room's session as it is queued (`rooms.follow_stream`: a `continue` mix
+over the library songs of the stream's artist when they match, else
+`library` with no seed, the listener's taste), and the extender appends the
+first batch after the stream once it has played 15 s and, when its length
+is known, has a minute or less left — the player moves on by itself, so the
+sweeper never sees a stop; a playlist played in a room is the
 room's whole queue since 2026-11-12 — `handlers/shared/room_playlist.py`
 loads it, the first 50 songs at once and the rest in the background, and
 arms a `continue` session with the playlist as its source; no picks join

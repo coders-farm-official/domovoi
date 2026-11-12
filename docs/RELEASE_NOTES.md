@@ -15,6 +15,21 @@ Stand By Me"). When a media-provider plugin finds nothing that carries the
 words you asked for, the answer is "I couldn't find anything called …";
 the media-provider plugin's next release stops streaming an unrelated
 result in that case.
+## 2026-11-12 — Music keeps going after a streamed song
+
+When a song you don't have is streamed into a room (say "play" a song
+that isn't in your library and a streaming provider plugin plays it), the
+room no longer goes quiet when it ends: Up next carries on with songs
+from your library. If the library has that song's artist, the mix leans
+to them and their era and genres, and the queue's header reads "more like
+<artist>"; otherwise it follows your taste (or the household's), like
+"play something". The library's own copy of that song is never picked.
+Nothing follows when you stopped the music, when the room's Autoplay is
+off, or when the stream failed or died in its first seconds, and a radio
+station never gets a follow-on. The songs join the room's queue in the
+stream's last minute (or once it has played 15 seconds, when its length
+isn't known), so "next" during the stream still finds another stream
+like it until then.
 
 ## 2026-11-12 — Add songs from a room's queue, and a quicker Room queue tab
 
