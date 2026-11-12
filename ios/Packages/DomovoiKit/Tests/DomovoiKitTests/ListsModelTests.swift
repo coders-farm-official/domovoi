@@ -43,6 +43,9 @@ final class ListsModelTests: XCTestCase {
         let addStatus = Shared<Int>(201)
         let addOutcome = Shared<String>("added")
         let readStatus = Shared<Int>(200)
+        /// Lists whose own read 404s while the lists read still names them —
+        /// deleted between the two reads.
+        let goneDetail = Shared<Set<Int64>>([])
 
         /// Every request, as `METHOD path`.
         let seen = Shared<[String]>([])
@@ -93,6 +96,9 @@ final class ListsModelTests: XCTestCase {
             }
             if method == "GET", parts.path.hasPrefix("/api/lists/"),
                let id = Int64(parts.path.dropFirst("/api/lists/".count)) {
+                guard !goneDetail.current.contains(id) else {
+                    return .json(#"{"detail": "list \#(id) not found"}"#, status: 404)
+                }
                 guard let row = lists.current.first(where: { $0.contains("\"id\": \(id),") }) else {
                     return .json(#"{"detail": "list \#(id) not found"}"#, status: 404)
                 }
@@ -320,10 +326,27 @@ final class ListsModelTests: XCTestCase {
         await opened(model)
         XCTAssertEqual(2, model.selectedID)
 
-        house.lists.set([House.list(1, "To-do", position: 1, open: 0)])
+        // Deleted between the two reads: the lists still name it, its own
+        // read 404s.
+        house.goneDetail.set([2])
         container.stateEventArrived(StateEvent(type: "lists.changed", frame: "{}"))
         await settleUntil({ model.selectedID == 1 && model.openDetail?.list.id == 1 }, "the drop back")
         XCTAssertNil(selection.read(server: server), "the gone list is still this phone's choice")
+        XCTAssertGreaterThanOrEqual(house.count("GET /api/lists"), 3, "the lists were not read again after the 404")
+    }
+
+    /// Gone from the lists read itself: the first list is shown.
+    func testAListGoneFromTheListsShowsTheFirst() async {
+        let house = House()
+        let (container, _) = container(house)
+        let selection = ListsSelection(place: SavedStateBox())
+        selection.save(server: server, id: 2)
+        let model = ListsModel(container: container, selection: selection)
+        await opened(model)
+        house.lists.set([House.list(1, "To-do", position: 1, open: 0)])
+        container.stateEventArrived(StateEvent(type: "lists.changed", frame: "{}"))
+        await settleUntil({ model.selectedID == 1 && model.openDetail?.list.id == 1 }, "the first list")
+        XCTAssertEqual([], model.board.items.map(\.id), "Shopping's rows are on To-do's board")
     }
 
     // MARK: - read-after-await: every answer keyed by its server

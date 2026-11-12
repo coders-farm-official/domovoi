@@ -412,8 +412,11 @@ struct ListsCardView: View {
             .submitLabel(.done)
             .focused($addFocused)
             .onSubmit {
+                // Return on an empty box lets the keyboard go; with words in
+                // it, they are sent and the keyboard stays up, so the next
+                // item can be typed at once.
+                guard !lists.field.text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                 lists.add()
-                // The keyboard stays up: the next item can be typed at once.
                 addFocused = true
             }
             .accessibilityLabel(ListsStrings.addTo(list.name))

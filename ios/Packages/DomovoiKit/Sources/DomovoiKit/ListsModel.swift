@@ -428,10 +428,15 @@ public final class ListsModel {
         let asked = container.store.serverURL
         let path = "/api/lists/\(list.id)/items"
         let field = self.field
+        // Emptied **here**, in the tap, and not in the task: a key typed
+        // between the tap and the task's first turn would otherwise be
+        // erased with the words that were sent.
+        guard let words = field.take() else { return }
+        let body = Self.body(["text": words])
         Task { @MainActor [weak self] in
-            guard let result = await field.submit({ (words: String) async throws(DomovoiError) -> ListItemAdded in
-                try await client.post(path, body: Self.body(["text": words]), as: ListItemAdded.self)
-            }) else { return }
+            let result = await field.send(words) { () async throws(DomovoiError) -> ListItemAdded in
+                try await client.post(path, body: body, as: ListItemAdded.self)
+            }
             guard let self, self.container.store.serverURL == asked else { return }
             switch result {
             case .success(let added):
@@ -571,11 +576,27 @@ public final class ListAddField {
     public func submit<T>(
         _ send: (String) async throws(DomovoiError) -> T
     ) async -> Result<T, DomovoiError>? {
+        guard let words = take() else { return nil }
+        return await self.send(words) { () async throws(DomovoiError) -> T in try await send(words) }
+    }
+
+    /// The words to send, trimmed, with the field emptied — nil, and the
+    /// field untouched, when there is nothing to send.
+    public func take() -> String? {
         let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return nil }
         text = ""
+        return words
+    }
+
+    /// Send what ``take()`` took; a failure puts `words` back if the field is
+    /// still empty.
+    public func send<T>(
+        _ words: String,
+        _ call: () async throws(DomovoiError) -> T
+    ) async -> Result<T, DomovoiError> {
         do throws(DomovoiError) {
-            return .success(try await send(words))
+            return .success(try await call())
         } catch {
             if text.isEmpty { text = words }
             return .failure(error)
