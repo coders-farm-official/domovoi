@@ -207,7 +207,10 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
     assert {h.name: set(h.choice_kinds) for h in HANDLERS if h.choice_kinds} == {
         "music": {"core.music_choice"},
         "music_alias": {"core.alias_target"},
-        "voice_profile": {"core.phone_voice_add", "core.room_voice_add", "core.forget_me"},
+        "voice_profile": {
+            "core.phone_voice_add", "core.room_voice_add", "core.forget_me",
+            "core.self_intro", "core.name_sound_alike",
+        },
         "printing": {"core.print_pick", "core.print_printer", "core.printer_pick", "core.scan_more"},
         "help_desk": {"core.help_who"},
         "documents": {
@@ -224,7 +227,7 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
     expected = {
         "voice_profile": {
             "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
-            "core.room_voice_add", "core.forget_me",
+            "core.room_voice_add", "core.forget_me", "core.name_sound_alike",
         },
         "double_check": {"core.self_doubt_offer", "core.prefs_offer"},
         "memory": {"core.pending_memory_offer"},

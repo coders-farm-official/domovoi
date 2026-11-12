@@ -29,6 +29,7 @@ from domovoi.admin_auth import (
 from domovoi.config import settings as core_settings
 from domovoi import voice_history
 from domovoi.db.repositories import PeopleRepository
+from web.backend import voice_match
 from web.backend.db import session_scope
 from web.backend.schemas import (
     ConversationTurn,
@@ -232,15 +233,23 @@ async def list_sessions(
     dependencies=READ,
 )
 async def list_conversations(
-    person_id: int, limit: int = Query(default=50, ge=1, le=500)
+    person_id: int, limit: int = Query(default=50, ge=1, le=500),
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; None when called directly
 ) -> list[ConversationTurn]:
+    """What this person said (the turns voice identification attributed to
+    them), newest first. For an admin, each satellite turn's
+    ``voice_match`` says how it was scored (V049)."""
     async with session_scope() as s:
+        with_voice = (
+            await voice_match.caller_sees_scores(request) and await voice_match.has_columns(s)
+        )
+        tail = voice_match.SELECT_TAIL if with_voice else ""
         rows = await s.execute(
             text(
-                """
+                f"""
                 SELECT id, session_id::text, at, room_id, user_text,
                        assistant_text, matched_handler, matched_path,
-                       utterance_trigger
+                       utterance_trigger{tail}
                 FROM conversation_log
                 WHERE person_id = :pid
                 ORDER BY at DESC
@@ -249,7 +258,42 @@ async def list_conversations(
             ),
             {"pid": person_id, "limit": limit},
         )
-        return [_row_to_turn(r) for r in rows.all()]
+        return [_row_to_turn(r, with_voice=with_voice) for r in rows.all()]
+
+
+@router.get(
+    "/{person_id}/voice-matches", response_model=list[ConversationTurn],
+    dependencies=READ,
+)
+async def list_voice_matches(
+    person_id: int, request: Request, limit: int = Query(default=10, ge=1, le=100)
+) -> list[ConversationTurn]:
+    """The latest satellite turns on which this person was the closest
+    voice or the runner-up, named or not (V049), newest first, each with
+    its ``voice_match``: whether their voice is being recognized, and how
+    close it comes to someone else's. Admins only, like ``voice_match``
+    everywhere: any other caller (on the device read tier) gets an empty
+    list, so a paired screen renders without a prompt."""
+    async with session_scope() as s:
+        if not (
+            await voice_match.caller_sees_scores(request) and await voice_match.has_columns(s)
+        ):
+            return []
+        rows = await s.execute(
+            text(
+                f"""
+                SELECT id, session_id::text, at, room_id, user_text,
+                       assistant_text, matched_handler, matched_path,
+                       utterance_trigger{voice_match.SELECT_TAIL}
+                FROM conversation_log
+                WHERE voice_best_person_id = :pid OR voice_runner_up_person_id = :pid
+                ORDER BY at DESC
+                LIMIT :limit
+                """
+            ),
+            {"pid": person_id, "limit": limit},
+        )
+        return [_row_to_turn(r, with_voice=True) for r in rows.all()]
 
 
 @router.get(
@@ -754,7 +798,7 @@ def _row_to_person(r: Any) -> Person:
     )
 
 
-def _row_to_turn(r: Any) -> ConversationTurn:
+def _row_to_turn(r: Any, *, with_voice: bool = False) -> ConversationTurn:
     return ConversationTurn(
         id=int(r[0]),
         session_id=r[1],
@@ -766,6 +810,9 @@ def _row_to_turn(r: Any) -> ConversationTurn:
         matched_path=r[7],
         # Optional: only the SELECTs that ask for it have an 8th column.
         utterance_trigger=r[8] if len(r) > 8 else None,
+        voice_match=(
+            voice_match.from_row(r[-voice_match.SELECT_TAIL_WIDTH:]) if with_voice else None
+        ),
     )
 
 

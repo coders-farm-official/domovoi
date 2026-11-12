@@ -21,8 +21,16 @@ Context). This handler covers the *user-facing* parts:
 
 The confirmation flow uses the multi-turn ``pending_confirmation``
 mechanism in ``router.py``: the introduction stashes the candidate
-name + b64-serialized embedding into ``sessions.context``, and the
-follow-up "yes"/"no" routes to ``handle_confirmation`` here.
+name + b64-serialized embedding into ``sessions.context`` and reads the
+name back letter by letter ("Nice to meet you, Jordan. That's J, O, R, D,
+A, N. Did I get that right?"). Since 2026-11-11 that question is a CHOICE
+(``handle_choice_reply``): only the very next turn answers it, within
+:data:`SELF_INTRO_TTL_SEC`, and the answer may correct the name — "no,
+it's Jordyn", "yes, but it's spelled J-O-R-D-Y-N", the letters alone
+(``domovoi/person_names.py`` reads every shape). "Yes, but …" is never a
+yes. A heard name nobody has that sounds like one somebody has asks "Did
+you mean Jordan?" (``core.name_sound_alike``) instead of making a second,
+misheard person.
 
 We keep the embedding around in the pending payload (rather than
 re-embedding on confirmation) because re-embedding the *next*
@@ -103,8 +111,10 @@ from domovoi.db.repositories import (
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.log_privacy import said
+from domovoi import person_names
 from domovoi import voice_history
 from domovoi.models import Context, Intent, Response, is_phone_room
+from domovoi.person_names import read_name_reply, sound_alike_people, sounds_like_name, spell_out
 from domovoi.voice_identifier import claims_by_this_voice, is_own_voice
 
 log = logging.getLogger(__name__)
@@ -129,6 +139,24 @@ def phone_chat_mic(ctx: Context) -> bool:
 #: long as the other follow-up, "did you mean …?" (handlers/music_choice.py
 #: CHOICE_TTL_SEC).
 VOICE_ADD_TTL_SEC = 60.0
+
+#: How long "… Did I get that right?" (the name of a new person, read back
+#: letter by letter) stays answerable, in seconds. It is also a CHOICE: only
+#: the very next turn answers it, and a turn about something else drops it
+#: (handle_choice_reply), so a stray "yes" minutes later can never save a
+#: misheard name. The clock is the backstop for the one case the next-turn
+#: rule can't see: a core restarted between the question and the answer
+#: forgets which sessions have a choice waiting, and a later yes/no would
+#: otherwise still find the question parked. Two minutes rather than the
+#: one of the other follow-ups: spelling a name out, or being asked to, takes
+#: longer than a yes.
+SELF_INTRO_TTL_SEC = 120.0
+
+#: The stages of the self-introduction question (``stage`` in its payload):
+#: "Nice to meet you, X. … Did I get that right?" and, after a "no" or a
+#: correction that couldn't be read, "What's your name?".
+_STAGE_CONFIRM = "confirm"
+_STAGE_ASK_NAME = "ask_name"
 
 #: The keys a parked enrolment question carries about where it was asked.
 _ORIGIN_KEY = "origin"
@@ -192,6 +220,12 @@ _SELF_INTRO_RE = re.compile(
     r"|call me (?P<name3>[a-z][a-z'\-]+(?: [a-z][a-z'\-]+)?)"
     r"|this is (?P<name4>[a-z][a-z'\-]+(?: [a-z][a-z'\-]+)?)"
     r")$"
+)
+
+# A self-intro spelled letter by letter: "my name is J. O. R. D. Y. N."
+# (the plain form above takes at most two words, and "J-O-R-D-Y-N" as one).
+_SELF_INTRO_SPELLED_RE = re.compile(
+    r"^(?:my name(?:'s| is)|call me|i(?:'m| am)) (?P<name>[a-z](?:[\s.,\-]+[a-z]){2,})$"
 )
 
 # Third-party intro. A known speaker attesting that the named person is
@@ -338,6 +372,61 @@ def _claimed_by(data: dict) -> int | None:
         return None if value is None else int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _intro_expired(data: dict) -> bool:
+    """Whether a parked self-introduction is too old to answer: past its
+    ``expires_at``, or (a question parked before 2026-11-11, which had
+    none) more than :data:`SELF_INTRO_TTL_SEC` after its ``created_at``. A
+    payload with neither (written by hand) never expires."""
+    expires_at = data.get("expires_at")
+    if expires_at is not None:
+        try:
+            return time.time() > float(expires_at)
+        except (TypeError, ValueError):
+            return True
+    created_at = data.get("created_at")
+    if not created_at:
+        return False
+    try:
+        created = datetime.fromisoformat(str(created_at))
+    except ValueError:
+        return True
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (datetime.now(tz=timezone.utc) - created).total_seconds() > SELF_INTRO_TTL_SEC
+
+
+def _intro_question(name: str) -> str:
+    """The first read-back of a new person's name: said, then spelled —
+    "Jordan" and "Jordyn" sound the same, so only the letters show a
+    misspelling (2026-11-11)."""
+    return f"Nice to meet you, {name}. That's {spell_out(name)}. Did I get that right?"
+
+
+def _corrected_question(name: str) -> str:
+    """The read-back after a correction or a spelling."""
+    return f"Got it, {name}: {spell_out(name)}. Is that right?"
+
+
+#: Said after a plain "no" to the read-back.
+_ASK_NAME_TEXT = "Sorry about that. What's your name? You can spell it if you like."
+#: Said after a correction whose name couldn't be read ("yes, but it's
+#: spelled wrong"), or a "no" to a name that sounded the same.
+_ASK_SPELLING_TEXT = "Sorry, how do you spell it? Say the letters one at a time."
+#: Said when the reply comes after the question's time ran out.
+_INTRO_EXPIRED_TEXT = (
+    "That was a while ago, so I didn't save it. Tell me your name again if you'd like me to."
+)
+_WONT_SAVE_TEXT = "Okay, I won't save that."
+
+
+def _not_a_command(name: str) -> bool:
+    """A lone word given as a name ("no, Jordyn") that no fast path takes
+    as a command ("no, pause" is not somebody called Pause)."""
+    from domovoi.router import first_fast_path
+
+    return first_fast_path(name.lower()) is None
 
 
 # ─── Third-party expectation lifecycle ────────────────────────────────────
@@ -595,7 +684,7 @@ class VoiceProfileHandler(Handler):
     )
     confirmation_kinds = (
         "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
-        "core.room_voice_add", "core.forget_me",
+        "core.room_voice_add", "core.forget_me", "core.name_sound_alike",
     )
     # "Add this phone's voice to X?" and a satellite's "I already know
     # someone called X. Is that you?" are answered by the very next turn or
@@ -604,7 +693,14 @@ class VoiceProfileHandler(Handler):
     # else.
     # "forget me"'s "Say yes to delete everything you've said" is one too:
     # the very next turn answers it, or nothing does.
-    choice_kinds = ("core.phone_voice_add", "core.room_voice_add", "core.forget_me")
+    # So, since 2026-11-11, are "Nice to meet you, X. … Did I get that
+    # right?" (its reply may be a correction or a spelling, not only a
+    # yes/no) and "Did you mean X?" (a heard name that sounds like someone
+    # the house knows).
+    choice_kinds = (
+        "core.phone_voice_add", "core.room_voice_add", "core.forget_me",
+        "core.self_intro", "core.name_sound_alike",
+    )
     requires_network = "no"
 
     def offers_tool(self, transcript: str) -> bool:
@@ -652,6 +748,7 @@ class VoiceProfileHandler(Handler):
             # match "this is Alex", but the third-party form's leading
             # "Domovoi," disambiguator wins when present.
             FastPath(_THIRD_PARTY_INTRO_RE, VoiceProfileHandler._third_party_from_match),
+            FastPath(_SELF_INTRO_SPELLED_RE, VoiceProfileHandler._self_intro_from_match),
             FastPath(_SELF_INTRO_RE, VoiceProfileHandler._self_intro_from_match),
         ]
 
@@ -669,7 +766,14 @@ class VoiceProfileHandler(Handler):
     ) -> Response:
         action = args.get("action")
         if action == "introduce_self":
-            name = _clean_name(args.get("name") or "")
+            raw = args.get("name") or ""
+            letters = person_names.letters_of(raw)
+            if letters:
+                # "my name is S A M …": the tool model passes the letters on.
+                return await self._start_self_intro(
+                    person_names.name_from_letters(letters), ctx, session, spelled=True,
+                )
+            name = _clean_name(raw)
             if not name:
                 return Response(
                     text="What name should I use?",
@@ -710,6 +814,10 @@ class VoiceProfileHandler(Handler):
                     text="Got it — I won't save that.",
                     session_id=ctx.session_id,
                     matched_handler=self.name,
+                )
+            if _intro_expired(data):
+                return Response(
+                    text=_INTRO_EXPIRED_TEXT, session_id=ctx.session_id, matched_handler=self.name,
                 )
             name = data.get("name", "")
             embedding = _decode_b64_embedding(data.get("embedding_b64", ""))
@@ -823,6 +931,12 @@ class VoiceProfileHandler(Handler):
             or m.groupdict().get("name4")
             or ""
         )
+        letters = person_names.letters_of(raw_name)
+        if letters and len(letters) > 2:
+            # "my name is J-O-R-D-Y-N": spelled in the introduction itself.
+            return await self._start_self_intro(
+                person_names.name_from_letters(letters), ctx, session, spelled=True,
+            )
         name = _clean_name(raw_name)
         if not name:
             # Likely "I'm hungry" / "I'm tired" type false positive.
@@ -848,6 +962,11 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        # "Meet Jordyn" where the house knows a Jordan (and nobody called
+        # Jordyn): the introduction is of Jordan, misheard — never the start
+        # of a second person whose name differs by a letter. The answer says
+        # the name it took, so a real Jordyn is one rename away.
+        name = await self._known_spelling(name, session)
 
         # We need an identified introducer to anchor the deferred
         # confirmation step ("By the way, was that Alex?"). Without one,
@@ -902,9 +1021,37 @@ class VoiceProfileHandler(Handler):
     ) -> Response:
         return await self._denylist(ctx, session)
 
+    # ─── Names that sound like someone the house knows ────────────────
+    async def _sound_alikes(self, name: str, session: AsyncSession) -> list[tuple[int, str]]:
+        """Household members whose name sounds like ``name`` without being
+        it (:func:`person_names.sound_alike_people`); [] on a read error."""
+        try:
+            people = await PeopleRepository(session).names()
+        except Exception as e:
+            log.warning("reading the household's names failed: %s", e)
+            return []
+        return sound_alike_people(name, people)
+
+    async def _known_spelling(self, name: str, session: AsyncSession) -> str:
+        """``name``, or the one household name it sounds like when nobody is
+        called ``name`` itself and exactly one name sounds like it."""
+        try:
+            if await PeopleRepository(session).find_by_name(name):
+                return name
+        except Exception as e:
+            log.warning("PeopleRepository.find_by_name failed: %s", e)
+            return name
+        alikes = await self._sound_alikes(name, session)
+        spellings = {" ".join(n.split()).lower() for _pid, n in alikes}
+        if len(spellings) == 1:
+            known = alikes[0][1]
+            log.info("heard name %r taken as the household's %r", name, known)
+            return known
+        return name
+
     # ─── Core actions ─────────────────────────────────────────────────
     async def _start_self_intro(
-        self, name: str, ctx: Context, session: AsyncSession
+        self, name: str, ctx: Context, session: AsyncSession, *, spelled: bool = False,
     ) -> Response:
         """Park the candidate name + embedding in pending_confirmation,
         ask the user to confirm. Two failure modes:
@@ -931,21 +1078,63 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
 
-        # Already enrolled with that name? Skip the confirmation dance.
-        if ctx.person_id is not None:
+        embedding = np.frombuffer(ctx.embedding_bytes, dtype=np.float32)
+        return await self._propose_name(
+            name, embedding, ctx, session, claimed_by=ctx.person_id, first=True,
+            spelled=spelled,
+        )
+
+    async def _propose_name(
+        self,
+        name: str,
+        embedding: np.ndarray,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        claimed_by: int | None,
+        first: bool,
+        spelled: bool = False,
+        check_sound_alike: bool = True,
+    ) -> Response:
+        """A name for this voice — from "my name is X", or a correction or
+        spelling given in reply to the read-back — met against the people
+        the house knows, in this order:
+
+        * the voice was recognized as somebody (``claimed_by``) whose name
+          this is, or sounds like: "I already know you, X." Nothing saved.
+          Spelled out differently from that person's name: "I know you as
+          X …" — the saved spelling is an admin's to change (People).
+        * someone (exactly) has the name: "Add this phone's voice to X?" /
+          "I already know someone called X. Is that you?"; two such
+          people: the refusal (:func:`_more_than_one`).
+        * a name nobody has but that sounds like one household name: "Did
+          you mean X?" (``core.name_sound_alike``) — never a second,
+          misheard person. Asked once: not again after its "no".
+        * otherwise the read-back, with the letters: "Nice to meet you, X.
+          That's X, Y, Z. Did I get that right?" (``first``), or "Got it,
+          X: …. Is that right?" after a correction."""
+        if claimed_by is not None:
+            # Already enrolled with that name? Skip the confirmation dance.
             try:
-                existing = await PeopleRepository(session).get(ctx.person_id)
+                existing = await PeopleRepository(session).get(claimed_by)
             except Exception as e:
                 log.warning("PeopleRepository.get failed: %s", e)
                 existing = None
-            if existing is not None and existing[1].lower() == name.lower():
-                return Response(
-                    text=f"I already know you, {name}.",
-                    session_id=ctx.session_id,
-                    matched_handler=self.name,
+            if existing is not None and _same_name(existing[1], name):
+                return self._say(f"I already know you, {existing[1]}.", ctx)
+            if existing is not None and sounds_like_name(name, existing[1]):
+                if not spelled:
+                    # "my name is Jordyn" in Jordan's voice: Jordan, misheard.
+                    return self._say(f"I already know you, {existing[1]}.", ctx)
+                # Spelled out, and not how the house spells this voice's
+                # name: the saved spelling may be the wrong one. Never a
+                # second person with the same voice.
+                return self._say(
+                    f"I know you as {existing[1]}. If that's spelled wrong, an admin "
+                    "can change it in Settings, under People.",
+                    ctx,
                 )
 
-        embedding = np.frombuffer(ctx.embedding_bytes, dtype=np.float32)
         # A name someone already has is that person asking to be known by
         # this voice too — from the chat mic or at a satellite — never a
         # second person with the name.
@@ -968,8 +1157,42 @@ class VoiceProfileHandler(Handler):
             )
         if known:
             if phone_chat_mic(ctx):
-                return await self._offer_phone_voice(known[0], embedding, ctx, session)
-            return await self._offer_room_voice(known[0], embedding, ctx, session)
+                return await self._offer_phone_voice(
+                    known[0], embedding, ctx, session, claimed_by=claimed_by,
+                )
+            return await self._offer_room_voice(
+                known[0], embedding, ctx, session, claimed_by=claimed_by,
+            )
+        if check_sound_alike:
+            alikes = await self._sound_alikes(name, session)
+            if len(alikes) == 1:
+                return await self._offer_sound_alike(
+                    alikes[0], name, embedding, ctx, session, claimed_by=claimed_by,
+                )
+        return await self._park_intro(
+            name, embedding, ctx, session, claimed_by=claimed_by,
+            text=_intro_question(name) if first else _corrected_question(name),
+            stage=_STAGE_CONFIRM,
+        )
+
+    async def _park_intro(
+        self,
+        name: str,
+        embedding: np.ndarray,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        claimed_by: int | None,
+        text: str,
+        stage: str,
+        heard: str | None = None,
+    ) -> Response:
+        """Park the self-introduction question (a choice: the next turn
+        answers it, within :data:`SELF_INTRO_TTL_SEC`) and ask ``text``.
+        ``stage``: :data:`_STAGE_CONFIRM` (``name`` is read back) or
+        :data:`_STAGE_ASK_NAME` (no name yet; ``heard`` is the one that was
+        wrong). The voice parked is the introduction's, kept through every
+        correction: it is the clip of the person saying their name."""
         try:
             await request_confirmation(
                 session,
@@ -978,28 +1201,80 @@ class VoiceProfileHandler(Handler):
                 handler=self.name,
                 data={
                     **_confirmation_payload(
-                        name, embedding, "core.self_intro", claimed_by=ctx.person_id,
+                        name, embedding, "core.self_intro", claimed_by=claimed_by,
                     ),
                     **_origin(ctx),
+                    "stage": stage,
+                    "heard": heard,
+                    "expires_at": time.time() + SELF_INTRO_TTL_SEC,
                 },
             )
         except Exception as e:
             log.warning("couldn't park pending_confirmation: %s", e)
             return Response(
-                text=f"Hi {name}, nice to meet you.",
+                text=f"Hi {name}, nice to meet you." if name else "Something went wrong there — try saying your name again.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
 
         return Response(
-            text=f"Nice to meet you, {name}. Did I get that right?",
+            text=text,
             session_id=ctx.session_id,
             matched_handler=self.name,
             # Tell the Pi to skip the wake-word gate for the user's
-            # yes/no answer. Pairs with the `pending_confirmation`
-            # parked above — the router will route the answer through
-            # `handle_confirmation` regardless, but without this flag
-            # the user would have to re-engage with "Hey Jarvis" first.
+            # answer. Pairs with the question parked above — the router
+            # hands the next turn to `handle_choice_reply` — but without
+            # this flag the user would have to re-engage with the wake
+            # word first.
+            expect_followup=True,
+        )
+
+    async def _offer_sound_alike(
+        self,
+        known: tuple[int, str],
+        heard: str,
+        embedding: np.ndarray,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        claimed_by: int | None,
+    ) -> Response:
+        """ "my name is Jordyn" where nobody is called Jordyn but Jordan is
+        known: "Did you mean Jordan?" — the name was most likely misheard
+        (Whisper has no idea how the household spells its names). Yes: the
+        clip joins Jordan's samples as a claim (like "I already know someone
+        called X. Is that you?"); no: Jordyn is read back as a new person.
+        The very next turn only, within :data:`VOICE_ADD_TTL_SEC`."""
+        person_id, name = known
+        payload = {
+            **_confirmation_payload(
+                name, embedding, "core.name_sound_alike", claimed_by=claimed_by,
+            ),
+            **_origin(ctx),
+            "person_id": int(person_id),
+            "heard": heard,
+            "expires_at": time.time() + VOICE_ADD_TTL_SEC,
+        }
+        try:
+            await request_confirmation(
+                session,
+                ctx.session_id,
+                kind="core.name_sound_alike",
+                handler=self.name,
+                data=payload,
+            )
+        except Exception as e:
+            log.warning("couldn't park the sound-alike question: %s", e)
+            return Response(
+                text="Something went wrong there — try saying your name again.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        log.info("heard name %r sounds like person_id=%d %r: asking", heard, person_id, name)
+        return Response(
+            text=f"Did you mean {name}? I already know someone called {name}.",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
             expect_followup=True,
         )
 
@@ -1010,6 +1285,8 @@ class VoiceProfileHandler(Handler):
         embedding: np.ndarray,
         ctx: Context,
         session: AsyncSession,
+        *,
+        claimed_by: int | None,
     ) -> Response:
         """ "my name is X" from the chat mic, for an X who exists: ask
         before adding this clip to X's phone samples. Only the NEXT press
@@ -1019,7 +1296,7 @@ class VoiceProfileHandler(Handler):
         person_id, name = known
         payload = {
             **_confirmation_payload(
-                name, embedding, "core.phone_voice_add", claimed_by=ctx.person_id,
+                name, embedding, "core.phone_voice_add", claimed_by=claimed_by,
             ),
             **_origin(ctx),
             "person_id": int(person_id),
@@ -1054,6 +1331,8 @@ class VoiceProfileHandler(Handler):
         embedding: np.ndarray,
         ctx: Context,
         session: AsyncSession,
+        *,
+        claimed_by: int | None,
     ) -> Response:
         """ "my name is X" at a satellite, for an X who exists but isn't
         who this voice was matched as (a room they were never heard in, a
@@ -1066,7 +1345,7 @@ class VoiceProfileHandler(Handler):
         person_id, name = known
         payload = {
             **_confirmation_payload(
-                name, embedding, "core.room_voice_add", claimed_by=ctx.person_id,
+                name, embedding, "core.room_voice_add", claimed_by=claimed_by,
             ),
             **_origin(ctx),
             "person_id": int(person_id),
@@ -1259,6 +1538,10 @@ class VoiceProfileHandler(Handler):
             return None
         if kind == "core.forget_me":
             return await self._handle_forget_reply(data, transcript, ctx, session)
+        if kind == "core.self_intro":
+            return await self._handle_intro_reply(data, transcript, ctx, session)
+        if kind == "core.name_sound_alike":
+            return await self._handle_sound_alike_reply(data, transcript, ctx, session)
         affirmative = _parse_yes_no(transcript)
         if affirmative is None:
             affirmative = _parse_yes_no(strip_leading_filler(transcript))
@@ -1277,6 +1560,175 @@ class VoiceProfileHandler(Handler):
         if kind == "core.room_voice_add":
             return await self._handle_room_voice_add(data, affirmative, ctx, session)
         return await self._handle_phone_voice_add(data, affirmative, ctx, session)
+
+    # ─── Replies to the name read-back ────────────────────────────────
+    @staticmethod
+    def _read_reply(transcript: str) -> person_names.NameReply | None:
+        """:func:`person_names.read_name_reply`, with a lone word that is
+        one of the house's commands not taken as a name: "no, pause" is a
+        no (and the pause is not lost to a person called Pause — the
+        question is answered, as a plain yes/no always did)."""
+        from domovoi.router import normalize_transcript
+
+        reply = read_name_reply(normalize_transcript(transcript), not_a_name=_NAME_BLOCKLIST)
+        if reply is not None and reply.kind == person_names.NAME and reply.bare:
+            if not _not_a_command(reply.name or ""):
+                if reply.polarity is None:
+                    return None
+                kind = person_names.YES if reply.polarity else person_names.NO
+                return person_names.NameReply(kind, polarity=reply.polarity)
+        return reply
+
+    def _say(self, text: str, ctx: Context) -> Response:
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _ask_for_name(
+        self, data: dict, ctx: Context, session: AsyncSession, *, spelling: bool,
+    ) -> Response:
+        """Ask for the name again — "What's your name?" after a plain no,
+        "how do you spell it?" after a correction that couldn't be read —
+        keeping the introduction's voice. A fresh question, with its own
+        :data:`SELF_INTRO_TTL_SEC`."""
+        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
+        if embedding is None:
+            return self._say("Something went wrong storing that — try saying your name again.", ctx)
+        heard = str(data.get("name") or data.get("heard") or "") or None
+        return await self._park_intro(
+            "", embedding, ctx, session, claimed_by=_claimed_by(data),
+            text=_ASK_SPELLING_TEXT if spelling else _ASK_NAME_TEXT,
+            stage=_STAGE_ASK_NAME, heard=heard,
+        )
+
+    async def _handle_intro_reply(
+        self, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The turn after "Nice to meet you, X. That's X, Y, Z. Did I get
+        that right?" (or "What's your name?"). The router has already
+        cleared the question.
+
+        * yes — X is saved (in time, from where it was asked);
+        * a name — "no, it's Jordyn", "it's spelled J-O-R-D-Y-N", "yes, but
+          it's J O R D Y N", "my name is Jordyn", a bare spelling: read back
+          again, spelled ("Got it, Jordyn: J, O, R, D, Y, N. Is that
+          right?"), or met against the household like any introduction
+          (:meth:`_propose_name`). The same name as X with a yes, or
+          spelled the same: saved. The same name after a NO: it sounded
+          right and is spelled wrong, so "how do you spell it?";
+        * "yes, but …" / a correction that couldn't be read: "how do you
+          spell it?" — never a yes;
+        * no: "What's your name?" (once; a no to that saves nothing);
+        * "never mind" / "forget it": nothing saved;
+        * anything else: not about the name — the question is dropped and
+          the turn routed as usual (None)."""
+        reply = self._read_reply(transcript)
+        if reply is None:
+            return None
+        if not _answered_where_asked(data, ctx):
+            return self._say(_ELSEWHERE_TEXT, ctx)
+        stage = data.get("stage") or _STAGE_CONFIRM
+        name = str(data.get("name") or "")
+        if reply.kind == person_names.CANCEL:
+            return self._say(_WONT_SAVE_TEXT, ctx)
+        if reply.kind == person_names.NO:
+            if stage == _STAGE_ASK_NAME or not name:
+                return self._say(_WONT_SAVE_TEXT, ctx)
+            if _intro_expired(data):
+                return self._say(_INTRO_EXPIRED_TEXT, ctx)
+            return await self._ask_for_name(data, ctx, session, spelling=False)
+        if _intro_expired(data):
+            return self._say(_INTRO_EXPIRED_TEXT, ctx)
+        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
+        if embedding is None:
+            return self._say("Something went wrong storing that — try saying your name again.", ctx)
+        if reply.kind == person_names.UNCLEAR:
+            return await self._ask_for_name(data, ctx, session, spelling=True)
+        if reply.kind == person_names.YES:
+            if stage == _STAGE_ASK_NAME or not name:
+                return await self._ask_for_name(data, ctx, session, spelling=False)
+            return await self._enroll(
+                name, embedding, ctx, session, phone=_asked_on_the_phone(data),
+                room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=_claimed_by(data),
+            )
+        # A name.
+        new_name = reply.name or ""
+        if name and _same_name(new_name, name) and stage == _STAGE_CONFIRM:
+            if reply.polarity is False and not reply.spelled:
+                # "No, it's Jordan" to "Jordan": the name sounded right and
+                # the spelling is what's wrong.
+                return await self._ask_for_name(data, ctx, session, spelling=True)
+            return await self._enroll(
+                name, embedding, ctx, session, phone=_asked_on_the_phone(data),
+                room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=_claimed_by(data),
+            )
+        log.info(
+            "self-introduction corrected: %r -> %r (%s)",
+            name or data.get("heard"), new_name, "spelled" if reply.spelled else "said",
+        )
+        return await self._propose_name(
+            new_name, embedding, ctx, session, claimed_by=_claimed_by(data), first=False,
+            spelled=reply.spelled,
+        )
+
+    async def _handle_sound_alike_reply(
+        self, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The turn after "Did you mean Jordan? I already know someone
+        called Jordan." Yes (or "Jordan"): this voice joins Jordan's samples
+        as a claim, like "I already know someone called X. Is that you?".
+        No: the heard name is read back as a new person ("Nice to meet you,
+        Jordyn. That's …"). A different name or a spelling: met like any
+        correction, without asking about sound-alikes again. Anything else:
+        the question is dropped (None)."""
+        reply = self._read_reply(transcript)
+        if reply is None:
+            return None
+        if not _answered_where_asked(data, ctx):
+            return self._say(_ELSEWHERE_TEXT, ctx)
+        if reply.kind == person_names.CANCEL:
+            return self._say(_WONT_SAVE_TEXT, ctx)
+        try:
+            expired = time.time() > float(data.get("expires_at"))
+        except (TypeError, ValueError):
+            expired = True
+        if expired:
+            return self._say(_INTRO_EXPIRED_TEXT, ctx)
+        known = str(data.get("name") or "")
+        heard = str(data.get("heard") or "")
+        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
+        try:
+            person_id = int(data.get("person_id"))
+        except (TypeError, ValueError):
+            person_id = None
+        if embedding is None or person_id is None or not known:
+            return self._say("Something went wrong storing that — try saying your name again.", ctx)
+        claimed_by = _claimed_by(data)
+        is_known = reply.kind == person_names.YES or (
+            reply.kind == person_names.NAME and _same_name(reply.name or "", known)
+        )
+        if is_known:
+            if _asked_on_the_phone(data):
+                return await self._add_phone_sample(
+                    person_id, known, embedding, ctx, session, claimed_by=claimed_by,
+                )
+            return await self._add_room_sample(
+                person_id, known, embedding, data.get(_ORIGIN_ROOM_KEY) or ctx.room_id,
+                ctx, session, claimed_by=claimed_by,
+            )
+        if reply.kind == person_names.UNCLEAR:
+            return await self._ask_for_name(
+                {**data, "name": "", "heard": heard}, ctx, session, spelling=True,
+            )
+        if reply.kind == person_names.NO:
+            if not heard:
+                return await self._ask_for_name({**data, "name": ""}, ctx, session, spelling=False)
+            return await self._propose_name(
+                heard, embedding, ctx, session, claimed_by=claimed_by, first=True,
+                check_sound_alike=False,
+            )
+        return await self._propose_name(
+            reply.name or "", embedding, ctx, session, claimed_by=claimed_by, first=False,
+            spelled=reply.spelled, check_sound_alike=False,
+        )
 
     async def _handle_phone_voice_add(
         self,

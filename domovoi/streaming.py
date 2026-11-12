@@ -4636,11 +4636,14 @@ class StreamSession:
                 # transcript brings the embedding of its copy, computed right
                 # after its decode; the matching (and its last_seen and
                 # per-room learning) runs here, once per turn, either way.
+                from domovoi import voice_identifier
                 from domovoi.voice_identifier import identify
                 stage = STAGE_IDENTIFY
                 stage_t0 = time.perf_counter()
                 id_limit = max(0.1, float(settings.voice_identify_timeout_sec))
                 id_budget = asyncio.timeout(id_limit)
+                # Why there is no result, when there is none (V049).
+                id_outcome: str | None = None
                 try:
                     async with id_budget:
                         await self._copy_embedding(heard)
@@ -4653,7 +4656,9 @@ class StreamSession:
                 except TimeoutError as e:
                     if not id_budget.expired():
                         log.warning("voice identification failed: %s", e)
+                        id_outcome = voice_identifier.OUTCOME_ERROR
                     else:
+                        id_outcome = voice_identifier.OUTCOME_TIMEOUT
                         # Best-effort, like a failure: the turn goes on
                         # unidentified. Noted for the Health page — the
                         # embedder shares the speech workers.
@@ -4666,8 +4671,22 @@ class StreamSession:
                 except Exception as e:
                     log.warning("voice identification failed: %s", e)
                     ident = None
+                    id_outcome = voice_identifier.OUTCOME_ERROR
                 timings.stage("identify_ms", stage_t0)
                 stage = STAGE_REPLY
+                # How identification scored this turn, whatever happened
+                # (too short, nobody enrolled, timed out, opted out): logged
+                # for every satellite turn and kept on its history row
+                # (V049). On the entry at once, so the router's record has
+                # it even before the row's own write has run.
+                voice_match = voice_identifier.VoiceMatch.of(
+                    ident, outcome=id_outcome, speech_seconds=audio_seconds,
+                )
+                if history is not None:
+                    history.voice_match = voice_match
+                self._track_history_write(turn_history.record_voice_match(
+                    history, voice_match, room_id=self.room_id, session_id=self.session_id,
+                ))
 
                 person_id = ident.person_id if ident else None
                 if person_id is not None and history is not None:

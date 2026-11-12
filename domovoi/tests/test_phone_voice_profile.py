@@ -248,7 +248,7 @@ async def test_a_new_name_from_the_phone_enrols_into_the_phone_set(db_session, o
     tid = await _thread()
     async with _client() as c:
         asked = await _say(c, tid, whisper, "My name is Ana.", PRIYA_PHONE)
-        assert asked["reply"] == "Nice to meet you, Ana. Did I get that right?"
+        assert asked["reply"] == "Nice to meet you, Ana. That's A, N, A. Did I get that right?"
         done = await _say(c, tid, whisper, "Yes.", PRIYA_PHONE)
         assert done["reply"] == "Got it, Ana."
         later = await _say(c, tid, whisper, "Who am I?", PRIYA_PHONE)
@@ -372,7 +372,7 @@ async def test_a_yes_from_elsewhere_on_the_phones_session_saves_nothing(
     tid = await _thread()
     async with _client() as c:
         asked = await _say(c, tid, whisper, "My name is Ana.", PRIYA_PHONE)
-        assert asked["reply"] == "Nice to meet you, Ana. Did I get that right?"
+        assert asked["reply"] == "Nice to meet you, Ana. That's A, N, A. Did I get that right?"
         replay = await c.post(
             "/v1/intent",
             json={"transcript": "yes", "room_id": "kitchen", "session_id": asked["session_id"]},

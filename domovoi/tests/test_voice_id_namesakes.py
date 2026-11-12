@@ -431,7 +431,7 @@ async def test_the_room_question_takes_no_answer_from_a_chat_mic(db_session) -> 
 
 async def test_a_name_taken_between_the_question_and_the_yes_gets_the_sample_not_a_twin(room) -> None:
     asked = await room.say("My name is Ana.", PRIYA_HERE)
-    assert _reply(asked) == "Nice to meet you, Ana. Did I get that right?"
+    assert _reply(asked) == "Nice to meet you, Ana. That's A, N, A. Did I get that right?"
     ana = await _person("Ana", (PRIYA_OFFICE, "office"))   # enrolled elsewhere meanwhile
     done = await room.say("Yes.", PRIYA_HERE, trigger="followup")
     assert _reply(done) == "Done — I'll know your voice in this room now, Ana."

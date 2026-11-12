@@ -3539,6 +3539,7 @@
           "people"
         ],
         "summary": "List Conversations",
+        "description": "What this person said (the turns voice identification attributed to\nthem), newest first. For an admin, each satellite turn's\n``voice_match`` says how it was scored (V049).",
         "operationId": "list_conversations_api_people__person_id__conversations_get",
         "parameters": [
           {
@@ -3574,6 +3575,65 @@
                     "$ref": "#/components/schemas/ConversationTurn"
                   },
                   "title": "Response List Conversations Api People  Person Id  Conversations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/people/{person_id}/voice-matches": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "List Voice Matches",
+        "description": "The latest satellite turns on which this person was the closest\nvoice or the runner-up, named or not (V049), newest first, each with\nits ``voice_match``: whether their voice is being recognized, and how\nclose it comes to someone else's. Admins only, like ``voice_match``\neverywhere: any other caller (on the device read tier) gets an empty\nlist, so a paired screen renders without a prompt.",
+        "operationId": "list_voice_matches_api_people__person_id__voice_matches_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConversationTurn"
+                  },
+                  "title": "Response List Voice Matches Api People  Person Id  Voice Matches Get"
                 }
               }
             }
@@ -5668,7 +5728,7 @@
           "satellites"
         ],
         "summary": "List Conversations",
-        "description": "The room's voice turns, newest first. Since V043 every turn of a\nsatellite is here from the moment its transcript exists: ``status``\nsays whether the reply is pending, answered, never came\n(``no_answer`` + ``no_answer_reason``) or speech recognition never\nmade the request out (``unheard``, with ``audio_ms``).",
+        "description": "The room's voice turns, newest first. Since V043 every turn of a\nsatellite is here from the moment its transcript exists: ``status``\nsays whether the reply is pending, answered, never came\n(``no_answer`` + ``no_answer_reason``) or speech recognition never\nmade the request out (``unheard``, with ``audio_ms``). For an admin,\n``voice_match`` says how voice identification scored the turn (V049,\nweb/backend/voice_match.py).",
         "operationId": "list_conversations_api_satellites__room_id__conversations_get",
         "parameters": [
           {
@@ -19994,6 +20054,16 @@
               }
             ],
             "title": "Wake Score"
+          },
+          "voice_match": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VoiceMatchInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -27021,6 +27091,86 @@
           "sha256"
         ],
         "title": "VoiceInfo"
+      },
+      "VoiceMatchInfo": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "best_person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Person Id"
+          },
+          "best_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Name"
+          },
+          "best_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Score"
+          },
+          "runner_up_person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Up Person Id"
+          },
+          "runner_up_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Up Name"
+          },
+          "runner_up_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Up Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "title": "VoiceMatchInfo",
+        "description": "How voice identification scored a satellite turn (V049). ``outcome``:\n\"confident\" | \"match\" (somebody was named) | \"ambiguous\" (two people too\nclose to tell apart: nobody named) | \"no_match\" (the closest was under\nthe threshold) | \"too_short\" (the recording was too short to embed) |\n\"no_embedding\" (the embedder gave nothing) | \"no_samples\" (nobody\nenrolled yet) | \"timeout\" | \"denylist\" (an opted-out voice) | \"error\".\nThe closest person and the runner-up with their scores (cosine, 0..1;\nthe match threshold is ``voice_profile_match_threshold``, 0.75 by\ndefault) are set for the first four; a person since forgotten reads\nnull. Names are the people's current names."
       },
       "VoiceNote": {
         "properties": {
