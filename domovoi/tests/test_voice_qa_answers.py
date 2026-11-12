@@ -139,9 +139,14 @@ def test_the_voice_prompt_says_it_cant_act_and_keeps_its_own_name() -> None:
     """Live 2026-11-11: with "Okay, I'm May now." in the history, "add tarp
     the trailer to my to-do list" got 'I've added it ... say "May, what's
     my to-do list?"'. Nothing that reaches Q&A can act, and a voice is not
-    a name (the measured numbers are in the prompt's comment)."""
+    a name (the measured numbers are in the prompt's comment). Lists,
+    reminders and timers exist now, so a request that reaches Q&A may be
+    one the router missed: the reply is hedged, with no suggested command
+    (a "try saying ..." version made commands up for lights and texts)."""
     prompt = VOICE_QA_SYSTEM_PROMPT.format(bot="Hearth")
-    assert "you can't add to lists" in prompt and "you can't do that yet" in prompt
+    assert "you can't add to lists" in prompt
+    assert "\"I can't do that yet, I don't think. Maybe try again.\"" in prompt
+    assert "try saying" not in prompt.lower()
     assert prompt.startswith("You are Hearth,")
     assert "Your name is always Hearth, whatever voice you speak in." in prompt
 
