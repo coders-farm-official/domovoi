@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — a pushed wake word no longer hides the room's wake sensitivity
+
+**Pushing a wake word to a room now sets that room's Wake sensitivity,
+and the room's Settings tab shows it.** Until now the push kept the word's
+own value (0.50 unless you changed it) in a separate place on the room
+device that quietly won over the Wake sensitivity in the room's Settings
+tab: a room set to 0.80 woke at 0.50 after a push, with only a small
+amber "wake threshold" note on its health card to say so. The push button
+now says what the room will get, e.g. **Push to room (wake sensitivity
+0.50)**; change a word's value beside its name before pushing, or the
+room's Wake sensitivity after. Room devices pick this up with their next
+software update; when one starts on the new software it moves the value
+it was already using into its Settings tab, so nothing about how it wakes
+changes, and the amber note goes away. If a room wakes too easily after
+that, raise its Wake sensitivity in its Settings tab.
+
 ## 2026-11-11 — Podcasts gets its own folder on Windows
 
 **Windows install: downloaded podcast episodes now live in a `Podcasts`

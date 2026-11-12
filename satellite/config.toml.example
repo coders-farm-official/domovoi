@@ -181,10 +181,11 @@ threshold = 0.5
 # Seconds the wake word is ignored after a turn that went wrong (0-10, 0 =
 # off): one the server ignored as background talk, one cut off at
 # max_record_seconds, or one that ended in an error or with no reply. After
-# an ordinary answered turn there is no pause. If ~/.domovoi/wake_threshold
-# exists (left by a model pushed from the dashboard) it overrides
-# `threshold` above; the dashboard's room health shows the threshold in
-# effect, and setting the sensitivity from the dashboard removes that file.
+# an ordinary answered turn there is no pause. A wake word pushed from the
+# dashboard writes its own value into `threshold` above. Older software kept
+# it in ~/.domovoi/wake_threshold instead, overriding `threshold`; this
+# satellite moves that file's value into `threshold` when it starts and
+# deletes the file.
 # cooldown_sec = 2.0
 
 # How the satellite acknowledges its wake word before it listens for your

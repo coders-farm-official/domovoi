@@ -1593,7 +1593,9 @@ listens.
   and about 32 GB of disk. A word takes about 20 minutes to train with an
   NVIDIA graphics card, and over an hour on the processor.
 - The steps: **Create** the word, **Record** 15 or more clips on the
-  room device itself, press **Train**, then **Push to room**.
+  room device itself, press **Train**, then **Push to room**. The button
+  shows the wake sensitivity the room gets with the word; the room's
+  Settings tab shows it after the push, and you can change it there.
 - Each **Record** adds to the clips already there, from any room, until
   you train; each clip shows the room it came from. **Delete all clips**
   starts over.

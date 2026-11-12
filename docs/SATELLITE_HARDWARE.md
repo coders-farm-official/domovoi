@@ -443,7 +443,10 @@ documented destination**, and you train it in-product:
    training pipeline details.
 3. **Push to room.** The push writes the model slug to the Pi's
    `~/.domovoi/wake` sidecar, which overrides `[wake] wake_word` at
-   runtime and survives restarts. Delete the sidecar to revert.
+   runtime and survives restarts. Delete the sidecar to revert. The word's
+   own threshold goes into `[wake] threshold`, the room's **Wake
+   sensitivity** (the push button names it), so the room's ⚙ tab shows the
+   value in use; change it there afterwards as usual.
 
 **Model sync is automatic and verified.** Satellites mirror the server's
 wake-model set over HTTP (`/v1/wake-models/manifest` +

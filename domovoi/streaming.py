@@ -6900,8 +6900,9 @@ class StreamSession:
         self-restarts to load it. ``slug`` is the load-bearing identifier —
         the served ``<slug>.onnx`` stem, the Pi's effective wake word, and the
         openWakeWord prediction-dict key all equal it. ``threshold`` carries the
-        registry's per-word detection threshold so the Pi applies it instead of
-        its local config default (None → the Pi keeps its config threshold).
+        registry's per-word detection threshold, which the satellite writes into
+        its ``[wake] threshold`` (the room's Wake sensitivity setting; None →
+        the setting stays as it is).
         Raw send so a dead socket propagates to the admin caller.
         :class:`NotDeclared` for a device that didn't declare "wake_models"."""
         self._require("wake_models", "set_wake_word")

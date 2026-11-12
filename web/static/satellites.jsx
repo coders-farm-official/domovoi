@@ -397,7 +397,10 @@ const satHealthTempTone = (c) => c == null ? 'idle' : c < 70 ? 'ok' : c < 80 ? '
 const satHealthThrottle = (flags) => (flags || []).filter(f => !f.endsWith('_occurred'));
 // The wake threshold in use when it isn't the [wake] threshold setting (a
 // pushed wake word left its own on the device; 2026-11-09), else null.
-// Older room devices send neither number: null.
+// Older room devices send neither number: null. Current room software
+// writes a pushed word's value into the setting itself and moves an old
+// leftover there when it starts (2026-11-11), so this shows on a device
+// still on older software, or one whose settings file couldn't be written.
 const satWakeOverride = (s) => {
   if (!s || typeof s.wake_threshold !== 'number' || typeof s.wake_threshold_setting !== 'number') return null;
   if (Math.abs(s.wake_threshold - s.wake_threshold_setting) < 0.001) return null;
@@ -594,7 +597,7 @@ const SatHealthCard = ({ room, online }) => {
         {s && satNeeds2023(s.boot) &&
           <Pill tone="warn" title="Secure Boot is on and the firmware lacks Microsoft's 2023 certificate (below)">firmware needs the 2023 certificate</Pill>}
         {satWakeOverride(s) &&
-          <Pill tone="warn" title="a wake word pushed from the dashboard left its own threshold on this room device; it is the one in use">wake threshold {satWakeOverride(s).inUse}</Pill>}
+          <Pill tone="warn" title="a wake word pushed from the dashboard left its own value on this room device; it is the one in use">wake sensitivity {satWakeOverride(s).inUse}</Pill>}
         {s && s.mic_blocked === true &&
           <Pill tone="err" title="the device's microphone is switched off in its own settings (a phone's mic privacy toggle): it hears only silence">mic blocked</Pill>}
         {throttle.length > 0 && <Pill tone="err">{throttle.join(', ').replace(/_/g, ' ')}</Pill>}
@@ -609,7 +612,7 @@ const SatHealthCard = ({ room, online }) => {
       )}
       {satWakeOverride(s) && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
-          It wakes at threshold {satWakeOverride(s).inUse}, not the {satWakeOverride(s).setting} in its Settings tab: a wake word pushed earlier left its own value behind. Setting the wake sensitivity again replaces it.
+          It wakes at sensitivity {satWakeOverride(s).inUse}, not the {satWakeOverride(s).setting} in its Settings tab: a wake word pushed earlier left its own value behind. Setting the wake sensitivity again replaces it; updating the room device's software stops a push from doing this again.
         </div>
       )}
       {s && s.reboot_needed && (

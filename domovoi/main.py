@@ -3863,8 +3863,9 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
     try:
         # set_wake_word already triggers a model sync + restart on the Pi;
         # sending wake_models_changed too would just race a second concurrent
-        # sync against the restart, so we don't. Carry the per-word threshold
-        # so the Pi applies it instead of its local config default.
+        # sync against the restart, so we don't. Carry the per-word threshold:
+        # the satellite writes it into its [wake] threshold, the room's Wake
+        # sensitivity setting, so its Settings tab shows the value in use.
         await target.request_set_wake_word(
             slug=row["slug"], threshold=row.get("threshold")
         )
