@@ -376,7 +376,7 @@ fun LyricsPanel(trackId: Long?, follow: LyricsFollow, height: Dp, modifier: Modi
 }
 
 /**
- * The "lyrics" section of the player tab and the player sheet: a header
+ * The "lyrics" section of the player tab: a header
  * that opens and closes it ([open], remembered by the caller) over a
  * [LyricsPanel]. The doc loads even while closed, so a viewer outside the
  * household tier never sees the header at all.
@@ -416,7 +416,7 @@ internal fun LyricsSection(
 }
 
 @Composable
-private fun LyricsBody(load: LyricsLoad, follow: LyricsFollow, height: Dp, modifier: Modifier = Modifier) {
+internal fun LyricsBody(load: LyricsLoad, follow: LyricsFollow, height: Dp, modifier: Modifier = Modifier) {
     when (val r = load.result) {
         null -> LyricsSkeleton(modifier)
         LyricsResult.Hidden -> Unit

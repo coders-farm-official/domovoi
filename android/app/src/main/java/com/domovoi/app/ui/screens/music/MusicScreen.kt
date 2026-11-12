@@ -158,13 +158,7 @@ fun MusicScreen() {
     val realPlaylists = playlists.data.orEmpty().filter { !it.isVirtual }
 
     // ── Local playback (this device) ──────────────────────────────────
-    fun toItem(t: LibraryTrack): PlayItem = PlayItem.fromTrack(
-        t.id,
-        t.title
-            ?: t.filePath?.substringAfterLast('/')?.substringAfterLast('\\')
-            ?: "track",
-        t.artist, t.album, t.durationSec,
-    )
+    fun toItem(t: LibraryTrack): PlayItem = libraryPlayItem(t)
 
     val onBrowserPlay: (LibraryTrack) -> Unit = { t ->
         playHereAndSay(app.player, toItem(t), t.title ?: "track", toast) { scope.launch { it() } }
@@ -358,6 +352,7 @@ fun MusicScreen() {
     val libraryTotal: Int? = stats.data?.totalTracks
     val tabLabels = listOf(
         "library" + (libraryTotal?.let { " · $it" } ?: ""),
+        "genres",
         "player",
         // What the SPEAKERS play from, next to the player's own queue so the
         // difference is visible rather than explained.
@@ -368,15 +363,18 @@ fun MusicScreen() {
 
     // The player and room-queue tabs emit a lazy item per row, so the state
     // their item lists are built from is collected here, only while open.
-    val playerModel = if (ui.tab == 1) rememberPlayerTabModel() else null
-    val roomQueue = if (ui.tab == 2) {
+    val playerModel = if (ui.tab == MusicTabs.PLAYER) rememberPlayerTabModel() else null
+    val roomQueue = if (ui.tab == MusicTabs.ROOM_QUEUE) {
         rememberRoomQueue(rooms, npList.firstOrNull { it.state == "play" }?.roomId)
     } else null
 
     // ── Layout ────────────────────────────────────────────────────────
     val listState = rememberLazyListState()
     // The next page of tracks as the Library tab nears its end.
-    if (ui.tab == 0) LoadMoreNearEnd(listState, libPager)
+    if (ui.tab == MusicTabs.LIBRARY) LoadMoreNearEnd(listState, libPager)
+    // The genres, read a page at a time, only while their tab is open.
+    val genres = if (ui.tab == MusicTabs.GENRES) rememberGenresTab(ui) else null
+    if (genres != null) LoadMoreNearEnd(listState, genres.pager)
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -469,7 +467,7 @@ fun MusicScreen() {
             }
 
             when (ui.tab) {
-                0 -> libraryTab(
+                MusicTabs.LIBRARY -> libraryTab(
                     ui = ui,
                     lib = lib,
                     pager = libPager,
@@ -484,16 +482,19 @@ fun MusicScreen() {
                     onPlayNext = onPlayNext,
                     onSaveToDevice = onSaveToDevice,
                 )
-                1 -> if (playerModel != null) {
+                MusicTabs.GENRES -> if (genres != null) {
+                    genresTab(ui, genres, onOpen = { ui.openGenre = it })
+                }
+                MusicTabs.PLAYER -> if (playerModel != null) {
                     playerTab(playerModel, rooms, onSaveQueue = { ui.saveQueueOpen = true })
                 }
-                2 -> if (roomQueue != null) queueTab(rooms, roomQueue)
-                3 -> playlistsTab(
+                MusicTabs.ROOM_QUEUE -> if (roomQueue != null) queueTab(rooms, roomQueue)
+                MusicTabs.PLAYLISTS -> playlistsTab(
                     playlists = playlists,
                     onSelect = { ui.openPlaylist = it },
                     onPlay = onPlayPlaylist,
                 )
-                4 -> statsTab(stats = stats)
+                MusicTabs.STATS -> statsTab(stats = stats)
             }
         }
 
@@ -517,6 +518,18 @@ fun MusicScreen() {
                 onClose = { ui.openPlaylist = null },
                 onEdited = { ui.openPlaylist = it },
                 refreshPlaylists = playlists.refresh,
+                refreshNP = nowPlaying.refresh,
+            )
+        }
+        ui.openGenre?.let { g ->
+            GenreDrawer(
+                genre = g,
+                rooms = rooms,
+                onClose = { ui.openGenre = null },
+                onSelectTrack = { t ->
+                    ui.openGenre = null
+                    ui.detailTrack = t
+                },
                 refreshNP = nowPlaying.refresh,
             )
         }
@@ -571,6 +584,16 @@ fun MusicScreen() {
             onDismiss = { ui.saveQueueOpen = false },
         )
     }
+}
+
+/** The Music page's tabs, in the order [MusicScreen] lists their labels. */
+internal object MusicTabs {
+    const val LIBRARY = 0
+    const val GENRES = 1
+    const val PLAYER = 2
+    const val ROOM_QUEUE = 3
+    const val PLAYLISTS = 4
+    const val STATS = 5
 }
 
 private fun displayName(context: Context, uri: Uri): String {

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
@@ -49,6 +50,7 @@ import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -108,6 +110,13 @@ internal fun PlaylistDrawer(
             onFailure = { toast((if (shuffle) "shuffle" else "play") + " failed: ${it.message}") },
         )
         onClose()
+    }
+
+    // The list as shown (a reorder in flight included), every track of it.
+    fun playHere(shuffle: Boolean) {
+        if (playTracksHereAndSay(app.player, items, playlist.name, shuffle, toast, onMain = { scope.launch { it() } })) {
+            onClose()
+        }
     }
 
     fun saveEdit() {
@@ -264,6 +273,37 @@ internal fun PlaylistDrawer(
                                     Text(if (editing) "cancel" else "edit", color = Domovoi.colors.fg)
                                 }
                             }
+                        }
+                        // This phone: the whole list (the tracks route is
+                        // unpaged), Favorites included — the web's "this
+                        // browser" pair. Only once the tracks are in.
+                        Spacer(Modifier.size(12.dp))
+                        SectionLabel("this device")
+                        Spacer(Modifier.size(8.dp))
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(onClick = { playHere(shuffle = false) }, enabled = items.isNotEmpty()) {
+                                Icon(
+                                    Icons.Filled.Headphones, contentDescription = null,
+                                    modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text("play here", color = Domovoi.colors.fg)
+                            }
+                            OutlinedButton(onClick = { playHere(shuffle = true) }, enabled = items.isNotEmpty()) {
+                                Icon(
+                                    Icons.Filled.Shuffle, contentDescription = null,
+                                    modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text("shuffle here", color = Domovoi.colors.fg)
+                            }
+                        }
+                        phoneCapNote(items.size)?.let { note ->
+                            Spacer(Modifier.size(8.dp))
+                            Text(note, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
                         }
                         if (editing && !playlist.isVirtual) {
                             Spacer(Modifier.size(12.dp))
