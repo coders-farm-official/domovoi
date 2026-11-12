@@ -59,7 +59,7 @@ from domovoi.satellite_abilities import BOARDS_WITHOUT_VOICE
 
 from satellite import provisioning_protocol as proto
 
-from web.backend import satellite_adoption, timer_fires
+from web.backend import satellite_adoption, timer_fires, voice_match
 from web.backend.api import captures as captures_api
 from web.backend.api.acquisitions import _availability as _acquisition_availability
 from web.backend.api.music import _now_playing_for
@@ -925,21 +925,29 @@ async def list_sessions(
     dependencies=[Depends(require_device_read)],
 )
 async def list_conversations(
-    room_id: str, limit: int = Query(default=50, ge=1, le=500)
+    room_id: str, limit: int = Query(default=50, ge=1, le=500),
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; None when called directly
 ) -> list[ConversationTurn]:
     """The room's voice turns, newest first. Since V043 every turn of a
     satellite is here from the moment its transcript exists: ``status``
     says whether the reply is pending, answered, never came
     (``no_answer`` + ``no_answer_reason``) or speech recognition never
-    made the request out (``unheard``, with ``audio_ms``)."""
+    made the request out (``unheard``, with ``audio_ms``). For an admin,
+    ``voice_match`` says how voice identification scored the turn (V049,
+    web/backend/voice_match.py)."""
     async with session_scope() as s:
         with_status = await _has_turn_status(s)
         with_score = with_status and await _has_wake_score(s)
+        with_voice = (
+            await voice_match.caller_sees_scores(request) and await voice_match.has_columns(s)
+        )
         extra = (
             ", turn_status, no_answer_reason, audio_ms, "
             "(at < NOW() - make_interval(secs => :stale))"
             if with_status else ""
-        ) + (", wake_score" if with_score else "")
+        ) + (", wake_score" if with_score else "") + (
+            voice_match.SELECT_TAIL if with_voice else ""
+        )
         rows = await s.execute(
             text(
                 f"""
@@ -959,6 +967,9 @@ async def list_conversations(
         for r in rows.all():
             status, reason, audio_ms = "answered", None, None
             score = r[13] if with_score else None
+            heard_as = (
+                voice_match.from_row(r[-voice_match.SELECT_TAIL_WIDTH:]) if with_voice else None
+            )
             if with_status:
                 status = r[9] or "answered"
                 reason, audio_ms = r[10], r[11]
@@ -980,6 +991,7 @@ async def list_conversations(
                 no_answer_reason=reason,
                 audio_ms=int(audio_ms) if audio_ms is not None else None,
                 wake_score=round(float(score), 3) if score is not None else None,
+                voice_match=heard_as,
             ))
         return out
 

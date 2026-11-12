@@ -193,7 +193,33 @@ const PersonNamesakes = ({ person }) => (
 );
 
 /* ---- Profile tab ------------------------------------------ */
-const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, onForget, onRenamed, fire }) => {
+/* A person's latest voice-match scores (GET /api/people/{id}/voice-matches,
+ * V049): the satellite turns on which they were the closest voice or the
+ * runner-up, named or not — whether their voice is being recognized, and
+ * how close it comes to someone else's. Admins only on the server (an empty
+ * list for anyone else), so the section shows only when there is something. */
+const PersonVoiceMatches = ({ person, matches }) => {
+  if (!matches || matches.length === 0) return null;
+  return (
+    <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
+      <div className="label" style={{ marginBottom: 6 }}>recent voice matches</div>
+      {matches.map(c => {
+        const vm = c.voice_match || {};
+        const runnerUp = vm.runner_up_person_id === person.id && vm.best_person_id !== person.id;
+        return (
+          <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 0' }}>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', minWidth: 64 }}>{relTime(c.at)}</span>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', minWidth: 72 }}>{c.room_id || '—'}</span>
+            <VoiceMatchLine vm={vm} style={{ marginTop: 0 }}/>
+            {runnerUp && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>· runner-up here</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceMatches, onDeleteSample, onForget, onRenamed, fire }) => {
   // Rename: PATCH /api/people/{id}, admin tier. A name somebody else has
   // is refused (409) with the server's reason, and the box stays open.
   const [editing, setEditing] = React.useState(false);
@@ -276,6 +302,8 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, 
       </div>
 
       <PersonVoiceSamples samples={samples} onDelete={onDeleteSample}/>
+
+      <PersonVoiceMatches person={person} matches={voiceMatches}/>
 
       <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>notes</div>
@@ -621,6 +649,7 @@ const ConversationTurn = ({ c }) => {
           </button>
         )}</span>
       </div>
+      <VoiceMatchLine vm={c.voice_match}/>
     </div>
   );
 };
@@ -894,6 +923,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
   const [favorites, setFavorites] = React.useState([]);
   const [preferences, setPreferences] = React.useState({});
   const [samples, setSamples] = React.useState([]);
+  const [voiceMatches, setVoiceMatches] = React.useState([]);
   const [perPersonLoading, setPerPersonLoading] = React.useState(false);
   const [refreshTick, setRefreshTick] = React.useState(0);
   const refreshProfile = React.useCallback(() => setRefreshTick(t => t + 1), []);
@@ -909,7 +939,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
   React.useEffect(() => {
     if (selectedId == null) {
       setSessions([]); setConversations([]);
-      setMemories([]); setFavorites([]); setPreferences({}); setSamples([]);
+      setMemories([]); setFavorites([]); setPreferences({}); setSamples([]); setVoiceMatches([]);
       setPersonRefusal(null);
       return;
     }
@@ -922,13 +952,15 @@ const PeoplePage = ({ embedded = false } = {}) => {
     });
     setPerPersonLoading(true);
     (async () => {
-      const [ss, cc, mm, ff, pp, vs] = await Promise.all([
+      const [ss, cc, mm, ff, pp, vs, vm] = await Promise.all([
         read(`/api/people/${selectedId}/sessions?limit=50`, []),
         read(`/api/people/${selectedId}/conversations?limit=${PERSON_TURNS_FETCHED}`, []),
         read(`/api/people/${selectedId}/memories`, []),
         read(`/api/people/${selectedId}/favorites`, []),
         read(`/api/people/${selectedId}/preferences`, {}),
         read(`/api/people/${selectedId}/profiles`, []),
+        // Admin-only scores; [] for anyone else (never a refusal).
+        apiGet(`/api/people/${selectedId}/voice-matches?limit=10`).catch(() => []),
       ]);
       if (cancelled) return;
       setSessions(ss || []);
@@ -937,6 +969,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
       setFavorites(ff || []);
       setPreferences(pp || {});
       setSamples(vs || []);
+      setVoiceMatches(vm || []);
       setPersonRefusal(refusal);
       setPerPersonLoading(false);
     })();
@@ -1106,6 +1139,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
                           sessionCount={sessions.length}
                           turnCount={conversations.length}
                           samples={samples}
+                          voiceMatches={voiceMatches}
                           onDeleteSample={onDeleteSample}
                           onForget={() => setConfirmFor(selected)}
                           onRenamed={refreshPeople}

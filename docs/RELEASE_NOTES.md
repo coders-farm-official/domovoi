@@ -45,6 +45,25 @@ as its own row), and the app API is `/api/lists` (docs/API_REFERENCE.md
 playlist or the music queue. A plugin page whose route is `lists` is now
 refused, like any core page's route.
 
+## 2026-11-11 — your name, spelled back; and how sure the voice match was
+
+**"My name is …" now spells the name back** ("Nice to meet you, Jordan.
+That's J, O, R, D, A, N. Did I get that right?"), and the answer can
+correct it: "no, it's Jordyn", "it's spelled J-O-R-D-Y-N" or the letters
+alone. "Yes, but …" is a correction, not a yes. Only the very next thing
+said answers the question (and only within two minutes), so a stray
+"yes" later can't save a misheard name. A name that sounds like someone
+the house already knows ("Jordyn" when there is a Jordan) gets "Did you
+mean Jordan?" instead of a second person. **A name saved misspelled
+before this stays as it was:** rename the person in Settings → People.
+
+**Admins can now see how each satellite turn's voice was matched.** Under
+each turn in a room's Conversations tab and a person's Conversations tab:
+"voice: Alex 0.82 (next: Priya 0.61)", "voice: not sure — Alex 0.79 vs
+Priya 0.77", "voice: too short to tell" and so on; a person's Profile tab
+lists their recent scores. Every satellite turn also logs one line about
+its identification. Only new turns have it (database migration V049).
+
 ## 2026-11-11 — a pushed wake word no longer hides the room's wake sensitivity
 
 **Pushing a wake word to a room now sets that room's Wake sensitivity,

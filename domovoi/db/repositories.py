@@ -386,6 +386,11 @@ class ConversationLogRepository:
         pending_id = await history_entry.take() if history_entry is not None else None
         from domovoi import turn_history
 
+        # How voice identification scored the turn (V049), when the
+        # streaming layer has said by now.
+        voice_match = getattr(history_entry, "voice_match", None)
+        if voice_match is not None and await turn_history.has_voice_match_columns(self.s):
+            params.update(voice_match.columns())
         if pending_id is not None and await turn_history.complete_row(
             self.s, pending_id, params, with_trigger=with_trigger,
         ):
@@ -404,6 +409,10 @@ class ConversationLogRepository:
         if with_status:
             cols += ", turn_status"
             vals += ", 'answered'"
+        for col in turn_history.VOICE_MATCH_COLUMNS:
+            if col in params:
+                cols += f", {col}"
+                vals += f", :{col}"
         await self.s.execute(
             text(
                 f"""
@@ -485,6 +494,12 @@ class PeopleRepository:
         if result is None:
             return None
         return int(result[0]), result[1], result[2]
+
+    async def names(self) -> list[tuple[int, str]]:
+        """Every person's ``(id, name)``: what a heard name is compared with
+        for sound-alikes (domovoi/person_names.py)."""
+        rows = await self.s.execute(text("SELECT id, name FROM people ORDER BY id"))
+        return [(int(r[0]), str(r[1])) for r in rows.all()]
 
     async def find_by_name(self, name: str) -> list[tuple[int, str]]:
         """Everyone called ``name`` (case and surrounding space aside), as

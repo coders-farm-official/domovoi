@@ -49,7 +49,11 @@ a person, and otherwise removes only that voice's claims
 (:func:`claims_by_this_voice`).
 
 Every decision is logged at INFO with the best and runner-up scores, so
-a misrecognition can be read back from the journal.
+a misrecognition can be read back from the journal: a satellite turn's
+line (every turn, whatever happened: too short, no samples, timed out,
+opted out) by the streaming layer, with the turn's history row and the
+recording's length (:class:`VoiceMatch`, kept on the row since V049); a
+phone turn's here.
 
 Returns ``IdentificationResult`` plus the raw embedding so the
 VoiceProfileHandler can persist it on enrollment without re-running
@@ -106,6 +110,142 @@ class IdentificationResult:
     runner_up_similarity: float | None = None
     ambiguous: bool = False
     candidates: tuple[int, ...] = ()
+    #: What identification decided (one of the ``OUTCOME_*`` values), and
+    #: who scored best and second best even when nobody was named — kept on
+    #: a satellite turn's history row (V049, :class:`VoiceMatch`).
+    outcome: str | None = None
+    best_person_id: int | None = None
+    runner_up_person_id: int | None = None
+
+
+# ─── A turn's identification, as kept and shown (V049) ────────────────────
+
+OUTCOME_CONFIDENT = "confident"
+OUTCOME_MATCH = "match"
+OUTCOME_AMBIGUOUS = "ambiguous"
+OUTCOME_NO_MATCH = "no_match"
+OUTCOME_TOO_SHORT = "too_short"
+OUTCOME_NO_EMBEDDING = "no_embedding"
+OUTCOME_NO_SAMPLES = "no_samples"
+OUTCOME_TIMEOUT = "timeout"
+OUTCOME_DENYLIST = "denylist"
+OUTCOME_ERROR = "error"
+
+OUTCOMES = frozenset({
+    OUTCOME_CONFIDENT, OUTCOME_MATCH, OUTCOME_AMBIGUOUS, OUTCOME_NO_MATCH,
+    OUTCOME_TOO_SHORT, OUTCOME_NO_EMBEDDING, OUTCOME_NO_SAMPLES, OUTCOME_TIMEOUT,
+    OUTCOME_DENYLIST, OUTCOME_ERROR,
+})
+
+# Outcomes with no person scored: nothing but the outcome is kept.
+_UNSCORED = frozenset({
+    OUTCOME_TOO_SHORT, OUTCOME_NO_EMBEDDING, OUTCOME_NO_SAMPLES, OUTCOME_TIMEOUT,
+    OUTCOME_DENYLIST, OUTCOME_ERROR,
+})
+
+
+@dataclass(frozen=True)
+class VoiceMatch:
+    """How identification scored one satellite turn: what is logged for
+    every turn and kept on its ``conversation_log`` row (V049). Scores are
+    the per-person centroid cosines :func:`_decide` ranked; a denylisted
+    voice keeps no scores (its similarity is to the opt-out, not to a
+    person). ``speech_seconds``: the recording's length, which decides
+    ``too_short``."""
+
+    outcome: str
+    best_person_id: int | None = None
+    best_score: float | None = None
+    runner_up_person_id: int | None = None
+    runner_up_score: float | None = None
+    speech_seconds: float | None = None
+
+    @classmethod
+    def of(
+        cls,
+        ident: "IdentificationResult | None",
+        *,
+        outcome: str | None = None,
+        speech_seconds: float | None = None,
+    ) -> "VoiceMatch":
+        """The match for a turn's identification result; ``outcome``
+        overrides it (``timeout`` / ``error`` when there is no result)."""
+        if ident is None or outcome is not None:
+            return cls(outcome=outcome or OUTCOME_ERROR, speech_seconds=speech_seconds)
+        out = getattr(ident, "outcome", None) or _inferred_outcome(ident)
+        if out in _UNSCORED:
+            return cls(outcome=out, speech_seconds=speech_seconds)
+        return cls(
+            outcome=out,
+            best_person_id=getattr(ident, "best_person_id", None),
+            best_score=_rounded(getattr(ident, "best_similarity", None)),
+            runner_up_person_id=getattr(ident, "runner_up_person_id", None),
+            runner_up_score=_rounded(getattr(ident, "runner_up_similarity", None)),
+            speech_seconds=speech_seconds,
+        )
+
+    def columns(self) -> dict[str, Any]:
+        """The V049 columns of ``conversation_log``."""
+        return {
+            "voice_outcome": self.outcome,
+            "voice_best_person_id": self.best_person_id,
+            "voice_best_score": self.best_score,
+            "voice_runner_up_person_id": self.runner_up_person_id,
+            "voice_runner_up_score": self.runner_up_score,
+        }
+
+    def describe(self) -> str:
+        """The log's words for it: "match: best person_id=3 0.812,
+        runner-up person_id=5 0.604", "too short to tell (0.8 s < 1.0 s)"."""
+        secs = self.speech_seconds
+        if self.outcome == OUTCOME_TOO_SHORT:
+            if secs is None:
+                return "too short to tell"
+            return (
+                f"too short to tell ({secs:.1f} s < "
+                f"{settings.voice_profile_min_utterance_sec:.1f} s)"
+            )
+        words = {
+            OUTCOME_NO_EMBEDDING: "no voice embedding (the embedder gave none)",
+            OUTCOME_NO_SAMPLES: "nobody has a voice sample to compare with",
+            OUTCOME_TIMEOUT: "timed out; the turn went on unidentified",
+            OUTCOME_DENYLIST: "an opted-out voice (denylist); not identified",
+            OUTCOME_ERROR: "failed; the turn went on unidentified",
+        }
+        if self.outcome in words:
+            return words[self.outcome]
+        best = (
+            "none" if self.best_person_id is None or self.best_score is None
+            else f"person_id={self.best_person_id} {self.best_score:.3f}"
+        )
+        runner = (
+            "none" if self.runner_up_person_id is None or self.runner_up_score is None
+            else f"person_id={self.runner_up_person_id} {self.runner_up_score:.3f}"
+        )
+        return (
+            f"{self.outcome.replace('_', ' ')}: best {best}, runner-up {runner} "
+            f"(threshold {settings.voice_profile_match_threshold:.2f}, "
+            f"margin {settings.voice_profile_match_margin:.2f})"
+        )
+
+
+def _inferred_outcome(ident: Any) -> str:
+    """The outcome of a result that doesn't say (one made by hand)."""
+    if getattr(ident, "denylisted", False):
+        return OUTCOME_DENYLIST
+    if getattr(ident, "person_id", None) is not None:
+        return OUTCOME_MATCH
+    if getattr(ident, "ambiguous", False):
+        return OUTCOME_AMBIGUOUS
+    if getattr(ident, "best_similarity", None) is not None:
+        return OUTCOME_NO_MATCH
+    if getattr(ident, "embedding", None) is None:
+        return OUTCOME_NO_EMBEDDING
+    return OUTCOME_NO_SAMPLES
+
+
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(float(value), 3)
 
 
 # In-memory counter for learning a person's voice in a room. Keyed by
@@ -450,11 +590,16 @@ async def identify(
         # any explicit identity-revealing utterance ("I'm Sarah") still
         # gets prompted to enroll on the next turn that produces a
         # usable vector.
+        seconds = len(pcm_int16 or b"") / (16_000 * 2)
         return IdentificationResult(
             person_id=None,
             presence_tier="high",
             embedding=None,
             best_similarity=None,
+            outcome=(
+                OUTCOME_TOO_SHORT if seconds < settings.voice_profile_min_utterance_sec
+                else OUTCOME_NO_EMBEDDING
+            ),
         )
 
     # Denylist pre-empt. Check before the regular profile
@@ -485,6 +630,7 @@ async def identify(
                     embedding=embedding,
                     best_similarity=sim,
                     denylisted=True,
+                    outcome=OUTCOME_DENYLIST,
                 )
     except Exception as e:
         log.warning("voice denylist lookup failed: %s", e)
@@ -494,6 +640,7 @@ async def identify(
 
     decision = _decide({})
     last_seen = None
+    outcome = OUTCOME_ERROR
 
     try:
         async with session_scope() as s:
@@ -513,7 +660,11 @@ async def identify(
             last_seen = await PeopleRepository(s).latest_seen()
 
         decision = _decide(_person_scores(embedding, matched_against))
-        if decision.best_person is not None:
+        outcome = _outcome_of(decision)
+        if decision.best_person is not None and phone:
+            # A satellite turn's line is logged by the streaming layer, for
+            # every turn, with its history row and the recording's length
+            # (turn_history.record_voice_match); a phone turn's here.
             log.info(
                 "voice identification %s=%s: %s — best person_id=%d %.3f, "
                 "runner-up %s (threshold %.2f, margin %.2f)",
@@ -559,6 +710,7 @@ async def identify(
     except Exception as e:
         log.warning("voice identification DB lookup failed: %s", e)
         matched_person = None
+        outcome = OUTCOME_ERROR
 
     ambiguous = decision.ambiguous and matched_person is None
     return IdentificationResult(
@@ -576,4 +728,16 @@ async def identify(
             )
             if ambiguous else ()
         ),
+        outcome=outcome,
+        best_person_id=decision.best_person,
+        runner_up_person_id=decision.runner_up_person,
     )
+
+
+def _outcome_of(decision: _Decision) -> str:
+    """:data:`OUTCOME_*` for a verdict of :func:`_decide`."""
+    if decision.best_person is None:
+        return OUTCOME_NO_SAMPLES
+    if decision.person_id is not None:
+        return OUTCOME_CONFIDENT if decision.confident else OUTCOME_MATCH
+    return OUTCOME_AMBIGUOUS if decision.ambiguous else OUTCOME_NO_MATCH

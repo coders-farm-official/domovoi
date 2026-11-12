@@ -409,6 +409,26 @@ class Session(BaseModel):
     intent_count: int = 0
 
 
+class VoiceMatchInfo(BaseModel):
+    """How voice identification scored a satellite turn (V049). ``outcome``:
+    "confident" | "match" (somebody was named) | "ambiguous" (two people too
+    close to tell apart: nobody named) | "no_match" (the closest was under
+    the threshold) | "too_short" (the recording was too short to embed) |
+    "no_embedding" (the embedder gave nothing) | "no_samples" (nobody
+    enrolled yet) | "timeout" | "denylist" (an opted-out voice) | "error".
+    The closest person and the runner-up with their scores (cosine, 0..1;
+    the match threshold is ``voice_profile_match_threshold``, 0.75 by
+    default) are set for the first four; a person since forgotten reads
+    null. Names are the people's current names."""
+    outcome: str
+    best_person_id: int | None = None
+    best_name: str | None = None
+    best_score: float | None = None
+    runner_up_person_id: int | None = None
+    runner_up_name: str | None = None
+    runner_up_score: float | None = None
+
+
 class ConversationTurn(BaseModel):
     id: int
     session_id: str | None = None
@@ -441,6 +461,10 @@ class ConversationTurn(BaseModel):
     # The wake word's peak score, 0..1 (V044; satellites from 2026-11-09,
     # wake-word turns only); None otherwise.
     wake_score: float | None = None
+    # How voice identification scored the turn (V049; satellite turns from
+    # 2026-11-11). Admins only (web/backend/voice_match.py): null for every
+    # other caller, for older rows and for turns not from a satellite.
+    voice_match: VoiceMatchInfo | None = None
 
 
 class RecentlyPlayed(BaseModel):

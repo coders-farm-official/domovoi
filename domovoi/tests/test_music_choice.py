@@ -630,7 +630,7 @@ async def test_a_yes_no_question_that_replaces_the_choice_takes_the_reply(
 ) -> None:
     sid = await _asked(db_session)
     await confirmations.request_confirmation(
-        db_session, sid, kind="core.self_intro", handler="voice_profile",
+        db_session, sid, kind="core.third_party_intro_confirm", handler="voice_profile",
         data={"name": "Sam", "embedding_b64": ""},
     )
     await db_session.commit()

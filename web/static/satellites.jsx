@@ -382,6 +382,7 @@ const SatConversationTurn = ({ c }) => {
           </button>
         )}</span>}
       </div>
+      <VoiceMatchLine vm={c.voice_match}/>
     </div>
   );
 };

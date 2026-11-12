@@ -28,6 +28,10 @@ Now:
    the recording's length and the time of the request.
 5. **Restart** — :func:`sweep_pending` closes rows a stopped core left
    pending (``no_answer`` / ``restarted``), once at start-up.
+6. **Voice match** (V049) — once voice identification has run (or given
+   up), :func:`record_voice_match` keeps how it scored the turn on the row
+   and logs it, one INFO line for every satellite turn; the router's
+   record carries the same values when it inserts a row of its own.
 
 Everything here is best-effort and bounded: a history write that fails
 or takes longer than :data:`WRITE_TIMEOUT_SEC` is logged and the turn
@@ -39,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -100,9 +105,40 @@ async def has_status_columns(s: AsyncSession) -> bool:
 
 def _forget_probe() -> None:
     """Probe again on next use (tests that drop and re-add the columns)."""
-    global _HAS_STATUS, _HAS_WAKE_SCORE
+    global _HAS_STATUS, _HAS_WAKE_SCORE, _HAS_VOICE_MATCH
     _HAS_STATUS = None
     _HAS_WAKE_SCORE = None
+    _HAS_VOICE_MATCH = None
+
+
+# Whether conversation_log has V049's voice-match columns; probed once, like
+# the others. Without them the match is only logged.
+_HAS_VOICE_MATCH: bool | None = None
+
+
+async def has_voice_match_columns(s: AsyncSession) -> bool:
+    global _HAS_VOICE_MATCH
+    if _HAS_VOICE_MATCH is None:
+        row = (
+            await s.execute(
+                text(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'conversation_log'
+                      AND column_name = 'voice_outcome'
+                    """
+                )
+            )
+        ).first()
+        _HAS_VOICE_MATCH = row is not None
+    return _HAS_VOICE_MATCH
+
+
+#: The V049 columns, in the order they are written.
+VOICE_MATCH_COLUMNS = (
+    "voice_outcome", "voice_best_person_id", "voice_best_score",
+    "voice_runner_up_person_id", "voice_runner_up_score",
+)
 
 
 # Whether conversation_log has V044's wake_score; probed once, like the
@@ -138,12 +174,16 @@ class HistoryEntry:
     copies (``Context.history_entry``; pydantic's model_copy is shallow),
     so whichever record uses it first takes it. ``person_id``: who spoke,
     once voice identification has said — written onto the row so "forget
-    what this person said" finds a turn that never got its answer too."""
+    what this person said" finds a turn that never got its answer too.
+    ``voice_match``: how identification scored the turn
+    (``voice_identifier.VoiceMatch``, V049), for a record that inserts its
+    own row."""
 
     def __init__(self, task: "asyncio.Future[int | None]") -> None:
         self._task = task
         self.taken = False
         self.person_id: int | None = None
+        self.voice_match: Any = None
 
     async def row_id(self) -> int | None:
         """The row's id once written; None when it couldn't be."""
@@ -272,6 +312,56 @@ async def set_person(entry: HistoryEntry | None, *, room_id: str | None) -> None
     )
 
 
+async def record_voice_match(
+    entry: HistoryEntry | None,
+    match: Any,
+    *,
+    room_id: str | None,
+    session_id: UUID | None,
+) -> None:
+    """Voice identification's verdict on the turn (``match``: a
+    ``voice_identifier.VoiceMatch``): kept on the turn's row (V049) and
+    logged — one INFO line for every satellite turn, with the row's id and
+    the recording's length, so a line in the journal matches a row in the
+    history. The entry carries it too, for a record that inserts its own
+    row (:meth:`ConversationLogRepository.record_turn`)."""
+    if entry is not None:
+        entry.voice_match = match
+    row_id = await entry.row_id() if entry is not None else None
+    secs = getattr(match, "speech_seconds", None)
+    log.info(
+        "voice identification room=%s turn=%s session=%s speech=%s: %s",
+        room_id, row_id if row_id is not None else "-",
+        str(session_id)[:8] if session_id else "-",
+        f"{secs:.1f}s" if secs is not None else "-",
+        match.describe(),
+    )
+    if row_id is None:
+        return
+    from domovoi.db.session import session_scope
+
+    async def _write() -> None:
+        async with session_scope() as s:
+            if not await has_voice_match_columns(s):
+                return
+            await s.execute(
+                text(
+                    """
+                    UPDATE conversation_log
+                    SET voice_outcome = :voice_outcome,
+                        voice_best_person_id = :voice_best_person_id,
+                        voice_best_score = :voice_best_score,
+                        voice_runner_up_person_id = :voice_runner_up_person_id,
+                        voice_runner_up_score = :voice_runner_up_score
+                    WHERE id = :id
+                    """
+                ),
+                {**match.columns(), "id": row_id},
+            )
+
+    await _bounded(_write(), "keeping the voice match on the history entry", room_id)
+
+
 async def close_entry(entry: HistoryEntry | None, reason: str, *, room_id: str | None) -> None:
     """The turn ended with no reply: a still-pending row says so (and who
     spoke, when known). Leaves an answered row alone."""
@@ -383,8 +473,11 @@ async def complete_row(
     with_trigger: bool,
 ) -> bool:
     """Fill in a pending row with the routed turn (the router's write, in
-    its transaction). True when the row was there to fill in."""
+    its transaction). True when the row was there to fill in. ``params``
+    may carry the V049 voice-match columns (record_turn adds them when it
+    has them), which are then set too."""
     trigger_set = ", utterance_trigger = COALESCE(:trigger, utterance_trigger)" if with_trigger else ""
+    trigger_set += "".join(f", {c} = :{c}" for c in VOICE_MATCH_COLUMNS if c in params)
     result = await s.execute(
         text(
             f"""

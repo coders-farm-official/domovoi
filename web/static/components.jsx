@@ -4699,6 +4699,56 @@ const DeviceTokenNotice = () => {
   );
 };
 
+/* ---- Voice match line (V049) --------------------------------------
+ * How voice identification scored a satellite turn: `voice_match` on the
+ * conversation lists (GET /api/satellites/{room}/conversations,
+ * /api/people/{id}/conversations and /voice-matches). Admins only on the
+ * server (null for anyone else), so nothing renders without it. One quiet
+ * line under the turn: "voice: Alex 0.82 (next: Priya 0.61)",
+ * "voice: not sure — Alex 0.79 vs Priya 0.77", "voice: too short to tell". */
+const VOICE_MATCH_WORDS = {
+  too_short: 'too short to tell',
+  no_embedding: 'no voice to match',
+  no_samples: 'nobody enrolled yet',
+  timeout: 'timed out — not checked',
+  denylist: 'opted out — not identified',
+  error: 'couldn’t check',
+};
+const voiceMatchWho = (name, score) =>
+  `${name || 'someone forgotten'}${typeof score === 'number' ? ` ${score.toFixed(2)}` : ''}`;
+const voiceMatchText = (vm) => {
+  if (!vm || !vm.outcome) return null;
+  if (VOICE_MATCH_WORDS[vm.outcome]) return `voice: ${VOICE_MATCH_WORDS[vm.outcome]}`;
+  const best = voiceMatchWho(vm.best_name, vm.best_score);
+  const hasNext = vm.runner_up_person_id != null || vm.runner_up_name;
+  const next = hasNext ? voiceMatchWho(vm.runner_up_name, vm.runner_up_score) : null;
+  if (vm.outcome === 'ambiguous') return `voice: not sure — ${best}${next ? ` vs ${next}` : ''}`;
+  if (vm.outcome === 'no_match') return `voice: no match — closest ${best}${next ? `, then ${next}` : ''}`;
+  return `voice: ${best}${next ? ` (next: ${next})` : ''}`;
+};
+const VOICE_MATCH_TITLE = {
+  confident: 'recognized clearly',
+  match: 'recognized',
+  ambiguous: 'two voices too close to tell apart — nobody was named',
+  no_match: 'nobody was close enough to name',
+  too_short: 'the recording was too short to match a voice',
+  no_embedding: 'no voice print could be made from this recording',
+  no_samples: 'nobody has a voice sample yet',
+  timeout: 'voice identification ran out of time',
+  denylist: 'this voice asked never to be saved',
+  error: 'voice identification failed',
+};
+const VoiceMatchLine = ({ vm, style }) => {
+  const words = voiceMatchText(vm);
+  if (!words) return null;
+  return (
+    <div className="mono" data-voice-outcome={vm.outcome} title={VOICE_MATCH_TITLE[vm.outcome] || vm.outcome}
+         style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4, ...style }}>
+      {words}
+    </div>
+  );
+};
+
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
@@ -4722,4 +4772,5 @@ Object.assign(window, {
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,
   CONTAINER_GUARD_GUEST_TEXT,
   DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,
+  VoiceMatchLine, voiceMatchText,
 });
