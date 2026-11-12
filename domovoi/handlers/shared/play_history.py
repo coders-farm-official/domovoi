@@ -8,10 +8,10 @@ tab (domovoi owns the writes; the web backend only reads).
 
 Deliberately best-effort: a history-write failure must NEVER break
 playback, so every call is wrapped in try/except and only logged. This
-mirrors the now-playing / current_playlist / last_played_track
+mirrors the now-playing / last_played_track
 stamps each call sits beside.
 
-Consecutive-dedup: ``_stream_to_mpd`` and the playlist smart-skip fire
+Consecutive-dedup: ``_stream_to_mpd`` and the play paths fire
 on every stream (re)start, including a "next" that re-streams the same
 track or a double-clicked UI play. To keep the tab readable we skip an
 insert when the room's most recent row is the SAME item within a short

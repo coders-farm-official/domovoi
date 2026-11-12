@@ -1669,7 +1669,7 @@
           "music"
         ],
         "summary": "Play Playlist",
-        "description": "Start a playlist (real or the Favorites virtual one) in a\nroom. Proxies to the Domovoi server's\n``/v1/admin/music/play-playlist`` which handles the SELECT,\nhands the first/picked track to MPD, and stamps\n``app.state.current_playlist`` so subsequent ``next`` calls\nstay inside the playlist.",
+        "description": "Play a playlist (real or the Favorites virtual one) in a room.\nProxies to the Domovoi server's ``/v1/admin/music/play-playlist``,\nwhich loads the WHOLE playlist into the room's queue (in order or\nshuffled) and arms the room's Up next with the playlist as its\nsource. The answer adds ``total`` / ``queued`` / ``skipped`` /\n``loading`` / ``up_next`` to the fields it always had.",
         "operationId": "play_playlist_api_music_play_playlist_post",
         "requestBody": {
           "content": {
@@ -25817,6 +25817,33 @@
               }
             ],
             "title": "Device Id"
+          },
+          "listener_person_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listener Person Id"
+          },
+          "as_household": {
+            "type": "boolean",
+            "title": "As Household",
+            "default": false
+          },
+          "autoplay": {
+            "type": "boolean",
+            "title": "Autoplay",
+            "default": true
+          },
+          "up_next": {
+            "type": "boolean",
+            "title": "Up Next",
+            "default": true
           }
         },
         "type": "object",
@@ -25825,7 +25852,7 @@
           "playlist_id"
         ],
         "title": "PlayPlaylistRequest",
-        "description": "Direct play of a playlist by id. ``playlist_id == 0`` is the\nvirtual Favorites view. ``shuffle=True`` randomizes the pick;\notherwise playback starts at the first track and ``next``\nadvances by position."
+        "description": "Play a playlist in a room by id. ``playlist_id == 0`` is the\nvirtual Favorites view. The whole playlist becomes the room's queue\n(2026-11-12), in order, or shuffled with ``shuffle=True``; the room's\nqueue tools then edit it like any queue (a copy: the playlist itself\nnever changes)."
       },
       "PlayRequest": {
         "properties": {

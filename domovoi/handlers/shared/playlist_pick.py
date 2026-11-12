@@ -1,8 +1,10 @@
-"""Pick the next track to play for a given playlist + mode.
+"""Pick the track a playlist starts on for a given mode.
 
-Used by both :class:`domovoi.handlers.music.MusicHandler` 's
-``_smart_skip`` and the core's ``/v1/admin/music/play-playlist``
-admin endpoint so the SQL stays in one place.
+Used by the playlist handler's phone path (a playlist asked for from a
+phone's chat mic starts the phone's queue here). A room plays the whole
+playlist as its queue instead (``room_playlist``, 2026-11-12), so the
+"next" side of this module (``last_track_id`` / ``last_position``) no
+longer has a room caller.
 
 Two modes:
 
@@ -36,8 +38,7 @@ class PickedTrack:
     """Result type for :func:`pick_next_track`.
 
     Slim deliberately — callers want title/artist/file_path to hand
-    to MPD plus the ``position`` to stamp back into the per-room
-    ``current_playlist`` state. ``track_id`` lets shuffle dedup
+    to a player plus the ``position`` for the resume point. ``track_id`` lets shuffle dedup
     against the immediately-previous track on the *next* call.
     """
 
@@ -224,9 +225,8 @@ async def _pick_favorites(
     last_position: int | None,
 ) -> PickedTrack | None:
     """Virtual Favorites. ``position`` mirrors ``library_tracks.id``
-    (monotonic, stable for the lifetime of a row) so the per-room
-    ``current_playlist`` state's ``last_position`` can be a single
-    int regardless of whether we're in a real playlist or this
+    (monotonic, stable for the lifetime of a row) so ``last_position``
+    can be a single int regardless of whether we're in a real playlist or this
     virtual one."""
     if mode == "ordered":
         if last_position is not None:

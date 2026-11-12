@@ -1,5 +1,5 @@
 """Core playback-state sweeper (design §4.7 split): stale now-playing
-stamps + current_playlist pruning against MPD reality, and the
+stamps pruned against MPD reality, and the
 natural-end music_stop push to the Pi (with the seen-playing guard)."""
 
 from __future__ import annotations
@@ -39,7 +39,6 @@ class _FakeSession:
 def _app(**state: Any) -> Any:
     defaults: dict[str, Any] = {
         "resumable_music": {},
-        "current_playlist": {},
         "active_sessions": {},
     }
     defaults.update(state)
@@ -103,21 +102,6 @@ async def test_mpd_probe_failure_leaves_stamp(monkeypatch) -> None:
     pruned = await PlaybackStateSweeper(app).tick()
     assert pruned == 0
     assert NOW_PLAYING.get("kitchen") is not None
-
-
-async def test_playlist_dict_pruned_on_drift(monkeypatch) -> None:
-    app = _app(current_playlist={
-        "kitchen": {"playlist_id": 1, "last_file_path": "a.mp3"},
-        "garage": {"playlist_id": 2, "last_file_path": "b.mp3"},
-    })
-    _patch_mpd(monkeypatch, {
-        "kitchen": _FakeMPD(state="play", file="a.mp3"),   # fresh — stays
-        "garage": _FakeMPD(state="play", file="other.mp3"),  # drifted — pruned
-    })
-    pruned = await PlaybackStateSweeper(app).tick()
-    assert pruned == 1
-    assert "kitchen" in app.state.current_playlist
-    assert "garage" not in app.state.current_playlist
 
 
 async def test_pi_music_stop_only_after_seen_playing(monkeypatch) -> None:
