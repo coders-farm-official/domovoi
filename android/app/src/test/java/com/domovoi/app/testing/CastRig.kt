@@ -232,6 +232,7 @@ internal class StatefulExoPlayer(private val log: MutableList<String>) {
                 note("exo.${method.name}"); null
             }
             "getCurrentMediaItemIndex" -> index
+            "getCurrentMediaItem" -> items.getOrNull(index)
             "getMediaItemCount" -> items.size
             "getCurrentPosition", "getContentPosition" -> positionMs
             "getPlayWhenReady" -> playWhenReady
