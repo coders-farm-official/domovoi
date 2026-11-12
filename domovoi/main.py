@@ -946,6 +946,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     _android_app.schedule_auto_refresh(frozen=container_freeze.is_frozen)
 
+    # The server's name on the home network (domovoi/lan_name/): the core
+    # announces it on Linux, DomovoiHost on the Windows install (told by a
+    # request file). Not under stubs: the suite never binds UDP 5353.
+    from domovoi.lan_name import service as _lan_name
+
+    if not settings.use_stubs:
+        await _lan_name.start()
+
     log.info("domovoi started; bot_name=%s", settings.bot_name)
     # Satellites can connect from here on: a timer that went off during
     # startup (or while the server was down) waits for its rooms to
@@ -977,6 +985,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ("LLM warm-up", cancel_warm_up, 1.0),
                 ("speech warm-up", cancel_speech_warm_up, 1.0),
                 ("Android app refresh", _android_app.cancel_auto_refresh, 1.0),
+                # The goodbye for the network name, so caches drop it now.
+                ("network name", _lan_name.stop, 2.0),
                 # Plugins first (reverse of startup: they loaded last), then
                 # the core worker set, then the probe.
                 ("plugins", lambda: LOADER.shutdown(worker_timeout=_STOP_WORKERS_SEC),
@@ -6803,6 +6813,48 @@ async def admin_set_host_limits(body: HostLimitsBody) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except host_limits.Refused as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ─── The network name (domovoi/lan_name/) ────────────────────────────────
+
+
+class LanNameBody(BaseModel):
+    # Either or both: the name ("kitchen", "kitchen.local"; checked by
+    # domovoi/lan_name/names.py) and the switch. Absent: unchanged.
+    name: str | None = None
+    enabled: bool | None = None
+
+
+@app.get("/v1/lan-name", dependencies=[Depends(require_device_read)])
+async def get_lan_name() -> dict[str, Any]:
+    """The server's name on the home network (Settings → System → About &
+    updates): ``{requested, claimed, fqdn, state, taken, error, enabled,
+    host_kind, addresses, hint, help}``. ``state``: ``announced``,
+    ``checking``, ``taken``, ``off``, ``no_lan``, ``failed`` or
+    ``no_host`` (nothing on this machine announces one)."""
+    from domovoi.lan_name import service as lan_name
+
+    return await asyncio.to_thread(lan_name.status)
+
+
+@app.put("/v1/lan-name", status_code=202, dependencies=[Depends(require_admin_mutation)])
+async def put_lan_name(body: LanNameBody) -> dict[str, Any]:
+    """Change the name or turn it on or off: saved to ``.env``
+    (``LAN_NAME``, ``LAN_NAME_ENABLED``), then checked on the network by
+    whoever announces it. 202 with the state (``checking`` until the
+    probe is done); 400 for a name that can't be one. A name the
+    household typed that another device holds is never changed: the
+    state says ``taken`` and the name held before stays."""
+    from domovoi.lan_name import names as lan_names
+    from domovoi.lan_name import service as lan_name
+
+    async with app.state.config_apply_lock:
+        try:
+            return await asyncio.to_thread(lan_name.save, body.name, body.enabled)
+        except lan_names.BadName as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # ─── Media folders (domovoi/media_folders.py) ────────────────────────────

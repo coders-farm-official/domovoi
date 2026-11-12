@@ -662,17 +662,32 @@ _HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def advertised_server_names() -> list[str]:
-    """``<hostname>.local`` — the mDNS name avahi publishes for this host —
-    when the host name is a usable single label (an FQDN's first label
-    otherwise). Empty when it is not (``localhost``, an address)."""
+    """The names a satellite may find this server by, best first: the
+    network name Domovoi holds now (``domovoi2.local``,
+    domovoi/lan_name/), then ``<hostname>.local`` — the mDNS name avahi
+    publishes for this host — when the host name is a usable single label
+    (an FQDN's first label otherwise; left out for ``localhost`` or an
+    address). A satellite resolves each one and still checks the server's
+    key at the address it reached."""
+    out: list[str] = []
+    try:
+        from domovoi.lan_name.service import claimed_name
+
+        claimed = claimed_name()
+    except Exception:  # noqa: BLE001 - a name never breaks a satellite's hello
+        claimed = None
+    if claimed:
+        out.append(claimed)
     try:
         host = socket.gethostname().strip().rstrip(".").lower()
     except OSError:
-        return []
+        return out
     first = host.split(".", 1)[0]
     if not first or first in ("localhost", "localhost-localdomain") or not _HOST_LABEL.match(first):
-        return []
-    return [f"{first}.local"]
+        return out
+    if f"{first}.local" not in out:
+        out.append(f"{first}.local")
+    return out
 
 
 PROTOCOL_VERSION = "0.1"
