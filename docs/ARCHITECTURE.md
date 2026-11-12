@@ -292,6 +292,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 160 | `timer` | |
 | 170 | `clock` | |
 | 175 | `calendar` | After clock ("what's tomorrow" is the date); before library's "do I have X" ("anything on Friday") |
+| 178 | `lists` | The household's lists (V048): "add X to my to-do list", "what's on the shopping list", "cross X off". Every pattern ends on the word "list" (or starts with "cross off" / "tick off"), so playlists, the queue and the library are never poached; "play list" / "song list" are declined. Before documents' "read me the X" |
 | 180 | `repeat` | Clusters with double_check |
 | 190 | `double_check` | Owns "verify" / "are you sure" |
 | 200 | `dropin` | Immediately before intercom |

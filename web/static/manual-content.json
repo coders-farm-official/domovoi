@@ -131,6 +131,12 @@
     "screen": "Calendar"
    }
   },
+  "lists": {
+   "dashboard": "#lists",
+   "app": {
+    "dashboard": true
+   }
+  },
   "files": {
    "dashboard": "#files",
    "app": {
@@ -545,13 +551,17 @@
     "documents",
     "calendar",
     "print",
-    "scan"
+    "scan",
+    "lists",
+    "to-do",
+    "shopping"
    ],
    "pieces": [
     "files",
     "documents",
     "printers",
-    "calendar"
+    "calendar",
+    "lists"
    ]
   },
   {
@@ -897,7 +907,7 @@
        "text": "The **app** brings the everyday pages to your phone, with its own music player and Chat. Chat holds your chats on the home server and chats that run on the phone itself, with no server."
       },
       {
-       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages plugins add there, like Stations) and **Tools** (News, Calendar, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
+       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages plugins add there, like Stations) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
       },
       {
        "text": "That menu is the same in every browser, and an admin can change it in [Settings → System → App layout](route:settings/app-layout) → **Menu**: rename the groups, add or delete one, move any page into a group or to the top, and put things in another order. **Reset to default** brings the usual menu back. Nothing needs changing there; the phone app keeps its own layout."
@@ -3286,6 +3296,93 @@
       {
        "text": "do I have anything on Friday",
        "handler": "calendar",
+       "path": "fast"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "lists",
+   "topic": "chat-files-calendar",
+   "title": "Lists",
+   "subtitle": "to-do, shopping, any list",
+   "keywords": [
+    "list",
+    "lists",
+    "to-do",
+    "todo",
+    "to do",
+    "shopping",
+    "groceries",
+    "grocery",
+    "cross off",
+    "check off",
+    "tick off"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "The household's lists: **To-do** and **Shopping** are there from the start, and you can make your own. Everyone shares them, by voice, on the dashboard and in the app, and a change shows everywhere at once."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "[Lists](route:lists): type in the box and press **add**; tap the box beside an item to cross it off, tap its words to change them, drag the grip to move it."
+      },
+      {
+       "text": "**clear crossed off** removes the ticked items; **new list** makes one; the pencil renames a list and the bin deletes it (it asks first)."
+      },
+      {
+       "text": "By voice, \"to-do\", \"todo\" and \"to do\" are the To-do list, and \"grocery\" and \"groceries\" are the Shopping list. A list Domovoi doesn't know, it asks about before making, so a word it misheard never becomes a list."
+      },
+      {
+       "text": "Say several things at once with commas: \"add milk, eggs and bread to the shopping list\". A long list is read eight items at a time."
+      },
+      {
+       "text": "Lists are separate from playlists and the music queue: \"add this song to my playlist\" still goes to Music."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "add milk to the shopping list",
+       "handler": "lists",
+       "path": "fast"
+      },
+      {
+       "text": "what's on my to-do list",
+       "handler": "lists",
+       "path": "fast"
+      },
+      {
+       "text": "cross milk off the shopping list",
+       "handler": "lists",
+       "path": "fast"
+      },
+      {
+       "text": "clear the shopping list",
+       "handler": "lists",
+       "path": "fast",
+       "note": "asks first"
+      },
+      {
+       "text": "what lists do I have",
+       "handler": "lists",
        "path": "fast"
       }
      ]

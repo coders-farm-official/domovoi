@@ -181,7 +181,7 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
   that run on the phone itself, with no server.
 - The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts,
   Audiobooks, Videos, and pages plugins add there, like Stations) and
-  **Tools** (News, Calendar, Files), each opening in place, then
+  **Tools** (News, Calendar, Lists, Files), each opening in place, then
   **Plugins**. On a phone, Home's "everything" grid has the same groups.
 - That menu is the same in every browser, and an admin can change it in
   [Settings → System → App layout](route:settings/app-layout) → **Menu**:
@@ -1129,6 +1129,36 @@ change events here: by voice it only reads.
 - "what's on my calendar today"
 - "what's next on my calendar"
 - "do I have anything on Friday"
+
+### Lists
+
+The household's lists: **To-do** and **Shopping** are there from the
+start, and you can make your own. Everyone shares them, by voice, on the
+dashboard and in the app, and a change shows everywhere at once.
+
+**How to**
+
+- [Lists](#lists): type in the box and press **add**; tap the box beside
+  an item to cross it off, tap its words to change them, drag the grip to
+  move it.
+- **clear crossed off** removes the ticked items; **new list** makes one;
+  the pencil renames a list and the bin deletes it (it asks first).
+- By voice, "to-do", "todo" and "to do" are the To-do list, and
+  "grocery" and "groceries" are the Shopping list. A list Domovoi
+  doesn't know, it asks about before making, so a word it misheard
+  never becomes a list.
+- Say several things at once with commas: "add milk, eggs and bread to
+  the shopping list". A long list is read eight items at a time.
+- Lists are separate from playlists and the music queue: "add this song
+  to my playlist" still goes to Music.
+
+**Try saying**
+
+- "add milk to the shopping list"
+- "what's on my to-do list"
+- "cross milk off the shopping list"
+- "clear the shopping list" (asks first)
+- "what lists do I have"
 
 ---
 

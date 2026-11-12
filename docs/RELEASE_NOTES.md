@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-11 — Lists: to-do, shopping and your own, by voice and on the dashboard
+
+**"Add tarp the trailer to my to-do list" now keeps it.** Until now no
+command took a list, so the question went to the answer model, which could
+say it had added the item when nothing was kept. Domovoi now has the
+household's lists: **To-do** and **Shopping** are there after the update
+(the database update, V048, makes them), and you can make your own. Say
+"add milk to the shopping list", "what's on my to-do list", "cross milk off
+the shopping list" or "clear the shopping list" (it asks first); a list it
+doesn't know it asks about before making. The dashboard has a **Lists**
+page under **Tools** (a saved custom menu that has no Tools group shows it
+as its own row), and the app API is `/api/lists` (docs/API_REFERENCE.md
+§3.8a). The phone apps don't have a Lists screen yet. Lists never take a
+playlist or the music queue. A plugin page whose route is `lists` is now
+refused, like any core page's route.
+
 ## 2026-11-11 — a pushed wake word no longer hides the room's wake sensitivity
 
 **Pushing a wake word to a room now sets that room's Wake sensitivity,

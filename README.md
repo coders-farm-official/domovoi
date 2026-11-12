@@ -124,7 +124,7 @@ We build Domovoi in public. Here's where it stands.
   before stays as it was, with AI on.
 - **A shorter sidebar.** Chat, then **Media** (Music, Podcasts,
   Audiobooks, Videos and plugin pages such as Stations) and **Tools**
-  (News, Calendar, Files), each opening in place, then Plugins. People
+  (News, Calendar, Lists, Files), each opening in place, then Plugins. People
   moved into Settings → Household; `#people` still opens it.
 - **Settings in groups, with search and one Health page.** Household (Rooms, People, Phones & browsers, Printers & scanners), Voice, Chat & AI, Privacy and System (App layout lives here), with a search box
   ("wake", "token"); the app's Settings uses the same groups and names, and
@@ -787,6 +787,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | A chat that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
+| Household lists (to-do, shopping, your own) | voice: "add milk to the shopping list" | voice | ✅ Lists page | — not yet |
 | Edit documents and spreadsheets (documents co-edited live) | — | — | ✅ | ✅ the server's Documents, same editors |
 | Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
 | Custom wake-word recording & training | records the clips | wakes on a pushed model; no recording | ✅ record → train → push to room | — |
