@@ -2723,7 +2723,11 @@ const PlayerUpNext = ({ p }) => {
   };
   let line = null;
   if (u && u.offline) line = 'up next needs the home server';
-  else if (!on && !listMode) line = 'autoplay is off — the queue stops at the end';
+  else if (!on) {
+    // A list keeps the rest of itself: say where it stops.
+    line = listMode && rows.length ? `autoplay is off — stops after the last song of ${listName || 'this list'}`
+      : 'autoplay is off — the queue stops at the end';
+  }
   else if (u && u.loading) line = 'finding songs like this one…';
   else if (!rows.length && on) line = 'similar songs join here when the queue is nearly over';
   return (
@@ -2775,9 +2779,6 @@ const PlayerUpNext = ({ p }) => {
             </div>
           ))}
         </div>
-      )}
-      {!on && listMode && rows.length > 0 && (
-        <div className="mp-un-line">autoplay is off — stops after the last song of {listName || 'this list'}</div>
       )}
       {casting && rows.length > 0 && (
         <div className="mp-un-line">{p.target.roomId} plays these as they were sent; up next adds more while it plays here</div>
