@@ -42,7 +42,8 @@ model is told it can only talk and that its name stays Domovoi whatever
 voice it uses. Before, after a voice switch it could call itself May, and
 a request it has no command for ("add tarp the trailer to my to-do
 list") could get a made-up "I've added it"; nothing was saved. It now
-says it can't do that yet.
+says it can't do that yet. "Add eggs to the shopping" and "add X to my
+to-do" now go to Lists without the word "list".
 
 ## 2026-11-11 — the dashboard's player bar can be closed
 

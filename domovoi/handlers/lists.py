@@ -5,12 +5,15 @@ answer model, which said it was done; nothing was kept (live, 2026-11-11).
 Now it lands here and is kept in the same lists the dashboard's and the
 apps' Lists page show.
 
-What it takes (every pattern ends on the word "list", or starts with a
-verb only lists have: "cross off", "tick off"):
+What it takes (every pattern ends on the word "list" or on the name of
+a list every house has, or starts with a verb only lists have: "cross
+off", "tick off"):
 
 * add: "add X to my to-do list", "put X on the shopping list", "add milk,
   eggs and bread to the grocery list" (commas split items; a plain "and"
-  does not, so "mac and cheese" stays one item);
+  does not, so "mac and cheese" stays one item); without the word "list"
+  for the two lists every house has: "add eggs to the shopping", "add X
+  to my to-do";
 * read: "what's on my to-do list", "read me the shopping list", "how many
   things are on my to-do list" — open items only, at most
   ``_MAX_SPOKEN``, then how many more;
@@ -84,6 +87,14 @@ _ADD_RE = re.compile(
 # "add to my to-do list tarp the trailer"
 _ADD_LATE_RE = re.compile(
     rf"^{_ADD_VERB} (?:to|on|onto) {_LIST},? (?P<item>.+)$"
+)
+# "add eggs to the shopping", "add tarp the trailer to my to-do": the two
+# lists every house has, without the word "list". Only these names (a bare
+# "add it to my camping" could be anything), and "to do" with a space is
+# left out: "put the kettle on to do the dishes" is no list.
+_ADD_KNOWN_RE = re.compile(
+    rf"^{_ADD_VERB} (?P<item>.+?) (?:to|on|onto|in|into|on to|in to) (?:{_ART} )?"
+    rf"(?P<list>to-?dos?|shopping|groceries){_END}"
 )
 
 _WHAT_IS = r"(?:what(?:'s| is| are)|whats)"
@@ -202,7 +213,8 @@ def _said(item: str) -> str:
 class ListsHandler(Handler):
     name = "lists"
     # band rationale: utility cluster beside calendar (175): every pattern
-    #   ends on the word "list" (or starts with "cross off"/"tick off"), so
+    #   ends on the word "list" (or "the shopping" / "my to-do", or starts
+    #   with "cross off"/"tick off"), so
     #   it poaches nothing later — playlists, the queue and the library
     #   don't say "list" — and nothing earlier takes these phrasings (the
     #   calendar's write answer needs a calendar word). Ahead of documents
@@ -247,6 +259,7 @@ class ListsHandler(Handler):
             FastPath(_REMOVE_RE, ListsHandler._remove_from_match),
             FastPath(_ADD_RE, ListsHandler._add_from_match),
             FastPath(_ADD_LATE_RE, ListsHandler._add_from_match),
+            FastPath(_ADD_KNOWN_RE, ListsHandler._add_known_from_match),
             FastPath(_DELETE_LIST_RE, ListsHandler._delete_list_from_match),
         ]
 
@@ -333,6 +346,12 @@ class ListsHandler(Handler):
 
     async def _add_from_match(self, m, ctx, session) -> Response | None:
         if self._declined_name(m):
+            return None
+        return await self._add(m.group("item"), m.group("list"), ctx, session)
+
+    async def _add_known_from_match(self, m, ctx, session) -> Response | None:
+        # "put it on the shopping": no item said, so not this turn's.
+        if m.group("item").strip() in _PRONOUNS:
             return None
         return await self._add(m.group("item"), m.group("list"), ctx, session)
 
