@@ -106,6 +106,11 @@ class EngineConfig:
     up_next_skip_demote_sec: int = 30
     #: list mode: share of a batch drawn by weight; the rest are uniform.
     list_weighted_share: float = 0.8
+    #: list mode: a list this long or longer starts a new, reshuffled cycle
+    #: when it is used up (a repeat goes unnoticed). A shorter one plays
+    #: through once, then the session carries on in the library (continue
+    #: mode), so 2 search results never ping-pong.
+    list_repeat_min: int = 50
     #: library mode quota.
     shares: Mapping[str, float] = field(default_factory=lambda: dict(DEFAULT_SHARES))
     #: ± years for "same era".

@@ -132,14 +132,16 @@ async def create(db: "AsyncSession", sess: UpNextSession, *, name: str | None) -
 
 
 async def save(db: "AsyncSession", st: Stored) -> bool:
-    """Write the session back. False when someone else saved it since it
+    """Write the session back (its mode too: a short list played out
+    carries on as ``continue``). False when someone else saved it since it
     was read (optimistic locking: reload and try again)."""
     s = st.sess
     res = await db.execute(
-        text("UPDATE up_next_sessions SET target = :target, person_id = :person, autoplay = :autoplay, "
-             "batch_no = :batch, state = CAST(:state AS jsonb), version = version + 1, updated_at = now() "
+        text("UPDATE up_next_sessions SET target = :target, person_id = :person, mode = :mode, "
+             "autoplay = :autoplay, batch_no = :batch, state = CAST(:state AS jsonb), "
+             "version = version + 1, updated_at = now() "
              "WHERE id = :id AND version = :v"),
-        {"id": s.id, "target": s.target, "person": s.person_id, "autoplay": s.autoplay,
+        {"id": s.id, "target": s.target, "person": s.person_id, "mode": s.mode, "autoplay": s.autoplay,
          "batch": s.batch_no, "state": json.dumps(s.to_state()), "v": st.version})
     if res.rowcount == 1:
         st.version += 1

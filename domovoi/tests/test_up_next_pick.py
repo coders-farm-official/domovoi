@@ -25,6 +25,7 @@ from domovoi.up_next.model import (
     SAME_GENRE,
     SIMILAR_ARTIST,
     WILDCARD,
+    EngineConfig,
     ListCycle,
     Taste,
     Track,
@@ -346,14 +347,14 @@ def test_similar_takes_at_most_half_the_wildcards():
 LIST = [BY_ID[i] for i in range(1, 51)]  # 50 tracks
 
 
-def _run_list(cycles: int, *, clicked=1, members=LIST, rng_seed=11, autoplay=True, n=30):
+def _run_list(cycles: int, *, clicked=1, members=LIST, rng_seed=11, autoplay=True, n=30, repeat=None):
     st = P.start_cycle(clicked)
     played = [clicked]
     batches = []
     b = 0
     while True:
         picks, st, ended = P.list_batch(n=n, rng=P.batch_rng(rng_seed, b), members=members, state=st,
-                                        seeds=[(BY_ID[clicked], 0.3)], autoplay=autoplay)
+                                        seeds=[(BY_ID[clicked], 0.3)], autoplay=autoplay, repeat=repeat)
         b += 1
         batches.append(picks)
         played.extend(p.track_id for p in picks)
@@ -391,11 +392,50 @@ def test_list_mode_autoplay_off_ends_after_the_list():
 
 
 def test_short_list_never_repeats_a_track_in_one_batch():
+    # repeat forced on: a list this short would go on in the library
     short = [BY_ID[i] for i in (1, 2, 3)]
-    _p, batches, _st, _e = _run_list(3, members=short)
+    _p, batches, _st, _e = _run_list(3, members=short, repeat=True)
     for b in batches:
         assert len(b) == len({p.track_id for p in b})
     assert all(b for b in batches)
+
+
+def test_a_list_repeats_only_from_list_repeat_min_tracks():
+    cfg = DEFAULT_CONFIG
+    assert cfg.list_repeat_min == 50
+    assert P.list_repeats(50) and P.list_repeats(300) and not P.list_repeats(49) and not P.list_repeats(2)
+    assert P.list_repeats(10, EngineConfig(list_repeat_min=10))
+
+
+def test_a_small_list_plays_once_then_is_used_up():
+    two = [BY_ID[1], BY_ID[2]]
+    st = P.start_cycle(1)
+    assert not P.list_used_up(two, st)
+    picks, st, ended = P.list_batch(n=30, rng=P.batch_rng(5, 0), members=two, state=st,
+                                    seeds=[(BY_ID[1], 0.3)])
+    assert [p.track_id for p in picks] == [2] and not ended and st.cycle == 0
+    assert P.list_used_up(two, st)
+    # asked again, the list gives nothing more: no new cycle, no ping-pong
+    again, st2, ended2 = P.list_batch(n=30, rng=P.batch_rng(5, 1), members=two, state=st,
+                                      seeds=[(BY_ID[1], 0.3)])
+    assert again == [] and st2 == st and not ended2
+    # an empty (all excluded) list is not "used up": list_batch ends it
+    assert not P.list_used_up(two, st, taste=Taste(excluded_tracks=frozenset({1, 2})))
+
+
+def test_a_60_track_list_still_reshuffles():
+    sixty = [BY_ID[i] for i in range(1, 61)]
+    played, _b, st, ended = _run_list(3, members=sixty)
+    assert not ended and st.cycle >= 2
+    assert sorted(played[:60]) == list(range(1, 61))
+    assert sorted(played[60:120]) == list(range(1, 61))  # the second cycle: the whole list again
+    assert not P.list_used_up(sixty, st)
+
+
+def test_autoplay_off_ends_a_small_list():
+    ten = [BY_ID[i] for i in range(1, 11)]
+    played, _b, _st, ended = _run_list(9, members=ten, autoplay=False)
+    assert ended and sorted(played) == list(range(1, 11))
 
 
 def test_one_artist_list_plays_back_to_back():
@@ -561,6 +601,50 @@ async def test_engine_list_session_plays_the_list_then_ends():
     assert b.ended and s.ended
     assert sorted(got) == [i for i in range(1, 41) if i != 7]
     assert (await next_batch(s, library=lib, listens=MemoryListens(), now=NOW)).picks == ()
+
+
+async def test_engine_two_track_list_goes_on_in_the_library():
+    # The bug: 2 search results, clicked, then Up next ping-ponged between them.
+    lib = MemoryLibrary(LIB)
+    s = UpNextSession.start(target="device:d1", mode="list", rng_seed=4,
+                            seed=SeedRef(1, kind="ids", track_ids=(1, 2), label='from results for "x"'))
+    b0 = await next_batch(s, library=lib, listens=MemoryListens(), now=NOW)
+    assert [p.track_id for p in b0.picks] == [2] and s.mode == "list" and not b0.ended
+    s.record_listen(BY_ID[2], played_sec=200, duration_sec=200, outcome="finished")
+    played = [1, 2]
+    for _ in range(3):
+        b = await next_batch(s, library=lib, listens=MemoryListens(), now=NOW)
+        assert s.mode == "continue" and not b.ended and len(b.picks) == 30
+        assert not {p.track_id for p in b.picks} & {1, 2}          # the list never comes round again
+        assert all(p.reason_code != FROM_LIST for p in b.picks)     # the library's own reasons
+        assert all(p.reason_label and p.reason_label != "from this list" for p in b.picks)
+        played.extend(p.track_id for p in b.picks)
+    assert {p.reason_code for p in b.picks} & {SAME_ARTIST, SAME_ERA, SAME_GENRE, WILDCARD}
+    # each of the two songs plays once (the list's one pass), never again
+    assert played.count(1) == played.count(2) == 1
+    assert len(set(played)) == len(played)
+
+
+async def test_engine_small_list_with_autoplay_off_ends():
+    lib = MemoryLibrary(LIB)
+    s = UpNextSession.start(target="device:d1", mode="list", rng_seed=4, autoplay=False,
+                            seed=SeedRef(1, kind="ids", track_ids=(1, 2, 3)))
+    b0 = await next_batch(s, library=lib, listens=MemoryListens(), now=NOW)
+    b1 = await next_batch(s, library=lib, listens=MemoryListens(), now=NOW)
+    assert sorted(p.track_id for p in b0.picks + b1.picks) == [2, 3]
+    assert b1.ended and s.ended and s.mode == "list"
+
+
+async def test_engine_big_list_reshuffles_and_stays_a_list():
+    lib = MemoryLibrary(LIB, playlists={4: ("Long", list(range(1, 61)))})
+    s = UpNextSession.start(target="device:d1", mode="list", rng_seed=4,
+                            seed=SeedRef(1, kind="playlist", ref="4"))
+    got = []
+    for _ in range(4):
+        b = await next_batch(s, library=lib, listens=MemoryListens(), now=NOW)
+        got.extend(p.track_id for p in b.picks)
+    assert s.mode == "list" and s.list_cycle.cycle >= 1
+    assert set(got) <= set(range(1, 61)) and len(got) > 60
 
 
 async def test_engine_continue_mode_labels_the_lists_neighbourhood():

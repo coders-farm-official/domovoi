@@ -1293,8 +1293,9 @@ const PlaybackProvider = ({ children }) => {
     return tracks.map((t) => Object.assign(itemFromTrack(t), { origin, upNextGen: gen }));
   };
   /* A song clicked inside a list (`tracks`, `at`): it plays here, and Up
-   * next goes on with the rest of the list (and round again while autoplay
-   * is on). `context` names the list: {kind, ref?, name}; an `ids` list
+   * next goes on with the rest of the list (with autoplay on: round again
+   * when the list has 50 songs or more, else similar songs from the
+   * library once it has played). `context` names the list: {kind, ref?, name}; an `ids` list
    * takes its songs from `tracks`. No context: the song on its own,
    * similar songs from the whole library. */
   const playFromList = (tracks, at = 0, context = null, opts = {}) => {
@@ -1351,9 +1352,11 @@ const PlaybackProvider = ({ children }) => {
         });
         // Nothing new and not over: ask again when the song changes, not in a loop.
         const idle = !picks.length && !r.ended;
+        // A short list played out goes on in the library: the mode moves on
+        // ('list' -> 'continue'), and the header with it ("more like …").
         setUpNext((x) => (x && x.id === u.id
           ? Object.assign({}, x, { haveThrough: top, ended: !!r.ended, offline: false,
-                                   failedAt: idle ? at : null }) : x));
+                                   failedAt: idle ? at : null, mode: r.mode || x.mode }) : x));
       })
       .catch(() => {
         if (gen !== upNextGenRef.current) return;

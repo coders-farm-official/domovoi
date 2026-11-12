@@ -6,7 +6,8 @@
 * ``next`` is idempotent: the same ``have_through_seq`` gets the same batch;
 * feedback: remove, less like this (the artist's waiting picks come back
   as ``removed``), an early skip; the Autoplay switch (off: library mode
-  draws nothing, a list stops at its end; on again: the list goes round);
+  draws nothing, a list stops at its end; on again: a short list goes on
+  in the library); a short list plays once, then continues in the library;
 * whose mix it is: listening as, the claimed device, a shared screen,
   household on purpose, an unknown person refused;
 * a device acts on its own sessions only; no credential is 401;
@@ -177,10 +178,9 @@ async def test_a_song_clicked_in_a_playlist_starts_a_list_session(_db, clean) ->
     assert s["seed"]["title"] == "Song 0" and s["seed"]["list"] == {"kind": "playlist", "name": "Road Trip"}
     assert s["seed"]["label"] == "from road trip"
     picks = s["picks"]
-    # The rest of the playlist, each once, then (autoplay on) round again,
-    # starting a new cycle: the batch stops before any song would repeat.
-    assert sorted(p["track_id"] for p in picks[:19]) == sorted(d["ids"][1:20])
-    assert {p["track_id"] for p in picks[19:]} <= set(d["ids"][:20])
+    # The rest of the playlist, each once. 20 songs are too few to go round
+    # again: the next refill carries on in the library.
+    assert sorted(p["track_id"] for p in picks) == sorted(d["ids"][1:20])
     assert [p["seq"] for p in picks] == list(range(1, len(picks) + 1))
     assert s["have_through_seq"] == len(picks) and s["batch_no"] == 1
     labels = {p["reason_label"] for p in picks}
@@ -226,6 +226,42 @@ async def test_library_and_continue_modes_and_a_new_start_ends_the_old(_db, clea
         active = (await conn.execute(text(
             "SELECT count(*) FROM up_next_sessions WHERE target = 'device:browser-a1' AND ended_at IS NULL"))).scalar()
     assert active == 1
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_small_list_plays_once_then_goes_on_in_the_library(_db, clean) -> None:
+    # Two search results clicked: the other one, then the library's mix
+    # (never the two songs again), labelled with its own reasons; the mode
+    # moves to continue so the head reads "more like ...", not "shuffled from".
+    d = await _seed()
+    _, token = await _household()
+    two = d["ids"][:2]
+    async with _dev(token, "browser-a1") as c:
+        s = (await c.post(f"{BASE}/sessions", json=_start(
+            "browser-a1", track_id=two[0],
+            context={"kind": "ids", "track_ids": two, "name": 'results for "nin"'}))).json()
+        assert s["mode"] == "list" and [p["track_id"] for p in s["picks"]] == [two[1]]
+        assert s["picks"][0]["reason_code"] == "from_list"
+        nxt = (await c.post(f"{BASE}/sessions/{s['id']}/next",
+                            json={"have_through_seq": s["have_through_seq"]})).json()
+        assert nxt["mode"] == "continue" and nxt["ended"] is False and len(nxt["picks"]) == 30
+        assert not {p["track_id"] for p in nxt["picks"]} & set(two)
+        codes = {p["reason_code"] for p in nxt["picks"]}
+        assert "from_list" not in codes
+        assert codes <= {"same_artist", "same_era", "same_genre", "played_together", "wildcard"}
+        assert "same artist" in {p["reason_label"] for p in nxt["picks"]}
+        more = (await c.post(f"{BASE}/sessions/{s['id']}/next",
+                             json={"have_through_seq": nxt["picks"][-1]["seq"]})).json()
+        assert more["mode"] == "continue" and more["picks"]
+        assert not {p["track_id"] for p in more["picks"]} & set(two)
+        got = (await c.get(f"{BASE}/sessions/{s['id']}")).json()
+        assert got["mode"] == "continue"
+        assert got["seed"]["list"] == {"kind": "ids", "name": 'results for "nin"'}
+    async with engine.begin() as conn:
+        mode = (await conn.execute(text("SELECT mode FROM up_next_sessions WHERE id = :s"),
+                                   {"s": s["id"]})).scalar()
+    assert mode == "continue"
 
 
 @requires_db
@@ -333,8 +369,10 @@ async def test_autoplay_switch(_db, clean) -> None:
         assert end["picks"] == [] and end["ended"] is True
         on = (await c.patch(f"{BASE}/sessions/{lst['id']}", json={"autoplay": True})).json()
         assert on["autoplay"] is True and on["ended"] is False
+        # On again: a list this short doesn't go round, it carries on in the library.
         again = (await c.post(f"{BASE}/sessions/{lst['id']}/next", json={"have_through_seq": 5})).json()
-        assert sorted(p["track_id"] for p in again["picks"]) == sorted(small)   # round again
+        assert again["mode"] == "continue" and again["picks"]
+        assert not {p["track_id"] for p in again["picks"]} & set(small)
 
 
 @requires_db

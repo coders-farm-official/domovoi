@@ -7,7 +7,10 @@ it changes only the session object it was given (the caller saves it).
 
 * ``list`` mode reads the list as it is now and draws the next part of
   the cycle (:func:`~.pick.list_batch`). Autoplay off still plays the
-  rest of the list, then ends.
+  rest of the list, then ends. With autoplay on, a list shorter than
+  ``list_repeat_min`` (50) plays through once, then the session switches
+  to ``continue`` for good (``sess.mode`` changes; the caller saves it)
+  instead of reshuffling the same few songs.
 * ``library`` and ``continue`` modes read the candidates near the drift
   seeds, a wildcard sample, the playlist and listening-session
   neighbours, the listener's stats and the hold-back, then fill by quota
@@ -31,6 +34,7 @@ from .pick import (
     drift_weights,
     library_batch,
     list_batch,
+    list_used_up,
 )
 from .session import UpNextSession
 
@@ -61,8 +65,18 @@ async def next_batch(
     scope = Scope(sess.target, sess.person_id)
     n = config.up_next_batch_size
 
+    members: list[Track] | None = None
     if sess.mode == "list":
         members = await library.list_members(sess.seed)
+        if sess.autoplay and list_used_up(members, sess.list_cycle, taste=sess.taste(), config=config):
+            # A list too short to repeat played through: carry on in the
+            # library like a list played on purpose that ended (below). The
+            # clicked song joins the no-repeat memory beside the list's picks.
+            sess.mode = "continue"
+            known_picked = set(sess.picked)
+            sess.picked.extend(i for i in sess.list_cycle.done if i not in known_picked)
+    if sess.mode == "list":
+        assert members is not None
         weights = drift_weights(sess.recent_listened, sess.seed.track_id)
         known = {t.id: t for t in members}
         missing = [tid for tid, _ in weights if tid not in known]
@@ -82,7 +96,8 @@ async def next_batch(
     original = sess.seed.track_id
     context: list[Track] = []
     if sess.mode == "continue":
-        members = await library.list_members(sess.seed)
+        if members is None:
+            members = await library.list_members(sess.seed)
         if members:
             ordered = sorted(members, key=lambda t: t.id)
             context = rng.sample(ordered, min(CONTINUE_CONTEXT_SEEDS, len(ordered)))
