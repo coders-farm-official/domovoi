@@ -1726,6 +1726,8 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
   const [edits, setEdits] = React.useState({});
   const [saving, setSaving] = React.useState(false);
   const [result, setResult] = React.useState(null);
+  // Counts saves, so each one that needs a restart asks again (RestartAfterSave).
+  const [saveN, setSaveN] = React.useState(0);
   const [advOpen, setAdvOpen] = React.useState(false);
   // "sign in" pressed on the withheld note: open Advanced when it lands.
   const [wantAdvanced, setWantAdvanced] = React.useState(false);
@@ -1819,6 +1821,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
     try {
       const res = await apiPatch('/api/config/editable', { changes: edits });
       setResult(res);
+      setSaveN((n) => n + 1);
       const rejected = (res && res.rejected) || {};
       setEdits(prev => {                       // keep only still-rejected edits
         const next = {};
@@ -1969,9 +1972,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
               adjusted: {Object.entries(result.normalized).map(([k, v]) => `${k} (${v})`).join('; ')}
             </div>}
           {result && result.restart_required && result.restart_required.length > 0 &&
-            <div style={{ fontSize: 12, color: 'var(--warn-ink)', marginBottom: 8 }}>
-              saved — restart the Domovoi server to apply: {result.restart_required.map(restartWords).join(', ')}
-            </div>}
+            <RestartAfterSave key={saveN} words={result.restart_required.map(restartWords)}/>}
           {result && !result.error && rejectedCount === 0 && (!result.restart_required || !result.restart_required.length) &&
            result.applied && result.applied.length > 0 &&
             <div style={{ fontSize: 12, color: 'var(--ok-ink)', marginBottom: 8 }}>saved ✓</div>}
@@ -2093,6 +2094,7 @@ const InternetPanel = () => {
   const [saving, setSaving] = React.useState(false);
   const [following, setFollowing] = React.useState(null);
   const [result, setResult] = React.useState(null);
+  const [saveN, setSaveN] = React.useState(0);
   const [retrying, setRetrying] = React.useState(false);
   const [helperBusy, setHelperBusy] = React.useState(false);
   const [helperError, setHelperError] = React.useState(null);
@@ -2118,6 +2120,7 @@ const InternetPanel = () => {
     try {
       const res = await apiPatch('/api/config/editable', { changes: { internet_access: choice } });
       setResult(res || {});
+      setSaveN((n) => n + 1);
       const refused = res && res.rejected && res.rejected.internet_access;
       if (!refused) {
         announceInternetChange(choice);
@@ -2289,9 +2292,9 @@ const InternetPanel = () => {
             </div>
           )}
           {restartNames.length > 0 && (
-            <div className="internet-restart" style={{ fontSize: 12, color: 'var(--warn-ink)', marginTop: 8, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Pill tone="warn">restart</Pill>
-              <span>saved — restart the Domovoi server to apply: {restartNames.map(labelOf).join(', ')}</span>
+            <div className="internet-restart" style={{ marginTop: 8 }}>
+              <RestartAfterSave key={saveN} words={restartNames.map(labelOf)}
+                                asked={!!(result && result.restart_required && result.restart_required.length)}/>
             </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
