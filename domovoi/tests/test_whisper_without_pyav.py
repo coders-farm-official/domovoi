@@ -79,7 +79,7 @@ def test_the_model_gets_an_array_and_no_file_is_written(tmp_path, monkeypatch) -
     seen = []
 
     class Model:
-        def transcribe(self, audio, beam_size):
+        def transcribe(self, audio, beam_size, **_kw):
             seen.append((type(audio), getattr(audio, "dtype", None), len(audio), beam_size))
             return iter([type("S", (), {"text": " hello "})()]), None
 

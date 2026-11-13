@@ -590,6 +590,10 @@ def wav_to_float32(wav_bytes: bytes) -> np.ndarray:
     return pcm_to_float32(proc.stdout)
 
 
+# Whisper's timestamp tokens: <|0.00|> to <|30.00|> in 0.02 s steps.
+TIMESTAMP_TOKENS = 1501
+
+
 class FasterWhisperClient:
     """Wraps `faster_whisper.WhisperModel` with an async interface.
 
@@ -746,8 +750,43 @@ class FasterWhisperClient:
         return self._run_model(wav_to_float32(wav_bytes))
 
     def _run_model(self, audio: np.ndarray) -> str:
-        segments, _info = self._model.transcribe(audio, beam_size=5)
+        # without_timestamps: with timestamps on, the library moves through
+        # the audio by the last timestamp the model wrote. A window that
+        # comes back as two "0.00" timestamps (music does it) moves by 0
+        # and, at temperature 0, decodes the same window the same way
+        # forever: the speech thread never returns and the room's turns all
+        # time out until a restart (incident 2026-11-12/13). Without them
+        # every window moves on by its full length, so the call ends. Only
+        # the text is used here; the short window decodes this way already.
+        # The timestamp tokens are also suppressed: the library's splitter
+        # treats two in a row as "move by 0" whatever the option says, so
+        # the model must not be able to write them at all.
+        segments, _info = self._model.transcribe(
+            audio, beam_size=5, without_timestamps=True,
+            suppress_tokens=self._suppress_tokens(),
+        )
         return " ".join(seg.text.strip() for seg in segments).strip()
+
+    def _suppress_tokens(self) -> list[int]:
+        """The library's default suppression (``-1``: its non-speech
+        symbols) plus every timestamp token, worked out once from the
+        model's own vocabulary. If the vocabulary can't be read, only the
+        default (``without_timestamps`` still applies)."""
+        cached = getattr(self, "_suppress_cache", None)
+        if cached is not None:
+            return cached
+        ids = [-1]
+        try:
+            # The tokenizer file stops short of the timestamp tokens (its
+            # vocabulary size ends at them), so they are counted, not
+            # looked up: 1501 of them (0.00 to 30.00 s in 0.02 s steps)
+            # straight after <|notimestamps|>, in every Whisper model.
+            first = int(self._model.hf_tokenizer.token_to_id("<|notimestamps|>")) + 1
+            ids += list(range(first, first + TIMESTAMP_TOKENS))
+        except Exception as e:  # noqa: BLE001 - a missing vocabulary must not stop decoding
+            log.warning("Whisper: couldn't list the timestamp tokens (%s: %s)", type(e).__name__, e)
+        self._suppress_cache = ids
+        return ids
 
 
 _client: WhisperClient | None = None
