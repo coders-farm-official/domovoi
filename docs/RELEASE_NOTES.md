@@ -4,6 +4,64 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-12 — "Play <artist>, the song <title>" asks for that song
+
+"Play Lil Seeto, the song Glitch Again" is now read as the song Glitch
+Again by Lil Seeto, the same as "play Glitch Again by Lil Seeto": the
+library is searched for that title by that artist, and a song you don't
+have is looked up as "glitch again by lil seeto" without "the song" in
+the search. A title with "by" in it keeps it ("play the Beatles, the song
+Stand By Me"). When a media-provider plugin finds nothing that carries the
+words you asked for, the answer is "I couldn't find anything called …";
+the media-provider plugin's next release stops streaming an unrelated
+result in that case.
+## 2026-11-12 — Music keeps going after a streamed song
+
+When a song you don't have is streamed into a room (say "play" a song
+that isn't in your library and a streaming provider plugin plays it), the
+room no longer goes quiet when it ends: Up next carries on with songs
+from your library. If the library has that song's artist, the mix leans
+to them and their era and genres, and the queue's header reads "more like
+<artist>"; otherwise it follows your taste (or the household's), like
+"play something". The library's own copy of that song is never picked.
+Nothing follows when you stopped the music, when the room's Autoplay is
+off, or when the stream failed or died in its first seconds, and a radio
+station never gets a follow-on. The songs join the room's queue in the
+stream's last minute (or once it has played 15 seconds, when its length
+isn't known), so "next" during the stream still finds another stream
+like it until then.
+
+## 2026-11-12 — Add songs from a room's queue, and a quicker Room queue tab
+
+Music → Room queue now has a search box at the top, under the room
+picker: type a song, artist, album or genre and press **play next** or
+**add to queue** to put it in that room's queue. Guests get it on a room
+that is playing; where a phone or browser isn't allowed to change the
+queue, there is no box and the queue says why.
+
+The tab is also quicker, mostly on phones: it no longer redraws the whole
+Music page every second, a song changing in another room no longer
+reloads this room's queue, a long queue (a whole playlist) shows 100
+songs at a time with **show more**, and the room you looked at last loads
+straight away instead of after every room's status. Each browser now
+remembers that room.
+
+## 2026-11-12 — A short list no longer repeats itself in Up next
+
+Click a song in a short list, such as two search results or a 10-song
+album, and Up next now plays the rest of that list once and then carries
+on with similar songs from the whole library (same artist, same era,
+same genre, played together, a few wildcards), each saying why it was
+picked. The queue's header changes from "shuffled from <list>" to
+"more like <list>" at that point. Before, it shuffled the same few songs
+over and over. A list of 50 songs or more still goes round again,
+reshuffled. With autoplay off, any list still stops at its last song.
+This works the same in the browser and in a room.
+
+API (docs/API_REFERENCE.md §3.5f): the answer of
+`POST /api/music/up-next/sessions/{id}/next` adds `mode`, and a session's
+`mode` can move from `list` to `continue` while it runs.
+
 ## 2026-11-12 — A playlist played in a room is the room's whole queue
 
 Play a playlist in a room — its play or shuffle button, Favorites, or

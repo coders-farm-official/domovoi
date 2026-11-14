@@ -1293,8 +1293,9 @@ const PlaybackProvider = ({ children }) => {
     return tracks.map((t) => Object.assign(itemFromTrack(t), { origin, upNextGen: gen }));
   };
   /* A song clicked inside a list (`tracks`, `at`): it plays here, and Up
-   * next goes on with the rest of the list (and round again while autoplay
-   * is on). `context` names the list: {kind, ref?, name}; an `ids` list
+   * next goes on with the rest of the list (with autoplay on: round again
+   * when the list has 50 songs or more, else similar songs from the
+   * library once it has played). `context` names the list: {kind, ref?, name}; an `ids` list
    * takes its songs from `tracks`. No context: the song on its own,
    * similar songs from the whole library. */
   const playFromList = (tracks, at = 0, context = null, opts = {}) => {
@@ -1351,9 +1352,11 @@ const PlaybackProvider = ({ children }) => {
         });
         // Nothing new and not over: ask again when the song changes, not in a loop.
         const idle = !picks.length && !r.ended;
+        // A short list played out goes on in the library: the mode moves on
+        // ('list' -> 'continue'), and the header with it ("more like …").
         setUpNext((x) => (x && x.id === u.id
           ? Object.assign({}, x, { haveThrough: top, ended: !!r.ended, offline: false,
-                                   failedAt: idle ? at : null }) : x));
+                                   failedAt: idle ? at : null, mode: r.mode || x.mode }) : x));
       })
       .catch(() => {
         if (gen !== upNextGenRef.current) return;
@@ -3037,17 +3040,21 @@ const _queueAskPrompt = () => _QUEUE_ASK_PROMPTS[Math.floor(Math.random() * _QUE
 const _QUEUE_SEARCH_MIN = 2;
 const _QUEUE_GENRE_TAKE = 25;   // songs a genre row adds, shuffled
 
-/* Search the library from the queue panel and add what is found: by title,
- * artist or album (GET /api/music/library?q=, the library search) and by
- * genre (GET /api/music/genres?q=; a genre row adds up to 25 of its songs,
- * shuffled). Only library songs: that is what the browser queue plays.
- * Combobox + listbox; Enter adds the highlighted row, Shift+Enter plays it
- * next, Up/Down move, Esc clears. While casting, the panel still shows the
- * queue this browser keeps for the room, and an add goes to both it and the
- * room's own queue (POST /api/music/queue/{room}/add): "add to queue"
- * lands after what was asked for and before the room's Up next picks,
- * "play next" right after the song playing there (`where`, P4). */
-const PlayerQueueAdd = ({ p }) => {
+/* Search the library and add what is found, to a queue: by title, artist
+ * or album (GET /api/music/library?q=, the library search) and by genre
+ * (GET /api/music/genres?q=; a genre row adds up to 25 of its songs,
+ * shuffled). Only library songs. Combobox + listbox; Enter adds the
+ * highlighted row, Shift+Enter plays it next, Up/Down move, Esc clears.
+ *
+ * Shared by the player's queue (PlayerQueueAdd, below) and the Music
+ * page's Room queue tab (music.jsx QueueTab): each says where an add goes
+ * through `onAdd(tracks, next, label)`, which resolves to the line to show
+ * (or throws: "Couldn't add …", said unless a sign-in prompt has it).
+ * `unavailable`: a sentence said instead of adding, when nothing can take
+ * the songs. `idBase` keeps the listbox's ids apart when both are on
+ * screen. `where` names the room in the buttons' titles. */
+const QueueSearchAdd = ({ onAdd, unavailable = null, idBase = 'mp-q', where = null,
+                          ariaLabel = 'search the library to add to the queue' }) => {
   const [prompt] = React.useState(_queueAskPrompt);
   const [q, setQ] = React.useState('');
   const dq = useDebouncedValue(q.trim(), 250);
@@ -3055,7 +3062,6 @@ const PlayerQueueAdd = ({ p }) => {
   const [busy, setBusy] = React.useState(false);
   const [active, setActive] = React.useState(0);
   const [status, setStatus] = React.useState('');
-  const casting = !!(p.target && p.target.kind === 'room');
   const asking = dq.length >= _QUEUE_SEARCH_MIN && dq === q.trim();
   React.useEffect(() => {
     if (dq.length < _QUEUE_SEARCH_MIN) { setRows(null); setBusy(false); return undefined; }
@@ -3096,30 +3102,12 @@ const PlayerQueueAdd = ({ p }) => {
   };
   const label = (row) => (row.kind === 'song' ? (row.track.title || 'that song') : `${row.genre.name} songs`);
   const add = async (row, next) => {
-    if (!p.available) { setStatus("The browser player isn't available here."); return; }
+    if (unavailable) { setStatus(unavailable); return; }
     try {
       const tracks = await tracksOf(row);
       if (!tracks.length) { setStatus(`Nothing to add from ${label(row)}.`); return; }
-      const items = tracks.map(itemFromTrack);
-      if (next) {
-        for (let i = items.length - 1; i >= 0; i--) p.playNext(items[i]);
-      } else {
-        p.enqueue(items);
-      }
-      if (casting) {
-        try {
-          await apiPost(roomQueuePath(p.target.roomId, '/add'),
-            { track_ids: tracks.map((t) => t.id), device_id: DeviceIdentity.id(), where: next ? 'next' : 'end' });
-        } catch (e) {
-          if (!isAuthFailure(e)) {
-            setStatus(`Added "${label(row)}" here, but ${p.target.roomId} didn't take it: ${apiErrorText(e)}`);
-          }
-          return;
-        }
-      }
-      const n = items.length;
-      const where = casting ? ` in ${p.target.roomId}` : '';
-      setStatus(`${next ? 'Playing next' : 'Added'}${where}: ${label(row)}${n > 1 ? ` (${n} songs)` : ''}`);
+      const said = await onAdd(tracks, next, label(row));
+      setStatus(said || '');
     } catch (e) {
       if (!isAuthFailure(e)) setStatus(`Couldn't add ${label(row)}: ${apiErrorText(e)}`);
     }
@@ -3140,19 +3128,20 @@ const PlayerQueueAdd = ({ p }) => {
     }
   };
   const showList = rows !== null && asking;
+  const listId = `${idBase}-results`;
   return (
-    <div className="mp-q-save">
+    <>
       <input type="search" className="mp-q-search" value={q} placeholder={prompt}
              onChange={(e) => { setQ(e.target.value); setStatus(''); }} onKeyDown={onKey}
-             role="combobox" aria-label="search the library to add to the queue"
+             role="combobox" aria-label={ariaLabel}
              aria-autocomplete="list" aria-expanded={showList && list.length > 0}
-             aria-controls="mp-q-results"
-             aria-activedescendant={showList && list[active] ? `mp-q-opt-${active}` : undefined}
+             aria-controls={listId}
+             aria-activedescendant={showList && list[active] ? `${idBase}-opt-${active}` : undefined}
              autoComplete="off"/>
       {showList && (
-        <div className="mp-q-results" id="mp-q-results" role="listbox" aria-label="songs to add">
+        <div className="mp-q-results" id={listId} role="listbox" aria-label="songs to add">
           {list.map((row, i) => (
-            <div key={row.key} id={`mp-q-opt-${i}`} role="option" aria-selected={i === active}
+            <div key={row.key} id={`${idBase}-opt-${i}`} role="option" aria-selected={i === active}
                  className={`mp-q-res${i === active ? ' on' : ''}`}
                  onMouseEnter={() => setActive(i)}>
               <div className="mp-q-res-main" onClick={() => add(row, false)}>
@@ -3169,10 +3158,11 @@ const PlayerQueueAdd = ({ p }) => {
                 )}
               </div>
               <IconButton name="corner-down-right" tabIndex={-1} onClick={() => add(row, true)}
-                          title={casting ? `play next in ${p.target.roomId}` : 'play next'}
+                          title={where ? `play next in ${where}` : 'play next'}
                           aria-label={`play ${label(row)} next`}/>
               <IconButton name="list-plus" tabIndex={-1} onClick={() => add(row, false)}
-                          title="add to queue" aria-label={`add ${label(row)} to the queue`}/>
+                          title={where ? `add to ${where}'s queue` : 'add to queue'}
+                          aria-label={`add ${label(row)} to the queue`}/>
             </div>
           ))}
           {list.length === 0 && !busy && (
@@ -3183,6 +3173,42 @@ const PlayerQueueAdd = ({ p }) => {
       <div className="mp-q-note" role="status" aria-live="polite">
         {status || (busy && asking ? 'searching…' : '')}
       </div>
+    </>
+  );
+};
+
+/* The player's queue search (QueueSearchAdd). While casting, the panel
+ * still shows the queue this browser keeps for the room, and an add goes
+ * to both it and the room's own queue (POST /api/music/queue/{room}/add):
+ * "add to queue" lands after what was asked for and before the room's
+ * Up next picks, "play next" right after the song playing there
+ * (`where`, P4). */
+const PlayerQueueAdd = ({ p }) => {
+  const casting = !!(p.target && p.target.kind === 'room');
+  const onAdd = async (tracks, next, label) => {
+    const items = tracks.map(itemFromTrack);
+    if (next) {
+      for (let i = items.length - 1; i >= 0; i--) p.playNext(items[i]);
+    } else {
+      p.enqueue(items);
+    }
+    if (casting) {
+      try {
+        await apiPost(roomQueuePath(p.target.roomId, '/add'),
+          { track_ids: tracks.map((t) => t.id), device_id: DeviceIdentity.id(), where: next ? 'next' : 'end' });
+      } catch (e) {
+        if (isAuthFailure(e)) return '';
+        return `Added "${label}" here, but ${p.target.roomId} didn't take it: ${apiErrorText(e)}`;
+      }
+    }
+    const n = items.length;
+    const where = casting ? ` in ${p.target.roomId}` : '';
+    return `${next ? 'Playing next' : 'Added'}${where}: ${label}${n > 1 ? ` (${n} songs)` : ''}`;
+  };
+  return (
+    <div className="mp-q-save">
+      <QueueSearchAdd onAdd={onAdd} where={casting ? p.target.roomId : null}
+                      unavailable={p.available ? null : "The browser player isn't available here."}/>
       <PlayerQueueSave queue={p.queue} roomId={casting ? p.target.roomId : null}/>
     </div>
   );

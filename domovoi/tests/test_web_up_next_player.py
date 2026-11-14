@@ -132,6 +132,14 @@ SCENARIOS: dict = {
         "const before = bodies(/next$/).length;"
         "P().next(); await step(); await step();"
         "return { before, nexts: bodies(/next$/), queue: Q(), index: P().index, un: UN() };"),
+    # A small list played out: the refill's answer says the session went on
+    # in the library ('continue'), and the head follows it.
+    "list_goes_on": _provider(
+        f"ans('{S}', W().__sess('list', [W().__pk(1, 11, 'same artist')]));"
+        f"ans('{NEXT}', {{ batch_no: 1, picks: [W().__pk(2, 40, 'wildcard'), W().__pk(3, 41, '90s')], removed: [], ended: false, mode: 'continue' }});"
+        "h.render(); P().playFromList([10, 11].map((n) => W().__t(n)), 0, { kind: 'ids', name: 'results for x' });"
+        " await step(); await step();"
+        "return { un: UN(), queue: Q(), basis: W().upNextBasis(UN()) };"),
     # A refill that failed is asked again, with the same number, when the song changes.
     "refill_retry": _provider(
         f"ans('{S}', W().__sess('library', [1, 2].map((s) => W().__pk(s, 20 + s))));"
@@ -481,6 +489,14 @@ def test_the_queue_refills_when_five_songs_are_left(driven) -> None:
     assert [q[2] for q in r["queue"]] == [0, 1, 2, 3, 4, 5, 7, 8]
     assert r["queue"][6][3] == "wildcard"
     assert r["un"]["haveThrough"] == 8 and r["index"] == 1
+
+
+def test_a_small_lists_session_going_on_in_the_library_moves_the_mode(driven) -> None:
+    g = driven["list_goes_on"]
+    assert g["un"]["mode"] == "continue" and g["un"]["haveThrough"] == 3
+    assert [q[:4] for q in g["queue"]] == [[10, "explicit", 0, ""], [11, "auto", 1, "same artist"],
+                                          [40, "auto", 2, "wildcard"], [41, "auto", 3, "90s"]]
+    assert g["basis"] == "more like Road Trip"   # the scripted session's list
 
 
 def test_a_failed_refill_is_asked_again_with_the_same_number(driven) -> None:

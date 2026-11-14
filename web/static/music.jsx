@@ -117,6 +117,30 @@ const useLibraryPage = ({ pageSize = 50 } = {}) => {
 };
 
 /* ---- Now Playing card ------------------------------------- */
+/* Seconds since this room's now-playing was read, ticking once a second
+ * while it plays, so the elapsed time advances between pushes (the server
+ * only says play / pause / skip / new song; the seconds between need a
+ * local clock). Back to 0 whenever the room's state, song or elapsed time
+ * changes: the server's elapsed_sec is canonical, the tick adds to it.
+ * Per card, not per page: the page-wide tick re-drew the whole Music page
+ * (every tab, a long room queue included) every second. */
+const useRoomTick = (np) => {
+  const [tick, setTick] = React.useState(0);
+  const playing = !!(np && np.state === 'play' && np.song);
+  const sig = `${roomPlaySig(np)}|${np ? np.elapsed_sec : ''}`;
+  React.useEffect(() => { setTick(0); }, [sig]);
+  React.useEffect(() => {
+    if (!playing) return undefined;
+    const i = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(i);
+  }, [playing]);
+  return tick;
+};
+const TickingNPCard = (props) => {
+  const tick = useRoomTick(props.np);
+  return <NPCard {...props} tick={tick}/>;
+};
+
 // `guest` (data.js isGuestViewer): a browser with no household credential.
 // It may pause, resume and skip a room that is playing and change its
 // queue (owner decision 2026-10-10), but not stop it, favorite for the
@@ -1405,6 +1429,16 @@ const queueTapTarget = (kind, idx, cur, count) => {
   return null;
 };
 
+// The Room queue tab's rows are drawn this many at a time ("show more").
+const QUEUE_ROWS_STEP = 100;
+// Songs played before the one playing that stay drawn above it.
+const QUEUE_FOLD_AFTER = 20;
+// The room this browser last picked on the Room queue tab.
+const QUEUE_ROOM_KEY = 'domovoi.music.queueRoom';
+// What makes a room's queue worth re-reading on a now-playing event: its
+// state and its song (from the event's per-room value or a now-playing row).
+const roomPlaySig = (np) => (np ? `${np.state || ''}|${np.song ? `${np.song.file || ''}|${np.song.title || ''}` : ''}` : '');
+
 /* The Room queue tab. `room` is the Music page's (a room card's queue
  * button picks it); null falls back to a room that's playing.
  *
@@ -1415,28 +1449,71 @@ const queueTapTarget = (kind, idx, cur, count) => {
  * artist out of the mix; "save as playlist" keeps the queue. A guest gets
  * the jump, the moves and remove on a playing room — no switch, no "less
  * like this", no saving. */
-const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }) => {
-  // Default to a room that's actually playing — that's the queue you came
-  // here to look at.
+const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: pickedRoom, onRoom }) => {
+  // Default to the room this browser looked at last (kept per browser), so
+  // the queue is read at once rather than after now-playing has answered;
+  // else a room that's actually playing — that's the queue you came here to
+  // look at. A kept room that no longer exists is dropped once the rooms
+  // are known.
   const playingRoom = (nowPlaying.find(np => np.state === 'play') || {}).room_id;
   // Rendered on its own (no `onRoom`), the tab keeps its own pick.
   const [ownRoom, setOwnRoom] = React.useState(null);
-  const room = pickedRoom || ownRoom || playingRoom || rooms[0] || null;
+  const [kept] = React.useState(() => {
+    try { return localStorage.getItem(QUEUE_ROOM_KEY) || null; } catch { return null; }
+  });
+  const roomsKnown = rooms.length > 0 || !npLoading;
+  const keptRoom = kept && (!roomsKnown || rooms.includes(kept)) ? kept : null;
+  const room = pickedRoom || ownRoom || keptRoom || playingRoom || rooms[0] || null;
   const setRoom = onRoom || setOwnRoom;
+  const chosen = pickedRoom || ownRoom;
+  React.useEffect(() => {
+    if (!chosen) return;
+    try { localStorage.setItem(QUEUE_ROOM_KEY, chosen); } catch { /* kept for the visit */ }
+  }, [chosen]);
 
   const [order, setOrder] = React.useState(null);   // local drag order, or null
   const [busy, setBusy] = React.useState(false);
   const dragFrom = React.useRef(null);
+  // Rows drawn: a whole playlist can be a room's queue (1,500 songs), and
+  // drawing every one of them is what made the tab crawl on a phone.
+  const [shown, setShown] = React.useState(QUEUE_ROWS_STEP);
+  const [earlier, setEarlier] = React.useState(false);
+  React.useEffect(() => { setShown(QUEUE_ROWS_STEP); setEarlier(false); }, [room]);
 
   const deviceId = DeviceIdentity.id();
   // Quiet: opening the tab, or switching rooms, is nobody pressing
   // anything. A refused read renders its own state; it never pops the pair
   // prompt (a guest's phone used to get one just for looking).
-  const { data: queue, loading, error, refresh } = useApiObject(
+  const { data: answer, error, refresh } = useApiObject(
     room ? `/api/music/queue/${encodeURIComponent(room)}`
            + `?device_id=${encodeURIComponent(deviceId)}` : null,
-    { eventTypes: ['music.now_playing.changed'], quiet: true },
+    { quiet: true },
   );
+  // Another room's answer (the read for a room just picked is still out)
+  // is not this room's queue: it would show the old room's songs under the
+  // new room's name.
+  const queue = answer && (!answer.room_id || answer.room_id === room) ? answer : null;
+
+  // Re-read when THIS room's song or state changed. The event carries
+  // every room's now-playing (realtime.py `music.now_playing.changed`):
+  // a song changing in another room used to re-read, and re-draw, this
+  // room's whole queue. An event without the rooms re-reads, as before.
+  const npNow = React.useRef(nowPlaying);
+  npNow.current = nowPlaying;
+  const seen = React.useRef(null);
+  React.useEffect(() => { seen.current = null; }, [room]);
+  useStateEvents(['music.now_playing.changed'], (ev) => {
+    const all = ev && ev.data;
+    if (!room || !all || typeof all !== 'object' || Array.isArray(all)) { refresh(); return; }
+    if (seen.current === null) {
+      const np = (npNow.current || []).find((x) => x && x.room_id === room);
+      seen.current = roomPlaySig(np);
+    }
+    const now = roomPlaySig(all[room]);
+    if (now === seen.current) return;
+    seen.current = now;
+    refresh();
+  });
 
   // A guest's tab has no live socket to say the queue moved on: re-read it
   // on the same 15 s beat as the page's now-playing (MusicPage).
@@ -1456,9 +1533,12 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
   const serverKey = (queue?.items || []).map(i => i.song_id).join(',');
   React.useEffect(() => { setOrder(null); }, [serverKey, room]);
 
-  // No rooms is two different states: the now-playing list came back
-  // empty (nothing provisioned) or it never came back at all.
-  if (rooms.length === 0) {
+  // No rooms is three states: now-playing hasn't answered yet, it came
+  // back empty (nothing provisioned) or it never came back at all.
+  if (!room) {
+    if (npLoading && !npError) {
+      return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading rooms…</div>;
+    }
     if (npError) {
       return <Empty glyph="headphones" title="rooms unavailable"
                     sub={`couldn't load now-playing: ${apiErrorText(npError)}`}/>;
@@ -1468,6 +1548,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
   }
 
   const items = order || queue?.items || [];
+  const roomChoices = rooms.length ? rooms : [room];
   const editable = queue ? queue.editable !== false : true;
   // The server says who is asking (music_queue.py RoomQueue): a guest
   // never clears and never removes the song playing now; an admin may ban
@@ -1621,6 +1702,35 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
     </div>
   ) : null;
 
+  // Search the library and add to this room's queue: the tab's main
+  // control, under the room chips. Shown only where adding works — the
+  // queue has answered for this room and says this caller may change it
+  // (a guest: while the room plays, unless banned; a household device:
+  // unless an admin blocked it). Otherwise the box isn't drawn and the
+  // queue's own words say why.
+  const canAdd = !!queue && editable && typeof QueueSearchAdd === 'function';
+  const addToRoom = async (tracks, next, label) => {
+    const n = tracks.length;
+    try {
+      await send(roomQueuePath(room, '/add'), {
+        track_ids: tracks.map((t) => t.id), device_id: deviceId, where: next ? 'next' : 'end',
+      });
+    } catch (e) {
+      if (!guest) throw e;
+      refresh();
+      return guestRefusalText('add', e);
+    }
+    refresh();
+    return `${next ? 'Playing next' : 'Added'} in ${room}: ${label}${n > 1 ? ` (${n} songs)` : ''}`;
+  };
+
+  // The rows drawn: QUEUE_ROWS_STEP at a time, "show more" for the rest.
+  // Deep into a long queue the songs already played fold away (one press
+  // shows them) so the song playing is near the top.
+  const from = earlier || cur < QUEUE_FOLD_AFTER ? 0 : cur - 2;
+  const to = Math.min(items.length, from + shown);
+  const visible = items.slice(from, to);
+
   const tapButton = (name, title, to, from) => (
     <IconButton name={name} title={title} disabled={busy || to == null}
                 onClick={() => moveTo(from, to)}/>
@@ -1630,7 +1740,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
     <div>
       <div className="rq-rooms" style={{ borderBottom: '1px solid var(--border-soft)' }}>
         <span className="label">room</span>
-        {rooms.map(r => (
+        {roomChoices.map(r => (
           <button key={r} className="rq-room" onClick={() => setRoom(r)}
                   style={{ background: room === r ? 'var(--brand-soft)' : 'var(--card)',
                            color: room === r ? 'var(--brand-ink)' : 'var(--fg)' }}>{r}</button>
@@ -1644,7 +1754,14 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
         )}
       </div>
 
-      {!editable && queue?.blocked_reason && items.length > 0 && (
+      {canAdd && (
+        <div className="mp-q-save rq-add" key={`add-${room}`}>
+          <QueueSearchAdd onAdd={addToRoom} idBase="rq-add" where={room}
+                          ariaLabel={`search the library to add to ${room}'s queue`}/>
+        </div>
+      )}
+
+      {!editable && queue?.blocked_reason && !(guest && items.length === 0) && (
         <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8,
                       background: 'var(--warn-soft, var(--sunken))',
                       borderBottom: '1px solid var(--border-soft)' }}>
@@ -1659,7 +1776,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
         <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--fg-muted)',
                       borderBottom: '1px solid var(--border-soft)' }}>
           You're a guest: while {room} is playing you can play a song now, reorder,
-          play next and remove songs, and add them from a track's details.
+          play next and remove songs, and add songs with the search above.
         </div>
       )}
 
@@ -1676,7 +1793,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
         </div>
       )}
 
-      {loading && items.length === 0 ? (
+      {!queue && !error ? (
         <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading queue…</div>
       ) : error && !queue ? (
         /* A failed fetch is not an empty queue (F-020): say what failed
@@ -1696,7 +1813,13 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
                sub={`cast from the player, or say "play something" in ${room}`}/>
       ) : (
         <div>
-          {items.map((item, idx) => {
+          {from > 0 && (
+            <button type="button" className="rq-more" onClick={() => setEarlier(true)}>
+              show {from} played song{from === 1 ? '' : 's'}
+            </button>
+          )}
+          {visible.map((item, i) => {
+            const idx = from + i;
             const canRemove = editable && !(guest && item.playing);
             const canBan = admin && (item.guest_device_id || item.guest_source);
             const pick = item.origin === 'auto' && idx > cur;
@@ -1775,7 +1898,13 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
               </React.Fragment>
             );
           })}
-          {firstPick < 0 && upNextHead}
+          {to < items.length && (
+            <button type="button" className="rq-more"
+                    onClick={() => setShown((n) => n + QUEUE_ROWS_STEP)}>
+              show more ({items.length - to} more)
+            </button>
+          )}
+          {(firstPick < 0 || firstPick >= to) && upNextHead}
         </div>
       )}
     </div>
@@ -2308,7 +2437,6 @@ const MusicPage = () => {
   const [openArtist, setOpenArtist] = React.useState(null);
   // Genres tab: the genre whose drawer is open.
   const [openGenre, setOpenGenre] = React.useState(null);
-  const [tick, setTick] = React.useState(0);
   const [fire, toastNode] = useToast();
 
   // App-level browser playback context (docked mini-player lives in the
@@ -2376,7 +2504,7 @@ const MusicPage = () => {
   const { data: acqData, loading: acqLoading, refresh: refreshAcquisitions } =
     useApiObject('/api/acquisitions?limit=100', { eventTypes: ['acquisitions.changed'] });
   const acquisitions = acqData?.acquisitions || [];
-  const { items: nowPlaying, error: npError, refresh: refreshNP } =
+  const { items: nowPlaying, error: npError, loading: npLoading, refresh: refreshNP } =
     useApiList('/api/music/now-playing', { eventTypes: ['music.now_playing.changed'] });
   // Playlists list — driven by /api/playlists which includes the
   // virtual Favorites row. Refetches on any playlists_changed event
@@ -2430,19 +2558,6 @@ const MusicPage = () => {
     }, GUEST_POLL_MS);
     return () => clearInterval(t);
   }, [guest]);
-
-  // Tick once a second so the elapsed-time display advances
-  // between WS pushes (domovoi only emits on play/pause/skip
-  // boundaries; the seconds in between need a local clock).
-  React.useEffect(() => {
-    const i = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(i);
-  }, []);
-
-  // Reset tick whenever the now-playing payload changes — the new
-  // elapsed_sec from the server is canonical, the local tick is
-  // additive to it.
-  React.useEffect(() => { setTick(0); }, [JSON.stringify(nowPlaying)]);
 
   // ── Action handlers — all hit the real backend. ──────────────
   // Every mutation's catch reports through reportMutationFailure (data.js):
@@ -2891,7 +3006,7 @@ const MusicPage = () => {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
           {nowPlaying.map(np => (
-            <NPCard key={np.room_id} np={np} tick={tick} guest={guest}
+            <TickingNPCard key={np.room_id} np={np} guest={guest}
                     onPlayRandom={onPlayRandom}
                     onPause={onPause} onResume={onResume}
                     onSkip={onSkip} onStop={onStop}
@@ -2910,7 +3025,7 @@ const MusicPage = () => {
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
         {tab === 'artists'   && <ArtistsTab onOpen={setOpenArtist}/>}
         {tab === 'genres'    && <GenresTab onOpen={setOpenGenre}/>}
-        {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} npError={npError} fire={fire}
+        {tab === 'queue'     && <QueueTab rooms={rooms} nowPlaying={nowPlaying} npError={npError} npLoading={npLoading} fire={fire}
                                           room={queueRoom} onRoom={setQueueRoom}/>}
         {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={onPlayPlaylistInFirstRoom} onCreate={onCreatePlaylist} fire={fire}/>}
         {tab === 'stats'     && <StatsTab     stats={stats} loading={!stats}/>}

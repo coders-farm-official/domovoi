@@ -49,6 +49,15 @@ _LAST_STREAM_TITLE_KEY = "last_stream_title"
 log = logging.getLogger(__name__)
 
 
+def _stream_listener(ctx: Context):
+    """Around a provider's stream: Up next follows it with the speaker's
+    taste (None: an unrecognised voice, the household) when it ends
+    (domovoi/up_next/rooms.py ``follow_stream``)."""
+    from domovoi.up_next import rooms as up_next_rooms
+
+    return up_next_rooms.listening_as(getattr(ctx, "person_id", None))
+
+
 class _PlayerUnreachable(Exception):
     """The room's music player didn't answer a queue read (see
     ``MusicHandler._queue_place``): the skip says so without trying it
@@ -132,6 +141,17 @@ _LYRIC_NOT_FOUND_TEXT = "I couldn't find a song in your library with those words
 _LYRIC_CARRIERS = ("the song ", "song ", "the track ", "track ", "the one ")
 
 _PLAY_ARTIST_RE = re.compile(r"^play (.+?) (?:by|from) (.+)$")
+# The artist first, then the song: "play lil seeto, the song glitch
+# again", "play holla cheese the song bff4l". Read as a title and an
+# artist, so "the song" and the comma never reach a search, and a title
+# holding " by " ("stand by me") is not split. Never "play the song …"
+# itself, nor a line of lyrics ("… the song that goes", lyric search).
+_PLAY_ARTIST_SONG_RE = re.compile(
+    r"^play (?!the (?:song|track) )(.+?),? the (?:song|track) "
+    r"(?:called |named )?(?!(?:that|where|which|who|about|with)\b)(.+)$"
+)
+# "Play me the song X": "me" names no artist.
+_NOT_AN_ARTIST = frozenset({"me", "us", "for me", "for us"})
 # Random / shuffle / "just play something." Anchored variants so a stray
 # "play a song" doesn't fall through to _PLAY_ANY_RE and hit an external
 # provider searching for the literal string "a song" (garbage; see the
@@ -439,6 +459,7 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             FastPath(ROOM_PLAY_RE, MusicHandler._room_play_from_match),
             FastPath(_ROOM_CONTROL_RE, MusicHandler._room_control_from_match),
             FastPath(_ROOM_FIRST_RE, MusicHandler._room_first_from_match),
+            FastPath(_PLAY_ARTIST_SONG_RE, MusicHandler._play_artist_song_from_match),
             FastPath(_PLAY_ARTIST_RE, MusicHandler._play_artist_from_match),
             # Random/shuffle BEFORE _PLAY_ANY_RE so "play a song" hits the
             # local-library random pick rather than falling through to
@@ -558,6 +579,17 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
         # "play stand by the river door" as a lyric before the split.
         return await self._play(
             {"title": _clean_capture(m.group(1)), "artist": _clean_capture(m.group(2))},
+            ctx,
+            session,
+            said=_clean_capture(m.group(0)[len("play "):]),
+        )
+
+    async def _play_artist_song_from_match(self, m, ctx, session):
+        artist, title = _clean_capture(m.group(1)), _clean_capture(m.group(2))
+        if artist.lower() in _NOT_AN_ARTIST:
+            return await self._play({"any": title}, ctx, session)
+        return await self._play(
+            {"title": title, "artist": artist},
             ctx,
             session,
             said=_clean_capture(m.group(0)[len("play "):]),
@@ -1132,7 +1164,8 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             return await self._not_in_library(query, q_display, "offline", ctx, session, **kw)
         stream_response: Response | None = None
         try:
-            stream_response = await provider.stream(ctx.room_id, query=q_display)
+            with _stream_listener(ctx):
+                stream_response = await provider.stream(ctx.room_id, query=q_display)
         except Exception as e:
             # The request itself is left out of the line (privacy).
             log.warning(
@@ -1331,7 +1364,8 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             return None
         query = f"song that goes {phrase}" + (f" by {artist}" if artist else "")
         try:
-            response = await provider.stream(ctx.room_id, query=query)
+            with _stream_listener(ctx):
+                response = await provider.stream(ctx.room_id, query=query)
         except Exception as e:
             log.warning("streaming provider %r failed for a lyric request (%s)",
                         getattr(provider, "slug", "?"), type(e).__name__)
@@ -1723,7 +1757,8 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
                 seen_current = True
                 continue
             try:
-                response = await provider.stream(ctx.room_id, candidate)
+                with _stream_listener(ctx):
+                    response = await provider.stream(ctx.room_id, candidate)
             except Exception as e:
                 log.warning("smart_skip: provider stream failed: %s", e)
                 continue
