@@ -25,9 +25,67 @@ internal data class CalendarEvent(
     val source: String? = null,
     val external_id: String? = null,
     val last_synced_at: String? = null,
+    /** 1.3.0: an all-day event. Its `starts_at` names the DATE (a UTC
+     *  midnight from a phone calendar): read by its written date, never
+     *  shifted into this phone's zone. */
+    val all_day: Boolean = false,
+    /** The server's calendar source id (a linked or a phone calendar). */
+    val calendar_id: Long? = null,
+    val calendar_name: String? = null,
+    /** "#rrggbb", for the calendar's dot only (never a second accent). */
+    val calendar_color: String? = null,
+    /** "link" | "phone" | null (the household's own). */
+    val calendar_kind: String? = null,
+    /** The person or phone the calendar comes from. */
+    val owner_name: String? = null,
+    /** Can't be changed here: it comes from another calendar. */
+    val read_only: Boolean = false,
 )
 
 internal fun CalendarEvent.isGoogle(): Boolean = source == "google"
+
+/** Comes from a calendar outside the house (a link, a phone, Google): drawn
+ *  in the neutral tone, not the accent. */
+internal fun CalendarEvent.isImported(): Boolean =
+    read_only || calendar_kind != null || source == "google" || source == "link" || source == "phone"
+
+/** What the badge says: the calendar's name, else where it came from. */
+internal fun CalendarEvent.sourceLabel(): String =
+    calendar_name?.trim()?.takeIf { it.isNotEmpty() }
+        ?: when (source) {
+            null, "", "local" -> "household"
+            "phone" -> "phone calendar"
+            "link" -> "linked calendar"
+            else -> source
+        }
+
+/**
+ * Why a read-only event has no edit or delete: "from Work on Pixel 8 —
+ * change it on that phone", "from School — change it there". Null for an
+ * event the house can change.
+ */
+internal fun CalendarEvent.readOnlyNote(): String? {
+    if (!read_only) return null
+    val name = calendar_name?.trim()?.takeIf { it.isNotEmpty() }
+    val owner = owner_name?.trim()?.takeIf { it.isNotEmpty() }
+    return if (calendar_kind == "phone" || source == "phone") {
+        val from = listOfNotNull(name ?: "a phone calendar", owner?.let { "on $it" }).joinToString(" ")
+        "from $from — change it on that phone"
+    } else {
+        "from ${name ?: "another calendar"} — change it there"
+    }
+}
+
+/** "#33b679" → 0xFF33B679; anything else null. */
+internal fun parseHexColor(hex: String?): Long? {
+    val h = hex?.trim()?.removePrefix("#") ?: return null
+    if (h.length != 6 || !h.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) return null
+    return 0xFF000000L or h.toLong(16)
+}
+
+/** The date an all-day event's ISO string names, as written. */
+internal fun writtenDate(iso: String?): LocalDate? =
+    iso?.trim()?.takeIf { it.length >= 10 }?.let { runCatching { LocalDate.parse(it.take(10)) }.getOrNull() }
 
 internal fun parseLocal(iso: String?): LocalDateTime? =
     parseInstant(iso)?.atZone(ZoneId.systemDefault())?.toLocalDateTime()
@@ -41,10 +99,13 @@ internal fun parseLocal(iso: String?): LocalDateTime? =
  * drawn, so this value is never put on screen.
  */
 internal fun CalendarEvent.startLocal(): LocalDateTime =
-    parseLocal(starts_at) ?: LocalDateTime.MAX
+    (if (all_day) writtenDate(starts_at)?.atStartOfDay() else null)
+        ?: parseLocal(starts_at) ?: LocalDateTime.MAX
 
+/** An all-day event ends at the start of its (exclusive) end date. */
 internal fun CalendarEvent.endLocal(): LocalDateTime =
-    parseLocal(ends_at) ?: startLocal()
+    (if (all_day) writtenDate(ends_at)?.atStartOfDay() else null)
+        ?: parseLocal(ends_at) ?: startLocal()
 
 /**
  * The rows with a readable `starts_at` — the only ones the calendar draws
@@ -133,7 +194,7 @@ internal fun visibleEvents(
             // (`CalendarRules.swift` `calendarStartMs($0) != Int64.max`).
             .withReadableStart()
             .filter { !it.endLocal().isBefore(floor) }
-            .sortedBy { it.starts_at }
+            .sortedBy { it.startLocal() }
             .take(25)
     }
 }
@@ -193,7 +254,7 @@ internal fun fmtClock(t: LocalDateTime): String =
     t.format(clockFmt).lowercase(Locale.US).replace(" ", "")
 
 internal fun fmtRange(e: CalendarEvent): String =
-    "${fmtClock(e.startLocal())} – ${fmtClock(e.endLocal())}"
+    if (e.all_day) "all day" else "${fmtClock(e.startLocal())} – ${fmtClock(e.endLocal())}"
 
 internal fun fmtDayLabel(d: LocalDate): String = d.format(dayLabelFmt).lowercase(Locale.US)
 
