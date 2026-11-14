@@ -19,7 +19,8 @@ import org.junit.Test
 class UpNextWhyTest {
     // As domovoi/up_next/why.py words them (capitals and "·" kept: the
     // phone must not touch them).
-    private val sentence = "from the 90s, like the song you started with · you play this often"
+    // played_together from an album: why.py keeps the album's own capitals.
+    private val sentence = "on Harvest Moon with the song you started with · you play this often"
     private val listSentence = "from Road Trip"
 
     /** pick_json, field for field, with `why` (1.3.0). */
