@@ -14,6 +14,10 @@ Related: [ARCHITECTURE.md](ARCHITECTURE.md) for the process/port layout,
 [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md) for the plugin runtime this
 page keeps being blunt about.
 
+Found a vulnerability? Report it privately: [SECURITY.md](../SECURITY.md)
+says how (GitHub's private reporting, or email), what is in scope, and
+what we promise in reply.
+
 ---
 
 ## The threat model, in one paragraph
@@ -2570,6 +2574,12 @@ table at once: **No, keep everything in the house** (`INTERNET_ACCESS=never`,
 [below](#the-internet-switch-what-it-closes-and-what-it-cant)). On a server
 that does use the internet, the complete list of things that *can* create
 outbound traffic, each with its own off switch:
+
+Every host behind these rows, with the answer that allows it, is in the
+[egress inventory](INTERNET.md#egress-inventory) (a test fails when the
+code gains a host the inventory doesn't list), and
+[Check it yourself](INTERNET.md#check-it-yourself) has the commands to
+watch the server's traffic under **No**.
 
 | Traffic | When | Off switch |
 |---|---|---|

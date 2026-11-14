@@ -229,6 +229,9 @@ up to date.
 
 **Later**
 
+The whole plan, grouped Now / Next / Later, is in the
+[roadmap](docs/ROADMAP.md).
+
 - **Guided resumes and letters, held out of 1.0.0.** The step-by-step
   flows that ask questions to build a resume or letter are built but not
   part of 1.0.0; plain "write a cover letter" in Chat ships.
@@ -253,6 +256,10 @@ same bar Coders Farm teaches: automated tests, review, and a written
 and by [email](https://forms.gle/wbz194RhuLmJdg3D8). For questions and install help, use
 [Discussions](https://github.com/coders-farm-official/domovoi/discussions);
 replies can take a few days while we build.
+
+**Found a security problem?** Please report it privately, not in an issue:
+[SECURITY.md](SECURITY.md) says how, and we reply within 7 days. Everyone
+in the project's spaces follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ---
 
@@ -720,6 +727,7 @@ Want to write one? Start at the
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | When the house spirit sulks — fixes for common problems |
 | [Home Assistant](docs/HOME_ASSISTANT.md) | No integration; running both side by side and spoken announcements from Home Assistant |
 | [Security & privacy](docs/SECURITY_PRIVACY.md) | Threat model, what leaves your network (and what never does) |
+| [Security policy](SECURITY.md) | How to report a vulnerability privately, what's supported, what we promise in reply |
 | [Licences of what Domovoi downloads](docs/LICENSES.md) | Every model, voice and dataset a server, the app or the trainer downloads, its licence, and what that means for a household and for a redistributor |
 | [Container guard](docs/CONTAINER_GUARD.md) | Which Docker containers Domovoi watches, the alerts when one fails, and the freeze when one looks tampered with |
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
@@ -735,6 +743,7 @@ Want to write one? Start at the
 | [Running the server on Linux](docs/LINUX_HOST.md) | Linux install (one script or by hand), what differs from the Windows-first docs, systemd units, updates from the dashboard |
 | [The Windows installer (preview)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
 | [UML diagrams](docs/uml/) | Sequence and component diagrams |
+| [Roadmap](docs/ROADMAP.md) | What's being worked on now, next and later, without dates |
 | [Release notes](docs/RELEASE_NOTES.md) | What changed, newest first, and what an operator has to do after an update |
 
 ---

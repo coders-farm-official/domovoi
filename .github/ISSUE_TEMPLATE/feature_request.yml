@@ -1,0 +1,34 @@
+name: Feature request
+description: Something Domovoi could do for your household.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/coders-farm-official/domovoi/blob/main/docs/ROADMAP.md) first: it may already be planned. Domovoi is built for everyday households, so tell us who in the house it helps.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do
+      description: The situation, in your own words. "When I'm cooking I want to..." beats a design.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: What you'd say or click, and what Domovoi would do. Optional.
+  - type: dropdown
+    id: internet
+    attributes:
+      label: Does it need the internet?
+      description: Domovoi is local-first; features that need the internet must say so and stay off under "No".
+      options:
+        - "No, it can work entirely in the house"
+        - It needs the internet
+        - Not sure
+  - type: textarea
+    id: else
+    attributes:
+      label: Anything else
+      description: Other tools that do it, screenshots, plugins you'd expect it in.

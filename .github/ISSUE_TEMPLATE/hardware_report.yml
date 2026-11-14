@@ -1,0 +1,56 @@
+name: Hardware report
+description: Tell us how Domovoi ran on a satellite board, microphone, speaker, phone or server.
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports of what **worked** are as useful as what didn't: they go into [satellite hardware](https://github.com/coders-farm-official/domovoi/blob/main/docs/SATELLITE_HARDWARE.md) and [Android compatibility](https://github.com/coders-farm-official/domovoi/blob/main/docs/ANDROID_COMPATIBILITY.md).
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of device
+      options:
+        - A satellite (Raspberry Pi or another board)
+        - A spare Linux PC or laptop as a room
+        - A spare Windows PC or laptop as a room
+        - A phone or tablet in room mode
+        - The Android app on a phone
+        - The server
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: board
+    attributes:
+      label: Board, model or PC
+      placeholder: "Raspberry Pi Zero 2 W, Pi 4 (4 GB), Radxa Zero 3W, a 2015 laptop..."
+    validations:
+      required: true
+  - type: input
+    id: mic
+    attributes:
+      label: Microphone and speaker
+      placeholder: "ReSpeaker 2-Mics HAT, XVF3800 USB, the laptop's own, a USB speaker..."
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Raspberry Pi OS Lite (64-bit, Bookworm), Ubuntu 24.04, Windows 11, Android 14..."
+  - type: input
+    id: version
+    attributes:
+      label: Domovoi version
+      description: Settings → System → About & updates.
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+      description: Setup, wake word from across the room, barge-in, music, intercom, the LED ring...
+    validations:
+      required: true
+  - type: textarea
+    id: didnt
+    attributes:
+      label: What didn't
+      description: With the room's or the device's logs if you have them; remove passwords, tokens and addresses first.
