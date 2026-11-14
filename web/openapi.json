@@ -27098,6 +27098,15 @@
             ],
             "title": "Phone Name"
           },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "title": "Platform",
+            "default": "android"
+          },
           "window_start_ms": {
             "anyOf": [
               {

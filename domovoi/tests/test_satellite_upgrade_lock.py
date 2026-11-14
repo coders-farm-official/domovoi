@@ -207,11 +207,20 @@ async def test_the_web_row_has_no_upgrade_from_an_older_core_or_a_bad_entry() ->
 
 @pytest_asyncio.fixture
 async def _clean_db():
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(f"TRUNCATE {', '.join(TABLES_TO_TRUNCATE)} RESTART IDENTITY CASCADE")
-        )
+    """A clean DB before AND after: the endpoint tests set the admin
+    password (``_admin_headers``), and an admin_auth row left behind ends
+    the pre-setup grace for every later test on the same worker (it made
+    test_videos_api's streams 401 in CI)."""
+
+    async def _truncate() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(f"TRUNCATE {', '.join(TABLES_TO_TRUNCATE)} RESTART IDENTITY CASCADE")
+            )
+
+    await _truncate()
     yield
+    await _truncate()
 
 
 async def _admin_headers() -> dict[str, str]:

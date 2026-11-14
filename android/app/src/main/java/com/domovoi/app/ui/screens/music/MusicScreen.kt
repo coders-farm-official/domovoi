@@ -564,7 +564,7 @@ fun MusicScreen() {
                 scope.launchAction(
                     action = { saveQueueAsPlaylist(app.api, name, ids) },
                     onSuccess = {
-                        toast(savedAsNote(name.trim()))
+                        toast(savedAsNote(name.trim(), ids.size))
                         playlists.refresh()
                     },
                     onFailure = { toast(saveFailedNote(apiErrorText(it))) },

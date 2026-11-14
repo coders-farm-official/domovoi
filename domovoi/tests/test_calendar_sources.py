@@ -578,3 +578,31 @@ async def test_a_phone_snapshot_is_capped(house) -> None:
     assert r.status_code in (404, 422)
     r = await _call("PUT", "/api/calendar/phones/android-cccc", _snapshot(), headers={})
     assert r.status_code == 401
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_phone_says_which_app_it_is_and_older_builds_are_android(house) -> None:
+    """``platform`` (optional): the iPhone app's snapshot makes an 'ios'
+    devices row, a body without it (an older Android build) an 'android'
+    one, and anything else is refused before anything is stored."""
+    from domovoi.db.session import engine
+
+    ids = ("iphone-plat-1", "android-plat-2", "phone-plat-3")
+    try:
+        r = await _call("PUT", f"/api/calendar/phones/{ids[0]}",
+                        {**_snapshot(name="Ana's iPhone"), "platform": "ios"}, headers=DEVICE)
+        assert r.status_code == 200, r.text
+        r = await _call("PUT", f"/api/calendar/phones/{ids[1]}", _snapshot(), headers=DEVICE)
+        assert r.status_code == 200, r.text
+        r = await _call("PUT", f"/api/calendar/phones/{ids[2]}",
+                        {**_snapshot(), "platform": "windows"}, headers=DEVICE)
+        assert r.status_code == 422
+        async with engine.begin() as conn:
+            rows = dict((await conn.execute(text(
+                "SELECT device_id, platform FROM devices WHERE device_id = ANY(:ids)"
+            ), {"ids": list(ids)})).all())
+        assert rows == {ids[0]: "ios", ids[1]: "android"}
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("DELETE FROM devices WHERE device_id = ANY(:ids)"), {"ids": list(ids)})

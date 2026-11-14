@@ -419,7 +419,7 @@ async def refresh_source(source_id: int) -> CalendarSourceRefresh:
     return CalendarSourceRefresh(source=CalendarSource(**row), ok=result.ok, events=result.events)
 
 
-# ─── Phones (the Android app's "Share this phone's calendars") ─────────────
+# ─── Phones (the apps' "Share this phone's calendars", Android and iPhone) ─
 
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$")
 PHONE_MIN_GAP_SEC = 60.0
@@ -526,10 +526,11 @@ async def put_phone_snapshot(
             # met under that id yet (never renames a known one).
             await s.execute(
                 text(
-                    "INSERT INTO devices (device_id, name, platform) VALUES (:id, :name, 'android') "
+                    "INSERT INTO devices (device_id, name, platform) VALUES (:id, :name, :platform) "
                     "ON CONFLICT (device_id) DO NOTHING"
                 ),
-                {"id": ident, "name": payload.phone_name.strip()[:80] or "phone"},
+                {"id": ident, "name": payload.phone_name.strip()[:80] or "phone",
+                 "platform": payload.platform},
             )
         n_cal, n_ev = await calendar_feeds.store_phone_snapshot(
             s, ident, calendars, generation=payload.generation,

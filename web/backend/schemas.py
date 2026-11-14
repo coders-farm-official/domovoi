@@ -1005,6 +1005,10 @@ class PhoneCalendarSnapshot(BaseModel):
     """``PUT /api/calendar/phones/{device_id}``: everything a phone shares."""
 
     phone_name: str | None = Field(default=None, max_length=80)
+    # Which app sent it: the phone's devices row (made with ``phone_name``
+    # when this server hasn't met the phone) records it. Absent is
+    # "android", for app builds from before the iPhone app.
+    platform: Literal["android", "ios"] = "android"
     window_start_ms: int | None = None
     window_end_ms: int | None = None
     # Optional (V057): a number that only grows on this phone (e.g. the
