@@ -44,21 +44,14 @@ enum RoomModeRuntime {
         )
     }
 
-    /// This phone's microphone.
-    ///
-    /// **On the base branch there is none to give**: R2's `AVAudioEngine`
-    /// source (`RoomAudioSource.making`, ROOMMODE-MAP §6.3) lands with R2,
-    /// and this is the one line R3's rebase onto R2 changes. Until then it
-    /// refuses to open, with the reason — never a feed of noise passed off as
-    /// a microphone (no silent fallbacks).
-    static let microphone: RoomPCMSourceMaking = { UnbuiltMicrophone() }
+    /// This phone's microphone: R2's shared `AVAudioEngine` source
+    /// (ROOMMODE-MAP §6.3) — raw for listening, voice processing for calls.
+    static let microphone: RoomPCMSourceMaking = RoomAudioSource.making
 
-    /// The phone's battery and process facts for the health frame.
-    ///
-    /// R2's `RoomModeDeviceFacts` (UIKit) is the real one and replaces this
-    /// at the rebase; until then every fact is "this phone will not say",
-    /// which the health frame leaves out (never made-up numbers).
-    static let deviceFacts: any RoomDeviceFacts = UnsaidRoomDeviceFacts()
+    /// The phone's battery and process facts for the health frame (R2's
+    /// `RoomModeDeviceFacts`; a fact iOS will not give is left out, never
+    /// made up).
+    static let deviceFacts: any RoomDeviceFacts = RoomModeDeviceFacts()
 
     /// Application Support/room: the models and sounds the room syncs,
     /// excluded from backups (they come from the server again).
@@ -82,26 +75,6 @@ enum RoomModeRuntime {
     static var micGranted: Bool {
         AVAudioApplication.shared.recordPermission == .granted
     }
-}
-
-/// See ``RoomModeRuntime/microphone``.
-private final class UnbuiltMicrophone: RoomPCMSource {
-    func start(call: Bool) throws {
-        throw RoomMicFailure(stop: nil, note: "room mode is not built into this version yet")
-    }
-    func read(into frame: inout [Int16]) -> Int { -1 }
-    func stop() {}
-}
-
-/// See ``RoomModeRuntime/deviceFacts``.
-private struct UnsaidRoomDeviceFacts: RoomDeviceFacts {
-    func battery() -> RoomBattery { RoomBattery(percent: nil, charging: nil, onPower: nil) }
-    func batteryChanges() -> AsyncStream<RoomBattery> { AsyncStream { _ in } }
-    func rssKB() -> Int64? { nil }
-    func threads() -> Int? { nil }
-    func cpuSeconds() -> Double? { nil }
-    func uptimeSeconds() -> Int64 { Int64(ProcessInfo.processInfo.systemUptime) }
-    func processUptimeSeconds() -> Int64 { 0 }
 }
 
 /// `isIdleTimerDisabled` and the brightness (§3.3, D9).

@@ -21,10 +21,9 @@ extension StubHouseUITests {
     enum RoomModeUnderTest {
         static let port = 6601
         /// The stub's server-identity fingerprint, from the header of R2's
-        /// `r2/stubhouse.patch` (a fixed test seed). Until that patch lands
-        /// this is a well-formed placeholder, and the room cases see the
-        /// identity check fail — which is why they run in the train after R2.
-        static let fingerprint = "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA"
+        /// `r2/stubhouse.patch` (a fixed test seed: sha256 of
+        /// "domovoi stub house room identity").
+        static let fingerprint = "SHA256:BWNQsKOoufCmvpTu0RjoU4Gc3zrZuDi6L8WD+AbPKiQ"
         /// `ready`.
         static let ready = "Kitchen"
         /// `awaiting_approval` with the code below, until approved.
