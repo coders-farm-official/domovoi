@@ -11457,6 +11457,124 @@
         }
       }
     },
+    "/api/wake-words/default": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Wake Default Status",
+        "description": "The household word, the words it can be, rooms waiting for it, and\na sentence when rooms can't be given it (or can't wake at all).",
+        "operationId": "wake_default_status_api_wake_words_default_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Wake Default Set",
+        "description": "Set the word new rooms are given (409 with the reason when it can't be).",
+        "operationId": "wake_default_set_api_wake_words_default_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WakeDefaultBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/default/download": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Wake Default Download",
+        "description": "Download the household's published wake word now; the answer says\nwhether it worked and why not.",
+        "operationId": "wake_default_download_api_wake_words_default_download_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/use": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Wake Use",
+        "description": "Give a connected room \"Hey Jarvis\" or a published word (a trained\nword goes through /{id}/push).",
+        "operationId": "wake_use_api_wake_words_use_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WakeUseBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/push": {
       "post": {
         "tags": [
@@ -30466,6 +30584,43 @@
           "clips"
         ],
         "title": "WakeClipList"
+      },
+      "WakeDefaultBody": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug"
+        ],
+        "title": "WakeDefaultBody"
+      },
+      "WakeUseBody": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Room Id"
+          },
+          "slug": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "slug"
+        ],
+        "title": "WakeUseBody"
       },
       "WakeWord": {
         "properties": {

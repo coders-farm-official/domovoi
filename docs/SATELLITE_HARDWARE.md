@@ -432,7 +432,8 @@ dashboard shows **needs a satellite upgrade** in its place.
 
 ## Custom wake words
 
-`hey_jarvis` is the out-of-the-box default; **"Hey Domovoi" is the
+A new room boots on `hey_jarvis`, and its server then gives it the
+household's wake word ("Domovoi" on a new install). **"Hey Domovoi" is the
 documented destination**, and you train it in-product:
 
 1. Dashboard → **Settings → Voice → Wake words**: record positive clips — the

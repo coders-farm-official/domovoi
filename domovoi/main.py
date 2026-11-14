@@ -513,6 +513,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except OSError as e:
             log.warning("could not create wake dir %s: %s", _wake_dir, e)
 
+    # The household's published wake word (domovoi/wake_default.py): a copy
+    # that doesn't match its pin is dropped before any room can be served
+    # it, and a new install fetches it now (the internet gate permitting),
+    # then gives it to rooms that connected while it was missing.
+    app.state.wake_default_task = asyncio.create_task(
+        _wake_default_boot(), name="wake-default-boot")
+
     # Re-render the satellite-side canned MP3s (network_issues.mp3 today)
     # if the configured TTS voice has changed since the last render.
     # No-op when up-to-date; doesn't hit the network when nothing needs
@@ -3553,6 +3560,22 @@ class _AdminWakeRecordStopBody(BaseModel):
     wake_word_id: int | None = None
 
 
+async def _wake_default_boot() -> None:
+    from domovoi import wake_default
+
+    try:
+        await asyncio.to_thread(wake_default.remove_unverified_published)
+        async with session_scope() as s:
+            slug = await wake_default.household_default(s)
+        if slug in wake_default.PUBLISHED and not wake_default.published_ready(slug):
+            ok, msg = await wake_default.ensure_published(slug, force=True)
+            log.info("wake default: %s", msg)
+            if ok:
+                await wake_default.give_pending(app.state.active_sessions)
+    except Exception as e:  # noqa: BLE001 - never stops the core starting
+        log.warning("wake default: start-up check failed: %s", e)
+
+
 class _AdminWakePushBody(BaseModel):
     room_id: str
     wake_word_id: int
@@ -3902,12 +3925,113 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
         raise HTTPException(
             status_code=502, detail=f"couldn't reach the room device: {e}"
         ) from e
+    # The room's own choice now: the household default never applies to it.
+    from domovoi import wake_default
+
+    async with session_scope() as s:
+        await wake_default.mark_chosen(s, body.room_id, row["slug"])
     return {
         "pushed": True,
         "room_id": body.room_id,
         "wake_word_id": body.wake_word_id,
         "slug": row["slug"],
     }
+
+
+# ─── The household's default wake word (domovoi/wake_default.py) ──────────
+
+class _AdminWakeDefaultBody(BaseModel):
+    slug: str
+
+
+class _AdminWakeUseBody(BaseModel):
+    room_id: str
+    slug: str
+
+
+def _wake_room_words() -> dict[str, str]:
+    return dict(getattr(app.state, "satellite_wake_word", None) or {})
+
+
+@app.get("/v1/admin/wake/default", dependencies=[Depends(require_admin_read)])
+async def admin_wake_default_status() -> dict[str, Any]:
+    """The word new rooms are given, the words it can be, rooms waiting for
+    it, and a sentence when rooms can't be given it (or can't wake at all)."""
+    from domovoi import wake_default
+
+    async with session_scope() as s:
+        return await wake_default.status(s, _wake_room_words())
+
+
+@app.put("/v1/admin/wake/default", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_default_set(body: _AdminWakeDefaultBody) -> dict[str, Any]:
+    """Set the word NEW rooms are given. Rooms that already have a word keep
+    it; rooms still waiting for the old default are given the new one."""
+    from domovoi import wake_default
+
+    try:
+        async with session_scope() as s:
+            word = await wake_default.set_household_default(s, body.slug.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    if word["kind"] == "published" and not word["available"]:
+        await wake_default.ensure_published(word["slug"], force=True)
+    await wake_default.give_pending(app.state.active_sessions)
+    async with session_scope() as s:
+        return await wake_default.status(s, _wake_room_words())
+
+
+@app.post("/v1/admin/wake/default/download", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_default_download() -> dict[str, Any]:
+    """Download the household's published wake word now (refused under
+    internet access "never", with the reason), then give it to the rooms
+    waiting for it."""
+    from domovoi import wake_default
+
+    async with session_scope() as s:
+        slug = await wake_default.household_default(s)
+    if slug not in wake_default.PUBLISHED:
+        raise HTTPException(status_code=409, detail="the household word isn't one to download")
+    ok, msg = await wake_default.ensure_published(slug, force=True)
+    if ok:
+        await wake_default.give_pending(app.state.active_sessions)
+    async with session_scope() as s:
+        out = await wake_default.status(s, _wake_room_words())
+    out["download"] = {"ok": ok, "message": msg}
+    return out
+
+
+@app.post("/v1/admin/wake/use", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_use(body: _AdminWakeUseBody) -> dict[str, Any]:
+    """Give a connected room a built-in or published word ("Hey Jarvis",
+    "Domovoi"); a trained word goes through /v1/admin/wake/push. The room's
+    own choice from then on."""
+    from domovoi import wake_default
+
+    slug = body.slug.strip()
+    if slug not in wake_default.BUILTIN_WORDS and slug not in wake_default.PUBLISHED:
+        raise HTTPException(status_code=404, detail=f"no built-in or published word {slug!r}")
+    target = app.state.active_sessions.get(body.room_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"room {body.room_id!r} not connected")
+    _require_declared(target, "wake_models", "a wake-word model")
+    async with session_scope() as s:
+        word = await wake_default.describe(s, slug)
+    if not word["available"] and word["kind"] == "published":
+        ok, _ = await wake_default.ensure_published(slug, force=True)
+        word["available"] = ok
+    if not word["available"]:
+        raise HTTPException(status_code=409, detail=f"{word['name']}: {word['reason']}")
+    try:
+        await target.request_set_wake_word(slug=slug, threshold=None)
+    except Exception as e:
+        log.warning("admin wake use to room=%s failed: %s", body.room_id, e)
+        raise HTTPException(
+            status_code=502, detail=f"couldn't reach the room device: {e}"
+        ) from e
+    async with session_scope() as s:
+        await wake_default.mark_chosen(s, body.room_id, slug)
+    return {"pushed": True, "room_id": body.room_id, "slug": slug}
 
 
 @app.post(

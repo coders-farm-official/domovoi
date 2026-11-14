@@ -103,7 +103,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **One Chat** — the app's Chat: a single list that holds the chats on the home server (shared with the household) and the ones on the phone itself, each marked with where it runs. The dashboard's chat is the home server's side of it.
 
-**openWakeWord** — the on-satellite wake-word engine. Ships prebuilt models (`hey_jarvis` is Domovoi's default) and supports custom models trained from your own recorded clips.
+**openWakeWord** — the on-satellite wake-word engine. Ships prebuilt models (`hey_jarvis`, an older install's default and every room's word until its server gives it one) and supports custom models trained from your own recorded clips.
 
 **Piper** — the local neural TTS engine — second link in the TTS chain and the fully-offline voice. Domovoi offers three public-domain Piper voices (Norman, Kristin, Linda), run on ONNX Runtime and fed by its own text-to-phoneme converter (`domovoi/phonemizer`, no espeak-ng). Voice models download once or can be uploaded on the dashboard's Voices page.
 
@@ -151,7 +151,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Wake sensitivity** — the score the *wake word* must reach for a room to wake (`[wake] threshold`, 0–1, default 0.7; higher wakes less). Per room, in its Settings tab; pushing a trained word sets it to that word's own value.
 
-**Wake word** — the phrase that opens the mic (default `hey_jarvis`). Detection runs on the satellite via *openWakeWord*; custom words ("Hey Domovoi") are recorded, trained, and pushed to rooms from the dashboard's Settings → Voice → Wake words, with trained models synced into the Pi's `~/.domovoi/wake_models/` cache.
+**Wake word** — the phrase that opens the mic. A new room is given the household's wake word ("Domovoi", `domovoi_v1`, on a new install; `hey_jarvis` on an older one); rooms that have a word keep it. Detection runs on the satellite via *openWakeWord*; custom words ("Hey Domovoi") are recorded, trained, and pushed to rooms from the dashboard's Settings → Voice → Wake words, with trained models synced into the Pi's `~/.domovoi/wake_models/` cache.
 
 **Whisper** — the local speech-to-text model (`faster-whisper`): `small.en` on the CPU on a server set up by the installers, `large-v3` on CUDA by default on one set up by hand. All transcription happens on the server; no audio goes to any cloud STT.
 

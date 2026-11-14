@@ -19,7 +19,10 @@ is what counts.
 ## In short
 
 - **Two defaults are not permissive:**
-  - the wake word **`hey_jarvis`**, under **CC BY-NC-SA 4.0** (non-commercial);
+  - the wake words, under **CC BY-NC-SA 4.0** (non-commercial): **Domovoi**
+    (`domovoi_v1`, Coders Farm's published model), which a new install's
+    rooms are given, and **`hey_jarvis`**, which an older install's rooms
+    keep, and which every room wakes on until its server gives it a word;
   - the question-answering model **`llama3.2:3b`**, under the **Llama 3.2
     Community License**.
 
@@ -57,7 +60,8 @@ a server fetches and when.
 | `qwen3:4b-instruct-2507-q4_K_M` (smaller servers) or `qwen3:8b-q4_K_M` (22 GB of memory or more) | Turns a command into the right action | Alibaba's Qwen team, from the [Ollama library](https://ollama.com/library/qwen3) | [Apache-2.0](https://huggingface.co/Qwen/Qwen3-8B) | At install |
 | `qwen3-vl:2b-instruct-q4_K_M` | Describes pictures in chat | Qwen, from the [Ollama library](https://ollama.com/library/qwen3-vl) | Apache-2.0 | At install |
 | Piper voices Kristin (the default), Norman and Linda | The house voice | Bryce Beattie, from [`rhasspy/piper-voices`](https://huggingface.co/rhasspy/piper-voices) on Hugging Face | [Public domain](https://brycebeattie.com/files/tts/): trained from scratch on LibriVox and LJ Speech recordings, both public domain | At install |
-| openWakeWord's pre-trained wake words: `hey_jarvis` (the default), `alexa`, `hey_mycroft`, `hey_rhasspy`, `timer`, `weather` | The wake word on satellites, spare computers and phones in room mode | David Scripka, from [openWakeWord's v0.5.1 release](https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1) on GitHub | [CC BY-NC-SA 4.0](https://github.com/dscripka/openWakeWord#license) | When the satellite media cache is refreshed; a spare computer's installer fetches the ones it needs itself |
+| Domovoi's published wake word, **Domovoi** (`domovoi_v1.onnx`) | The wake word a new install's rooms are given (the household's wake word, Settings → Voice → Wake words) | Coders Farm, from the [`domovoi-v1` release](https://github.com/coders-farm-official/domovoi-wake-word-models/releases/tag/domovoi-v1) of [domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models), which never moves. Its model card there names every dataset it was trained on, with their licences | [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), because of its training data ([below](#the-wake-word-trainer)). Not part of Domovoi, which stays MIT | When a new install starts, or when an admin picks it; never under internet access "never". Satellites, spare computers and phones get it from your server |
+| openWakeWord's pre-trained wake words: `hey_jarvis` (an older install's default, and every room's word until its server gives it one), `alexa`, `hey_mycroft`, `hey_rhasspy`, `timer`, `weather` | The wake word on satellites, spare computers and phones in room mode | David Scripka, from [openWakeWord's v0.5.1 release](https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1) on GitHub | [CC BY-NC-SA 4.0](https://github.com/dscripka/openWakeWord#license) | When the satellite media cache is refreshed; a spare computer's installer fetches the ones it needs itself |
 | openWakeWord's feature models: `embedding_model`, `melspectrogram` | The front end of every wake word, trained ones included | The same release. The embedding model is Google's speech embedding model | The embedding model: Apache-2.0 (Google's, says openWakeWord). The melspectrogram: no licence of its own; it ships in a release whose pre-trained models are CC BY-NC-SA 4.0 | The same |
 | Silero VAD v4 (`silero_vad.onnx`) | Hears where speech starts and stops, on satellites | Silero, from the same openWakeWord release | [MIT](https://github.com/snakers4/silero-vad) | The same |
 | NVIDIA NeMo streaming FastConformer (80 ms, int8) | The fast lane, if you turn it on (off by default) | NVIDIA, converted by sherpa-onnx, from [its `asr-models` release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | Only when the fast lane is turned on |
@@ -99,7 +103,7 @@ Any other model you pull by name has its own licence: its page in the
 | Moonshine `base-en` | The benchmark only (developer options) | The same | MIT | Only when the benchmark runs it |
 | Silero VAD | Hears where speech starts and stops | Silero, from `csukuangfj/vad` on Hugging Face | [MIT](https://github.com/snakers4/silero-vad) | With the assistant |
 | Piper voices Kristin, Norman and Linda | The assistant's voice | As on the server | Public domain | One at a time, from Settings, Voice |
-| The wake-word models (room mode, preview) | A phone as a room | **Your own server**, not the internet: the openWakeWord files above | As above (`hey_jarvis`: CC BY-NC-SA 4.0). That's why the app doesn't bundle them | When room mode starts |
+| The wake-word models (room mode, preview) | A phone as a room | **Your own server**, not the internet: the openWakeWord files and Domovoi's published wake word above | As above (`hey_jarvis` and `domovoi_v1`: CC BY-NC-SA 4.0). That's why the app doesn't bundle them | When room mode starts, and when the server gives the phone its word |
 
 The app's own parts and libraries, with their licence texts, are in the
 app under Settings → About & updates → Open-source licences.
@@ -329,7 +333,8 @@ business, change them, and pass them on.
   note on files you changed.
 
 **CC BY-NC-SA 4.0:** openWakeWord's pre-trained wake words, `hey_jarvis`
-among them, and the trainer's ACAV100M features.
+among them, Domovoi's published wake word (`domovoi_v1`), and the
+trainer's ACAV100M features.
 - *Household:* personal, non-commercial use is what the licence allows,
   and it's what a home assistant does.
 - *Redistributor:* no commercial use, so a box, stick or service that

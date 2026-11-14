@@ -2998,7 +2998,9 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                   : undefined}
                 onClick={() => onPush(w, roomFor)}>{wakePushLabel(w)}</Button>
         {canPush && !w.is_default &&
-          <Button variant="ghost" onClick={() => onSetDefault(w)}>make default</Button>}
+          <Button variant="ghost" onClick={() => onSetDefault(w)}
+                  title="the word new rooms wake on; rooms you already have keep theirs">
+            make default</Button>}
         {/* Download: the trained model packed to share (a ready word only). */}
         {canPush && onDownload && (
           <React.Fragment>
@@ -3475,6 +3477,112 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
   );
 };
 
+/* ---- The household's wake word (GET/PUT /api/wake-words/default) ----
+ * The word a NEW room is given the first time it connects
+ * (domovoi/wake_default.py). Rooms that already have a word keep it: this
+ * card never changes one by itself; "Use here" is the admin choosing for a
+ * room. A word rooms can't be given right now (the published Domovoi word
+ * not downloaded: internet off, no connection) says why, and the rooms
+ * waiting for it are named. No "Use here" for a word that isn't here. */
+
+const wakeWordName = (st, slug) => {
+  const o = ((st && st.options) || []).find((x) => x.slug === slug);
+  return o ? o.name : slug;
+};
+
+const HouseholdWakeCard = ({ rooms, trained, onPushTrained, fire }) => {
+  const { data: st, refresh } = useApiObject('/api/wake-words/default',
+    { quiet: true, refetchOnAuth: true });
+  const [busy, setBusy] = React.useState(false);
+  if (!st || !st.default) return null;
+  const cur = st.default;
+  const act = async (fn, ok) => {
+    setBusy(true);
+    try {
+      const out = await fn();
+      if (out && out.download && !out.download.ok) fire(out.download.message);
+      else if (ok) fire(ok);
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : apiErrorText(e));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+  const choose = (slug) => act(() => apiPut('/api/wake-words/default', { slug }),
+    `new rooms will wake on “${wakeWordName(st, slug)}”`);
+  const download = () => act(() => apiPost('/api/wake-words/default/download', {}),
+    `“${cur.name}” is downloaded`);
+  const useHere = (room) => {
+    if (cur.kind === 'trained') {
+      const w = (trained || []).find((x) => x.slug === cur.slug);
+      return w ? onPushTrained(w, room) : undefined;
+    }
+    return act(() => apiPost('/api/wake-words/use', { room_id: room, slug: cur.slug }),
+      `${room} now wakes on “${cur.name}”`);
+  };
+  const words = st.rooms || {};
+  const waiting = (st.pending || []).map((p) => p.room_id);
+  return (
+    <Card title="Household wake word"
+          sub="The word a new room wakes on. Rooms you already have keep theirs.">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13 }}>New rooms wake on</span>
+          <select value={cur.slug} disabled={busy} style={_wakeFieldStyle}
+                  onChange={(e) => choose(e.target.value)}>
+            {(st.options || []).map((o) => (
+              <option key={o.slug} value={o.slug}>
+                {o.name}{o.phrase ? ` (“${o.phrase}”)` : ''}{o.available ? '' : ' — not on this server yet'}
+              </option>
+            ))}
+          </select>
+          {cur.available ? <Pill tone="ok">ready</Pill> : <Pill tone="warn">not here yet</Pill>}
+        </label>
+        {st.note && (
+          <div role="status" style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+            {st.note}
+          </div>
+        )}
+        {!cur.available && cur.kind === 'published' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Button variant="secondary" icon="download" disabled={busy} onClick={download}>
+              {busy ? 'Downloading…' : `Download “${cur.name}” now`}</Button>
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+              from Coders Farm’s wake-word release, checked against the copy this version expects</span>
+          </div>
+        )}
+        {waiting.length > 0 && (
+          <div style={{ fontSize: 12 }}>
+            Waiting for “{cur.name}”: {waiting.join(', ')}. They wake on
+            “{wakeWordName(st, st.boot_word)}” until then.
+          </div>
+        )}
+        {rooms.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {rooms.map((r) => {
+              const has = words[r.room_id] || r.wake_word;
+              return (
+                <div key={r.room_id} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="mono" style={{ fontSize: 12, minWidth: 110 }}>{r.room_id}</span>
+                  <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                    {has ? `wakes on “${wakeWordName(st, has)}”` : 'hasn’t said which word it wakes on'}
+                  </span>
+                  {cur.available && has !== cur.slug && satCan(r, 'wake_models') && (
+                    <Button variant="ghost" disabled={busy} onClick={() => useHere(r.room_id)}
+                            title="the room switches to this word and restarts to load it">
+                      Use “{cur.name}” here</Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+};
+
 const WakeWordsPanel = () => {
   // Live clip-count/status updates ride the net-new `wake_words.changed`
   // channel (the streaming clip-write, the trainer, and these CRUD routes all
@@ -3553,7 +3661,7 @@ const WakeWordsPanel = () => {
   const threshold = (w, value) =>
     guard(() => apiPatch(`/api/wake-words/${w.id}`, { threshold: value }), 'wake sensitivity updated');
   const setDefault = (w) =>
-    guard(() => apiPatch(`/api/wake-words/${w.id}`, { set_default: true }), `${w.name} is now the default`);
+    guard(() => apiPatch(`/api/wake-words/${w.id}`, { set_default: true }), `new rooms will wake on “${w.name}”`);
   const push = (w, room) => {
     if (!room) { fire('no room online to push to'); return; }
     const sens = wakePushSensitivity(w);
@@ -3592,6 +3700,8 @@ const WakeWordsPanel = () => {
 
   return (
     <React.Fragment>
+      <HouseholdWakeCard rooms={rooms} trained={items} onPushTrained={push} fire={fire}/>
+
       <WakeTrainerCard status={trainer} error={trainerError} refresh={refreshTrainer} fire={fire}/>
 
       <Card title="Create a wake word"
