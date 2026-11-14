@@ -3173,6 +3173,11 @@ class _TrayResultBody(BaseModel):
     detail: str | None = Field(default=None, max_length=1000)
     log: str | None = Field(default=None, max_length=300)
     version: str | None = Field(default=None, max_length=64)
+    # What ran (windows_side.RESULT_KINDS): a tray that doesn't say has it
+    # worked out from its outcome.
+    kind: str | None = Field(default=None, max_length=16)
+    # The menu run's Windows part came after its Linux part (words only).
+    after_linux: bool = False
 
 
 @app.post("/v1/windows/update/result")

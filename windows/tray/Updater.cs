@@ -24,6 +24,15 @@
 // next tray reports its outcome (with the claim) BEFORE it reads the state
 // again (UpdatePoll), so a finished run never starts another.
 //
+// The menu's run decides whether there is a Windows part from the state it
+// reads BEFORE the Linux part, and the Linux part can change it: the code it
+// pulls may include a newer release (2026-11-14: a 1.1.0 tray updated the
+// Linux side to code with v1.2.0 in it and stopped, reporting a bare "ok").
+// So after a Linux part alone that updated, the tray reads the state again
+// and goes on to the Windows part when it is now needed
+// (UpdateDecision.WindowsAfterLinux), and every report says what ran
+// (ReportKind), so the core never reads the Linux part as a Windows result.
+//
 // WindowsStep is pure orchestration over four interfaces (the core, the
 // release download, Windows' elevation, the clock and files), so the tests
 // run it whole against fakes.
@@ -63,7 +72,9 @@ namespace Domovoi.Windows.Tray
         // tray took it, or it is gone).
         string Claim(string requestId);
         // False only when the core should hear it again later (no answer).
-        bool Report(string requestId, string claim, string outcome, string detail, string log, string version);
+        // kind: ReportKind (what ran); afterLinux: a menu run's Windows part
+        // after its Linux part (the core's words for a declined prompt).
+        bool Report(string requestId, string claim, string outcome, string detail, string log, string version, string kind, bool afterLinux);
     }
 
     public interface IReleaseFiles
@@ -277,6 +288,17 @@ namespace Domovoi.Windows.Tray
     // What the tray does with a poll's answer.
     public enum UpdateAction { Nothing, StartNow, Notify }
 
+    // What a report is about, in the core's words (domovoi/windows_side.py
+    // RESULT_KINDS): "linux" only for the menu run's Linux part alone,
+    // "windows" for the Windows step (a Setup run, or why none ran).
+    public static class ReportKind
+    {
+        public const string Linux = "linux";
+        public const string Windows = "windows";
+
+        public static string Of(string stepKind) { return stepKind == "linux" ? Linux : Windows; }
+    }
+
     public static class UpdateDecision
     {
         // A dashboard request the tray hasn't acted on: from a browser on
@@ -290,6 +312,18 @@ namespace Domovoi.Windows.Tray
             if (s == null || s.RequestId == null || s.RequestId == seenRequest || stepRunning || pendingRun) return UpdateAction.Nothing;
             if (!s.StepNeeded || s.LinuxBusy || s.RequestClaimed) return UpdateAction.Nothing;
             return s.RequestOnThisPc ? UpdateAction.StartNow : UpdateAction.Notify;
+        }
+
+        // The menu's run did the Linux part alone (no Windows step was
+        // needed when it read the state) and that part updated: go on to the
+        // Windows part when the state read NOW says it is needed (the code
+        // just pulled includes a newer release). Not after a refusal or
+        // "nothing new", not while an update still runs, not without a core.
+        public static bool WindowsAfterLinux(string stepKind, StepResult linux, UpdateState now)
+        {
+            if (stepKind != "linux" || linux == null || linux.Outcome != Outcome.Ok) return false;
+            if (now == null || !now.StepNeeded || now.TargetTag == null || now.LinuxBusy || now.Internet == "never") return false;
+            return true;
         }
     }
 
@@ -338,7 +372,7 @@ namespace Domovoi.Windows.Tray
                 p.Outcome = fin.Outcome; p.Detail = fin.Detail; p.Log = fin.Log; p.Version = fin.Version ?? p.Version;
                 p.Save(root);
             }
-            if (!srv.Report(p.RequestId, p.Claim, p.Outcome, p.Detail, p.Log, p.Version)) return null;
+            if (!srv.Report(p.RequestId, p.Claim, p.Outcome, p.Detail, p.Log, p.Version, ReportKind.Of(p.Kind), p.AfterLinux)) return null;
             PendingRun.Clear(root);
             return new PendingDone
             {
@@ -431,14 +465,16 @@ namespace Domovoi.Windows.Tray
             return r != null && r.Status == 200 ? Json.Str(r.Body, "claim") : null;
         }
 
-        public bool Report(string requestId, string claim, string outcome, string detail, string log, string version)
+        public bool Report(string requestId, string claim, string outcome, string detail, string log, string version, string kind, bool afterLinux)
         {
             string json = "{\"request_id\": " + (requestId == null ? "null" : Loopback.Quote(requestId))
                 + ", \"claim\": " + (claim == null ? "null" : Loopback.Quote(claim))
                 + ", \"outcome\": " + Loopback.Quote(outcome)
                 + ", \"detail\": " + (detail == null ? "null" : Loopback.Quote(detail.Length > 400 ? detail.Substring(0, 400) : detail))
                 + ", \"log\": " + (log == null ? "null" : Loopback.Quote(log))
-                + ", \"version\": " + (version == null ? "null" : Loopback.Quote(version)) + "}";
+                + ", \"version\": " + (version == null ? "null" : Loopback.Quote(version))
+                + ", \"kind\": " + Loopback.Quote(kind == ReportKind.Linux ? ReportKind.Linux : ReportKind.Windows)
+                + ", \"after_linux\": " + (afterLinux ? "true" : "false") + "}";
             JsonReply r = Loopback.Send("POST", core + Loopback.ResultPath, json, 10000);
             // A refusal (403: not this tray's claim; 422) won't change on a retry.
             return r != null && r.Status < 500;

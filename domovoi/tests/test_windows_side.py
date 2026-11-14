@@ -261,6 +261,65 @@ def test_a_result_keeps_known_outcomes_and_plain_text_only() -> None:
         windows_side.record_result({"outcome": "run_this"}, None)
 
 
+def test_the_tray_menus_linux_part_is_no_windows_result() -> None:
+    """2026-11-14: the 1.1.0 tray's "Update Domovoi" ran the Linux part only
+    and reported a bare "ok" (no request, no version); the core stamped the
+    release the Linux side then included (v1.2.0) on it, and the card read
+    it as the Windows side updating while it stayed at 1.1.0."""
+    doc = windows_side.record_result({"outcome": "ok", "detail": None, "log": None, "version": None}, "v1.2.0")
+    assert doc["kind"] == "linux" and doc["tag"] is None
+    assert windows_side.read_result()["kind"] == "linux"
+    doc = windows_side.record_result({"outcome": "nothing_new"}, "v1.2.0")
+    assert doc["kind"] == "linux"
+    # A Setup run's "ok" always names the release it installed.
+    doc = windows_side.record_result({"outcome": "ok", "version": "1.2.0"}, "v1.2.0")
+    assert doc["kind"] == "windows" and doc["tag"] == "v1.2.0"
+    # Failures stay the Windows step's unless the tray says otherwise.
+    assert windows_side.record_result({"outcome": "declined"}, "v1.2.0")["kind"] == "windows"
+    doc = windows_side.record_result({"outcome": "linux_failed", "kind": "linux"}, "v1.2.0")
+    assert doc["kind"] == "linux" and doc["tag"] is None
+    assert windows_side.record_result({"outcome": "ok", "kind": "bogus"}, None)["kind"] == "linux"
+    req, _ = windows_side.make_request(False)
+    token = windows_side.claim_request(req["id"])
+    doc = windows_side.record_result({"outcome": "nothing_new", "request_id": req["id"], "claim": token}, "v1.2.0")
+    assert doc["kind"] == "windows", "an answer to the dashboard's request is the Windows step's"
+
+
+def test_a_result_file_from_an_earlier_core_is_read_by_what_ran() -> None:
+    """The live result.json of 2026-11-14, written before ``kind``."""
+    d = windows_side.state_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "result.json").write_text(json.dumps({
+        "outcome": "ok", "detail": None, "log": None, "version": None, "at": "2026-11-14T05:53:23Z",
+        "request_id": None, "tag": "v1.2.0", "after_linux": False}), encoding="utf-8")
+    r = windows_side.read_result()
+    assert r["kind"] == "linux" and r["tag"] is None and r["outcome"] == "ok"
+
+
+def test_after_linux_from_the_tray_only_for_its_own_run() -> None:
+    doc = windows_side.record_result({"outcome": "declined", "after_linux": True}, "v1.2.0")
+    assert doc["after_linux"] is True, "the menu run's Windows part after its Linux part"
+    req, _ = windows_side.make_request(False, after_linux=False)
+    token = windows_side.claim_request(req["id"])
+    doc = windows_side.record_result({"outcome": "declined", "request_id": req["id"], "claim": token,
+                                      "after_linux": True}, "v1.2.0")
+    assert doc["after_linux"] is False, "a request's own flag wins"
+
+
+def test_a_release_tagged_on_running_code_is_seen_without_a_restart(monkeypatch) -> None:
+    """2026-11-14: v1.2.0 was tagged on a commit already on main. Cached
+    until the restart, a core running that commit would never have offered
+    the Windows side its release."""
+    t = [1000.0]
+    monkeypatch.setattr(windows_side, "_now", lambda: t[0])
+    _fake_git(monkeypatch, {"any": "v1.1.0\n"})
+    assert windows_side.target_release("788c2a9", "main")["tag"] == "v1.1.0"
+    _fake_git(monkeypatch, {"any": "v1.2.0\n"})
+    assert windows_side.target_release("788c2a9", "main")["tag"] == "v1.1.0", "cached for a while"
+    t[0] += windows_side.TARGET_CACHE_SEC + 1
+    assert windows_side.target_release("788c2a9", "main")["tag"] == "v1.2.0"
+
+
 def test_a_result_for_another_request_leaves_the_current_one() -> None:
     req, _ = windows_side.make_request(False)
     with pytest.raises(PermissionError):

@@ -938,7 +938,9 @@ install, which keeps your data. **Update Domovoi** does both:
   heard from for two minutes (nobody is signed in on the PC; a core
   restart doesn't forget it), the card says **sign in on the PC to
   finish**. When only the Windows side is behind, the card says **Windows
-  side is behind** and **Update Domovoi** is that part alone.
+  side is behind** and **Update Domovoi** is the only button (no **Check
+  for updates** beside it): it checks first, and takes the Linux side along
+  when that is behind too, else asks the PC for the Windows part alone.
 - **Twice, or from two places**: a second press while the PC hasn't
   finished joins the first (the card says the PC has been asked already),
   so one Windows prompt at most, and a declined prompt leaves nothing
@@ -949,8 +951,14 @@ install, which keeps your data. **Update Domovoi** does both:
 - **In the tray menu**: **Update Domovoi...**, one confirmation, then
   Windows' administrator prompt, then both halves: the Linux part first
   (inside the elevated program, before anything on Windows changes), then
-  the Windows part when a newer one is out. The tray has no admin
-  password: the Windows prompt is what allows it. The elevated program
+  the Windows part when a newer one is out. When the Windows part only
+  became needed because of the code the Linux part pulled (a release
+  tagged since the last update), the tray reads the state again once the
+  Linux part is done and goes on to the Windows part, with a second
+  Windows prompt (a tray older than this change stops after the Linux
+  part: finish with **Update Domovoi** in the dashboard). The card never
+  shows the Linux part alone as the Windows side updating. The tray has no
+  admin password: the Windows prompt is what allows it. The elevated program
   leaves a one-off request in `C:\ProgramData\Domovoi\host\in`, which only
   administrators can write, and DomovoiHost runs the dashboard's own update
   in the distro (the same checks, the same order).
