@@ -23,8 +23,9 @@ request in real time. Nothing here does:
   drop-ins (the intercom). The audio goes only to the household's own server,
   never to Coders Farm or anyone else, and is not kept by the app. So "Data
   Not Collected" still holds with room mode.
-- **Phone chat** on an iPhone with Apple Intelligence is answered by Apple's
-  on-device model; the conversation stays on the phone.
+- **Chat** is answered only by the household's own server. This version has
+  no on-device chat (owner answer Q11: Apple's model is not offered) and
+  sends nothing to an AI company.
 - **Problem reports and reply reports** go only if the person sends them, by
   their own email app, to info@codersfarm.org, after seeing the whole report.
   The app never receives or sends it itself (it opens a `mailto:` draft), and
@@ -47,8 +48,7 @@ privacy policy the same day.
 
 **Privacy policy URL:**
 https://github.com/coders-farm-official/domovoi/blob/main/docs/PRIVACY_POLICY.md
-(it must cover the iPhone app before submission; today it says "Domovoi for
-Android").
+(it covers the iPhone app as well as Android).
 
 ## Export compliance
 
@@ -100,7 +100,7 @@ Apple's questionnaire (updated 2025: ages 4+, 9+, 13+, 16+, 18+).
 | **Messaging and chat** | **Yes** | Household members can talk to each other's rooms through drop-in (the intercom). Only inside the household's own server; no strangers. |
 | Advertising | No | No ad SDK. |
 | Parental controls / age assurance | No | |
-| **AI-generated content, an assistant or chatbot** (if asked) | **Yes** | Chat answers with a language model: the household's server, or Apple's on-device model. Mitigations: the model's safety tuning, a fixed system prompt, reporting from the reply's menu for server chats. |
+| **AI-generated content, an assistant or chatbot** (if asked) | **Yes** | Chat answers with a language model running on the household's own server. Mitigations: the model's safety tuning, a fixed system prompt, and reporting from each reply's menu. |
 
 **Expected rating: 13+** (plan 4.3), because of open-ended AI chat and
 messaging. If Apple's form gives a lower rating, accept it; don't raise it by

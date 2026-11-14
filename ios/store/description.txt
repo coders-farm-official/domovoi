@@ -2,8 +2,8 @@ Domovoi is the home computer system that just works. Your music, movies, audiobo
 
 WORKS ON ITS OWN, TOO: NO SERVER NEEDED
 • Play the music and videos on your phone, from your photos or from the folders you choose.
+• Browse its photos and the folders you choose, in Files.
 • Listen to the audiobooks you saved to the phone.
-• On an iPhone with Apple Intelligence, chat with an assistant that runs on the phone itself.
 
 With a Domovoi server (a computer in your home running the free Domovoi software), the app becomes the remote for the whole house:
 
