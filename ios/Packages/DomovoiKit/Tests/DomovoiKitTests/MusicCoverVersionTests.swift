@@ -32,7 +32,7 @@ final class MusicCoverVersionTests: XCTestCase {
         super.tearDown()
     }
 
-    static let picture = Data([0x89, 0x50, 0x4E, 0x47] + Array(repeating: 0x20, count: 200))
+    nonisolated static let picture = Data([0x89, 0x50, 0x4E, 0x47] + Array(repeating: 0x20, count: 200))
 
     private func settleUntil(
         _ done: @MainActor () -> Bool,
