@@ -17,7 +17,7 @@ internal fun libraryPlayItem(t: LibraryTrack): PlayItem = PlayItem.fromTrack(
     t.title
         ?: t.filePath?.substringAfterLast('/')?.substringAfterLast('\\')
         ?: "track",
-    t.artist, t.album, t.durationSec,
+    t.artist, t.album, t.durationSec, t.coverV,
 )
 
 /** Most track ids a room takes in one go (play-tracks' cap). */

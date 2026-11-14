@@ -46,6 +46,15 @@ data class LibraryTrack(
     @SerialName("enriched_at") val enrichedAt: String? = null,
     @SerialName("file_path") val filePath: String? = null,
     val favorited: Boolean = false,
+    // Every artist the file credits, in its order (its ARTISTS tag, V058);
+    // [] when nobody beyond `artist`, which stays the primary credit. Shown
+    // as "with B, C" (Credits.kt).
+    val artists: List<String> = emptyList(),
+    // The cover's version (V059) and the server's versioned cover path
+    // (`/api/music/library/{id}/cover?v={cover_v}`); absent from an older
+    // server: null, and the cover is checked by its ETag (player/CoverArt.kt).
+    @SerialName("cover_v") val coverV: Int? = null,
+    @SerialName("cover_url") val coverUrl: String? = null,
 )
 
 @Serializable
@@ -118,6 +127,12 @@ data class QueueItem(
     // The library song the entry is; null for a stream, a podcast or a
     // file the library doesn't know.
     @SerialName("track_id") val trackId: Long? = null,
+    // For a library song, the library track's credited artists, cover
+    // version and versioned cover path (V059, as on LibraryTrack); [] /
+    // null / null for anything else, and from an older server.
+    val artists: List<String> = emptyList(),
+    @SerialName("cover_v") val coverV: Int? = null,
+    @SerialName("cover_url") val coverUrl: String? = null,
 )
 
 @Serializable
