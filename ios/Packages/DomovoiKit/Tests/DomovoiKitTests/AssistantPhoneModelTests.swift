@@ -153,7 +153,7 @@ final class AssistantPhoneModelTests: XCTestCase {
 
     func testTheReplyStreamsIntoLiveAndNotIntoTheSavedChat() async {
         let (model, store) = make(FakeAssistantEngine(script: [
-            FakeAssistantEngine.Reply(chunks: [.append("one"), .append(" two")], delay: .milliseconds(20)),
+            FakeAssistantEngine.Reply(chunks: [.append("one"), .append(" two")], delay: .milliseconds(400)),
         ]))
         model.load()
         model.newChat()
@@ -172,7 +172,7 @@ final class AssistantPhoneModelTests: XCTestCase {
         let (model, store) = make(FakeAssistantEngine(script: [
             FakeAssistantEngine.Reply(
                 chunks: [.append("I was saying"), .append(" something longer")],
-                delay: .milliseconds(50)
+                delay: .milliseconds(400)
             ),
         ]))
         model.load()
@@ -320,7 +320,7 @@ final class AssistantPhoneModelTests: XCTestCase {
     /// that switched before or after would not catch.
     func testAReplyLandsInTheConversationThatAskedItAndNotTheOneNowOpen() async {
         let engine = FakeAssistantEngine(script: [
-            FakeAssistantEngine.Reply(chunks: [.append("the answer"), .append(" to the first")], delay: .milliseconds(30)),
+            FakeAssistantEngine.Reply(chunks: [.append("the answer"), .append(" to the first")], delay: .milliseconds(400)),
         ])
         let (model, store) = make(engine)
 
@@ -360,7 +360,7 @@ final class AssistantPhoneModelTests: XCTestCase {
         // a five-millisecond poll can step over — the reason this case failed
         // the first time it ran, and nothing to do with the rename.
         let (model, store) = make(FakeAssistantEngine(script: [
-            FakeAssistantEngine.Reply(chunks: [.append("an "), .append("answer")], delay: .milliseconds(60)),
+            FakeAssistantEngine.Reply(chunks: [.append("an "), .append("answer")], delay: .milliseconds(400)),
         ]))
         model.load()
         model.newChat()
@@ -389,7 +389,7 @@ final class AssistantPhoneModelTests: XCTestCase {
         let (model, store) = make(FakeAssistantEngine(script: [
             FakeAssistantEngine.Reply(
                 chunks: [.append("keep them "), .append("in a paper bag")],
-                delay: .milliseconds(60)
+                delay: .milliseconds(400)
             ),
         ]))
         model.load()
@@ -421,7 +421,7 @@ final class AssistantPhoneModelTests: XCTestCase {
         let (model, store) = make(FakeAssistantEngine(script: [
             FakeAssistantEngine.Reply(
                 chunks: [.append("half a "), .append("sentence more")],
-                delay: .milliseconds(50)
+                delay: .milliseconds(400)
             ),
         ]))
         model.load()
@@ -447,7 +447,7 @@ final class AssistantPhoneModelTests: XCTestCase {
         let (model, store) = make(FakeAssistantEngine(script: [
             FakeAssistantEngine.Reply(
                 chunks: [.append("the answer"), .append(" to the first")],
-                delay: .milliseconds(40)
+                delay: .milliseconds(400)
             ),
         ]))
         var other = AssistantConversation(id: "c-other", created: 1, updated: 1)
