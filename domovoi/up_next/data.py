@@ -25,13 +25,19 @@ played on this target, "played together" within their own listening.
 ``person_id`` None means the household — every listen counts for
 affinity, and hold-back and "played together" are this target's.
 
-The online "similar artists" signal (phase P7) has its hook in
-:meth:`SqlLibrary.similar`: it returns nothing until the
-``artist_similarity`` cache exists. It never makes a network call.
+The online signals (phase P7) are read here from the DATABASE ONLY:
+:meth:`SqlLibrary.similar` from ``artist_similarity`` and
+:meth:`SqlLibrary.popularity` from ``recording_popularity`` (V056), both
+filled by the core's background ``listenbrainz_fetch`` worker. Nothing in
+this package makes a network call or imports an HTTP client, cache miss
+included (owner rule 2026-11-14; ``test_up_next_offline.py`` enforces it):
+a track or artist with nothing stored simply has no such signal, and the
+mix uses the library's own.
 """
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -61,6 +67,13 @@ TOGETHER_DAYS = 180
 TOGETHER_SEED_LISTENS = 200
 TOGETHER_SPAN = timedelta(minutes=30)
 PLAYLIST_LABEL_CHARS = 60
+#: The freshness weight looks this far back for "last heard" (the default
+#: listening-history keep).
+FRESH_WINDOW_DAYS = 365
+#: Similar artists per seed artist, and library tracks read for them.
+SIMILAR_PER_ARTIST = 20
+SIMILAR_TRACK_LIMIT = 120
+SIMILAR_LABEL_CHARS = 60
 
 _COLS = "id, artist_norm, year, genre_keys, favorited"
 
@@ -109,7 +122,9 @@ class LibrarySource(Protocol):
 
     async def list_members(self, seed: SeedRef) -> list[Track]: ...
 
-    async def similar(self, seeds: Sequence[Track]) -> dict[int, str]: ...
+    async def similar(self, seeds: Sequence[Track], *, salt: str = "") -> dict[int, str]: ...
+
+    async def popularity(self, track_ids: Iterable[int]) -> dict[int, float]: ...
 
 
 class ListenSource(Protocol):
@@ -278,11 +293,104 @@ class SqlLibrary:
         rows = (await self.db.execute(_LIST_SQL[seed.kind], params)).mappings().all()
         return [_track(r) for r in rows]
 
-    async def similar(self, seeds: Sequence[Track]) -> dict[int, str]:
-        """Phase P7 hook: track id -> ``similar to <artist>`` for library
-        tracks by artists the ``artist_similarity`` cache relates to the
-        seeds'. No cache yet, so nothing; never a network call."""
-        return {}
+    async def similar(self, seeds: Sequence[Track], *, salt: str = "") -> dict[int, str]:
+        """Track id -> ``similar to <artist>``: library tracks by artists
+        the stored ``artist_similarity`` rows relate to the seeds' artists
+        (the best :data:`SIMILAR_PER_ARTIST` each, by score). Database only;
+        nothing stored means nothing here, never a network call."""
+        norms = sorted({s.artist_norm for s in seeds if s.artist_norm})
+        if not norms or not await _has_table(self.db, "artist_similarity"):
+            return {}
+        rows = (await self.db.execute(_SIMILAR_SQL, {
+            "norms": norms, "per": SIMILAR_PER_ARTIST, "salt": salt, "lim": SIMILAR_TRACK_LIMIT,
+        })).mappings().all()
+        out: dict[int, str] = {}
+        for r in rows:
+            name = " ".join(str(r["seed_name"] or "").split())[:SIMILAR_LABEL_CHARS].lower()
+            out.setdefault(int(r["id"]), f"similar to {name}" if name else "similar artist")
+        return out
+
+    async def popularity(self, track_ids: Iterable[int]) -> dict[int, float]:
+        """Track id -> 0..1: the song's ListenBrainz listen count against
+        its artist's best-known song in the library (log scale), for tracks
+        whose recording MBID has a stored figure and whose artist has at
+        least two such songs. Database only."""
+        ids = sorted({int(i) for i in track_ids})
+        if not ids or not await _has_table(self.db, "recording_popularity"):
+            return {}
+        rows = (await self.db.execute(_POPULARITY_SQL, {"ids": ids})).mappings().all()
+        out: dict[int, float] = {}
+        for r in rows:
+            mx = int(r["mx"] or 0)
+            if mx <= 0 or int(r["n"] or 0) < 2:
+                continue
+            out[int(r["id"])] = math.log1p(max(int(r["c"]), 0)) / math.log1p(mx)
+        return out
+
+
+_TABLES_SEEN: set[str] = set()
+
+
+async def _has_table(db: "AsyncSession", name: str) -> bool:
+    """Whether a P7 table exists (process-wide once seen), so the engine
+    runs on a database that predates V056."""
+    if name in _TABLES_SEEN:
+        return True
+    present = bool((await db.execute(text("SELECT to_regclass(:n) IS NOT NULL"), {"n": name})).scalar())
+    if present:
+        _TABLES_SEEN.add(name)
+    return present
+
+
+#: The seeds' artists with a MusicBrainz id: from the enricher
+#: (``library_tracks.musicbrainz_artist_id``) and from the alias fetch's
+#: verified matches (``library_alias_lookups``).
+_SEED_MBIDS_CTE = """
+seed_mbids AS (
+    SELECT DISTINCT artist_norm, mbid FROM (
+        SELECT lt.artist_norm, lt.musicbrainz_artist_id AS mbid FROM library_tracks lt
+        WHERE lt.artist_norm = ANY(CAST(:norms AS text[])) AND lt.musicbrainz_artist_id IS NOT NULL
+        UNION ALL
+        SELECT library_search_norm(l.artist_name), l.mb_artist_id FROM library_alias_lookups l
+        WHERE l.status = 'matched' AND l.mb_artist_id IS NOT NULL
+          AND library_search_norm(l.artist_name) = ANY(CAST(:norms AS text[]))
+    ) x
+)"""
+
+_SIMILAR_SQL = text(f"""
+WITH {_SEED_MBIDS_CTE},
+sim AS (
+    SELECT s.artist_norm AS seed_norm, a.similar_mbid, a.score FROM seed_mbids s
+    CROSS JOIN LATERAL (
+        SELECT similar_mbid, score FROM artist_similarity
+        WHERE artist_mbid = s.mbid ORDER BY score DESC LIMIT :per
+    ) a
+),
+hits AS (
+    SELECT DISTINCT ON (t.id) t.id, sim.seed_norm FROM sim
+    JOIN library_tracks t ON t.musicbrainz_artist_id = sim.similar_mbid
+    WHERE t.artist_norm <> ALL(CAST(:norms AS text[]))
+    ORDER BY t.id, sim.score DESC
+)
+SELECT h.id, h.seed_norm,
+       (SELECT min(lt.artist) FROM library_tracks lt WHERE lt.artist_norm = h.seed_norm) AS seed_name
+FROM hits h ORDER BY hashtext(h.id::text || :salt) LIMIT :lim
+""")
+
+_POPULARITY_SQL = text("""
+WITH c AS (
+    SELECT t.id, t.artist_norm, rp.listen_count AS c FROM library_tracks t
+    JOIN recording_popularity rp ON rp.recording_mbid = t.musicbrainz_recording_id
+    WHERE t.id = ANY(CAST(:ids AS int[])) AND rp.listen_count IS NOT NULL AND t.artist_norm <> ''
+),
+m AS (
+    SELECT t.artist_norm, max(rp.listen_count) AS mx, count(*) AS n FROM library_tracks t
+    JOIN recording_popularity rp ON rp.recording_mbid = t.musicbrainz_recording_id
+    WHERE t.artist_norm IN (SELECT DISTINCT artist_norm FROM c) AND rp.listen_count IS NOT NULL
+    GROUP BY t.artist_norm
+)
+SELECT c.id, c.c, m.mx, m.n FROM c JOIN m USING (artist_norm)
+""")
 
 
 # ─── Listening history ────────────────────────────────────────────────────
@@ -315,11 +423,12 @@ def _stats_sql(personal: bool):
     who = "AND person_id = :person" if personal else ""
     return text(f"""
         SELECT track_id,
-               count(*) FILTER (WHERE outcome = 'finished') AS finished,
-               count(*) AS plays,
-               count(*) FILTER (WHERE outcome = 'skipped') AS skipped
+               count(*) FILTER (WHERE outcome = 'finished' AND started_at >= :since) AS finished,
+               count(*) FILTER (WHERE started_at >= :since) AS plays,
+               count(*) FILTER (WHERE outcome = 'skipped' AND started_at >= :since) AS skipped,
+               max(started_at) AS last_at
         FROM music_listens
-        WHERE track_id = ANY(CAST(:ids AS int[])) AND started_at >= :since {who}
+        WHERE track_id = ANY(CAST(:ids AS int[])) AND started_at >= :fresh_since {who}
         GROUP BY track_id""")
 
 
@@ -370,12 +479,18 @@ class MusicListens:
         if not ids or not await self.available():
             return {}
         personal = scope.person_id is not None
-        params = {"ids": ids, "since": now - timedelta(days=AFFINITY_DAYS)}
+        params = {"ids": ids, "since": now - timedelta(days=AFFINITY_DAYS),
+                  "fresh_since": now - timedelta(days=FRESH_WINDOW_DAYS)}
         if personal:
             params["person"] = scope.person_id
         rows = (await self.db.execute(_stats_sql(personal), params)).mappings().all()
-        return {int(r["track_id"]): TrackStats(int(r["finished"]), int(r["plays"]), int(r["skipped"]))
-                for r in rows}
+        out: dict[int, TrackStats] = {}
+        for r in rows:
+            last = r["last_at"]
+            days = max((now - last).total_seconds() / 86400.0, 0.0) if last is not None else None
+            out[int(r["track_id"])] = TrackStats(
+                int(r["finished"]), int(r["plays"]), int(r["skipped"]), days)
+        return out
 
     async def last_heard(self, scope: Scope, *, now: datetime, hours: float) -> dict[int, datetime]:
         if hours <= 0 or not await self.available():

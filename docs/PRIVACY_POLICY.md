@@ -244,7 +244,10 @@ is the one the app is connected to. Forgetting the server, or unpairing
 the phone from it, deletes the copy first, and says so if it couldn't.
 If you take back the app's calendar permission, sharing turns off and the
 copy is deleted the same way. Uninstalling the app does not reach the
-server: turn sharing off first, or ask whoever runs the server.
+server: turn sharing off first, or ask whoever runs the server, who can
+remove a phone's calendars in its dashboard. Either way the server
+deletes a phone's calendars by itself after 7 days without an update from
+that phone, and when its household token is replaced.
 
 Your server is run by you or your household, on your own hardware; what it
 keeps is described in its own documentation

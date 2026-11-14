@@ -8,8 +8,10 @@ calendar whose ``next_refresh_at`` has come: every 30 min normally, every
 keeps its last copy. While the connectivity probe reads offline the tick is
 skipped, so an outage doesn't count against every calendar.
 
-Phone calendars are not touched here: phones send their own (LAN, any
-internet answer).
+Phone calendars are not read here (phones send their own, on the LAN,
+under any internet answer), but each tick deletes those of a phone not
+heard from for 7 days (calendar_feeds.expire_phones: an uninstalled app, a
+lost phone, a server the phone forgot), offline or not.
 """
 
 from __future__ import annotations
@@ -32,10 +34,12 @@ class CalendarFeedRefresher(Worker):
     requires_online = False
 
     async def tick(self) -> dict[str, int]:
+        async with session_scope() as session:
+            expired = await calendar_feeds.expire_phones(session)
         if not egress.internet_turned_off():
             probe = connectivity.current_probe()
             if probe is not None and not getattr(probe, "online", True):
-                return {"refreshed": 0, "failed": 0, "skipped": 1}
+                return {"refreshed": 0, "failed": 0, "skipped": 1, "expired": expired}
         refreshed = failed = 0
         async with session_scope() as session:
             due = await calendar_feeds.due_links(session)
@@ -46,4 +50,4 @@ class CalendarFeedRefresher(Worker):
                 refreshed += 1
             elif not result.busy:
                 failed += 1
-        return {"refreshed": refreshed, "failed": failed, "skipped": 0}
+        return {"refreshed": refreshed, "failed": failed, "skipped": 0, "expired": expired}

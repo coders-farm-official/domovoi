@@ -4,6 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — Phones' calendars: whose they are, how long they last (V057)
+
+Review fixes to the phone calendars below, before 1.3.0 ships.
+
+- **Only the phone itself changes its calendars.** The first snapshot a
+  phone sends is answered with a `calendar_key`; every later
+  `PUT`/`DELETE /api/calendar/phones/{device_id}` must carry it
+  (`X-Domovoi-Calendar-Key`, `403` without). An admin can remove a phone
+  calendar, or all of one phone's, in **Settings → Household →
+  Calendars**, e.g. one left behind by an uninstalled app.
+- **Left-behind calendars go by themselves.** A phone not heard from for
+  a day shows as stale ("Last heard from … 30 hours ago"); after 7 days
+  without an update its calendars are deleted (the calendar refresher).
+  Replacing the household device token removes every phone's calendars;
+  phones given the new token send them again.
+- **A late upload can't bring them back**: a snapshot's optional
+  `generation` older than the moment sharing was turned off is refused
+  (`410`).
+- **`GET /api/calendar/events` with no `start`/`end`** now answers a day
+  ago to 60 days ahead (it was every event, oldest first, capped at 500).
+- The same event shared by two phones (`ical_uid`, optional) is listed
+  once, with `also_in`. A private event a phone sends as `busy` shows and
+  is read aloud as busy time ("Tomorrow you're busy from 3 PM to 4 PM").
+- `GET /api/calendar/sources`: a phone's `device_id` is for admins only,
+  `account_name` is no longer kept or returned, `status` may be `stale`,
+  and a phone's calendars carry `expires_at`.
+
+**What an update needs:** the migration (V057: `calendar_phones`, and
+`ical_uid` / `busy` on `calendar_events`; it clears stored
+`account_name`s). A phone app built before this keeps working until its
+second snapshot, which needs the key: update the app.
+
 ## 2026-11-14 — Other calendars on the household calendar, read-only (V055)
 
 The Calendar page, Home and voice ("what's on my calendar today") can now
@@ -37,6 +69,108 @@ carries `all_day` and the calendar fields, and an all-day event's times
 are written with the server's own offset (`…T00:00:00-05:00`) so they
 carry their date. Clients that read `limit` events with no window should
 pass `start`/`end`: a linked calendar can hold thousands of events.
+
+## 1.3.0 (unreleased) — Up next: the queue everywhere, by voice, a Music mix, and similar artists
+
+**Migration V056** (V055 is wf/cal-130's: merge that first, so the
+migration numbers have no gap). Nothing else to do.
+
+### Up next leans toward songs you haven't heard in a while, and says why
+
+- **Freshness:** inside each kind of pick, a song heard today counts ×0.7
+  and one not heard in 90 days (or never) ×1.3, smoothly in between, a
+  little less for a song played very often — by the listener's own
+  listens, else the household's. A nudge, not a filter: favourites and
+  what you play still come up. In a simulated month on a 5,000-song
+  library, repeats fell by about a fifth.
+- **"Why this song?"** Every Up next pick keeps the signals that weighed
+  most in choosing it, and the queue says them in plain words: "same
+  artist as the last song · not played in 4 months". API: `Pick.why` and
+  the room queue's `why` (strings, null for older picks).
+- **Settings → Household → Music mix** (new; search "mix"): **Discovery ↔
+  Favorites** and **Stay close ↔ Wander** (five steps each, the middle is
+  how Up next chose before), **Autoplay when a playlist ends** (the
+  default a new Up next takes: rooms, browsers and phones that don't say;
+  a browser's own queue switch still wins for that browser), **No repeats
+  within N songs** (20–500, default 50), and the two internet switches
+  below. Each person can set their own two sliders in Settings → Household
+  → People; their sessions use them. API: `GET/PUT /api/music/mix`,
+  `GET/PUT /api/people/{id}/music-mix`.
+
+### Similar artists and song popularity from ListenBrainz (optional)
+
+Two new switches, each its own, defaults following the internet answer:
+**Similar artists from the internet** (on for **Yes**, off for Sometimes
+and No; `MUSIC_SIMILAR_ARTISTS_ENABLED`) adds "similar to *artist*"
+wildcards from songs you already have; **Song popularity from the
+internet** (on for **Yes** and **Sometimes**, like artist names and synced
+lyrics; `MUSIC_POPULARITY_ENABLED`) lets an artist's well-known songs come
+up a little more often (×0.9–×1.2; your own taste counts more). **Only
+MusicBrainz ids** (public catalogue numbers) of your artists and songs go
+to listenbrainz.org — never names or what you played — from a background
+job, one request a second, a batch a minute (about 650 requests the first
+time for a 6,000-song library, then about 8 a day). **Choosing songs never
+waits on the internet:** Up next reads only what was already fetched, and
+with the switches off (which also deletes what was fetched) it works from
+your library alone. New egress hosts: `labs.api.listenbrainz.org`,
+`api.listenbrainz.org` (docs/INTERNET.md).
+
+### The queue, easier to find and to use
+
+What changed on the dashboard and in the API:
+
+- **Every song row has a ⋯ menu** with **play next** and **add to
+  queue** (Library, an artist's, album's or genre's songs, playlists, a
+  room's Recently played). It goes where the music plays and says so:
+  "play next here", "play next in kitchen". The Library's two queue
+  buttons became this one menu.
+- **The Queue panel picks whose queue it shows**: this browser, or any
+  room (the room's real queue, with everything Music → Room queue does).
+  A browser playing in a room still keeps its own copy of what it sent;
+  the room's own queue is one pick away. Songs are grouped under **now
+  playing**, **next** and **up next**; the grip drags or moves a song with
+  the arrow keys, and an arrow button plays a song next.
+- **Home's room cards** (playing or paused) have a **queue** button, and
+  a room's page in Settings → Rooms has **open queue**: the queue panel
+  aimed at that room, or Music → Room queue when nothing plays in this
+  browser.
+- **API:** `POST /api/playlists/{id}/tracks` also takes
+  `{track_ids: [...]}` (up to 500) and answers 200
+  `{added, duplicates, missing}`; the one-song body is unchanged. "Save as
+  playlist" now sends one request instead of one per song.
+  `GET /api/satellites/{room}/recently-played` rows gain `track_id`.
+
+### The queue and Up next by voice
+
+In a room (or with the room's name after it, "… in the kitchen"):
+
+- **"what's next"** / "what's up next" says the next two songs.
+- **"play *song* next"** puts it right after the song playing now;
+  **"add *song* to the queue"**, **"queue up *song*"** or **"queue
+  *song*"** put it after the songs already asked for, before Up next's
+  picks. **Changed meaning:** "queue up *song*" used to play it at once;
+  it now adds it when something is playing, and plays it only when the
+  room is quiet (owner decision 2026-11-12).
+- **"clear the queue"** removes everything after the song playing now
+  (it keeps playing; Up next refills while autoplay is on).
+- **"skip this artist"** / **"no more *artist*"** skips them and leaves
+  them out of the room's mix; their waiting picks leave the queue.
+- **"turn autoplay off / on"**, **"stop after this list"**: the room's
+  Autoplay switch. On with no Up next yet makes one from the queue's
+  songs.
+- **"why is this playing"** says the pick's reason in words.
+- **"play something like this"** / **"more like this"** starts Up next
+  again from the song playing now (the song plays on; the old picks make
+  way). A stream or a podcast isn't a library song, and it says so.
+- **"play next"** and **"play the next song"** now skip, as "next" does
+  (they used to search the library for a song called "next"). A bare
+  "skip this" waits the longer pause before acting, because it also
+  starts "skip this artist".
+- A command that changes the room's mix from a recognised voice makes it
+  that person's mix.
+
+Nothing here needs the internet; none of it is offered to the language
+model's tools (they are fast paths only).
 
 ## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
 

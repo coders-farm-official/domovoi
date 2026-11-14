@@ -1063,7 +1063,13 @@ itself (`X-Domovoi-Device-Id`, `X-Device-Id`, the registration cookie,
 person: {id, name} | null, seed: {track_id, title, artist, label, list:
 {kind, name} | null}, picks: [Pick], batch_no, have_through_seq, ended}`.
 `Pick` = `{seq, track_id, title, artist, album, duration_sec, reason_code,
-reason_label, status, mpd_song_id, batch_no}`; `reason_code` is
+reason_label, why, status, mpd_song_id, batch_no}`; `why` (1.3.0, V056) is
+"why this song?" in plain words, said from the signals the picker really
+used — what made it a candidate, then the scoring factor that lifted it
+most, if one did ("same artist as the last song · not played in 4
+months", "from the 90s, like the song you started with · you play this
+often"); null for a pick made before 1.3.0. The room queue's auto items
+carry the same `why`; `reason_code` is
 `same_artist`, `same_era`, `same_genre`, `played_together`, `wildcard`,
 `similar_artist` or `from_list`; `reason_label` is what the queue shows
 (`same artist`, `90s`, `from 1997-ish`, `soul`, `from road trip`,
@@ -1080,6 +1086,39 @@ label says what it shares with the song the session started from, else
 | `PATCH /api/music/up-next/sessions/{id}` | **Device** | `{autoplay?, listener_person_id?}` (`listener_person_id: null` = the household; left out = unchanged) | `Session`. Autoplay on again restarts a list that stopped at its end. The new listener counts from the next batch. |
 | `POST /api/music/up-next/sessions/{id}/move` | **Device** | `{target: {kind: "room", room_id} \| {kind: "device", device_id}}` | Casting (P4): the session carries on on another player — to a room after the cast (`play-tracks` can do both in one call: `up_next_session_id`; the room's own session ends, the core finds the picks in its queue by their files), or back to this device when playback comes home (only to the device asking: `403` otherwise). A device's session moves only at that device's request. `409` for an ended session. `Session`. |
 | `GET /api/music/up-next/room/{room_id}` | **Device read or guest (core decides)** | — | The room's active `Session`, or `null`. Read like the room's queue: open to the household, and to a guest while the room plays; a guest's leaves `person` out. |
+
+**How picks are weighed (1.3.0).** Inside each bucket a song's weight is
+favourite × personal affinity × **freshness** × **popularity** × the
+session's early-skip demotions. Freshness leans a little toward songs not
+heard in a while (×0.7 heard today up to ×1.3 for 90 days or never, by
+the listener's listens, else the household's; a nudge, not a filter).
+Popularity (×0.9–×1.2, how a song stands among its artist's songs on
+ListenBrainz) and `similar to <artist>` wildcards come from what the
+core's background `listenbrainz_fetch` worker stored (V056): **choosing
+songs never calls the network**, and with nothing stored (switches off,
+or never online) the mix is the library's alone.
+
+**The Music mix** (`web/backend/api/music_mix.py`, `domovoi/up_next/mix.py`;
+Settings → Household → Music mix). Two five-step sliders instead of
+weights: `discovery_favorites` (1 = Discovery: a wider freshness range;
+3 = the default; 5 = Favorites: a narrow one, more weight on play count)
+and `close_wander` (1 = Stay close: few wildcards, lists follow the song
+they started from; 5 = Wander: many wildcards); `autoplay`, the default a
+new session takes when its start doesn't say (rooms, browsers, phones);
+`list_repeat_min` (20–500, default 50), "no repeats within N songs": a
+shorter list plays through once, then similar songs follow. A person may
+set their own sliders (`people.music_mix`): sessions for that listener
+use them, the household's otherwise. The two internet switches are core
+settings (`music_similar_artists_enabled`, `music_popularity_enabled`),
+changed with `PATCH /api/config/editable` (admin); `internet` reports them
+as the core last did (null while it hasn't).
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/music/mix` | **Device read** | — | `{discovery_favorites, close_wander, autoplay, list_repeat_min, steps: [1..5], list_repeat_min_range: [20, 500], internet: {similar_artists, popularity, state}, people_with_own_mix: [person id]}` |
+| `PUT /api/music/mix` | **Device** | any of `{discovery_favorites, close_wander, autoplay, list_repeat_min}` (the rest stay) | The new mix, as `GET`. `422` out of range. |
+| `GET /api/people/{id}/music-mix` | **Device read** | — | `{person_id, override: {discovery_favorites?, close_wander?} \| null, uses: {discovery_favorites, close_wander}}` (`null` = uses the household's). `404` for a person nobody has. |
+| `PUT /api/people/{id}/music-mix` | **Device** | `{override: {discovery_favorites, close_wander} \| null}` | As `GET`; `null` goes back to the household's. |
 
 ### 3.5d Music: the visualizer's presets
 
@@ -1235,7 +1274,7 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 | `GET /api/satellites/{room_id}/logs` | **Admin (read)** | `?max_bytes=` (1 KB–10 MB, default 1 MB) | Satellite's logs: the live ring over its WS and, since 2026-10-09, the log the core retains for it on disk, with its last outage — the core route's shape (§2.5) passes through. Gated: both hold every transcript the room heard. An offline room answers with `live: null` and what is retained; `404` only when nothing is held for it at all. |
 | `GET /api/satellites/{room_id}/health` | **Device read** | — | Proxy → core `GET /v1/admin/satellite/{room_id}/health` (§2.5): the latest health sample, the last outage report and a 24 h summary. The drawer's Health card and Last outage block. |
 | `GET /api/satellites/{room_id}/notes` | **Device read** | — | Notes taken in this room. |
-| `GET /api/satellites/{room_id}/recently-played` | **Device read** | `?limit=100` | Play history for the room (each play's `started_at` says when the room was in use, so a paired device's read since 2026-10-08). |
+| `GET /api/satellites/{room_id}/recently-played` | **Device read** | `?limit=100` | Play history for the room (each play's `started_at` says when the room was in use, so a paired device's read since 2026-10-08). Each row's `track_id` is the library song it was while the library still has it (null for streams, podcasts and plugin plays): the drawer's "play next" / "add to queue" on it. |
 | `GET /api/satellites/{room_id}/timers` | Open, M1 | — | Active timers/reminders in this room: `[{id, expires_at, created_at, label, message, room_id, is_reminder, masked}]`, soonest first. `is_reminder` is true when the stored row has a message; a reminder set with no task ("set a reminder for 10 minutes") stores `message: ""` and the label `"10 minute reminder"`, and fires as "Here's your 10 minute reminder." Without a household credential every reminder reads `message`/`label` null, `masked: true` (rule M1 above). |
 | `DELETE /api/satellites/{room_id}/timers/{timer_id}` | **Device** | — | Cancel a timer. `204`; `404` when it isn't in that room. Fires `timers_changed`. |
 | `GET /api/satellites/{room_id}/timer-announcements` | Open | — | The room's "Only reminders for this device" setting: `{room_id, own_only, since}`. `own_only: false` (the default) = this satellite announces every room's timers and reminders, each named by the room it was set in; `true` = only the ones set on it. The room a timer was set in always announces it. `since` = when it was turned on. `404` for a room this server has never known (neither connected nor adopted). Reads off (`{own_only: false, since: null}`) without V018. |
@@ -1287,7 +1326,7 @@ withheld from an unpaired client); every write is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/calendar/events` | **Device read** · `?start=&end=&limit=500` (at most 2000) | Events in a window (ISO datetimes): starting in it, or (1.3.0) begun before `start` and still on at it. Each event carries `all_day` and, for one from another calendar (1.3.0), `calendar_id`, `calendar_name`, `calendar_color` (`#rrggbb`), `calendar_kind` (`link` / `phone`), `owner_name` (the person, or the phone's name) and `read_only: true`; `source` is `local`, `link` or `phone`. An all-day event's `starts_at` / `ends_at` are its local midnights written with the server's own offset (`2026-11-26T00:00:00-05:00`), so the text carries its date. |
+| `GET /api/calendar/events` | **Device read** · `?start=&end=&limit=500` (at most 2000) | Events in a window (ISO datetimes): starting in it, or (1.3.0) begun before `start` and still on at it, in start order, at most `limit`. With **neither** bound the window is a day ago to 60 days ahead (before 1.3.0: every event ever, oldest first); one bound alone stays open on the other side. The same event in two calendars (same iCalendar UID and start: two phones sharing one family calendar, or a phone and a link) is listed once, `also_in` naming the other calendars (`["Family · Galaxy"]`). A private event a phone shared as busy has `busy: true`, `title: "Busy"` and no place. Each event carries `all_day` and, for one from another calendar (1.3.0), `calendar_id`, `calendar_name`, `calendar_color` (`#rrggbb`), `calendar_kind` (`link` / `phone`), `owner_name` (the person, or the phone's name) and `read_only: true`; `source` is `local`, `link` or `phone`. An all-day event's `starts_at` / `ends_at` are its local midnights written with the server's own offset (`2026-11-26T00:00:00-05:00`), so the text carries its date. |
 | `POST /api/calendar/events` | `CalendarEventCreate` | Create an event. |
 | `GET /api/calendar/events/{event_id}` | **Device read** | One event. |
 | `PATCH /api/calendar/events/{event_id}` | `CalendarEventPatch` | Edit an event. `409` for one from another calendar: "this event comes from <calendar>; change it there". |
@@ -1302,12 +1341,13 @@ Home and voice ("what's on my calendar today") read them all.
 
 | Method & path | Tier · request | Purpose |
 |---|---|---|
-| `GET /api/calendar/sources` | **Device read** | Every calendar the house shows besides its own: `[{id, kind: "link"\|"phone", name, color, person_id, owner_name, url_display, device_id, device_name, account_name, event_count, last_refreshed_at, last_attempt_at, next_refresh_at, last_error, last_error_words, status: "ok"\|"error"\|"waiting"\|"internet_off"}]`. A link's address is **never** in it: `url_display` is its host and `/…`. `last_error_words` says a failure in plain words (`not_found`: "The link doesn't work any more…"; `internet_off`: "…can't refresh. Showing the last copy."). |
+| `GET /api/calendar/sources` | **Device read** | Every calendar the house shows besides its own: `[{id, kind: "link"\|"phone", name, color, person_id, owner_name, url_display, device_id, device_name, account_name, event_count, last_refreshed_at, last_attempt_at, next_refresh_at, expires_at, last_error, last_error_words, status: "ok"\|"error"\|"waiting"\|"internet_off"\|"stale"}]`. A phone's `device_id` is given to an admin only (`null` otherwise); `account_name` is always `null` (no longer kept). A phone not heard from for 24 hours (phones send every 6) is `status: "stale"`, `last_error: "stale"`, `last_error_words` "Last heard from Pixel 8 30 hours ago. …"; `expires_at` is when its calendars are deleted unless it sends again (7 days after its last snapshot). A link's address is **never** in it: `url_display` is its host and `/…`. `last_error_words` says a failure in plain words (`not_found`: "The link doesn't work any more…"; `internet_off`: "…can't refresh. Showing the last copy."). |
 | `POST /api/calendar/sources` | **Admin (mutation)** · `{url, name, color?, person_id?}` | Add a calendar by its private ICS link (`https://`, `http://`, or `webcal://`, read as `https://`). `422` with plain words for anything else, or for an address inside the house (the outbound gate's rule; `OUTBOUND_ALLOW_HOSTS` opens one). `409` when the same link is already added. It is read once at once (unless internet access is **No**): `201 {source, ok, events}`, the calendar kept even when that first read fails (`ok: false`, the reason in `source.last_error_words`). |
 | `PATCH /api/calendar/sources/{source_id}` | **Admin (mutation)** · `{name?, color?, person_id?, url?}` | Rename, recolour, re-own; a new `url` replaces a link that was reset (read again at once). A phone's calendar takes its name and colour from the phone (`409`). |
-| `DELETE /api/calendar/sources/{source_id}` | **Admin (mutation)** | Remove a linked calendar and its events (the calendar itself is untouched). A phone's is stopped on the phone: `409`. |
+| `DELETE /api/calendar/sources/{source_id}` | **Admin (mutation)** | Remove a calendar and its events (the calendar itself is untouched). For a phone's calendar left behind; a phone still sharing it sends it again with its next update. |
 | `POST /api/calendar/sources/{source_id}/refresh` | **Admin (mutation)** | **Refresh now**: `{source, ok, events}` (`events: null` when unchanged, a `304`). Under internet **No** nothing is fetched (`ok: false`, `internet_off`). `409` while another read of it runs. |
-| `PUT /api/calendar/phones/{device_id}` | **Device** · `{phone_name?, window_start_ms?, window_end_ms?, calendars: [{calendar_id, name, account_name?, color?, events: [{uid, title?, starts_at_ms, ends_at_ms?, all_day, location?}]}]}` | The Android app's "Share this phone's calendars with the house": the COMPLETE set this phone shares. Each listed calendar's events are replaced; a calendar of this phone not listed is deleted (unpicked); `calendars: []` deletes them all. All-day instances come as CalendarContract keeps them (UTC midnights) and are stored by their date. One row per (phone, calendar), so a phone never overwrites another's; the id is self-asserted, as everywhere in the device tier. `200 {calendars, events}`. At most one a minute per phone (`429` + `Retry-After`); `413` past 25 calendars, 5,000 events in one, 20,000 in all, or an 8 MB body. |
+| `PUT /api/calendar/phones/{device_id}` | **Device** · `{phone_name?, window_start_ms?, window_end_ms?, calendars: [{calendar_id, name, account_name?, color?, events: [{uid, title?, starts_at_ms, ends_at_ms?, all_day, location?}]}]}` | The Android app's "Share this phone's calendars with the house": the COMPLETE set this phone shares. Each listed calendar's events are replaced; a calendar of this phone not listed is deleted (unpicked); `calendars: []` deletes them all. All-day instances come as CalendarContract keeps them (UTC midnights) and are stored by their date. One row per (phone, calendar), so a phone never overwrites another's; the id is self-asserted, as everywhere in the device tier. `200 {calendars, events}`. At most one a minute per phone (`429` + `Retry-After`); `413` past 25 calendars, 5,000 events in one, 20,000 in all, or an 8 MB body. **Since V057:** the first snapshot this server stores from a phone answers `calendar_key` (once; `null` after); every later PUT or DELETE for that id must send it as `X-Domovoi-Calendar-Key` (`403` without or wrong). Optional `generation` (an integer that only grows on the phone, e.g. the epoch ms the snapshot was read): `410` when sharing was turned off at or after it (an upload that landed after the DELETE), `409` when a higher one is already stored; drop the upload on either, don't retry it. Optional per event: `ical_uid` (CalendarContract `UID_2445`, used to list one event shared by two phones once) and `busy: true` (a private event: stored as "Busy", title and place dropped). `account_name` is accepted and ignored. A phone not heard from for 7 days has its calendars deleted. |
+| `DELETE /api/calendar/phones/{device_id}` | **Device** (with the phone's `X-Domovoi-Calendar-Key`) or **Admin** · `?generation=` | Every calendar the phone shared leaves the house (`204`, also when there was none). From the phone (sharing turned off): its key (`403` without, once it has one) and optionally the `generation` it was at, which refuses a later-arriving older upload (`410`). From an admin (Settings → Household → Calendars, "remove all from this phone"): no key, and the phone's key is forgotten (its next snapshot, if it still shares, is handed a new one). Replacing the household device token (`POST /api/auth/device-token` or its `/rotate`, and the core's `/v1/admin/device-token` equivalents) removes every phone's calendars. |
 | `DELETE /api/calendar/phones/{device_id}` | **Device** | Sharing turned off on the phone: every calendar it shared leaves the house. `204`. |
 
 Refreshing (the core's `calendar_feed_refresher` worker, every
@@ -1424,7 +1464,7 @@ Reads are **Open**; every write is **Device** tier.
 | `PATCH /api/playlists/{playlist_id}` | `PlaylistPatch` | Rename / edit. |
 | `DELETE /api/playlists/{playlist_id}` | — | Delete. |
 | `GET /api/playlists/{playlist_id}/tracks` | — | Ordered tracks. |
-| `POST /api/playlists/{playlist_id}/tracks` | `PlaylistTrackAdd` | Add a library track. |
+| `POST /api/playlists/{playlist_id}/tracks` | `PlaylistTrackAdd` | Add a library track: `{track_id}` (204; 404 unknown song, 409 already there), or many at once: `{track_ids: [...]}` (up to 500, in order, after the last song; songs already there or sent twice are kept once, ids the library doesn't have are left out) → 200 `{added, duplicates, missing}`. The browser's "save as playlist" sends the whole queue in one request. Favorites (`0`) is refused with 400 either way. |
 | `PATCH /api/playlists/{playlist_id}/order` | `PlaylistReorder` | Reorder. |
 | `DELETE /api/playlists/{playlist_id}/tracks/{track_id}` | — | Remove a track. |
 

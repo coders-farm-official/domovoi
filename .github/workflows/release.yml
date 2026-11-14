@@ -1,0 +1,367 @@
+# Sign and publish a Domovoi release from GitHub Actions, behind the owner's
+# approval (owner decision 2026-11-14). Started ONLY by hand: Actions,
+# release, Run workflow, on main. Nothing else starts it (no push, tag or
+# pull_request trigger), and it never runs code from anywhere but the commit
+# it was started on (main's tip).
+#
+#   plan     no secrets, read-only: finish_release.py --plan checks main's
+#            tip is a release to make (a release commit: it raises
+#            pyproject.toml's version, leaves android/release.json alone, and
+#            no tag v<version> is on GitHub yet) or one to finish (a run that
+#            stopped after tagging), and says whether the Android app
+#            changed (its versionName/versionCode differ from the ones
+#            android/release.json names).
+#   release  the `release` environment: GitHub waits for the owner's
+#            approval before this job starts or sees a secret. On Windows:
+#            when the app changed, android/scripts/release.ps1 builds,
+#            signs (the keystore from the environment's secrets), commits
+#            android/release.json on main, tags it and publishes the APKs;
+#            then, always, scripts/release/finish_release.py builds the
+#            Windows Setup from the tag, signs it with the release key held
+#            only by an ssh-agent for that one step, publishes the release
+#            files and fast-forwards stable.
+#
+# The owner's one-time setup (the environment, its reviewers, its secrets):
+# docs/release/ACTIONS-SETUP.md. The release itself, and the local scripts
+# that remain the fallback: docs/CONTRIBUTING.md, "Releasing".
+#
+# Hardening: every action is pinned by commit SHA (the comment names its
+# release); the only action is actions/checkout, with no credentials left
+# behind. Tools come from the runner image or are downloaded at a pinned
+# version and checked against a pinned SHA-256. Secrets live only in the
+# `release` environment and reach only the step that needs each; GITHUB_TOKEN
+# is handed to git per step (never written to .git/config). No secret is
+# written into the workspace; the keystore is written to RUNNER_TEMP for
+# apksigner and deleted in the same step and again at the end, whatever
+# happened.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release, v<version> (empty: v + pyproject.toml's version on main; it must match it anyway)"
+        required: false
+        default: ""
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan (no secrets)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      path: ${{ steps.plan.outputs.path }}
+      sign_app: ${{ steps.plan.outputs.sign_app }}
+      finish_at: ${{ steps.plan.outputs.finish_at }}
+    steps:
+      - name: Only main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::a release runs on main only (this run is on $GITHUB_REF)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Plan
+        id: plan
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          args=()
+          [ -z "$TAG_INPUT" ] || args=(--tag "$TAG_INPUT")
+          python3 scripts/release/finish_release.py --plan "$RUNNER_TEMP/plan.json" "${args[@]}"
+          python3 - "$RUNNER_TEMP/plan.json" <<'PY' >>"$GITHUB_OUTPUT"
+          import json, sys
+          doc = json.load(open(sys.argv[1], encoding="utf-8"))
+          print(f"tag={doc['tag']}")
+          print(f"path={doc['path']}")
+          print(f"sign_app={'true' if doc['sign_app'] else 'false'}")
+          print(f"finish_at={doc['finish_at']}")
+          PY
+          {
+            echo "### Release plan"
+            echo '```json'
+            cat "$RUNNER_TEMP/plan.json"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: sign and publish (approval)
+    needs: plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    environment: release
+    timeout-minutes: 150
+    permissions:
+      contents: write   # the tag, main's android/release.json commit (app path), the release, stable
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      DISPATCHED: ${{ github.sha }}
+    steps:
+      - name: Check out without line-ending conversion
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Python 3.12+ from the runner's tool cache
+        shell: pwsh
+        run: |
+          $dir = Get-ChildItem (Join-Path $env:RUNNER_TOOL_CACHE 'Python') -Directory |
+            Where-Object { $_.Name -match '^3\.(1[2-9])\.\d+$' } |
+            Sort-Object { [version]$_.Name } | Select-Object -Last 1
+          if (-not $dir) { throw 'no Python 3.12+ in the tool cache' }
+          $py = Join-Path $dir.FullName 'x64'
+          & (Join-Path $py 'python.exe') --version
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $py -Encoding utf8
+
+      - name: The branch and the identity release.ps1 commits with
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --quiet -B main "$DISPATCHED"
+          git branch --quiet --set-upstream-to=origin/main main
+
+      # The plan again (a re-run of this job alone doesn't re-run the plan
+      # job): what to do now, from what GitHub has now.
+      - name: Plan again
+        id: plan
+        run: |
+          python scripts/release/finish_release.py --plan "$RUNNER_TEMP/plan.json" --tag "$TAG"
+          python - "$RUNNER_TEMP/plan.json" <<'PY' >>"$GITHUB_OUTPUT"
+          import json, sys
+          doc = json.load(open(sys.argv[1], encoding="utf-8"))
+          print(f"sign_app={'true' if doc['sign_app'] else 'false'}")
+          print(f"finish_at={doc['finish_at']}")
+          PY
+
+      # Before anything is pushed: the release key's secrets load into an
+      # ssh-agent and are the key the commit pins, so a wrong secret stops
+      # the run here, not after the app's release (the agent is thrown away).
+      - name: Check the release key secrets (nothing pushed yet)
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_PASSPHRASE: ${{ secrets.RELEASE_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          [ -n "$RELEASE_SIGNING_KEY" ] || { echo "::error::the release environment has no secret RELEASE_SIGNING_KEY"; exit 1; }
+          export PATH="/usr/bin:$PATH"
+          eval "$(ssh-agent -s)" >/dev/null
+          trap 'ssh-agent -k >/dev/null 2>&1 || true; rm -f "$RUNNER_TEMP/release-askpass.sh" "$RUNNER_TEMP/release-askpass.sh.used"' EXIT
+          askpass="$RUNNER_TEMP/release-askpass.sh"
+          cat >"$askpass" <<'ASKPASS'
+          #!/bin/sh
+          # One answer only: ssh-add asks again after a wrong one, forever.
+          [ ! -e "$0.used" ] || exit 1
+          : >"$0.used"
+          printf '%s\n' "$RELEASE_SIGNING_KEY_PASSPHRASE"
+          ASKPASS
+          chmod 700 "$askpass"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" \
+            | SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY='' timeout 60 ssh-add -q - \
+            || { echo "::error::RELEASE_SIGNING_KEY doesn't load with RELEASE_SIGNING_KEY_PASSPHRASE"; exit 1; }
+          pinned="$(cut -d' ' -f2 windows/installer/release-signing.pub)"
+          ssh-add -L | cut -d' ' -f2 | grep -qxF "$pinned" \
+            || { echo "::error::RELEASE_SIGNING_KEY is not the key windows/installer/release-signing.pub pins"; exit 1; }
+          echo "the release key loads and is the pinned one"
+
+      - name: Inno Setup 6.7.4 (pinned, SHA-256 checked)
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe'
+          $sha = 'a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c'
+          $exe = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.4.exe'
+          Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+          $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant()
+          if ($got -ne $sha) { throw "innosetup-6.7.4.exe is $got, not the pinned $sha" }
+          # Per user: %LOCALAPPDATA%\Programs\Inno Setup 6, the first place windows\build.ps1 looks.
+          $p = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the Inno Setup installer exited $($p.ExitCode)" }
+          $iscc = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) { throw "no $iscc after installing" }
+          Remove-Item -LiteralPath $exe
+
+      # ── the app changed: build (no secrets), then sign and publish ──────
+      - name: Android SDK and JDK 17 (the runner's)
+        if: steps.plan.outputs.sign_app == 'true'
+        shell: pwsh
+        run: |
+          if (-not $env:JAVA_HOME_17_X64) { throw 'no JDK 17 on the runner (JAVA_HOME_17_X64)' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "JAVA_HOME=$env:JAVA_HOME_17_X64" -Encoding utf8
+          $sdkmanager = Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat'
+          if (-not (Test-Path -LiteralPath $sdkmanager)) { throw "no sdkmanager at $sdkmanager" }
+          $env:JAVA_HOME = $env:JAVA_HOME_17_X64
+          $yes = ('y' + [Environment]::NewLine) * 20
+          $yes | & $sdkmanager --licenses | Out-Null
+          & $sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'platform-tools'
+          if ($LASTEXITCODE -ne 0) { throw 'sdkmanager failed' }
+
+      - name: Build the release APKs (no secrets)
+        if: steps.plan.outputs.sign_app == 'true'
+        working-directory: android
+        shell: pwsh
+        run: |
+          # The Gradle the wrapper downloads, held to Gradle's published SHA-256
+          # for this run (gradle-wrapper.properties has none yet; put back below,
+          # since release.ps1 wants a clean checkout).
+          $props = 'gradle\wrapper\gradle-wrapper.properties'
+          if (-not (Select-String -LiteralPath $props -SimpleMatch -Quiet 'gradle-8.14.3-bin.zip')) {
+            throw 'the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 in release.yml'
+          }
+          if (-not (Select-String -LiteralPath $props -SimpleMatch -Quiet 'distributionSha256Sum')) {
+            Add-Content -LiteralPath $props -Value 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' -Encoding ascii
+          }
+          try {
+            # What release.ps1 runs (its -SkipBuild signs these), with no daemon left behind.
+            .\gradlew.bat --no-daemon ':app:assembleRelease' '-Pdomovoi.apkPerAbi' '-Pdomovoi.abis=arm64-v8a,armeabi-v7a'
+            if ($LASTEXITCODE -ne 0) { throw 'the build failed' }
+          } finally {
+            git checkout -- $props
+            # Nothing the build started outlives it into the signing steps.
+            Get-Process java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Sign and publish the app (release.ps1)
+        if: steps.plan.outputs.sign_app == 'true'
+        shell: powershell
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in 'ANDROID_KEYSTORE_B64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS') {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "the release environment has no secret $name" }
+          }
+          # git pushes with GITHUB_TOKEN for this step only (never in .git/config).
+          $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
+          Write-Output "::add-mask::$auth"
+          $env:GIT_CONFIG_COUNT = '1'
+          $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
+          $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $auth"
+          # The keystore: RUNNER_TEMP (outside the checkout), this account only, deleted below.
+          $dir = Join-Path $env:RUNNER_TEMP 'domovoi-keystore'
+          $null = New-Item -ItemType Directory -Force -Path $dir
+          $null = & icacls $dir /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F"
+          $ks = Join-Path $dir 'release.jks'
+          try {
+            [IO.File]::WriteAllBytes($ks, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_B64))
+            $env:ANDROID_KEYSTORE_B64 = $null
+            $cred = New-Object System.Management.Automation.PSCredential('keystore',
+              (ConvertTo-SecureString $env:ANDROID_KEYSTORE_PASSWORD -AsPlainText -Force))
+            $keyPass = if ($env:ANDROID_KEY_PASSWORD) { ConvertTo-SecureString $env:ANDROID_KEY_PASSWORD -AsPlainText -Force } else { $null }
+            $env:ANDROID_KEYSTORE_PASSWORD = $null; $env:ANDROID_KEY_PASSWORD = $null
+            $params = @{ SkipBuild = $true; Keystore = $ks; Alias = $env:ANDROID_KEY_ALIAS; KeystoreCredential = $cred }
+            if ($keyPass) { $params.KeyPassword = $keyPass }
+            & .\android\scripts\release.ps1 @params
+            $code = $LASTEXITCODE
+            # Stopped after making its release commit (a push, gh or a download
+            # failed)? It carries on from that commit with the signed APKs it
+            # left on this runner, without the keystore: try twice more here,
+            # since those APKs go when the runner does.
+            for ($try = 1; $code -ne 0 -and $try -le 2; $try++) {
+              $parent = (git rev-parse --verify --quiet 'HEAD^') | Out-String
+              if ($parent.Trim() -ne $env:DISPATCHED) { break }
+              Write-Output "release.ps1 stopped after its release commit: carrying on (try $try of 2)"
+              Start-Sleep -Seconds 30
+              & .\android\scripts\release.ps1 -SkipBuild
+              $code = $LASTEXITCODE
+            }
+            if ($code -ne 0) { throw "release.ps1 exited $code" }
+          } finally {
+            Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue
+          }
+
+      - name: The app's release commit is the dispatched commit plus android/release.json
+        if: steps.plan.outputs.sign_app == 'true'
+        run: |
+          [ "$(git rev-parse HEAD^)" = "$DISPATCHED" ] || { echo "::error::HEAD's parent is not the dispatched commit"; exit 1; }
+          [ "$(git diff --name-only "$DISPATCHED" HEAD)" = "android/release.json" ] \
+            || { echo "::error::the release commit changes more than android/release.json"; exit 1; }
+
+      # A run to finish whose app release an earlier attempt published: the
+      # tag is the dispatched commit plus android/release.json (the plan
+      # checked that); finish-release runs there.
+      - name: Check out the tag to finish at
+        if: steps.plan.outputs.sign_app != 'true' && steps.plan.outputs.finish_at != github.sha
+        env:
+          FINISH_AT: ${{ steps.plan.outputs.finish_at }}
+        run: |
+          [ "$(git diff --name-only "$DISPATCHED" "$FINISH_AT")" = "android/release.json" ] \
+            || { echo "::error::$FINISH_AT is more than android/release.json on the dispatched commit"; exit 1; }
+          git checkout --quiet --detach "$FINISH_AT"
+
+      # ── always: the Windows Setup, signed by the key in an ssh-agent ────
+      - name: Finish the release (finish-release, the key in ssh-agent only)
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_PASSPHRASE: ${{ secrets.RELEASE_SIGNING_KEY_PASSPHRASE }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -n "$RELEASE_SIGNING_KEY" ] || { echo "::error::the release environment has no secret RELEASE_SIGNING_KEY"; exit 1; }
+          # Git for Windows' OpenSSH: its ssh-agent runs per process (Windows'
+          # own runs as a service that keeps keys in the registry).
+          export PATH="/usr/bin:$PATH"
+          [ "$(command -v ssh-keygen)" = /usr/bin/ssh-keygen ] || { echo "::error::ssh-keygen is $(command -v ssh-keygen)"; exit 1; }
+          eval "$(ssh-agent -s)" >/dev/null
+          trap 'ssh-agent -k >/dev/null 2>&1 || true' EXIT
+          # The passphrase reaches ssh-add through SSH_ASKPASS (no terminal);
+          # the key text through its stdin. Neither is written to disk.
+          askpass="$RUNNER_TEMP/release-askpass.sh"
+          cat >"$askpass" <<'ASKPASS'
+          #!/bin/sh
+          # One answer only: ssh-add asks again after a wrong one, forever.
+          [ ! -e "$0.used" ] || exit 1
+          : >"$0.used"
+          printf '%s\n' "$RELEASE_SIGNING_KEY_PASSPHRASE"
+          ASKPASS
+          chmod 700 "$askpass"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" \
+            | SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY='' timeout 60 ssh-add -q -
+          rm -f "$askpass" "$askpass.used"
+          unset RELEASE_SIGNING_KEY RELEASE_SIGNING_KEY_PASSPHRASE
+          ssh-add -l
+          # git pushes the tag and stable with GITHUB_TOKEN, for this step only.
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          # finish-release.sh's Python, named (the tool cache's, put on PATH above).
+          python scripts/release/finish_release.py --tag "$TAG" --signing-agent
+          {
+            echo "### Released $TAG"
+            echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up (whatever happened)
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force -LiteralPath (Join-Path $env:RUNNER_TEMP 'domovoi-keystore') -ErrorAction SilentlyContinue
+          Remove-Item -Force -Path (Join-Path $env:RUNNER_TEMP 'release-askpass.sh*') -ErrorAction SilentlyContinue
+          Get-Process ssh-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          exit 0

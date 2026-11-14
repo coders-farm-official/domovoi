@@ -3360,6 +3360,166 @@
         }
       }
     },
+    "/api/music/mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Mix",
+        "operationId": "get_mix_api_music_mix_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Mix Api Music Mix Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Mix",
+        "operationId": "put_mix_api_music_mix_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MixIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Mix Api Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/people/{person_id}/music-mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Person Mix",
+        "operationId": "get_person_mix_api_people__person_id__music_mix_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Person Mix Api People  Person Id  Music Mix Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Person Mix",
+        "operationId": "put_person_mix_api_people__person_id__music_mix_put",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonMixIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Person Mix Api People  Person Id  Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -8130,7 +8290,7 @@
           "calendar"
         ],
         "summary": "List Events",
-        "description": "Events in ``[start, end)``: starting in it, or (from 1.3.0) begun\nbefore ``start`` and still under way at it (a multi-day event).\n\nBoth bounds optional: omit ``start`` for a \"since the dawn of time\"\nsweep, omit ``end`` for everything from ``start`` onwards. Default\ncap at 500 keeps the JSON response sane on a year-spanning query.",
+        "description": "Events in ``[start, end)``: starting in it, or (from 1.3.0) begun\nbefore ``start`` and still under way at it (a multi-day event), in\nstart order, at most ``limit``.\n\nWith NEITHER bound the window is a day ago to 60 days ahead (until\n1.3.0 it was every event ever, oldest first, so the cap cut off what\nwas coming). One bound alone is open on the other side, as before.\nThe same event in two calendars (same iCalendar UID and start) is\nlisted once, with ``also_in`` naming the others.",
         "operationId": "list_events_api_calendar_events_get",
         "parameters": [
           {
@@ -8379,7 +8539,7 @@
           "calendar"
         ],
         "summary": "List Sources",
-        "description": "Every calendar the house reads besides its own: links (address\nshown as ``host/\u2026`` only) and phones' shared calendars, with when each\nwas last read and, for a link, what went wrong in plain words.",
+        "description": "Every calendar the house reads besides its own: links (address\nshown as ``host/\u2026`` only) and phones' shared calendars, with when each\nwas last read and, for a link, what went wrong in plain words; a phone\nnot heard from for a day is ``stale`` (\"last heard from \u2026\"). A phone's\n``device_id`` is in it for an admin only; ``account_name`` never.",
         "operationId": "list_sources_api_calendar_sources_get",
         "responses": {
           "200": {
@@ -8496,7 +8656,7 @@
           "calendar"
         ],
         "summary": "Delete Source",
-        "description": "Remove a linked calendar and its events from the house (the\ncalendar itself, wherever it lives, is untouched). A phone's calendar\nis stopped on the phone: removing it here would only last until the\nphone's next update, so it is refused with that sentence.",
+        "description": "Remove a calendar and its events from the house (the calendar\nitself, wherever it lives, is untouched). For a phone's calendar this\nis how one left behind goes (the app uninstalled, the phone lost); a\nphone still sharing it sends it again with its next update.",
         "operationId": "delete_source_api_calendar_sources__source_id__delete",
         "parameters": [
           {
@@ -8575,7 +8735,7 @@
           "calendar"
         ],
         "summary": "Put Phone Snapshot",
-        "description": "The complete set of calendars this phone shares, with their events\nin a rolling window. Each listed calendar's events are replaced;\na calendar of this phone that is not listed is deleted (unpicked), and\n``calendars: []`` deletes them all.",
+        "description": "The complete set of calendars this phone shares, with their events\nin a rolling window. Each listed calendar's events are replaced;\na calendar of this phone that is not listed is deleted (unpicked), and\n``calendars: []`` deletes them all.\n\nThe first snapshot from a phone answers ``calendar_key`` (once); every\nlater one must send it in ``X-Domovoi-Calendar-Key`` (403 without).\n410: sharing was turned off after this snapshot's ``generation``; 409:\nan update with a higher ``generation`` is already stored.",
         "operationId": "put_phone_snapshot_api_calendar_phones__device_id__put",
         "parameters": [
           {
@@ -8626,7 +8786,7 @@
           "calendar"
         ],
         "summary": "Delete Phone Calendars",
-        "description": "Sharing turned off on the phone: every calendar it shared, and\ntheir events, leave the house.",
+        "description": "Every calendar a phone shared, and their events, leave the house.\n\nFrom the phone (sharing turned off): with its calendar key (403\nwithout, once it has one) and, optionally, the ``generation`` it was\nat, so an upload made before this and arriving after it is refused\n(410). From an admin (Settings \u2192 Household \u2192 Calendars, \"remove all of\nthis phone's\"): no key needed, and the phone's key is forgotten.",
         "operationId": "delete_phone_calendars_api_calendar_phones__device_id__delete",
         "parameters": [
           {
@@ -8636,6 +8796,23 @@
             "schema": {
               "type": "string",
               "title": "Device Id"
+            }
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Generation"
             }
           }
         ],
@@ -9871,7 +10048,7 @@
           "playlists"
         ],
         "summary": "Add Track To Playlist",
-        "description": "Append a library track to the end of a playlist.\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
+        "description": "Append a library track to the end of a playlist.\n\n``{track_id}``: one song; 204, 404 for a song the library doesn't\nhave, 409 when it is already in the playlist.\n\n``{track_ids: [...]}`` (P5, up to 500): many songs in one request, in\nthe order sent, after the playlist's last song. Songs already in the\nplaylist, or sent twice, are kept once; ids the library doesn't have\nare left out. 200 ``{added, duplicates, missing}``. The browser's\n\"save as playlist\" uses it (it used to send one request per song).\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
         "operationId": "add_track_to_playlist_api_playlists__playlist_id__tracks_post",
         "parameters": [
           {
@@ -9897,6 +10074,16 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "200": {
+            "description": "track_ids: what the bulk add did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistBulkAdded"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -21481,6 +21668,18 @@
             "type": "boolean",
             "title": "Read Only",
             "default": false
+          },
+          "busy": {
+            "type": "boolean",
+            "title": "Busy",
+            "default": false
+          },
+          "also_in": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Also In"
           }
         },
         "type": "object",
@@ -21768,10 +21967,23 @@
               "ok",
               "error",
               "waiting",
-              "internet_off"
+              "internet_off",
+              "stale"
             ],
             "title": "Status",
             "default": "ok"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           }
         },
         "type": "object",
@@ -22097,9 +22309,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -25769,6 +25987,62 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MixIn": {
+        "properties": {
+          "discovery_favorites": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Wander"
+          },
+          "autoplay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
+          },
+          "list_repeat_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 500.0,
+                "minimum": 20.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List Repeat Min"
+          }
+        },
+        "type": "object",
+        "title": "MixIn"
+      },
       "MoveIn": {
         "properties": {
           "target": {
@@ -26330,6 +26604,28 @@
         ],
         "title": "NowPlayingSong"
       },
+      "OverrideIn": {
+        "properties": {
+          "discovery_favorites": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Close Wander"
+          }
+        },
+        "type": "object",
+        "required": [
+          "discovery_favorites",
+          "close_wander"
+        ],
+        "title": "OverrideIn"
+      },
       "PasswordChangeRequest": {
         "properties": {
           "old_password": {
@@ -26627,6 +26923,22 @@
         ],
         "title": "Person"
       },
+      "PersonMixIn": {
+        "properties": {
+          "override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverrideIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "PersonMixIn"
+      },
       "PersonRename": {
         "properties": {
           "name": {
@@ -26746,6 +27058,23 @@
               }
             ],
             "title": "Location"
+          },
+          "ical_uid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ical Uid"
+          },
+          "busy": {
+            "type": "boolean",
+            "title": "Busy",
+            "default": false
           }
         },
         "type": "object",
@@ -26791,6 +27120,18 @@
             ],
             "title": "Window End Ms"
           },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
           "calendars": {
             "items": {
               "$ref": "#/components/schemas/PhoneCalendar"
@@ -26812,6 +27153,17 @@
           "events": {
             "type": "integer",
             "title": "Events"
+          },
+          "calendar_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Key"
           }
         },
         "type": "object",
@@ -26909,9 +27261,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -27008,9 +27366,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -27099,6 +27463,30 @@
         ],
         "title": "Playlist",
         "description": "One row in the Playlists tab. ``is_virtual=True`` is the\npinned-at-top \"Favorites\" entry \u2014 derived from\n``library_tracks.favorited`` rather than a real ``playlists``\nrow, so it can't be renamed or deleted from the dashboard."
+      },
+      "PlaylistBulkAdded": {
+        "properties": {
+          "added": {
+            "type": "integer",
+            "title": "Added"
+          },
+          "duplicates": {
+            "type": "integer",
+            "title": "Duplicates"
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "added",
+          "duplicates",
+          "missing"
+        ],
+        "title": "PlaylistBulkAdded",
+        "description": "What a bulk add did: songs appended, songs already in the playlist\n(or sent twice: saved once), ids the library doesn't have."
       },
       "PlaylistCreate": {
         "properties": {
@@ -27227,16 +27615,37 @@
       "PlaylistTrackAdd": {
         "properties": {
           "track_id": {
-            "type": "integer",
-            "minimum": 1.0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Track Id"
+          },
+          "track_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 500,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Ids"
           }
         },
         "type": "object",
-        "required": [
-          "track_id"
-        ],
-        "title": "PlaylistTrackAdd"
+        "title": "PlaylistTrackAdd",
+        "description": "Add one library song (``track_id``) or many at once (``track_ids``,\nin order, up to 500: \"save the queue as a playlist\" in one request\ninstead of one per song). Exactly one of the two."
       },
       "PollFailure": {
         "properties": {
@@ -27868,6 +28277,17 @@
             ],
             "title": "Reason Label"
           },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          },
           "up_next_seq": {
             "anyOf": [
               {
@@ -28089,6 +28509,17 @@
             "type": "boolean",
             "title": "Can Add",
             "default": false
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
           }
         },
         "type": "object",
@@ -29516,9 +29947,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           }
         },
         "type": "object",

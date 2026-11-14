@@ -1321,6 +1321,11 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 2 }}>
                 {fmtDur(np.elapsed_sec)}{songDur ? ` / ${fmtDur(songDur)}` : ''}
               </div>
+              {/* The room's whole queue, a tap away (P5): the queue panel
+                  aimed at this room, or the Music page's Room queue. */}
+              <button type="button" className="q-link" onClick={() => satOpenQueue(s.room_id)}>
+                <Icon name="list-music" size={13}/> open queue
+              </button>
               {s.sat_type === 'video' && (
                 <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
                   <IconButton name={np.state === 'play' ? 'pause' : 'play'}
@@ -1353,7 +1358,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           away. Nothing when the room has no Up next. */}
       {(playing || (np?.state === 'pause' && np.song)) && typeof RoomUpNext === 'function' && (
         <RoomUpNext roomId={s.room_id} limit={3} className="sat-upnext"
-                    onOpenQueue={() => { if (typeof openRoomQueue === 'function') openRoomQueue(s.room_id); }}/>
+                    onOpenQueue={() => satOpenQueue(s.room_id)}/>
       )}
 
       <VolumeControl s={s} fire={fire}/>
@@ -1774,6 +1779,13 @@ const RoomTimersBody = ({ room, fire }) => {
   );
 };
 
+// A room's queue: the queue panel aimed at it (player.jsx openQueueFor),
+// else the Music page's Room queue (data.js openRoomQueue).
+const satOpenQueue = (room) => {
+  if (typeof openQueueFor === 'function') openQueueFor(room);
+  else if (typeof openRoomQueue === 'function') openRoomQueue(room);
+};
+
 // Source → pill tone for the recently-played table, served by
 // /api/capabilities (design §8): handler/source names map to tone slugs
 // (media/device/info/comms/neutral) which render as pill tones here.
@@ -1853,6 +1865,9 @@ const RoomRecentlyPlayedBody = ({ room, fire }) => {
                 {sub && <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{sub}</div>}
               </td>
               <td className="actions">
+                {r.track_id != null && typeof SongRowMenu === 'function' && (
+                  <SongRowMenu track={{ id: r.track_id, title: r.title }} room={room} fire={fire}/>
+                )}
                 {r.can_add && !fulfillerKnownAbsent && (
                   queued.has(r.id)
                     ? <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>queued</span>

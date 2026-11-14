@@ -261,9 +261,11 @@ differently from the others would be inconsistent.
   **uninstalling the app does not delete the server's copy** (the app is
   gone before it could send the delete), and neither does a delete that
   never reached a server the phone has since switched away from or
-  forgotten. Whether the household's dashboard can remove a phone's
-  calendars then is for the server half to say *(unverified: the policy
-  says "ask whoever runs the server", nothing more, until it ships)*.
+  forgotten. The household's dashboard is where it is removed then
+  (Settings → Household → Calendars: an admin removes one calendar or all
+  of a phone's), and the server deletes a phone's calendars by itself
+  after 7 days without an update from that phone, and when the household
+  device token is replaced (server V057).
 
 **Owner checklist for the Play Console (1.3.0):**
 

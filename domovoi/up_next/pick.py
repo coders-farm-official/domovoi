@@ -33,6 +33,19 @@ top-N, so batches vary.
 * ``session demotion``: the session's early-skip factors on the artist
   (×0.3 each) and the track's primary genre (×0.6 each); excluded artists
   are never picked (:class:`~.model.Taste`).
+* ``freshness`` (:func:`freshness`, 0.6–1.3): a nudge toward songs not
+  heard in a while, against the shuffle that plays the same rotation
+  over and over. Never played (or not in 90 days) ×1.3, heard today ×0.7,
+  smoothly in between, a little lower still for a song played very
+  often. The same people as the affinity: the listener's, else the
+  household's. A nudge, not a filter: taste, the seeds and the no-repeat
+  memory still lead.
+* ``popularity`` (:func:`popularity_factor`, 0.9–1.2): how a song stands
+  among its artist's songs on ListenBrainz (phase P7), read from the
+  database only (``recording_popularity``, filled by the background
+  ``listenbrainz_fetch`` worker); a track with no figure is neutral (1.0),
+  so with the setting off, or offline from the start, the mix is the
+  library's alone.
 
 **Hold-back.** Never picked: the seeds (the song playing and the ones
 just heard). Not picked: a track heard on this target or by this person
@@ -80,12 +93,21 @@ import hashlib
 import math
 import random
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Callable, Collection, Iterable, Mapping, Sequence, TypeVar
 
 from .model import (
+    AFFINITY_STEP,
     BUCKET_ORDER,
+    FRESH_FLOOR,
+    FRESH_FULL_DAYS,
+    FRESH_MAX,
+    FRESH_MIN,
+    FRESH_PLAY_CAP,
+    FRESH_PLAY_STEP,
+    POP_HIGH,
+    POP_LOW,
     DEFAULT_CONFIG,
     FROM_LIST,
     PLAYED_TOGETHER,
@@ -112,6 +134,7 @@ ORIGINAL_SEED_WEIGHT = 0.3
 FAVOURITE_FACTOR = 1.5
 SKIP_ARTIST_FACTOR = 0.3
 SKIP_GENRE_FACTOR = 0.6
+
 
 # List-mode similarity weights (§2.2 list mode, step 2).
 LIST_SAME_ARTIST = 1.5
@@ -175,25 +198,110 @@ def drift_weights(recent_listened: Sequence[int], original: int | None) -> list[
     return list(out.items())
 
 
-def affinity(stats: TrackStats | None) -> float:
-    """``1 + 0.1·min(finished, 10)``, minus ``0.3·skip rate`` from 3 plays."""
+def affinity(stats: TrackStats | None, step: float = AFFINITY_STEP) -> float:
+    """``1 + 0.1·min(finished, 10)``, minus ``0.3·skip rate`` from 3 plays.
+    (``step`` is the 0.1: the Music mix's Favorites end raises it.)"""
     if stats is None:
         return 1.0
-    a = 1.0 + 0.1 * min(stats.finished, 10)
+    a = 1.0 + step * min(stats.finished, 10)
     if stats.plays >= 3:
         a -= 0.3 * (stats.skipped / stats.plays)
     return max(a, 0.05)
 
 
-def score(track: Track, stats: Mapping[int, TrackStats], taste: Taste) -> float:
+def freshness(stats: TrackStats | None, lo: float = FRESH_MIN, hi: float = FRESH_MAX) -> float:
+    """The freshness weight (constants in :mod:`.model`): ``lo`` for a song
+    heard just now up to ``hi`` for one not heard in ``FRESH_FULL_DAYS``
+    (or never), less a little for many plays. ``lo``/``hi`` come from the
+    Music mix (:mod:`.mix`); the middle step is ``FRESH_MIN``/``FRESH_MAX``."""
+    if stats is None or stats.last_days is None:
+        f = hi
+    else:
+        d = min(max(float(stats.last_days), 0.0), FRESH_FULL_DAYS)
+        x = math.log1p(d) / math.log1p(FRESH_FULL_DAYS)
+        f = lo + (hi - lo) * x
+    if stats is not None and stats.plays:
+        f *= 1.0 - FRESH_PLAY_STEP * min(stats.plays, FRESH_PLAY_CAP)
+    return max(f, FRESH_FLOOR)
+
+
+def popularity_factor(p: float | None) -> float:
+    """``POP_LOW``..``POP_HIGH`` by the song's standing among its artist's
+    songs (0..1); 1.0 without a figure."""
+    if p is None:
+        return 1.0
+    return POP_LOW + (POP_HIGH - POP_LOW) * min(max(float(p), 0.0), 1.0)
+
+
+def score(
+    track: Track,
+    stats: Mapping[int, TrackStats],
+    taste: Taste,
+    popularity: Mapping[int, float] | None = None,
+    *,
+    config: EngineConfig = DEFAULT_CONFIG,
+) -> float:
     s = FAVOURITE_FACTOR if track.favorite else 1.0
-    s *= affinity(stats.get(track.id))
+    st = stats.get(track.id)
+    s *= affinity(st, config.affinity_step)
+    if config.freshness:
+        s *= freshness(st, config.fresh_min, config.fresh_max)
+    if popularity:
+        s *= popularity_factor(popularity.get(track.id))
     if track.artist_norm:
         s *= taste.artist_factor.get(track.artist_norm, 1.0)
     g = track.primary_genre
     if g:
         s *= taste.genre_factor.get(g, 1.0)
     return s
+
+
+#: A scoring factor counts as a reason only from this much (×1.12 up).
+WHY_MIN_FACTOR = 1.12
+
+
+def why_signals(
+    pick: Pick,
+    track: Track,
+    *,
+    stats: Mapping[int, TrackStats],
+    popularity: Mapping[int, float] | None,
+    config: EngineConfig,
+    seed_roles: Mapping[int, str] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """The pick's reasons, from the real scoring: first what made it a
+    candidate (its bucket, and which seed: ``last`` = the song just heard,
+    ``start`` = the song the session started from, ``recent``, ``list``),
+    then the scoring factor that lifted it most, when one lifted it by
+    ``WHY_MIN_FACTOR`` or more: a favourite, often played, not played in a
+    while (only when there is listening history to say so), or one of its
+    artist's best-known songs."""
+    role = (seed_roles or {}).get(pick.seed_track_id, "recent") if pick.seed_track_id is not None else ""
+    code = pick.reason_code
+    if code in (SAME_ARTIST,):
+        first = (code, role)
+    elif code in (SAME_ERA, SAME_GENRE, PLAYED_TOGETHER):
+        first = (code, f"{pick.reason_label}|{role}")
+    else:
+        first = (code, pick.reason_label)
+    st = stats.get(track.id)
+    factors: list[tuple[float, tuple[str, str]]] = []
+    if track.favorite:
+        factors.append((FAVOURITE_FACTOR, ("favorite", "")))
+    a = affinity(st, config.affinity_step)
+    if st is not None and a >= WHY_MIN_FACTOR:
+        factors.append((a, ("plays_often", str(st.finished))))
+    if config.freshness and stats:  # no history at all: nothing to say
+        f = freshness(st, config.fresh_min, config.fresh_max)
+        if f >= WHY_MIN_FACTOR:
+            days = "" if st is None or st.last_days is None else str(int(st.last_days))
+            factors.append((f, ("not_played", days)))
+    if popularity:
+        pf = popularity_factor(popularity.get(track.id))
+        if pf >= WHY_MIN_FACTOR:
+            factors.append((pf, ("well_known", "")))
+    factors.sort(key=lambda x: -x[0])
+    return (first, factors[0][1]) if factors else (first,)
 
 
 def _near_era(seed: Track, t: Track, years: int) -> bool:
@@ -423,10 +531,12 @@ def library_batch(
     prefer_together_seeds: Collection[int] = (),
     similar: Mapping[int, str] | None = None,
     stats: Mapping[int, TrackStats] | None = None,
+    popularity: Mapping[int, float] | None = None,
     last_heard: Mapping[int, datetime] | None = None,
     session_picked: Sequence[int] = (),
     taste: Taste = Taste(),
     prev_keys: Sequence[str] = (),
+    seed_roles: Mapping[int, str] | None = None,
     config: EngineConfig = DEFAULT_CONFIG,
 ) -> list[Pick]:
     """A library-mode (or continue-mode) batch; see the module docstring.
@@ -437,7 +547,8 @@ def library_batch(
     sample, None = every candidate. ``together``: seed id -> {track id:
     label}. ``prefer_together_seeds``: continue mode's list tracks, whose
     neighbours the together bucket takes first. ``similar``: track id ->
-    ``similar to <artist>`` label (P7; empty until then).
+    ``similar to <artist>`` label (P7: read from the ``artist_similarity``
+    cache, never the network). ``popularity``: track id -> 0..1 (P7).
     """
     stats = stats or {}
     together = together or {}
@@ -497,7 +608,7 @@ def library_batch(
     def weight_of(t: Track) -> float:
         w = weight_cache.get(t.id)
         if w is None:
-            w = weight_cache[t.id] = score(t, stats, taste)
+            w = weight_cache[t.id] = score(t, stats, taste, popularity, config=config)
         return w
 
     used: set[int] = set()
@@ -543,6 +654,9 @@ def library_batch(
                 break
             picks.append(p)
 
+    picks = [replace(p, why=why_signals(p, by_id[p.track_id], stats=stats, popularity=popularity,
+                                        config=config, seed_roles=seed_roles))
+             for p in picks]
     # Drawn bucket by bucket; heard mixed (then spaced).
     rng.shuffle(picks)
     key_of = {t.id: t.spacing_key for t in eligible}
@@ -617,6 +731,7 @@ def list_batch(
     state: ListCycle,
     seeds: Sequence[tuple[Track, float]],
     stats: Mapping[int, TrackStats] | None = None,
+    popularity: Mapping[int, float] | None = None,
     taste: Taste = Taste(),
     autoplay: bool = True,
     label: str = "from this list",
@@ -666,7 +781,8 @@ def list_batch(
         # Tail tracks may only take places at or past the boundary.
         tail_room = max(0, d + k - boundary)
 
-        weights = [list_weight(t, seeds, config.era_years) * score(t, stats, taste) for t in pool]
+        weights = [list_weight(t, seeds, config.era_years) * score(t, stats, taste, popularity, config=config)
+                   for t in pool]
         order = es_order(pool, weights, rng)
         k_w = int(round(config.list_weighted_share * k))
         chosen: list[Track] = []
@@ -706,7 +822,9 @@ def list_batch(
                 break
             batch_ids.add(t.id)
             taken.append(t.id)
-            picks.append(Pick(t.id, FROM_LIST, label, seed_track_id))
+            p = Pick(t.id, FROM_LIST, label, seed_track_id)
+            picks.append(replace(p, why=why_signals(p, t, stats=stats, popularity=popularity,
+                                                    config=config)))
         st = ListCycle(cycle=st.cycle, done=(*st.done, *taken), tail=st.tail)
         if stop or not taken:
             break

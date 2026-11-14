@@ -177,7 +177,7 @@ async def test_playlist_together(db_session):
     assert hits == {1: {2: "from road trip", 3: "from road trip"},
                     3: {1: "from road trip", 2: "from road trip", 50: "from late"}}
     assert {t.id for t in tracks} == {1, 2, 3, 50}
-    assert await D.SqlLibrary(db_session).similar([Track(1)]) == {}  # P7 hook
+    assert await D.SqlLibrary(db_session).similar([Track(1)]) == {}  # nothing stored: no signal
 
 
 # ─── MusicListens ─────────────────────────────────────────────────────────
@@ -213,10 +213,14 @@ async def test_stats_personal_and_household(listens_table):
     await add_listen(db, 1, at=NOW - timedelta(days=200), person=alex, room="kitchen")  # outside 90 d
     await add_listen(db, 2, at=NOW - timedelta(days=1), device="ph", outcome="skipped", played=5)
     src = D.MusicListens(db)
-    assert await src.stats(D.Scope("room:kitchen", alex), [1, 2], now=NOW) == {1: TrackStats(3, 3, 0)}
-    assert await src.stats(D.Scope("device:ph", sam), [1, 2], now=NOW) == {1: TrackStats(0, 1, 1)}
+    # last_days: days since the same people last heard it, within a year
+    # (the freshness weight); the 200-day-old listen counts there only.
+    assert await src.stats(D.Scope("room:kitchen", alex), [1, 2], now=NOW) == {1: TrackStats(3, 3, 0, 1.0)}
+    assert await src.stats(D.Scope("device:ph", sam), [1, 2], now=NOW) == {1: TrackStats(0, 1, 1, 2.0)}
     house = await src.stats(D.Scope("room:kitchen", None), [1, 2], now=NOW)
-    assert house == {1: TrackStats(3, 4, 1), 2: TrackStats(0, 1, 1)}
+    assert house == {1: TrackStats(3, 4, 1, 1.0), 2: TrackStats(0, 1, 1, 1.0)}
+    old_only = await src.stats(D.Scope("room:kitchen", alex), [1], now=NOW + timedelta(days=150))
+    assert old_only == {1: TrackStats(0, 0, 0, 151.0)}
 
 
 async def test_last_heard_scope(listens_table):

@@ -170,6 +170,9 @@ class _Event:
     start: datetime          # wall clock, naive
     end: datetime | None
     all_day: bool
+    # A private event a phone shared as busy (no title): read as a busy
+    # time, never as an event called "Busy".
+    busy: bool = False
 
 
 def _and_join(items: list[str]) -> str:
@@ -180,8 +183,22 @@ def _and_join(items: list[str]) -> str:
     return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 
+def _busy_span(e: _Event) -> str:
+    """"busy from 3 PM to 4 PM", "busy all day", "busy at 3 PM"."""
+    if e.all_day:
+        return "busy all day"
+    if e.end is not None and e.end > e.start:
+        return f"busy from {spoken_clock(e.start)} to {spoken_clock(e.end)}"
+    return f"busy at {spoken_clock(e.start)}"
+
+
 def _item(e: _Event) -> str:
-    """"Dentist at 10 AM", "Mom's birthday, all day"."""
+    """"Dentist at 10 AM", "Mom's birthday, all day", and a private event
+    "a busy time from 3 PM to 4 PM"."""
+    if e.busy:
+        if e.all_day:
+            return "a busy day"
+        return "a busy time " + _busy_span(e)[len("busy "):]
     title = " ".join(e.title.split()) or "something"
     if e.all_day:
         return f"{title}, all day"
@@ -280,17 +297,23 @@ class CalendarHandler(Handler):
     ) -> list[_Event]:
         """Events starting in [start, end) on the household wall clock."""
         params: dict[str, Any] = {"start": household_time.to_utc(start), "limit": limit}
-        where = "starts_at >= :start"
+        where = "e.starts_at >= :start"
         if end is not None:
-            where += " AND starts_at < :end"
+            where += " AND e.starts_at < :end"
             params["end"] = household_time.to_utc(end)
+        # One event in two calendars (two phones sharing a family calendar,
+        # same iCalendar UID and start) is said once.
+        where += (
+            " AND NOT EXISTS (SELECT 1 FROM calendar_events o WHERE e.ical_uid IS NOT NULL"
+            " AND o.ical_uid = e.ical_uid AND o.starts_at = e.starts_at AND o.id < e.id)"
+        )
         rows = await session.execute(
             text(
                 f"""
-                SELECT title, starts_at, ends_at, all_day
-                FROM calendar_events
+                SELECT e.title, e.starts_at, e.ends_at, e.all_day, e.busy
+                FROM calendar_events e
                 WHERE {where}
-                ORDER BY starts_at ASC, id ASC
+                ORDER BY e.starts_at ASC, e.id ASC
                 LIMIT :limit
                 """
             ),
@@ -302,6 +325,7 @@ class CalendarHandler(Handler):
                 start=household_time.to_local(r[1]),
                 end=household_time.to_local(r[2]) if r[2] is not None else None,
                 all_day=bool(r[3]),
+                busy=bool(r[4]),
             )
             for r in rows.all()
         ]
@@ -320,6 +344,8 @@ class CalendarHandler(Handler):
                 items.append(f"{more} more")
             lead = _capitalized(span.said)
             if len(events) == 1:
+                if events[0].busy:
+                    return f"{lead} you're {_busy_span(events[0])}."
                 return f"{lead} you have {items[0]}."
             return f"{lead} you have {len(events)} things: {_and_join(items)}."
         # Several days: grouped by day, each named.
@@ -364,7 +390,10 @@ class CalendarHandler(Handler):
         text_ = f"Nothing on the calendar {span.said}."
         nxt = await self._events(session, max(span.end, now), span.end + timedelta(days=7), limit=1)
         if nxt:
-            text_ += f" The next thing is {_item(nxt[0])} {self._day_of(nxt[0], now)}."
+            if nxt[0].busy:
+                text_ += f" Next, you're {_busy_span(nxt[0])} {self._day_of(nxt[0], now)}."
+            else:
+                text_ += f" The next thing is {_item(nxt[0])} {self._day_of(nxt[0], now)}."
         return text_
 
     @staticmethod
@@ -377,6 +406,8 @@ class CalendarHandler(Handler):
         if not events:
             return self._reply(ctx, "Nothing coming up on the calendar.")
         e = events[0]
+        if e.busy:
+            return self._reply(ctx, f"Next on the calendar: you're {_busy_span(e)} {self._day_of(e, now)}.")
         return self._reply(ctx, f"Next on the calendar: {_item(e)} {self._day_of(e, now)}.")
 
     async def _anything(
