@@ -617,13 +617,22 @@ class MusicQueueMixin:
             seed = None
             if st is not None and cur_id is not None:
                 row = (await s.execute(
-                    text("SELECT reason_code, reason_label, seed_track_id FROM up_next_picks "
+                    text("SELECT reason_code, reason_label, seed_track_id, why FROM up_next_picks "
                          "WHERE session_id = :s AND mpd_song_id = :m ORDER BY seq DESC LIMIT 1"),
                     {"s": st.sess.id, "m": int(cur_id)})).mappings().first()
                 pick = dict(row) if row is not None else None
                 if pick is not None and pick["seed_track_id"] is not None:
                     seed = await service.track_row(s, int(pick["seed_track_id"]))
-        return self._q_reply(ctx, why_text(pick, seed, st))
+        answer = why_text(pick, seed, st)
+        if pick is not None:
+            # The scoring factor that lifted it most, when one did (the
+            # same stored signals the queue's "why" shows).
+            from domovoi.up_next.why import factor_text
+
+            extra = factor_text(service._why_list(pick.get("why")))
+            if extra:
+                answer = f"{answer} {extra[0].upper()}{extra[1:]}."
+        return self._q_reply(ctx, answer)
 
     # ── more like this ──
     async def more_like_this(self, ctx: Context, session: AsyncSession) -> Response:

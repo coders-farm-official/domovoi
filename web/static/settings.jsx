@@ -5646,7 +5646,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'media-folders', 'printers'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'media-folders', 'music-mix', 'printers'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -5672,6 +5672,10 @@ const SETTINGS_SECTIONS = [
   { id: 'media-folders', label: 'Media folders', optional: true,
     sub: 'Where your music, videos, pictures, documents, audiobooks and podcasts are kept, and moving them.',
     words: 'media folder folders music videos pictures photos documents audiobooks podcasts path paths directory location where drive move explorer open copy' },
+  // music_mix.jsx registers it (2026-11-14): how Up next picks songs.
+  { id: 'music-mix', label: 'Music mix', optional: true, aliases: ['mix', 'up-next'],
+    sub: 'How Up next picks the songs that follow: discovery or favorites, close or wandering, autoplay, repeats, similar artists.',
+    words: 'music mix up next autoplay shuffle discovery favorites favourites wander similar artists popularity listenbrainz repeats radio station' },
   { id: 'printers', label: 'Printers & scanners', optional: true,
     sub: 'Printers and scanners on your network.',
     words: 'printer printers print printing scanner scanners scan scanning ink toner paper' },
@@ -5729,6 +5733,7 @@ const SETTINGS_SEARCH_ITEMS = [
   { label: 'Who may edit a room’s queue', section: 'phones-and-browsers', mark: 'queue-access', words: 'queue access block' },
   { label: 'Guest access', section: 'phones-and-browsers', mark: 'guest-access', words: 'guest guests visitor' },
   { label: 'Files access', section: 'phones-and-browsers', mark: 'files-access', words: 'files documents' },
+  { label: 'Your own music mix', section: 'people', mark: 'music-mix', words: 'music mix person own discovery favorites wander' },
   { label: 'Network name', section: 'advanced', mark: 'network-name', words: 'network name local domovoi.local mdns hostname address' },
   { label: 'Updates', section: 'about', mark: 'updates', words: 'update check pull restart version channel' },
   { label: 'User manual', section: 'about', mark: 'manual', words: 'manual help guide' },

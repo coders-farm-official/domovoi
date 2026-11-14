@@ -99,4 +99,16 @@ def why_text(why: Iterable[Sequence[Any]] | None) -> str | None:
     return " · ".join(parts) or None
 
 
-__all__ = ["why_text"]
+def factor_text(why: Iterable[Sequence[Any]] | None) -> str | None:
+    """Just the lifting factor (the second signal), for a spoken answer
+    that words the first one itself; None when there is none."""
+    items = list(why or ())
+    if len(items) < 2:
+        return None
+    try:
+        return _factor(str(items[1][0]), str(items[1][1] if len(items[1]) > 1 else ""))
+    except (TypeError, IndexError):
+        return None
+
+
+__all__ = ["factor_text", "why_text"]

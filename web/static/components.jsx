@@ -157,6 +157,31 @@ const Pill = ({ tone = 'idle', live = false, children }) => (
   </span>
 );
 
+/* ---- Up next: a pick's reason chip, with "why this song?" ---------
+ * `label` is the short reason chip ("same artist", "90s"); `why` is the
+ * plain sentence the server built from the signals the picker really used
+ * ("same artist as the last song · not played in 4 months"). With a `why`
+ * the chip is a button that shows or hides that line under the row; it
+ * never starts the row's own action (play now). No `why` (an older pick):
+ * just the chip. */
+const UpNextWhy = ({ label, why, className = 'mp-un-why' }) => {
+  const [open, setOpen] = React.useState(false);
+  if (!label && !why) return null;
+  if (!why) return <span className={className}>{label}</span>;
+  const stop = (e) => { if (e && e.stopPropagation) e.stopPropagation(); };
+  return (
+    <>
+      <button type="button" className={`${className} un-why-btn`} aria-expanded={open}
+              title="why this song?" aria-label={`why this song? ${label || ''}`.trim()}
+              onClick={(e) => { stop(e); setOpen((v) => !v); }}
+              onKeyDown={stop}>
+        {label || 'why?'}
+      </button>
+      {open && <span className="un-why-line" role="note">{why}</span>}
+    </>
+  );
+};
+
 /* ---- Preview tag -------------------------------------------- */
 /* "preview" beside something that ships with 1.0 but isn't yet held to its
    promise (owner decision 2, 2026-10-16): the Windows installer, the phone's

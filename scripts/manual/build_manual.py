@@ -78,6 +78,7 @@ ROUTES: dict[str, dict] = {
     "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
     # Listening history (2026-11-12): the app has no tab for it yet.
     "settings/listening-history": {"dashboard": "#settings/listening-history", "app": {"dashboard": True}},
+    "settings/music-mix": {"dashboard": "#settings/music-mix", "app": {"dashboard": True}},
     "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
     "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
     # the app's own: plain text on the dashboard

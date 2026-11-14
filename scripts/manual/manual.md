@@ -525,6 +525,25 @@ browser, and in a room.
   [Settings → Household → Rooms](#settings/rooms) shows its next three under now
   playing, with **open queue**. Guests can play a song now, move and
   remove, but not switch autoplay or use less like this.
+- **Up next leans a little toward songs you haven't heard in a while.**
+  Songs you play a lot still come up, just not every time.
+- **Why this song?** Tap the reason beside an Up next song (in the
+  **Queue** panel or [Music → Room queue](#music/queue)) to see why it was
+  picked, in plain words: "same artist as the last song · not played in 4
+  months". In a room, ask "why is this playing".
+- **The Music mix:** [Settings → Household → Music mix](#settings/music-mix)
+  sets how Up next picks for the whole house: **Discovery** or
+  **Favorites**, **Stay close** or **Wander** (the middle of each is the
+  default), **Autoplay when a playlist ends**, and **No repeats within**
+  so many songs. Each person can have their own mix: open them in
+  [Settings → Household → People](#settings/people), **Profile** → **music
+  mix**.
+- **Similar artists and popularity from the internet** (optional, in the
+  Music mix): with them on, Up next can add songs you have by artists like
+  the one playing, and lean a little toward an artist's best-known songs.
+  Only your songs' and artists' MusicBrainz ids go to ListenBrainz, in the
+  background; Up next never waits for the internet, and without them it
+  works from your library alone.
 - **Listening history** is what Up next learns from: a song heard to its
   end counts toward more like it, one skipped early counts against it
   (only time actually heard counts, not pauses or skipping ahead). Each

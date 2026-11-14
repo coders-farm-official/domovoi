@@ -132,6 +132,7 @@ const itemFromTrack = (t) => ({
  *                purpose) | 'auto' (an Up next pick)
  *   upNextSeq    the pick's number in its session
  *   reasonLabel  why it was picked ("same artist", "90s", "from road trip")
+ *   why          the same in a plain sentence, from the picker's real signals
  *   sessionId    the session the song belongs to (the listening history
  *                carries it back, which is how skips and finishes feed it)
  * The queue panels show auto items in their own "up next" section
@@ -152,7 +153,7 @@ const _upNextSetAutoplayPref = (on) => {
 const itemFromPick = (pick, sessionId) => Object.assign(
   itemFromTrack({ id: pick.track_id, title: pick.title, artist: pick.artist, album: pick.album,
                   duration_sec: pick.duration_sec }),
-  { origin: 'auto', upNextSeq: pick.seq, reasonLabel: pick.reason_label || '', sessionId });
+  { origin: 'auto', upNextSeq: pick.seq, reasonLabel: pick.reason_label || '', why: pick.why || '', sessionId });
 /* Up next's calls that nobody pressed a button for (the start that rides
  * on a play, a refill, a removed pick): `noPrompt`, so a refused sign-in
  * never opens a prompt over the music. */
@@ -2861,7 +2862,7 @@ const PlayerUpNextHere = ({ p }) => {
                 <div className="mp-q-title">{row.it.title}</div>
                 <div className="mp-un-sub">
                   <span className="mp-q-sub mono">{row.it.artist || '—'}</span>
-                  {row.it.reasonLabel && <span className="mp-un-why">{row.it.reasonLabel}</span>}
+                  <UpNextWhy label={row.it.reasonLabel} why={row.it.why}/>
                 </div>
               </div>
               <div className="mp-un-acts">
@@ -2976,7 +2977,7 @@ const RoomUpNext = ({ roomId, limit = null, onOpenQueue = null, send = null, cla
                 <div className="mp-q-title">{it.title || 'unknown'}</div>
                 <div className="mp-un-sub">
                   <span className="mp-q-sub mono">{it.artist || '—'}</span>
-                  {it.reason_label && <span className="mp-un-why">{it.reason_label}</span>}
+                  <UpNextWhy label={it.reason_label} why={it.why}/>
                 </div>
               </div>
               {editable && (

@@ -29,7 +29,7 @@ from domovoi.up_next.model import (
     TrackStats,
 )
 from domovoi.up_next.pick import library_batch, why_signals
-from domovoi.up_next.why import why_text
+from domovoi.up_next.why import factor_text, why_text
 
 NOW = datetime(2026, 11, 14, 20, 0, tzinfo=timezone.utc)
 
@@ -122,6 +122,8 @@ def test_why_words():
     assert why_text([["similar_artist", "similar to radiohead"]]) == "by an artist like radiohead"
     assert why_text([["wildcard", "wildcard"], ["not_played", ""]]) == "a wildcard from your library · not played in a long time"
     assert why_text(None) is None and why_text([["bogus", "x"]]) is None
+    assert factor_text([["same_artist", "last"], ["plays_often", "5"]]) == "you play this often"
+    assert factor_text([["same_artist", "last"]]) is None
 
 
 def test_every_library_pick_carries_its_why():

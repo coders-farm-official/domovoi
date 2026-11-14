@@ -269,6 +269,12 @@
     "dashboard": true
    }
   },
+  "settings/music-mix": {
+   "dashboard": "#settings/music-mix",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/health": {
    "dashboard": "#settings/health",
    "app": {
@@ -1739,6 +1745,18 @@
       {
        "text": "The room's picks show in [Music → Room queue](route:music/queue) under **up next**, each with why it was picked, with the room's **autoplay** switch and **less like this**; while you play in a room the player's **Queue** shows the room's up next; and a room's page in [Settings → Household → Rooms](route:settings/rooms) shows its next three under now playing, with **open queue**. Guests can play a song now, move and remove, but not switch autoplay or use less like this.",
        "only": "dashboard"
+      },
+      {
+       "text": "**Up next leans a little toward songs you haven't heard in a while.** Songs you play a lot still come up, just not every time."
+      },
+      {
+       "text": "**Why this song?** Tap the reason beside an Up next song (in the **Queue** panel or [Music → Room queue](route:music/queue)) to see why it was picked, in plain words: \"same artist as the last song · not played in 4 months\". In a room, ask \"why is this playing\"."
+      },
+      {
+       "text": "**The Music mix:** [Settings → Household → Music mix](route:settings/music-mix) sets how Up next picks for the whole house: **Discovery** or **Favorites**, **Stay close** or **Wander** (the middle of each is the default), **Autoplay when a playlist ends**, and **No repeats within** so many songs. Each person can have their own mix: open them in [Settings → Household → People](route:settings/people), **Profile** → **music mix**."
+      },
+      {
+       "text": "**Similar artists and popularity from the internet** (optional, in the Music mix): with them on, Up next can add songs you have by artists like the one playing, and lean a little toward an artist's best-known songs. Only your songs' and artists' MusicBrainz ids go to ListenBrainz, in the background; Up next never waits for the internet, and without them it works from your library alone."
       },
       {
        "text": "**Listening history** is what Up next learns from: a song heard to its end counts toward more like it, one skipped early counts against it (only time actually heard counts, not pauses or skipping ahead). Each person's listening is kept apart once their phone or browser says **this is me**; clearing it, or not keeping it at all, is under [What's kept, and forgetting](node:kept)."

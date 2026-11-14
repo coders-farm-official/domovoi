@@ -1544,23 +1544,6 @@ class Settings(BaseSettings):
     music_alias_fetch_enabled: bool = False
     # The fetch worker's cadence (it looks up a small batch per tick).
     music_alias_fetch_interval_sec: float = 30.0
-    # ─── ListenBrainz for Up next (V056; workers/listenbrainz_fetch.py) ──
-    # Two switches, each off while the internet question is unanswered;
-    # otherwise their defaults follow the answer (PROFILE_DEFAULTS) and a
-    # hand-set value wins. Both send only MusicBrainz ids (public catalogue
-    # ids) of the library's artists or songs to listenbrainz.org, about a
-    # request a second, only while the server is online, from the
-    # background worker alone: building a queue never asks the network.
-    # Switching one off stops its requests and deletes what it stored, so
-    # the mix is the library's own again.
-    #   similar artists: one request per library artist with an id, asked
-    #     again after 90 days ("similar to <artist>" picks).
-    #   popularity: listen counts for songs with a recording id, 100 songs
-    #     a request, asked again after 30 days (an artist's well-known
-    #     songs come up a little more often).
-    music_similar_artists_enabled: bool = False
-    music_popularity_enabled: bool = False
-    listenbrainz_fetch_interval_sec: float = 60.0
     # ─── Lyrics (V021; domovoi/lyrics/, workers/lyrics_scan.py, lyrics_fetch.py) ──
     # Lyrics come from a .lrc next to the song (same name, any case), then from
     # the song's own tags — read from the files every few minutes; nothing
@@ -1578,6 +1561,23 @@ class Settings(BaseSettings):
     lyrics_scan_interval_sec: float = 300.0
     # The LRCLIB worker's cadence (a small batch per tick, ~1 request/s).
     lyrics_fetch_interval_sec: float = 5.0
+    # ─── ListenBrainz for Up next (V056; workers/listenbrainz_fetch.py) ──
+    # Two switches, each off while the internet question is unanswered;
+    # otherwise their defaults follow the answer (PROFILE_DEFAULTS) and a
+    # hand-set value wins. Both send only MusicBrainz ids (public catalogue
+    # ids) of the library's artists or songs to listenbrainz.org, about a
+    # request a second, only while the server is online, from the
+    # background worker alone: building a queue never asks the network.
+    # Switching one off stops its requests and deletes what it stored, so
+    # the mix is the library's own again.
+    #   similar artists: one request per library artist with an id, asked
+    #     again after 90 days ("similar to <artist>" picks).
+    #   popularity: listen counts for songs with a recording id, 100 songs
+    #     a request, asked again after 30 days (an artist's well-known
+    #     songs come up a little more often).
+    music_similar_artists_enabled: bool = False
+    music_popularity_enabled: bool = False
+    listenbrainz_fetch_interval_sec: float = 60.0
 
     # ─── Session context ───────────────────────────────────────────────
     session_recent_turns_cap: int = 20

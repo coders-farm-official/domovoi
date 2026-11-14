@@ -1880,8 +1880,9 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
                                                  overflow: 'hidden', textOverflow: 'ellipsis',
                                                  whiteSpace: 'nowrap' }}>
                     {item.artist || 'unknown artist'}
-                    {item.origin === 'auto' && item.reason_label && (
-                      <span className="rq-why"> · {item.reason_label}</span>
+                    {item.origin === 'auto' && (item.reason_label || item.why) && (
+                      <span className="rq-why"> · <UpNextWhy className="rq-why-chip" label={item.reason_label}
+                                                              why={item.why}/></span>
                     )}
                     {item.added_by && (
                       <span style={{ color: 'var(--fg-faint)' }}> · added by {item.added_by}</span>

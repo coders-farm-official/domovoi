@@ -470,7 +470,7 @@ def test_the_editor_is_a_settings_tab_of_its_own(driven) -> None:
     # Settings → System → App layout (the phone bar's editor; it was in
     # Rooms & devices, now Household, until 2026-11-09).
     tabs = driven["settings_on_satellites"]["tabs"]
-    assert tabs == ["rooms", "people", "phones-and-browsers", "media-folders", "printers"]
+    assert tabs == ["rooms", "people", "phones-and-browsers", "media-folders", "music-mix", "printers"]
     assert "app-layout" in driven["settings_on_satellites"]["system"]
     settings = _src("settings.jsx")
     panel = settings[settings.index("const PhoneBarPanel"):]

@@ -755,6 +755,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   podcast_feed_poller → audiobook_indexer → room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard →
+    #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
     #   library_tag_backfill → library_year_fetch.
     #
@@ -828,10 +829,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.container_guard import ContainerGuardWorker
 
     WORKERS.add_worker(ContainerGuardWorker(), owner="core")
-    # Opt-in (off by default) MusicBrainz "also called" names for the
-    # library's artists; self-gated per tick on music_alias_fetch_enabled
-    # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
-    WORKERS.add_worker(LibraryAliasFetcher(), owner="core")
     # Up next P7 (V056): similar artists and song popularity from
     # ListenBrainz, each behind its own switch, the internet answer and the
     # probe; the ONLY code that asks ListenBrainz (the picker reads the
@@ -839,6 +836,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.listenbrainz_fetch import ListenBrainzFetch
 
     WORKERS.add_worker(ListenBrainzFetch(), owner="core")
+    # Opt-in (off by default) MusicBrainz "also called" names for the
+    # library's artists; self-gated per tick on music_alias_fetch_enabled
+    # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
+    WORKERS.add_worker(LibraryAliasFetcher(), owner="core")
     # Lyrics (V021): the local scan reads .lrc files and the songs' own tags;
     # the opt-in LRCLIB fetch is self-gated per tick on lyrics_lrclib_enabled,
     # INTERNET_ACCESS and the probe, and saves Domovoi-marked .lrc files.
