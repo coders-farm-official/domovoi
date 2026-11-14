@@ -23,12 +23,18 @@ import Observation
 /// * **`cover_color`** is read and shown, never edited. Android's edit form is
 ///   name, description and emoji only (`PlaylistDrawer.kt:271-295`), and the
 ///   colour arrives from whatever created the playlist.
-/// * **Removing a track from the virtual Favorites** goes through the library
-///   row's favourite flag, not through here — that is
-///   ``MusicModel/toggleFavorite(_:)``. Android's drawer draws its `remove`
-///   button for Favorites too (`PlaylistDrawer.kt:364`), where it sends
-///   `DELETE /api/playlists/0/tracks/{id}`; the server's own guard list
-///   (`playlists.py:467`) is why that is not ported.
+/// * **Removing a track from the virtual Favorites** is offered, as on
+///   Android (`PlaylistDrawer.kt`): `DELETE /api/playlists/0/tracks/{id}`
+///   unfavourites the song (`playlists.py` remove_track_from_playlist). The
+///   earlier note here said the server refused it; it does not.
+///
+/// ### A playlist made from the music files (V058)
+///
+/// `"imported": true`: the files own it and every write is a 409. So
+/// ``mayEdit`` and ``mayRemove`` are false, ``copy()`` is offered instead,
+/// and a 409 from any write (a flag that was stale when the sheet opened)
+/// is said in the server's words and re-reads the list
+/// (``MusicPlaylistReadOnly``).
 @MainActor
 @Observable
 public final class MusicPlaylistDetailModel {
@@ -69,6 +75,21 @@ public final class MusicPlaylistDetailModel {
     /// Set when the playlist is gone from the server, so the screen closes the
     /// sheet rather than leaving it open over nothing.
     public private(set) var deleted = false
+
+    /// The household copy ``copy()`` made of a playlist from the music files.
+    /// Set once the server answered; the screen then says ``toast`` in the
+    /// shell and closes the sheet (``closing``, `PlaylistDrawer.kt` copy).
+    public private(set) var copied: Playlist?
+
+    /// Whether the sheet should close: the playlist is gone, or a copy of it
+    /// was made.
+    public var closing: Bool { deleted || copied != nil }
+
+    /// Re-read the playlists list behind this sheet. Called after a copy and
+    /// after a 409 (a stale `imported` flag), the two answers that change
+    /// that list without a write this phone knows about; the screen sets it
+    /// (`PlaylistDrawer.kt` refreshPlaylists).
+    public var listChanged: @MainActor () -> Void = {}
 
     public private(set) var toast: String?
 
@@ -116,8 +137,19 @@ public final class MusicPlaylistDetailModel {
 
     public var isFirstLoad: Bool { read.data == nil && read.loading }
 
-    /// Whether this playlist can be edited, reordered or deleted at all.
-    public var mayEdit: Bool { !playlist.isVirtual }
+    /// Whether this playlist can be edited, reordered or deleted at all:
+    /// neither Favorites nor one made from the music files
+    /// (``Playlist/editable``, `PlaylistDrawer.kt`).
+    public var mayEdit: Bool { playlist.editable }
+
+    /// Whether a song can be taken out of it. Favorites too — the server
+    /// unfavourites the song (`playlists.py` remove_track_from_playlist), as
+    /// Android's drawer does — but never a playlist the music files own.
+    public var mayRemove: Bool { !playlist.imported }
+
+    /// Whether "Copy to a new playlist" is offered: only for one made from
+    /// the music files, which is how it is changed (`PlaylistDrawer.kt`).
+    public var mayCopy: Bool { playlist.imported && !playlist.isVirtual }
 
     /// Whether an edit may be sent right now. One at a time, as
     /// ``MusicQueueModel/busy`` is: two reorders racing each other produce an
@@ -154,15 +186,19 @@ public final class MusicPlaylistDetailModel {
 
     /// What to say over an empty track list — the second line differs for
     /// Favorites, because the way to fill it is different
-    /// (`PlaylistDrawer.kt:313`).
-    public var emptyNote: (String, String)? {
+    /// (`PlaylistDrawer.kt:313`), and absent for one made from the music
+    /// files, which nothing can be added to.
+    public var emptyNote: (String, String?)? {
         guard read.answered, tracks.isEmpty, read.error == nil else { return nil }
-        return (
-            MusicMoreStrings.noTracksYet,
-            playlist.isVirtual
-                ? MusicMoreStrings.favoriteATrackToAddIt
-                : MusicMoreStrings.tapPlusToAddTracks
-        )
+        let hint: String?
+        if playlist.isVirtual {
+            hint = MusicMoreStrings.favoriteATrackToAddIt
+        } else if playlist.imported {
+            hint = nil
+        } else {
+            hint = MusicMoreStrings.tapPlusToAddTracks
+        }
+        return (MusicMoreStrings.noTracksYet, hint)
     }
 
     // MARK: - lifecycle
@@ -282,7 +318,9 @@ public final class MusicPlaylistDetailModel {
                 self.editing = false
                 self.say(MusicMoreStrings.playlistUpdated)
             } catch let trouble {
-                self?.say(MusicMoreStrings.updateFailed(trouble.message), failed: true)
+                guard let self else { return }
+                if self.conflicted(trouble) { return }
+                self.say(MusicMoreStrings.updateFailed(trouble.message), failed: true)
             }
         }
         return true
@@ -320,6 +358,7 @@ public final class MusicPlaylistDetailModel {
                 // refused by ``mayWrite``, so `before` is the server's order
                 // or the one previous optimistic step.
                 self.localOrder = before
+                if self.conflicted(trouble) { return }
                 self.say(MusicMoreStrings.reorderFailed(trouble.message), failed: true)
             }
         }
@@ -329,7 +368,7 @@ public final class MusicPlaylistDetailModel {
     /// `DELETE /api/playlists/{id}/tracks/{track_id}`.
     @discardableResult
     public func remove(_ track: LibraryTrack) -> Bool {
-        guard mayEdit, mayWrite else { return false }
+        guard mayRemove, mayWrite else { return false }
         let label = track.displayTitle
         busy = true
         let client = container.client
@@ -344,7 +383,9 @@ public final class MusicPlaylistDetailModel {
                 self.say(MusicMoreStrings.removedFromPlaylist(label, playlist: name))
                 self.read.refresh()
             } catch let trouble {
-                self?.say(MusicMoreStrings.removeFromPlaylistFailed(trouble.message), failed: true)
+                guard let self else { return }
+                if self.conflicted(trouble) { return }
+                self.say(MusicMoreStrings.removeFromPlaylistFailed(trouble.message), failed: true)
             }
         }
         return true
@@ -368,10 +409,78 @@ public final class MusicPlaylistDetailModel {
                 self.say(MusicMoreStrings.deletedPlaylist(name))
                 self.deleted = true
             } catch let trouble {
-                self?.say(MusicMoreStrings.deletePlaylistFailed(trouble.message), failed: true)
+                guard let self else { return }
+                if self.conflicted(trouble) { return }
+                self.say(MusicMoreStrings.deletePlaylistFailed(trouble.message), failed: true)
             }
         }
         return true
+    }
+
+    /// `POST /api/playlists/{id}/copy` for a playlist made from the music
+    /// files: a household playlist with the same songs, in the same order,
+    /// that can be changed (`PlaylistDrawer.kt` copy). On success the toast
+    /// is `copied to “<name>”`, the list behind is re-read and ``copied``
+    /// closes the sheet.
+    @discardableResult
+    public func copy() -> Bool {
+        guard mayCopy, mayWrite else { return false }
+        busy = true
+        let client = container.client
+        let id = playlist.id
+        // Which house this copy is for: an answer landing after a move of
+        // house says nothing here ([[read-after-await-wrong-key]]).
+        let server = container.store.serverURL
+        Task { @MainActor [weak self] in
+            defer { self?.busy = false }
+            do throws(DomovoiError) {
+                let made = try await MusicPlaylistReadOnly.copy(client: client, playlistID: id)
+                guard let self, self.container.store.serverURL == server else { return }
+                self.say(MusicPlaylistReadOnly.copiedText(made))
+                self.listChanged()
+                self.copied = made
+            } catch let trouble {
+                guard let self, self.container.store.serverURL == server else { return }
+                self.say(MusicPlaylistReadOnly.copyFailed(trouble.message), failed: true)
+            }
+        }
+        return true
+    }
+
+    /// A 409 from any write here: the playlist is one the music files own and
+    /// this sheet opened from an older list. Said in the server's words (or
+    /// ``MusicPlaylistReadOnly/readOnlyText``), and the list re-read — the
+    /// tab's, and this sheet's own row, whose flag then hides the controls.
+    /// False for anything that is not a 409, which the caller reports as it
+    /// always has.
+    private func conflicted(_ trouble: DomovoiError) -> Bool {
+        guard let text = MusicPlaylistReadOnly.conflictText(trouble) else { return false }
+        say(text, failed: true)
+        editing = false
+        listChanged()
+        rereadRow()
+        return true
+    }
+
+    /// Read the playlists list again and take this playlist's row from it,
+    /// so a flag the server now reports (`imported`) is the one the sheet
+    /// draws by. Keyed by the server it was asked of.
+    private func rereadRow() {
+        let client = container.client
+        let id = playlist.id
+        let server = container.store.serverURL
+        Task { @MainActor [weak self] in
+            do throws(DomovoiError) {
+                let all = try await client.get(MusicPlaylistPath.all, as: [Playlist].self)
+                guard let self, self.container.store.serverURL == server, !self.deleted else { return }
+                if let row = all.first(where: { (one: Playlist) -> Bool in one.id == id }) {
+                    self.playlist = row
+                }
+            } catch {
+                // The sentence is already said; a list that will not read
+                // leaves the sheet as it was.
+            }
+        }
     }
 
     /// `{"track_ids":[4,7,9]}`.
@@ -402,7 +511,8 @@ extension Playlist {
             createdAt: createdAt,
             isVirtual: isVirtual,
             coverEmoji: coverEmoji.isEmpty ? nil : coverEmoji,
-            coverColor: coverColor
+            coverColor: coverColor,
+            imported: imported
         )
     }
 }

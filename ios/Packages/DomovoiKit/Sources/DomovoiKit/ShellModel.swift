@@ -967,6 +967,12 @@ public final class ShellModel {
                 // have taken some back while the app was away
                 // (``PhoneUpNext/reread()``, `MainActivity.onResume`).
                 heldPlayer?.upNext?.reread()
+                // Covers drawn from now on are asked about again with their
+                // ETag, and a remembered "no cover" is forgotten — a cover
+                // can change inside its file (V058; `MainActivity.onStart`,
+                // `CoverArt.appForegrounded`).
+                MusicCoverRenewal.shared.appReturned()
+                PlayerArtwork.forgetMisses()
             }
         case .inactive, .background:
             // `.inactive` is a step on the way out and also a transient state

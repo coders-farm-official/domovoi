@@ -52,6 +52,29 @@ public enum PlayerArtwork {
         podcastPath(url).map(absolute)
     }
 
+    // MARK: - the lock screen's fetch
+
+    /// The request the lock screen's artwork is fetched with.
+    ///
+    /// That fetch goes through `URLSession.shared`, which (unlike
+    /// ``DomovoiClient``) keeps an HTTP cache, and the cover route answers
+    /// `Cache-Control: max-age=86400` with a strong `ETag`. A cover can change
+    /// inside its file with the URL unchanged (V058), so a kept copy is never
+    /// used without asking: the cache is told to revalidate (its stored
+    /// `ETag` goes as `If-None-Match`, and a `304` hands back the kept
+    /// bytes), and `Cache-Control: no-cache` says the same to the cache in
+    /// case the policy alone is not honoured. Android's media-session loader
+    /// has no cache at all, so it always asks; this asks too, for less.
+    ///
+    /// When the lock screen asks: each time a different song's artwork is
+    /// attached (``PlayerNowPlaying``), as on Android. The song already on
+    /// the lock screen is not asked about again until it changes.
+    public static func request(_ url: URL) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: .reloadRevalidatingCacheData)
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        return request
+    }
+
     // MARK: - the miss memo
 
     /// Covers the server said it does not have, this run.

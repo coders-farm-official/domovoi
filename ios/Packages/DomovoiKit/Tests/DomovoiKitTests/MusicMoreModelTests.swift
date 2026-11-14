@@ -352,9 +352,11 @@ final class MusicMoreModelTests: XCTestCase {
         let before = StubURLProtocol.requestCount
         XCTAssertFalse(favorites.edit(name: "x", description: "", emoji: ""))
         XCTAssertFalse(favorites.move(from: 1, by: -1))
-        XCTAssertFalse(favorites.remove(LibraryTrack(id: 11)))
         XCTAssertFalse(favorites.delete())
         XCTAssertEqual(before, StubURLProtocol.requestCount, "not one of those was sent")
+        // Taking a song out IS offered, as on Android: the server unfavourites
+        // it (`playlists.py` remove_track_from_playlist, V058 batch).
+        XCTAssertTrue(favorites.mayRemove)
 
         let real = MusicPlaylistDetailModel(
             playlist: Playlist(id: 4, name: "road trip", trackCount: 3),

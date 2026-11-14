@@ -131,7 +131,12 @@ public final class MPNowPlayingPublisher: PlayerNowPlayingPublisher {
         artworkFor = url
         artworkTask?.cancel()
         artworkTask = Task { [weak self] in
-            guard let (data, response) = try? await URLSession.shared.data(from: source) else { return }
+            // Revalidated, never a silent cache hit: `URLSession.shared` keeps
+            // a cache and the cover route says `max-age=86400`, but a cover
+            // can change inside its file with this URL unchanged (V058).
+            // ``PlayerArtwork/request(_:)``.
+            let request = PlayerArtwork.request(source)
+            guard let (data, response) = try? await URLSession.shared.data(for: request) else { return }
             let status = (response as? HTTPURLResponse)?.statusCode
             if status != 200 {
                 PlayerArtwork.noteFailure(url, status: status)

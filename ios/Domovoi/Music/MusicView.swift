@@ -481,7 +481,9 @@ struct MusicView: View {
     /// Here rather than on ``MusicMoreSheet`` because reading a model is
     /// main-actor work and this view is where that isolation already is.
     private var playlistDeleted: Bool {
-        if case .playlist(let detail) = sheet { return detail.deleted }
+        // Deleted, or copied (a playlist from the music files): either way
+        // the sheet closes and its last sentence is the shell's to say.
+        if case .playlist(let detail) = sheet { return detail.closing }
         return false
     }
 
@@ -566,6 +568,10 @@ struct MusicView: View {
             deviceID: deviceID
         )
         detail.listener = model.queueTools()?.listener ?? .unnamed
+        // A copy made, or a 409 from a playlist the music files own: the
+        // tab's list is re-read (V058).
+        let list = playlists
+        detail.listChanged = { [weak list] in list?.read.refresh() }
         sheet = .playlist(detail)
     }
 

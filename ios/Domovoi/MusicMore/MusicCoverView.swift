@@ -75,8 +75,13 @@ struct MusicCoverView: View {
             .accessibilityLabel(
                 settledAbsent ? MusicMoreStrings.noCoverArt : MusicMoreStrings.coverArt
             )
-            .task(id: trackID) { covers.want(trackID) }
+            .task(id: askID) { covers.want(trackID) }
     }
+
+    /// The track and the renewal epoch: when the app comes back to the
+    /// screen the epoch moves, and a cover already drawn is asked about
+    /// again with its ETag (``MusicCoverStore``, V058).
+    private var askID: String { "\(trackID)#\(covers.renewal.epoch)" }
 
     @ViewBuilder
     private var art: some View {

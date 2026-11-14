@@ -59,7 +59,8 @@ public enum MusicCover: Sendable, Equatable {
 /// by byte count. A cover's "no cover" is a real `404`, which
 /// ``DomovoiClient/raw(method:path:body:contentType:trackPairing:timeout:)``
 /// throws. So this branches on the **status**: `404` is ``MusicCover/absent``
-/// and never asked again, anything else is ``MusicCover/failed`` and is. That
+/// and not asked again until the app comes back to the screen
+/// (``MusicCoverRenewal``), anything else is ``MusicCover/failed`` and is. That
 /// is `CoverArt.noteFailure`'s rule (`CoverArt.kt:47`, "Only a 404 … is
 /// remembered") expressed in the one place iOS can see a status.
 ///
@@ -71,9 +72,33 @@ public enum MusicCover: Sendable, Equatable {
 /// * **`CoverArt.model`'s `content://` branch** (`CoverArt.kt:30`) — that is
 ///   art for a song stored on the phone, and this app has no on-device music
 ///   list. A path that is not server-relative is not fetched at all.
-/// * **`If-None-Match`** — this store holds decoded answers in memory for one
-///   visit and has no disk cache to revalidate. A conditional request with
-///   nothing to condition on is a round trip for nothing.
+///
+/// ### A cover can change with its URL unchanged (V058)
+///
+/// Domovoi writes the Cover Art Archive's front cover into a file, and Undo
+/// puts the original back; the path a cover is asked by stays the same. The
+/// server's answer carries a strong `ETag` (the file's path, mtime and size)
+/// and `Cache-Control: max-age=86400`. This app keeps **no** HTTP cache —
+/// ``DomovoiClient/defaultConfiguration()`` sets `urlCache = nil` — so that
+/// max-age is never obeyed here; the one copy kept is this store's, in
+/// memory. So, as Android's `CoverArt.revalidate` does for Coil's disk copy:
+///
+/// * a held picture keeps its `ETag`;
+/// * when the app comes back to the screen ``MusicCoverRenewal`` starts a new
+///   epoch, and the next time a held cover is drawn it is asked about again
+///   with `If-None-Match` — a `304` costs no picture bytes and keeps the
+///   picture, a `200` replaces it, a `404` takes it away. The old picture
+///   stays on screen while it is asked, so nothing flickers;
+/// * a remembered "no cover" (`404`) from an earlier epoch is asked again,
+///   since a song can have gained a cover meanwhile.
+///
+/// Within one epoch a held cover is not asked again, which is Android's
+/// memory cache: a list scrolled back and forth costs nothing.
+///
+/// **The key is a ``MusicCoverKey``, not a bare track id**, so that a cover
+/// URL carrying a version (`?v=<cover_v>`, a server change on the way) can be
+/// its own key later — a new version is then a new picture without asking —
+/// with the `ETag` check kept for a server that sends no version.
 @MainActor
 @Observable
 public final class MusicCoverStore {
@@ -97,12 +122,20 @@ public final class MusicCoverStore {
     /// nothing is worth a screen of rows hanging on.
     public static let timeoutSeconds: TimeInterval = 4
 
-    private var covers: [Int64: MusicCover] = [:]
+    /// One cover held: what is known, the `ETag` it came with, and the
+    /// renewal epoch it was last confirmed in.
+    private struct Held {
+        var cover: MusicCover
+        var etag: String?
+        var epoch: Int
+    }
+
+    private var covers: [MusicCoverKey: Held] = [:]
 
     /// Fetch order, oldest first, for the eviction.
-    private var order: [Int64] = []
+    private var order: [MusicCoverKey] = []
 
-    private var inFlight: Set<Int64> = []
+    private var inFlight: Set<MusicCoverKey> = []
 
     /// Which server the covers held belong to.
     ///
@@ -112,70 +145,140 @@ public final class MusicCoverStore {
     /// for a song it has never seen. That is [[read-after-await-wrong-key]]
     /// exactly — the top defect class on this track — so the epoch is
     /// captured **before** the await and checked after it.
-    private var epoch = 0
+    private var serverEpoch = 0
 
-    /// Fetch one track's cover bytes, or throw. Injected so a test can answer
-    /// a 404 without a server.
-    private let fetch: @Sendable (Int64) async throws -> Data
+    /// When the app last came back to the screen. Shared by every store, so
+    /// one return renews every list's covers.
+    public let renewal: MusicCoverRenewal
 
-    public init(fetch: @Sendable @escaping (Int64) async throws -> Data) {
+    /// Ask the server for one cover: the key, and the `ETag` of the picture
+    /// held for it (nil: ask unconditionally). Injected so a test can answer
+    /// a 404 or a 304 without a server.
+    private let fetch: @Sendable (MusicCoverKey, String?) async throws -> MusicCoverAnswer
+
+    public init(
+        renewal: MusicCoverRenewal,
+        revalidate fetch: @Sendable @escaping (MusicCoverKey, String?) async throws -> MusicCoverAnswer
+    ) {
+        self.renewal = renewal
         self.fetch = fetch
     }
 
+    /// A store over a plain fetch of one track's bytes: no `ETag`, so every
+    /// renewal asks again in full. For the tests that predate revalidation.
+    public convenience init(fetch: @Sendable @escaping (Int64) async throws -> Data) {
+        self.init(renewal: MusicCoverRenewal.shared, revalidate: { key, _ in
+            MusicCoverAnswer.picture(try await fetch(key.trackID), etag: nil)
+        })
+    }
+
     /// The store the app uses: covers read through the container's client.
-    public convenience init(in container: AppContainer) {
+    public convenience init(in container: AppContainer, renewal: MusicCoverRenewal = MusicCoverRenewal.shared) {
         let client = container.client
-        self.init(fetch: { trackID in
+        let timeout = Self.timeoutSeconds
+        self.init(renewal: renewal, revalidate: { key, etag in
             // `trackPairing: false`: `track_cover` is an **open** route
             // (`music.py:1695` — "an `<img>` tag and the phone's lock screen
             // can't send a credential"), so a 401 from it is not a pairing
             // signal, and raising the pairing screen from a thumbnail is the
             // defect class [[reasoning-that-hides-a-bug]] records.
-            try await client.raw(
+            var headers: [String: String] = [:]
+            if let etag { headers["If-None-Match"] = etag }
+            let answer = try await client.rawAnswer(
                 method: "GET",
-                path: MusicCoverPath.library(trackID: trackID),
+                path: key.path,
                 trackPairing: false,
-                timeout: Self.timeoutSeconds
+                timeout: timeout,
+                headers: headers,
+                alsoAccept: [304]
+            )
+            return MusicCoverAnswer.from(
+                status: answer.response.statusCode,
+                body: answer.body,
+                etag: answer.response.value(forHTTPHeaderField: "ETag")
             )
         })
     }
 
     /// What is known about `trackID` right now, without asking for anything.
-    public func cover(_ trackID: Int64) -> MusicCover? { covers[trackID] }
+    public func cover(_ trackID: Int64) -> MusicCover? { cover(MusicCoverKey(trackID: trackID)) }
 
-    /// Ask for `trackID`'s cover if it has not been asked for.
+    public func cover(_ key: MusicCoverKey) -> MusicCover? { covers[key]?.cover }
+
+    /// Ask for `trackID`'s cover if it has not been asked for this epoch.
+    public func want(_ trackID: Int64) { want(MusicCoverKey(trackID: trackID)) }
+
+    /// Ask for a cover if it has not been asked for in this renewal epoch.
     ///
-    /// Nothing re-fetches an ``MusicCover/absent`` — that is the server's
-    /// settled answer, and re-asking it is the thing `CoverArt`'s miss memo
-    /// exists to stop: without it every row scrolled back into view asks for
-    /// the same missing picture again. A ``MusicCover/failed`` **is** retried,
-    /// because that one may have been the network.
-    public func want(_ trackID: Int64) {
-        switch covers[trackID] {
-        case .loading, .image, .absent:
+    /// Within an epoch nothing re-fetches an ``MusicCover/absent`` — that is
+    /// the server's settled answer, and re-asking it is the thing `CoverArt`'s
+    /// miss memo exists to stop: without it every row scrolled back into view
+    /// asks for the same missing picture again. A ``MusicCover/failed`` **is**
+    /// retried, because that one may have been the network.
+    ///
+    /// After a renewal a held picture is asked about again with its `ETag`
+    /// and stays drawn meanwhile; a held "no cover" is asked again in full.
+    public func want(_ key: MusicCoverKey) {
+        let now = renewal.epoch
+        let held = covers[key]
+        switch held?.cover {
+        case .loading:
             return
+        case .image, .absent:
+            if held?.epoch == now { return }
         case .failed, nil:
             break
         }
-        guard !inFlight.contains(trackID) else { return }
-        inFlight.insert(trackID)
-        remember(trackID, .loading)
+        guard !inFlight.contains(key) else { return }
+        inFlight.insert(key)
+        // A held picture stays drawn while it is asked about; anything else
+        // shows the placeholder's loading state.
+        var shown: Data?
+        if case .image(let bytes) = held?.cover { shown = bytes }
+        let etag = shown == nil ? nil : held?.etag
+        if shown == nil { remember(key, Held(cover: .loading, etag: nil, epoch: now)) }
         let fetch = self.fetch
-        let asked = epoch
+        let asked = serverEpoch
         Task { @MainActor [weak self] in
-            defer { if self?.epoch == asked { self?.inFlight.remove(trackID) } }
+            defer { if self?.serverEpoch == asked { self?.inFlight.remove(key) } }
             do {
-                let bytes = try await fetch(trackID)
-                guard let self, self.epoch == asked else { return }
-                self.remember(trackID, bytes.count >= Self.smallestImage ? .image(bytes) : .absent)
+                let answer = try await fetch(key, etag)
+                guard let self, self.serverEpoch == asked else { return }
+                self.settle(key, answer, epoch: now)
             } catch let trouble as DomovoiError {
-                guard let self, self.epoch == asked else { return }
-                self.remember(trackID, Self.verdict(for: trouble))
+                guard let self, self.serverEpoch == asked else { return }
+                self.failed(key, verdict: Self.verdict(for: trouble), epoch: now)
             } catch {
-                guard let self, self.epoch == asked else { return }
-                self.remember(trackID, .failed)
+                guard let self, self.serverEpoch == asked else { return }
+                self.failed(key, verdict: .failed, epoch: now)
             }
         }
+    }
+
+    /// The server answered.
+    private func settle(_ key: MusicCoverKey, _ answer: MusicCoverAnswer, epoch: Int) {
+        switch answer {
+        case .unchanged:
+            // A 304: the picture held is still the file's. Only meaningful
+            // when one is held; a 304 to an unconditional ask is a server
+            // this store does not understand, and is tried again.
+            if case .image = covers[key]?.cover {
+                covers[key]?.epoch = epoch
+            } else {
+                remember(key, Held(cover: .failed, etag: nil, epoch: epoch))
+            }
+        case .picture(let bytes, let etag):
+            let cover: MusicCover = bytes.count >= Self.smallestImage ? .image(bytes) : .absent
+            remember(key, Held(cover: cover, etag: etag, epoch: epoch))
+        }
+    }
+
+    /// The ask failed. A 404 is "no cover" (the picture was taken out of the
+    /// file, or there never was one); anything else keeps a held picture
+    /// drawn, in its old epoch so it is asked again next time.
+    private func failed(_ key: MusicCoverKey, verdict: MusicCover, epoch: Int) {
+        if verdict == .failed, case .image = covers[key]?.cover { return }
+        remember(key, Held(cover: verdict, etag: nil, epoch: epoch))
     }
 
     /// A 404 is "this track has no cover" and is remembered; everything else
@@ -187,9 +290,9 @@ public final class MusicCoverStore {
         trouble.failure?.status == 404 ? .absent : .failed
     }
 
-    private func remember(_ trackID: Int64, _ what: MusicCover) {
-        if covers[trackID] == nil { order.append(trackID) }
-        covers[trackID] = what
+    private func remember(_ key: MusicCoverKey, _ what: Held) {
+        if covers[key] == nil { order.append(key) }
+        covers[key] = what
         while order.count > Self.capacity {
             let oldest = order.removeFirst()
             // Never evict something still being fetched: the task that
@@ -215,9 +318,77 @@ public final class MusicCoverStore {
         covers = [:]
         order = []
         inFlight = []
-        epoch += 1
+        serverEpoch += 1
     }
 
     /// How many are held. For a test, and for the cap's own assertion.
     public var count: Int { covers.count }
+
+    /// Whether the server is being asked about `trackID`'s cover right now.
+    public func isAsking(_ trackID: Int64) -> Bool { inFlight.contains(MusicCoverKey(trackID: trackID)) }
+}
+
+/// Which cover is meant: a track, and the version of its art when the server
+/// names one.
+///
+/// Today the server names none and `version` is nil: the path is the bare
+/// cover route and the `ETag` is what tells an old picture from a new one.
+/// A server that sends a cover version (`cover_v`) will put it in the URL
+/// (`?v=<cover_v>`), and then a new version is a new key — a new picture
+/// without asking — while the `ETag` check stays for an older server.
+public struct MusicCoverKey: Hashable, Sendable {
+    public let trackID: Int64
+    public let version: String?
+
+    public init(trackID: Int64, version: String? = nil) {
+        self.trackID = trackID
+        self.version = version
+    }
+
+    /// The path this cover is asked at.
+    public var path: String {
+        let bare = MusicCoverPath.library(trackID: trackID)
+        guard let version, !version.isEmpty else { return bare }
+        let escaped = version.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? version
+        return "\(bare)?v=\(escaped)"
+    }
+}
+
+/// What the cover route answered.
+public enum MusicCoverAnswer: Equatable, Sendable {
+    /// A picture's bytes (a `200`), with the `ETag` it came with, if any.
+    case picture(Data, etag: String?)
+    /// `304 Not Modified`: the picture held for the `ETag` sent is current.
+    case unchanged
+
+    /// Reads one answer: a `304` is ``unchanged``, anything else (a 2xx; the
+    /// client throws the rest) a picture.
+    public static func from(status: Int, body: Data, etag: String?) -> MusicCoverAnswer {
+        if status == 304 { return .unchanged }
+        let tag = etag?.trimmingCharacters(in: .whitespaces)
+        return .picture(body, etag: (tag?.isEmpty ?? true) ? nil : tag)
+    }
+}
+
+/// When the app last came back to the screen, as an epoch every cover store
+/// reads (`CoverArt.kt` epoch).
+///
+/// Bumped by ``ShellModel`` on a **real** return (a departure came before
+/// it; not the launch, not Control Centre): every cover drawn after it is
+/// asked about again with its `ETag`, and every remembered "no cover" is
+/// asked again. Observable, so a cover on screen asks the moment the app is
+/// back rather than the next time its row is built.
+@MainActor
+@Observable
+public final class MusicCoverRenewal {
+
+    /// The one the app uses.
+    public static let shared = MusicCoverRenewal()
+
+    public private(set) var epoch = 0
+
+    public init() {}
+
+    /// The app is on screen again after a spell away.
+    public func appReturned() { epoch += 1 }
 }

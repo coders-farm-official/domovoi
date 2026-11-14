@@ -294,6 +294,30 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
+    /// A real return renews every cover (asked again with its ETag) and
+    /// forgets the lock screen's remembered "no cover"s; a peek does neither
+    /// (V058, `MainActivity.onStart` → `CoverArt.appForegrounded`). The
+    /// defect: covers kept from before the app went away were trusted for
+    /// the rest of the run.
+    func testARealReturnRenewsCoversAndForgetsMisses() {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        let miss = "http://10.0.0.42:6369/api/music/library/9/cover"
+        let start = MusicCoverRenewal.shared.epoch
+        PlayerArtwork.noteFailure(miss, status: 404)
+        rig.model.scenePhaseChanged(to: .inactive)
+        rig.model.scenePhaseChanged(to: .active)
+        XCTAssertEqual(start, MusicCoverRenewal.shared.epoch, "a peek is not a return")
+        XCTAssertTrue(PlayerArtwork.isMissing(miss))
+
+        rig.model.scenePhaseChanged(to: .background)
+        rig.model.scenePhaseChanged(to: .inactive)
+        rig.model.scenePhaseChanged(to: .active)
+        XCTAssertEqual(start + 1, MusicCoverRenewal.shared.epoch)
+        XCTAssertFalse(PlayerArtwork.isMissing(miss), "a song can have gained a cover meanwhile")
+        rig.model.stop()
+        PlayerArtwork.forgetMisses()
+    }
+
     /// Coming back re-asks the device register, no more often than the gap —
     /// and never for a phone that has no server at all.
     ///

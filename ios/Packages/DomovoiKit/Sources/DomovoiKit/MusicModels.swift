@@ -307,6 +307,10 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
     public let isVirtual: Bool
     public let coverEmoji: String?
     public let coverColor: String?
+    /// Made from the music files (an `.m3u` file or the songs' own PLAYLIST
+    /// tags, V058): read-only in Domovoi, copied to be changed
+    /// (``MusicPlaylistReadOnly``). Absent from an older server: false.
+    public let imported: Bool
 
     public init(
         id: Int64 = 0,
@@ -316,7 +320,8 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
         createdAt: String? = nil,
         isVirtual: Bool = false,
         coverEmoji: String? = nil,
-        coverColor: String? = nil
+        coverColor: String? = nil,
+        imported: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -326,10 +331,11 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
         self.isVirtual = isVirtual
         self.coverEmoji = coverEmoji
         self.coverColor = coverColor
+        self.imported = imported
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description
+        case id, name, description, imported
         case trackCount = "track_count"
         case createdAt = "created_at"
         case isVirtual = "is_virtual"
@@ -347,6 +353,7 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
         isVirtual = try values.decodeIfPresent(Bool.self, forKey: .isVirtual) ?? false
         coverEmoji = try values.decodeIfPresent(String.self, forKey: .coverEmoji)
         coverColor = try values.decodeIfPresent(String.self, forKey: .coverColor)
+        imported = try values.decodeIfPresent(Bool.self, forKey: .imported) ?? false
     }
 }
 

@@ -17,15 +17,19 @@ import SwiftUI
 /// that fail on every tap, which is the control [[no-misleading-controls]]
 /// forbids and the one this port was most likely to ship.
 ///
+/// ### A playlist made from the music files
+///
+/// `"imported": true` (V058): no edit, no reorder, no remove, no delete, and
+/// no "add" hint when it is empty; the title says `from your music files`
+/// and ``MusicPlaylistCopySection`` offers `Copy to a new playlist` with the
+/// web's note. Removing a song **is** offered for Favorites, as on Android:
+/// the server unfavourites it (``MusicPlaylistDetailModel/mayRemove``).
+///
 /// ### What is not, and why there is no control for it
 ///
 /// * **`cover_color`.** Read, drawn on the badge, never edited —
 ///   Android's form is name, description and emoji only
 ///   (`PlaylistDrawer.kt:271-295`).
-/// * **Removing a track from Favorites.** It is the library row's favourite
-///   flag, not a playlist write. Android draws a `remove` here for Favorites
-///   too and sends `DELETE /api/playlists/0/tracks/{id}`, which the server's
-///   own guard refuses.
 /// * **Drag-to-reorder.** The arrows are Android's and are what the model
 ///   sends a whole order from; a `.onMove` would need the rows in a `List`,
 ///   and this sheet's rows carry three controls each inside a `ScrollView`
@@ -101,6 +105,10 @@ struct MusicPlaylistSheet: View {
                         Divider()
                         editSection
                     }
+                    if detail.mayCopy {
+                        Divider()
+                        MusicPlaylistCopySection(detail: detail)
+                    }
                     Divider()
                     tracks
                     if detail.mayEdit {
@@ -111,10 +119,7 @@ struct MusicPlaylistSheet: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(MusicMoreStrings.playlistEyebrow(
-                id: detail.playlist.id,
-                isVirtual: detail.playlist.isVirtual
-            ))
+            .navigationTitle(MusicPlaylistReadOnly.eyebrow(for: detail.playlist))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -126,7 +131,7 @@ struct MusicPlaylistSheet: View {
         .onDisappear { detail.stop() }
         // The playlist is gone — deleted here, or the house changed under
         // us. The sheet closes rather than staying open over nothing.
-        .onChange(of: detail.deleted) { _, gone in
+        .onChange(of: detail.closing) { _, gone in
             if gone { dismiss() }
         }
         // The model has something newer to say — a reorder, a removal, a
@@ -386,10 +391,12 @@ struct MusicPlaylistSheet: View {
                     Text(title)
                         .font(.subheadline)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(note)
-                        .font(.footnote)
-                        .foregroundStyle(Color.fgMuted)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let note {
+                        Text(note)
+                            .font(.footnote)
+                            .foregroundStyle(Color.fgMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .multilineTextAlignment(.center)
@@ -477,7 +484,7 @@ struct MusicPlaylistTrackRow: View {
             if detail.mayMoveDown(index) {
                 control("arrow.down", MusicMoreStrings.moveDown) { detail.move(from: index, by: 1) }
             }
-            if detail.mayEdit {
+            if detail.mayRemove {
                 control("minus.circle", MusicMoreStrings.removeFromPlaylist, tint: Color.errInk) {
                     detail.remove(track)
                 }
@@ -503,5 +510,31 @@ struct MusicPlaylistTrackRow: View {
         // rows each saying "move up" names nothing, and the model's own
         // string is the verb alone.
         .accessibilityLabel("\(label) \(track.displayTitle)")
+    }
+}
+
+/// A playlist made from the music files (V058): the button that copies it to
+/// a household playlist, and the web's note saying why there is nothing else
+/// to press (`PlaylistDrawer.kt`, `PlaylistReadOnly.kt`).
+///
+/// Its own view, so the sheet's body stays a short chain.
+struct MusicPlaylistCopySection: View {
+
+    let detail: MusicPlaylistDetailModel
+
+    static let buttonIdentifier = "music-playlist-copy"
+    static let noteIdentifier = "music-playlist-imported-note"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HomeLink(MusicPlaylistReadOnly.copyButton) { detail.copy() }
+                .disabled(!detail.mayWrite)
+                .accessibilityIdentifier(Self.buttonIdentifier)
+            Text(MusicPlaylistReadOnly.note)
+                .font(.caption)
+                .foregroundStyle(Color.fgMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(Self.noteIdentifier)
+        }
     }
 }

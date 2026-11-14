@@ -50,8 +50,9 @@ public final class MusicPlaylistsModel {
 
     /// The playlists a track can be added to as playlists — Favorites is not
     /// one of them, and every write path for it is different
-    /// (``MusicAddToPlaylistModel/toggle(_:)``).
-    public var realPlaylists: [Playlist] { playlists.filter { !$0.isVirtual } }
+    /// (``MusicAddToPlaylistModel/toggle(_:)``), and neither is one made from
+    /// the music files, which refuses adds (``MusicPlaylistReadOnly``).
+    public var realPlaylists: [Playlist] { MusicPlaylistReadOnly.bulkAddTargets(playlists) }
 
     /// The spinner, and only for a first read.
     public var isFirstLoad: Bool { read.data == nil && read.loading }
