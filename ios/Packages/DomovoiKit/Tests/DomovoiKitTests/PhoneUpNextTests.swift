@@ -394,9 +394,9 @@ final class PhoneUpNextTests: XCTestCase {
     func testAutoplayOffAsksNothingMoreInALibraryMixButAListPlaysOut() async {
         let r = UpNextRig()
         await playing(r, picks: [unPick(1, 601)])
+        let before = r.api.count("next")
         try? await r.upNext.setAutoplay(false)
         await r.drain()
-        let before = r.api.count("next")
         r.model.enqueue([unTrack(505, "b")])
         await r.drain()
         XCTAssertEqual(r.api.count("next"), before, "a mix with autoplay off asks nothing more")
