@@ -338,7 +338,11 @@ struct SettingsPlaceholder: View {
                             // screen that opened it: Settings is in the
                             // workspace, and the workspace is gone the
                             // instant the server is.
-                            model.forgetTheActiveServer()
+                            //
+                            // After the parting calls (calendar sharing's
+                            // delete, while the token still works), which
+                            // bound their own wait.
+                            Task { await model.forgetTheActiveServerAfterParting() }
                         }
                     )
                 }
@@ -525,6 +529,11 @@ struct SettingsSectionScreen: View {
         case "printers":
             // slot: printers
             PrintersPanelView(model: model)
+        case "phone-calendars":
+            // slot: phone-calendars
+            // 1.3.0: "Share this phone's calendars with the house", hidden
+            // on a shared screen (``SettingsSection/sharedScreenHiddenKeys``).
+            PhoneCalendarsPanel(model: model)
         case "app-layout":
             // slot: app-layout
             SystemSettingsLayoutPanel(model: model)
