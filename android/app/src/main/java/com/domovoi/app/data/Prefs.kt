@@ -6,6 +6,9 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.domovoi.app.listens.ListenerPicks
+import com.domovoi.app.net.ClaimBook
+import com.domovoi.app.net.DeviceOwner
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.ServerIdentity
 import com.domovoi.app.net.TokenHealth
@@ -48,7 +51,14 @@ data class KnownServer(val url: String, val name: String? = null)
 class Prefs(
     private val context: Context,
     private val vault: TokenVault = TokenVault(PrefsVaultStore(context), KeystoreSealer()) { Log.w(TAG, it) },
-) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook {
+    /** The claim keys ("this is me", net/DeviceRegistry.kt), per server:
+     *  sealed like the tokens, under a Keystore key of their own, in a file
+     *  of their own (excluded from every backup and transfer). */
+    private val claimVault: TokenVault = TokenVault(
+        PrefsVaultStore(context, CLAIM_KEYS_FILE),
+        KeystoreSealer(CLAIM_KEYS_ALIAS, CLAIM_KEYS_AAD),
+    ) { Log.w(TAG, it.replace("token", "claim key")) },
+) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook, ClaimBook {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val kServer = stringPreferencesKey("server_url")
@@ -66,8 +76,16 @@ class Prefs(
     private val kRejectedTokens = stringPreferencesKey("rejected_tokens")
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
+    /** The one "listening as" pick from before 2026-11-12 (all servers);
+     *  moved into [kListenerPicks] for the active server at start. */
     private val kListener = stringPreferencesKey("listener_person")
+    /** "Listening as", per server: a person id, "none" (the household on
+     *  purpose), or absent (follow whose the phone is). */
+    private val kListenerPicks = stringPreferencesKey("listener_picks")
     private val kOwners = stringPreferencesKey("owner_people")
+    /** Whose the phone is, per server, as the server last answered
+     *  (net/DeviceRegistry.kt): id, name, when it claimed. */
+    private val kDeviceOwners = stringPreferencesKey("device_owners")
     private val kSharedScreens = stringPreferencesKey("shared_screens")
     private val kLyricsPanelOpen = booleanPreferencesKey("lyrics_panel_open")
     private val kLyricsSheetOpen = booleanPreferencesKey("lyrics_sheet_open")
@@ -113,8 +131,31 @@ class Prefs(
     private val _themeMode = MutableStateFlow(ThemeMode.System)
     val themeMode: StateFlow<ThemeMode> = _themeMode
 
+    /** Who the phone listens as on the ACTIVE server (podcast and book
+     *  places, listening history): the pick there, else whose the phone is
+     *  (unless it is a shared screen); null = the household. Worked out from
+     *  [listenerPicks], [deviceOwners] and [sharedScreens]
+     *  ([ListenerPicks.effective], web player.jsx SpokenAudio.getPerson). */
     private val _listenerPersonId = MutableStateFlow<String?>(null)
     val listenerPersonId: StateFlow<String?> = _listenerPersonId
+
+    /** The "listening as" pick per server (normalised address -> a person
+     *  id or [ListenerPicks.HOUSEHOLD]); absent: follow the phone. */
+    private val _listenerPicks = MutableStateFlow<Map<String, String>>(emptyMap())
+    val listenerPicks: StateFlow<Map<String, String>> = _listenerPicks
+
+    /** Whose the phone is per server, as each server last said. */
+    private val _deviceOwners = MutableStateFlow<Map<String, DeviceOwner>>(emptyMap())
+    val deviceOwners: StateFlow<Map<String, DeviceOwner>> = _deviceOwners
+
+    /** The claim key held per server (never logged, never shown). */
+    @Volatile
+    private var claimKeys: Map<String, String> = emptyMap()
+
+    /** Bumped whenever a claim key comes or goes, so a screen that shows
+     *  "can't prove it yet" follows. Carries no key. */
+    private val _claimKeysChanged = MutableStateFlow(0)
+    val claimKeysChanged: StateFlow<Int> = _claimKeysChanged
 
     /** "This phone belongs to", per server (normalised address -> that
      *  server's `people.id`): who usually talks from this phone. Voice ID
@@ -248,9 +289,27 @@ class Prefs(
             trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
             _rejectedTokens.value = ServerCredentials.decodeTrusted(p[kRejectedTokens])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
-            _listenerPersonId.value = p[kListener]
             _owners.value = ServerCredentials.decodeOwners(p[kOwners])
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
+            _deviceOwners.value = decodeDeviceOwners(p[kDeviceOwners])
+            claimKeys = claimVault.read()
+            var picks = ServerCredentials.decodeOwners(p[kListenerPicks])
+            val legacyPick = p[kListener]
+            if (legacyPick != null) {
+                // The pick from before it was per server belongs to the server
+                // the phone was on.
+                val active = ServerCredentials.normalize(_serverUrl.value)
+                if (active.isNotBlank() && active !in picks) picks = picks + (active to legacyPick)
+                val moved = picks
+                scope.launch {
+                    context.dataStore.edit {
+                        it[kListenerPicks] = ServerCredentials.encodeOwners(moved)
+                        it.remove(kListener)
+                    }
+                }
+            }
+            _listenerPicks.value = picks
+            recomputeListener()
             _lyricsPanelOpen.value = p[kLyricsPanelOpen] ?: true
             _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
             _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
@@ -294,6 +353,7 @@ class Prefs(
         if (clean.isNotBlank() && !isTrusted(clean)) return false
         _serverUrl.value = clean
         _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, clean)
+        recomputeListener()
         scope.launch { context.dataStore.edit { it[kServer] = clean } }
         ServerCredentials.orphanTrust(_trustedServers.value, _knownServers.value.map { it.url }, clean)
             .forEach { untrustServer(it) }
@@ -473,20 +533,26 @@ class Prefs(
         }
         setSharedAnswers(_sharedScreens.value - ServerCredentials.normalize(url))
         setOwners(ServerCredentials.withOwner(_owners.value, url, null))
+        rememberDeviceOwner(url, null, null)
+        setListenerPicks(ServerCredentials.withOwner(_listenerPicks.value, url, null))
     }
 
     // ── Shared screen ──────────────────────────────────────────────────
 
     /** Record [url]'s answer; a no-op when it has not changed, because the
      *  shell re-asks every couple of minutes and the answer rarely moves. */
-    fun setSharedScreen(url: String, shared: Boolean) {
+    override fun setSharedScreen(url: String, shared: Boolean) {
         val clean = ServerCredentials.normalize(url)
         if (clean.isBlank() || _sharedScreens.value[clean] == shared) return
         setSharedAnswers(_sharedScreens.value + (clean to shared))
+        // Marked a shared screen: a "listening as" pick saved for it goes
+        // (web player.jsx: SpokenAudio.forgetPick).
+        if (shared) setListenerPicks(_listenerPicks.value - clean)
     }
 
     private fun setSharedAnswers(next: Map<String, Boolean>) {
         _sharedScreens.value = next
+        recomputeListener()
         scope.launch {
             context.dataStore.edit { it[kSharedScreens] = ServerCredentials.encodeSharedAnswers(next) }
         }
@@ -583,24 +649,74 @@ class Prefs(
         scope.launch { context.dataStore.edit { it[kVoiceInfo] = encodeVoiceInfo(next) } }
     }
 
-    /** Who this phone belongs to on the server at [url]; null: nobody. */
-    fun setOwnerPersonId(url: String, id: String?) {
-        setOwners(ServerCredentials.withOwner(_owners.value, url, id))
-    }
-
     private fun setOwners(next: Map<String, String>) {
         if (next == _owners.value) return
         _owners.value = next
         scope.launch { context.dataStore.edit { it[kOwners] = ServerCredentials.encodeOwners(next) } }
     }
 
-    fun setListenerPersonId(id: String?) {
-        _listenerPersonId.value = id
-        scope.launch {
-            context.dataStore.edit {
-                if (id == null) it.remove(kListener) else it[kListener] = id
-            }
+    // ── Whose the phone is, and its claim key (ClaimBook) ──────────────
+
+    override fun deviceOwnerFor(server: String): DeviceOwner? =
+        _deviceOwners.value[ServerCredentials.normalize(server)]
+
+    override fun claimKeyFor(server: String): String? =
+        claimKeys[ServerCredentials.normalize(server)]?.takeIf { it.isNotBlank() }
+
+    /** What a server said about whose this phone is (net/DeviceRegistry.kt
+     *  rememberDeviceAnswer): the owner, mirrored into [owners] (help
+     *  alerts and the chat mic read it), and the claim key held there. */
+    override fun rememberDeviceOwner(server: String, owner: DeviceOwner?, claimKey: String?) {
+        val clean = ServerCredentials.normalize(server)
+        if (clean.isBlank()) return
+        val owners = if (owner == null) _deviceOwners.value - clean else _deviceOwners.value + (clean to owner)
+        if (owners != _deviceOwners.value) {
+            _deviceOwners.value = owners
+            scope.launch { context.dataStore.edit { it[kDeviceOwners] = encodeDeviceOwners(owners) } }
         }
+        setOwners(ServerCredentials.withOwner(_owners.value, clean, owner?.id?.toString()))
+        val keys = ServerCredentials.withToken(claimKeys, clean, claimKey)
+        if (keys != claimKeys) {
+            claimKeys = keys
+            _claimKeysChanged.value += 1
+            scope.launch { claimVault.write(keys) }
+        }
+        recomputeListener()
+    }
+
+    // ── "Listening as" ────────────────────────────────────────────────
+
+    /** Pick who the phone listens as on the active server: a person id, or
+     *  null for the household. Picking whose the phone is goes back to
+     *  following the phone (web player.jsx SpokenAudio.setPerson). */
+    fun setListenerPersonId(id: String?) {
+        val server = ServerCredentials.normalize(_serverUrl.value)
+        if (server.isBlank()) return
+        val stored = ListenerPicks.toStore(id, deviceOwnerFor(server)?.id, sharedHere(server))
+        setListenerPicks(ServerCredentials.withOwner(_listenerPicks.value, server, stored))
+    }
+
+    /** The raw pick for [server]: a person id, [ListenerPicks.HOUSEHOLD], or
+     *  null (follow the phone). What a listening-history row is sent with. */
+    fun listenerPickFor(server: String): String? = _listenerPicks.value[ServerCredentials.normalize(server)]
+
+    /** Whether [server] last said this phone is a shared screen. */
+    fun sharedHere(server: String): Boolean =
+        ServerCredentials.sharedAnswerFor(_sharedScreens.value, server) == true
+
+    private fun setListenerPicks(next: Map<String, String>) {
+        if (next != _listenerPicks.value) {
+            _listenerPicks.value = next
+            scope.launch { context.dataStore.edit { it[kListenerPicks] = ServerCredentials.encodeOwners(next) } }
+        }
+        recomputeListener()
+    }
+
+    private fun recomputeListener() {
+        val server = ServerCredentials.normalize(_serverUrl.value)
+        _listenerPersonId.value = ListenerPicks.effective(
+            _listenerPicks.value[server], deviceOwnerFor(server)?.id, sharedHere(server),
+        )
     }
 
     // ── Lyrics ─────────────────────────────────────────────────────────
@@ -634,6 +750,16 @@ class Prefs(
 
     private companion object {
         const val TAG = "Prefs"
+        const val CLAIM_KEYS_FILE = "domovoi-claim-keys"
+        const val CLAIM_KEYS_ALIAS = "domovoi-claim-keys"
+        val CLAIM_KEYS_AAD: ByteArray = "domovoi-claim-keys-v1".toByteArray(Charsets.UTF_8)
+
+        private val deviceOwnersSerializer = MapSerializer(String.serializer(), DeviceOwner.serializer())
+
+        fun decodeDeviceOwners(raw: String?): Map<String, DeviceOwner> =
+            raw?.let { runCatching { Json.decodeFromString(deviceOwnersSerializer, it) }.getOrNull() } ?: emptyMap()
+
+        fun encodeDeviceOwners(map: Map<String, DeviceOwner>): String = Json.encodeToString(deviceOwnersSerializer, map)
 
         private val voiceInfoSerializer = MapSerializer(String.serializer(), String.serializer())
 

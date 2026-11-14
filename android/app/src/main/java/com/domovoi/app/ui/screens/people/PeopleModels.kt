@@ -40,6 +40,9 @@ internal data class Person(
      *  share one are never guessed between when the name is said, so the
      *  page flags them until one is renamed or removed. */
     val namesakes: Int = 0,
+    /** How many phones and browsers are claimed as this person ("this is
+     *  me", `PUT /api/devices/{id}/person`). */
+    val device_count: Int = 0,
 )
 
 // ---------------------------------------------------------------------------

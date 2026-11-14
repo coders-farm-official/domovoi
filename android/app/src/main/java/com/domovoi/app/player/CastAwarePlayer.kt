@@ -129,11 +129,11 @@ class CastAwarePlayer(
     }
 
     override fun seekToNext() {
-        if (room != null || book) controller.next() else super.seekToNext()
+        if (room != null || book) controller.next() else { controller.listens?.skip(); super.seekToNext() }
     }
 
     override fun seekToNextMediaItem() {
-        if (room != null || book) controller.next() else super.seekToNextMediaItem()
+        if (room != null || book) controller.next() else { controller.listens?.skip(); super.seekToNextMediaItem() }
     }
 
     override fun seekToPrevious() {

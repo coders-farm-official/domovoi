@@ -159,4 +159,90 @@ class RoomProtocolTest {
         assertEquals(JsonPrimitive(true), sample["mic_blocked"])
         assertTrue(sample.toString().length < 4096)
     }
+
+    // -- batch 2 item 7: drop-in after the reply, the wake gate's report --
+
+    @Test
+    fun dropinReadyIsDeclaredOnlyWithTheEchoCanceller() {
+        // It goes with full_duplex: only a phone that can take a drop-in
+        // asks the core to hold the call's audio until its dropin_ready.
+        assertTrue("dropin_ready" in RoomProtocol.supports(echoCanceller = true))
+        assertFalse("dropin_ready" in RoomProtocol.supports(echoCanceller = false))
+        val hello = RoomProtocol.hello("nursery", "hey_jarvis", "t", "305117", echoCanceller = false)
+        assertFalse(JsonPrimitive("dropin_ready") in hello["supports"]!!.jsonArray)
+        // The core knows the name, and it is a declared behaviour (hello key).
+        val ability = fixtures["abilities"]!!.jsonObject["dropin_ready"]!!.jsonObject
+        assertEquals("dropin_ready", ability["hello_key"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun theDropinStartsAwaitReadyAndTheReadyFrameAreTheContracts() {
+        // What domovoi/streaming.py sends a room whose hello said dropin_ready.
+        val f = RoomProtocol.parse(
+            """{"type":"dropin_start","peer_room":"office","peer_label":"office","audio_sample_rate":16000,"full_duplex":true,"await_ready":true}""",
+        ) as RoomProtocol.ServerFrame.DropinStart
+        assertTrue(f.awaitReady)
+        assertTrue(f.fullDuplex)
+        // An older core's frame: no wait.
+        val old = RoomProtocol.parse("""{"type":"dropin_start","peer_room":"office","audio_sample_rate":16000,"full_duplex":true}""")
+        assertFalse((old as RoomProtocol.ServerFrame.DropinStart).awaitReady)
+        assertEquals("""{"type":"dropin_ready"}""", RoomProtocol.DROPIN_READY.toString())
+        // A turn the core ignored as background talk starts the cooldown.
+        assertEquals(
+            RoomProtocol.ServerFrame.ResponseEnd(false, false, ignored = true),
+            RoomProtocol.parse("""{"type":"response_end","interrupted":false,"expect_followup":false,"ignored":true}"""),
+        )
+        assertFalse((RoomProtocol.parse("""{"type":"response_end"}""") as RoomProtocol.ServerFrame.ResponseEnd).ignored)
+    }
+
+    @Test
+    fun theReportedConfigCarriesTheThreeWakeKeys() {
+        val f = RoomProtocol.configStatus(0.6f, WakeGate.PATIENCE_DEFAULT, WakeGate.COOLDOWN_SEC_DEFAULT)
+        assertEquals("config_status", f["type"]!!.jsonPrimitive.content)
+        val config = f["config"]!!.jsonObject
+        assertEquals(setOf("wake.threshold", "wake.patience_frames", "wake.cooldown_sec"), config.keys)
+        // 0.6f is reported as 0.6, the value the Settings tab would show.
+        assertEquals("0.6", config["wake.threshold"]!!.jsonPrimitive.content)
+        assertEquals(1, config["wake.patience_frames"]!!.jsonPrimitive.content.toInt())
+        assertEquals(2.0, config["wake.cooldown_sec"]!!.jsonPrimitive.content.toDouble(), 0.0)
+        // Every key is one the core's settings schema names (fixtures:
+        // the Pi's list, which the schema mirrors), and a config_status
+        // is never feature-gated.
+        assertTrue(RoomProtocol.maySend(f, emptySet()))
+    }
+
+    @Test
+    fun aPushedThresholdIsTheRoomsOneThresholdAndAMissingOneKeepsIt() {
+        // set_wake_word with a threshold: that value, as the Pi takes it (0-1).
+        val push = RoomProtocol.parse("""{"type":"set_wake_word","slug":"hey_house","threshold":0.62}""") as RoomProtocol.ServerFrame.SetWakeWord
+        assertEquals(0.62f, RoomStore.thresholdValue(push.threshold)!!, 0f)
+        assertEquals(0f, RoomStore.thresholdValue(0.0)!!, 0f)
+        assertEquals(1f, RoomStore.thresholdValue(1.0)!!, 0f)
+        // Without one, or with one out of range: null, so the threshold stays.
+        val bare = RoomProtocol.parse("""{"type":"set_wake_word","slug":"hey_domovoi"}""") as RoomProtocol.ServerFrame.SetWakeWord
+        assertEquals(null, RoomStore.thresholdValue(bare.threshold))
+        assertEquals(null, RoomStore.thresholdValue(1.5))
+        assertEquals(null, RoomStore.thresholdValue(-0.1))
+        assertEquals(null, RoomStore.thresholdValue(Double.NaN))
+        // And the threshold the room wakes at is the one it reports.
+        val t = RoomStore.thresholdValue(push.threshold)!!
+        val reported = RoomProtocol.configStatus(t, 1, 2.0)["config"]!!.jsonObject["wake.threshold"]!!.jsonPrimitive.content
+        assertEquals("0.62", reported)
+        assertEquals(t, WakeGate(t).threshold, 0f)
+    }
+
+    @Test
+    fun theTurnCarriesTheWakesPeakScore() {
+        val f = RoomProtocol.utteranceStart("wake_word", 3, 0, 412, wakeScore = 0.91234f)
+        assertEquals("0.912", f["wake_score"]!!.jsonPrimitive.content)
+        assertEquals(412, f["wake_ms"]!!.jsonPrimitive.content.toInt())
+        // The gate's peak is what goes: a two-chunk run's highest score.
+        val g = WakeGate(0.5f, patience = 2, cooldownSec = 0.0)
+        g.feed(0.7f, 0)
+        assertTrue(g.feed(0.88f, 80))
+        assertEquals("0.88", RoomProtocol.utteranceStart("wake_word", 4, 0, 10, g.lastPeak)["wake_score"]!!.jsonPrimitive.content)
+        // Only after a wake word, and only when there is one.
+        assertFalse("wake_score" in RoomProtocol.utteranceStart("followup", 5, 0, null, 0.9f))
+        assertFalse("wake_score" in RoomProtocol.utteranceStart("wake_word", 6, 0, 10, null))
+    }
 }

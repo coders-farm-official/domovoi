@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
@@ -51,8 +52,6 @@ import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 /** Track detail drawer — metadata, play-in-room chips, local play/queue,
  *  delete (optionally with the file on disk). Mirrors the web Drawer. */
@@ -66,6 +65,9 @@ internal fun TrackDrawer(
     refreshLib: () -> Unit,
     refreshStats: () -> Unit,
     refreshNP: () -> Unit,
+    /** The list the track was opened from, when there is one (a genre's
+     *  songs): "play in <room>" then plays on through that list. */
+    listContext: UpNextContext? = null,
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -84,6 +86,8 @@ internal fun TrackDrawer(
     var confirmDelete by remember(track.id) { mutableStateOf(false) }
 
     fun saveToDevice() = saveTrackToDevice(context, app, toast, track)
+    // Play next / add to queue, in the picked room or on this phone (batch 2 §2).
+    val queueTo = rememberSongQueueTo()
 
     fun playInRoom() {
         val room = room ?: return
@@ -92,13 +96,21 @@ internal fun TrackDrawer(
         // the app's scope, so closing doesn't cancel it, and failure still
         // toasts.
         onClose()
+        // The song starts the room's Up next (P4): it plays, then songs like
+        // it (or the rest of [listContext]) follow it there, the mix following
+        // whoever this phone listens as. Worked out now, for the server the
+        // tap was on, and sent only to that one.
+        val server = app.prefs.serverUrl.value
+        val body = roomPlayTrackBody(
+            room = room,
+            trackId = track.id,
+            deviceId = app.prefs.deviceId,
+            context = listContext,
+            pick = app.prefs.listenerPickFor(server),
+            shared = app.prefs.sharedHere(server),
+        )
         scope.launchAction(
-            action = {
-                app.api.post("/api/music/play-track", buildJsonObject {
-                    put("room_id", room)
-                    put("track_id", track.id)
-                })
-            },
+            action = { app.api.post("/api/music/play-track", body, onlyTo = server) },
             onSuccess = { refreshNP() },
             onFailure = { toast("play failed: ${it.message}") },
         )
@@ -191,6 +203,32 @@ internal fun TrackDrawer(
                         Spacer(Modifier.size(6.dp))
                         Text(if (room != null) "play in $room" else "no rooms online")
                     }
+                    if (room != null) {
+                        OutlinedButton(onClick = { queueTo(QueueTarget.Room(room), track, true) }) {
+                            Icon(
+                                Icons.Filled.SubdirectoryArrowRight, contentDescription = null,
+                                modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("play next in $room", color = Domovoi.colors.fg)
+                        }
+                        OutlinedButton(onClick = { queueTo(QueueTarget.Room(room), track, false) }) {
+                            Icon(
+                                Icons.Filled.QueueMusic, contentDescription = null,
+                                modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text("add to $room's queue", color = Domovoi.colors.fg)
+                        }
+                    }
+                }
+                Spacer(Modifier.size(12.dp))
+                SectionLabel("this device")
+                Spacer(Modifier.size(8.dp))
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedButton(onClick = { onBrowserPlay(track) }) {
                         Icon(
                             Icons.Filled.Headphones, contentDescription = null,
@@ -199,13 +237,21 @@ internal fun TrackDrawer(
                         Spacer(Modifier.size(6.dp))
                         Text("play here", color = Domovoi.colors.fg)
                     }
+                    OutlinedButton(onClick = { queueTo(QueueTarget.Phone, track, true) }) {
+                        Icon(
+                            Icons.Filled.SubdirectoryArrowRight, contentDescription = null,
+                            modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text("play next", color = Domovoi.colors.fg)
+                    }
                     OutlinedButton(onClick = { onQueueTrack(track) }) {
                         Icon(
                             Icons.Filled.QueueMusic, contentDescription = null,
                             modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
                         )
                         Spacer(Modifier.size(6.dp))
-                        Text("queue", color = Domovoi.colors.fg)
+                        Text("add to queue", color = Domovoi.colors.fg)
                     }
                     OutlinedButton(onClick = { saveToDevice() }) {
                         Icon(

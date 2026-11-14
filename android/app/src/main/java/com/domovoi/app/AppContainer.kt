@@ -70,6 +70,8 @@ class AppContainer(context: Context) {
             // save try now, and places set while away go up
             // (audiobooks/BookDownloads.kt, BookPositions.kt).
             booksReconnected(context)
+            // ...and the listening-history outbox goes (listens/ListenLog.kt).
+            listens.flushSoon(3_000)
         },
         log = { Log.i("NetworkWatch", it) },
     )
@@ -94,6 +96,11 @@ class AppContainer(context: Context) {
     val api: ApiClient = ApiClient(prefs, identity, tokenHealth)
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
+
+    /** Listening history from the phone's own player: the outbox and its
+     *  sending (listens/ListenLog.kt). The player calls its hooks. */
+    val listens: com.domovoi.app.listens.ListenLog =
+        com.domovoi.app.listens.ListenLog.forApp(context, api, prefs).also { player.listens = it }
 
     /** Books saved to the phone (audiobooks/BookStore.kt): the app's own
      *  storage, filesDir/audiobooks. */

@@ -106,7 +106,7 @@ class OneLineAnswerSourcesTest {
         "ui/screens/audiobooks/AudiobooksScreen.kt",
         "ui/screens/audiobooks/BookPage.kt",
         "ui/screens/audiobooks/SavedBooksScreen.kt",
-        "ui/screens/podcasts/PodcastsEpisodes.kt",
+        "ui/screens/podcasts/PodcastsFormat.kt",   // the episode row's meta line (PodFormat.meta)
     )
 
     @Test fun everyChapterCountGoesThroughThePluralHelper() {

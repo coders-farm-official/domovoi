@@ -61,8 +61,8 @@ class LazyTabsTest {
         val scope = RecordingScope()
         scope.playerTab(model(queue, index = 2_000, chapters = chapters), listOf("office"), onSaveQueue = {})
 
-        // Head, chapters label, queue label: the only single items.
-        assertEquals(3, scope.blocks.count { it.first == "item" })
+        // Head, chapters label, queue label, the queue's search box: the only single items.
+        assertEquals(4, scope.blocks.count { it.first == "item" })
         assertTrue(scope.blocks.contains("items" to chapters.size))
         assertTrue(scope.blocks.contains("items" to queue.size))
         // Keys are present and unique, or the LazyColumn throws.
@@ -80,7 +80,7 @@ class LazyTabsTest {
     @Test fun castingWithAnEmptyLocalQueueStillShowsTheHead() {
         val scope = RecordingScope()
         scope.playerTab(model(emptyList(), room = PlayTarget.Room("office")), listOf("office"), onSaveQueue = {})
-        assertEquals(listOf<Any?>("player-head", "player-queue-label", "player-queue-empty"), scope.keys)
+        assertEquals(listOf<Any?>("player-head", "player-queue-label", "player-queue-add", "player-queue-empty"), scope.keys)
     }
 
     @Test fun everyRoomQueueEntryIsItsOwnLazyItem() {
@@ -95,8 +95,65 @@ class LazyTabsTest {
         )
         val scope = RecordingScope()
         scope.queueTab(listOf("office", "kitchen"), rq)
-        assertEquals(listOf("item" to 1, "items" to 800), scope.blocks)
+        // The header, the search box that adds to the room, then the rows:
+        // the first 100 of them and a "show more" line (2026-11-12).
+        assertEquals(listOf("item" to 1, "item" to 1, "items" to ROOM_QUEUE_ROWS_STEP + 1), scope.blocks)
+        assertEquals("room-queue-add-office", scope.keys[1])
+        assertEquals("room-queue-more", scope.keys.last())
         assertEquals(scope.keys.size, scope.keys.toSet().size)
+    }
+
+    private fun roomKeys(rq: RoomQueueModel, rooms: List<String> = listOf("office")): List<Any?> {
+        val scope = RecordingScope()
+        scope.queueTab(rooms, rq)
+        return scope.keys
+    }
+
+    @Test fun aWholePlaylistInARoomDrawsAHundredRowsAtATime() {
+        // ~1,500 songs (a playlist played in the room): 100 drawn, then 100
+        // more each time the end of them is reached.
+        val items = (0 until 1_500).map { QueueItem(songId = it.toLong() + 1, pos = it, title = "song $it") }
+        val sel = RoomQueueSelection("office")
+        val rq = RoomQueueModel(sel, RoomQueue(roomId = "office", items = items), false, {}, { _, _ -> }, {})
+        val row = Regex("""room-queue-\d+-\d+""")
+        val rows = { roomKeys(rq).count { row.matches(it.toString()) } }
+        assertEquals(100, rows())
+        sel.showMore()
+        assertEquals(200, rows())
+        assertEquals("room-queue-200-199", roomKeys(rq).dropLast(1).last())
+    }
+
+    @Test fun theSearchWaitsForThisRoomsOwnAnswerAndItsEditable() {
+        val q = RoomQueue(roomId = "office", items = listOf(QueueItem(songId = 1, pos = 0, title = "a")))
+        fun model(queue: RoomQueue, answered: Boolean) =
+            RoomQueueModel(RoomQueueSelection("office"), queue, false, {}, { _, _ -> }, {}, answered = answered)
+        assertTrue("room-queue-add-office" in roomKeys(model(q, answered = true)))
+        // Still reading this room (another room's answer is not this one's).
+        assertTrue("room-queue-add-office" !in roomKeys(model(RoomQueue(), answered = false)))
+        // The server says this caller may not change it: no box (the header says why).
+        val blocked = q.copy(editable = false, blockedReason = "office's queue is blocked for this device")
+        assertTrue(roomKeys(model(blocked, answered = true)).none { it.toString().startsWith("room-queue-add") })
+    }
+
+    @Test fun theRoomsUpNextHeadIsItsOwnLineBeforeTheFirstPick() {
+        val items = listOf(
+            QueueItem(songId = 1, pos = 0, playing = true),
+            QueueItem(songId = 2, pos = 1),
+            QueueItem(songId = 3, pos = 2, origin = "auto", reasonLabel = "same artist", upNextSeq = 1),
+            QueueItem(songId = 4, pos = 3, origin = "auto", reasonLabel = "90s", upNextSeq = 2),
+        )
+        fun keys(q: RoomQueue): List<Any?> {
+            val scope = RecordingScope()
+            scope.queueTab(listOf("office"), RoomQueueModel(RoomQueueSelection("office"), q, false, {}, { _, _ -> }, {}))
+            return scope.keys.drop(2)   // the header and the search box
+        }
+        val session = RoomQueue(roomId = "office", items = items, sessionId = "s1", autoplay = true)
+        assertEquals(
+            listOf<Any?>("room-queue-1-0", "room-queue-2-1", "room-queue-up-next", "room-queue-3-2", "room-queue-4-3"),
+            keys(session),
+        )
+        // Without a session: the rows alone, no head.
+        assertEquals(listOf<Any?>("room-queue-1-0", "room-queue-2-1", "room-queue-3-2", "room-queue-4-3"), keys(session.copy(sessionId = null)))
     }
 
     @Test fun roomQueueWithoutRoomsIsTheHeaderAlone() {

@@ -16,10 +16,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -49,6 +52,7 @@ import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.components.rememberStillComposed
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -68,6 +72,7 @@ internal fun PlaylistDrawer(
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
+    val queueSong = rememberSongQueue()
     // The app's scope, not this drawer's: "play" closes the drawer before
     // the server answers, and a back gesture can close it mid-request
     // (ServerAction.kt says why). [open] keeps a late answer off a drawer
@@ -97,17 +102,19 @@ internal fun PlaylistDrawer(
         val room = room ?: return
         toast((if (shuffle) "shuffling" else "playing") + " ${playlist.name} in $room…")
         scope.launchAction(
-            action = {
-                app.api.post("/api/music/play-playlist", buildJsonObject {
-                    put("room_id", room)
-                    put("playlist_id", playlist.id)
-                    put("shuffle", shuffle)
-                })
-            },
+            // The whole playlist becomes the room's queue, Up next armed after it.
+            action = { playPlaylistInRoom(app, room, playlist.id, shuffle) },
             onSuccess = { refreshNP() },
             onFailure = { toast((if (shuffle) "shuffle" else "play") + " failed: ${it.message}") },
         )
         onClose()
+    }
+
+    // The list as shown (a reorder in flight included), every track of it.
+    fun playHere(shuffle: Boolean) {
+        if (playTracksHereAndSay(app.player, items, playlist.name, shuffle, toast, onMain = { scope.launch { it() } })) {
+            onClose()
+        }
     }
 
     fun saveEdit() {
@@ -265,6 +272,37 @@ internal fun PlaylistDrawer(
                                 }
                             }
                         }
+                        // This phone: the whole list (the tracks route is
+                        // unpaged), Favorites included — the web's "this
+                        // browser" pair. Only once the tracks are in.
+                        Spacer(Modifier.size(12.dp))
+                        SectionLabel("this device")
+                        Spacer(Modifier.size(8.dp))
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(onClick = { playHere(shuffle = false) }, enabled = items.isNotEmpty()) {
+                                Icon(
+                                    Icons.Filled.Headphones, contentDescription = null,
+                                    modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text("play here", color = Domovoi.colors.fg)
+                            }
+                            OutlinedButton(onClick = { playHere(shuffle = true) }, enabled = items.isNotEmpty()) {
+                                Icon(
+                                    Icons.Filled.Shuffle, contentDescription = null,
+                                    modifier = Modifier.size(16.dp), tint = Domovoi.colors.fg,
+                                )
+                                Spacer(Modifier.size(6.dp))
+                                Text("shuffle here", color = Domovoi.colors.fg)
+                            }
+                        }
+                        phoneCapNote(items.size)?.let { note ->
+                            Spacer(Modifier.size(8.dp))
+                            Text(note, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
+                        }
                         if (editing && !playlist.isVirtual) {
                             Spacer(Modifier.size(12.dp))
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -353,6 +391,9 @@ internal fun PlaylistDrawer(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
+                            // This phone's queue, or the room it casts to (batch 2 §2).
+                            SmallIconButton(Icons.Filled.SubdirectoryArrowRight, "play next") { queueSong(t, true) }
+                            SmallIconButton(Icons.Filled.QueueMusic, "add to queue") { queueSong(t, false) }
                             if (!playlist.isVirtual) {
                                 SmallIconButton(
                                     Icons.Filled.KeyboardArrowUp, "move up",

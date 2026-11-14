@@ -97,6 +97,7 @@ fun MusicScreen() {
     val scope = app.scope
     val context = LocalContext.current
     val ui = rememberSaveable(saver = MusicUi.Saver) { MusicUi() }
+    var queueRoom by remember { mutableStateOf<String?>(null) }
 
     // ── Data ──────────────────────────────────────────────────────────
     var qDebounced by remember { mutableStateOf("") }
@@ -158,25 +159,16 @@ fun MusicScreen() {
     val realPlaylists = playlists.data.orEmpty().filter { !it.isVirtual }
 
     // ── Local playback (this device) ──────────────────────────────────
-    fun toItem(t: LibraryTrack): PlayItem = PlayItem.fromTrack(
-        t.id,
-        t.title
-            ?: t.filePath?.substringAfterLast('/')?.substringAfterLast('\\')
-            ?: "track",
-        t.artist, t.album, t.durationSec,
-    )
+    fun toItem(t: LibraryTrack): PlayItem = libraryPlayItem(t)
 
     val onBrowserPlay: (LibraryTrack) -> Unit = { t ->
         playHereAndSay(app.player, toItem(t), t.title ?: "track", toast) { scope.launch { it() } }
     }
-    val onQueueTrack: (LibraryTrack) -> Unit = { t ->
-        app.player.enqueue(listOf(toItem(t)))
-        toast("queued \"${t.title ?: "track"}\"")
-    }
-    val onPlayNext: (LibraryTrack) -> Unit = { t ->
-        app.player.playNext(listOf(toItem(t)))
-        toast("playing next: \"${t.title ?: "track"}\"")
-    }
+    // Play next / Add to queue: this phone's queue, or the room it casts to.
+    val queueSong = rememberSongQueue()
+    val queueSongTo = rememberSongQueueTo()
+    val onQueueTrack: (LibraryTrack) -> Unit = { t -> queueSong(t, false) }
+    val onPlayNext: (LibraryTrack) -> Unit = { t -> queueSong(t, true) }
     val onSaveToDevice: (LibraryTrack) -> Unit = { t -> saveTrackToDevice(context, app, toast, t) }
 
     // ── Room transport ────────────────────────────────────────────────
@@ -338,13 +330,8 @@ fun MusicScreen() {
             ?: return@play toast("no rooms online — set up a room to play ${p.name}")
         toast("playing ${p.name} in $room…")
         scope.launchAction(
-            action = {
-                app.api.post("/api/music/play-playlist", buildJsonObject {
-                    put("room_id", room)
-                    put("playlist_id", p.id)
-                    put("shuffle", false)
-                })
-            },
+            // The whole playlist becomes the room's queue, Up next armed after it.
+            action = { playPlaylistInRoom(app, room, p.id, shuffle = false) },
             onSuccess = { nowPlaying.refresh() },
             onFailure = { toast("play failed: ${it.message}") },
         )
@@ -358,6 +345,7 @@ fun MusicScreen() {
     val libraryTotal: Int? = stats.data?.totalTracks
     val tabLabels = listOf(
         "library" + (libraryTotal?.let { " · $it" } ?: ""),
+        "genres",
         "player",
         // What the SPEAKERS play from, next to the player's own queue so the
         // difference is visible rather than explained.
@@ -368,15 +356,18 @@ fun MusicScreen() {
 
     // The player and room-queue tabs emit a lazy item per row, so the state
     // their item lists are built from is collected here, only while open.
-    val playerModel = if (ui.tab == 1) rememberPlayerTabModel() else null
-    val roomQueue = if (ui.tab == 2) {
+    val playerModel = if (ui.tab == MusicTabs.PLAYER) rememberPlayerTabModel() else null
+    val roomQueue = if (ui.tab == MusicTabs.ROOM_QUEUE) {
         rememberRoomQueue(rooms, npList.firstOrNull { it.state == "play" }?.roomId)
     } else null
 
     // ── Layout ────────────────────────────────────────────────────────
     val listState = rememberLazyListState()
     // The next page of tracks as the Library tab nears its end.
-    if (ui.tab == 0) LoadMoreNearEnd(listState, libPager)
+    if (ui.tab == MusicTabs.LIBRARY) LoadMoreNearEnd(listState, libPager)
+    // The genres, read a page at a time, only while their tab is open.
+    val genres = if (ui.tab == MusicTabs.GENRES) rememberGenresTab(ui) else null
+    if (genres != null) LoadMoreNearEnd(listState, genres.pager)
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -441,6 +432,7 @@ fun MusicScreen() {
                         onPlayRandom = onPlayRandom,
                         transport = RoomTransport { action, room -> roomCtl(action, room, action) },
                         onFavorite = onFavoriteNp,
+                        onOpenQueue = { queueRoom = it },
                     )
                 }
             }
@@ -469,13 +461,13 @@ fun MusicScreen() {
             }
 
             when (ui.tab) {
-                0 -> libraryTab(
+                MusicTabs.LIBRARY -> libraryTab(
                     ui = ui,
                     lib = lib,
                     pager = libPager,
                     libraryTotal = libraryTotal,
                     realPlaylists = realPlaylists,
-                    onSelect = { ui.detailTrack = it },
+                    onSelect = { ui.detailTrack = it; ui.detailContext = null },
                     onToggleFavorite = onToggleFavorite,
                     onAddToPlaylist = { ui.addTrack = it },
                     onBulkAdd = onBulkAdd,
@@ -484,16 +476,19 @@ fun MusicScreen() {
                     onPlayNext = onPlayNext,
                     onSaveToDevice = onSaveToDevice,
                 )
-                1 -> if (playerModel != null) {
+                MusicTabs.GENRES -> if (genres != null) {
+                    genresTab(ui, genres, onOpen = { ui.openGenre = it })
+                }
+                MusicTabs.PLAYER -> if (playerModel != null) {
                     playerTab(playerModel, rooms, onSaveQueue = { ui.saveQueueOpen = true })
                 }
-                2 -> if (roomQueue != null) queueTab(rooms, roomQueue)
-                3 -> playlistsTab(
+                MusicTabs.ROOM_QUEUE -> if (roomQueue != null) queueTab(rooms, roomQueue)
+                MusicTabs.PLAYLISTS -> playlistsTab(
                     playlists = playlists,
                     onSelect = { ui.openPlaylist = it },
                     onPlay = onPlayPlaylist,
                 )
-                4 -> statsTab(stats = stats)
+                MusicTabs.STATS -> statsTab(stats = stats)
             }
         }
 
@@ -504,10 +499,12 @@ fun MusicScreen() {
                 rooms = rooms,
                 onClose = { ui.detailTrack = null },
                 onBrowserPlay = onBrowserPlay,
-                onQueueTrack = onQueueTrack,
+                // The drawer's "this device" button: always this phone's queue.
+                onQueueTrack = { t -> queueSongTo(QueueTarget.Phone, t, false) },
                 refreshLib = { libPager.reload() },
                 refreshStats = stats.refresh,
                 refreshNP = nowPlaying.refresh,
+                listContext = ui.detailContext,
             )
         }
         ui.openPlaylist?.let { p ->
@@ -517,6 +514,19 @@ fun MusicScreen() {
                 onClose = { ui.openPlaylist = null },
                 onEdited = { ui.openPlaylist = it },
                 refreshPlaylists = playlists.refresh,
+                refreshNP = nowPlaying.refresh,
+            )
+        }
+        ui.openGenre?.let { g ->
+            GenreDrawer(
+                genre = g,
+                rooms = rooms,
+                onClose = { ui.openGenre = null },
+                onSelectTrack = { t ->
+                    ui.openGenre = null
+                    ui.detailContext = UpNextContext.genre(g)
+                    ui.detailTrack = t
+                },
                 refreshNP = nowPlaying.refresh,
             )
         }
@@ -534,43 +544,39 @@ fun MusicScreen() {
     }
 
     roomQueue?.let { RoomQueueDialogs(it) }
+    // A room card's queue button: that room's queue, one tap from the room.
+    queueRoom?.let { r -> RoomQueueSheet(r) { queueRoom = null } }
 
     if (ui.saveQueueOpen) {
+        // "Save as playlist" asks for a name (the web's PlayerQueueSave words).
         PromptDialog(
-            title = "save queue as playlist",
-            placeholder = "playlist name…",
-            confirmLabel = "create",
+            title = SAVE_AS_PLAYLIST,
+            placeholder = PLAYLIST_NAME_PROMPT,
+            confirmLabel = "save",
             onConfirm = { name ->
+                val ids = savableTrackIds(app.player.queue.value)
                 scope.launchAction(
-                    action = {
-                        val created = app.api.post("/api/playlists", buildJsonObject {
-                            put("name", name)
-                        })
-                        val pid = created.jsonObject["id"]?.jsonPrimitive?.longOrNull
-                            ?: error("no playlist id returned")
-                        val ids = app.player.queue.value
-                            .filter { it.kind == PlayKind.Library }
-                            .map { it.id }
-                        var added = 0
-                        ids.forEach { tid ->
-                            runAction {
-                                app.api.post("/api/playlists/$pid/tracks", buildJsonObject {
-                                    put("track_id", tid)
-                                })
-                            }.onSuccess { added++ }
-                        }
-                        added
-                    },
-                    onSuccess = { added ->
-                        toast("created $name · added $added track" + (if (added == 1) "" else "s"))
+                    action = { saveQueueAsPlaylist(app.api, name, ids) },
+                    onSuccess = {
+                        toast(savedAsNote(name.trim()))
                         playlists.refresh()
                     },
-                    onFailure = { toast("save failed: ${it.message}") },
+                    onFailure = { toast(saveFailedNote(apiErrorText(it))) },
                 )
             },
             onDismiss = { ui.saveQueueOpen = false },
         )
     }
+}
+
+/** The Music page's tabs, in the order [MusicScreen] lists their labels. */
+internal object MusicTabs {
+    const val LIBRARY = 0
+    const val GENRES = 1
+    const val PLAYER = 2
+    const val ROOM_QUEUE = 3
+    const val PLAYLISTS = 4
+    const val STATS = 5
 }
 
 private fun displayName(context: Context, uri: Uri): String {

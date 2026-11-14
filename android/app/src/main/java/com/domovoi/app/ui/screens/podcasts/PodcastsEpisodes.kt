@@ -21,6 +21,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
+import java.time.Instant
+import java.time.ZoneId
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -58,9 +73,7 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadingState
-import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.launchAction
-import com.domovoi.app.ui.screens.home.plural
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 
@@ -105,8 +118,13 @@ internal fun EpisodeOverlay(
         kotlinx.coroutines.delay(250)
         needle = search.trim()
     }
-    val episodesPath = "/api/podcasts/subscriptions/${sub.id}/episodes" +
-        (if (needle.isNotEmpty()) "?q=" + android.net.Uri.encode(needle) else "")
+    // The listening-as person's place in each episode comes with the rows
+    // (the device_id + person_id slot the player saves positions under);
+    // changing the person changes the path, which re-reads them.
+    val listenerId by app.prefs.listenerPersonId.collectAsState()
+    val episodesPath = PodFormat.episodesPath(sub.id, needle, app.prefs.deviceId, listenerId) {
+        android.net.Uri.encode(it)
+    }
     val pager = rememberPager<PodcastEpisode>(
         episodesPath, keyOf = { it.id },
         eventTypes = setOf("podcasts.changed", "podcast_positions.changed"),
@@ -165,6 +183,18 @@ internal fun EpisodeOverlay(
                     }
                 }
                 HorizontalDivider(color = Domovoi.colors.border)
+                // The show's info line ("6 episodes · updated 2h ago") and
+                // its description, as plain text that expands.
+                val now = Instant.now()
+                Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
+                    Text(
+                        PodFormat.subInfo(sub, episodes.total, now),
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                        color = Domovoi.colors.fgMuted,
+                    )
+                    val showText = remember(sub.description) { PodFormat.plainText(sub.description) }
+                    if (showText.isNotEmpty()) PodText(showText, Modifier.padding(top = 4.dp))
+                }
                 androidx.compose.material3.OutlinedTextField(
                     value = search, onValueChange = { search = it },
                     placeholder = { Text("search episodes…") }, singleLine = true,
@@ -181,7 +211,7 @@ internal fun EpisodeOverlay(
                         EmptyState("no episodes yet", "try \"poll now\"")
                     else -> LazyColumn(Modifier.weight(1f), state = listState) {
                         items(episodes.items, key = { it.id }) { ep ->
-                            EpisodeRow(ep, onDownload = { saveToDevice(ep) }) { onPlay(ep) }
+                            EpisodeRow(ep, now, onDownload = { saveToDevice(ep) }) { onPlay(ep) }
                         }
                         item(key = "episodes-footer") {
                             PagedFooter(episodes, "episodes", onRetry = pager::retry, onLoadMore = pager::loadMore)
@@ -214,11 +244,16 @@ internal fun EpisodeOverlay(
 }
 
 @Composable
-private fun EpisodeRow(ep: PodcastEpisode, onDownload: () -> Unit, onPlay: () -> Unit) {
+private fun EpisodeRow(ep: PodcastEpisode, now: Instant, onDownload: () -> Unit, onPlay: () -> Unit) {
+    val prog = PodFormat.progress(ep)
+    val isNew = prog == PodFormat.Progress.New
+    val desc = remember(ep.description) { PodFormat.plainText(ep.description) }
+    val progLabel = PodFormat.progressLabel(prog)
+    val meta = PodFormat.meta(ep, now, ZoneId.systemDefault())
     Column {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             FilledIconButton(
@@ -233,25 +268,51 @@ private fun EpisodeRow(ep: PodcastEpisode, onDownload: () -> Unit, onPlay: () ->
                 Icon(Icons.Filled.PlayArrow, "play", modifier = Modifier.size(16.dp))
             }
             Column(Modifier.weight(1f)) {
-                Text(
-                    ep.title ?: "episode",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = Domovoi.colors.fg,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                val meta = buildString {
-                    append(if (ep.duration_sec != null) fmtDur(ep.duration_sec) else "—")
-                    if (ep.chapters.isNotEmpty()) append(" · ${plural(ep.chapters.size, "chapter")}")
-                    if (!ep.has_file && !ep.download_status.isNullOrBlank()) {
-                        append(" · ${ep.download_status}")
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (isNew) {
+                        Box(
+                            Modifier.size(7.dp)
+                                .background(Domovoi.colors.brand, CircleShape)
+                                .semantics { contentDescription = "not played yet" },
+                        )
                     }
+                    Text(
+                        ep.title ?: "episode",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = if (isNew) FontWeight.SemiBold else FontWeight.Medium,
+                        color = Domovoi.colors.fg,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
+                // "today · 38 min · 24 min left · 12 chapters · downloaded";
+                // an unfinished place is in the brand colour, as on the web.
+                val brand = Domovoi.colors.brand
                 Text(
-                    meta,
+                    buildAnnotatedString {
+                        meta.forEachIndexed { i, m ->
+                            if (i > 0) append(" · ")
+                            if (progLabel != null && m == progLabel && prog !is PodFormat.Progress.Played) {
+                                withStyle(SpanStyle(color = brand)) { append(m) }
+                            } else {
+                                append(m)
+                            }
+                        }
+                    },
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
                     color = Domovoi.colors.fgMuted,
+                    modifier = Modifier.padding(top = 2.dp),
                 )
+                if (prog is PodFormat.Progress.Partial) {
+                    Box(
+                        Modifier.padding(top = 4.dp).fillMaxWidth().height(3.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Domovoi.colors.sunken),
+                    ) {
+                        Box(Modifier.fillMaxHeight().fillMaxWidth(prog.pct / 100f).background(brand))
+                    }
+                }
+                if (desc.isNotEmpty()) PodText(desc, Modifier.padding(top = 4.dp))
             }
             if (ep.has_file) {
                 IconButton(onClick = onDownload) {
@@ -264,4 +325,22 @@ private fun EpisodeRow(ep: PodcastEpisode, onDownload: () -> Unit, onPlay: () ->
         }
         HorizontalDivider(color = Domovoi.colors.borderSoft)
     }
+}
+
+/** A feed's description, already plain text (PodFormat.plainText): two
+ *  lines, and a tap shows the whole text (scrolling past a screenful). */
+@Composable
+private fun PodText(text: String, modifier: Modifier = Modifier) {
+    var open by remember(text) { mutableStateOf(false) }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = Domovoi.colors.fgMuted,
+        maxLines = if (open) Int.MAX_VALUE else 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = if (open) "show less" else "show more") { open = !open }
+            .then(if (open) Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()) else Modifier),
+    )
 }

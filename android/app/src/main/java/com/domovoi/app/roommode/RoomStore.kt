@@ -121,9 +121,16 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         prefs.edit().putString(K_CODE, newApprovalCode()).apply()
     }
 
+    /**
+     * A pushed wake word (`set_wake_word`). Its [threshold], when it is a
+     * 0-1 value ([thresholdValue]), becomes the room's one threshold
+     * ([wakeThreshold], reported as `wake.threshold`): the Pi writes it into
+     * its `[wake] threshold` setting the same way. Pushed without one (or
+     * with an unusable one) the threshold stays as it is, as on a Pi.
+     */
     fun setWakeWord(slug: String, threshold: Double?) {
         prefs.edit().putString(K_WAKE, slug).apply {
-            if (threshold != null && threshold > 0.0 && threshold < 1.0) putFloat(K_THRESHOLD, threshold.toFloat()) else remove(K_THRESHOLD)
+            thresholdValue(threshold)?.let { putFloat(K_THRESHOLD, it) }
         }.apply()
     }
 
@@ -191,6 +198,11 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         /** Six digits, what the dashboard's approval card takes. */
         fun newApprovalCode(random: SecureRandom = SecureRandom()): String =
             (random.nextInt(900_000) + 100_000).toString()
+
+        /** A wake threshold as the room keeps it: 0-1 (the dashboard's Wake
+         *  sensitivity range, the Pi's `_wake_threshold_value`), else null. */
+        fun thresholdValue(raw: Double?): Float? =
+            raw?.takeIf { it in 0.0..1.0 }?.toFloat()
 
         /** Whether room mode is on, without building a store (MainActivity). */
         fun isActive(context: Context): Boolean =

@@ -308,10 +308,24 @@ class ApiClient(
     }
 
     /** [trackPairing] false: the answer neither raises nor clears
-     *  [pairingRequired] ([getUntracked]). */
-    suspend fun raw(method: String, path: String, body: RequestBody? = null, trackPairing: Boolean = true): String =
+     *  [pairingRequired] ([getUntracked]). [headers]: extra headers for this
+     *  call alone (the claim key, X-Device-Id). [onlyTo]: the server this
+     *  call was meant for; when the active server is another one by now,
+     *  the call is not sent ([ServerChangedException]), so what a caller read
+     *  for server A (a claim key, an outbox row) never goes to server B. */
+    suspend fun raw(
+        method: String,
+        path: String,
+        body: RequestBody? = null,
+        trackPairing: Boolean = true,
+        headers: Map<String, String> = emptyMap(),
+        onlyTo: String? = null,
+    ): String =
         withContext(Dispatchers.IO) {
             if (baseUrl.isBlank()) throw IOException("no server configured")
+            if (onlyTo != null && onlyTo.trim().trimEnd('/') != baseUrl.trim().trimEnd('/')) {
+                throw ServerChangedException()
+            }
             val req = Request.Builder()
                 .url(absolute(path))
                 // Makes every call a preflighted one: a multipart or body-less
@@ -319,6 +333,7 @@ class ApiClient(
                 // can't refuse before the side effect lands (WEB-6). The
                 // dashboard sends the same header.
                 .header("X-Requested-With", "DomovoiApp")
+                .apply { headers.forEach { (k, v) -> header(k, v) } }
                 .method(method, body)
                 .build()
             http.newCall(req).await().use { resp ->
@@ -349,14 +364,29 @@ class ApiClient(
      * between the two. Errors still throw as from [get].
      */
     suspend fun getUntracked(path: String): JsonElement = parse(raw("GET", path, trackPairing = false))
-    suspend fun post(path: String, body: JsonElement? = null): JsonElement =
-        parse(raw("POST", path, jsonBody(body)))
+    suspend fun post(
+        path: String,
+        body: JsonElement? = null,
+        headers: Map<String, String> = emptyMap(),
+        onlyTo: String? = null,
+    ): JsonElement =
+        parse(raw("POST", path, jsonBody(body), headers = headers, onlyTo = onlyTo))
     suspend fun patch(path: String, body: JsonElement? = null): JsonElement =
         parse(raw("PATCH", path, jsonBody(body)))
-    suspend fun put(path: String, body: JsonElement? = null): JsonElement =
-        parse(raw("PUT", path, jsonBody(body)))
-    suspend fun delete(path: String, body: JsonElement? = null): JsonElement =
-        parse(raw("DELETE", path, body?.let { jsonBody(it) }))
+    suspend fun put(
+        path: String,
+        body: JsonElement? = null,
+        headers: Map<String, String> = emptyMap(),
+        onlyTo: String? = null,
+    ): JsonElement =
+        parse(raw("PUT", path, jsonBody(body), headers = headers, onlyTo = onlyTo))
+    suspend fun delete(
+        path: String,
+        body: JsonElement? = null,
+        headers: Map<String, String> = emptyMap(),
+        onlyTo: String? = null,
+    ): JsonElement =
+        parse(raw("DELETE", path, body?.let { jsonBody(it) }, headers = headers, onlyTo = onlyTo))
 
     suspend fun upload(path: String, form: MultipartBody): JsonElement =
         parse(raw("POST", path, form))
@@ -364,6 +394,11 @@ class ApiClient(
     private fun parse(text: String): JsonElement =
         if (text.isBlank()) JsonNull else DomovoiJson.parseToJsonElement(text)
 }
+
+/** A call made for one server ([ApiClient.raw] `onlyTo`) while the app had
+ *  moved to another: nothing was sent. An IOException, so it is kept and
+ *  tried again like any call that didn't get through. */
+class ServerChangedException : IOException("the server changed; not sent")
 
 /** What the server said to a household token checked before saving
  *  ([ApiClient.checkDeviceToken]). */

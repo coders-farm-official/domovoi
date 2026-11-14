@@ -128,6 +128,10 @@ class PlayerController(
 
     val current: PlayItem? get() = _queue.value.getOrNull(_index.value)
 
+    /** Listening history (listens/ListenLog.kt), set by AppContainer; null
+     *  in the tests: nothing is logged. */
+    var listens: com.domovoi.app.listens.ListenLog? = null
+
     private var saveJob: Job? = null
     private var sleepJob: Job? = null
     private var remotePollJob: Job? = null
@@ -205,14 +209,22 @@ class PlayerController(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _isPlaying.value = isPlaying
                 if (!isPlaying) flushSpokenPosition()
+                listens?.playing(isPlaying, current, _target.value is PlayTarget.Local, player.duration.takeIf { it > 0 }?.div(1000.0))
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 _index.value = player.currentMediaItemIndex
+                val natural = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+                listens?.transition(current, natural, _target.value is PlayTarget.Local, player.isPlaying)
+            }
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) listens?.ended()
             }
             override fun onPlaybackParametersChanged(params: androidx.media3.common.PlaybackParameters) {
                 _speed.value = params.speed
             }
         })
+        // Casting: the room logs its own listens; the phone's song stops here.
+        scope.launch { _target.collect { if (it is PlayTarget.Room) listens?.stopped() } }
         // Position ticker + throttled spoken-position save (web: rAF ticker,
         // save every 10s while playing, flush on pause).
         scope.launch {
@@ -323,12 +335,14 @@ class PlayerController(
         val left = leaveRoom(onLeft)
         ensureService()
         tagQueued(window.items, replaced = true)
+        listens?.stopped()
         _queue.value = window.items
         _index.value = window.index
         exoPlayer.setMediaItems(window.items.map(::mediaItemFor), window.index, (resumeSec * 1000).toLong())
         speed?.let { exoPlayer.setPlaybackSpeed(it) }
         exoPlayer.prepare()
         exoPlayer.play()
+        listens?.transition(current, natural = false, local = true, playing = exoPlayer.isPlaying)
         return left
     }
 
@@ -354,6 +368,7 @@ class PlayerController(
         // playback under a room that is still playing.
         if (_target.value is PlayTarget.Room) return
         if (i in _queue.value.indices) {
+            if (i != _index.value) listens?.skip()
             if (exoPlayer.playbackState == Player.STATE_IDLE) {
                 ensureService()
                 exoPlayer.prepare()
@@ -365,6 +380,7 @@ class PlayerController(
 
     fun removeAt(i: Int) {
         if (i !in _queue.value.indices) return
+        if (i == _index.value) listens?.skip()
         _queue.value = _queue.value.toMutableList().apply { removeAt(i) }
         exoPlayer.removeMediaItem(i)
     }
@@ -393,6 +409,7 @@ class PlayerController(
     }
 
     fun clearQueue() {
+        listens?.stopped()
         flushSpokenPosition()
         queueServer = null
         _queue.value = emptyList()
@@ -488,6 +505,7 @@ class PlayerController(
         if (ChapterSkip.applies(item)) {
             return move(ChapterSkip.next(item!!.chapters, exoPlayer.currentPosition / 1000.0, hasNextItem()))
         }
+        listens?.skip()
         exoPlayer.seekToNextMediaItem()
     }
 

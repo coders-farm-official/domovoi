@@ -403,11 +403,9 @@ private fun ShellContent(
     // even while the live connection is down (canRegister).
     val shellServerUrl by app.prefs.serverUrl.collectAsState()
     val paired = !deviceToken.isNullOrBlank()
-    // ...and when "This phone belongs to" changes: the register carries it,
-    // so voice help knows whose phone this is (net/DeviceRegistry.kt).
-    val shellOwners by app.prefs.owners.collectAsState()
-    val shellOwner = ServerCredentials.ownerFor(shellOwners, shellServerUrl)
-    LaunchedEffect(connected, shellServerUrl, deviceToken, shellOwner) {
+    // Whose phone this is no longer rides on the register (it would undo a
+    // claim made elsewhere): the answer says it (net/DeviceRegistry.kt).
+    LaunchedEffect(connected, shellServerUrl, deviceToken) {
         if (shellServerUrl.isNotBlank() && canRegister(connected, paired)) registerDevice(app)
     }
     // ...and again every couple of minutes while the app is on screen, and

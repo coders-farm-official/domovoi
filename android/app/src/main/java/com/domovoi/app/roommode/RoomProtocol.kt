@@ -39,7 +39,9 @@ object RoomProtocol {
      * nothing it did not name. Never chat mode (v1 does not handle
      * `chat_start`). `full_duplex` only on a phone with an echo canceller:
      * it is what lets the core start a drop-in here, and a room that cannot
-     * capture while it plays would howl.
+     * capture while it plays would howl. `dropin_ready` goes with it: a room
+     * that can take a drop-in finishes the reply announcing the call before
+     * it opens it ([DropinAfterReply]).
      */
     fun supports(echoCanceller: Boolean): List<String> = buildList {
         if (echoCanceller) add("full_duplex")
@@ -48,6 +50,7 @@ object RoomProtocol {
         add("announce_after_session_end")
         add("wake_models")
         add("sounds")
+        if (echoCanceller) add("dropin_ready")
     }
 
     fun hello(
@@ -71,12 +74,36 @@ object RoomProtocol {
 
     // ── what the phone sends ────────────────────────────────────────────
 
-    fun utteranceStart(trigger: String, utt: Int, backlogMs: Int, wakeMs: Int?): JsonObject = buildJsonObject {
+    /** [wakeScore]: the wake's peak score ([WakeGate.lastPeak]), sent as
+     *  `wake_score` (three decimals, as the Pi does) on a wake-word capture
+     *  only; the core keeps it on the turn's history row (V044). */
+    fun utteranceStart(trigger: String, utt: Int, backlogMs: Int, wakeMs: Int?, wakeScore: Float? = null): JsonObject = buildJsonObject {
         put("type", "utterance_start")
         put("trigger", trigger)
         put("utt", utt)
         put("backlog_ms", backlogMs)
         if (wakeMs != null) put("wake_ms", wakeMs)
+        if (trigger == "wake_word" && wakeScore != null && wakeScore.isFinite()) {
+            put("wake_score", Math.round(wakeScore.toDouble().coerceIn(0.0, 1.0) * 1000) / 1000.0)
+        }
+    }
+
+    /**
+     * The room's effective wake settings as `config_status` (flat
+     * `section.key` map, the keys of domovoi/satellite_config_schema.py and
+     * the Pi's `_config_report`): the one threshold the room wakes at, and
+     * the wake gate's patience and cooldown. Sent after `ready` and after a
+     * pushed wake word changes the threshold, so what the core holds for
+     * this room is what it does.
+     */
+    fun configStatus(threshold: Float, patienceFrames: Int, cooldownSec: Double): JsonObject = buildJsonObject {
+        put("type", "config_status")
+        put("config", buildJsonObject {
+            // Four decimals, as the Pi stores a threshold: 0.6f reads 0.6, not 0.6000000238.
+            put("wake.threshold", Math.round(threshold.toDouble() * 10_000) / 10_000.0)
+            put("wake.patience_frames", patienceFrames)
+            put("wake.cooldown_sec", cooldownSec)
+        })
     }
 
     fun volumeStatus(level: Int): JsonObject = buildJsonObject {
@@ -93,6 +120,8 @@ object RoomProtocol {
 
     val MUSIC_READY: JsonObject = buildJsonObject { put("type", "music_ready") }
     val DROPIN_END: JsonObject = buildJsonObject { put("type", "dropin_end") }
+    /** Only in answer to a `dropin_start` marked `await_ready`. */
+    val DROPIN_READY: JsonObject = buildJsonObject { put("type", "dropin_ready") }
 
     /** A message type an older core would answer with `error` is sent only
      *  when its `ready.features` lists it (frame → feature). */
@@ -139,7 +168,9 @@ object RoomProtocol {
         data object Pong : ServerFrame()
         data class Transcript(val text: String) : ServerFrame()
         data class ResponseStart(val text: String?, val sampleRate: Int) : ServerFrame()
-        data class ResponseEnd(val interrupted: Boolean, val expectFollowup: Boolean) : ServerFrame()
+        /** [ignored]: the core took the capture for background talk (the
+         *  next wake waits out the cooldown, [WakeGate]). */
+        data class ResponseEnd(val interrupted: Boolean, val expectFollowup: Boolean, val ignored: Boolean = false) : ServerFrame()
         data class SetVolume(val level: Int) : ServerFrame()
         data class MusicStart(val streamUrl: String?) : ServerFrame()
         data object MusicStop : ServerFrame()
@@ -150,7 +181,15 @@ object RoomProtocol {
         data class SoundsChanged(val roomVoice: String? = null, val saysVoice: Boolean = false) : ServerFrame()
         data class SetWakeWord(val slug: String?, val threshold: Double?) : ServerFrame()
         data object WakeModelsChanged : ServerFrame()
-        data class DropinStart(val peerRoom: String?, val peerLabel: String?, val sampleRate: Int, val fullDuplex: Boolean) : ServerFrame()
+        /** [awaitReady]: finish the reply still playing, then open the call
+         *  and say `dropin_ready` ([DropinAfterReply]). */
+        data class DropinStart(
+            val peerRoom: String?,
+            val peerLabel: String?,
+            val sampleRate: Int,
+            val fullDuplex: Boolean,
+            val awaitReady: Boolean = false,
+        ) : ServerFrame()
         data class DropinEnd(val reason: String?) : ServerFrame()
 
         /** A type this client does not handle (logged, ignored). */
@@ -175,7 +214,7 @@ object RoomProtocol {
             "pong" -> ServerFrame.Pong
             "transcript" -> ServerFrame.Transcript(s("text").orEmpty())
             "response_start" -> ServerFrame.ResponseStart(s("text"), (i("audio_sample_rate") ?: SAMPLE_RATE).coerceIn(8_000, 48_000))
-            "response_end" -> ServerFrame.ResponseEnd(b("interrupted"), b("expect_followup"))
+            "response_end" -> ServerFrame.ResponseEnd(b("interrupted"), b("expect_followup"), b("ignored"))
             "set_volume" -> ServerFrame.SetVolume((i("level") ?: 50).coerceIn(0, 100))
             "music_start" -> ServerFrame.MusicStart(s("stream_url"))
             "music_stop" -> ServerFrame.MusicStop
@@ -184,7 +223,7 @@ object RoomProtocol {
             "set_wake_word" -> ServerFrame.SetWakeWord(s("slug"), (o["threshold"] as? JsonPrimitive)?.doubleOrNull)
             "wake_models_changed" -> ServerFrame.WakeModelsChanged
             "dropin_start" -> ServerFrame.DropinStart(
-                s("peer_room"), s("peer_label"), i("audio_sample_rate") ?: SAMPLE_RATE, b("full_duplex"),
+                s("peer_room"), s("peer_label"), i("audio_sample_rate") ?: SAMPLE_RATE, b("full_duplex"), b("await_ready"),
             )
             "dropin_end" -> ServerFrame.DropinEnd(s("reason"))
             else -> ServerFrame.Other(type)
