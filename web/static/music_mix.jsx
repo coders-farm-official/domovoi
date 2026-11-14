@@ -132,14 +132,17 @@ const MusicMixPanel = () => {
 
       <Card title="The mix" sub="People can set their own in Settings → People; everyone else gets these.">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {!admin && (
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>An admin can change this.</div>
+          )}
           <div>
             <div className="label" style={{ marginBottom: 6 }}>discovery or favorites</div>
-            <MixSlider id="mix-df" spec={MIX_DISCOVERY} value={data.discovery_favorites} disabled={saving}
+            <MixSlider id="mix-df" spec={MIX_DISCOVERY} value={data.discovery_favorites} disabled={saving || !admin}
                        onChange={(v) => save({ discovery_favorites: v }, `the mix: ${MIX_DISCOVERY.words[v]}`)}/>
           </div>
           <div>
             <div className="label" style={{ marginBottom: 6 }}>stay close or wander</div>
-            <MixSlider id="mix-cw" spec={MIX_WANDER} value={data.close_wander} disabled={saving}
+            <MixSlider id="mix-cw" spec={MIX_WANDER} value={data.close_wander} disabled={saving || !admin}
                        onChange={(v) => save({ close_wander: v }, `the mix: ${MIX_WANDER.words[v]}`)}/>
           </div>
         </div>
@@ -211,6 +214,12 @@ const MusicMixPanel = () => {
 /* A person's own sliders, in the People page's Profile tab. */
 const PersonMusicMix = ({ person, fire }) => {
   const shared = useSharedScreen();
+  const admin = useAdminSignedIn();
+  // Editable by an admin, or from the phone or browser that said "this is me"
+  // as this person; anyone else sees it read-only.
+  let owner = null;
+  try { owner = DeviceIdentity.owner ? DeviceIdentity.owner() : null; } catch { owner = null; }
+  const canEdit = !!person && (admin || (!!owner && owner.id === person.id));
   const { data, refresh } = useApiObject(person ? `/api/people/${person.id}/music-mix` : null, { quiet: true });
   const [saving, setSaving] = React.useState(false);
   if (!person || shared || !data) return null;
@@ -232,18 +241,23 @@ const PersonMusicMix = ({ person, fire }) => {
     <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }} data-settings-mark="music-mix">
       <div className="label" style={{ marginBottom: 6 }}>music mix</div>
       <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: own ? 12 : 0 }}>
-        <input type="checkbox" checked={!own} disabled={saving}
+        <input type="checkbox" checked={!own} disabled={saving || !canEdit}
                onChange={(e) => (e.target.checked
                  ? put(null, `${person.name} uses the household’s mix`)
                  : put({ discovery_favorites: uses.discovery_favorites || 3, close_wander: uses.close_wander || 3 },
                        `${person.name} has their own mix`))}/>
         Use the household’s mix <a href="#settings/music-mix" style={{ fontSize: 12 }}>(see it)</a>
       </label>
+      {!canEdit && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          An admin, or {person.name}’s own phone, can change this.
+        </div>
+      )}
       {own && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <MixSlider id={`pmix-df-${person.id}`} spec={MIX_DISCOVERY} value={uses.discovery_favorites} disabled={saving}
+          <MixSlider id={`pmix-df-${person.id}`} spec={MIX_DISCOVERY} value={uses.discovery_favorites} disabled={saving || !canEdit}
                      onChange={(v) => set('discovery_favorites', v)}/>
-          <MixSlider id={`pmix-cw-${person.id}`} spec={MIX_WANDER} value={uses.close_wander} disabled={saving}
+          <MixSlider id={`pmix-cw-${person.id}`} spec={MIX_WANDER} value={uses.close_wander} disabled={saving || !canEdit}
                      onChange={(v) => set('close_wander', v)}/>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             Used when Up next plays for {person.name}: “listening as” them, their phone, or their voice in a room.

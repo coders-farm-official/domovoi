@@ -150,7 +150,8 @@ from domovoi.tests.test_up_next_api import _gates  # noqa: E402
 
 def test_route_tiers():
     assert admin_auth.require_device_read in _gates("GET", "/api/music/mix")
-    assert admin_auth.require_device in _gates("PUT", "/api/music/mix")
+    assert admin_auth.require_admin_mutation in _gates("PUT", "/api/music/mix")
+    assert admin_auth.require_device not in _gates("PUT", "/api/music/mix")
     assert admin_auth.require_device_read in _gates("GET", "/api/people/{person_id}/music-mix")
     assert admin_auth.require_device in _gates("PUT", "/api/people/{person_id}/music-mix")
 
@@ -174,7 +175,7 @@ async def test_mix_round_trip_person_override_and_autoplay_default(_db, clean):
     from domovoi.db.session import engine
 
     async with web_client() as c:
-        await claim_admin(c)
+        admin_token = await claim_admin(c)
     token = await db_device_token()
     async with engine.begin() as conn:
         alex = (await conn.execute(text("INSERT INTO people (name) VALUES ('Alex') RETURNING id"))).scalar_one()
@@ -182,7 +183,12 @@ async def test_mix_round_trip_person_override_and_autoplay_default(_db, clean):
             "INSERT INTO library_tracks (file_path, title, artist) VALUES ('/home/alex/Music/a.flac', 'A', 'Nina') "
             "RETURNING id"))).scalar_one()
     dev = web_client(headers={"X-Requested-With": "t", HEADER: token, "X-Device-Id": "browser-1"})
-    async with dev as d, web_client() as anon:
+    adm = web_client(headers={"X-Requested-With": "t", "Authorization": f"Bearer {admin_token}",
+                              "X-Device-Id": "browser-1"})
+    async with dev as dv, adm as d, web_client() as anon:
+        # A device can read the mix but not change the household's (admin).
+        assert (await dv.get("/api/music/mix")).status_code == 200
+        assert (await dv.put("/api/music/mix", json={"autoplay": False})).status_code in (401, 403)
         r = await d.get("/api/music/mix")
         assert r.status_code == 200
         body = r.json()
@@ -223,3 +229,37 @@ async def test_mix_round_trip_person_override_and_autoplay_default(_db, clean):
             house = await mix_mod.resolve(s, None)
     assert (used.discovery_favorites, used.close_wander) == (1, 5)
     assert (house.discovery_favorites, house.close_wander) == (1, 3)
+
+
+@requires_db
+async def test_person_mix_is_an_admins_or_that_persons_own_phone(_db, clean):
+    from domovoi.db.session import engine
+
+    async with web_client() as c:
+        admin_token = await claim_admin(c)
+    token = await db_device_token()
+    async with engine.begin() as conn:
+        alex = (await conn.execute(text("INSERT INTO people (name) VALUES ('Alex') RETURNING id"))).scalar_one()
+        sam = (await conn.execute(text("INSERT INTO people (name) VALUES ('Sam') RETURNING id"))).scalar_one()
+        for dev_id, owner in (("phone-alex", alex), ("phone-none", None)):
+            await conn.execute(text(
+                "INSERT INTO devices (device_id, name, owner_person_id) VALUES (:d, :d, :o)"), {"d": dev_id, "o": owner})
+    body = {"override": {"discovery_favorites": 2, "close_wander": 4}}
+
+    def device(dev_id):
+        return web_client(headers={"X-Requested-With": "t", HEADER: token, "X-Device-Id": dev_id})
+
+    adm = web_client(headers={"X-Requested-With": "t", "Authorization": f"Bearer {admin_token}"})
+    async with device("phone-none") as nobody, device("phone-alex") as mine, adm as admin:
+        # No claim: refused on both.
+        r = await nobody.put(f"/api/people/{alex}/music-mix", json=body)
+        assert r.status_code == 403 and "own phone" in r.json()["detail"]
+        assert (await nobody.put("/api/music/mix", json={"autoplay": False})).status_code in (401, 403)
+        # Claimed as Alex: Alex's own, not Sam's, not the household's.
+        assert (await mine.put(f"/api/people/{alex}/music-mix", json=body)).status_code == 200
+        assert (await mine.put(f"/api/people/{sam}/music-mix", json=body)).status_code == 403
+        assert (await mine.put("/api/music/mix", json={"autoplay": False})).status_code in (401, 403)
+        # Admin: everything.
+        assert (await admin.put(f"/api/people/{sam}/music-mix", json=body)).status_code == 200
+        assert (await admin.put(f"/api/people/{alex}/music-mix", json={"override": None})).status_code == 200
+        assert (await admin.put("/api/music/mix", json={"autoplay": False})).status_code == 200
