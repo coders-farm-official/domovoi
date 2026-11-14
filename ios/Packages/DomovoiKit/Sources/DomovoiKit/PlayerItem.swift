@@ -73,7 +73,9 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
     /// e.g. `/api/music/library/12/audio`.
     public let src: String
     /// e.g. `/api/music/library/12/cover`.
-    public let coverPath: String?
+    /// `var`: a cover version heard after the item was queued (V059) moves it
+    /// in place, so Now Playing redraws without restarting playback.
+    public var coverPath: String?
     public let durationSec: Double?
     /// False for a live stream: the seek is refused in the model and the
     /// lock-screen scrubber is disabled (MAP §5.5).

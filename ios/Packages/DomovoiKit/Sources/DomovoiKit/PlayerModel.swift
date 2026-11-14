@@ -1129,7 +1129,16 @@ public final class PlayerModel {
     /// (``MusicCoverVersions``): when one is the song on the lock screen,
     /// its artwork is attached again at the new version.
     public func coverVersionsMoved(_ moved: Set<Int64>) {
-        guard let item = current, item.kind == .library, moved.contains(item.itemID) else { return }
+        let versions = MusicCoverVersions.shared
+        var changed = false
+        for i in queue.indices where queue[i].kind == .library && moved.contains(queue[i].itemID) {
+            let next = versions.versioned(queue[i].coverPath)
+            if next != queue[i].coverPath {
+                queue[i].coverPath = next
+                changed = true
+            }
+        }
+        guard changed, let item = current, item.kind == .library, moved.contains(item.itemID) else { return }
         refreshNowPlaying()
     }
 

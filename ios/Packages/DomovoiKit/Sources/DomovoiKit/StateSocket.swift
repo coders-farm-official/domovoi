@@ -19,9 +19,26 @@ public struct StateEvent: Equatable, Sendable {
     /// The whole frame, as it arrived.
     public let frame: String
 
-    public init(type: String, frame: String) {
+    /// The server address the socket that carried it was opened to, or ""
+    /// where nobody stamped it (a frame parsed by itself, a test). So a
+    /// consumer can drop a frame from a server the app has since left
+    /// (V059 cover versions; Android `WsEvent.server`). **Not** part of
+    /// equality: two frames with the same words are the same frame.
+    public let server: String
+
+    public init(type: String, frame: String, server: String = "") {
         self.type = type
         self.frame = frame
+        self.server = server
+    }
+
+    public static func == (lhs: StateEvent, rhs: StateEvent) -> Bool {
+        lhs.type == rhs.type && lhs.frame == rhs.frame
+    }
+
+    /// The same frame, stamped with the server its socket was opened to.
+    public func from(_ server: String) -> StateEvent {
+        StateEvent(type: type, frame: frame, server: server)
     }
 
     /// The frame, or nil for one the listener drops.
@@ -720,9 +737,11 @@ public final class StateSocket: Sendable {
     }
 
     private func arrived(_ text: String, attempt: Int64) {
-        let mine = state.withLock { current in current.started && current.attempt == attempt }
+        let (mine, base) = state.withLock { current in
+            (current.started && current.attempt == attempt, current.base)
+        }
         guard mine, let parsed = StateEvent.parse(text) else { return }
-        event(parsed)
+        event(parsed.from(base))
     }
 
     private func failed(_ status: Int?, _ body: String?, attempt: Int64) {

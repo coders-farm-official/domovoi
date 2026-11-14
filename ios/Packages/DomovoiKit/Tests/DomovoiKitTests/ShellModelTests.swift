@@ -331,6 +331,13 @@ final class ShellModelTests: XCTestCase {
         XCTAssertEqual(4, MusicCoverVersions.shared.known(12))
         rig.model.coverEventArrived(StateEvent(type: "playlists.changed", frame: "{}"))
         XCTAssertEqual(4, MusicCoverVersions.shared.known(12))
+        // A frame from a socket opened to a server the app has left is dropped.
+        rig.model.coverEventArrived(StateEvent(
+            type: "library.cover.changed",
+            frame: #"{"type":"library.cover.changed","data":{"tracks":[{"id":12,"cover_v":9}]}}"#,
+            server: "http://10.0.0.77:6369"
+        ))
+        XCTAssertEqual(4, MusicCoverVersions.shared.known(12), "another server's event moved this one's covers")
         MusicCoverVersions.shared.forget()
         rig.model.stop()
     }

@@ -101,6 +101,11 @@ final class MusicCoverVersionTests: XCTestCase {
         XCTAssertEqual("", MusicCredits.with(artist: "Main feat. Guest", artists: ["Main", "guest"]))
         XCTAssertEqual("", MusicCredits.with(artist: "A", artists: []))
         XCTAssertEqual("with B", MusicCredits.with(artist: nil, artists: ["  ", "B"]))
+        // Android's cases (`CreditsAndCoverFieldsTest.kt`, 4e9206e9).
+        XCTAssertEqual("with Guest", MusicCredits.with(artist: "Main", artists: ["Main", "Guest"]))
+        XCTAssertEqual("with B, C, D", MusicCredits.with(artist: "A", artists: ["A", "B", "C", "D"]))
+        XCTAssertEqual("", MusicCredits.with(artist: "Main", artists: ["Main"]))
+        XCTAssertEqual("with C", MusicCredits.with(artist: "Main feat. Guest", artists: ["Main", "GUEST", "C"]))
         XCTAssertEqual("A · with B, C", MusicCredits.artistLine("A", credits: "with B, C"))
         XCTAssertEqual("A", MusicCredits.artistLine("A", credits: ""))
 
@@ -207,11 +212,63 @@ final class MusicCoverVersionTests: XCTestCase {
         XCTAssertNil(covers.newestImage(trackID: 13))
     }
 
+    /// The defect: a cover event from a server the app has left moved this
+    /// server's track ids. The socket stamps each frame with its server.
+    func testAFrameKeepsTheServerItsSocketWasOpenedTo() {
+        let plain = StateEvent(type: "x", frame: "{}")
+        XCTAssertEqual("", plain.server)
+        XCTAssertEqual("http://10.0.0.77:6369", plain.from("http://10.0.0.77:6369").server)
+        XCTAssertEqual(plain, plain.from("http://10.0.0.77:6369"), "the server is not part of a frame's words")
+    }
+
     func testACoverPathIsReadBack() {
         XCTAssertEqual(12, PlayerArtwork.coverPathParts("/api/music/library/12/cover")?.trackID)
         XCTAssertNil(PlayerArtwork.coverPathParts("/api/music/library/12/cover")?.version)
         XCTAssertEqual(4, PlayerArtwork.coverPathParts("/api/music/library/12/cover?v=4")?.version)
         XCTAssertNil(PlayerArtwork.coverPathParts("/api/music/library/12/audio"))
         XCTAssertNil(PlayerArtwork.coverPathParts("/api/podcasts/art/4"))
+    }
+}
+
+/// The phone's own queue on a cover change (V059, Android
+/// `PlayerController` on `library.cover.changed`).
+@MainActor
+final class MusicCoverVersionPlayerTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        StubURLProtocol.reset()
+        MusicCoverVersions.shared.forget()
+    }
+
+    override func tearDown() {
+        MusicCoverVersions.shared.forget()
+        StubURLProtocol.reset()
+        super.tearDown()
+    }
+
+    /// The defect: the queue kept the cover path of the day it was queued,
+    /// so Now Playing kept the old artwork until the song changed. Now the
+    /// queue's items take the new version, the lock screen is handed it, and
+    /// the engine is not asked to play anything again.
+    func testACoverChangeMovesTheQueueAndTheLockScreenWithoutReplaying() {
+        let harness = PlayerHarness()
+        _ = harness.model.play([
+            PlayerItem.fromTrack(id: 12, title: "Alpha", coverV: 0),
+            PlayerItem.fromTrack(id: 13, title: "Beta", coverV: 0),
+        ])
+        let callsBefore = harness.engine.calls.count
+        MusicCoverVersions.shared.received(StateEvent(
+            type: MusicCoverVersions.event,
+            frame: #"{"type":"library.cover.changed","data":{"tracks":[{"id":12,"cover_v":2},{"id":13,"cover_v":5}]}}"#
+        ), server: PlayerHarness.serverAddress)
+        harness.model.coverVersionsMoved([12, 13])
+
+        XCTAssertEqual(
+            ["/api/music/library/12/cover?v=2", "/api/music/library/13/cover?v=5"],
+            harness.model.queue.map(\.coverPath)
+        )
+        XCTAssertEqual("/api/music/library/12/cover?v=2", harness.nowPlaying.artworkPaths.last ?? nil)
+        XCTAssertEqual(callsBefore, harness.engine.calls.count, "the engine was touched for a picture: (harness.engine.calls)")
     }
 }

@@ -1128,7 +1128,13 @@ public final class ShellModel {
     /// now.
     func coverEventArrived(_ frame: StateEvent) {
         guard frame.type == MusicCoverVersions.event else { return }
-        let moved = MusicCoverVersions.shared.received(frame, server: container.store.serverURL)
+        let active = container.store.serverURL
+        // A frame from a socket opened to a server the app has since left
+        // says nothing about this one's tracks (Android keys `WsEvent` by
+        // server the same way).
+        if !frame.server.isEmpty,
+           ServerCredentials.normalize(frame.server) != ServerCredentials.normalize(active) { return }
+        let moved = MusicCoverVersions.shared.received(frame, server: active)
         guard !moved.isEmpty else { return }
         heldPlayer?.coverVersionsMoved(moved)
     }
