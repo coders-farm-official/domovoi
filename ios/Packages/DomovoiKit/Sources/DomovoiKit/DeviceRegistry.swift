@@ -158,7 +158,8 @@ public enum DeviceRegistry {
         server: String? = nil,
         deviceID: String,
         name: String,
-        userAgent: String
+        userAgent: String,
+        timeout: TimeInterval = DeviceRegistry.registerTimeoutSec
     ) async -> DeviceRow? {
         guard let body = try? registerPayload(deviceID: deviceID, name: name, userAgent: userAgent) else {
             return nil
@@ -166,14 +167,27 @@ public enum DeviceRegistry {
         // In the book's line (``ClaimLine``): a registration answer must not
         // land after a claim that was sent after it, or "nobody" from the
         // registration would wipe the key the claim minted.
+        //
+        // Held to ``registerTimeoutSec`` in all (integration fix B2): one
+        // line for every server, so an old house that no longer answers must
+        // not keep a claim on the active one waiting for the client's 60 s.
+        // An answer that comes after the deadline is not stored — the line
+        // has moved on, and a claim after it may have stored a newer key.
         let send: @Sendable () async -> Data? = {
-            guard let data = try? await client.raw(
-                method: "POST", path: "/api/devices/register", body: body, onlyTo: server
-            ) else { return nil }
-            if let book, let server, (try? DomovoiClient.decode(data, as: DeviceRow.self)) != nil {
-                rememberDeviceAnswer(book, server: server, data: data)
+            await withClaimDeadline(timeout) { stillInTime in
+                // Read before the await: a forget while the call is out
+                // makes its answer stale (integration fix B1).
+                let forgets = server.map { book?.forgetCount(for: $0) ?? 0 }
+                guard let data = try? await client.raw(
+                    method: "POST", path: "/api/devices/register", body: body,
+                    timeout: timeout, onlyTo: server
+                ) else { return nil }
+                guard stillInTime() else { return nil }
+                if let book, let server, (try? DomovoiClient.decode(data, as: DeviceRow.self)) != nil {
+                    rememberDeviceAnswer(book, server: server, data: data, forgetCount: forgets)
+                }
+                return data
             }
-            return data
         }
         let data: Data?
         if let book { data = await book.line.run(send) } else { data = await send() }
@@ -274,6 +288,11 @@ public enum DeviceRegistry {
 
     /// …and never twice inside this gap, however many things changed at once.
     public static let reaskGapMs: Int64 = 15 * 1000
+
+    /// The most a registration may take, in all, inside the ``ClaimLine``
+    /// (integration fix B2). The request's own idle timeout is set to it as
+    /// well, so a server that never answers is let go of at the same time.
+    public static let registerTimeoutSec: TimeInterval = 15
 
     /// The cadence rule, without the timer.
     ///
@@ -520,9 +539,41 @@ public protocol ClaimBook: AnyObject, Sendable {
     /// Registrations and claims go through this one at a time, so a stale
     /// answer can never land after a newer one (``ClaimLine``).
     var line: ClaimLine { get }
+    /// How many times `server` has been forgotten. A call reads it before it
+    /// goes out, and stores its answer only if it is unchanged
+    /// (``update(for:ifForgetCountIs:_:)``): a forget runs outside the line,
+    /// so without this a key minted in flight would be saved again after the
+    /// forget took it (integration fix B1).
+    func forgetCount(for server: String) -> Int
+    /// ``update(for:_:)``, but only while `server` has not been forgotten
+    /// since `count` was read — checked in the same step as the write.
+    func update(
+        for server: String,
+        ifForgetCountIs count: Int,
+        _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?
+    )
+    /// ``setSharedScreen(_:for:)`` under the same rule.
+    func setSharedScreen(_ shared: Bool, for server: String, ifForgetCountIs count: Int)
 }
 
 public extension ClaimBook {
+    /// A book that is never forgotten (a test's wrapper) counts none.
+    func forgetCount(for server: String) -> Int { 0 }
+
+    func update(
+        for server: String,
+        ifForgetCountIs count: Int,
+        _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?
+    ) {
+        guard forgetCount(for: server) == count else { return }
+        update(for: server, change)
+    }
+
+    func setSharedScreen(_ shared: Bool, for server: String, ifForgetCountIs count: Int) {
+        guard forgetCount(for: server) == count else { return }
+        setSharedScreen(shared, for: server)
+    }
+
     /// Store `owner` (nil: nobody) as the phone's owner at `server`, and
     /// `claimKey` as the key it holds there (nil: none).
     func rememberDeviceOwner(_ owner: DeviceOwner?, claimKey: String?, for server: String) {
@@ -552,17 +603,89 @@ public final class ClaimLine: Sendable {
 
     public init() {}
 
+    /// Set for the body of a ``run(_:)`` (and what it awaits).
+    @TaskLocal static var inside = false
+
+    /// Whether the caller is inside a line's body now.
+    public static var isInside: Bool { inside }
+
+    /// Run `body` after every call queued before it has finished.
+    ///
+    /// **Never from inside a body** (integration fix B3): the new call would
+    /// queue behind the body that is waiting for it, and both would wait
+    /// forever. That is a programming error, so it stops the app with a
+    /// sentence that says so rather than hanging the claim buttons.
     public func run<T: Sendable>(_ body: @Sendable @escaping () async -> T) async -> T {
+        precondition(
+            !Self.inside,
+            "ClaimLine.run was called from inside the line; it would wait for itself forever"
+        )
         let mine: Task<T, Never> = tail.withLock { last in
             let previous = last
             let task = Task<T, Never> {
                 await previous?.value
-                return await body()
+                return await Self.$inside.withValue(true) { await body() }
             }
             last = Task { _ = await task.value }
             return task
         }
         return await mine.value
+    }
+}
+
+/// `work`, but given up after `seconds`: nil then, and whatever `work`
+/// finishes with afterwards is thrown away (integration fix B2).
+///
+/// `work` is handed `stillInTime`, which it calls just before it **stores**
+/// anything: true means it has the result slot and the deadline can no
+/// longer pass it; false means the deadline already answered and nothing
+/// may be written. So the line moves on at the deadline, and a late answer
+/// can never be stored after a call queued behind it.
+func withClaimDeadline<T: Sendable>(
+    _ seconds: TimeInterval,
+    _ work: @Sendable @escaping (_ stillInTime: @Sendable @escaping () -> Bool) async -> T?
+) async -> T? {
+    let slot = ClaimDeadlineSlot<T>()
+    return await withCheckedContinuation { (waiter: CheckedContinuation<T?, Never>) in
+        slot.state.withLock { $0.waiter = waiter }
+        let job = Task {
+            let out = await work { slot.take() }
+            // Taken by `stillInTime`, or not yet by anyone: answer it.
+            _ = slot.take()
+            slot.answer(out)
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            if slot.take() {
+                job.cancel()
+                slot.answer(nil)
+            }
+        }
+    }
+}
+
+/// The one result of a ``withClaimDeadline(_:_:)``: whichever side takes it
+/// first answers the waiter; the other's answer goes nowhere.
+private final class ClaimDeadlineSlot<T: Sendable>: Sendable {
+    let state = Mutex<(taken: Bool, waiter: CheckedContinuation<T?, Never>?)>((false, nil))
+
+    /// Take the slot; false when the other side already has.
+    func take() -> Bool {
+        state.withLock { s in
+            if s.taken { return false }
+            s.taken = true
+            return true
+        }
+    }
+
+    /// Hand `value` to the waiter, once.
+    func answer(_ value: T?) {
+        let waiter = state.withLock { s -> CheckedContinuation<T?, Never>? in
+            let w = s.waiter
+            s.waiter = nil
+            return w
+        }
+        waiter?.resume(returning: value)
     }
 }
 
@@ -588,6 +711,8 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
         /// A read the Keychain FAILED is not cached, so it is asked again.
         var keys: [String: String?] = [:]
         var shared: [String: Bool] = [:]
+        /// How many times each server was forgotten (``forgetCount(for:)``).
+        var forgets: [String: Int] = [:]
     }
 
     private let place: any SavedState
@@ -615,16 +740,22 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
     }
 
     private func keyLocked(_ s: inout State, _ key: String) -> String? {
-        if let cached = s.keys[key] { return cached }
+        keyReadLocked(&s, key).key
+    }
+
+    /// The key, and whether the Keychain FAILED to answer (as opposed to
+    /// answering "none"). A failed read is not cached, so it is asked again.
+    private func keyReadLocked(_ s: inout State, _ key: String) -> (key: String?, failed: Bool) {
+        if let cached = s.keys[key] { return (cached, false) }
         switch vault.read(for: key) {
         case .key(let found):
             s.keys[key] = .some(found)
-            return found
+            return (found, false)
         case .none:
             s.keys[key] = .some(nil)
-            return nil
+            return (nil, false)
         case .failed:
-            return nil
+            return (nil, true)
         }
     }
 
@@ -638,11 +769,34 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
     public func holdsClaimKey(for server: String) -> Bool { claimKey(for: server) != nil }
 
     public func update(for server: String, _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?) {
+        write(for: server, ifForgetCountIs: nil, change)
+    }
+
+    public func forgetCount(for server: String) -> Int {
+        state.withLock { $0.forgets[Self.k(server)] ?? 0 }
+    }
+
+    public func update(
+        for server: String,
+        ifForgetCountIs count: Int,
+        _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?
+    ) {
+        write(for: server, ifForgetCountIs: count, change)
+    }
+
+    private func write(
+        for server: String,
+        ifForgetCountIs count: Int?,
+        _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?
+    ) {
         let key = Self.k(server)
         guard !key.isEmpty else { return }
         let moved: Bool = state.withLock { s in
+            // Forgotten since the caller read the count: its answer is stale
+            // (integration fix B1). Checked in the same step as the write.
+            if let count, (s.forgets[key] ?? 0) != count { return false }
             let ownerBefore = s.owners[key]
-            let keyBefore = keyLocked(&s, key)
+            let (keyBefore, readFailed) = keyReadLocked(&s, key)
             guard let next = change(ownerBefore, keyBefore) else { return false }
             let safe = headerSafeClaimKey(next.key)
             var moved = false
@@ -651,7 +805,11 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
                 if let blob = try? JSONEncoder().encode(s.owners) { place.write(blob) }
                 moved = true
             }
-            if safe != keyBefore {
+            // A read that FAILED is not "no key": the Keychain may still hold
+            // one. When the answer is "no key", it is deleted anyway, or a key
+            // the server no longer honours would come back on the next read
+            // (integration fix B4).
+            if safe != keyBefore || (safe == nil && readFailed) {
                 vault.set(safe, for: key)
                 s.keys[key] = .some(safe)
                 moved = true
@@ -662,9 +820,18 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
     }
 
     public func setSharedScreen(_ shared: Bool, for server: String) {
+        writeShared(shared, for: server, ifForgetCountIs: nil)
+    }
+
+    public func setSharedScreen(_ shared: Bool, for server: String, ifForgetCountIs count: Int) {
+        writeShared(shared, for: server, ifForgetCountIs: count)
+    }
+
+    private func writeShared(_ shared: Bool, for server: String, ifForgetCountIs count: Int?) {
         let key = Self.k(server)
         guard !key.isEmpty else { return }
         let moved = state.withLock { s -> Bool in
+            if let count, (s.forgets[key] ?? 0) != count { return false }
             guard s.shared[key] != shared else { return false }
             s.shared[key] = shared
             return true
@@ -682,8 +849,14 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
     /// Called from the store's one "server forgotten" signal
     /// (``ShellStore/notifyServerForgotten(to:)``).
     public func forget(server: String) {
+        let key = Self.k(server)
+        guard !key.isEmpty else { return }
+        // Counted FIRST: a call already out read the count before it went,
+        // and stores nothing once it has moved — so a key minted in flight
+        // is never saved again after this (integration fix B1).
+        state.withLock { $0.forgets[key, default: 0] += 1 }
         update(for: server) { _, _ in (nil, nil) }
-        state.withLock { _ = $0.shared.removeValue(forKey: Self.k(server)) }
+        state.withLock { _ = $0.shared.removeValue(forKey: key) }
     }
 }
 
@@ -732,13 +905,24 @@ public func ownerAnswer(_ answer: [String: Any], before: DeviceOwner?, heldKey: 
 /// the server the call was made TO, read before it, never the active one
 /// afterwards. `rememberDeviceAnswer` (`DeviceRegistry.kt`). The owner and
 /// key are read and written as one step (``ClaimBook/update(for:_:)``).
-public func rememberDeviceAnswer(_ book: any ClaimBook, server: String, data: Data) {
+///
+/// `forgetCount`: ``ClaimBook/forgetCount(for:)`` as read before the call
+/// went out. When given, nothing is stored if `server` was forgotten since
+/// (integration fix B1).
+public func rememberDeviceAnswer(_ book: any ClaimBook, server: String, data: Data, forgetCount: Int? = nil) {
     guard let row = try? JSONDecoder().decode(DeviceRegistry.DeviceRow.self, from: data),
           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return }
-    book.setSharedScreen(DeviceRegistry.sharedScreenAnswer(row), for: server)
-    book.update(for: server) { owner, held in
+    let shared = DeviceRegistry.sharedScreenAnswer(row)
+    let change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)? = { owner, held in
         ownerAnswer(object, before: owner, heldKey: held).map { ($0.owner, $0.claimKey) }
+    }
+    if let forgetCount {
+        book.setSharedScreen(shared, for: server, ifForgetCountIs: forgetCount)
+        book.update(for: server, ifForgetCountIs: forgetCount, change)
+    } else {
+        book.setSharedScreen(shared, for: server)
+        book.update(for: server, change)
     }
 }
 
@@ -809,6 +993,9 @@ public func claimThisPhone(
         body = Data("{\"person_id\":null}".utf8)
     }
     let result: Result<DeviceOwner?, DomovoiError> = await book.line.run {
+        // Read before the await, with the key: a forget while the call is
+        // out makes its answer stale (integration fix B1).
+        let forgets = book.forgetCount(for: server)
         let sent = book.claimKey(for: server)
         let data: Data
         do throws(DomovoiError) {
@@ -827,7 +1014,7 @@ public func claimThisPhone(
         guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
             return .failure(.notDomovoi("that isn't Domovoi: the answer is not what this app understands"))
         }
-        rememberDeviceAnswer(book, server: server, data: data)
+        rememberDeviceAnswer(book, server: server, data: data, forgetCount: forgets)
         return .success(book.deviceOwner(for: server))
     }
     return try result.get()

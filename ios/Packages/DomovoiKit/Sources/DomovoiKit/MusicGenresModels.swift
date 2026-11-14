@@ -329,4 +329,26 @@ public enum MusicGenresStrings {
         "this device takes the " + (count == 1 ? "1 song" : "\(count) songs")
             + " loaded so far — scroll the list for more"
     }
+
+    // ---- the queue (integration of the music and queues units, 21b5ccfb / cb780e90)
+
+    /// The room's `add to queue` and this phone's `queue here`
+    /// (`GenresTab.kt:453`, `:490`).
+    public static let addToQueue = "add to queue"
+    public static let queueHere = "queue here"
+
+    private static func songsWord(_ n: Int) -> String { "\(n) song" + (n == 1 ? "" : "s") }
+
+    /// `"added 12 songs · Jazz to parlour's queue"` (`GenresTab.kt:397`).
+    public static func addedToRoomQueue(_ count: Int, genre: String, room: String) -> String {
+        "added \(songsWord(count)) · \(genre) to \(room)'s queue"
+    }
+
+    /// `"add failed: …"` (`GenresTab.kt:400`).
+    public static func addFailed(_ message: String) -> String { "add failed: \(message)" }
+
+    /// `"queued 12 songs · Jazz"` (`TrackSets.kt:80`, `queueTracksHereAndSay`).
+    public static func queuedHere(_ count: Int, label: String) -> String {
+        "queued \(songsWord(count)) · \(label)"
+    }
 }

@@ -369,7 +369,8 @@ struct MusicPlaylistSheet: View {
                     detail: detail,
                     covers: covers,
                     track: track,
-                    index: index
+                    index: index,
+                    onQueued: { said = $0 }
                 )
             }
             if let (title, note) = detail.emptyNote {
@@ -413,6 +414,8 @@ struct MusicPlaylistTrackRow: View {
     let covers: MusicCoverStore
     let track: LibraryTrack
     let index: Int
+    /// What the song's Play next / Add to queue said (the sheet's line).
+    let onQueued: (String) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -428,6 +431,12 @@ struct MusicPlaylistTrackRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
+            // Play next / Add to queue, where the player plays now
+            // (`PlaylistDrawer.kt:394-396`, 21b5ccfb). Outside `edits`, which
+            // is disabled while a playlist write is out: a queue add is not
+            // one.
+            SongQueueMenu(track: track, onSaid: onQueued)
+                .accessibilityIdentifier("music-playlist-song-queue-\(track.id)")
             edits
         }
         .padding(.vertical, 2)

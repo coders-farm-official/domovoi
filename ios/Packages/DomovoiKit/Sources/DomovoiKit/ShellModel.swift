@@ -318,9 +318,20 @@ public final class ShellModel {
         // store's one forget signal — every forget path goes through it
         // (`Prefs.forgetServer`; security review of the claim unit).
         container.store.notifyServerForgotten { [weak self] url in
+            let normalized = ServerCredentials.normalize(url)
+            // The song open for that server goes first, and in the same turn
+            // when the forget came from the main actor (every forget the app
+            // makes does): the forget-active path refreshes the shell right
+            // after, and a song closed then must not add a row for the
+            // server just forgotten (integration fix B1).
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.listens?.forget(server: normalized) }
+            } else {
+                Task { @MainActor in self?.listens?.forget(server: normalized) }
+            }
             owners.forget(server: url)
             listenerStore.forgetPick(for: url)
-            listenOutbox?.forget(server: ServerCredentials.normalize(url))
+            listenOutbox?.forget(server: normalized)
             Task { @MainActor in self?.ownersChanged() }
         }
         // A launch straight onto a waiting card has to count down too, and

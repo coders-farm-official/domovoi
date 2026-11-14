@@ -8,7 +8,10 @@ import Foundation
 ///  * `played_sec` is the time it was actually PLAYING (a monotonic clock
 ///    that runs only between "playing" and "not playing"): a pause adds
 ///    nothing, and a seek forward isn't listening;
-///  * `outcome` is `finished` once 90 % or more played, whatever ended it;
+///  * `outcome` is `finished` on a natural end, or once 90 % or more
+///    played whatever ended it; `played_sec` is always the time HEARD, a
+///    natural end included (never padded to the length: "count real time",
+///    2026-11-14);
 ///    else `skipped` when next, a queue row or removing the current song
 ///    ended it; else `stopped` (stop, a new play, casting, the app closing);
 ///  * a song that played under a second is not a listen.
@@ -47,6 +50,16 @@ public struct ListenTracker {
 
     /// The library track being followed, or nil.
     public var openTrack: Int64? { cur?.trackID }
+
+    /// The server the open song came from, or nil.
+    public var openServer: String? { cur?.server }
+
+    /// Drop the open song without a row (its server was forgotten).
+    @discardableResult
+    public mutating func discard() -> Bool {
+        defer { cur = nil }
+        return cur != nil
+    }
 
     /// A library song `trackID` from `server` starts now. Whatever was open
     /// is closed first, as stopped (the caller closes it with the right word
@@ -90,15 +103,16 @@ public struct ListenTracker {
         let now = monoMs()
         var playedMs = c.playedMs + (c.sinceMono.map { now - $0 } ?? 0)
         // Never more than has passed since the begin, plus a little for the
-        // clock reads in between (security review, finding 4). Before the
-        // natural-end rule below, which is the shared one (player.jsx) and
-        // is left exactly as it was.
+        // clock reads in between (security review, finding 4).
         playedMs = min(playedMs, now - c.beganMono + Self.clockSlackMs)
         let duration = c.durationSec
+        // `played` is the time actually HEARD, a natural end included (owner,
+        // 2026-11-14: "count real time"). It used to be padded up to the
+        // song's length on a natural end (player.jsx's rule), so a seek from
+        // 0:10 to 5:50 of a 6:00 song logged 360 s. Only the seconds change:
+        // a natural end is still `finished` (below).
         if let duration {
-            let durMs = Int64(duration * 1000)
-            if natural { playedMs = max(playedMs, durMs) }
-            playedMs = min(playedMs, durMs)
+            playedMs = min(playedMs, Int64(duration * 1000))
         }
         let played = Double(playedMs) / 1000.0
         guard played >= 1.0 else { return nil }
@@ -108,7 +122,9 @@ public struct ListenTracker {
             startedAtMs: c.startedAtMs,
             playedSec: Int(played.rounded()),
             durationSec: duration.map { Int($0.rounded()) },
-            outcome: Self.outcome(playedSec: played, durationSec: duration, skipped: c.skipped && !natural)
+            outcome: natural
+                ? "finished"
+                : Self.outcome(playedSec: played, durationSec: duration, skipped: c.skipped)
         )
     }
 

@@ -250,14 +250,10 @@ struct MusicTrackSheet: View {
 
     static let statusID = "track-sheet-queue-status"
 
-    /// `play in <room>`: the room's mix, with this phone's listener, when
-    /// the queue tools are here; the plain play otherwise.
+    /// `play in <room>`: the room's mix, with this phone's listener and the
+    /// list the song was opened from (``MusicModel/play(_:in:tools:context:)``).
     private func playInRoom(_ room: String) {
-        if let tools {
-            music.play(track, in: room, deviceID: tools.deviceID, context: listContext, listener: tools.listener)
-        } else {
-            music.play(track, in: room)
-        }
+        music.play(track, in: room, tools: tools, context: listContext)
     }
 
     /// Play next / add to queue, to the room or this phone, said in the

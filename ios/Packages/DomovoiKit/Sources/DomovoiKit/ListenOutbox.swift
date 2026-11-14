@@ -224,6 +224,7 @@ public final class ListenOutbox: Sendable {
             } catch {
                 return nil
             }
+            pruneAside()
             return []
         }
         let decoder = JSONDecoder()
@@ -232,6 +233,25 @@ public final class ListenOutbox: Sendable {
                   let one = try? JSONSerialization.data(withJSONObject: element)
             else { return nil }
             return try? decoder.decode(OutboxRow.self, from: one)
+        }
+    }
+
+    /// Keep only the NEWEST file moved aside (integration fix B5): one is
+    /// enough to look at what went wrong, and each holds listening history
+    /// that should not pile up on the phone. Newest by the time in its name,
+    /// which is when it was moved aside.
+    private func pruneAside() {
+        let folder = file.deletingLastPathComponent()
+        let prefix = file.deletingPathExtension().lastPathComponent + ".corrupt-"
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
+        let aside: [(ms: Int64, name: String)] = names.compactMap { name in
+            guard name.hasPrefix(prefix), name.hasSuffix(".json") else { return nil }
+            let stamp = name.dropFirst(prefix.count).dropLast(".json".count)
+            return (Int64(stamp) ?? 0, name)
+        }
+        guard let newest = aside.max(by: { ($0.ms, $0.name) < ($1.ms, $1.name) }) else { return }
+        for old in aside where old.name != newest.name {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(old.name))
         }
     }
 

@@ -254,6 +254,9 @@ public enum QueueStrings {
     public static func playNextIn(_ room: String) -> String { "play next in \(room)" }
     public static func addToRoomQueue(_ room: String) -> String { "add to \(room)'s queue" }
 
+    /// The name of a song row's Play next / Add to queue menu.
+    public static func songQueueMenu(_ title: String) -> String { "queue \(title)" }
+
     // ---- a room's queue, one tap away -----------------------------------
 
     /// The name of a room's queue button, and its sheet's title.

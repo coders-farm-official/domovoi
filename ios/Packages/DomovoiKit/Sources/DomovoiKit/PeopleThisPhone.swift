@@ -230,7 +230,10 @@ public final class PeopleThisPhoneModel {
               !clearing, let deviceID = shell.deviceID
         else { return }
         guard asked.server == server else {
+            // Said, not dropped silently: the person pressed "Clear" and is
+            // owed a reason nothing happened (integration fix B6).
             ask = nil
+            shell.showToast(ListeningStrings.clearNotSentServerChanged)
             return
         }
         clearing = true

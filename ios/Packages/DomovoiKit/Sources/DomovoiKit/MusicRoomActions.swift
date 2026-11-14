@@ -261,3 +261,19 @@ public extension MusicModel {
         return true
     }
 }
+
+public extension MusicModel {
+
+    /// "play in <room>" as every screen sends it (integration fix A2): the
+    /// room's mix with this phone's device id, the list the song was opened
+    /// from and the listener (`TrackDrawer.kt:92-117`) — the library row's
+    /// menu, the track sheet and anything after them.
+    ///
+    /// With no queue tools — this install has no device id, so there is no
+    /// phone to send — the plain body (``play(_:in:)``) is all there is.
+    @discardableResult
+    func play(_ track: LibraryTrack, in room: String, tools: QueueTools?, context: UpNextContext? = nil) -> Bool {
+        guard let tools else { return play(track, in: room) }
+        return play(track, in: room, deviceID: tools.deviceID, context: context, listener: tools.listener)
+    }
+}

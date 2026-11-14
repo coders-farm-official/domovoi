@@ -144,7 +144,9 @@ struct MusicView: View {
     /// nothing more. Each case also carries a main-actor model, so an
     /// `Identifiable` `id` would be a nonisolated witness reaching them.
     private enum MusicMoreSheet {
-        case track(LibraryTrack, MusicRoomLyricsModel)
+        /// The song, its words, and the list it was opened from (a genre's
+        /// songs), which `play in <room>` plays on through.
+        case track(LibraryTrack, MusicRoomLyricsModel, UpNextContext?)
         case playlist(MusicPlaylistDetailModel)
         case addTo(LibraryTrack, MusicAddToPlaylistModel)
         case genre(MusicGenresDetailModel)
@@ -400,14 +402,15 @@ struct MusicView: View {
         // `isPresented`, not `item`: see ``MusicMoreSheet``.
         .sheet(isPresented: sheetUp) {
             switch sheet {
-            case .track(let track, let lyrics):
+            case .track(let track, let lyrics, let context):
                 if let music, let covers {
                     MusicTrackSheet(
                         music: music,
                         track: track,
                         covers: covers,
                         lyrics: lyrics,
-                        onAddToPlaylist: { openAddToPlaylist(track) }
+                        onAddToPlaylist: { openAddToPlaylist(track) },
+                        listContext: context
                     )
                 }
             case .playlist(let detail):
@@ -433,7 +436,11 @@ struct MusicView: View {
                         // A song's own sheet **replaces** this one, as
                         // `add to playlist` replaces the track sheet: one
                         // presentation, a content swap (``MusicMoreSheet``).
-                        onOpenTrack: { openTrack($0) },
+                        // …with the genre as the list `play in <room>` plays
+                        // on through (`MusicScreen.kt:527`, cb780e90).
+                        onOpenTrack: {
+                            openTrack($0, context: UpNextContext.genre(key: detail.genre.key, name: detail.genre.name))
+                        },
                         onSay: { model.showToast($0) }
                     )
                 }
@@ -499,7 +506,7 @@ struct MusicView: View {
     /// the model falls back to the track's own document, which it shows
     /// still: that fallback is
     /// ``MusicRoomLyricsModel``'s own, not something invented here.
-    private func openTrack(_ track: LibraryTrack) {
+    private func openTrack(_ track: LibraryTrack, context: UpNextContext? = nil) {
         guard let lyricsStore, let nudges, let music else { return }
         let lyrics = MusicRoomLyricsModel(
             // Nil, **not** `?? ""`: an empty room made the model ask
@@ -512,7 +519,7 @@ struct MusicView: View {
             nudges: nudges
         )
         lyrics.offer(trackID: track.id)
-        sheet = .track(track, lyrics)
+        sheet = .track(track, lyrics, context)
     }
 
     private func startGenres() {
@@ -934,6 +941,8 @@ struct MusicTrackRow: View {
     let track: LibraryTrack
     let onOpen: (LibraryTrack) -> Void
 
+    @Environment(\.queueTools) private var tools
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // The row's text is the button that opens the sheet; the two
@@ -966,6 +975,9 @@ struct MusicTrackRow: View {
             }
             .buttonStyle(.plain)
             favouriteButton
+            // Play next / Add to queue, where the player plays now
+            // (`LibraryTab.kt:355-356`, 21b5ccfb); said in the shell's toast.
+            SongQueueMenu(track: track) { music.setToast($0) }
             playMenu
         }
         .padding(.vertical, 4)
@@ -990,7 +1002,9 @@ struct MusicTrackRow: View {
         .accessibilityLabel(track.favorited ? MusicStrings.unfavorite : MusicStrings.favorite)
     }
 
-    /// Play, in one of the rooms the server reported.
+    /// Play, in one of the rooms the server reported — the room's mix, with
+    /// this phone's device id and listener
+    /// (``MusicModel/play(_:in:tools:context:)``, integration fix A2).
     ///
     /// **Not drawn at all when no room has answered.** ``MusicModel/play(_:in:)``
     /// refuses a room it has not seen, so a menu offered over an empty list
@@ -1000,7 +1014,7 @@ struct MusicTrackRow: View {
     private var playMenu: some View {
         let rooms = music.castRooms
         if rooms.count == 1, let only = rooms.first {
-            Button { music.play(track, in: only) } label: {
+            Button { music.play(track, in: only, tools: tools) } label: {
                 Image(systemName: "play.circle")
                     .frame(minWidth: 44, minHeight: 44)
                     .contentShape(.rect)
@@ -1011,7 +1025,7 @@ struct MusicTrackRow: View {
         } else if rooms.count > 1 {
             Menu {
                 ForEach(rooms, id: \.self) { room in
-                    Button(MusicStrings.playIn(room: room)) { music.play(track, in: room) }
+                    Button(MusicStrings.playIn(room: room)) { music.play(track, in: room, tools: tools) }
                 }
             } label: {
                 Image(systemName: "play.circle")

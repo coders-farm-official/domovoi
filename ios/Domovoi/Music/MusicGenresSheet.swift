@@ -17,13 +17,17 @@ import SwiftUI
 /// keeps the sheet open, so that one is said in the sheet
 /// (``MusicMoreSheetStatus``).
 ///
-/// ### What is not here, and why
+/// ### The queue (21b5ccfb, cb780e90; the music and queues units, joined)
 ///
-/// Android's room `add to queue`, `queue here`, and each song's `play next` /
-/// `add to queue` — the queue work of this batch owns "play next / add to
-/// queue" in every drawer, and this phone's engine has no enqueue to call
-/// (``MusicGenresDetailModel``). No button is drawn for them rather than one
-/// that cannot do what it says ([[no-misleading-controls]]).
+/// The room's `add to queue` puts the genre at the end of the room's queue,
+/// before its Up next picks (``MusicGenresDetailModel/queueInRoom(rooms:)``);
+/// `queue here` puts the songs loaded so far at the end of this phone's queue
+/// (``QueueTools/queueHere(_:label:)``); each song's menu plays it next or
+/// adds it to the queue where the player plays now (``SongQueueMenu``). None
+/// of them closes the sheet, as on Android, so each says what it did on the
+/// sheet's own line. Each is absent where it could not do what it says: no
+/// queue tools, an unpaired phone for a room, no player for this phone
+/// ([[no-misleading-controls]]).
 struct MusicGenresSheet: View {
 
     let detail: MusicGenresDetailModel
@@ -43,6 +47,7 @@ struct MusicGenresSheet: View {
     let onSay: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.queueTools) private var tools
 
     /// What a single song's play on this phone said, drawn in the sheet.
     @State private var said: String?
@@ -140,6 +145,20 @@ struct MusicGenresSheet: View {
     private var roomButtons: some View {
         HomeLink(MusicMoreStrings.play) { playInRoom(shuffle: false) }
         HomeLink(MusicMoreStrings.shuffleAll) { playInRoom(shuffle: true) }
+        // The room's queue routes need the pairing (`RoomQueueSheet.kt:58`).
+        if let tools, tools.paired {
+            HomeLink(MusicGenresStrings.addToQueue) { queueInRoom() }
+        }
+    }
+
+    /// `add to queue` in the room (`GenresTab.kt:383`): the sheet stays, and
+    /// says what the room took on its own line.
+    private func queueInRoom() {
+        let detail = detail
+        let rooms = rooms
+        Task { @MainActor in
+            if let line = await detail.queueInRoom(rooms: rooms) { said = line }
+        }
     }
 
     private func playInRoom(shuffle: Bool) {
@@ -187,6 +206,13 @@ struct MusicGenresSheet: View {
     private func phoneButtons(_ player: MusicLocalQueueModel) -> some View {
         HomeLink(MusicMoreStrings.playHere) { playHere(player, detail.loaded) }
         HomeLink(MusicMoreStrings.shuffleHere) { playHere(player, detail.loaded.shuffled()) }
+        // `queue here` (`GenresTab.kt:485-491`): the songs loaded so far at
+        // the end of this phone's queue; the sheet stays.
+        if let tools, tools.mayQueueHere {
+            HomeLink(MusicGenresStrings.queueHere) {
+                if let line = tools.queueHere(detail.loaded, label: detail.genre.name) { said = line }
+            }
+        }
     }
 
     private func playHere(_ player: MusicLocalQueueModel, _ tracks: [LibraryTrack]) {
@@ -243,7 +269,8 @@ struct MusicGenresSheet: View {
                 covers: covers,
                 mayPlayHere: player?.mayPlayHere == true,
                 onOpen: { onOpenTrack(track) },
-                onPlayHere: { playSong(track) }
+                onPlayHere: { playSong(track) },
+                onQueued: { said = $0 }
             )
             .onAppear {
                 if detail.shouldLoadMore(lastVisible: index) { detail.songs.loadMore() }
@@ -283,6 +310,8 @@ struct MusicGenreSongRow: View {
     let mayPlayHere: Bool
     let onOpen: () -> Void
     let onPlayHere: () -> Void
+    /// What the song's Play next / Add to queue said (the sheet's line).
+    let onQueued: (String) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -303,6 +332,9 @@ struct MusicGenreSongRow: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            // The sheet's own row, told apart from the library row of the
+            // same song behind the sheet.
+            .accessibilityIdentifier("music-genre-song-\(track.id)")
             if mayPlayHere {
                 Button(action: onPlayHere) {
                     Image(systemName: "play.fill")
@@ -315,6 +347,9 @@ struct MusicGenreSongRow: View {
                 // device" name nothing.
                 .accessibilityLabel("\(MusicGenresStrings.playSongHere) \(track.displayTitle)")
             }
+            // This phone's queue, or the room it casts to (`GenresTab.kt:519-521`).
+            SongQueueMenu(track: track, onSaid: onQueued)
+                .accessibilityIdentifier("music-genre-song-queue-\(track.id)")
         }
         .padding(.vertical, 2)
     }

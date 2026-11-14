@@ -199,6 +199,15 @@ public final class ListenLog: PlayerListenHooks {
     /// Send what waits now (the app going to the background).
     public func flushNow() { flushSoon(delayMs: 0) }
 
+    /// The phone forgot `server` (normalised): the song open for it is
+    /// dropped, not logged — closing it later (the player stopping as the app
+    /// leaves that server) would otherwise add a row for a server whose rows
+    /// were just deleted (integration fix B1).
+    public func forget(server forgotten: String) {
+        guard !forgotten.isEmpty, tracker.openServer == forgotten else { return }
+        _ = tracker.discard()
+    }
+
     /// A server said it keeps no listening history.
     public func recordingOff() {
         recording = false

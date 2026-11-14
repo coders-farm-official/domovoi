@@ -105,6 +105,10 @@ public enum ListeningStrings {
     public static let cantBeUndone = "This can’t be undone."
     public static let clearConfirm = "Clear"
     public static let cancel = "cancel"
+    /// "Clear" pressed after the app moved to another server: nothing was
+    /// sent. iOS's own line — Android sends the DELETE to the server the
+    /// dialog was opened for and has no such case.
+    public static let clearNotSentServerChanged = "not cleared: the app moved to another server, so nothing was sent"
     public static func cleared(_ name: String, _ n: Int) -> String {
         "cleared \(name)’s listening history (\(songs(n)))"
     }

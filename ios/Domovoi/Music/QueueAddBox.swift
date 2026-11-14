@@ -249,3 +249,52 @@ struct SaveAsPlaylistRow: View {
 
     static let noteID = "queue-save-note"
 }
+
+/// A song row's Play next / Add to queue (21b5ccfb), to wherever the player
+/// plays now — the room this phone casts to, else this phone, read at the
+/// tap (``QueueTools/followingTarget``). The library's, a genre's and a
+/// playlist's rows all draw this one.
+///
+/// One menu rather than Android's two icons side by side: an iPhone row
+/// already carries the cover, the title and one or two controls, and two
+/// more 44-point targets left the title a word wide at the larger text
+/// sizes. The two verbs and their words are Android's.
+///
+/// **Absent** where it could not do what it says: no queue tools, or a target
+/// it cannot reach (``QueueTools/offersSongQueue``).
+struct SongQueueMenu: View {
+
+    let track: LibraryTrack
+    /// Where the sentence goes: a sheet's own line, or the shell's toast.
+    let onSaid: (String) -> Void
+
+    @Environment(\.queueTools) private var tools
+
+    var body: some View {
+        if let tools, tools.offersSongQueue {
+            Menu {
+                Button(QueueStrings.playNext) { add(tools, next: true) }
+                Button(QueueStrings.addToQueue) { add(tools, next: false) }
+            } label: {
+                Image(systemName: "text.badge.plus")
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.brandInk)
+            // The track in the label: ten rows each saying "queue" name
+            // nothing.
+            .accessibilityLabel(QueueStrings.songQueueMenu(track.displayTitle))
+        }
+    }
+
+    /// The tools' own `Task`, not the row's: the row may scroll away, or the
+    /// sheet close, before the room answers.
+    private func add(_ tools: QueueTools, next: Bool) {
+        let track = track
+        let onSaid = onSaid
+        Task { @MainActor in
+            if let said = await tools.songToFollowing(track, next: next) { onSaid(said) }
+        }
+    }
+}

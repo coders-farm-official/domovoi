@@ -41,13 +41,15 @@ final class ListenTrackerTests: XCTestCase {
         XCTAssertEqual("stopped", row.outcome)
     }
 
+    /// Finished, and the seconds are the ones heard — not padded up to the
+    /// length (owner, 2026-11-14: "count real time").
     func testASongThatRanToItsEndIsFinishedEvenIfTheClockSaysLess() throws {
         t.begin(trackID: 812, server: "s", durationSec: 200, playing: true)
         play(150)
         t.skip()
         let row = try XCTUnwrap(t.close(natural: true))
         XCTAssertEqual("finished", row.outcome)
-        XCTAssertEqual(200, row.playedSec)
+        XCTAssertEqual(150, row.playedSec)
     }
 
     func testPlayedNeverExceedsTheLength() {

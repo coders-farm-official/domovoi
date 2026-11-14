@@ -476,6 +476,38 @@ public final class QueueTools {
 
     /// Whether this phone's own queue may be offered at all.
     public var mayQueueHere: Bool { phone?.available ?? false }
+
+    /// Whether a song row (library, genre, playlist) may offer Play next /
+    /// Add to queue now: to the room this phone casts to when it is paired
+    /// (the room's routes need it), else to this phone when it has a player.
+    /// Asked where the row is drawn, so a row never offers a queue its tap
+    /// could not reach ([[no-misleading-controls]]).
+    public var offersSongQueue: Bool {
+        switch followingTarget {
+        case .room: return paired
+        case .phone: return mayQueueHere
+        }
+    }
+
+    /// Play next / Add to queue for one song row, to wherever the player
+    /// plays now (read at the tap): the sentence to say, or nil when the app
+    /// moved to another server while the call was out
+    /// ([[read-after-await-wrong-key]]).
+    public func songToFollowing(_ track: LibraryTrack, next: Bool) async -> String? {
+        let server = container.store.serverURL
+        let said = await adder().song(followingTarget, track: track, next: next)
+        guard container.store.serverURL == server else { return nil }
+        return said
+    }
+
+    /// `tracks` at the end of THIS PHONE's queue (the genre sheet's `queue
+    /// here`, `queueTracksHereAndSay`): the sentence, or nil with nothing to
+    /// queue or no player.
+    public func queueHere(_ tracks: [LibraryTrack], label: String) -> String? {
+        guard !tracks.isEmpty, mayQueueHere, let phone else { return nil }
+        phone.enqueue(tracks)
+        return MusicGenresStrings.queuedHere(tracks.count, label: label)
+    }
 }
 
 public extension ShellModel {

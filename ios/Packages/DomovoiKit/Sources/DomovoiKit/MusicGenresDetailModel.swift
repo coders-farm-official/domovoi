@@ -25,14 +25,13 @@ import Observation
 /// house changed is never sent on to a room of the new house
 /// ([[read-after-await-wrong-key]], `GenresTab.kt:357-365`).
 ///
-/// ### What is not here, and why
+/// ### The queue (21b5ccfb, cb780e90)
 ///
-/// Android's drawer also has **add to queue** in a room, **queue here**, and
-/// per-song **play next** / **add to queue**. Those are the queue work's
-/// (batch 2026-11-14, the queues unit owns "play next / add to queue" in
-/// every drawer), and this phone's engine has no enqueue yet
-/// (``MusicMorePlayerEngine``) — so no button is drawn for them here rather
-/// than one that cannot do what it says ([[no-misleading-controls]]).
+/// Android's drawer also has **add to queue** in a room — here
+/// ``queueInRoom(rooms:)``, the genre's ids at the end of the room's queue,
+/// before its Up next picks — and **queue here** and each song's **play
+/// next** / **add to queue**, which go through the queues unit's
+/// ``QueueAdder`` from the sheet.
 @MainActor
 @Observable
 public final class MusicGenresDetailModel {
@@ -214,6 +213,33 @@ public final class MusicGenresDetailModel {
             }
         }
         return true
+    }
+
+    /// `add to queue` in the room: every id of the genre (at most
+    /// ``MusicGenres/roomTrackCap``, in order) at the END of the room's queue
+    /// — after the songs somebody asked for, before the room's Up next picks
+    /// (`POST /api/music/queue/{room}/add`, `where: end`; `GenresTab.kt:383`).
+    ///
+    /// The sentence to say, or nil: nil with nothing to send, and nil when
+    /// the app moved to another server while the call was out — its answer
+    /// is about a house the person has left ([[read-after-await-wrong-key]]).
+    /// The sheet stays open, as Android's drawer does, so the sentence is the
+    /// sheet's to draw.
+    public func queueInRoom(rooms: [String]) async -> String? {
+        guard let room = room(in: rooms) else { return nil }
+        let send = MusicGenres.roomTrackIDs(roomIDs, shuffle: false)
+        guard !send.isEmpty else { return nil }
+        let server = container.store.serverURL
+        let api = RoomQueueApi(client: container.client, deviceID: deviceID)
+        let name = genre.name
+        do throws(DomovoiError) {
+            try await api.add(room, trackIDs: send, where: RoomQueueApi.whereEnd)
+            guard container.store.serverURL == server else { return nil }
+            return MusicGenresStrings.addedToRoomQueue(send.count, genre: name, room: room)
+        } catch let trouble {
+            guard container.store.serverURL == server else { return nil }
+            return MusicGenresStrings.addFailed(trouble.message)
+        }
     }
 
     /// `{"room_id":"parlour","track_ids":[503,504],"device_id":"ios-…"}` —
