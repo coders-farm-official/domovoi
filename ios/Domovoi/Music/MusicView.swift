@@ -173,7 +173,10 @@ struct MusicView: View {
         page.environment(\.queueTools, model.queueTools())
     }
 
-    private var page: some View {
+    // `page` is built in three stages, each a short modifier chain: one
+    // chain of every modifier was past what Swift 6.2 (the CI runner's
+    // Xcode 26.3) will type-check in reasonable time.
+    private var scrolled: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
@@ -272,6 +275,10 @@ struct MusicView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var withLifecycle: some View {
+        scrolled
         .task {
             // Built here and not in `init` for ``HomeView``'s reason: the
             // model needs the container, and a `@State` initialiser runs
@@ -341,6 +348,10 @@ struct MusicView: View {
         // must outlive a scroll and does outlive this screen. Each model
         // holds its own until something takes it, so this is a hand-off and
         // not a second copy.
+    }
+
+    private var withToasts: some View {
+        withLifecycle
         .onChange(of: music?.toast) { _, text in
             guard text != nil, let said = music?.takeToast() else { return }
             model.showToast(said)
@@ -368,6 +379,10 @@ struct MusicView: View {
         // The one exception is the delete, which dismisses the sheet first —
         // so there is no sheet left to say it in, and the sentence is taken
         // here, on `deleted`, while the model is still in `sheet`.
+    }
+
+    private var page: some View {
+        withToasts
         .onChange(of: playlistDeleted) { _, gone in
             guard gone, let said = takeDeletedPlaylistToast() else { return }
             model.showToast(said)
