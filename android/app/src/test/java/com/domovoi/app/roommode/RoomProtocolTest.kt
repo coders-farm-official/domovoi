@@ -203,7 +203,7 @@ class RoomProtocolTest {
         assertEquals(setOf("wake.threshold", "wake.patience_frames", "wake.cooldown_sec"), config.keys)
         // 0.6f is reported as 0.6, the value the Settings tab would show.
         assertEquals("0.6", config["wake.threshold"]!!.jsonPrimitive.content)
-        assertEquals(1, config["wake.patience_frames"]!!.jsonPrimitive.content.toInt())
+        assertEquals(2, config["wake.patience_frames"]!!.jsonPrimitive.content.toInt())
         assertEquals(2.0, config["wake.cooldown_sec"]!!.jsonPrimitive.content.toDouble(), 0.0)
         // Every key is one the core's settings schema names (fixtures:
         // the Pi's list, which the schema mirrors), and a config_status

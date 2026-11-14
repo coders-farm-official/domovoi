@@ -16,14 +16,18 @@ class WakeGateTest {
         scores.mapIndexed { i, s -> g.feed(s, from + i * 80L) }
 
     @Test
-    fun theDefaultsWakeOnTheFirstChunkOverTheThresholdAsBefore() {
-        val g = WakeGate(0.5f)
-        assertEquals(1, g.patience)
+    fun theDefaultsWantTwoChunksInARow() {
+        // Patience 2 and threshold 0.7 since 2026-11-14 (were 1 and 0.5).
+        assertEquals(0.7f, RoomStore.DEFAULT_THRESHOLD, 0f)
+        val g = WakeGate(RoomStore.DEFAULT_THRESHOLD)
+        assertEquals(2, g.patience)
         assertEquals(2.0, g.cooldownSec, 0.0)
-        assertTrue(g.feed(0.51f, 1_000))
-        assertEquals(0.51f, g.lastPeak!!, 0f)
+        assertFalse("one chunk is not a wake", g.feed(0.71f, 1_000))
+        assertTrue(g.feed(0.5f, 1_080))
+        assertEquals(0.71f, g.lastPeak!!, 0f)
         // At the threshold is not over it.
-        assertFalse(g.feed(0.5f, 1_080))
+        assertFalse(g.feed(0.7f, 2_000))
+        assertFalse(g.feed(0.7f, 2_080))
     }
 
     @Test
@@ -77,7 +81,7 @@ class WakeGateTest {
 
     @Test
     fun nothingWakesInTheCooldownAfterATurnThatWentWrong() {
-        val g = WakeGate(0.5f) // the defaults: 1 chunk, 2 s
+        val g = WakeGate(0.5f, patience = 1) // the default cooldown: 2 s
         g.quietFor(10_000)
         assertTrue(g.inCooldown(11_999))
         for (t in listOf(10_000L, 10_100L, 11_000L, 11_999L)) assertFalse("woke at $t", g.feed(0.98f, t))
@@ -110,14 +114,14 @@ class WakeGateTest {
 
     @Test
     fun theSettingsFallBackToTheDefaults() {
-        assertEquals(1, WakeGate.PATIENCE_DEFAULT)
+        assertEquals(2, WakeGate.PATIENCE_DEFAULT)
         assertEquals(2.0, WakeGate.COOLDOWN_SEC_DEFAULT, 0.0)
-        assertEquals(1, WakeGate.patienceSetting(null))
+        assertEquals(2, WakeGate.patienceSetting(null))
         assertEquals(3, WakeGate.patienceSetting(3))
         assertEquals(3, WakeGate.patienceSetting(3.0))
         assertEquals(1, WakeGate.patienceSetting(0))
         assertEquals(5, WakeGate.patienceSetting(9))
-        for (bad in listOf<Any>("x", true, 2.5)) assertEquals("$bad", 1, WakeGate.patienceSetting(bad))
+        for (bad in listOf<Any>("x", true, 2.5)) assertEquals("$bad", 2, WakeGate.patienceSetting(bad))
         assertEquals(2.0, WakeGate.cooldownSetting(null), 0.0)
         assertEquals(0.0, WakeGate.cooldownSetting(0), 0.0)
         assertEquals(10.0, WakeGate.cooldownSetting(99), 0.0)

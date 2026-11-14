@@ -265,7 +265,7 @@ domovoi_url = "ws://<server-ip-or-hostname>:6370"
 
 [wake]
 wake_word = "hey_jarvis"
-threshold = 0.5
+threshold = 0.7
 ```
 
 Verify your audio devices with `python -m satellite.client --list-devices`

@@ -8,13 +8,14 @@ package com.domovoi.app.roommode
  * openWakeWord scores every 80 ms chunk ([WakeDetector.accept]). Two rules,
  * both defaults with no setup:
  *
- * - **Patience** (`wake.patience_frames`, default 1): the score must stay up
+ * - **Patience** (`wake.patience_frames`, default 2): the score must stay up
  *   on that many chunks IN A ROW and reach the threshold on at least one of
  *   them. "Up" is a floor below the threshold, `max(0.3, threshold x 0.6)`
  *   (never above the threshold), so a far-field wake word whose peak just
  *   clears the threshold between two weaker chunks still wakes, while a
- *   lone blip does not. The default of 1 wakes on the first chunk over the
- *   threshold, as the room did before.
+ *   lone blip does not. The default of 2 (since 2026-11-14, with a
+ *   threshold of 0.7, [RoomStore.DEFAULT_THRESHOLD]) is the Pi's: 1 wakes on
+ *   the first chunk over the threshold.
  * - **Cooldown** (`wake.cooldown_sec`, default 2): after a turn that went
  *   wrong (the core ignored it as background talk, the capture hit the
  *   length cap, it ended in an error or with no reply, or there was no
@@ -87,7 +88,7 @@ class WakeGate(
     }
 
     companion object {
-        const val PATIENCE_DEFAULT = 1
+        const val PATIENCE_DEFAULT = 2
         const val PATIENCE_MIN = 1
         const val PATIENCE_MAX = 5
         const val COOLDOWN_SEC_DEFAULT = 2.0
