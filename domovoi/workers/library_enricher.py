@@ -243,6 +243,19 @@ def strip_upload_noise(name: str | None) -> str:
     return t or raw
 
 
+# Noise only an upload has (not a catalog's "2011 Remaster" or "Radio Edit").
+_UPLOAD_ONLY_RE = re.compile(r"\blyrics?\b|\bvideo\b|\bofficial\b|\b(?:hd|hq)\b|\bon\s+screen\b", re.I)
+
+
+def _without_upload_words(title: str | None) -> str | None:
+    """A provider's title as written to a row: without upload noise when it
+    carries an upload's ("Rat Race - Lyrics" → "Rat Race"); a catalog's
+    own version label ("(2011 Remaster)") stays."""
+    if not title or not _UPLOAD_ONLY_RE.search(title):
+        return title
+    return strip_upload_noise(title)
+
+
 def has_upload_noise(name: str | None) -> bool:
     raw = " ".join((name or "").split())
     return bool(raw) and strip_upload_noise(raw) != raw
@@ -388,28 +401,78 @@ def _named_in(
     )
 
 
+#: Words that make a recording a different take on the song (a cover, a
+#: remix, a backing track). An answer whose title adds one our names don't
+#: have is another recording, not this file's ("Forgot About Dre
+#: (instrumental)" for the vocal version, "American Woman (4.0 mix)").
+VARIANT_WORDS = frozenset({
+    "instrumental", "karaoke", "cover", "covers", "remix", "remixed", "mix", "tribute",
+})
+
+
+def adds_variant(their_title: str | None, our_texts: tuple[str | None, ...]) -> bool:
+    """Does ``their_title`` carry a :data:`VARIANT_WORDS` word that none of
+    ``our_texts`` (our title, artist, file name) has? Pure."""
+    theirs = set(_words(their_title)) & VARIANT_WORDS
+    if not theirs:
+        return False
+    ours: set[str] = set()
+    for t in our_texts:
+        ours.update(_words(t))
+    return bool(theirs - ours)
+
+
+def artist_usable(artist: str | None) -> bool:
+    """Is ``artist`` a performer we can hold an answer's artist to: not
+    empty, not a name for nobody ("Unknown Artist"), not an uploader or
+    channel ("LaBoucheVEVO", "Mixed Lyrics", upload noise)? Pure."""
+    a = " ".join((artist or "").split())
+    if not _credit_keys(a):
+        return False
+    if _CHANNEL_RE.search(a) or has_upload_noise(a):
+        return False
+    return _name_key(a) not in _NOBODY_KEYS
+
+
+_NOBODY_KEYS = frozenset({"unknownartist", "variousartists", "unknown", "va", "artist"})
+
+
 def names_agree(
     our_title: str | None, our_artist: str | None,
     their_title: str | None, their_artist: str | None,
     *, our_extra: str | None = None,
 ) -> bool:
     """Does a provider's answer (``their_*``) plausibly name the same song
-    as the names a row already has (``our_*``)? True when we have no names
-    to compare; when its title is our title or its artist is our artist;
-    when it is our two names the other way round (a file name read
-    "Artist - Title" that was really "Title - Artist"); or (2026-11-14)
-    when its title AND its artist both appear in our names taken together
-    (an upload's "Artist - Title (Lyrics)" by "<channel>"). ``our_extra``:
-    more of our text to look in for that (the file's name). Never when its
-    title is our ARTIST and its artist appears nowhere in our names: that
-    is how a wrong fingerprint answer looked ("In the End" by Linkin Park
-    answered as the title "Linkin Park" by "Boomin"). Upload noise
-    ("(Lyrics)", "Official Video", "HD", a video id) is ignored
-    throughout."""
+    AND recording as the names a row already has (``our_*``)?
+
+    * No names of ours: True (nothing to hold it to).
+    * Its title adds "instrumental", "karaoke", "cover", "remix", "mix" or
+      "tribute" that our title, artist and ``our_extra`` (the file's name)
+      don't have: False, another recording (2026-11-14).
+    * Our two names the other way round (a file name read "Artist - Title"
+      that was really "Title - Artist"): True.
+    * Its title AND its artist (or one performer) both appear in our names
+      taken together (an upload's "Artist - Title (Lyrics)" by a channel,
+      2026-11-14): True.
+    * Its title is our artist while its artist isn't: False (how a wrong
+      fingerprint answer looked: "In the End" by Linkin Park answered as
+      the title "Linkin Park" by "Boomin").
+    * Our artist is a real performer (:func:`artist_usable`) and it names
+      one: its artist (or one performer) must be ours; the title alone is
+      not enough, as a cover by someone else has the same title
+      (2026-11-14: "Jumper" by Third Eye Blind answered as "Jumper" by
+      "Tweaker").
+    * Otherwise (no usable artist of ours, or none in the answer, which
+      then leaves ours as it is): its title must be ours.
+
+    Upload noise ("(Lyrics)", "Official Video", "HD", a video id) is
+    ignored throughout."""
     has_title = bool(_name_key(our_title))
     has_artist = bool(_credit_keys(our_artist))
     if not has_title and not has_artist:
         return True
+    if adds_variant(their_title, (our_title, our_artist, our_extra)):
+        return False  # a cover, remix or backing track of it
     artist_ok = has_artist and _same_artist(our_artist, their_artist)
     if has_title and has_artist and not artist_ok:
         if _same_title(our_artist, their_title) and _same_artist(our_title, their_artist):
@@ -418,8 +481,9 @@ def names_agree(
         return True  # both of its names are in ours
     if has_artist and not artist_ok and _same_artist(our_artist, their_title):
         return False  # their title is our artist, their artist someone else
-    title_ok = has_title and _same_title(our_title, their_title)
-    return bool(artist_ok or title_ok)
+    if artist_usable(our_artist) and (their_artist or "").strip():
+        return bool(artist_ok)
+    return bool(has_title and _same_title(our_title, their_title)) or bool(artist_ok)
 
 
 def file_names(
@@ -1153,7 +1217,7 @@ async def _sweep() -> dict[str, Any]:
                     text(_FILL_ONLY_SQL if fill_only else _MATCH_SQL),
                     {
                         "id": row.id,
-                        "t": result.title,
+                        "t": _without_upload_words(result.title),
                         "a": result.artist,
                         "al": result.album,
                         "mb": result.musicbrainz_recording_id,
@@ -1316,12 +1380,40 @@ def _row_fits_file(
 ) -> bool:
     """Do a matched row's names agree with its file's (``ours``, plus the
     file's name ``stem``), either way round? Only a row that fits in
-    neither direction is a real disagreement the repair may act on."""
+    neither direction is a real disagreement the repair may act on. A row
+    whose title adds a cover/remix/instrumental word the file doesn't have
+    never fits (it names another recording)."""
+    if adds_variant(row_title, (ours[0], ours[1], stem)):
+        return False
     if names_agree(ours[0], ours[1], row_title, row_artist, our_extra=stem):
         return True
     if not (row_title or "").strip() and not (row_artist or "").strip():
         return False
+    if looks_like_upload_names(row_title, row_artist):
+        # The row holds an upload's names ("Skindred - Rat Race - Lyrics"
+        # by "Faded Swade"): the file's names being IN them says nothing.
+        return False
     return names_agree(row_title, row_artist, ours[0], ours[1])
+
+
+def _names_to_put_back(
+    ours: tuple[str | None, str | None],
+) -> tuple[str | None, str | None] | None:
+    """The file's names as the repair would restore them: as they are when
+    they look like a song's; without upload noise and decoration when that
+    leaves a song's names ("Love Tonight (Official Radio Edit)" →
+    "Love Tonight", "American Woman - 7" Single Version" → "American
+    Woman"); None when even that still looks like an upload's ("Bruno Mars
+    - That's what I like (Lyrics)" by "Pizza Music"): not put back."""
+    from domovoi.handlers.shared.spoken_names import clean_title
+
+    if not looks_like_upload_names(*ours):
+        return ours
+    t = clean_title(strip_upload_noise(ours[0])) if ours[0] else ours[0]
+    a = strip_upload_noise(ours[1]) if ours[1] else ours[1]
+    if not (t or "").strip() or looks_like_upload_names(t, a):
+        return None
+    return t, a
 
 
 async def _repair(counts: dict[str, Any]) -> None:
@@ -1351,7 +1443,8 @@ async def _repair(counts: dict[str, Any]) -> None:
             if _row_fits_file(ours, path.stem, row.title, row.artist):
                 counts["kept"] += 1
                 continue
-            if looks_like_upload_names(*ours):
+            put_back = _names_to_put_back(ours)
+            if put_back is None:
                 # The file's names are an upload's ("Artist - Title
                 # (Lyrics)" by a channel): never put back over the row's.
                 counts["unsure"] += 1
@@ -1363,8 +1456,8 @@ async def _repair(counts: dict[str, Any]) -> None:
                 continue
             await session.execute(text(_RESTORE_SQL), {
                 "id": row.id,
-                "t": meta.get("title"),
-                "a": meta.get("artist"),
+                "t": put_back[0],
+                "a": put_back[1],
                 "al": meta.get("album"),
                 "matched": OUTCOME_MATCHED,
                 "disagreed": OUTCOME_DISAGREED,
@@ -1373,7 +1466,7 @@ async def _repair(counts: dict[str, Any]) -> None:
             counts["restored"] += 1
             log.info(
                 "library enricher repair: %s: %r by %r → %r by %r (the file's names)",
-                path.name[:60], row.title, row.artist, meta.get("title"), meta.get("artist"),
+                path.name[:60], row.title, row.artist, put_back[0], put_back[1],
             )
         if counts["restored"]:
             await session.execute(

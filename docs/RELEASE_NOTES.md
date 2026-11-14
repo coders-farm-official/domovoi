@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — Song recognition no longer takes covers and remixes
+
+A matching title was enough for an answer to be used, so a requeue renamed
+songs to covers and other recordings: "Jumper" by Third Eye Blind became
+"Jumper" by "Tweaker", "Forgot About Dre" the instrumental. Now, when a
+track names a real artist (not empty, not "Unknown Artist", not an
+uploader channel), the answer's artist must be that artist (or one of the
+performers); the title alone counts only when the track has no usable
+artist. An answer whose title adds "instrumental", "karaoke", "cover",
+"remix", "mix" or "tribute" that the track's names and file name don't
+have is refused. A matched title no longer keeps upload words ("Rat Race
+- Lyrics" is written "Rat Race").
+
+**If tracks were renamed that way**, run the repair again without a body
+(`POST /api/music/library/enrich/repair`, admin Bearer): it now finds
+those tracks, puts the file's names back (without upload words such as
+"(Official Radio Edit)" when that leaves a song's names) and marks them
+`disagreed`. To look them up once more under the new rule, follow it with
+the `requeue_disagreed` call below, with a window around the repair's run.
+
 ## 2026-11-14 — Song recognition understands upload names; the repair can be undone
 
 The name check from 2026-11-13 refused right answers for files that carry
