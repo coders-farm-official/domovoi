@@ -199,6 +199,17 @@ jobs:
       # stays out: the suite runs on stubs.
       - name: Install what the tests import beyond the lock (scipy, feedparser)
         run: python -m pip install "scipy>=1.11,<2" "feedparser>=6.0"
+      # The default 100 connections run out under pytest -n 4 (each worker
+      # has its own database copy and the app's pools): raise it, then
+      # restart the service container so the setting takes.
+      - name: More database connections for the parallel workers
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U domovoi -d domovoi_test -c "ALTER SYSTEM SET max_connections = 500"
+          docker restart ${{ job.services.postgres.id }}
+          for i in $(seq 1 30); do
+            docker exec ${{ job.services.postgres.id }} pg_isready -h 127.0.0.1 -U domovoi -d domovoi_test && break
+            sleep 1
+          done
       - name: Migrate the test database (Flyway, as the compose file's flyway-test)
         run: |
           docker run --rm --network host \

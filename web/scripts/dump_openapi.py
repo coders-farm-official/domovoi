@@ -20,7 +20,8 @@ from web.backend.main import app
 def main() -> None:
     out = Path(__file__).resolve().parent.parent / "openapi.json"
     spec = app.openapi()
-    out.write_text(json.dumps(spec, indent=2), encoding="utf-8")
+    # LF on every OS: CI regenerates it on Linux and compares byte for byte.
+    out.write_text(json.dumps(spec, indent=2), encoding="utf-8", newline="\n")
     print(f"wrote {out} ({out.stat().st_size:,} bytes)")
 
 
