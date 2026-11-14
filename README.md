@@ -962,8 +962,13 @@ used.
 
 The default wake word, `hey_jarvis`, is one of openWakeWord's pre-trained
 models, which are licensed CC BY-NC-SA 4.0 (non-commercial). A wake word
-you train on your own server is for your household only
-([why](scripts/wake_word/README.md#5-licence-a-model-trained-here-is-for-this-household)).
+you train on your own server can be shared under the same CC BY-NC-SA 4.0,
+with the notice its Download includes; a model trained on your household's
+voices is your call to share
+([details](scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)). Coders Farm's own trained
+models are in
+[domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models).
+Domovoi itself stays MIT.
 
 The Android app's own chat runs Gemma 4 E2B (Apache-2.0) on
 LiteRT-LM (Apache-2.0), and listens with Moonshine and Silero VAD (both

@@ -1731,7 +1731,7 @@ listens.
   starts over.
 - A trained word can record more: its row counts the new clips, and
   **Train again** uses them. The rooms keep the current model until then.
-- A wake word trained at home is for your household only ([why](docs/LICENSES.md#the-wake-word-trainer)).
+- **Download** packs a trained word to share: you may share it non-commercially, under CC BY-NC-SA 4.0 with the notice in the zip ([why](docs/LICENSES.md#the-wake-word-trainer)). A word trained on your household's voices is your call to share.
 
 **Greetings** *(admin)*
 

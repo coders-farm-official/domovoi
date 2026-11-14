@@ -4424,7 +4424,7 @@
        "text": "A trained word can record more: its row counts the new clips, and **Train again** uses them. The rooms keep the current model until then."
       },
       {
-       "text": "A wake word trained at home is for your household only ([why](doc:docs/LICENSES.md#the-wake-word-trainer))."
+       "text": "**Download** packs a trained word to share: you may share it non-commercially, under CC BY-NC-SA 4.0 with the notice in the zip ([why](doc:docs/LICENSES.md#the-wake-word-trainer)). A word trained on your household's voices is your call to share."
       }
      ]
     },

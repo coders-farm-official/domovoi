@@ -739,9 +739,15 @@ core starts. The training container runs on Docker's default network, so it
 could reach the internet while it trains; nothing in it needs to once the
 data is cached. What the household recorded only goes into it read-only and
 into the cache volume ([Data at rest](#data-at-rest)); nothing uploads it.
-A model trained this way is for the household only: its training data's
-licences don't allow sharing it
-([`scripts/wake_word/README.md`, section 5](../scripts/wake_word/README.md#5-licence-a-model-trained-here-is-for-this-household)).
+A trained model leaves the server only when an admin presses **Download**
+(`GET /v1/admin/wake/export/{wake_word_id}`): a zip of the `.onnx`,
+`SHA256SUMS`, `MODEL_CARD.md` and `LICENSE-NOTICE.md`, with no
+recordings, clip names, rooms or paths. Sharing it is allowed under
+CC BY-NC-SA 4.0 with that notice. A model trained on the household's
+voices holds learned weights, not the recordings, but those voices shaped
+it, so sharing it is the household's call; a **Synthetic voices only**
+word carries nobody's voice
+([`scripts/wake_word/README.md`, section 5](../scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)).
 
 ### How much a request may weigh
 

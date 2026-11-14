@@ -614,5 +614,6 @@ worker marks the row `ready`, the model serves over `/v1/wake-models/<slug>.onnx
 and the dashboard's **Push to …** control pushes it to satellites. The Pi's
 effective wake word, the served filename, and the openWakeWord prediction-dict
 key all equal `<slug>` — the container writes exactly `<slug>.onnx`, never a
-renamed file. The model is for this household only: its training data's
-licences don't allow sharing it ([README.md, section 5](README.md#5-licence-a-model-trained-here-is-for-this-household)).
+renamed file. To share it, use the dashboard's **Download**: the model may
+be shared under CC BY-NC-SA 4.0 with the notice that zip includes
+([README.md, section 5](README.md#5-licence-sharing-a-model-trained-here)).

@@ -241,11 +241,11 @@ systemd drop-in is no longer needed. Every knob:
   as a separate program; it pronounces only the words the core sent
   nothing for.
 
-## 5. Licence: a model trained here is for this household
+## 5. Licence: sharing a model trained here
 
-A model trained at home is for that household. It can't become one of
-Domovoi's shipped defaults, and it shouldn't be shared, because the
-training data is not licensed for that:
+You may share a model you trained, under CC BY-NC-SA 4.0 (non-commercial,
+share-alike) with the notice the **Download** below includes. The
+training data's licences are why it can't be offered on looser terms:
 
 - the negative features the training uses (ACAV100M, from
   `davidscripka/openwakeword_features`) are CC BY-NC-SA 4.0
@@ -265,8 +265,16 @@ turned on), the mutagen library (GPL-2.0-or-later) and libsndfile
 server builds from the Dockerfile in `scripts/wake_word/docker`; Domovoi
 doesn't distribute the image. The NVIDIA Container Toolkit is an
 Apache-2.0 operating-system package installed from NVIDIA's repository.
-A default Domovoi could ship would need
-training data with permissive licences throughout.
+
+A model trained here can't become one of Domovoi's shipped defaults: that
+would need training data with permissive licences throughout. Coders Farm publishes
+its own trained models, under the same CC BY-NC-SA 4.0, in a separate
+repository: [domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models).
+
+**Your household's voices.** A model trained on recordings of your
+household is yours to share or not. The `.onnx` file holds learned
+weights, not the recordings, but those voices shaped it. A word trained
+with **Synthetic voices only** carries nobody's voice.
 
 **Download (Settings → Voice → Wake words).** A ready word has a
 **Download** button: a zip with `<slug>.onnx` (and its `.onnx.json`

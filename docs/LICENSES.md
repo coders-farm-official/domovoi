@@ -31,9 +31,13 @@ is what counts.
 - **AI is optional.** If you leave AI chat and questions out when you set
   up a server, the Llama, Qwen and picture-describing models below are not
   downloaded at all.
-- **A wake word you train at home is for your household only**, because
-  the training data's licences don't allow sharing it
-  ([why](../scripts/wake_word/README.md#5-licence-a-model-trained-here-is-for-this-household)).
+- **A wake word you train at home can be shared**, under CC BY-NC-SA 4.0
+  (non-commercial) with the notice its **Download** includes; the
+  training data below is why
+  ([details](../scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)). Coders Farm's own
+  trained models are in a separate repository,
+  [domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models),
+  under the same licence.
 - **Some models you can pick yourself are not permissive.** `qwen2.5:3b` is
   for non-commercial research or evaluation only. Llama's vision model has
   an EU restriction. Gemma 2 and 3 have Google's own terms. See
@@ -104,8 +108,12 @@ app under Settings → About & updates → Open-source licences.
 
 Wake-word training is off until you turn it on in Settings. The trainer is a
 container your server builds and runs. What it downloads trains **your
-household's** model, and the training data is why that model stays in the
-household.
+household's** model. Because of this data, a model it trains can only be
+shared under CC BY-NC-SA 4.0, with the attribution in the
+`LICENSE-NOTICE.md` that Settings → Voice → Wake words → **Download**
+puts in the zip. A model trained on recordings of your household's voices
+is your call to share: it holds learned weights, not the recordings, but
+those voices shaped it; **Synthetic voices only** avoids that.
 
 | What | Licence |
 |---|---|
@@ -302,9 +310,11 @@ among them, and the trainer's ACAV100M features.
 - *Redistributor:* no commercial use, so a box, stick or service that
   you sell can't carry these files. Non-commercial sharing must credit the
   author and use the same licence.
-- A model trained from this data inherits the problem, so a wake word
-  trained at home stays at home. A permissive default for Domovoi needs
-  training data that is permissive throughout. It's planned, not built.
+- A model trained from this data inherits these terms: a wake word
+  trained at home may be shared non-commercially, under the same licence,
+  with the attribution its Download includes. A permissive default for
+  Domovoi needs training data that is permissive throughout. It's
+  planned, not built.
 
 **Llama 3.2 (and 3.1) Community License:** `llama3.2:3b` and the other
 Llama models.
@@ -346,4 +356,6 @@ fonts.
 **"No licence stated" and "educational use only":** MIT's impulse
 responses, and MUSDB18 inside the validation features. Without a licence,
 nothing grants you the right to pass them on, and MUSDB18 is for education
-only. Both are used only to train a household's own wake word.
+only. Both are used only to train a household's own wake word; the files
+themselves never leave the trainer. They are why sharing a trained model,
+even under CC BY-NC-SA 4.0, stays a judgement call.

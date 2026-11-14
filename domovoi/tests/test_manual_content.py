@@ -163,7 +163,7 @@ def test_the_wake_word_page_explains_training_your_own() -> None:
     page = next(p for p in DOC["pieces"] if p["id"] == "wake-word")
     text = json.dumps(page, ensure_ascii=False)
     for needed in ("route:settings/wake-words", "22 GB", "32 GB", "20 minutes", "over an hour",
-                   "15 or more clips", "**Train**", "**Push to room**", "household only",
+                   "15 or more clips", "**Train**", "**Push to room**", "CC BY-NC-SA 4.0", "**Download**",
                    "doc:docs/LICENSES.md#the-wake-word-trainer"):
         assert needed in text, needed
     start = json.dumps(DOC["start"], ensure_ascii=False)
