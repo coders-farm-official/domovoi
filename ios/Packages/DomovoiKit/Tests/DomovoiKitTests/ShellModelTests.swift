@@ -294,6 +294,54 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
+    /// A real return renews every cover (asked again with its ETag) and
+    /// forgets the lock screen's remembered "no cover"s; a peek does neither
+    /// (V058, `MainActivity.onStart` → `CoverArt.appForegrounded`). The
+    /// defect: covers kept from before the app went away were trusted for
+    /// the rest of the run.
+    func testARealReturnRenewsCoversAndForgetsMisses() {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        let miss = "http://10.0.0.42:6369/api/music/library/9/cover"
+        let start = MusicCoverRenewal.shared.epoch
+        PlayerArtwork.noteFailure(miss, status: 404)
+        rig.model.scenePhaseChanged(to: .inactive)
+        rig.model.scenePhaseChanged(to: .active)
+        XCTAssertEqual(start, MusicCoverRenewal.shared.epoch, "a peek is not a return")
+        XCTAssertTrue(PlayerArtwork.isMissing(miss))
+
+        rig.model.scenePhaseChanged(to: .background)
+        rig.model.scenePhaseChanged(to: .inactive)
+        rig.model.scenePhaseChanged(to: .active)
+        XCTAssertEqual(start + 1, MusicCoverRenewal.shared.epoch)
+        XCTAssertFalse(PlayerArtwork.isMissing(miss), "a song can have gained a cover meanwhile")
+        rig.model.stop()
+        PlayerArtwork.forgetMisses()
+    }
+
+    /// `library.cover.changed` (V059) reaches the app-wide versions every
+    /// cover draws from. The defect: the event fanned out to nobody, so a
+    /// changed cover stayed old on every surface that had read its row.
+    func testACoverChangedEventMovesTheAppsCoverVersions() {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        MusicCoverVersions.shared.forget()
+        rig.model.coverEventArrived(StateEvent(
+            type: "library.cover.changed",
+            frame: #"{"type":"library.cover.changed","data":{"tracks":[{"id":12,"cover_v":4,"cover_url":"/api/music/library/12/cover?v=4"}]}}"#
+        ))
+        XCTAssertEqual(4, MusicCoverVersions.shared.known(12))
+        rig.model.coverEventArrived(StateEvent(type: "playlists.changed", frame: "{}"))
+        XCTAssertEqual(4, MusicCoverVersions.shared.known(12))
+        // A frame from a socket opened to a server the app has left is dropped.
+        rig.model.coverEventArrived(StateEvent(
+            type: "library.cover.changed",
+            frame: #"{"type":"library.cover.changed","data":{"tracks":[{"id":12,"cover_v":9}]}}"#,
+            server: "http://10.0.0.77:6369"
+        ))
+        XCTAssertEqual(4, MusicCoverVersions.shared.known(12), "another server's event moved this one's covers")
+        MusicCoverVersions.shared.forget()
+        rig.model.stop()
+    }
+
     /// Coming back re-asks the device register, no more often than the gap —
     /// and never for a phone that has no server at all.
     ///

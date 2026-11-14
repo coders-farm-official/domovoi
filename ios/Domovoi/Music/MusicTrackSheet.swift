@@ -125,7 +125,8 @@ struct MusicTrackSheet: View {
                 size: 96,
                 corner: 10,
                 spoken: true,
-                covers: covers
+                covers: covers,
+                coverV: track.coverV
             )
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title ?? MusicStrings.unknownTitle)
@@ -135,6 +136,7 @@ struct MusicTrackSheet: View {
                     .font(.subheadline)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                MusicTrackCredits(track: track)
                 Text(track.album ?? "—")
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
@@ -286,6 +288,27 @@ struct MusicTrackSheet: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.errInk)
+        }
+    }
+}
+
+/// The track's further credited artists (V059), quieter, on a line of their
+/// own under the artist — where the web's track drawer and Android's
+/// `TrackDrawer.kt` put them. Nothing when there are none.
+struct MusicTrackCredits: View {
+
+    let track: LibraryTrack
+
+    static let identifier = "music-track-credits"
+
+    var body: some View {
+        let credits = MusicCredits.with(track)
+        if !credits.isEmpty {
+            Text(credits)
+                .font(.footnote)
+                .foregroundStyle(Color.fgMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(Self.identifier)
         }
     }
 }

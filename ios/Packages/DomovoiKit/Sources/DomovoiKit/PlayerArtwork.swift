@@ -28,6 +28,29 @@ public enum PlayerArtwork {
         "/api/music/library/\(trackID)/cover"
     }
 
+    /// The same path at a cover version (V059: the server's `cover_url`,
+    /// `/api/music/library/{id}/cover?v={cover_v}`), or the bare route for
+    /// none. The server ignores `?v=`; it makes a changed cover a new URL.
+    public static func libraryPath(trackID: Int64, coverV: Int?) -> String {
+        guard let coverV else { return libraryPath(trackID: trackID) }
+        return "\(libraryPath(trackID: trackID))?v=\(coverV)"
+    }
+
+    /// A library cover path's track and version, or nil for anything else
+    /// (a podcast's art, a phone file).
+    public static func coverPathParts(_ path: String) -> (trackID: Int64, version: Int?)? {
+        let prefix = "/api/music/library/"
+        guard path.hasPrefix(prefix) else { return nil }
+        let rest = path.dropFirst(prefix.count)
+        let pieces = rest.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let head = pieces.first, head.hasSuffix("/cover"),
+              let id = Int64(head.dropLast("/cover".count)) else { return nil }
+        guard pieces.count == 2 else { return (id, nil) }
+        let query = pieces[1]
+        guard query.hasPrefix("v="), let version = Int(query.dropFirst(2)) else { return (id, nil) }
+        return (id, version)
+    }
+
     /// What to hand an image loader for a cover path: a server path resolved
     /// against the active server; an on-device file URL or a full `http(s)`
     /// URL as it is; nil for none.
@@ -50,6 +73,29 @@ public enum PlayerArtwork {
     /// `PodcastArtwork.kt:25`.
     public static func podcastModel(_ url: String?, absolute: (String) -> String) -> String? {
         podcastPath(url).map(absolute)
+    }
+
+    // MARK: - the lock screen's fetch
+
+    /// The request the lock screen's artwork is fetched with.
+    ///
+    /// That fetch goes through `URLSession.shared`, which (unlike
+    /// ``DomovoiClient``) keeps an HTTP cache, and the cover route answers
+    /// `Cache-Control: max-age=86400` with a strong `ETag`. A cover can change
+    /// inside its file with the URL unchanged (V058), so a kept copy is never
+    /// used without asking: the cache is told to revalidate (its stored
+    /// `ETag` goes as `If-None-Match`, and a `304` hands back the kept
+    /// bytes), and `Cache-Control: no-cache` says the same to the cache in
+    /// case the policy alone is not honoured. Android's media-session loader
+    /// has no cache at all, so it always asks; this asks too, for less.
+    ///
+    /// When the lock screen asks: each time a different song's artwork is
+    /// attached (``PlayerNowPlaying``), as on Android. The song already on
+    /// the lock screen is not asked about again until it changes.
+    public static func request(_ url: URL) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: .reloadRevalidatingCacheData)
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        return request
     }
 
     // MARK: - the miss memo

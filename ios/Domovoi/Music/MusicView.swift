@@ -376,17 +376,13 @@ struct MusicView: View {
         // still up. They report inline now
         // (``MusicMoreSheetStatus``).
         //
-        // The one exception is the delete, which dismisses the sheet first —
-        // so there is no sheet left to say it in, and the sentence is taken
-        // here, on `deleted`, while the model is still in `sheet`.
+        // The two exceptions are the delete and the copy, which close the
+        // sheet: the playlist model hands those sentences to the shell itself
+        // (``MusicPlaylistDetailModel/sayInShell``, set in `openPlaylist`).
     }
 
     private var page: some View {
         withToasts
-        .onChange(of: playlistDeleted) { _, gone in
-            guard gone, let said = takeDeletedPlaylistToast() else { return }
-            model.showToast(said)
-        }
         // A write from the add-to-playlist sheet changed something the
         // screen behind it is showing: the star on a library row, and the
         // playlists tab's counts.
@@ -476,22 +472,6 @@ struct MusicView: View {
         )
     }
 
-    /// Whether the open playlist sheet's playlist is gone.
-    ///
-    /// Here rather than on ``MusicMoreSheet`` because reading a model is
-    /// main-actor work and this view is where that isolation already is.
-    private var playlistDeleted: Bool {
-        if case .playlist(let detail) = sheet { return detail.deleted }
-        return false
-    }
-
-    /// The delete's own sentence, taken before the sheet's dismissal empties
-    /// ``sheet``. Every other outcome a sheet produces is said in the sheet.
-    private func takeDeletedPlaylistToast() -> String? {
-        guard case .playlist(let detail) = sheet else { return nil }
-        return detail.takeToast()
-    }
-
     /// Whether the add-to-playlist sheet has written something.
     ///
     /// A computed property rather than the expression inline in `onChange`,
@@ -566,6 +546,14 @@ struct MusicView: View {
             deviceID: deviceID
         )
         detail.listener = model.queueTools()?.listener ?? .unnamed
+        // A copy made, or a 409 from a playlist the music files own: the
+        // tab's list is re-read (V058).
+        let list = playlists
+        detail.listChanged = { [weak list] in list?.read.refresh() }
+        // The copy's and the delete's sentences, said as the sheet closes:
+        // the model hands them to the shell itself (I044).
+        let shell = model
+        detail.sayInShell = { shell.showToast($0) }
         sheet = .playlist(detail)
     }
 
@@ -967,7 +955,7 @@ struct MusicTrackRow: View {
             // between two real targets is a dead zone on the row.
             Button { onOpen(track) } label: {
                 HStack(alignment: .top, spacing: 10) {
-                MusicCoverView(trackID: track.id, size: 40, covers: covers)
+                MusicCoverView(trackID: track.id, size: 40, covers: covers, coverV: track.coverV)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.displayTitle)
                         .font(.subheadline)
@@ -1000,7 +988,9 @@ struct MusicTrackRow: View {
 
     private var subtitle: String {
         let artist = track.artist?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let who = (artist?.isEmpty == false ? artist : nil) ?? MusicStrings.unknownArtist
+        let named = (artist?.isEmpty == false ? artist : nil) ?? MusicStrings.unknownArtist
+        // "A · with B, C" (V059, `LibraryTab.kt`, the web's library rows).
+        let who = MusicCredits.artistLine(named, credits: MusicCredits.with(track))
         guard let seconds = track.durationSec else { return who }
         return "\(who) · \(fmtDur(seconds))"
     }

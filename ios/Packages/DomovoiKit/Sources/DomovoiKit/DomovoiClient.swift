@@ -606,6 +606,27 @@ public final class DomovoiClient: Sendable {
         headers: [String: String] = [:],
         onlyTo: String? = nil
     ) async throws(DomovoiError) -> Data {
+        try await rawAnswer(
+            method: method, path: path, body: body, contentType: contentType,
+            trackPairing: trackPairing, timeout: timeout, headers: headers, onlyTo: onlyTo
+        ).body
+    }
+
+    /// ``raw(method:path:body:contentType:trackPairing:timeout:headers:onlyTo:)``
+    /// with the response kept, for a caller that reads a header (a cover's
+    /// `ETag`). `alsoAccept` names statuses outside 2xx that are answers
+    /// rather than failures here: a `304 Not Modified` to an `If-None-Match`.
+    public func rawAnswer(
+        method: String,
+        path: String,
+        body: Data? = nil,
+        contentType: String? = nil,
+        trackPairing: Bool = true,
+        timeout: TimeInterval? = nil,
+        headers: [String: String] = [:],
+        onlyTo: String? = nil,
+        alsoAccept: Set<Int> = []
+    ) async throws(DomovoiError) -> (body: Data, response: HTTPURLResponse) {
         // Read ONCE: the `onlyTo` check and the address the request goes to
         // must be the same reading of the active server, or a switch between
         // the two would send a call checked for A to B.
@@ -645,14 +666,14 @@ public final class DomovoiClient: Sendable {
         if let timeout { request.timeoutInterval = timeout }
 
         let (data, response, _) = try await perform(request)
-        guard (200...299).contains(response.statusCode) else {
+        guard (200...299).contains(response.statusCode) || alsoAccept.contains(response.statusCode) else {
             let text = Self.text(data)
             let pairing = isPairingRefusalFromOurServer(status: response.statusCode, body: text)
             if pairing && trackPairing { self.pairing.withLock { $0 = true } }
             throw Self.failure(response: response, body: text, deviceTokenRequired: pairing)
         }
         if trackPairing { pairing.withLock { $0 = false } }
-        return data
+        return (data, response)
     }
 
     // ---- the JSON verbs ----------------------------------------------------

@@ -329,7 +329,7 @@ struct MusicGenreSongRow: View {
         HStack(alignment: .top, spacing: 10) {
             Button(action: onOpen) {
                 HStack(alignment: .top, spacing: 10) {
-                    MusicCoverView(trackID: track.id, size: 40, covers: covers)
+                    MusicCoverView(trackID: track.id, size: 40, covers: covers, coverV: track.coverV)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track.displayTitle)
                             .font(.subheadline)

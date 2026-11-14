@@ -13,9 +13,11 @@ import Observation
 ///    (`playlists.py:382`). A port that forgets this ships a row that fails
 ///    every time it is tapped — [[no-misleading-controls]] exactly. The branch
 ///    is ``isFavorites(_:)`` and it is the first thing ``toggle(_:)`` tests.
-/// 2. **A 409 is not a failure.** The server answers "track N is already in
-///    this playlist" (`playlists.py:438`) when the track is already there,
-///    which is the state the person asked for. Android's bulk add counts those
+/// 2. **A 409 for a song already there is not a failure.** The server
+///    answers "track N is already in this playlist" (`playlists.py:438`)
+///    when the track is already there, which is the state the person asked
+///    for. Any **other** 409 is a playlist made from the music files
+///    (V058), said in the server's words (``MusicPlaylistReadOnly``). Android's bulk add counts those
 ///    apart from real failures and says "added 3 tracks, 1 already in"
 ///    (`MusicScreen.kt:255-264`); a single add says the same thing and nothing
 ///    about failing.
@@ -94,7 +96,10 @@ public final class MusicAddToPlaylistModel {
     /// Every row the sheet offers, in the server's order — **Favorites
     /// included**, because toggling it is the one way to favourite a track
     /// from this sheet and leaving it out would hide a thing the sheet can do.
-    public var playlists: [Playlist] { all.data ?? [] }
+    /// A playlist made from the music files is **not** offered: it refuses
+    /// adds and removes with a 409 (``MusicPlaylistReadOnly/addTargets(_:)``,
+    /// `AddToPlaylistSheet.kt`).
+    public var playlists: [Playlist] { MusicPlaylistReadOnly.addTargets(all.data ?? []) }
 
     /// The ids this track is in.
     public var memberIDs: Set<Int64> {
@@ -227,11 +232,21 @@ public final class MusicAddToPlaylistModel {
                 self.settled()
             } catch let trouble {
                 guard let self else { return }
-                if trouble.failure?.status == 409 {
+                if MusicPlaylistReadOnly.isAlreadyInPlaylist(trouble) {
                     // Already there: the state that was asked for. Said as
                     // such, and the reads are still refreshed, because the
                     // memberships this phone holds were out of date.
                     self.say(MusicMoreStrings.alreadyInPlaylist(label, playlist: name))
+                    self.settled()
+                    return
+                }
+                if let conflict = MusicPlaylistReadOnly.conflictText(trouble) {
+                    // Any other 409: the playlist turned out to be one the
+                    // music files own (this sheet's list was older than the
+                    // server's). The server's words, and every list re-read —
+                    // this sheet's, which then leaves the row out, and the
+                    // tab's behind it (`mutated`).
+                    self.say(conflict, failed: true)
                     self.settled()
                     return
                 }

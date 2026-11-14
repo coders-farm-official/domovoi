@@ -1117,7 +1117,29 @@ public final class PlayerModel {
             target: target, current: item, canNext: canNext, canPrevious: canPrevious,
             hasPreviousItem: index > 0
         ))
-        nowPlaying.attachArtwork(path: info.artworkPath, absolute: absoluteForArtwork())
+        // At the newest cover version heard (V059): a cover that changed
+        // while this song plays is a new URL, so the lock screen loads it.
+        nowPlaying.attachArtwork(
+            path: MusicCoverVersions.shared.versioned(info.artworkPath),
+            absolute: absoluteForArtwork()
+        )
+    }
+
+    /// `library.cover.changed` moved these tracks' cover versions
+    /// (``MusicCoverVersions``): when one is the song on the lock screen,
+    /// its artwork is attached again at the new version.
+    public func coverVersionsMoved(_ moved: Set<Int64>) {
+        let versions = MusicCoverVersions.shared
+        var changed = false
+        for i in queue.indices where queue[i].kind == .library && moved.contains(queue[i].itemID) {
+            let next = versions.versioned(queue[i].coverPath)
+            if next != queue[i].coverPath {
+                queue[i].coverPath = next
+                changed = true
+            }
+        }
+        guard changed, let item = current, item.kind == .library, moved.contains(item.itemID) else { return }
+        refreshNowPlaying()
     }
 
     /// The resolver the artwork fetch uses. A `@Sendable` closure over the
@@ -1280,6 +1302,8 @@ public final class PlayerModel {
         // The session lives on the server being left.
         upNext?.drop()
         PlayerArtwork.forgetMisses()
+        // Cover versions are the old server's track ids (V059).
+        MusicCoverVersions.shared.forget()
         if target.isCasting {
             // The room is the old server's: stop watching it, and say nothing
             // about it to the new one.

@@ -486,7 +486,8 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
             title: track.displayTitle,
             artist: track.artist,
             album: track.album,
-            durationSec: track.durationSec
+            durationSec: track.durationSec,
+            coverV: track.coverV
         )
     }
 

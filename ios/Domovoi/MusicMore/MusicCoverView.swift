@@ -53,13 +53,27 @@ struct MusicCoverView: View {
 
     let covers: MusicCoverStore
 
+    /// The row's cover version (`cover_v`, V059), or nil for a surface whose
+    /// read carries none (a room card, the player) or an older server.
+    var coverV: Int? = nil
+
+    /// The newest versions the live event announced (V059), observed so a
+    /// cover redraws the moment its version moves.
+    private var versions: MusicCoverVersions { MusicCoverVersions.shared }
+
+    /// Which picture this is: the track, at the larger of the row's version
+    /// and the newest heard; no version from an older server.
+    private var key: MusicCoverKey {
+        MusicCoverKey(trackID: trackID, version: versions.version(trackID, row: coverV))
+    }
+
     /// Whether the server has settled on "this track has no picture".
     ///
     /// `.loading` and `.failed` are deliberately **not** this: neither is an
     /// answer, and saying "no cover art" over a read that has not finished
     /// is the same claim-more-than-you-measured fault
     /// ([[reasoning-that-hides-a-bug]]) as calling an unread library empty.
-    private var settledAbsent: Bool { covers.cover(trackID) == .absent }
+    private var settledAbsent: Bool { covers.cover(key) == .absent }
 
     var body: some View {
         RoundedRectangle(cornerRadius: corner, style: .continuous)
@@ -75,12 +89,29 @@ struct MusicCoverView: View {
             .accessibilityLabel(
                 settledAbsent ? MusicMoreStrings.noCoverArt : MusicMoreStrings.coverArt
             )
-            .task(id: trackID) { covers.want(trackID) }
+            .task(id: askID) { covers.want(key) }
+    }
+
+    /// The cover and the renewal epoch: a new version is a new picture, and
+    /// when the app comes back to the screen an unversioned cover already
+    /// drawn is asked about again with its ETag (``MusicCoverStore``).
+    private var askID: String { "\(key.path)#\(covers.renewal.epoch)" }
+
+    /// The picture for this version, or — while a new version is being
+    /// fetched — the one held for the version before it, so a cover that
+    /// changed swaps rather than flickering through the placeholder.
+    private var currentCover: MusicCover? {
+        let now = covers.cover(key)
+        if case .image = now { return now }
+        if now == .absent { return now }
+        guard key.version != nil else { return now }
+        let earlier = covers.newestImage(trackID: trackID)
+        return earlier ?? now
     }
 
     @ViewBuilder
     private var art: some View {
-        switch covers.cover(trackID) {
+        switch currentCover {
         case .image(let bytes):
             if let image = UIImage(data: bytes) {
                 Image(uiImage: image)

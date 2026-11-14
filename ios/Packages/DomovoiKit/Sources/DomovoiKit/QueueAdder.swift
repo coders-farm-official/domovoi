@@ -40,7 +40,8 @@ public final class PlayerModelQueueSink: PhoneQueueSink {
             title: track.displayTitle,
             artist: track.artist,
             album: track.album,
-            durationSec: track.durationSec
+            durationSec: track.durationSec,
+            coverV: track.coverV
         )
     }
 }

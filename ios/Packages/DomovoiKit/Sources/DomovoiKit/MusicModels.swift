@@ -160,6 +160,17 @@ public struct LibraryTrack: Equatable, Sendable, PagedRow, Identifiable {
     public let enrichedAt: String?
     public let filePath: String?
     public let favorited: Bool
+    /// Every artist the file credits, in its order (V059, its ARTISTS tag);
+    /// `[]` when nobody beyond ``artist``, which stays the primary credit.
+    /// Shown as "with B, C" (``MusicCredits``).
+    public let artists: [String]
+    /// The cover's version (V059): it moves whenever the art does. Nil from
+    /// an older server, whose cover is checked by its ETag instead
+    /// (``MusicCoverStore``).
+    public let coverV: Int?
+    /// The server's versioned cover path,
+    /// `/api/music/library/{id}/cover?v={cover_v}`; nil from an older server.
+    public let coverURL: String?
 
     public init(
         id: Int64 = 0,
@@ -173,7 +184,10 @@ public struct LibraryTrack: Equatable, Sendable, PagedRow, Identifiable {
         addedVia: String? = nil,
         enrichedAt: String? = nil,
         filePath: String? = nil,
-        favorited: Bool = false
+        favorited: Bool = false,
+        artists: [String] = [],
+        coverV: Int? = nil,
+        coverURL: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -187,10 +201,15 @@ public struct LibraryTrack: Equatable, Sendable, PagedRow, Identifiable {
         self.enrichedAt = enrichedAt
         self.filePath = filePath
         self.favorited = favorited
+        self.artists = artists
+        self.coverV = coverV
+        self.coverURL = coverURL
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, artist, album, source, favorited
+        case id, title, artist, album, source, favorited, artists
+        case coverV = "cover_v"
+        case coverURL = "cover_url"
         case durationSec = "duration_sec"
         case sourceID = "source_id"
         case addedAt = "added_at"
@@ -213,6 +232,11 @@ public struct LibraryTrack: Equatable, Sendable, PagedRow, Identifiable {
         enrichedAt = try values.decodeIfPresent(String.self, forKey: .enrichedAt)
         filePath = try values.decodeIfPresent(String.self, forKey: .filePath)
         favorited = try values.decodeIfPresent(Bool.self, forKey: .favorited) ?? false
+        // V059, read leniently and each on its own: one of them in an
+        // unexpected shape must not throw the whole page of rows away.
+        artists = (try? values.decodeIfPresent([String].self, forKey: .artists)) ?? []
+        coverV = try? values.decodeIfPresent(Int.self, forKey: .coverV)
+        coverURL = try? values.decodeIfPresent(String.self, forKey: .coverURL)
     }
 
     /// The name a row shows: the tag title, the file's own basename, or the
@@ -242,7 +266,10 @@ public struct LibraryTrack: Equatable, Sendable, PagedRow, Identifiable {
             addedVia: addedVia,
             enrichedAt: enrichedAt,
             filePath: filePath,
-            favorited: value
+            favorited: value,
+            artists: artists,
+            coverV: coverV,
+            coverURL: coverURL
         )
     }
 
@@ -307,6 +334,10 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
     public let isVirtual: Bool
     public let coverEmoji: String?
     public let coverColor: String?
+    /// Made from the music files (an `.m3u` file or the songs' own PLAYLIST
+    /// tags, V058): read-only in Domovoi, copied to be changed
+    /// (``MusicPlaylistReadOnly``). Absent from an older server: false.
+    public let imported: Bool
 
     public init(
         id: Int64 = 0,
@@ -316,7 +347,8 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
         createdAt: String? = nil,
         isVirtual: Bool = false,
         coverEmoji: String? = nil,
-        coverColor: String? = nil
+        coverColor: String? = nil,
+        imported: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -326,10 +358,11 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
         self.isVirtual = isVirtual
         self.coverEmoji = coverEmoji
         self.coverColor = coverColor
+        self.imported = imported
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, description
+        case id, name, description, imported
         case trackCount = "track_count"
         case createdAt = "created_at"
         case isVirtual = "is_virtual"
@@ -347,6 +380,7 @@ public struct Playlist: Equatable, Sendable, Decodable, Identifiable {
         isVirtual = try values.decodeIfPresent(Bool.self, forKey: .isVirtual) ?? false
         coverEmoji = try values.decodeIfPresent(String.self, forKey: .coverEmoji)
         coverColor = try values.decodeIfPresent(String.self, forKey: .coverColor)
+        imported = try values.decodeIfPresent(Bool.self, forKey: .imported) ?? false
     }
 }
 

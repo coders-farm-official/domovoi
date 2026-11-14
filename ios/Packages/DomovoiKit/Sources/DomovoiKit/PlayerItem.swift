@@ -73,7 +73,9 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
     /// e.g. `/api/music/library/12/audio`.
     public let src: String
     /// e.g. `/api/music/library/12/cover`.
-    public let coverPath: String?
+    /// `var`: a cover version heard after the item was queued (V059) moves it
+    /// in place, so Now Playing redraws without restarting playback.
+    public var coverPath: String?
     public let durationSec: Double?
     /// False for a live stream: the seek is refused in the model and the
     /// lock-screen scrubber is disabled (MAP §5.5).
@@ -167,13 +169,16 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
         title: String,
         artist: String? = nil,
         album: String? = nil,
-        durationSec: Double? = nil
+        durationSec: Double? = nil,
+        coverV: Int? = nil
     ) -> PlayerItem {
         PlayerItem(
             uid: "lib-\(id)", kind: .library, itemID: id,
             title: title, artist: artist, album: album,
             src: "/api/music/library/\(id)/audio",
-            coverPath: PlayerArtwork.libraryPath(trackID: id),
+            // The row's cover version (V059), so the lock screen asks for
+            // the picture this row was read with.
+            coverPath: PlayerArtwork.libraryPath(trackID: id, coverV: coverV),
             durationSec: durationSec
         )
     }

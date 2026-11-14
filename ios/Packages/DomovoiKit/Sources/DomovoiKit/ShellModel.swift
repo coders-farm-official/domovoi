@@ -967,6 +967,12 @@ public final class ShellModel {
                 // have taken some back while the app was away
                 // (``PhoneUpNext/reread()``, `MainActivity.onResume`).
                 heldPlayer?.upNext?.reread()
+                // Covers drawn from now on are asked about again with their
+                // ETag, and a remembered "no cover" is forgotten — a cover
+                // can change inside its file (V058; `MainActivity.onStart`,
+                // `CoverArt.appForegrounded`).
+                MusicCoverRenewal.shared.appReturned()
+                PlayerArtwork.forgetMisses()
             }
         case .inactive, .background:
             // `.inactive` is a step on the way out and also a transient state
@@ -1101,6 +1107,7 @@ public final class ShellModel {
                 Task { @MainActor in
                     guard let self else { return }
                     self.container.stateEventArrived(frame)
+                    self.coverEventArrived(frame)
                     event?(frame)
                 }
             }
@@ -1112,6 +1119,24 @@ public final class ShellModel {
         // cannot be got wrong silently rather than something a counter
         // reports after the fact.
         socketConnectionChanged(container.socket.connected)
+    }
+
+    /// `library.cover.changed` (V059): the covers whose version moved are
+    /// remembered app-wide (``MusicCoverVersions``), which every cover on
+    /// screen redraws from, and the lock screen's artwork is attached again
+    /// when the playing song's moved. Keyed by the server the app talks to
+    /// now.
+    func coverEventArrived(_ frame: StateEvent) {
+        guard frame.type == MusicCoverVersions.event else { return }
+        let active = container.store.serverURL
+        // A frame from a socket opened to a server the app has since left
+        // says nothing about this one's tracks (Android keys `WsEvent` by
+        // server the same way).
+        if !frame.server.isEmpty,
+           ServerCredentials.normalize(frame.server) != ServerCredentials.normalize(active) { return }
+        let moved = MusicCoverVersions.shared.received(frame, server: active)
+        guard !moved.isEmpty else { return }
+        heldPlayer?.coverVersionsMoved(moved)
     }
 
     /// The socket's own report, and the three things that follow a connect.
