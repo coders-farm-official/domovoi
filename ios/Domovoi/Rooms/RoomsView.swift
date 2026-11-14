@@ -41,9 +41,10 @@ import SwiftUI
 ///   genuinely needs here.
 /// * **Display controls and logs** — `:1597-1602` and `:1679-1684`, both
 ///   admin. Android's phone screen draws neither either.
-/// * **"Use this device as a room"** (`SatellitesScreen.kt:169`) — the
-///   `roommode` item's card. This screen leaves the gap rather than drawing a
-///   dead one.
+///
+/// **"Use this device as a room" IS here now** (`SatellitesScreen.kt:166-169`,
+/// ``RoomModeEntryCard``): room mode landed (I7), so the card is drawn after
+/// the roster in every state, as Android's last grid item is.
 ///
 /// **"Drop in from this phone" IS here now** (`PhoneDropinRow`,
 /// `PhoneDropinCall.kt:61`): The owner, answer 54. It is a device-tier socket of
@@ -263,6 +264,7 @@ struct RoomsView: View {
                 // than being swapped for the detail.
                 roster(rooms)
             }
+            RoomModeEntryCard()
         }
     }
 

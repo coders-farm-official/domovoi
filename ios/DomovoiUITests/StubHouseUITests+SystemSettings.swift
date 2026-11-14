@@ -383,13 +383,15 @@ extension StubHouseUITests {
         )
     }
 
-    /// The licences card lists **this** app's parts, and says there are none.
+    /// The licences card lists **this** app's parts: Apple's, and ONNX
+    /// Runtime 1.24.2 (linked for room mode, batch 2026-11-14) with its
+    /// notice behind a "show" toggle.
     ///
-    /// Discriminating by absence, deliberately: `ONNX Runtime` and `CMUdict`
-    /// are in Android's `OPEN_SOURCE_PARTS` and in no part of this app, and
-    /// "port the licences card" is the most natural way to put them on an
-    /// iPhone's screen. A licence row is a claim about what the binary
-    /// contains.
+    /// Discriminating by absence too, deliberately: `1.28.0` (Android's ONNX
+    /// Runtime) and `CMUdict` are in Android's `OPEN_SOURCE_PARTS` and in no
+    /// part of this app, and "port the licences card" is the most natural way
+    /// to put them on an iPhone's screen. A licence row is a claim about what
+    /// the binary contains.
     @MainActor
     func testSystemSettings_LicencesListThisAppsPartsOnly() throws {
         let app = launch(push: "Settings")
@@ -401,9 +403,16 @@ extension StubHouseUITests {
             "the licences card does not name Apple's frameworks"
         )
         XCTAssertTrue(
-            app.staticTexts[SystemSettingsStringsUnderTest.nothingLinked].exists,
-            "the card does not say this build links no third-party package"
+            app.staticTexts[SystemSettingsStringsUnderTest.onnxRuntime].exists,
+            "the licences card does not name ONNX Runtime 1.24.2, which this build links"
         )
+        XCTAssertFalse(
+            app.staticTexts[SystemSettingsStringsUnderTest.nothingLinked].exists,
+            "the card says this build links no third-party package, and it links ONNX Runtime"
+        )
+        let notice = app.buttons[SystemSettingsStringsUnderTest.showOnnxLicence]
+        if !notice.exists { print(app.debugDescription) }
+        XCTAssertTrue(notice.exists, "no toggle opens ONNX Runtime's LICENSE")
         // The one part of Android's card that ports word for word, because it
         // is about the server's downloads.
         XCTAssertTrue(
@@ -454,6 +463,10 @@ extension StubHouseUITests {
         XCTAssertTrue(
             app.staticTexts[SystemSettingsStringsUnderTest.noAnalytics].exists,
             "the privacy card does not say there is no analytics or crash-reporting service"
+        )
+        XCTAssertTrue(
+            startingWith(app, SystemSettingsStringsUnderTest.roomModeOpening).exists,
+            "the privacy card does not carry room mode's sentence (PrivacyCard.kt:65-66)"
         )
         for absent in SystemSettingsStringsUnderTest.droppedPrivacyClauses {
             XCTAssertEqual(
@@ -1169,9 +1182,12 @@ enum SystemSettingsStringsUnderTest {
     /// ``SystemSettingsPrivacy/noAnalytics``, verbatim from Android.
     static let noAnalytics = "There is no analytics, advertising or crash-reporting service in the app."
     /// Features this app does not have, which Android's points promise
-    /// (`PrivacyCard.kt:60-66`). A claim about one of them is the same fault
-    /// as a control that cannot act.
-    static let droppedPrivacyClauses = ["room mode", "microphone"]
+    /// (`PrivacyCard.kt:60-64`, the phone chats'). A claim about one of them
+    /// is the same fault as a control that cannot act. Room mode's sentence
+    /// is back with room mode (I7), and it does not say "microphone".
+    static let droppedPrivacyClauses = ["phone chats", "microphone"]
+    /// ``SystemSettingsPrivacy/roomMode``'s opening, Android's words.
+    static let roomModeOpening = "Room mode, which you turn on yourself, listens for its wake word"
 
     // MARK: - problem reports (SystemSettingsStrings)
 
@@ -1188,10 +1204,14 @@ enum SystemSettingsStringsUnderTest {
         "This build links no third-party package: everything above is Apple's own."
     static let modelLicencesLink = "licences of what Domovoi downloads"
     /// Parts of `OPEN_SOURCE_PARTS` (`LicencesCard.kt:60-108`) that are in the
-    /// **Android** APK and in nothing this app links. Two is enough: they are
-    /// the first and the last of that list, and the mistake this guards
-    /// against is porting the whole of it.
-    static let androidOnlyParts = ["ONNX Runtime", "CMUdict"]
+    /// **Android** APK and in nothing this app links: Android's ONNX Runtime
+    /// version, and CMUdict. The mistake this guards against is porting the
+    /// whole list.
+    static let androidOnlyParts = ["1.28.0", "CMUdict"]
+    /// ``Licences/rules``' title for the one package this build links.
+    static let onnxRuntime = "ONNX Runtime 1.24.2"
+    /// ``SystemSettingsNoticeToggle``'s label for its LICENSE, closed.
+    static let showOnnxLicence = "show onnxruntime/LICENSE"
 
     // MARK: - Advanced (ShellStrings §7.9)
 

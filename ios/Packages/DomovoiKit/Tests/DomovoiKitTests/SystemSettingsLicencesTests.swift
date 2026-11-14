@@ -9,17 +9,17 @@ final class SystemSettingsLicencesTests: XCTestCase {
     /// **The one mistake this file exists to prevent.** "Port the licences
     /// card" naturally means porting Android's list — ONNX Runtime 1.28.0,
     /// sherpa-onnx 1.13.8, LiteRT-LM 0.18.0, CMUdict, the Piper voices, the
-    /// Liberation fonts, CameraX, ZXing — and **none of it is in this app**.
-    /// A card is a licence claim; a row for a package nobody links is a claim
-    /// about software that is not there.
+    /// Liberation fonts, CameraX, ZXing — and **only ONNX Runtime is in this
+    /// app**, at its own version. A card is a licence claim; a row for a
+    /// package nobody links is a claim about software that is not there.
     func testNoRowNamesSomethingThisAppDoesNotLink() {
         let parts = systemSettingsLicenceParts()
-        XCTAssertEqual([SystemSettingsStrings.applesFrameworks], parts.map(\.title))
+        XCTAssertEqual([SystemSettingsStrings.applesFrameworks, "ONNX Runtime 1.24.2"], parts.map(\.title))
         let text = parts.map { [$0.title, $0.licence, $0.source ?? "", $0.note ?? ""].joined(separator: " ") }
             .joined(separator: "\n")
             .lowercased()
         for absent in [
-            "onnx", "sherpa", "litert", "cmudict", "piper", "liberation",
+            "1.28.0", "sherpa", "litert", "cmudict", "piper", "liberation",
             "camerax", "zxing", "androidx", "okhttp", "coil", "kotlin",
             "guava", "gson", "espeak",
         ] {
@@ -27,12 +27,32 @@ final class SystemSettingsLicencesTests: XCTestCase {
         }
     }
 
-    /// Nothing is linked, so the card says so in one sentence rather than
-    /// drawing an empty expandable list.
-    func testWithNothingLinkedTheCardSaysSo() {
-        XCTAssertEqual([], systemSettingsLinkedIdentities)
-        XCTAssertTrue(systemSettingsLinksNothing())
+    /// ONNX Runtime is linked (room mode), so the card draws its row, with
+    /// both notices it ships, and not the "links nothing" sentence.
+    func testOnnxRuntimeIsLinkedWithItsNotices() {
+        XCTAssertEqual(["onnxruntime-swift-package-manager"], systemSettingsLinkedIdentities)
+        XCTAssertFalse(systemSettingsLinksNothing())
+        let onnx = systemSettingsLicenceParts().first { $0.title == "ONNX Runtime 1.24.2" }
+        XCTAssertEqual("MIT", onnx?.licence)
+        XCTAssertEqual(["onnxruntime/LICENSE", "onnxruntime/ThirdPartyNotices.txt"], onnx?.notices)
+        XCTAssertTrue(onnx?.note?.contains("Microsoft Corporation") == true)
+        // The sentence is still right for a build that links nothing.
+        XCTAssertTrue(systemSettingsLinksNothing(linked: []))
         XCTAssertTrue(SystemSettingsStrings.licencesNothingLinked.contains("no third-party package"))
+    }
+
+    /// `noticeChunks` (`LicencesCard.kt:274-275`): 40 lines a piece, nothing
+    /// lost, the empty text one empty piece.
+    func testANoticeIsCutIntoFortyLinePieces() {
+        let text = (1...85).map(String.init).joined(separator: "\n")
+        let chunks = systemSettingsNoticeChunks(text)
+        XCTAssertEqual(3, chunks.count)
+        XCTAssertEqual(text, chunks.joined(separator: "\n"))
+        XCTAssertTrue(chunks.first?.hasPrefix("1\n2\n") == true)
+        XCTAssertTrue(chunks.last?.hasPrefix("81\n") == true)
+        XCTAssertEqual([""], systemSettingsNoticeChunks(""))
+        XCTAssertEqual("onnxruntime/LICENSE", systemSettingsNoticeLabel("notices/onnxruntime/LICENSE"))
+        XCTAssertEqual("onnxruntime/LICENSE", systemSettingsNoticeLabel("onnxruntime/LICENSE"))
     }
 
     /// The guard is worth nothing if it can only be checked against the empty
@@ -126,15 +146,31 @@ final class SystemSettingsLicencesTests: XCTestCase {
         )
     }
 
-    /// Room mode and the microphone are gone, because this app has neither.
-    /// A claim about a feature the app does not have is the same fault as a
+    /// The phone chats' sentences are gone, because this app has none. A
+    /// claim about a feature the app does not have is the same fault as a
     /// control that cannot act.
     func testNoPointClaimsAFeatureThisAppDoesNotHave() {
-        XCTAssertEqual(3, SystemSettingsPrivacy.points.count)
+        XCTAssertEqual(4, SystemSettingsPrivacy.points.count)
         let text = SystemSettingsPrivacy.points.joined(separator: "\n").lowercased()
-        for absent in ["room mode", "microphone", "wake word", "phone chats", "photo of a letter"] {
+        for absent in ["microphone", "phone chats", "photo of a letter"] {
             XCTAssertFalse(text.contains(absent), "this app has no \(absent)")
         }
+    }
+
+    /// Room mode is here now (I7), so Android's sentence about it is back,
+    /// word for word and in Android's place: after storage, before the
+    /// problem reports (`PrivacyCard.kt:44-70`, `assistant == false`).
+    func testRoomModesSentenceIsAndroidsAndInItsPlace() {
+        XCTAssertEqual(
+            "Room mode, which you turn on yourself, listens for its wake word all the time and says what it sends "
+                + "before it starts.",
+            SystemSettingsPrivacy.roomMode
+        )
+        XCTAssertEqual(
+            [SystemSettingsPrivacy.storage, SystemSettingsPrivacy.roomMode,
+             SystemSettingsPrivacy.problemReports, SystemSettingsPrivacy.noAnalytics],
+            SystemSettingsPrivacy.points
+        )
     }
 
     /// The no-analytics sentence is kept true by ``Licences/never`` — the iOS

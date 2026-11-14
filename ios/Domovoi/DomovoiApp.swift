@@ -29,24 +29,27 @@ import UIKit
 /// `connect` pill, no banner, and nothing opening by itself — because that is
 /// what an empty store says, not because there is nowhere to keep an answer.
 ///
-/// ### Room mode is not here
+/// ### Room mode comes first
 ///
 /// Android reads `RoomStore.isActive` in `onCreate` and sends the phone to a
 /// different activity **before a container exists**, so nothing can make a
-/// request first. ``HouseholdLock`` is the seam here
-/// (`AppContainerTests.testRoomModeSealsTheTokenBeforeAnyRequestIsBuilt`) and
-/// the scene that reads it is a later batch's; until then this app has no
-/// room mode rather than a half of one.
+/// request first (`DomovoiApplication.kt:33,53-59`, `MainActivity.kt:121`).
+/// So does this: the first lines of ``init()`` read the room store and set
+/// ``HouseholdLock`` from it, and the household side — the container, the
+/// shell model, the alerts (``HouseholdRoot``) — is built only when it is
+/// first shown. A phone that launches as a room never builds an
+/// `AppContainer` (ROOMMODE-MAP §6.4; the seal itself is
+/// `AppContainerTests.testRoomModeSealsTheTokenBeforeAnyRequestIsBuilt`).
 @main
 struct DomovoiApp: App {
 
-    private let model: ShellModel
-
-    /// The alerts' process-wide half — the three engines, the notification
-    /// delegate and the hint row's model (``AlertsAppWiring``, overnight
-    /// `alerts`). Everything it does is in that file; this is the property
-    /// that keeps it alive for the process.
-    private let alerts: AlertsAppWiring
+    /// Which side shows — the room screen or the household app — and the
+    /// household app itself, built on first need (``RoomModeScene``).
+    ///
+    /// The alerts' process-wide half (``AlertsAppWiring``) and the shell
+    /// model live in ``HouseholdRoot`` now, which keeps them alive for the
+    /// process once built, as these two properties used to.
+    @StateObject private var scene: RoomModeScene
 
     /// A server and token handed in on the command line, for a UI test.
     ///
@@ -99,7 +102,7 @@ struct DomovoiApp: App {
     /// from outliving its process is worth nothing if the store it seeds
     /// outlives it instead. So: seeded ⇒ nothing is kept; otherwise ⇒
     /// everything is.
-    private static func store(vault: TokenVault) -> any ShellStore {
+    static func store(vault: TokenVault) -> any ShellStore {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         func value(after flag: String) -> String? {
@@ -153,67 +156,46 @@ struct DomovoiApp: App {
     }
 
     init() {
+        // **Room mode first, before anything else is built** (ROOMMODE-MAP
+        // §6.4): the room store's flag, then the lock from it, so that no
+        // request built after this line can carry the household token on a
+        // phone that is a room. Nothing of the household app exists yet.
+        let launch = RoomModeLaunch.read()
+        let roomActive = launch.roomActive
+        HouseholdLock.shared.setRoomModeActive(roomActive)
         // Before anything is built, let alone drawn: a field takes its hint
         // through the setter when it is created, so a field already on screen
         // would keep the grey.
         Self.drawHintsInTheMutedInk()
-        // **One vault, handed to both.** Two `TokenVault()`s would reach the
-        // same Keychain items — same service, same accounts — so this is not
-        // a correctness fix; it is so that "where do the tokens live" has one
-        // answer at the one place that builds the graph, and so that a test
-        // or a future seam can replace it in one line rather than two.
-        let vault = TokenVault()
-        let container = AppContainer(store: Self.store(vault: vault), vault: vault)
-        // The device id, and the two things only UIKit can answer. Read HERE,
-        // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
-        // closure running anywhere never reads `UIDevice`, which
-        // ``DomovoiKit`` cannot even import.
-        //
-        // The id is kept in `UserDefaults` and deliberately not the Keychain
-        // (``DeviceIdentity``). Whose phone this is is not ours to send: it
-        // is the server's answer (``DeviceSelf``, ``DeviceOwnerBook``).
-        let deviceModel = UIDevice.current.model
-        let who = DeviceSelf(
-            deviceID: DeviceIdentity.stable(in: DeviceIdentity.UserDefaultsStore()),
-            name: DeviceRegistry.suggestedDeviceName(model: deviceModel),
-            userAgent: DeviceRegistry.userAgent(
-                systemVersion: UIDevice.current.systemVersion,
-                model: deviceModel
-            )
-        )
-        // Whose the phone is per server (owners in `UserDefaults`, claim keys
-        // in the Keychain) and the listening-history outbox: the app's own,
-        // handed over here so a shell a test builds keeps neither.
-        let model = ShellModel(
-            container: container,
-            deviceSelf: { who },
-            owners: DeviceOwnerBook(),
-            listenOutbox: ListenOutbox.forApp()
-        )
-        self.model = model
-        // **Subscribed before the socket is opened**, in this order and not
-        // in a view's `.task`, which runs later: a connect that landed in
-        // between would be a connect whose capability refresh and device
-        // register never happened, because ``SocketRelay`` does not replay.
-        // These two lines, in this order, are the whole of what prevents it —
-        // which is also why ``ShellModel/watchSocket()`` takes the socket's
-        // CURRENT value rather than waiting for the next change.
-        model.watchSocket()
-        // Registering the path monitors, and opening the state socket, are
-        // side effects on the process, which is why they are a separate call
-        // the app makes and not something a container does to whoever builds
-        // one.
-        container.start()
-        // After `container.start()`, because the alerts' first act is a read
-        // through the container's client, and `DomovoiApplication.onCreate`
-        // starts them beside the socket in the same order
-        // (`TimerAlerts.kt:97`).
-        alerts = AlertsAppWiring(container: container)
+        // The household graph — **one vault, handed to both**; the device id
+        // and the two things only UIKit can answer, read once on the main
+        // actor (``DeviceSelf``); the socket subscribed **before** it is
+        // opened, in this order and not in a view's `.task`, because
+        // ``SocketRelay`` does not replay; `container.start()`; the alerts
+        // after it (`TimerAlerts.kt:97`) — is ``HouseholdRoot/init()``,
+        // unchanged in order, and built the first time the household side
+        // shows.
+        _scene = StateObject(wrappedValue: RoomModeScene(launch: launch, roomActive: roomActive))
     }
 
     var body: some Scene {
         WindowGroup {
-            AppShellView(model: model)
+            // The room screen, or the household app (``RoomModeSceneRoot``,
+            // which puts the two modifiers below on ``AppShellView`` through
+            // ``HouseholdRootView``; their reasons stay here).
+            RoomModeSceneRoot(scene: scene)
+        }
+    }
+}
+
+/// The household app's root view: ``AppShellView`` with the two app-wide
+/// modifiers, which used to sit on it in ``DomovoiApp/body`` and keep their
+/// reasons here.
+struct HouseholdRootView: View {
+    let root: HouseholdRoot
+
+    var body: some View {
+        AppShellView(model: root.model)
                 // ### The app's tint is the **ink**, not the fill
                 //
                 // The `AccentColor` asset is ``Color/brand``, so every
@@ -256,9 +238,8 @@ struct DomovoiApp: App {
                 // hand (`RouteScreen.swift:196-203`). The read is a status
                 // read and never a prompt, so doing it once at launch asks
                 // nothing of anybody.
-                .environment(\.alertsHintModel, alerts.hint)
-                .alertsHintLifecycle(alerts.hint)
-        }
+                .environment(\.alertsHintModel, root.alerts.hint)
+                .alertsHintLifecycle(root.alerts.hint)
     }
 }
 
