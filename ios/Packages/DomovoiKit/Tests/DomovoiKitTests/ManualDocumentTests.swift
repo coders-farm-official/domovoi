@@ -50,8 +50,8 @@ final class ManualDocumentTests: XCTestCase {
             "doc_base carries the {ref} placeholder manualDocURL fills in"
         )
         XCTAssertEqual(10, doc.topics.count)
-        XCTAssertEqual(61, doc.pieces.count)
-        XCTAssertEqual(31, doc.routes.count)
+        XCTAssertEqual(62, doc.pieces.count)
+        XCTAssertEqual(35, doc.routes.count)
         XCTAssertEqual("domovoi", doc.centre.id)
         XCTAssertEqual("how-it-works", doc.centre.opens)
         XCTAssertEqual(
@@ -139,7 +139,7 @@ final class ManualDocumentTests: XCTestCase {
         }
         // The counts are here so that a parser that found no links at all
         // cannot pass this test by asserting nothing.
-        XCTAssertEqual(84, counted["route"])
+        XCTAssertEqual(93, counted["route"])
         XCTAssertEqual(51, counted["node"])
         XCTAssertEqual(5, counted["doc"])
         XCTAssertEqual(
