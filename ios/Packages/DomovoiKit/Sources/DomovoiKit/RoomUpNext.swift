@@ -365,40 +365,41 @@ public enum RoomPlayBodies {
 
     /// `POST /api/music/play-track`'s body for "play in <room>": the song
     /// starts the room's Up next. With `context` the session is a `list` one,
-    /// else `library`. Autoplay off is said; on is the server's default and
-    /// left out (the web's `roomStartBody`).
+    /// else `library`. `autoplay`: what the person chose on this phone, sent
+    /// as it is; nil (never flipped here) is left out, so the room takes the
+    /// household's Music mix default (1.3.0; the web's `roomStartBody`).
     public static func playTrack(
         room: String,
         trackID: Int64,
         deviceID: String,
         context: UpNextContext?,
         listener: RoomListener,
-        autoplay: Bool = true
+        autoplay: Bool? = nil
     ) -> Data {
         var out: [String: Any] = ["room_id": room, "track_id": trackID, "device_id": deviceID]
         if let context { out["context"] = context.json }
         out.merge(listener.fields) { _, new in new }
-        if !autoplay { out["autoplay"] = false }
+        if let autoplay { out["autoplay"] = autoplay }
         return encode(out)
     }
 
     /// `POST /api/music/play-playlist`'s body: the room loads the whole
     /// playlist as its queue and arms a `continue` Up next with it as the
-    /// source. Autoplay off (this phone's switch, P9) is said; on is the
-    /// server's default and left out (`roomPlayPlaylistBody`, 4fb53334).
+    /// source. `autoplay` as for ``playTrack(room:trackID:deviceID:context:listener:autoplay:)``:
+    /// this phone's choice, or left out (`roomPlayPlaylistBody`, 8230ccd2).
     public static func playPlaylist(
         room: String,
         playlistID: Int64,
         shuffle: Bool,
         deviceID: String,
         listener: RoomListener,
-        autoplay: Bool = true
+        autoplay: Bool? = nil
     ) -> Data {
         var out: [String: Any] = [
             "room_id": room, "playlist_id": playlistID, "shuffle": shuffle, "device_id": deviceID,
         ]
         out.merge(listener.fields) { _, new in new }
-        if !autoplay { out["autoplay"] = false }
+        if let autoplay { out["autoplay"] = autoplay }
         return encode(out)
     }
 
@@ -525,7 +526,7 @@ public enum RoomPlaylistPlay {
         shuffle: Bool,
         deviceID: String,
         listener: RoomListener,
-        autoplay: Bool = UpNextAutoplayStore.shared.on
+        autoplay: Bool? = UpNextAutoplayStore.shared.choice
     ) async throws(DomovoiError) -> PlayPlaylistAnswer? {
         let server = container.store.serverURL
         let body = RoomPlayBodies.playPlaylist(

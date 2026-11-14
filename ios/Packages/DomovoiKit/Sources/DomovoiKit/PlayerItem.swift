@@ -101,6 +101,8 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
     public var upNextSeq: Int?
     /// Why a pick was picked ("same artist", "90s"), shown as a chip.
     public var reasonLabel: String?
+    /// "Why this song?" (1.3.0): the server's sentence, as it sent it.
+    public var why: String?
     /// The Up next session this song belongs to: a pick's, or the songs a
     /// start played, once the session's id came back. Listens carry it.
     public var sessionID: String?
@@ -118,6 +120,7 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
         out.queueOrigin = .explicit
         out.upNextSeq = nil
         out.reasonLabel = nil
+        out.why = nil
         out.sessionID = nil
         out.upNextGen = 0
         return out

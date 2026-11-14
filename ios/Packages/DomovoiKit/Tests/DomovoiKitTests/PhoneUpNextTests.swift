@@ -98,7 +98,12 @@ final class FakeUpNextApi: UpNextApi {
 final class UpNextWorld {
     var server = "http://10.0.0.42:6369"
     var paired = true
-    var autoplay = true
+    /// What the person chose here: nil until they flip the switch.
+    var autoplay: Bool?
+    /// The household's Music mix default, as the server last said.
+    var householdDefault: Bool?
+    /// The servers whose household default was asked for.
+    var defaultsRead: [String] = []
     var pick: String?
     var shared = false
     var listenerSet: [String?] = []
@@ -109,7 +114,9 @@ final class UpNextWorld {
             server: { [unowned self] in self.server },
             paired: { [unowned self] in self.paired },
             deviceID: { "ios-phone-1" },
-            autoplay: { [unowned self] in self.autoplay },
+            autoplayChoice: { [unowned self] in self.autoplay },
+            autoplayDefault: { [unowned self] _ in self.householdDefault },
+            readAutoplayDefault: { [unowned self] server in self.defaultsRead.append(server) },
             saveAutoplay: { [unowned self] in self.autoplay = $0 },
             listenerPick: { [unowned self] _ in self.pick },
             shared: { [unowned self] _ in self.shared },
@@ -225,7 +232,7 @@ final class PhoneUpNextTests: XCTestCase {
         let body = r.api.bodies("start").last
         XCTAssertEqual((body?["target"] as? [String: Any])?["kind"] as? String, "device")
         XCTAssertEqual((body?["target"] as? [String: Any])?["device_id"] as? String, "ios-phone-1")
-        XCTAssertEqual(body?["autoplay"] as? Bool, true, "autoplay is sent on every start")
+        XCTAssertNil(body?["autoplay"], "never flipped here: the household's default applies")
     }
 
     func testAnIdsListSendsItsSongsCappedAt500() {
@@ -513,7 +520,7 @@ final class PhoneUpNextTests: XCTestCase {
         await r.drain()
         XCTAssertFalse(r.model.queue.contains { $0.queueOrigin == .auto })
         XCTAssertEqual(r.api.bodies("patch").last?["autoplay"] as? Bool, false)
-        XCTAssertFalse(r.world.autoplay, "remembered for this device")
+        XCTAssertEqual(r.world.autoplay, false, "remembered for this device")
     }
 
     func testAutoplayOffKeepsAListsOwnPicks() async throws {
@@ -585,7 +592,7 @@ final class PhoneUpNextTests: XCTestCase {
         r.api.nextAnswers = [.success(UpNextBatch(ended: true))]
         await playing(r, picks: [unPick(1, 601)])
         XCTAssertNil(r.upNext.castFields()["up_next_session_id"])
-        XCTAssertNil(r.upNext.castFields()["autoplay"], "on is the server's default")
+        XCTAssertNil(r.upNext.castFields()["autoplay"], "never flipped here: the household's default")
     }
 
     func testHandBackMovesTheSessionToThisDevice() async {
@@ -735,25 +742,119 @@ final class PhoneUpNextTests: XCTestCase {
         XCTAssertEqual(item.src, "/api/music/library/604/audio")
     }
 
-    func testTheAutoplayPreferenceIsOnUntilSwitchedOff() {
+    /// 1.3.0: unset until the person flips it here; a flip, on or off, is
+    /// remembered — and a phone flipped before 1.3.0 (a stored "1" or "0",
+    /// the only way the key was ever written) keeps its choice.
+    func testTheAutoplayChoiceIsUnsetUntilFlippedAndAnEarlierFlipIsKept() {
         let place = SavedStateBox()
         let store = UpNextAutoplayStore(place: place)
-        XCTAssertTrue(store.on)
-        store.set(false)
-        XCTAssertFalse(UpNextAutoplayStore(place: place).on, "remembered")
+        XCTAssertNil(store.choice, "never flipped: no choice")
+        XCTAssertNil(place.read(), "nothing written until a flip")
         store.set(true)
-        XCTAssertTrue(UpNextAutoplayStore(place: place).on)
+        XCTAssertEqual(UpNextAutoplayStore(place: place).choice, true, "on is a choice too, remembered")
+        store.set(false)
+        XCTAssertEqual(UpNextAutoplayStore(place: place).choice, false, "remembered")
+        XCTAssertEqual(UpNextAutoplayStore(place: SavedStateBox(Data("0".utf8))).choice, false,
+                       "switched off before 1.3.0: kept")
+        XCTAssertEqual(UpNextAutoplayStore(place: SavedStateBox(Data("1".utf8))).choice, true,
+                       "switched back on before 1.3.0: kept")
+        XCTAssertNil(UpNextAutoplayStore(place: SavedStateBox(Data("maybe".utf8))).choice,
+                     "a blob nobody can read is no choice")
     }
 
-    func testARoomPlaylistCarriesThisPhonesAutoplayOff() throws {
-        let off = try JSONSerialization.jsonObject(with: RoomPlayBodies.playPlaylist(
+    func testARoomPlaylistOrPlaySaysAutoplayOnlyOnceFlippedHere() throws {
+        func body(_ data: Data) throws -> [String: Any]? {
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        }
+        let off = try body(RoomPlayBodies.playPlaylist(
             room: "parlour", playlistID: 41, shuffle: false, deviceID: "d", listener: .unnamed, autoplay: false
-        )) as? [String: Any]
+        ))
         XCTAssertEqual(off?["autoplay"] as? Bool, false)
-        let on = try JSONSerialization.jsonObject(with: RoomPlayBodies.playPlaylist(
-            room: "parlour", playlistID: 41, shuffle: false, deviceID: "d", listener: .unnamed
-        )) as? [String: Any]
-        XCTAssertNil(on?["autoplay"], "on is the server's default and left out")
+        let on = try body(RoomPlayBodies.playPlaylist(
+            room: "parlour", playlistID: 41, shuffle: false, deviceID: "d", listener: .unnamed, autoplay: true
+        ))
+        XCTAssertEqual(on?["autoplay"] as? Bool, true, "on is said too: the household's default may be off")
+        let unset = try body(RoomPlayBodies.playPlaylist(
+            room: "parlour", playlistID: 41, shuffle: false, deviceID: "d", listener: .unnamed, autoplay: nil
+        ))
+        XCTAssertNil(unset?["autoplay"], "never flipped here: left out")
+        let track = try body(RoomPlayBodies.playTrack(
+            room: "parlour", trackID: 12, deviceID: "d", context: nil, listener: .unnamed, autoplay: nil
+        ))
+        XCTAssertNil(track?["autoplay"])
+        let trackOn = try body(RoomPlayBodies.playTrack(
+            room: "parlour", trackID: 12, deviceID: "d", context: nil, listener: .unnamed, autoplay: true
+        ))
+        XCTAssertEqual(trackOn?["autoplay"] as? Bool, true)
+    }
+
+    // MARK: Autoplay unset until flipped here (1.3.0)
+
+    // The server takes the household's Music mix default when a start, cast
+    // or room play leaves `autoplay` out; the phone says it only once the
+    // person flipped the switch on this phone (PhoneUpNextTest.kt).
+
+    func testNeverFlippedSendsNoAutoplayOnAStartOrACast() async {
+        let r = UpNextRig()
+        r.world.householdDefault = false
+        r.model.playFromList([unTrack(7, "a")], at: 0, context: nil)
+        await r.drain()
+        XCTAssertEqual(r.api.count("start"), 1)
+        XCTAssertNil(r.api.bodies("start").last?["autoplay"], "the household's default applies")
+        XCTAssertNil(r.upNext.castFields()["autoplay"])
+    }
+
+    func testOnceFlippedTheChoiceGoesWithEveryStartAndCastEvenOn() async throws {
+        let r = UpNextRig()
+        await playing(r, picks: [unPick(1, 601)])
+        try await r.upNext.setAutoplay(true)
+        XCTAssertEqual(r.world.autoplay, true)
+        r.model.playFromList([unTrack(8, "b")], at: 0, context: nil)
+        await r.drain()
+        XCTAssertEqual(r.api.bodies("start").last?["autoplay"] as? Bool, true,
+                       "on is said too: the household's may be off")
+        XCTAssertEqual(r.upNext.castFields()["autoplay"] as? Bool, true)
+        r.world.autoplay = false
+        r.model.playFromList([unTrack(9, "c")], at: 0, context: nil)
+        await r.drain()
+        XCTAssertEqual(r.api.bodies("start").last?["autoplay"] as? Bool, false)
+    }
+
+    func testWhileUnsetTheSwitchSaysTheHouseholdsDefaultUntilTheSessionAnswers() async {
+        let r = UpNextRig()
+        r.world.householdDefault = false
+        r.api.startAnswer = .failure(.unreachable("down"))
+        r.model.playFromList([unTrack(7, "a")], at: 0, context: nil)
+        XCTAssertEqual(r.upNext.state?.autoplay, false, "what this phone will do: the household's off")
+        XCTAssertFalse(r.upNext.autoplay)
+        await r.drain()
+        r.world.autoplay = true
+        XCTAssertTrue(r.upNext.autoplayHere(r.world.server), "a choice here wins over the household's")
+        r.world.autoplay = nil
+        r.world.householdDefault = nil
+        XCTAssertTrue(r.upNext.autoplayHere(r.world.server), "nothing known: on, the server's own default")
+    }
+
+    func testAQueueAddedOneByOneFollowsTheHouseholdsDefaultWhileUnset() async {
+        let r = UpNextRig()
+        r.world.householdDefault = false
+        r.model.enqueue([unTrack(1, "a"), unTrack(2, "b")])
+        await r.drain()
+        XCTAssertEqual(r.api.count("start"), 0, "the household's autoplay is off: no session")
+        r.world.autoplay = true
+        r.upNext.check()
+        await r.drain()
+        XCTAssertEqual(r.api.count("start"), 1)
+        XCTAssertEqual(r.api.bodies("start").last?["autoplay"] as? Bool, true)
+    }
+
+    func testTheHouseholdDefaultIsReadForTheServerTheAppTalksToOnlyWhilePaired() async {
+        let r = UpNextRig()
+        await r.upNext.readHouseholdDefault()
+        XCTAssertEqual(r.world.defaultsRead, [r.world.server])
+        r.world.paired = false
+        await r.upNext.readHouseholdDefault()
+        XCTAssertEqual(r.world.defaultsRead.count, 1, "an unpaired app asks for nothing")
     }
 }
 

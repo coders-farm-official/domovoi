@@ -511,6 +511,11 @@ struct SettingsSectionScreen: View {
             // are part 3's; §6.5's four are a batch of their own, as
             // ``PhonesAndBrowsersPanel`` says and the report sizes.
             PhonesAndBrowsersPanel(model: model, askingToForget: $askingToForget)
+        case "music-mix":
+            // slot: music-mix
+            // Up next 1.3.0: the household's mix in words (an admin's), and
+            // this phone's person's own sliders.
+            MusicMixPanel(model: model)
         case "people":
             // slot: people
             // Settings → Household → People since the nav regroup: the People

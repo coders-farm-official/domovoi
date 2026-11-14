@@ -246,8 +246,9 @@ public extension MusicModel {
             deviceID: deviceID,
             context: context,
             listener: listener,
-            // This phone's Autoplay switch goes with it (on: left out).
-            autoplay: UpNextAutoplayStore.shared.on
+            // This phone's Autoplay, only once flipped here (else the
+            // household's Music mix default applies).
+            autoplay: UpNextAutoplayStore.shared.choice
         )
         Task { @MainActor [weak self] in
             do throws(DomovoiError) {

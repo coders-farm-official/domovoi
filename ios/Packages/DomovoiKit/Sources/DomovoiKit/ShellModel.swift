@@ -1385,8 +1385,12 @@ public final class ShellModel {
         return made
     }
 
-    /// This phone's Autoplay preference; nil for a shell with no Up next.
+    /// This phone's Autoplay choice; nil for a shell with no Up next.
     public let upNextAutoplay: UpNextAutoplayStore?
+
+    /// The household's Music mix Autoplay default, by server (1.3.0): what
+    /// Up next's switch shows until the person flips it on this phone.
+    public let mixDefaults = MixDefaults()
 
     /// The phone's Up next over `player`, keyed by the server the app talks
     /// to (`AppContainer.kt`, 4fb53334).
@@ -1396,11 +1400,21 @@ public final class ShellModel {
         let client = container.client
         let listeners = self.listeners
         let owners = self.owners
+        let defaults = self.mixDefaults
         let env = PhoneUpNextEnv(
             server: { ServerCredentials.normalize(store.serverURL) },
             paired: { [weak self] in (self?.isPaired ?? false) && !lock.roomModeActive },
             deviceID: { deviceID },
-            autoplay: { autoplay.on },
+            autoplayChoice: { autoplay.choice },
+            autoplayDefault: { server in defaults.autoplayDefault(for: server) },
+            readAutoplayDefault: { server in
+                // Kept under the server it was asked of; an older server (no
+                // Music mix) or one not reachable teaches nothing.
+                do throws(DomovoiError) {
+                    let mix = try await readHouseholdMix(client: client, server: server)
+                    defaults.heard(server, mix)
+                } catch {}
+            },
             saveAutoplay: { autoplay.set($0) },
             listenerPick: { listeners.pick(for: $0) },
             shared: { owners.sharedScreen(for: $0) == true },

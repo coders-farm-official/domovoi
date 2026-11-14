@@ -41,6 +41,10 @@ struct PersonDetailView: View {
     /// screen has not built it.
     var thisPhone: PeopleThisPhoneModel?
 
+    /// The shell, for the person's own music mix (Up next 1.3.0); nil draws
+    /// none.
+    var shell: ShellModel?
+
     /// The roster, re-read after a claim that changed who has a phone.
     var onPeopleChanged: @MainActor () -> Void = {}
 
@@ -134,6 +138,11 @@ struct PersonDetailView: View {
             if let thisPhone {
                 Divider()
                 PersonThisPhoneSection(person: person, model: thisPhone, onPeopleChanged: onPeopleChanged)
+            }
+            // Their own music mix (1.3.0), after listening history: theirs
+            // to change from their phone (`PersonDetail.kt` ProfileTab).
+            if let shell {
+                PersonMusicMixSection(model: shell, personID: person.id, name: person.name)
             }
         }
     }

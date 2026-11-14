@@ -1,7 +1,7 @@
 import Foundation
 
 /// Settings' groups and sections, as pure data: the five group labels and the
-/// sixteen sections with their keys, labels, one-line descriptions, search
+/// seventeen sections with their keys, labels, one-line descriptions, search
 /// words, old keys and dashboard addresses.
 ///
 /// A port of `SettingsSection` and `SettingsGroup` in
@@ -96,7 +96,7 @@ public struct SettingsSection: Equatable, Sendable {
 
 public extension SettingsSection {
 
-    /// The sixteen sections, in the Kotlin's declaration order — which is
+    /// The seventeen sections, in the Kotlin's declaration order — which is
     /// the order they are listed in, so it is not incidental.
     static let all: [SettingsSection] = [
         SettingsSection(
@@ -115,6 +115,14 @@ public extension SettingsSection {
             sub: "Which server this phone talks to, and who's listening. The household's other phones and browsers are on the dashboard.",
             words: "connection server pair pairing household token phone device identity trust",
             aliases: ["connection"]
+        ),
+        // Up next 1.3.0 (8230ccd2): the household's mix, read-only on a
+        // phone, and the person's own for the phone that is theirs.
+        SettingsSection(
+            key: "music-mix", label: "Music mix", group: .household,
+            sub: "How Up next picks the songs that follow: discovery or favorites, close or wandering, autoplay, repeats, similar artists.",
+            words: "music mix up next autoplay shuffle discovery favorites favourites wander similar artists popularity listenbrainz repeats radio station",
+            aliases: ["mix", "up-next"]
         ),
         SettingsSection(
             key: "printers", label: "Printers & scanners", group: .household,

@@ -28,8 +28,16 @@ public struct PhoneUpNextEnv {
     /// Paired with that server, and not in room mode: Up next may be asked for.
     public var paired: @MainActor () -> Bool
     public var deviceID: @MainActor () -> String
-    /// The Autoplay preference (per device, default on).
-    public var autoplay: @MainActor () -> Bool
+    /// What the person chose for Autoplay on this phone: nil until they
+    /// flip the switch here (then nothing is sent, and the household's Music
+    /// mix default applies).
+    public var autoplayChoice: @MainActor () -> Bool?
+    /// The household's Autoplay default as a server last answered it
+    /// (`GET /api/music/mix`, ``MixDefaults``); nil when not read yet.
+    public var autoplayDefault: @MainActor (String) -> Bool?
+    /// Read the household's Music mix of a server (and keep its Autoplay
+    /// default under that server). Quiet on failure.
+    public var readAutoplayDefault: @MainActor (String) async -> Void
     public var saveAutoplay: @MainActor (Bool) -> Void
     /// The raw "listening as" pick for a server (``PlayerListenerStore/pick(for:)``).
     public var listenerPick: @MainActor (String) -> String?
@@ -44,7 +52,9 @@ public struct PhoneUpNextEnv {
         server: @escaping @MainActor () -> String,
         paired: @escaping @MainActor () -> Bool,
         deviceID: @escaping @MainActor () -> String,
-        autoplay: @escaping @MainActor () -> Bool,
+        autoplayChoice: @escaping @MainActor () -> Bool?,
+        autoplayDefault: @escaping @MainActor (String) -> Bool? = { _ in nil },
+        readAutoplayDefault: @escaping @MainActor (String) async -> Void = { _ in },
         saveAutoplay: @escaping @MainActor (Bool) -> Void,
         listenerPick: @escaping @MainActor (String) -> String?,
         shared: @escaping @MainActor (String) -> Bool,
@@ -54,7 +64,9 @@ public struct PhoneUpNextEnv {
         self.server = server
         self.paired = paired
         self.deviceID = deviceID
-        self.autoplay = autoplay
+        self.autoplayChoice = autoplayChoice
+        self.autoplayDefault = autoplayDefault
+        self.readAutoplayDefault = readAutoplayDefault
         self.saveAutoplay = saveAutoplay
         self.listenerPick = listenerPick
         self.shared = shared
@@ -82,9 +94,9 @@ public final class PhoneUpNext {
     /// The session; nil for none.
     public private(set) var state: UpNextState?
 
-    /// This phone's Autoplay preference as last read or set, so a view
-    /// drawing the switch follows it.
-    public private(set) var preference: Bool
+    /// What the person chose for Autoplay on this phone as last read or set
+    /// (nil: never flipped here), so a view drawing the switch follows it.
+    public private(set) var preference: Bool?
 
     /// The household's people, for the server they were read from.
     public private(set) var roster: (server: String, people: [UpNextPerson])?
@@ -112,7 +124,7 @@ public final class PhoneUpNext {
         self.host = host
         self.env = env
         self.launch = launch
-        self.preference = env.autoplay()
+        self.preference = env.autoplayChoice()
     }
 
     private func current(_ u: UpNextState) -> Bool { u.gen == gen && u.server == env.server() }
@@ -129,8 +141,26 @@ public final class PhoneUpNext {
     /// next may be asked for (and shown).
     public var mayAsk: Bool { env.paired() }
 
-    /// What the switch says: the session's, else this phone's preference.
-    public var autoplay: Bool { state?.autoplay ?? preference }
+    /// What the switch says: the session's, else what the person chose on
+    /// this phone, else the household's Music mix default, else on.
+    public var autoplay: Bool { state?.autoplay ?? autoplayHere(env.server()) }
+
+    /// Autoplay on this phone for `server`: the person's choice here, else
+    /// that server's household default, else on (1.3.0).
+    public func autoplayHere(_ server: String) -> Bool {
+        // Read so a view drawing the switch follows a flip (the store
+        // itself is not observable); the store is what it says.
+        _ = preference
+        return MusicMixRules.effectiveAutoplay(choice: env.autoplayChoice(), householdDefault: env.autoplayDefault(server))
+    }
+
+    /// Read the household's Music mix default for the server the app talks
+    /// to (kept under that server), so the switch says it until the person
+    /// flips it here. Only while Up next may be asked for.
+    public func readHouseholdDefault() async {
+        guard env.paired() else { return }
+        await env.readAutoplayDefault(env.server())
+    }
 
     /// The people of the server the app talks to now (none read yet, or
     /// another server's: none).
@@ -175,13 +205,15 @@ public final class PhoneUpNext {
         start(.wholeList(context: context, listIDs: listIDs))
     }
 
-    /// The body a start sends (§3.5f), for this device.
-    func startBody(_ start: UpNextStart, server: String, autoplay: Bool) -> Data {
+    /// The body a start sends (§3.5f), for this device. `autoplay` is only
+    /// what the person chose on this phone; left out (nil), the session
+    /// takes the household's Music mix default.
+    func startBody(_ start: UpNextStart, server: String, autoplay: Bool?) -> Data {
         var body: [String: Any] = [
             "target": ["kind": "device", "device_id": env.deviceID()],
             "start": start.json,
-            "autoplay": autoplay,
         ]
+        if let autoplay { body["autoplay"] = autoplay }
         body.merge(UpNextListenerFields.fields(pick: env.listenerPick(server), shared: env.shared(server))) { _, new in new }
         return HttpUpNextApi.encode(body)
     }
@@ -190,9 +222,10 @@ public final class PhoneUpNext {
         guard env.paired() else { return }
         let g = gen
         let server = env.server()
-        let auto = env.autoplay()
+        let choice = env.autoplayChoice()
+        let auto = autoplayHere(server)
         state = UpNextState(server: server, gen: g, autoplay: auto, loading: true, start: start)
-        let body = startBody(start, server: server, autoplay: auto)
+        let body = startBody(start, server: server, autoplay: choice)
         let api = self.api
         launch { [weak self] in
             let session: UpNextSession
@@ -237,7 +270,7 @@ public final class PhoneUpNext {
         guard !q.isEmpty, q.indices.contains(index) else { return }
         guard q.count - 1 - index <= UpNextRules.refillAt else { return }
         guard let u = state else {
-            guard env.autoplay(), env.paired() else { return }
+            guard env.paired(), autoplayHere(env.server()) else { return }
             let lib = q.filter(\.isLibrarySong)
             guard !lib.isEmpty else { return }
             let g = newPlay()
@@ -416,14 +449,16 @@ public final class PhoneUpNext {
 
     /// What a cast (`POST /api/music/play-tracks`) adds: this phone's
     /// session goes with the queue (the room's server carries it on and
-    /// refills the room itself), autoplay when off, and whose mix it is.
+    /// refills the room itself), autoplay when the person chose it on this
+    /// phone (left out otherwise: the household's default), and whose mix
+    /// it is.
     public func castFields() -> [String: Any] {
         let server = env.server()
         var out: [String: Any] = [:]
         if let u = state, let id = u.id, !u.ended, !u.refused, u.server == server, u.gen == gen {
             out["up_next_session_id"] = id
         }
-        if !env.autoplay() { out["autoplay"] = false }
+        if let choice = env.autoplayChoice() { out["autoplay"] = choice }
         out.merge(UpNextListenerFields.fields(pick: env.listenerPick(server), shared: env.shared(server))) { _, new in new }
         return out
     }

@@ -81,6 +81,10 @@ public struct UpNextPick: Equatable, Sendable, Decodable {
     public let reasonCode: String?
     public let reasonLabel: String?
     public let status: String?
+    /// "Why this song?" in plain words (1.3.0), built on the server from the
+    /// signals the picker really used; nil for a pick made before. Shown as
+    /// it is, never made up here.
+    public let why: String?
 
     public init(
         seq: Int,
@@ -91,7 +95,8 @@ public struct UpNextPick: Equatable, Sendable, Decodable {
         durationSec: Double? = nil,
         reasonCode: String? = nil,
         reasonLabel: String? = nil,
-        status: String? = nil
+        status: String? = nil,
+        why: String? = nil
     ) {
         self.seq = seq
         self.trackID = trackID
@@ -102,10 +107,11 @@ public struct UpNextPick: Equatable, Sendable, Decodable {
         self.reasonCode = reasonCode
         self.reasonLabel = reasonLabel
         self.status = status
+        self.why = why
     }
 
     private enum CodingKeys: String, CodingKey {
-        case seq, title, artist, album, status
+        case seq, title, artist, album, status, why
         case trackID = "track_id"
         case durationSec = "duration_sec"
         case reasonCode = "reason_code"
@@ -123,6 +129,7 @@ public struct UpNextPick: Equatable, Sendable, Decodable {
         reasonCode = try? values.decodeIfPresent(String.self, forKey: .reasonCode)
         reasonLabel = try? values.decodeIfPresent(String.self, forKey: .reasonLabel)
         status = try? values.decodeIfPresent(String.self, forKey: .status)
+        why = try? values.decodeIfPresent(String.self, forKey: .why)
     }
 }
 
@@ -430,6 +437,7 @@ public enum UpNextRules {
         item.queueOrigin = .auto
         item.upNextSeq = p.seq
         item.reasonLabel = nonBlank(p.reasonLabel)
+        item.why = nonBlank(p.why)
         item.sessionID = sessionID
         return item
     }
@@ -501,12 +509,17 @@ public func phoneUpNextForShown(people: Int, state u: UpNextState?) -> Bool {
     people >= 2 && u?.id != nil
 }
 
-// MARK: - the Autoplay preference (one per device, default on)
+// MARK: - the Autoplay choice (one per device, unset until flipped)
 
-/// Up next's Autoplay, this phone's (`Prefs.upNextAutoplay`; the web's
-/// localStorage `domovoi-upnext-autoplay`): keep playing similar songs when
-/// the queue ends. On until switched off. Sent with every start, every cast
-/// and every room play (off only: on is the server's default there).
+/// Up next's Autoplay on THIS phone (`Prefs.upNextAutoplay`; the web's
+/// localStorage `domovoi-upnext-autoplay`): nil until the person flips the
+/// switch here, then what they chose (Up next 1.3.0, 8230ccd2). While nil
+/// nothing is sent, so a start, cast, room play or room playlist takes the
+/// household's Music mix default; once set it goes with every one, on as
+/// well as off. The key is written only by a flip (``set(_:)``), and before
+/// 1.3.0 it was written only by a flip too (the default was never stored),
+/// so a phone switched before keeps its choice. What the switch shows while
+/// nil: ``MusicMixRules/effectiveAutoplay(choice:householdDefault:)``.
 public final class UpNextAutoplayStore: @unchecked Sendable {
 
     public static let key = "domovoi.upnext.autoplay"
@@ -527,22 +540,33 @@ public final class UpNextAutoplayStore: @unchecked Sendable {
 
     private let place: any SavedState
     private let lock = NSLock()
-    private var value: Bool
+    private var value: Bool?
 
     public init(place: (any SavedState)? = nil) {
         let place = place ?? UserDefaultsSavedState(key: UpNextAutoplayStore.key)
         self.place = place
-        // Anything but a stored "0" is on: the default, and a blob nobody
-        // can read.
-        self.value = place.read().map { String(decoding: $0, as: UTF8.self) } != "0"
+        self.value = Self.decode(place.read())
     }
 
-    public var on: Bool {
+    /// A stored "1" or "0" is a flip; nothing stored, or a blob nobody can
+    /// read, is no choice.
+    static func decode(_ data: Data?) -> Bool? {
+        guard let data else { return nil }
+        switch String(decoding: data, as: UTF8.self) {
+        case "1": return true
+        case "0": return false
+        default: return nil
+        }
+    }
+
+    /// What the person chose on this phone; nil until they flip the switch.
+    public var choice: Bool? {
         lock.lock()
         defer { lock.unlock() }
         return value
     }
 
+    /// A flip: remembered from now on, whatever the household says.
     public func set(_ on: Bool) {
         lock.lock()
         let changed = value != on
