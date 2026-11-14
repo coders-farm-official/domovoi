@@ -2354,12 +2354,19 @@ class StreamSession:
         ``full_window``: faster-whisper's 30 s path whatever the length
         (the second hearing; only for a client that has it)."""
         waited = time.perf_counter()
+        # A free slot is no wait at all: with nothing in it, the call
+        # starts with no await in between (``_one_at_a_time`` only awaits
+        # a call still running), and the clock across those few lines is
+        # this thread losing the GIL, not a queue — 1 ms on a loaded CI
+        # runner read as a decode that queued.
+        prev = self._decode_inflight
+        queued = prev is not None and not prev.done()
         t0: list[float] = []
 
         def _start() -> Any:
             t0.append(time.perf_counter())
             if marks is not None:
-                marks["wait_ms"] = _elapsed_ms(waited)
+                marks["wait_ms"] = _elapsed_ms(waited) if queued else 0
                 marks["started"] = t0[0]
             if full_window:
                 return transcribe_full_window(whisper, pcm)

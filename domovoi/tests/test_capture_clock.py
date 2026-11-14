@@ -240,6 +240,38 @@ def test_the_turns_own_decode_waiting_behind_a_copy_it_threw_away_is_counted(pip
     assert doc["decode_wait_ms"] == 0 and doc["pause_to_decode_ms"] < 100
 
 
+class _SlowToRead(float):
+    """A setting whose read stalls the thread, as losing the GIL does on a
+    loaded machine — between the decode call being made and it starting."""
+
+    def __float__(self) -> float:
+        time.sleep(0.02)
+        return float.__float__(self)
+
+
+def test_a_free_decode_slot_is_no_wait_however_slow_the_way_to_it(pipeline, monkeypatch) -> None:
+    """CI, 2026-11-14: a copy decoded at once recorded decode_wait_ms 1 —
+    the thread stalled for a moment on the way into a free slot. Only a
+    call that really queued behind another records a wait; this one, 20 ms
+    late into a free slot, records none, and the turn's own decode, which
+    did queue behind the copy, still has its wait."""
+    monkeypatch.setattr(settings, "voice_stt_timeout_max_sec", _SlowToRead(40.0))
+    pipeline["whisper"] = _WatchedWhisper("set a timer", "set a timer for ten minutes", delay=0.4)
+    with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
+        _hello(ws)
+        ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 3}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 8)
+        ws.send_text(json.dumps({"type": "speech_pause", "utt": 3, "frame": 18, "last_voiced_frame": 9}))
+        ws.send_text(json.dumps({"type": "speech_resume", "utt": 3, "frame": 18}))
+        _send(ws, [LOUD] * 10 + [QUIET] * 4)
+        ws.send_text(json.dumps({"type": "utterance_end", "greeting_played": False, "utt": 3,
+                                 "frames": 32, "last_voiced_frame": 27}))
+        assert _finish_turn(ws) == "set a timer for ten minutes"
+    doc = _doc(pipeline)
+    assert doc["decode_wait_ms"] == 0
+    assert doc["stt_decode_wait_ms"] >= 200
+
+
 def test_a_second_copy_deferred_behind_the_first_shows_the_delay(pipeline) -> None:
     """A pause that arrives while the first copy is decoding is copied when
     that decode ends (never two at once): no wait inside the Whisper call,
