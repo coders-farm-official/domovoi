@@ -47,7 +47,9 @@ final class HouseholdRoot {
             container: container,
             deviceSelf: { who },
             owners: DeviceOwnerBook(),
-            listenOutbox: ListenOutbox.forApp()
+            listenOutbox: ListenOutbox.forApp(),
+            // Up next on the phone itself (P9): this phone's Autoplay switch.
+            upNextAutoplay: UpNextAutoplayStore.shared
         )
         self.model = model
         self.container = container

@@ -384,18 +384,21 @@ public enum RoomPlayBodies {
 
     /// `POST /api/music/play-playlist`'s body: the room loads the whole
     /// playlist as its queue and arms a `continue` Up next with it as the
-    /// source. Autoplay is left at the server's default (on).
+    /// source. Autoplay off (this phone's switch, P9) is said; on is the
+    /// server's default and left out (`roomPlayPlaylistBody`, 4fb53334).
     public static func playPlaylist(
         room: String,
         playlistID: Int64,
         shuffle: Bool,
         deviceID: String,
-        listener: RoomListener
+        listener: RoomListener,
+        autoplay: Bool = true
     ) -> Data {
         var out: [String: Any] = [
             "room_id": room, "playlist_id": playlistID, "shuffle": shuffle, "device_id": deviceID,
         ]
         out.merge(listener.fields) { _, new in new }
+        if !autoplay { out["autoplay"] = false }
         return encode(out)
     }
 
@@ -521,11 +524,13 @@ public enum RoomPlaylistPlay {
         playlistID: Int64,
         shuffle: Bool,
         deviceID: String,
-        listener: RoomListener
+        listener: RoomListener,
+        autoplay: Bool = UpNextAutoplayStore.shared.on
     ) async throws(DomovoiError) -> PlayPlaylistAnswer? {
         let server = container.store.serverURL
         let body = RoomPlayBodies.playPlaylist(
-            room: room, playlistID: playlistID, shuffle: shuffle, deviceID: deviceID, listener: listener
+            room: room, playlistID: playlistID, shuffle: shuffle, deviceID: deviceID, listener: listener,
+            autoplay: autoplay
         )
         let data = try await client.raw(method: "POST", path: "/api/music/play-playlist", body: body)
         let answer = PlayPlaylistAnswer.read(data)

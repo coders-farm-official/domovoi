@@ -253,8 +253,16 @@ struct MusicPlaylistSheet: View {
 
     /// The whole list (`PlaylistDrawer.kt:115`), and the playlist's name in
     /// what is said — not its first song's.
+    ///
+    /// Up next carries on after the list with songs like it
+    /// (`playlistContext`, `TrackSets.kt`): Favorites and other virtual
+    /// lists by their songs.
     private func playHere(_ player: MusicLocalQueueModel, _ tracks: [LibraryTrack]) {
-        guard player.playHere(tracks) else { return }
+        let playlist = detail.playlist
+        let context = playlist.isVirtual
+            ? UpNextContext(kind: "ids", name: playlist.name)
+            : UpNextContext(kind: "playlist", ref: String(playlist.id), name: playlist.name)
+        guard player.playList(tracks, context: context, label: playlist.name) else { return }
         said = MusicGenres.saidAfterPlayingHere(took: player.takeToast(), label: detail.playlist.name)
     }
 

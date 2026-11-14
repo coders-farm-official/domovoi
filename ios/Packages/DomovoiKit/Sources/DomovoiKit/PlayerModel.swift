@@ -274,6 +274,12 @@ public final class PlayerModel {
     /// `PlayerController.listens`, a1e611b6.
     public var listens: (any PlayerListenHooks)?
 
+    /// The phone's own Up next session (``PhoneUpNext``, P9), set by the
+    /// shell with this player as its host; nil in the tests that do not ask
+    /// for it, and then there is no Up next. Android's
+    /// `PlayerController.upNext` (4fb53334).
+    public var upNext: PhoneUpNext?
+
     /// The queue index the engine's first source was at the last rebuild,
     /// so the engine's current source can be matched to ``current``
     /// (the CLAIM unit's second hook: listening history must not book the
@@ -468,12 +474,72 @@ public final class PlayerModel {
     /// because the sentence naming the room it paused arrives through ``say``
     /// once the room has answered — one toast per tap, as Android's
     /// `playHereAndSay` has it (`MusicScreen.kt:583-586`).
+    ///
+    /// **Up next** (P9, `PlayerController.playItems`): a new play replaces
+    /// the session; what it plays was asked for (a restored queue's old
+    /// picks included), and a queue of library songs gets a session of its
+    /// own near its end (``PhoneUpNext/check()``). A library song tapped in
+    /// a list is ``playFromList(_:at:context:)``, a whole list
+    /// ``playList(_:context:)``.
     @discardableResult
     public func play(
         _ items: [PlayerItem],
         startAt: Int = 0,
         resumeSec: Double = 0,
         speed newSpeed: Float? = nil
+    ) -> String? {
+        guard !items.isEmpty else { return nil }
+        upNext?.newPlay()
+        let left = playNow(items.map(\.askedFor), startAt: startAt, resumeSec: resumeSec, speed: newSpeed)
+        upNext?.check()
+        return left
+    }
+
+    /// A library song tapped inside a list (Up next P9, the web's
+    /// playFromList; `PlayerController.playFromList`): the song plays here on
+    /// its own, and Up next goes on with the rest of `context` (nil: songs
+    /// like it from the whole library). `list` is the list as shown, `at`
+    /// the tapped one. Returns the room it left, as ``play(_:startAt:resumeSec:speed:)``.
+    @discardableResult
+    public func playFromList(_ list: [PlayerItem], at: Int, context: UpNextContext?) -> String? {
+        guard !list.isEmpty else { return nil }
+        let track = list[min(max(at, 0), list.count - 1)]
+        let gen = upNext?.newPlay() ?? 0
+        var asked = track.askedFor
+        asked.upNextGen = gen
+        let left = playNow([asked], startAt: 0, resumeSec: 0, speed: nil)
+        upNext?.startFromList(
+            trackID: track.itemID, context: context,
+            listIDs: list.filter(\.isLibrarySong).map(\.itemID)
+        )
+        return left
+    }
+
+    /// A whole list played (or shuffled) on purpose (the web's playList;
+    /// `PlayerController.playList`): the list is the queue, as it is; Up
+    /// next carries on with similar songs when it is nearly over, while
+    /// autoplay is on.
+    @discardableResult
+    public func playList(_ items: [PlayerItem], context: UpNextContext?) -> String? {
+        guard !items.isEmpty else { return nil }
+        let gen = upNext?.newPlay() ?? 0
+        let tagged = items.map { (item: PlayerItem) -> PlayerItem in
+            var out = item.askedFor
+            out.queueOrigin = .wholeList
+            out.upNextGen = gen
+            return out
+        }
+        let left = playNow(tagged, startAt: 0, resumeSec: 0, speed: nil)
+        upNext?.startWholeList(context: context, listIDs: items.filter(\.isLibrarySong).map(\.itemID))
+        return left
+    }
+
+    /// The play itself, with no word to Up next.
+    private func playNow(
+        _ items: [PlayerItem],
+        startAt: Int,
+        resumeSec: Double,
+        speed newSpeed: Float?
     ) -> String? {
         guard !items.isEmpty else { return nil }
         let window = PlayerQueueWindow.around(items, index: startAt)
@@ -504,21 +570,28 @@ public final class PlayerModel {
     }
 
     /// `PlayerController.kt:340`. An empty queue makes this a play here.
+    ///
+    /// "Add to queue": after the songs somebody asked for, **before the
+    /// first Up next pick still to come** (``UpNextRules/addAt(_:index:)``).
     public func enqueue(_ items: [PlayerItem]) {
         guard !items.isEmpty else { return }
         if queue.isEmpty { play(items); return }
-        tagQueued(items, replaced: false)
-        queue.append(contentsOf: items)
+        let add = items.map(\.askedFor)
+        tagQueued(add, replaced: false)
+        queue.insert(contentsOf: add, at: UpNextRules.addAt(queue, index: index))
         rebuildEngine(offsetSec: engine.currentTimeSec, keepPlaying: true)
+        upNext?.check()
     }
 
     /// `PlayerController.kt:348` — inserted at `index + 1`.
     public func playNext(_ items: [PlayerItem]) {
         guard !items.isEmpty else { return }
         if queue.isEmpty { play(items); return }
-        tagQueued(items, replaced: false)
-        queue.insert(contentsOf: items, at: min(index + 1, queue.count))
+        let add = items.map(\.askedFor)
+        tagQueued(add, replaced: false)
+        queue.insert(contentsOf: add, at: min(index + 1, queue.count))
         rebuildEngine(offsetSec: engine.currentTimeSec, keepPlaying: true)
+        upNext?.check()
     }
 
     /// `PlayerController.kt:357`.
@@ -538,12 +611,14 @@ public final class PlayerModel {
         engine.play()
         isPlaying = true
         refreshNowPlaying()
+        upNext?.check()
     }
 
     /// `PlayerController.kt:371`.
     public func remove(at i: Int) {
         guard i >= 0, i < queue.count else { return }
         let wasCurrent = i == index
+        let gone = queue[i]
         if wasCurrent { listens?.skip() }
         queue.remove(at: i)
         if i < index { index -= 1 }
@@ -551,6 +626,9 @@ public final class PlayerModel {
         if wasCurrent { partIndex = 0 }
         rebuildEngine(offsetSec: wasCurrent ? 0 : engine.currentTimeSec, keepPlaying: isPlaying)
         refreshNowPlaying()
+        // An Up next pick taken out: the session hears it (best-effort).
+        if gone.queueOrigin == .auto { upNext?.removed(gone) }
+        upNext?.check()
     }
 
     /// `PlayerController.kt:377`.
@@ -573,12 +651,14 @@ public final class PlayerModel {
         }
         rebuildEngine(offsetSec: engine.currentTimeSec, keepPlaying: isPlaying)
         refreshNowPlaying()
+        upNext?.check()
     }
 
     /// `PlayerController.kt:400` — the place is flushed **first**.
     public func clear() {
         listens?.stopped()
         flushSpokenPosition()
+        upNext?.drop()
         queueServer = nil
         queue = []
         index = 0
@@ -905,6 +985,7 @@ public final class PlayerModel {
         partIndex = 0
         rebuildEngine(offsetSec: 0, keepPlaying: isPlaying)
         refreshNowPlaying()
+        upNext?.check()
     }
 
     private func retreatItem() {
@@ -913,6 +994,7 @@ public final class PlayerModel {
         partIndex = 0
         rebuildEngine(offsetSec: 0, keepPlaying: isPlaying)
         refreshNowPlaying()
+        upNext?.check()
     }
 
     private func apply(_ move: PlayerChapterSkip.Move) {
@@ -958,6 +1040,8 @@ public final class PlayerModel {
                 updatePosition()
             }
             refreshNowPlaying()
+            // Up next asks for more when the queue is nearly over.
+            upNext?.check()
             return
         }
         isPlaying = false
@@ -1193,6 +1277,8 @@ public final class PlayerModel {
 
     private func dropServerMedia() {
         queueServer = nil
+        // The session lives on the server being left.
+        upNext?.drop()
         PlayerArtwork.forgetMisses()
         if target.isCasting {
             // The room is the old server's: stop watching it, and say nothing
@@ -1403,6 +1489,10 @@ public final class PlayerModel {
         }
         target = .thisPhone
         roomReading = nil
+        // Up next comes home with the music: the session the room carried
+        // on moves back to this phone (or is dropped when the room no
+        // longer has it).
+        upNext?.handBack()
         let play = wasPlaying && paused && queued
         if play { resumeLocal() } else { refreshNowPlaying() }
         return .here(
@@ -1426,6 +1516,10 @@ public final class PlayerModel {
         if plan.startSec > 0 { body["start_sec"] = plan.startSec }
         // The room waits paused there until play.
         if startPaused { body["start_paused"] = true }
+        // Up next goes with the queue (P4): this phone's session carries on
+        // in the room, whose server refills it there; without one the room
+        // arms its own. Autoplay and whose mix it is go too.
+        if let fields = upNext?.castFields() { body.merge(fields) { _, new in new } }
         let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]))
             ?? Data("{}".utf8)
         try await client.send(method: "POST", path: "/api/music/play-tracks", body: data)
@@ -1597,5 +1691,48 @@ public final class PlayerModel {
     private func report(_ note: String) {
         trouble = note
         say?(note)
+    }
+}
+
+// MARK: - Up next's host (P9)
+
+/// The queue as ``PhoneUpNext`` edits it: picks join at the end, picks it
+/// takes back leave, the session's id goes on the songs of its start
+/// (`PlayerController.upNextHost`).
+extension PlayerModel: PhoneUpNextHost {
+
+    public var upNextQueue: [PlayerItem] { queue }
+
+    public var upNextIndex: Int { index }
+
+    public var upNextCasting: Bool { target.isCasting }
+
+    public func upNextRetag(_ change: (PlayerItem) -> PlayerItem) {
+        queue = queue.map(change)
+    }
+
+    public func upNextAppend(_ items: [PlayerItem]) {
+        guard !items.isEmpty, !queue.isEmpty else { return }
+        tagQueued(items, replaced: false)
+        queue.append(contentsOf: items)
+        // While casting the engine holds nothing of ours to extend; the room
+        // plays its own queue.
+        guard !target.isCasting else { return }
+        rebuildEngine(offsetSec: engine.currentTimeSec, keepPlaying: true)
+    }
+
+    public func upNextRemoveWaiting(_ drop: (PlayerItem) -> Bool) {
+        let at = index
+        let gone = Set(queue.indices.filter { $0 > at && drop(queue[$0]) })
+        guard !gone.isEmpty else { return }
+        queue = queue.indices.filter { !gone.contains($0) }.map { queue[$0] }
+        guard !target.isCasting else { return }
+        rebuildEngine(offsetSec: engine.currentTimeSec, keepPlaying: true)
+    }
+
+    /// The listen open for the song playing carries the session from now on
+    /// (``ListenLog`` reads it off the next snapshot).
+    public func upNextSessionArrived() {
+        refreshNowPlaying()
     }
 }

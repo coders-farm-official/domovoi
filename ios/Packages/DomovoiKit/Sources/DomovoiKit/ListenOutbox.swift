@@ -19,6 +19,11 @@ public struct OutboxRow: Equatable, Sendable, Codable {
     public let outcome: String
     public let listenerPersonID: Int64?
     public let asHousehold: Bool
+    /// The Up next session the song belonged to (rows from before Up next:
+    /// none).
+    public let sessionID: String?
+    /// `explicit` | `list` | `auto`.
+    public let origin: String
 
     public init(
         id: String,
@@ -30,7 +35,9 @@ public struct OutboxRow: Equatable, Sendable, Codable {
         durationSec: Int? = nil,
         outcome: String,
         listenerPersonID: Int64? = nil,
-        asHousehold: Bool = false
+        asHousehold: Bool = false,
+        sessionID: String? = nil,
+        origin: String = PlayerQueueOrigin.explicit.rawValue
     ) {
         self.id = id
         self.server = server
@@ -42,10 +49,13 @@ public struct OutboxRow: Equatable, Sendable, Codable {
         self.outcome = outcome
         self.listenerPersonID = listenerPersonID
         self.asHousehold = asHousehold
+        self.sessionID = sessionID
+        self.origin = origin
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, server, outcome
+        case id, server, outcome, origin
+        case sessionID = "session_id"
         case trackID = "track_id"
         case deviceID = "device_id"
         case startedAt = "started_at"
@@ -67,6 +77,8 @@ public struct OutboxRow: Equatable, Sendable, Codable {
         outcome = try c.decode(String.self, forKey: .outcome)
         listenerPersonID = try c.decodeIfPresent(Int64.self, forKey: .listenerPersonID)
         asHousehold = try c.decodeIfPresent(Bool.self, forKey: .asHousehold) ?? false
+        sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
+        origin = try c.decodeIfPresent(String.self, forKey: .origin) ?? PlayerQueueOrigin.explicit.rawValue
     }
 
     /// The row as the server takes it (API_REFERENCE §3.5e): never the
@@ -86,6 +98,7 @@ public struct OutboxRow: Equatable, Sendable, Codable {
             case outcome
             case listenerPersonID = "listener_person_id"
             case asHousehold = "as_household"
+            case sessionID = "session_id"
             case player, origin
         }
 
@@ -100,7 +113,10 @@ public struct OutboxRow: Equatable, Sendable, Codable {
             try c.encodeIfPresent(row.listenerPersonID, forKey: .listenerPersonID)
             if row.asHousehold { try c.encode(true, forKey: .asHousehold) }
             try c.encode(ListenOutbox.player, forKey: .player)
-            try c.encode("explicit", forKey: .origin)
+            try c.encodeIfPresent(row.sessionID, forKey: .sessionID)
+            // Only the three words the server knows; anything else is asked for.
+            let known = row.origin == PlayerQueueOrigin.wholeList.rawValue || row.origin == PlayerQueueOrigin.auto.rawValue
+            try c.encode(known ? row.origin : PlayerQueueOrigin.explicit.rawValue, forKey: .origin)
         }
     }
 

@@ -87,6 +87,40 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
     /// The server a saved book came from: where its place goes.
     public let origin: PlayerServerScope?
 
+    // Up next (P9; `PlayItem.kt` 4fb53334). Not in the initialiser: every
+    // factory makes an asked-for song, and only ``UpNextRules/pickItem(_:sessionID:)``
+    // and the player's own plays set these.
+
+    /// Why this song is in the queue — asked for, part of a whole list
+    /// played on purpose, or one of Up next's picks. Listening history sends
+    /// it as `origin`.
+    public var queueOrigin: PlayerQueueOrigin = .explicit
+    /// A pick's number in its session (`seq`); nil for anything else.
+    public var upNextSeq: Int?
+    /// Why a pick was picked ("same artist", "90s"), shown as a chip.
+    public var reasonLabel: String?
+    /// The Up next session this song belongs to: a pick's, or the songs a
+    /// start played, once the session's id came back. Listens carry it.
+    public var sessionID: String?
+    /// Which start (``PhoneUpNext/newPlay()``) queued this song, so the
+    /// session id can be put on it when it arrives; 0 = none. Never sent.
+    public var upNextGen: Int = 0
+
+    /// A song of the server's library: the only kind Up next knows.
+    public var isLibrarySong: Bool { kind == .library && itemID > 0 }
+
+    /// This item without any Up next tags: somebody asked for it
+    /// (`PlayerController.asAskedFor`).
+    public var askedFor: PlayerItem {
+        var out = self
+        out.queueOrigin = .explicit
+        out.upNextSeq = nil
+        out.reasonLabel = nil
+        out.sessionID = nil
+        out.upNextGen = 0
+        return out
+    }
+
     public var id: String { uid }
 
     public init(
