@@ -9,8 +9,10 @@ import SwiftUI
 /// ### What is here
 ///
 /// A card per room — what it is playing, how far in, its transport, its
-/// cover and the line of lyric it is on. Four tabs: the library a page at a
-/// time with its search, filters and sort; the house's **playlists**, each
+/// cover and the line of lyric it is on. The tabs: the library a page at a
+/// time with its search, filters and sort; the library **by genre**
+/// (``MusicGenresView``, 3cdd261b), each genre opening a sheet that plays it
+/// in a room or on this phone; the house's **playlists**, each
 /// opening a sheet that plays, reorders, renames and deletes it; the
 /// **room's** queue, reorderable and clearable; and the library's
 /// whole-house numbers. A track opens a sheet with its cover, everything the
@@ -79,6 +81,13 @@ struct MusicView: View {
     /// library should not be sending its read.
     @State private var playlists: MusicPlaylistsModel?
 
+    /// The genres tab's model, built **the first time that tab is opened**
+    /// for ``queue``'s reason, and stopped whenever another tab is picked:
+    /// while the server is still reading tags it re-reads every ten seconds,
+    /// which is Android's `rememberGenresTab` — called only while its tab is
+    /// open.
+    @State private var genres: MusicGenresModel?
+
     /// The covers every list on this screen draws from. One store for the
     /// whole screen, because it is a cache with a cap — two of them would
     /// fetch the same picture twice and hold it twice.
@@ -138,6 +147,7 @@ struct MusicView: View {
         case track(LibraryTrack, MusicRoomLyricsModel)
         case playlist(MusicPlaylistDetailModel)
         case addTo(LibraryTrack, MusicAddToPlaylistModel)
+        case genre(MusicGenresDetailModel)
     }
 
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
@@ -210,6 +220,10 @@ struct MusicView: View {
                             covers: covers,
                             onOpen: { openTrack($0) }
                         )
+                    case .genres:
+                        if let genres {
+                            MusicGenresView(genres: genres, onOpen: { openGenre($0) })
+                        }
                     case .playlists:
                         if let playlists {
                             MusicPlaylistsView(
@@ -275,6 +289,7 @@ struct MusicView: View {
             }
             music?.start()
             playlists?.start()
+            if tab == .genres { genres?.start() }
         }
         .onAppear { visible = true }
         .onDisappear {
@@ -282,6 +297,7 @@ struct MusicView: View {
             music?.stop()
             queue?.stop()
             playlists?.stop()
+            genres?.stop()
             // Each room card's model is stopped too: a panel left running
             // off screen republishes a position ten times a second for
             // nothing.
@@ -295,6 +311,7 @@ struct MusicView: View {
             guard let music else { return }
             if now == .queue { startQueue(with: music) }
             if now == .playlists { startPlaylists() }
+            if now == .genres { startGenres() } else { genres?.stop() }
         }
         // A satellite came online, or went away: the open queue is re-offered
         // the list, so a room that has gone does not leave the tab asking for
@@ -359,6 +376,7 @@ struct MusicView: View {
             music?.serverChanged()
             queue?.serverChanged()
             playlists?.serverChanged()
+            genres?.serverChanged()
             covers?.serverChanged()
             lyricsStore?.serverChanged()
             // Every room model held is the old house's — a room name is one
@@ -397,6 +415,20 @@ struct MusicView: View {
                 }
             case .addTo(_, let add):
                 MusicAddToPlaylistSheet(add: add)
+            case .genre(let detail):
+                if let covers, let music {
+                    MusicGenresSheet(
+                        detail: detail,
+                        covers: covers,
+                        rooms: music.castRooms,
+                        player: player,
+                        // A song's own sheet **replaces** this one, as
+                        // `add to playlist` replaces the track sheet: one
+                        // presentation, a content swap (``MusicMoreSheet``).
+                        onOpenTrack: { openTrack($0) },
+                        onSay: { model.showToast($0) }
+                    )
+                }
             case .none:
                 // The slot emptied while the sheet was coming down. Nothing
                 // rather than a half-built sheet.
@@ -472,6 +504,27 @@ struct MusicView: View {
         )
         lyrics.offer(trackID: track.id)
         sheet = .track(track, lyrics)
+    }
+
+    private func startGenres() {
+        if genres == nil {
+            genres = MusicGenresModel(container: model.container)
+        }
+        genres?.start()
+    }
+
+    /// Open a genre's sheet. Its failures come back after the sheet has
+    /// closed (a room play closes it, as Android's drawer does), so the model
+    /// is handed the shell's toast to say them in.
+    private func openGenre(_ genre: MusicGenreRow) {
+        guard let deviceID = model.deviceID else { return }
+        let shell = model
+        sheet = .genre(MusicGenresDetailModel(
+            genre: genre,
+            container: model.container,
+            deviceID: deviceID,
+            say: { shell.showToast($0) }
+        ))
     }
 
     private func openPlaylist(_ playlist: Playlist) {
