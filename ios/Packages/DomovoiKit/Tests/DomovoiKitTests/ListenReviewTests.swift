@@ -53,34 +53,67 @@ final class ListenClaimReviewTests: XCTestCase {
 
     // MARK: - 2A: a stale registration answer cannot wipe a fresh key
 
-    /// The registration is out; a claim is pressed and mints K2. Without the
-    /// line the claim lands first and the registration's "nobody" — computed
-    /// before it — lands after and deletes K2, after which every claim is a
-    /// 403. In line, the claim waits for the registration.
-    func testARegistrationAnswerCannotWipeAKeyAClaimMintedAfterIt() async throws {
-        let b = book()
+    /// The line runs one call at a time, in the order asked: the second
+    /// starts only after the first has FINISHED, awaits included.
+    ///
+    /// Why this, and not a registration and a claim raced over the stub:
+    /// `URLProtocol` runs every stub request on CFNetwork's one custom-protocol
+    /// thread, so two requests cannot be in flight at once there and a race
+    /// test passes with or without the line (measured on the proof branch).
+    func testTheLineRunsOneCallAtATimeInOrder() async {
+        let line = ClaimLine()
+        let log = Shared<[String]>([])
+        async let a: Int = line.run {
+            log.mutate { $0.append("register-sent") }
+            try? await Task.sleep(for: .milliseconds(200))
+            log.mutate { $0.append("register-stored") }
+            return 1
+        }
+        try? await Task.sleep(for: .milliseconds(30))
+        async let b: Int = line.run {
+            log.mutate { $0.append("claim-sent") }
+            return 2
+        }
+        _ = await (a, b)
+        XCTAssertEqual(["register-sent", "register-stored", "claim-sent"], log.current)
+    }
+
+    /// A book that counts the calls that go through its line.
+    private final class SpyBook: ClaimBook, @unchecked Sendable {
+        let inner = DeviceOwnerBook(place: SavedStateBox(), vault: ClaimKeyVault(items: InMemoryKeychain()))
+        let lineUses = Shared(0)
+        func deviceOwner(for server: String) -> DeviceOwner? { inner.deviceOwner(for: server) }
+        func claimKey(for server: String) -> String? { inner.claimKey(for: server) }
+        func update(for server: String, _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?) {
+            inner.update(for: server, change)
+        }
+        func setSharedScreen(_ shared: Bool, for server: String) { inner.setSharedScreen(shared, for: server) }
+        func sharedScreen(for server: String) -> Bool? { inner.sharedScreen(for: server) }
+        var line: ClaimLine {
+            lineUses.mutate { $0 += 1 }
+            return inner.line
+        }
+    }
+
+    /// Both the registration and the claim go through the book's line, so a
+    /// registration answer computed before a claim can never be stored after
+    /// the claim that minted a new key (which would wipe it: "nobody" holds no
+    /// key, and every claim after would be a 403).
+    func testARegistrationAndAClaimBothGoThroughTheLine() async throws {
+        let b = SpyBook()
         let active = Shared(base)
-        let c = client(active)
         StubURLProtocol.dispatch { request in
-            if request.url?.path == "/api/devices/register" {
-                // Wait for the claim to go out (it never does, in line).
-                Self.park(1.5) { StubURLProtocol.recorded.contains(where: Self.isPut) }
-                return Self.row(owner: nil)
-            }
-            return Self.row(owner: 3, name: "Alex", key: "k2-minted-AAAAAAAAAAAAAAAAAAAA")
+            request.url?.path == "/api/devices/register"
+                ? Self.row(owner: nil)
+                : Self.row(owner: 3, name: "Alex", key: "k2-minted-AAAAAAAAAAAAAAAAAAAA")
         }
-        let server = base
-        let registering = Task {
-            await DeviceRegistry.register(
-                with: c, book: b, server: server, deviceID: "ios-1a2b", name: "iPhone", userAgent: "ua"
-            )
-        }
-        for _ in 0..<200 where StubURLProtocol.requestCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
-        let owner = try await claimThisPhone(client: c, book: b, server: base, deviceID: "ios-1a2b", personID: 3)
-        _ = await registering.value
-        XCTAssertEqual(3, owner?.id)
-        XCTAssertEqual("k2-minted-AAAAAAAAAAAAAAAAAAAA", b.claimKey(for: base), "a stale answer wiped the fresh key")
-        XCTAssertEqual(3, b.deviceOwner(for: base)?.id)
+        _ = await DeviceRegistry.register(
+            with: client(active), book: b, server: base, deviceID: "ios-1a2b", name: "iPhone", userAgent: "ua"
+        )
+        XCTAssertEqual(1, b.lineUses.current, "the registration did not go through the line")
+        _ = try await claimThisPhone(client: client(active), book: b, server: base, deviceID: "ios-1a2b", personID: 3)
+        XCTAssertEqual(2, b.lineUses.current, "the claim did not go through the line")
+        XCTAssertEqual("k2-minted-AAAAAAAAAAAAAAAAAAAA", b.claimKey(for: base))
     }
 
     // MARK: - 2B: two presses never cross
