@@ -113,7 +113,7 @@ struct PersonThisPhoneSection: View {
             .frame(minHeight: 44)
         case .thisIsMe:
             Button(ListeningStrings.thisIsMe) { model.press(person, claim: true, onPeopleChanged: onPeopleChanged) }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(BrandFillButtonStyle())
                 .disabled(model.busy)
                 .frame(minHeight: 44)
                 .accessibilityLabel(ListeningStrings.thisIsMeDescription(person.name))
