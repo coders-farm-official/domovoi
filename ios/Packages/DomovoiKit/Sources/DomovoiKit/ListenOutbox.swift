@@ -144,32 +144,54 @@ public final class ListenOutbox: Sendable {
         self.file = file
     }
 
-    /// The app's outbox: `Application Support/listens-outbox.json`, which is
-    /// backed up with the app like any of its own data and never shared.
+    /// The app's outbox: `Application Support/listens/listens-outbox.json`.
+    ///
+    /// **The FOLDER is excluded from backup**, not the file: every write
+    /// replaces the file (`.atomic` renames a new one over it), and a flag set
+    /// on the old file would go with it. Android opts the whole app out of
+    /// backups; listening history waiting to be sent is the household's, and
+    /// it has no business in an iCloud backup (security review, 2026-11-14).
     public static func forApp() -> ListenOutbox {
-        let base = (try? FileManager.default.url(
+        let support = (try? FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
         )) ?? FileManager.default.temporaryDirectory
-        return ListenOutbox(file: base.appendingPathComponent("listens-outbox.json"))
+        let folder = excludedFolder(support.appendingPathComponent("listens", isDirectory: true))
+        return ListenOutbox(file: folder.appendingPathComponent("listens-outbox.json"))
     }
 
-    public func all() -> [OutboxRow] { lock.withLock { _ in load() } }
+    /// Make `folder` and mark it excluded from backup. Returned so the
+    /// caller uses the URL the flag was set through.
+    static func excludedFolder(_ folder: URL) -> URL {
+        var folder = folder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? folder.setResourceValues(values)
+        return folder
+    }
 
-    /// Add `row` at the end, dropping the oldest past ``max``.
+    public func all() -> [OutboxRow] { lock.withLock { _ in load() ?? [] } }
+
+    /// Add `row` at the end, dropping the oldest past ``max``. Not written
+    /// when the file is there but cannot be read now (a locked device): the
+    /// row is lost rather than every row before it.
     public func add(_ row: OutboxRow) {
-        lock.withLock { _ in save(Array((load() + [row]).suffix(Self.max))) }
+        lock.withLock { _ in
+            guard let rows = load() else { return }
+            save(Array((rows + [row]).suffix(Self.max)))
+        }
     }
 
     /// The oldest `limit` rows waiting for `server`.
     public func batch(server: String, limit: Int = ListenOutbox.batchSize) -> [OutboxRow] {
-        lock.withLock { _ in Array(load().filter { $0.server == server }.prefix(limit)) }
+        lock.withLock { _ in Array((load() ?? []).filter { $0.server == server }.prefix(limit)) }
     }
 
     /// Delete exactly `ids` (a flush's own rows).
     public func remove(_ ids: Set<String>) {
         guard !ids.isEmpty else { return }
         lock.withLock { _ in
-            let rows = load()
+            guard let rows = load() else { return }
             let kept = rows.filter { !ids.contains($0.id) }
             if kept.count != rows.count { save(kept) }
         }
@@ -178,15 +200,39 @@ public final class ListenOutbox: Sendable {
     /// Forget every row for `server` (the phone forgot that server).
     public func forget(server: String) {
         lock.withLock { _ in
-            let rows = load()
+            guard let rows = load() else { return }
             let kept = rows.filter { $0.server != server }
             if kept.count != rows.count { save(kept) }
         }
     }
 
-    private func load() -> [OutboxRow] {
-        guard let data = try? Data(contentsOf: file) else { return [] }
-        return (try? JSONDecoder().decode([OutboxRow].self, from: data)) ?? []
+    /// The rows, or nil when the file is there and cannot be read NOW (then
+    /// nothing may be written over it).
+    ///
+    /// Read row by row: one row this version cannot decode is skipped, not
+    /// the whole list with it. A file that is not a JSON list at all is
+    /// **moved aside** (`….corrupt-<ms>.json`), never overwritten, and the
+    /// outbox starts again empty.
+    private func load() -> [OutboxRow]? {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        guard let list = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            let aside = file.deletingPathExtension()
+                .appendingPathExtension("corrupt-\(Int64(Date().timeIntervalSince1970 * 1000)).json")
+            do {
+                try FileManager.default.moveItem(at: file, to: aside)
+            } catch {
+                return nil
+            }
+            return []
+        }
+        let decoder = JSONDecoder()
+        return list.compactMap { element in
+            guard JSONSerialization.isValidJSONObject(element),
+                  let one = try? JSONSerialization.data(withJSONObject: element)
+            else { return nil }
+            return try? decoder.decode(OutboxRow.self, from: one)
+        }
     }
 
     private func save(_ rows: [OutboxRow]) {

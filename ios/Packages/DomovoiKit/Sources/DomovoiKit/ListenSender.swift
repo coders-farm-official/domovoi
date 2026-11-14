@@ -91,10 +91,15 @@ public actor ListenSender {
                 outbox.remove(Set(batch.map(\.id)))
                 continue
             }
+            // Deleted only on the server's own answer, a JSON object: a 2xx
+            // from something that is not this route (a captive portal, a
+            // proxy's page) has taken nothing, so the rows are kept.
+            guard let said = (try? JSONSerialization.jsonObject(with: answer)) as? [String: Any] else {
+                return .kept
+            }
             outbox.remove(Set(batch.map(\.id)))
             sentAny = true
-            let said = (try? JSONSerialization.jsonObject(with: answer)) as? [String: Any]
-            if let recording = said?["recording"] as? Bool, !recording { onRecordingOff() }
+            if let recording = said["recording"] as? Bool, !recording { onRecordingOff() }
         }
     }
 

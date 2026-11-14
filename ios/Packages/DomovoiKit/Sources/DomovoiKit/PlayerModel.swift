@@ -274,6 +274,22 @@ public final class PlayerModel {
     /// `PlayerController.listens`, a1e611b6.
     public var listens: (any PlayerListenHooks)?
 
+    /// The queue index the engine's first source was at the last rebuild,
+    /// so the engine's current source can be matched to ``current``
+    /// (the CLAIM unit's second hook: listening history must not book the
+    /// NEXT song's length against the one that just finished).
+    private var engineBase = 0
+
+    /// The engine's own length, only while its current source IS the model's
+    /// current item; nil for a book's parts and in the moment between the
+    /// engine advancing and the model hearing of it.
+    private var engineDurationOfCurrent: Double? {
+        guard let item = current, item.parts.count <= 1,
+              engine.currentIndex == index - engineBase
+        else { return nil }
+        return engine.durationSec
+    }
+
     /// Which part of a folder book the engine is on.
     private var partIndex = 0
 
@@ -844,6 +860,7 @@ public final class PlayerModel {
             urls = queue[index...].compactMap { resolve($0.src) }
         }
         engine.setItems(urls, startingAt: 0, offsetSec: offsetSec)
+        engineBase = index
         engine.setRate(speed)
         if keepPlaying && isPlaying { engine.play() }
         updatePosition()
@@ -994,7 +1011,7 @@ public final class PlayerModel {
     /// call: on iOS the dictionary is a push, so there is no listener plumbing.
     private func refreshNowPlaying() {
         listens?.observe(ListenSnapshot(
-            item: current, playing: isPlaying, local: !target.isCasting, durationSec: engine.durationSec
+            item: current, playing: isPlaying, local: !target.isCasting, durationSec: engineDurationOfCurrent
         ))
         guard let item = current else {
             nowPlaying.publish(nil)

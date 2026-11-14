@@ -74,14 +74,24 @@ public final class PeopleThisPhoneModel {
     /// Who the sections are about. Nil before ``show(_:)``.
     public private(set) var personID: Int?
 
-    /// A claim on its way (both buttons are disabled).
+    /// A claim on its way (both buttons are disabled). **Not** reset when
+    /// another person is shown: the claim is this phone's, whoever's page
+    /// is open, and a second one must wait for it.
     public private(set) var busy = false
 
     /// The last refused claim: the server's sentence, and what it offers.
     public private(set) var refused: ClaimOutcome?
 
     /// What a press of "clear" came to; nil while nothing is asked.
-    public private(set) var ask: ClearCheck?
+    public private(set) var ask: ClearAsk?
+
+    /// The answer to "clear", with the server and the person it was worked
+    /// out for: a DELETE goes only to that server, for that person.
+    public struct ClearAsk: Equatable, Sendable {
+        public let check: ClearCheck
+        public let server: String
+        public let personID: Int
+    }
 
     /// A refused DELETE: the server's sentence.
     public private(set) var clearRefused: String?
@@ -104,11 +114,9 @@ public final class PeopleThisPhoneModel {
         if personID != person.id {
             generation += 1
             personID = person.id
-            busy = false
             refused = nil
             ask = nil
             clearRefused = nil
-            clearing = false
         }
         if summary.data == nil, summary.error == nil { summary.refresh() } else { summary.serverChanged() }
     }
@@ -181,10 +189,12 @@ public final class PeopleThisPhoneModel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             let out = await claimHere(self.shell, personID: claim ? person.id : nil)
-            guard self.generation == mine else { return }
             self.busy = false
-            if out.ok { self.shell.showToast(out.message) } else { self.refused = out }
             if out.ok || out.refusal == .gone || out.refusal == .takenByAnother { onPeopleChanged() }
+            // Another person's page by now: the answer is still said, as a
+            // toast, rather than dropped or drawn under the wrong person.
+            guard self.generation == mine else { return self.shell.showToast(out.message) }
+            if out.ok { self.shell.showToast(out.message) } else { self.refused = out }
         }
     }
 
@@ -199,50 +209,72 @@ public final class PeopleThisPhoneModel {
     /// "clear" pressed: may this phone do it?
     public func askToClear(_ person: Person, nowMs: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) {
         clearRefused = nil
-        ask = clearCheck(
-            personID: person.id, name: person.name, owner: owner, shared: shared,
-            keyHeld: keyHeld, nowMs: nowMs
+        ask = ClearAsk(
+            check: clearCheck(
+                personID: person.id, name: person.name, owner: owner, shared: shared,
+                keyHeld: keyHeld, nowMs: nowMs
+            ),
+            server: server,
+            personID: person.id
         )
     }
 
     public func dismissAsk() { ask = nil }
 
-    /// The confirm dialog's "Clear": the DELETE, as this phone's person, at
-    /// the server read now — and only after ``askToClear(_:nowMs:)`` said
-    /// ``ClearCheck/allowed``.
+    /// The confirm dialog's "Clear": the DELETE, as this phone's person —
+    /// only after ``askToClear(_:nowMs:)`` said ``ClearCheck/allowed`` for
+    /// THIS person, and only to the server that answer was worked out for.
+    /// A server switched since is refused: nothing is sent.
     public func confirmClear(_ person: Person) {
-        guard ask == .allowed, !clearing, let deviceID = shell.deviceID else { return }
+        guard let asked = ask, asked.check == .allowed, asked.personID == person.id,
+              !clearing, let deviceID = shell.deviceID
+        else { return }
+        guard asked.server == server else {
+            ask = nil
+            return
+        }
         clearing = true
         let mine = generation
-        let at = server
+        let at = asked.server
         let client = shell.container.client
         let book = shell.owners
         Task { @MainActor [weak self] in
+            var said: String?
+            var refusedText: String?
             do throws(DomovoiError) {
                 let n = try await clearListeningHistory(
                     client: client, book: book, server: at, deviceID: deviceID, personID: person.id
                 )
-                guard let self, self.generation == mine else { return }
-                self.shell.showToast(ListeningStrings.cleared(person.name, n))
-                self.summary.refresh()
+                said = ListeningStrings.cleared(person.name, n)
             } catch {
-                guard let self, self.generation == mine else { return }
                 // A 403 says why in its own words.
-                self.clearRefused = claimDetail(error) ?? failureText("clear", error)
+                refusedText = claimDetail(error) ?? failureText("clear", error)
             }
-            guard let self, self.generation == mine else { return }
+            guard let self else { return }
             self.clearing = false
             self.ask = nil
+            if let said {
+                self.shell.showToast(said)
+                self.summary.refresh()
+            }
+            if let refusedText {
+                // Another person's page by now: said as a toast, not dropped.
+                if self.generation == mine { self.clearRefused = refusedText } else { self.shell.showToast(refusedText) }
+            }
         }
     }
 
     /// The not-here dialog's "this is me": the claim, its answer as a toast.
+    /// One claim at a time, with the block's buttons (``busy``).
     public func thisIsMeFromClear(_ person: Person) {
         ask = nil
-        let shell = self.shell
-        Task { @MainActor in
-            let out = await claimHere(shell, personID: person.id)
-            shell.showToast(out.message)
+        guard !busy else { return }
+        busy = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let out = await claimHere(self.shell, personID: person.id)
+            self.busy = false
+            self.shell.showToast(out.message)
         }
     }
 }

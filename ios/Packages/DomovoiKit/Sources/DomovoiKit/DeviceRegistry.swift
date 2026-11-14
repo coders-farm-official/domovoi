@@ -163,12 +163,22 @@ public enum DeviceRegistry {
         guard let body = try? registerPayload(deviceID: deviceID, name: name, userAgent: userAgent) else {
             return nil
         }
-        guard let data = try? await client.raw(
-            method: "POST", path: "/api/devices/register", body: body, onlyTo: server
-        ) else { return nil }
-        guard let row = try? DomovoiClient.decode(data, as: DeviceRow.self) else { return nil }
-        if let book, let server { rememberDeviceAnswer(book, server: server, data: data) }
-        return row
+        // In the book's line (``ClaimLine``): a registration answer must not
+        // land after a claim that was sent after it, or "nobody" from the
+        // registration would wipe the key the claim minted.
+        let send: @Sendable () async -> Data? = {
+            guard let data = try? await client.raw(
+                method: "POST", path: "/api/devices/register", body: body, onlyTo: server
+            ) else { return nil }
+            if let book, let server, (try? DomovoiClient.decode(data, as: DeviceRow.self)) != nil {
+                rememberDeviceAnswer(book, server: server, data: data)
+            }
+            return data
+        }
+        let data: Data?
+        if let book { data = await book.line.run(send) } else { data = await send() }
+        guard let data else { return nil }
+        return try? DomovoiClient.decode(data, as: DeviceRow.self)
     }
 
     /// Rename this device. Throws, so the Settings panel can report the
@@ -499,13 +509,61 @@ public struct DeviceOwner: Equatable, Sendable, Codable {
 public protocol ClaimBook: AnyObject, Sendable {
     func deviceOwner(for server: String) -> DeviceOwner?
     func claimKey(for server: String) -> String?
-    /// Store `owner` (nil: nobody) as the phone's owner at `server`, and
-    /// `claimKey` as the key it holds there (nil: none).
-    func rememberDeviceOwner(_ owner: DeviceOwner?, claimKey: String?, for server: String)
+    /// Read the owner and the key at `server` and write what `change` says,
+    /// as ONE step: nothing else can write in between. `change` answers nil
+    /// to leave both as they are.
+    func update(for server: String, _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?)
     func setSharedScreen(_ shared: Bool, for server: String)
     /// What `server` last said about this phone being a shared screen; nil
     /// before it has answered.
     func sharedScreen(for server: String) -> Bool?
+    /// Registrations and claims go through this one at a time, so a stale
+    /// answer can never land after a newer one (``ClaimLine``).
+    var line: ClaimLine { get }
+}
+
+public extension ClaimBook {
+    /// Store `owner` (nil: nobody) as the phone's owner at `server`, and
+    /// `claimKey` as the key it holds there (nil: none).
+    func rememberDeviceOwner(_ owner: DeviceOwner?, claimKey: String?, for server: String) {
+        update(for: server) { _, _ in (owner, claimKey) }
+    }
+
+    /// Drop the key at `server` **only if it is still the one that was
+    /// sent** (compare-and-clear): a refusal of key K1 must not wipe a K2
+    /// minted while the refused call was on its way.
+    func dropClaimKey(ifStill sent: String?, for server: String) {
+        update(for: server) { owner, held in held != nil && held == sent ? (owner, nil) : nil }
+    }
+}
+
+/// One registration or claim at a time (security review of ba70c348,
+/// finding 2).
+///
+/// Each call reads the key it sends, sends, and stores the answer; without a
+/// line, a registration answer computed before a claim could land after the
+/// claim that minted a new key and wipe it (the answer says nobody, and
+/// nobody holds no key), and two overlapping claims would send the old key
+/// twice. In line, every call starts from what the one before it stored.
+/// One line for all servers: stricter than per server, and these calls are
+/// rare.
+public final class ClaimLine: Sendable {
+    private let tail = Mutex<Task<Void, Never>?>(nil)
+
+    public init() {}
+
+    public func run<T: Sendable>(_ body: @Sendable @escaping () async -> T) async -> T {
+        let mine: Task<T, Never> = tail.withLock { last in
+            let previous = last
+            let task = Task<T, Never> {
+                await previous?.value
+                return await body()
+            }
+            last = Task { _ = await task.value }
+            return task
+        }
+        return await mine.value
+    }
 }
 
 /// The app's ``ClaimBook``: owners in `UserDefaults` (they are not secret —
@@ -514,8 +572,10 @@ public protocol ClaimBook: AnyObject, Sendable {
 /// within seconds of every launch).
 ///
 /// `@unchecked Sendable` with the reason the house rule asks for: every
-/// mutable thing is behind the one `Mutex`, the ``SavedState`` and the vault
-/// are `Sendable`, and ``changed`` is set once by the shell before any call.
+/// mutable thing is behind the one `Mutex` — the Keychain and `UserDefaults`
+/// writes included, so the cache and the stores cannot disagree — the
+/// ``SavedState`` and the vault are `Sendable`, and ``changed`` is set once by
+/// the shell before any call.
 public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
 
     /// Its own `UserDefaults` key, under the app's prefix, for the reason
@@ -525,6 +585,7 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
     private struct State {
         var owners: [String: DeviceOwner]
         /// Keys read from the Keychain so far; `.some(nil)` is "read, none".
+        /// A read the Keychain FAILED is not cached, so it is asked again.
         var keys: [String: String?] = [:]
         var shared: [String: Bool] = [:]
     }
@@ -532,6 +593,8 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
     private let place: any SavedState
     private let vault: ClaimKeyVault
     private let state: Mutex<State>
+
+    public let line = ClaimLine()
 
     /// Told after every change of owner, key or shared answer, off no
     /// particular thread. Carries nothing: a listener reads what it needs.
@@ -551,37 +614,51 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
         state.withLock { $0.owners[Self.k(server)] }
     }
 
+    private func keyLocked(_ s: inout State, _ key: String) -> String? {
+        if let cached = s.keys[key] { return cached }
+        switch vault.read(for: key) {
+        case .key(let found):
+            s.keys[key] = .some(found)
+            return found
+        case .none:
+            s.keys[key] = .some(nil)
+            return nil
+        case .failed:
+            return nil
+        }
+    }
+
     public func claimKey(for server: String) -> String? {
         let key = Self.k(server)
         guard !key.isEmpty else { return nil }
-        if let cached = state.withLock({ $0.keys[key] }) { return cached }
-        let read = vault.key(for: key)
-        state.withLock { $0.keys[key] = .some(read) }
-        return read
+        return state.withLock { keyLocked(&$0, key) }
     }
 
     /// Whether a key is held for `server`, without handing the key out.
     public func holdsClaimKey(for server: String) -> Bool { claimKey(for: server) != nil }
 
-    public func rememberDeviceOwner(_ owner: DeviceOwner?, claimKey: String?, for server: String) {
+    public func update(for server: String, _ change: (DeviceOwner?, String?) -> (owner: DeviceOwner?, key: String?)?) {
         let key = Self.k(server)
         guard !key.isEmpty else { return }
-        let safe = headerSafeClaimKey(claimKey)
-        let before = self.claimKey(for: key)
-        let owners: [String: DeviceOwner]? = state.withLock { s in
-            let next: [String: DeviceOwner] = {
-                var o = s.owners
-                o[key] = owner
-                return o
-            }()
-            s.keys[key] = .some(safe)
-            guard next != s.owners else { return nil }
-            s.owners = next
-            return next
+        let moved: Bool = state.withLock { s in
+            let ownerBefore = s.owners[key]
+            let keyBefore = keyLocked(&s, key)
+            guard let next = change(ownerBefore, keyBefore) else { return false }
+            let safe = headerSafeClaimKey(next.key)
+            var moved = false
+            if next.owner != ownerBefore {
+                s.owners[key] = next.owner
+                if let blob = try? JSONEncoder().encode(s.owners) { place.write(blob) }
+                moved = true
+            }
+            if safe != keyBefore {
+                vault.set(safe, for: key)
+                s.keys[key] = .some(safe)
+                moved = true
+            }
+            return moved
         }
-        if let owners, let blob = try? JSONEncoder().encode(owners) { place.write(blob) }
-        if safe != before { vault.set(safe, for: key) }
-        if owners != nil || safe != before { changed?() }
+        if moved { changed?() }
     }
 
     public func setSharedScreen(_ shared: Bool, for server: String) {
@@ -599,10 +676,13 @@ public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
         state.withLock { $0.shared[Self.k(server)] }
     }
 
-    /// The phone forgot `server`: its owner and its key go with it
+    /// The phone forgot `server`, or the machine at its address changed: its
+    /// owner, its key and its shared-screen answer go
     /// (`Prefs.forgetServer`, `rememberDeviceOwner(url, null, null)`).
+    /// Called from the store's one "server forgotten" signal
+    /// (``ShellStore/notifyServerForgotten(to:)``).
     public func forget(server: String) {
-        rememberDeviceOwner(nil, claimKey: nil, for: server)
+        update(for: server) { _, _ in (nil, nil) }
         state.withLock { _ = $0.shared.removeValue(forKey: Self.k(server)) }
     }
 }
@@ -650,14 +730,15 @@ public func ownerAnswer(_ answer: [String: Any], before: DeviceOwner?, heldKey: 
 
 /// Store what `data` (a device answer) says about the phone at `server` —
 /// the server the call was made TO, read before it, never the active one
-/// afterwards. `rememberDeviceAnswer` (`DeviceRegistry.kt`).
+/// afterwards. `rememberDeviceAnswer` (`DeviceRegistry.kt`). The owner and
+/// key are read and written as one step (``ClaimBook/update(for:_:)``).
 public func rememberDeviceAnswer(_ book: any ClaimBook, server: String, data: Data) {
     guard let row = try? JSONDecoder().decode(DeviceRegistry.DeviceRow.self, from: data),
           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return }
     book.setSharedScreen(DeviceRegistry.sharedScreenAnswer(row), for: server)
-    if let answer = ownerAnswer(object, before: book.deviceOwner(for: server), heldKey: book.claimKey(for: server)) {
-        book.rememberDeviceOwner(answer.owner, claimKey: answer.claimKey, for: server)
+    book.update(for: server) { owner, held in
+        ownerAnswer(object, before: owner, heldKey: held).map { ($0.owner, $0.claimKey) }
     }
 }
 
@@ -701,6 +782,9 @@ public func claimDetail(_ error: DomovoiError) -> String? {
 /// `PUT /api/devices/{id}/person` with `X-Device-Id` and, **only when one is
 /// held for `server`**, the claim key. `claimThisPhone` (`DeviceRegistry.kt`).
 ///
+/// - In ``ClaimBook/line``: the key sent is read after every registration
+///   and claim before this one has stored its answer, so two presses, or a
+///   press and a registration, never cross.
 /// - The key is read for `server` and the call goes only while `server` is
 ///   the active one (`onlyTo`), so a key minted by one house can never be
 ///   sent to another — not by a switch mid-call, and not by a redirect
@@ -709,7 +793,7 @@ public func claimDetail(_ error: DomovoiError) -> String? {
 ///   which is what the caller shows.
 /// - Throws the server's refusal unchanged (the caller shows its sentence,
 ///   ``claimDetail(_:)``). A refusal that says the phone can't prove whose it
-///   is drops the stored key: it no longer works.
+///   is drops the stored key — only if it is still the key that was sent.
 public func claimThisPhone(
     client: DomovoiClient,
     book: any ClaimBook,
@@ -724,23 +808,27 @@ public func claimThisPhone(
     } else {
         body = Data("{\"person_id\":null}".utf8)
     }
-    let data: Data
-    do throws(DomovoiError) {
-        data = try await client.raw(
-            method: "PUT", path: path, body: body,
-            headers: claimHeaders(deviceID: deviceID, claimKey: book.claimKey(for: server)),
-            onlyTo: server
-        )
-    } catch {
-        if let status = error.failure?.status,
-           claimRefusal(status: status, detail: claimDetail(error)) == .cantProve {
-            book.rememberDeviceOwner(book.deviceOwner(for: server), claimKey: nil, for: server)
+    let result: Result<DeviceOwner?, DomovoiError> = await book.line.run {
+        let sent = book.claimKey(for: server)
+        let data: Data
+        do throws(DomovoiError) {
+            data = try await client.raw(
+                method: "PUT", path: path, body: body,
+                headers: claimHeaders(deviceID: deviceID, claimKey: sent),
+                onlyTo: server
+            )
+        } catch {
+            if let status = error.failure?.status,
+               claimRefusal(status: status, detail: claimDetail(error)) == .cantProve {
+                book.dropClaimKey(ifStill: sent, for: server)
+            }
+            return .failure(error)
         }
-        throw error
+        guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
+            return .failure(.notDomovoi("that isn't Domovoi: the answer is not what this app understands"))
+        }
+        rememberDeviceAnswer(book, server: server, data: data)
+        return .success(book.deviceOwner(for: server))
     }
-    guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
-        throw DomovoiError.notDomovoi("that isn't Domovoi: the answer is not what this app understands")
-    }
-    rememberDeviceAnswer(book, server: server, data: data)
-    return book.deviceOwner(for: server)
+    return try result.get()
 }

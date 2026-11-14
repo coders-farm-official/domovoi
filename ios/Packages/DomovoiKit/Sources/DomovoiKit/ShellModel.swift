@@ -312,6 +312,17 @@ public final class ShellModel {
         owners.changed = { [weak self] in
             Task { @MainActor in self?.ownersChanged() }
         }
+        // A server forgotten, or a different machine at its address (a
+        // replaced pin): whose phone this was there, its claim key, the
+        // "listening as" pick and the songs waiting for it all go, at the
+        // store's one forget signal — every forget path goes through it
+        // (`Prefs.forgetServer`; security review of the claim unit).
+        container.store.notifyServerForgotten { [weak self] url in
+            owners.forget(server: url)
+            listenerStore.forgetPick(for: url)
+            listenOutbox?.forget(server: ServerCredentials.normalize(url))
+            Task { @MainActor in self?.ownersChanged() }
+        }
         // A launch straight onto a waiting card has to count down too, and
         // the first `.active` is not a return, so `scenePhaseChanged` will
         // not refresh.

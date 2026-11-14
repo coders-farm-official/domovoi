@@ -33,7 +33,7 @@ struct PersonThisPhoneSection: View {
             ),
             presenting: model.ask
         ) { ask in
-            switch ask {
+            switch ask.check {
             case .allowed:
                 Button(ListeningStrings.clearConfirm, role: .destructive) { model.confirmClear(person) }
                 Button(ListeningStrings.cancel, role: .cancel) { model.dismissAsk() }
@@ -50,7 +50,7 @@ struct PersonThisPhoneSection: View {
                 Button(ListeningStrings.cancel, role: .cancel) { model.dismissAsk() }
             }
         } message: { ask in
-            switch ask {
+            switch ask.check {
             case .allowed:
                 Text(ListeningStrings.confirmText(name: person.name, count: model.count(for: person))
                      + "\n\n" + ListeningStrings.cantBeUndone)

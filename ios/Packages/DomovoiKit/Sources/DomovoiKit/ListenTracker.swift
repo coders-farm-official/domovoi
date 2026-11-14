@@ -21,6 +21,9 @@ public struct ListenTracker {
         let trackID: Int64
         let server: String
         let startedAtMs: Int64
+        /// The monotonic clock at the begin: nothing can have played longer
+        /// than has passed since.
+        let beganMono: Int64
         var durationSec: Double?
         var playedMs: Int64 = 0
         var sinceMono: Int64?
@@ -52,7 +55,7 @@ public struct ListenTracker {
     public mutating func begin(trackID: Int64, server: String, durationSec: Double?, playing: Bool) -> ListenRow? {
         let closed = close(natural: false)
         let positive = durationSec.flatMap { $0 > 0 && $0.isFinite ? $0 : nil }
-        cur = Open(trackID: trackID, server: server, startedAtMs: wallMs(), durationSec: positive)
+        cur = Open(trackID: trackID, server: server, startedAtMs: wallMs(), beganMono: monoMs(), durationSec: positive)
         if playing { cur?.sinceMono = monoMs() }
         return closed
     }
@@ -84,7 +87,13 @@ public struct ListenTracker {
     public mutating func close(natural: Bool) -> ListenRow? {
         guard let c = cur else { return nil }
         cur = nil
-        var playedMs = c.playedMs + (c.sinceMono.map { monoMs() - $0 } ?? 0)
+        let now = monoMs()
+        var playedMs = c.playedMs + (c.sinceMono.map { now - $0 } ?? 0)
+        // Never more than has passed since the begin, plus a little for the
+        // clock reads in between (security review, finding 4). Before the
+        // natural-end rule below, which is the shared one (player.jsx) and
+        // is left exactly as it was.
+        playedMs = min(playedMs, now - c.beganMono + Self.clockSlackMs)
         let duration = c.durationSec
         if let duration {
             let durMs = Int64(duration * 1000)
@@ -102,6 +111,9 @@ public struct ListenTracker {
             outcome: Self.outcome(playedSec: played, durationSec: duration, skipped: c.skipped && !natural)
         )
     }
+
+    /// The slack on the elapsed-time clamp, in ms.
+    public static let clockSlackMs: Int64 = 1_000
 
     /// `finished` from this share of the song on (music_listens.py FINISHED_SHARE).
     public static let finishedShare = 0.9

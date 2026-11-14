@@ -154,6 +154,21 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     /// One sink, last one wins — the container installs it at init and is
     /// expected to be the only caller.
     func notifySelectionChanges(to sink: @escaping @Sendable () -> Void)
+
+    /// Call `sink` with a server's address whenever this store lets go of
+    /// what the phone was told by it: the server forgotten (the active one
+    /// or any saved row), or its pin replaced — a different machine at the
+    /// same address. **The one place every forget goes through**, so what
+    /// the shell keeps per server beside the household token (whose phone
+    /// this is, its claim key, the "listening as" pick) goes with it, as
+    /// `Prefs.forgetServer` takes it on Android (security review of the
+    /// claim unit, 2026-11-14).
+    ///
+    /// **Required, with no default**: a store that could forget a server
+    /// without saying so would leave a claim key behind.
+    ///
+    /// One sink, last one wins; called outside the store's lock.
+    func notifyServerForgotten(to sink: @escaping @Sendable (String) -> Void)
 }
 
 public extension ShellStore {
@@ -187,6 +202,7 @@ public final class InMemoryShellStore: ShellStore {
         var phoneBar: String?
         var localNetworkHasAnswered = false
         var onSelectionChange: (@Sendable () -> Void)?
+        var onServerForgotten: (@Sendable (String) -> Void)?
     }
 
     private let state = Mutex(State())
@@ -300,18 +316,34 @@ public final class InMemoryShellStore: ShellStore {
 
     public func replacePin(url: String, pin newPin: ServerIdentity.Pin) {
         state.withLock { $0.book.replacePin(url: url, pin: newPin) }
+        serverForgotten(url)
     }
 
     @discardableResult
     public func removeKnownServer(_ url: String) -> TrustBook.ForgetReach {
-        state.withLock { $0.book.forget(url) }
+        let reach = state.withLock { $0.book.forget(url) }
+        serverForgotten(url)
+        return reach
     }
 
     @discardableResult
     public func forgetActiveServer() -> String? {
         let gone = state.withLock { $0.book.forgetActiveServer()?.url }
-        if gone != nil { selectionChanged() }
+        if let gone {
+            serverForgotten(gone)
+            selectionChanged()
+        }
         return gone
+    }
+
+    public func notifyServerForgotten(to sink: @escaping @Sendable (String) -> Void) {
+        state.withLock { $0.onServerForgotten = sink }
+    }
+
+    /// Outside the lock, for ``selectionChanged()``'s reason.
+    private func serverForgotten(_ url: String) {
+        let sink = state.withLock { $0.onServerForgotten }
+        sink?(url)
     }
 }
 

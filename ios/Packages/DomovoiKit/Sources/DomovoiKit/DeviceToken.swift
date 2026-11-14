@@ -283,7 +283,10 @@ public struct ClaimKeyVault: Sendable {
 
     private let items: any KeychainItems
 
-    public init(items: any KeychainItems = SystemKeychain(service: ClaimKeyVault.service)) {
+    /// The real Keychain, under this service (pinned by ListenClaimTests).
+    public static func systemItems() -> SystemKeychain { SystemKeychain(service: service) }
+
+    public init(items: any KeychainItems = ClaimKeyVault.systemItems()) {
         self.items = items
     }
 
@@ -296,6 +299,27 @@ public struct ClaimKeyVault: Sendable {
               let text = String(data: data, encoding: .utf8)
         else { return nil }
         return headerSafeClaimKey(text)
+    }
+
+    /// What a read found: a key, nothing (the Keychain said there is no such
+    /// item), or a failure — a locked or unanswering Keychain, which is NOT
+    /// "no key" and must not be remembered as one.
+    public enum Read: Equatable, Sendable {
+        case key(String)
+        case none
+        case failed
+    }
+
+    public func read(for server: String) -> Read {
+        let account = ServerCredentials.normalize(server)
+        guard !account.isEmpty else { return .none }
+        let data: Data?
+        do { data = try items.get(account: account) } catch { return .failed }
+        guard let data else { return .none }
+        guard let text = String(data: data, encoding: .utf8), let safe = headerSafeClaimKey(text) else {
+            return .none
+        }
+        return .key(safe)
     }
 
     /// Hold `key` for `server`; nil (or an unsendable value) removes it.

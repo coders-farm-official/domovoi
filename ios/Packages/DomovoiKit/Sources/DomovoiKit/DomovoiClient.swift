@@ -606,7 +606,11 @@ public final class DomovoiClient: Sendable {
         headers: [String: String] = [:],
         onlyTo: String? = nil
     ) async throws(DomovoiError) -> Data {
-        guard !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // Read ONCE: the `onlyTo` check and the address the request goes to
+        // must be the same reading of the active server, or a switch between
+        // the two would send a call checked for A to B.
+        let base = baseURL
+        guard !base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DomovoiError.noServer
         }
         // `onlyTo`: the server this call was meant for (Android's `raw`
@@ -614,10 +618,14 @@ public final class DomovoiClient: Sendable {
         // nothing is sent, so what a caller read for server A — a claim key,
         // an outbox row — never goes to server B. `.unreachable`, so it is
         // kept and tried again like any call that didn't get through.
-        if let onlyTo, ServerCredentials.normalize(onlyTo) != ServerCredentials.normalize(baseURL) {
+        if let onlyTo, ServerCredentials.normalize(onlyTo) != ServerCredentials.normalize(base) {
             throw DomovoiError.unreachable(Self.serverChanged)
         }
-        guard let url = URL(string: absolute(path)) else {
+        // A call held to one server is never an absolute URL to another.
+        let absolutePath = path.hasPrefix("http://") || path.hasPrefix("https://")
+        if onlyTo != nil, absolutePath { throw DomovoiError.notPermitted("that is not a server address") }
+        let target = absolutePath ? path : base + path
+        guard let url = URL(string: target) else {
             throw DomovoiError.notPermitted("that is not a server address")
         }
         var request = URLRequest(url: url)
