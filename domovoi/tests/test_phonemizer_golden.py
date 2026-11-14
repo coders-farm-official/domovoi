@@ -88,12 +88,25 @@ def _same(case, got, expected=None) -> bool:
     near-tie word: the out-of-dictionary model's near ties may fall the
     other way on a runtime other than the one the fixture was made with
     (made_with; ONNX Runtime 1.24 reads "shiv" as SH IY1 V, 1.28 as SH IH1 V).
-    The same rule as scripts/g2p/make_golden.py --check and the Kotlin port."""
+    The same rule as scripts/g2p/make_golden.py --check and the Kotlin port.
+    One phoneme is up to three code points of IPA: a stressed long vowel
+    the model drops for a blank ("oluwaseun": Z IY1 N or, by 0.02 logits on
+    some CI machines, Z N; "zˌiːn" against "zn")."""
     expected = case["phonemes"] if expected is None else expected
     if got == expected:
         return True
     ties = case.get("near_tie") or []
-    return bool(ties) and len(got) == len(expected) and         _edit(" | ".join(expected), " | ".join(got)) <= 2 * len(ties)
+    return bool(ties) and len(got) == len(expected) and         _edit(" | ".join(expected), " | ".join(got)) <= 3 * len(ties)
+
+
+def test_a_near_tie_may_drop_its_vowel_for_a_blank():
+    """CI 2026-11-14 (run 43597450343): the model read "oluwaseun" as Z N
+    where the fixture has Z IY1 N (0.02 logits apart): one phoneme, three
+    code points. A second dropped phoneme is still a failure."""
+    for case in (c for c in DEFAULT_CASES if c["text"] == "Oluwaseun"):
+        got = case["phonemes"][0].replace("ˌiːn", "n")
+        assert got != case["phonemes"][0] and _same(case, [got])
+        assert not _same(case, [got.replace("w", "")])
 
 
 @pytest.mark.parametrize("case", DEFAULT_CASES, ids=[c["id"] for c in DEFAULT_CASES])

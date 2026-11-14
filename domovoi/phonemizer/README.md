@@ -260,8 +260,9 @@ A case:
   output and not listed).
 - `near_tie`: model words (of the text or of a respelling) whose output
   is within `near_tie_margin` (0.1) logits of a different phoneme. The
-  case may then differ by **one phoneme per near-tie word** (at most two
-  code points each in the joined sentences, `iː` against `ɪ`), and nothing
+  case may then differ by **one phoneme per near-tie word** (at most three
+  code points each in the joined sentences: `iː` against `ɪ`, or `ˌiː`
+  dropped for a blank, as `oluwaseun` does on some CI machines), and nothing
   else: a runtime other than `made_with` may pick the other phoneme
   (ONNX Runtime 1.24 read `shiv` as SH IY1 V, 1.28 and 1.30 as SH IH1 V,
   before the respelling key read it; `oluwaseun` flips between the int8
