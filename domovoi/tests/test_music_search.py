@@ -256,5 +256,9 @@ def test_one_artist_their_albums_and_tracks(client) -> None:
     paper = client.get("/api/music/artist", params={"name": "T.I.", "album": f"Paper {M}"}).json()
     assert sorted(paper["track_ids"]) == sorted(t["id"] for t in one["items"])
     loose = client.get("/api/music/artist", params={"name": "T.I.", "album": ""}).json()
-    assert len(loose["track_ids"]) == 1 and len(paper["albums"]) == len(d["albums"])
+    # This test's album-less single is among them (other tests in the same
+    # worker's database may hold a T.I. track of their own, so not "== 1").
+    single = next(t["id"] for t in lib["items"] if t["title"] == f"Single {M}")
+    assert single in loose["track_ids"] and len(paper["albums"]) == len(d["albums"])
+    assert not set(loose["track_ids"]) & set(paper["track_ids"])
     assert client.get("/api/music/artist", params={"name": f"nobody {M}"}).status_code == 404
