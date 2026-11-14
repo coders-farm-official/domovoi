@@ -48,7 +48,8 @@ import kotlinx.serialization.json.put
 
 /** "Add to playlist" drawer for one track — memberships highlighted, tap
  *  toggles add/remove (Favorites routes through the library favorited
- *  PATCH), footer creates a new playlist. Mirrors web LibraryAddDrawer. */
+ *  PATCH), footer creates a new playlist. Playlists made from the music
+ *  files are left out. Mirrors web LibraryAddDrawer. */
 @Composable
 internal fun AddToPlaylistSheet(
     track: LibraryTrack,
@@ -75,7 +76,9 @@ internal fun AddToPlaylistSheet(
     var creating by remember(track.id) { mutableStateOf("") }
 
     val memberIds = memberships.data.orEmpty().map { it.id }.toSet()
-    val playlists = all.data.orEmpty()
+    // A playlist made from the music files refuses adds and removes (409),
+    // so it isn't offered here (PlaylistReadOnly.kt).
+    val playlists = addTargets(all.data.orEmpty())
 
     fun toggle(p: Playlist) {
         val inIt = p.id in memberIds
@@ -106,7 +109,9 @@ internal fun AddToPlaylistSheet(
                 if (open()) onClose()
             },
             onFailure = {
-                toast("failed: ${it.message}")
+                // A 409 in plain words: the playlist turned out to be one the
+                // files own (this sheet's list was older than the server's).
+                toast(playlistConflictText(it) ?: "failed: ${it.message}")
                 memberships.refresh()
                 all.refresh()
             },

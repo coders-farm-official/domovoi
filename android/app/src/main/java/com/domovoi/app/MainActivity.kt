@@ -23,6 +23,7 @@ import com.domovoi.app.alerts.EXTRA_SERVER_KEY
 import com.domovoi.app.alerts.serverKey
 import com.domovoi.app.data.LocalDeveloperOptionsOn
 import com.domovoi.app.diagnostics.Diagnostics
+import com.domovoi.app.player.CoverArt
 import com.domovoi.app.roommode.RoomModeActivity
 import com.domovoi.app.roommode.RoomStore
 import com.domovoi.app.ui.shell.AppShell
@@ -96,11 +97,14 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         Diagnostics.watchdog.start()
         (application as DomovoiApplication).container.identity.appForegrounded()
+        // Covers drawn from now on are asked about again (CoverArt.kt).
+        CoverArt.appForegrounded()
     }
 
     override fun onStop() {
         Diagnostics.watchdog.stop()
         if (!isChangingConfigurations) (application as DomovoiApplication).container.identity.appBackgrounded()
+        if (!isChangingConfigurations) CoverArt.appBackgrounded()
         // Listening history waiting in the outbox goes when the app leaves the screen.
         if (!isChangingConfigurations) (application as DomovoiApplication).container.listens.flushNow()
         super.onStop()
