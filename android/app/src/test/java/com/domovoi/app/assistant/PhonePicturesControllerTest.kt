@@ -92,6 +92,16 @@ class PhonePicturesControllerTest {
         until("loaded") { c.ui().engine is EngineState.Ready || c.ui().engine is EngineState.Failed }
     }
 
+    /** Attaches [p] once the photo button would show. The vision check
+     *  settles after the engine is ready, so attaching straight after
+     *  [ready] was refused on a slow CI runner and the question went to the
+     *  clock instead (aClockQuestionWithAPhotoGoesToTheModel, run
+     *  43614519138). The app only offers the button once it can take one. */
+    private fun attach(c: AssistantController, p: PendingPhoto = photo()) {
+        until("photos offered") { c.canTakePhoto() }
+        assertTrue("the photo was taken", c.attachPhoto(p))
+    }
+
     /** A JPEG-looking photo whose bytes are easy to look for on disk. */
     private fun photo(): PendingPhoto {
         val bytes = ByteArray(4096) { i -> if (i < 3) byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte())[i] else (i * 31 % 251).toByte() }
@@ -202,7 +212,7 @@ class PhonePicturesControllerTest {
         configure = { it.photoGate = true }
         val c = controller()
         ready(c)
-        c.attachPhoto(photo())
+        attach(c)
         c.send("What is it?")
         until("writing") { c.ui().conversation.messages.lastOrNull()?.text == "A cat" }
         // Mid-turn the guard is down: this is what a crash leaves behind.
@@ -260,7 +270,7 @@ class PhonePicturesControllerTest {
         ready(c)
         val p = photo()
         val sent = p.jpeg.copyOf()
-        assertTrue(c.attachPhoto(p))
+        attach(c, p)
         assertEquals(p, c.ui().pendingPhoto)
         assertFalse("one per question: the buttons go while one waits", photoButtonsShown(c.ui()))
         assertFalse(c.attachPhoto(photo()))
@@ -303,7 +313,7 @@ class PhonePicturesControllerTest {
         install()
         val c = controller()
         ready(c)
-        c.attachPhoto(photo())
+        attach(c)
         c.send("What is on the sofa?")
         until("answered") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
         c.send("What colour is it?")
@@ -324,7 +334,7 @@ class PhonePicturesControllerTest {
         install()
         val c = controller()
         ready(c)
-        c.attachPhoto(photo())
+        attach(c)
         c.send("what time is it")
         until("answered") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
         assertFalse(c.ui().conversation.messages.last().fromClock)
@@ -339,7 +349,7 @@ class PhonePicturesControllerTest {
         val c = controller()
         ready(c)
         for ((n, phrase) in listOf("what's my battery", "set a timer for 2 minutes", "how much space is left").withIndex()) {
-            c.attachPhoto(photo())
+            attach(c)
             c.send(phrase)
             until("answered $phrase") { !c.ui().replying && c.ui().conversation.messages.size == 2 * (n + 1) }
             val a = c.ui().conversation.messages.last()
@@ -372,10 +382,10 @@ class PhonePicturesControllerTest {
         install()
         val c = controller()
         ready(c)
-        c.attachPhoto(photo())
+        attach(c)
         c.dropPhoto()
         assertNull(c.ui().pendingPhoto)
-        c.attachPhoto(photo())
+        attach(c)
         c.newConversation()
         until("new chat") { c.ui().pendingPhoto == null }
     }
@@ -386,7 +396,7 @@ class PhonePicturesControllerTest {
         val c = controller()
         ready(c)
         val p = photo()
-        c.attachPhoto(p)
+        attach(c, p)
         c.send("What is it?")
         until("writing") { c.ui().conversation.messages.lastOrNull()?.text == "A cat" }
         c.stop()
