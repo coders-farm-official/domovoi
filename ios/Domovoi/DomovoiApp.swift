@@ -240,6 +240,9 @@ struct HouseholdRootView: View {
                 // nothing of anybody.
                 .environment(\.alertsHintModel, root.alerts.hint)
                 .alertsHintLifecycle(root.alerts.hint)
+                // Settings → Phone calendars reads the bridge from here
+                // (``PhoneCalendarsBridge``, 1.3.0).
+                .environment(root.calendars)
     }
 }
 

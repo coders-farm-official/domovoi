@@ -84,6 +84,11 @@ outside the checkout; default: $env:DOMOVOI_RELEASE_SIGNING_KEY). Needed for
 a tag that pins the key (docs\CONTRIBUTING.md, Releasing, says how it is
 made, once).
 
+.PARAMETER SigningAgent
+Sign with the release key an ssh-agent holds (SSH_AUTH_SOCK) instead of a
+key file: the release workflow's way (.github/workflows/release.yml), which
+never prompts. Not with -SigningKey.
+
 .EXAMPLE
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1 -NoPublish
 #>
@@ -96,7 +101,8 @@ param(
     [string]$Tray,
     [string]$SatelliteSetup,
     [string]$Since,
-    [string]$SigningKey
+    [string]$SigningKey,
+    [switch]$SigningAgent
 )
 
 $ErrorActionPreference = 'Stop'
@@ -124,6 +130,7 @@ if ($Tray) { $pyArgs += @('--tray', $Tray) }
 if ($SatelliteSetup) { $pyArgs += @('--satellite-setup', $SatelliteSetup) }
 if ($Since) { $pyArgs += @('--since', $Since) }
 if ($SigningKey) { $pyArgs += @('--signing-key', $SigningKey) }
+if ($SigningAgent) { $pyArgs += '--signing-agent' }
 
 Set-Location (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 & $python @pyArgs

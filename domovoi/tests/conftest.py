@@ -181,6 +181,10 @@ TABLES_TO_TRUNCATE = [
     "intents_log",
     "conversation_log",
     "calendar_events",
+    # Calendars by link and phones' shared calendars (V055).
+    "calendar_sources",
+    # Phones' calendar keys and tombstones (V057).
+    "calendar_phones",
     "voice_notes",
     "connectivity_events",
     "voice_profiles",
@@ -246,6 +250,10 @@ TABLES_TO_TRUNCATE = [
     # music is (event data).
     "music_listens",
     "music_room_listeners",
+    # What ListenBrainz said about the library (V056; fetched data).
+    "artist_similarity",
+    "artist_similarity_lookups",
+    "recording_popularity",
 ]
 
 

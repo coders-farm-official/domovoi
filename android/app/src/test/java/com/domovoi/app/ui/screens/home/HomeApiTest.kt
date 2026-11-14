@@ -155,7 +155,7 @@ class HomeApiTest {
         val day = dayStartMs(isoMs("2026-09-28T19:00:00Z")!!, zone)
         val events = HomeApi.calendar(api, day, zone)
         assertEquals(
-            "/api/calendar/events?start=2026-09-28T00%3A00%3A00Z&end=2026-10-05T00%3A00%3A00Z&limit=20",
+            "/api/calendar/events?start=2026-09-28T00%3A00%3A00Z&end=2026-10-05T00%3A00%3A00Z&limit=50",
             server.takeRequest().path,
         )
         assertEquals("Dentist", events.single().title)

@@ -26,7 +26,9 @@ signed again.
 Then scripts\release\finish-release.ps1 adds the Windows Setup, one
 SHA256SUMS and the release notes, and moves the stable branch.
 
-Run by the owner on his own machine; nothing here runs in CI. The
+Run by the owner on his own machine, or by the release workflow
+(.github/workflows/release.yml: -SkipBuild after its own build, with
+-KeystoreCredential, behind the owner's approval). The
 keystore's path and passwords are asked for here and never written to a
 file, a log or a command line: apksigner reads the passwords from this
 script's environment for the one call that needs them, and they are

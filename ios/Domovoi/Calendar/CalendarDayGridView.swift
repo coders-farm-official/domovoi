@@ -142,7 +142,7 @@ struct CalendarDayGridView: View {
                 // one prominent pair this app has measured (8.49:1). A
                 // google row is the muted surface instead, which is the
                 // `Idle` tone the pill uses for it.
-                entry.isGoogle
+                entry.isImported
                     ? Color(.secondarySystemBackground)
                     : Color.brand.opacity(0.18),
                 in: RoundedRectangle(cornerRadius: 6)
@@ -156,7 +156,8 @@ struct CalendarDayGridView: View {
     }
 
     private func spokenClock(_ entry: CalendarEntry) -> String {
-        let start = calendarClock(ms: calendarStartMs(entry), timeZone: calendar.zone)
+        if entry.allDay { return CalendarStrings.allDay }
+        let start = calendarClock(ms: calendarStartMs(entry, in: calendar.zone), timeZone: calendar.zone)
         guard entry.endsAt != nil else { return start }
         return calendarRange(entry, in: calendar.zone)
     }

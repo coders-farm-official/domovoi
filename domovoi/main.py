@@ -752,9 +752,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   up_next_extender → music_listens_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → audiobook_indexer → room_book_positions →
+    #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
+    #   room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard →
+    #   listenbrainz_fetch →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
     #   library_tag_backfill → library_year_fetch.
     #
@@ -798,6 +800,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(NewsFetcher(app=app), owner="core")
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
+    # Calendars added by link (V055): read on schedule through the outbound
+    # gate, never under INTERNET_ACCESS=never (domovoi/calendar_feeds.py).
+    from domovoi.workers.calendar_feed_refresher import CalendarFeedRefresher
+
+    WORKERS.add_worker(CalendarFeedRefresher(), owner="core")
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
     # The place in the book of a room playing one, every 30 s
     # (domovoi/workers/room_book_positions.py).
@@ -828,6 +835,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.container_guard import ContainerGuardWorker
 
     WORKERS.add_worker(ContainerGuardWorker(), owner="core")
+    # Up next P7 (V056): similar artists and song popularity from
+    # ListenBrainz, each behind its own switch, the internet answer and the
+    # probe; the ONLY code that asks ListenBrainz (the picker reads the
+    # stored answers). domovoi/workers/listenbrainz_fetch.py
+    from domovoi.workers.listenbrainz_fetch import ListenBrainzFetch
+
+    WORKERS.add_worker(ListenBrainzFetch(), owner="core")
     # Opt-in (off by default) MusicBrainz "also called" names for the
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
@@ -2661,6 +2675,9 @@ async def admin_snapshot() -> dict[str, Any]:
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),
+        # Up next P7: the ListenBrainz switches and the fetch's state
+        # (Settings → Music mix reads the switches from here).
+        "listenbrainz_fetch": _listenbrainz_status(),
         # Lyrics: the local scan and the LRCLIB fetch (status only, never a lyric).
         "lyrics": lyrics_status(),
     }
@@ -3634,6 +3651,9 @@ async def admin_set_device_token(body: _AdminDeviceTokenBody) -> dict[str, Any]:
         # The message, never the value.
         raise HTTPException(status_code=400, detail=str(e))
     admin_auth_mod.write_device_token_file(token)
+    from domovoi import calendar_feeds
+
+    await calendar_feeds.after_device_token_change(session_scope)
     log.info("device token set by an admin")
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 
@@ -3651,6 +3671,9 @@ async def admin_rotate_device_token() -> dict[str, Any]:
     async with session_scope() as s:
         token = await admin_auth_mod.rotate_device_token(s)
     admin_auth_mod.write_device_token_file(token)
+    from domovoi import calendar_feeds
+
+    await calendar_feeds.after_device_token_change(session_scope)
     log.info("device token rotated by an admin")
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 
@@ -5324,7 +5347,8 @@ class _AdminPlayTrackBody(BaseModel):
     # alone, as before 2026-11-12.
     context: dict[str, Any] | None = None
     person_id: int | None = Field(default=None, ge=1)
-    autoplay: bool = True
+    # None: the household's Music mix default (Settings → Music mix).
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -5591,7 +5615,8 @@ class _AdminPlayTracksBody(BaseModel):
     up_next_session_id: str | None = Field(default=None, max_length=64)
     context: dict[str, Any] | None = None
     person_id: int | None = Field(default=None, ge=1)
-    autoplay: bool = True
+    # None: the household's Music mix default (Settings → Music mix).
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -7472,7 +7497,8 @@ class _AdminPlayPlaylistBody(BaseModel):
     # Up next (2026-11-12), as for play-tracks: whose taste the picks follow,
     # Autoplay, or ``up_next: false`` for the playlist alone.
     person_id: int | None = Field(default=None, ge=1)
-    autoplay: bool = True
+    # None: the household's Music mix default (Settings → Music mix).
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -8057,3 +8083,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _listenbrainz_status() -> dict:
+    from domovoi.workers.listenbrainz_fetch import listenbrainz_status
+
+    return listenbrainz_status()

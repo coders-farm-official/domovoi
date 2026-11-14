@@ -150,7 +150,7 @@ final class SystemSettingsLicencesTests: XCTestCase {
     /// claim about a feature the app does not have is the same fault as a
     /// control that cannot act.
     func testNoPointClaimsAFeatureThisAppDoesNotHave() {
-        XCTAssertEqual(4, SystemSettingsPrivacy.points.count)
+        XCTAssertEqual(5, SystemSettingsPrivacy.points.count)
         let text = SystemSettingsPrivacy.points.joined(separator: "\n").lowercased()
         for absent in ["microphone", "phone chats", "photo of a letter"] {
             XCTAssertFalse(text.contains(absent), "this app has no \(absent)")
@@ -168,9 +168,25 @@ final class SystemSettingsLicencesTests: XCTestCase {
         )
         XCTAssertEqual(
             [SystemSettingsPrivacy.storage, SystemSettingsPrivacy.roomMode,
-             SystemSettingsPrivacy.problemReports, SystemSettingsPrivacy.noAnalytics],
+             SystemSettingsPrivacy.problemReports, SystemSettingsPrivacy.phoneCalendars,
+             SystemSettingsPrivacy.noAnalytics],
             SystemSettingsPrivacy.points
         )
+    }
+
+    /// Phone calendars (1.3.0): Android's sentence word for word, after the
+    /// problem reports and before the no-analytics line
+    /// (`PrivacyCard.kt:69-76`). Fails if the card leaves it out or words it
+    /// differently from the Android card it keeps in step with.
+    func testThePhoneCalendarsSentenceIsAndroidsAndInItsPlace() {
+        XCTAssertEqual(
+            "If you turn on Phone calendars, the calendars you tick are copied to your Domovoi server, and nowhere "
+                + "else: their events' titles, times and places, never descriptions or guests. Turning it off deletes "
+                + "that copy.",
+            SystemSettingsPrivacy.phoneCalendars
+        )
+        let at = SystemSettingsPrivacy.points.firstIndex(of: SystemSettingsPrivacy.phoneCalendars)
+        XCTAssertEqual(3, at)
     }
 
     /// The no-analytics sentence is kept true by ``Licences/never`` — the iOS

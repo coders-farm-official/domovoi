@@ -77,6 +77,13 @@ public enum SystemSettingsPrivacy {
     public static let noAnalytics =
         "There is no analytics, advertising or crash-reporting service in the app."
 
-    /// The points, in order (`PRIVACY_POINTS`, `PrivacyCard.kt:74`).
-    public static let points: [String] = [storage, roomMode, problemReports, noAnalytics]
+    /// `PRIVACY_CALENDAR_POINT` (`PrivacyCard.kt:74-76`, 1.3.0),
+    /// **verbatim**, in Android's place: after the problem reports. Backed by
+    /// Settings → Phone calendars (``CalendarShareRules``): off until it is
+    /// turned on, only the ticked calendars, and turning it off deletes the
+    /// server's copy. The words are ``CalendarShareStrings/privacyPoint``.
+    public static let phoneCalendars = CalendarShareStrings.privacyPoint
+
+    /// The points, in order (`PRIVACY_POINTS`, `PrivacyCard.kt:64-71`).
+    public static let points: [String] = [storage, roomMode, problemReports, phoneCalendars, noAnalytics]
 }

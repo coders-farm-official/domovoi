@@ -25,12 +25,14 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_device
 from web.backend.db import session_scope
 from web.backend.schemas import (
     Playlist,
+    PlaylistBulkAdded,
     PlaylistCreate,
     PlaylistPatch,
     PlaylistReorder,
@@ -379,11 +381,24 @@ async def delete_playlist(playlist_id: int) -> None:
 # ─── Membership: add / remove ─────────────────────────────────────────────
 
 
-@router.post("/{playlist_id}/tracks", status_code=204, dependencies=DEVICE)
+@router.post(
+    "/{playlist_id}/tracks", status_code=204, dependencies=DEVICE, response_model=None,
+    responses={200: {"model": PlaylistBulkAdded,
+                     "description": "track_ids: what the bulk add did"}},
+)
 async def add_track_to_playlist(
     playlist_id: int, payload: PlaylistTrackAdd
-) -> None:
+) -> Any:
     """Append a library track to the end of a playlist.
+
+    ``{track_id}``: one song; 204, 404 for a song the library doesn't
+    have, 409 when it is already in the playlist.
+
+    ``{track_ids: [...]}`` (P5, up to 500): many songs in one request, in
+    the order sent, after the playlist's last song. Songs already in the
+    playlist, or sent twice, are kept once; ids the library doesn't have
+    are left out. 200 ``{added, duplicates, missing}``. The browser's
+    "save as playlist" uses it (it used to send one request per song).
 
     Refused for the virtual Favorites playlist (``id == 0``) —
     favoriting is done via ``PATCH /api/music/library/{id}
@@ -411,6 +426,9 @@ async def add_track_to_playlist(
             raise HTTPException(
                 status_code=404, detail=f"playlist {playlist_id} not found"
             )
+        if payload.track_ids is not None:
+            result = await _add_many(s, playlist_id, payload.track_ids)
+            return JSONResponse(result.model_dump())
         track_exists = (
             await s.execute(
                 text("SELECT 1 FROM library_tracks WHERE id = :id"),
@@ -462,6 +480,64 @@ async def add_track_to_playlist(
             {"id": playlist_id},
         )
         await s.execute(text("SELECT pg_notify('playlists_changed', 'added')"))
+
+
+async def _add_many(s: Any, playlist_id: int, track_ids: list[int]) -> PlaylistBulkAdded:
+    """Append ``track_ids`` (in order) to a playlist that exists, in the
+    caller's transaction: each song once, only songs the library has."""
+    known = {
+        int(r[0])
+        for r in (
+            await s.execute(
+                text("SELECT id FROM library_tracks WHERE id = ANY(:ids)"),
+                {"ids": list(set(track_ids))},
+            )
+        ).all()
+    }
+    have = {
+        int(r[0])
+        for r in (
+            await s.execute(
+                text("SELECT track_id FROM playlist_tracks WHERE playlist_id = :pid"),
+                {"pid": playlist_id},
+            )
+        ).all()
+    }
+    start = (
+        await s.execute(
+            text(
+                "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_tracks "
+                "WHERE playlist_id = :pid"
+            ),
+            {"pid": playlist_id},
+        )
+    ).scalar() or 0
+    order: list[int] = []
+    duplicates = 0
+    missing = 0
+    for tid in track_ids:
+        if tid not in known:
+            missing += 1
+        elif tid in have:
+            duplicates += 1
+        else:
+            have.add(tid)
+            order.append(tid)
+    if order:
+        await s.execute(
+            text(
+                "INSERT INTO playlist_tracks (playlist_id, track_id, position) "
+                "SELECT :pid, t.id, :start + t.ord - 1 "
+                "FROM unnest(CAST(:ids AS INTEGER[])) WITH ORDINALITY AS t(id, ord)"
+            ),
+            {"pid": playlist_id, "ids": order, "start": int(start)},
+        )
+        await s.execute(
+            text("UPDATE playlists SET updated_at = NOW() WHERE id = :id"),
+            {"id": playlist_id},
+        )
+        await s.execute(text("SELECT pg_notify('playlists_changed', 'added')"))
+    return PlaylistBulkAdded(added=len(order), duplicates=duplicates, missing=missing)
 
 
 @router.delete(

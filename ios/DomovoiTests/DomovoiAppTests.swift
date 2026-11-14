@@ -45,6 +45,14 @@ final class DomovoiAppTests: XCTestCase {
         // Moonshine), so its prompt must never appear.
         XCTAssertNil(info["NSSpeechRecognitionUsageDescription"])
 
+        // Phone calendars (1.3.0): full read access, asked only when the
+        // person turns it on. No write-only key: nothing is written.
+        let calendars = try XCTUnwrap(info["NSCalendarsFullAccessUsageDescription"] as? String)
+        XCTAssertTrue(calendars.contains("only if you turn on Phone"), calendars)
+        XCTAssertNil(info["NSCalendarsWriteOnlyAccessUsageDescription"])
+
+        // `audio` only: calendar sharing adds no background mode (no
+        // `fetch`, so no BGAppRefreshTask) — it syncs while the app is open.
         XCTAssertEqual(info["UIBackgroundModes"] as? [String], ["audio"])
         XCTAssertEqual(info["UIFileSharingEnabled"] as? Bool, true)
         XCTAssertEqual(info["LSSupportsOpeningDocumentsInPlace"] as? Bool, true)

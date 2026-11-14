@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from domovoi.models import MAX_CONFIG_CHANGES
 from domovoi.up_next.service import ContextIn as UpNextContext
@@ -75,8 +75,31 @@ class PlaylistReorder(BaseModel):
     track_ids: list[int]
 
 
+PLAYLIST_BULK_ADD_MAX = 500
+
+
 class PlaylistTrackAdd(BaseModel):
-    track_id: int = Field(..., ge=1)
+    """Add one library song (``track_id``) or many at once (``track_ids``,
+    in order, up to 500: "save the queue as a playlist" in one request
+    instead of one per song). Exactly one of the two."""
+    track_id: int | None = Field(default=None, ge=1)
+    track_ids: list[int] | None = Field(default=None, min_length=1, max_length=PLAYLIST_BULK_ADD_MAX)
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "PlaylistTrackAdd":
+        if (self.track_id is None) == (self.track_ids is None):
+            raise ValueError("send track_id or track_ids, not both")
+        if self.track_ids is not None and any(t < 1 for t in self.track_ids):
+            raise ValueError("track_ids must be library track ids")
+        return self
+
+
+class PlaylistBulkAdded(BaseModel):
+    """What a bulk add did: songs appended, songs already in the playlist
+    (or sent twice: saved once), ids the library doesn't have."""
+    added: int
+    duplicates: int
+    missing: int
 
 
 class TrackPatch(BaseModel):
@@ -491,6 +514,10 @@ class RecentlyPlayed(BaseModel):
     started_at: datetime
     in_library: bool = False
     can_add: bool = False
+    # The library song this play was, while the library still has it
+    # (media_plays.library_track_id): the drawer offers "play next" /
+    # "add to queue" on it (P5). Null for streams, podcasts and plugins.
+    track_id: int | None = None
 
 
 # ─── Satellites ───────────────────────────────────────────────────────────
@@ -880,6 +907,123 @@ class CalendarEvent(BaseModel):
     source: str | None = None
     external_id: str | None = None
     last_synced_at: datetime | None = None
+    # 1.3.0 (V055). An all-day event's bounds are its local midnights,
+    # written with the household's offset so the text carries the date.
+    all_day: bool = False
+    # The calendar it comes from (a link or a phone), None for the
+    # household's own; such an event is read_only.
+    calendar_id: int | None = None
+    calendar_name: str | None = None
+    calendar_color: str | None = None
+    calendar_kind: str | None = None
+    owner_name: str | None = None
+    read_only: bool = False
+    # A private event a phone shared as busy: ``title`` is "Busy", no place.
+    busy: bool = False
+    # The same event (same iCalendar UID and start) from other calendars,
+    # listed once: the other calendars' names ("Family · Galaxy").
+    also_in: list[str] = Field(default_factory=list)
+
+
+class CalendarSource(BaseModel):
+    """A calendar the house reads from elsewhere (``GET /api/calendar/sources``).
+    A link's address is never here: ``url_display`` is its host and "…"."""
+
+    id: int
+    kind: Literal["link", "phone"]
+    name: str
+    color: str
+    person_id: int | None = None
+    owner_name: str | None = None
+    url_display: str | None = None
+    # A phone's device id: admins only (None for everyone else).
+    device_id: str | None = None
+    device_name: str | None = None
+    # No longer returned (always None): kept so older clients still parse.
+    account_name: str | None = None
+    event_count: int = 0
+    last_refreshed_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    next_refresh_at: datetime | None = None
+    last_error: str | None = None
+    last_error_words: str | None = None
+    # ``stale``: a phone not heard from for a day (it sends every 6 h).
+    status: Literal["ok", "error", "waiting", "internet_off", "stale"] = "ok"
+    # A phone's calendar leaves the house at this time unless it sends again.
+    expires_at: datetime | None = None
+
+
+class CalendarSourceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(..., min_length=1, max_length=2048)
+    name: str = Field(..., min_length=1, max_length=80)
+    color: str | None = Field(default=None, max_length=7)
+    person_id: int | None = None
+
+
+class CalendarSourcePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    color: str | None = Field(default=None, max_length=7)
+    person_id: int | None = None
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+
+
+class CalendarSourceRefresh(BaseModel):
+    source: CalendarSource
+    ok: bool
+    events: int | None = None
+
+
+class PhoneCalendarEvent(BaseModel):
+    uid: str = Field(..., min_length=1, max_length=300)
+    title: str | None = Field(default=None, max_length=200)
+    starts_at_ms: int
+    ends_at_ms: int | None = None
+    all_day: bool = False
+    location: str | None = Field(default=None, max_length=200)
+    # Optional (V057). The event's iCalendar UID (CalendarContract UID_2445):
+    # the same event shared by two phones is listed once.
+    ical_uid: str | None = Field(default=None, max_length=300)
+    # A private or confidential event: stored and shown as "Busy", with no
+    # title or place (whatever is sent in them is dropped).
+    busy: bool = False
+
+
+class PhoneCalendar(BaseModel):
+    calendar_id: str = Field(..., min_length=1, max_length=200)
+    name: str = Field(..., min_length=1, max_length=200)
+    # Accepted and ignored (V057: never stored or shown).
+    account_name: str | None = Field(default=None, max_length=200)
+    color: str | None = Field(default=None, max_length=9)
+    events: list[PhoneCalendarEvent] = Field(default_factory=list)
+
+
+class PhoneCalendarSnapshot(BaseModel):
+    """``PUT /api/calendar/phones/{device_id}``: everything a phone shares."""
+
+    phone_name: str | None = Field(default=None, max_length=80)
+    window_start_ms: int | None = None
+    window_end_ms: int | None = None
+    # Optional (V057): a number that only grows on this phone (e.g. the
+    # epoch ms the snapshot was read). A snapshot at or below the
+    # generation sharing was turned off at is refused (410), one older than
+    # a stored one too (409).
+    generation: int | None = Field(default=None, ge=0)
+    # Caps (25 calendars, 5000 events each, 20000 in all) answer 413 in the route.
+    calendars: list[PhoneCalendar] = Field(default_factory=list)
+
+
+class PhoneCalendarStored(BaseModel):
+    calendars: int
+    events: int
+    # Handed out ONCE, on the first snapshot this server stores from the
+    # phone (or the first after an admin removed its calendars): the phone
+    # keeps it and sends it as X-Domovoi-Calendar-Key on every later PUT
+    # and DELETE. None otherwise.
+    calendar_key: str | None = None
 
 
 class CalendarEventCreate(BaseModel):
@@ -1099,7 +1243,8 @@ class PlayTrackRequest(BaseModel):
     context: UpNextContext | None = None
     listener_person_id: int | None = Field(default=None, ge=1)
     as_household: bool = False
-    autoplay: bool = True
+    # Absent: the household's Music mix default.
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -1135,7 +1280,8 @@ class CastTracksRequest(BaseModel):
     context: UpNextContext | None = None
     listener_person_id: int | None = Field(default=None, ge=1)
     as_household: bool = False
-    autoplay: bool = True
+    # Absent: the household's Music mix default.
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -1157,7 +1303,8 @@ class PlayPlaylistRequest(BaseModel):
     # source adds similar songs once it is nearly over. All optional.
     listener_person_id: int | None = Field(default=None, ge=1)
     as_household: bool = False
-    autoplay: bool = True
+    # Absent: the household's Music mix default.
+    autoplay: bool | None = None
     up_next: bool = True
 
 

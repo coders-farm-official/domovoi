@@ -67,6 +67,9 @@ ROUTES: dict[str, dict] = {
     "settings/people": {"dashboard": "#settings/people", "app": {"screen": "Settings", "tab": "people"}},
     "settings/greetings": {"dashboard": "#settings/greetings", "app": {"screen": "Settings", "tab": "greetings"}},
     "settings/printers": {"dashboard": "#settings/printers", "app": {"screen": "Settings", "tab": "printers"}},
+    # Calendars from elsewhere (1.3.0): links are added on the dashboard; a
+    # phone shares its own calendars from the app's Phone calendars section.
+    "settings/calendars": {"dashboard": "#settings/calendars", "app": {"dashboard": True}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
     "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"screen": "Settings", "tab": "wake-words"}},
     "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
@@ -78,11 +81,14 @@ ROUTES: dict[str, dict] = {
     "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
     # Listening history (2026-11-12): the app has no tab for it yet.
     "settings/listening-history": {"dashboard": "#settings/listening-history", "app": {"dashboard": True}},
+    "settings/music-mix": {"dashboard": "#settings/music-mix", "app": {"dashboard": True}},
     "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
     "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
     # the app's own: plain text on the dashboard
     "app/connection": {"dashboard": None, "app": {"screen": "Settings", "tab": "phones-and-browsers"}},
     "app/voice": {"dashboard": None, "app": {"screen": "Settings", "tab": "voices"}},
+    # The app's own "Phone calendars" (1.3.0): sharing this phone's calendars.
+    "app/phone-calendars": {"dashboard": None, "app": {"screen": "Settings", "tab": "phone-calendars"}},
 }
 
 # ── the map ───────────────────────────────────────────────────────────────
@@ -248,6 +254,21 @@ PHRASES: dict[str, tuple] = {
     "in the garage, stop the music": ("music", "fast", {}),
     "what's playing in the office": ("music", "fast", {}),
     "play the song that goes …": ("music", "fast", {"try": "play the song that goes warm stones by the fire"}),
+    # Up next by voice (phase P6, handlers/music_queue_voice.py).
+    "what's next": ("music", "fast", {}),
+    "what's up next": ("music", "fast", {}),
+    "play … next": ("music", "fast", {"try": "play feeling good next"}),
+    "add … to the queue": ("music", "fast", {"try": "add feeling good to the queue"}),
+    "queue up …": ("music", "fast", {"try": "queue up feeling good"}),
+    "clear the queue": ("music", "fast", {}),
+    "skip this artist": ("music", "fast", {}),
+    "no more …": ("music", "fast", {"try": "no more nina simone"}),
+    "turn autoplay off": ("music", "fast", {}),
+    "turn autoplay on": ("music", "fast", {}),
+    "stop after this list": ("music", "fast", {}),
+    "why is this playing": ("music", "fast", {}),
+    "play something like this": ("music", "fast", {}),
+    "more like this": ("music", "fast", {}),
     "when I say Gramps I mean Hearth Ensemble": ("music_alias", "fast", {}),
     "tell the kitchen dinner's ready": ("intercom", "llm", {}),
     "drop in on the kitchen": ("dropin", "fast", {}),

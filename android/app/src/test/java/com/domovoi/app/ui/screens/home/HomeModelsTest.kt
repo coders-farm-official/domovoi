@@ -227,7 +227,7 @@ class HomeModelsTest {
 
     // ─── today ───────────────────────────────────────────────────────────
 
-    @Test fun todayAndTomorrowFromLocalMidnight() {
+    @Test fun todayTomorrowAndTheRestOfTheWeekFromLocalMidnight() {
         val now = ms("2026-09-28T19:00:00Z")          // 2:00pm Monday in Chicago
         val events = listOf(
             HomeEvent(1, "Standup", "2026-09-28T14:00:00Z", "2026-09-28T14:15:00Z"),   // over already
@@ -235,14 +235,16 @@ class HomeModelsTest {
             HomeEvent(3, "Dinner", "2026-09-29T00:00:00Z"),                            // 7pm today, no end
             HomeEvent(4, "Gym", "2026-09-29T12:00:00Z", "2026-09-29T13:00:00Z"),       // tomorrow
             HomeEvent(5, "Trip", "2026-10-01T12:00:00Z"),                               // later this week
+            HomeEvent(6, "Far", "2026-10-09T12:00:00Z"),                                // past the week
         )
         val days = todayDays(events, now, zone, shared = false)
-        assertEquals(listOf("today", "tomorrow"), days.map { it.label })
+        assertEquals(listOf("today", "tomorrow", "thu 1 oct"), days.map { it.label })
         assertEquals(listOf(2L, 3L), days[0].rows.map { it.event.id })
         assertTrue(days[0].rows[0].running)
         assertFalse(days[0].rows[1].running)
         assertNull(days[0].rows[1].endMs)
         assertEquals(listOf(4L), days[1].rows.map { it.event.id })
+        assertEquals(listOf(5L), days[2].rows.map { it.event.id })
     }
 
     @Test fun aPhonesThreeRowsNeverLeaveABareDayLabel() {
@@ -261,27 +263,53 @@ class HomeModelsTest {
         assertEquals(listOf("today", "tomorrow"), todayDays(events, now, zone, shared = false).map { it.label })
     }
 
-    @Test fun anEmptyTodaySaysSoAndNamesTheNextOne() {
+    @Test fun atMostFiveOnAWideScreen() {
         val now = ms("2026-09-28T19:00:00Z")
-        val later = HomeEvent(5, "Trip", "2026-10-01T13:00:00Z")
-        assertEquals(
-            "nothing on today · next: thu 1 oct 8:00am Trip",
-            todayEmptyText(listOf(later), now, zone, shared = false),
-        )
-        assertEquals(
-            "nothing on today · next: thu 1 oct 8:00am busy",
-            todayEmptyText(listOf(later), now, zone, shared = true),
-        )
+        val events = listOf(
+            "2026-09-28T20:00:00Z", "2026-09-28T21:00:00Z", "2026-09-28T22:00:00Z", "2026-09-28T23:00:00Z",
+            "2026-09-29T12:00:00Z", "2026-09-29T13:00:00Z", "2026-09-29T14:00:00Z", "2026-09-29T15:00:00Z",
+        ).mapIndexed { i, at -> HomeEvent(i + 1L, "E$i", at) }
+        assertEquals(HOME_NEXT_ROWS, todayDays(events, now, zone, shared = false).sumOf { it.rows.size })
+    }
+
+    @Test fun anEmptyWeekIsSaidPlainly() {
+        val now = ms("2026-09-28T19:00:00Z")
         val done = HomeEvent(1, "Standup", "2026-09-28T14:00:00Z", "2026-09-28T14:15:00Z")
-        assertEquals("nothing more today", todayEmptyText(listOf(done), now, zone, shared = false))
-        assertTrue(todayDays(listOf(done, later), now, zone, false).isEmpty())
+        val far = HomeEvent(2, "Far", "2026-10-09T12:00:00Z")
+        assertTrue(todayDays(listOf(done, far), now, zone, false).isEmpty())
+        assertEquals("nothing on the calendar this week", HOME_CAL_EMPTY)
+    }
+
+    @Test fun importedEventsCarryTheirCalendarsDotAndHouseholdOnesNone() {
+        val now = ms("2026-09-28T14:00:00Z")
+        val events = listOf(
+            HomeEvent(1, "Dentist", "2026-09-28T15:00:00Z", calendar_name = "Work", calendar_color = "#33b679", calendar_kind = "phone"),
+            HomeEvent(2, "Dinner", "2026-09-28T23:00:00Z"),
+        )
+        val rows = todayDays(events, now, zone, shared = true).single().rows
+        assertEquals(0xFF33B679L, rows[0].dot)
+        assertNull(rows[1].dot)
+        // A shared screen still says "busy" for every calendar.
+        assertEquals(listOf("busy", "busy"), rows.map { it.title })
+    }
+
+    @Test fun anAllDayEventSitsOnItsWrittenDateInAnyZone() {
+        // 7pm Sunday in Chicago, which is already Monday in UTC.
+        val now = ms("2026-09-28T00:00:00Z")
+        val e = HomeEvent(1, "Holiday", "2026-09-28T00:00:00Z", "2026-09-29T00:00:00Z", all_day = true)
+        val days = todayDays(listOf(e), now, zone, shared = false)
+        assertEquals(listOf("tomorrow"), days.map { it.label })
+        val row = days.single().rows.single()
+        assertTrue(row.allDay)
+        assertFalse(row.running)
+        assertEquals(ms("2026-09-28T05:00:00Z"), row.startMs)  // Monday's local midnight
     }
 
     @Test fun calendarReadStartsAtLocalMidnightForAWeek() {
         val day = dayStartMs(ms("2026-09-28T19:00:00Z"), zone)
         assertEquals(ms("2026-09-28T05:00:00Z"), day)
         assertEquals(
-            "/api/calendar/events?start=2026-09-28T05%3A00%3A00Z&end=2026-10-05T05%3A00%3A00Z&limit=20",
+            "/api/calendar/events?start=2026-09-28T05%3A00%3A00Z&end=2026-10-05T05%3A00%3A00Z&limit=50",
             calendarPath(day, zone),
         )
     }

@@ -870,96 +870,118 @@ final class HomeSectionRulesTests: XCTestCase {
         ]
         let days = todayDays(events: events, nowMs: noon, timeZone: utc, shared: false, limit: homePhoneRows)
         XCTAssertEqual(["today"], days.map(\.label), "tomorrow's rows were all cut, so its heading is gone too")
-        XCTAssertEqual(["one", "two", "three"], days[0].rows.map(\.title))
+        XCTAssertEqual(["one", "two", "three"], days.first?.rows.map(\.title) ?? [])
 
-        // Six rows reach tomorrow, which is what makes the test above about
+        // Five rows reach tomorrow, which is what makes the test above about
         // the order of the cap and not about tomorrow never appearing.
-        let wide = todayDays(events: events, nowMs: noon, timeZone: utc, shared: false, limit: homeTodayRows)
+        let wide = todayDays(events: events, nowMs: noon, timeZone: utc, shared: false, limit: homeNextRows)
         XCTAssertEqual(["today", "tomorrow"], wide.map(\.label))
-        XCTAssertEqual(["tomorrow one", "tomorrow two"], wide[1].rows.map(\.title))
+        XCTAssertEqual(["tomorrow one", "tomorrow two"], wide.last?.rows.map(\.title) ?? [])
     }
 
-    func testTodayDropsWhatIsOverAndWhatIsTooFarOff() {
+    /// `todayTomorrowAndTheRestOfTheWeekFromLocalMidnight` (1.3.0): the card
+    /// is "today / next" — the coming week, under `today`, `tomorrow` or the
+    /// day. Fails on the old two-day window, which dropped Thursday.
+    func testTodayTomorrowAndTheRestOfTheWeekFromLocalMidnight() {
         let events = [
             event(1, starts: noon - 7_200_000, ends: noon - 3_600_000, title: "over"),
             event(2, starts: noon - 1_800_000, ends: noon + 1_800_000, title: "under way"),
-            event(3, starts: at(2026, 9, 30, 9), title: "the day after tomorrow"),
+            event(3, starts: at(2026, 9, 29, 9), title: "tomorrow"),
+            event(4, starts: at(2026, 10, 1, 9), title: "thursday"),
+            event(5, starts: at(2026, 10, 9, 9), title: "past the week"),
         ]
         let days = todayDays(events: events, nowMs: noon, timeZone: utc, shared: false)
-        XCTAssertEqual(["under way"], days.flatMap { $0.rows }.map(\.title))
-        XCTAssertTrue(days[0].rows[0].running, "it started before now and has not ended")
+        XCTAssertEqual(["today", "tomorrow", "thu 1 oct"], days.map(\.label))
+        XCTAssertEqual(["under way", "tomorrow", "thursday"], days.flatMap { $0.rows }.map(\.title))
+        XCTAssertEqual(true, days.first?.rows.first?.running, "it started before now and has not ended")
+    }
 
-        // The one that is over is dropped from the rows but is still what
-        // makes the day read `nothing more today` once the rest are gone.
-        XCTAssertEqual(
-            "nothing more today",
-            todayEmptyText(
-                events: [events[0]], nowMs: noon, timeZone: utc, shared: false
-            )
-        )
+    /// `atMostFiveOnAWideScreen`.
+    func testAtMostFiveOnAWideScreen() {
+        let events = (0..<8).map { (i: Int) -> HomeEvent in
+            event(Int64(i + 1), starts: noon + Int64(i + 1) * 3_600_000, title: "E\(i)")
+        }
+        XCTAssertEqual(5, homeNextRows)
+        XCTAssertEqual(5, todayDays(events: events, nowMs: noon, timeZone: utc, shared: false).reduce(0) { $0 + $1.rows.count })
+    }
+
+    /// `anEmptyWeekIsSaidPlainly`: nothing still to come this week is no
+    /// rows at all, and the card says the one plain line.
+    func testAnEmptyWeekIsSaidPlainly() {
+        let done = event(1, starts: noon - 7_200_000, ends: noon - 3_600_000)
+        let far = event(2, starts: at(2026, 10, 9, 12))
+        XCTAssertTrue(todayDays(events: [done, far], nowMs: noon, timeZone: utc, shared: false).isEmpty)
+        XCTAssertEqual("nothing on the calendar this week", HomeTodayStrings.calendarEmpty)
+        XCTAssertEqual("today / next", HomeTodayStrings.title)
+    }
+
+    /// `importedEventsCarryTheirCalendarsDotAndHouseholdOnesNone`: the
+    /// colour-coding by source, and a shared screen still says `busy` for
+    /// every calendar.
+    func testImportedEventsCarryTheirCalendarsDotAndHouseholdOnesNone() {
+        let events = [
+            HomeEvent(id: 1, title: "Dentist", startsAt: iso(noon + 3_600_000),
+                      calendarName: "Work", calendarColor: "#33b679", calendarKind: "phone"),
+            HomeEvent(id: 2, title: "Dinner", startsAt: iso(noon + 7_200_000)),
+        ]
+        let rows = todayDays(events: events, nowMs: noon, timeZone: utc, shared: true).first?.rows ?? []
+        XCTAssertEqual([0xFF33_B679, nil], rows.map(\.dot))
+        XCTAssertEqual(["busy", "busy"], rows.map(\.title))
+        XCTAssertEqual(0xFF33_B679, homeHexColor("33B679"))
+        XCTAssertNil(homeHexColor("#33b6"))
+        XCTAssertNil(homeHexColor("red"))
+        XCTAssertNil(homeHexColor(nil))
+    }
+
+    /// `anAllDayEventSitsOnItsWrittenDateInAnyZone`: 7pm Sunday in Chicago
+    /// is already Monday in UTC, and Monday's holiday is still **tomorrow**
+    /// there, starting at Chicago's midnight — never shifted into the zone.
+    func testAnAllDayEventSitsOnItsWrittenDateInAnyZone() throws {
+        let chicago = try XCTUnwrap(TimeZone(identifier: "America/Chicago"))
+        let now = at(2026, 9, 28, 0)
+        let holiday = HomeEvent(id: 1, title: "Holiday", startsAt: "2026-09-28T00:00:00-05:00",
+                                endsAt: "2026-09-29T00:00:00-05:00", allDay: true)
+        let days = todayDays(events: [holiday], nowMs: now, timeZone: chicago, shared: false)
+        XCTAssertEqual(["tomorrow"], days.map(\.label))
+        let row = try XCTUnwrap(days.first?.rows.first)
+        XCTAssertTrue(row.allDay)
+        XCTAssertFalse(row.running)
+        XCTAssertNil(row.endMs, "an all-day row draws `all day`, not a second clock")
+        XCTAssertEqual(at(2026, 9, 28, 5), row.startMs, "Monday's local midnight in Chicago")
+        // The written date even when the server's offset is not this phone's.
+        let utcWritten = HomeEvent(id: 2, title: "x", startsAt: "2026-09-28T00:00:00+00:00", allDay: true)
+        XCTAssertEqual(at(2026, 9, 28, 5), eventStartMs(utcWritten, timeZone: chicago))
+        XCTAssertEqual(at(2026, 9, 29, 5), eventEndMs(utcWritten, timeZone: chicago), "to the end of its one day")
     }
 
     func testASharedScreenShowsBusyAndNoLocationAtAll() {
         let events = [event(1, starts: noon + 600_000, title: "Dentist", location: "Market Street")]
         let own = todayDays(events: events, nowMs: noon, timeZone: utc, shared: false)
-        XCTAssertEqual("Dentist", own[0].rows[0].title)
-        XCTAssertEqual("Market Street", own[0].rows[0].location)
+        XCTAssertEqual("Dentist", own.first?.rows.first?.title)
+        XCTAssertEqual("Market Street", own.first?.rows.first?.location)
 
         let hall = todayDays(events: events, nowMs: noon, timeZone: utc, shared: true)
-        XCTAssertEqual("busy", hall[0].rows[0].title)
-        XCTAssertNil(hall[0].rows[0].location, "dropped entirely, not blanked")
+        XCTAssertEqual("busy", hall.first?.rows.first?.title)
+        XCTAssertNil(hall.first?.rows.first?.location, "dropped entirely, not blanked")
 
-        // An empty location is no location on this phone either.
+        // An empty location is no location on this phone either, and a blank
+        // title is `(no title)`.
         let blank = todayDays(
-            events: [event(2, starts: noon + 600_000, location: "")],
+            events: [event(2, starts: noon + 600_000, title: " ", location: "")],
             nowMs: noon, timeZone: utc, shared: false
         )
-        XCTAssertNil(blank[0].rows[0].location)
+        XCTAssertNil(blank.first?.rows.first?.location)
+        XCTAssertEqual("(no title)", blank.first?.rows.first?.title)
     }
 
     func testARowsSecondTimeIsOnlyThereWhenTheServerGaveOne() {
         let rows = todayDays(
             events: [event(1, starts: noon + 600_000), event(2, starts: noon + 700_000, ends: noon + 900_000)],
             nowMs: noon, timeZone: utc, shared: false
-        )[0].rows
-        XCTAssertNil(rows[0].endMs, "the invented hour is for the filtering, not for the row")
-        XCTAssertEqual(noon + 900_000, rows[1].endMs)
-    }
-
-    func testTheEmptyLineSaysWhetherTheDayIsOverAndWhatIsNext() {
-        XCTAssertEqual(
-            "nothing on today",
-            todayEmptyText(events: [], nowMs: noon, timeZone: utc, shared: false)
-        )
-        XCTAssertEqual(
-            "nothing more today",
-            todayEmptyText(
-                events: [event(1, starts: noon - 7_200_000, ends: noon - 3_600_000)],
-                nowMs: noon, timeZone: utc, shared: false
-            )
-        )
-        XCTAssertEqual(
-            "nothing on today · next: wed 30 sep 9:00am Dentist",
-            todayEmptyText(
-                events: [event(1, starts: at(2026, 9, 30, 9))],
-                nowMs: noon, timeZone: utc, shared: false
-            )
-        )
-        XCTAssertEqual(
-            "nothing on today · next: wed 30 sep 9:00am busy",
-            todayEmptyText(
-                events: [event(1, starts: at(2026, 9, 30, 9))],
-                nowMs: noon, timeZone: utc, shared: true
-            )
-        )
-        // Tomorrow is not "next": it has its own day in `todayDays`.
-        XCTAssertEqual(
-            "nothing on today",
-            todayEmptyText(
-                events: [event(1, starts: at(2026, 9, 29, 9))],
-                nowMs: noon, timeZone: utc, shared: false
-            )
-        )
+        ).first?.rows ?? []
+        XCTAssertEqual(2, rows.count)
+        XCTAssertNil(rows.first?.endMs, "the invented hour is for the filtering, not for the row")
+        XCTAssertEqual(noon + 900_000, rows.last?.endMs)
     }
 
     // MARK: - the header's counts

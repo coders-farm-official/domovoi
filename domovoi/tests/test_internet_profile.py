@@ -40,9 +40,14 @@ EXPECTED = {
     # Lyrics (V021, owner decision 2026-10-03): LRCLIB follows the answer.
     "lyrics_lrclib_enabled": {"always": True, "sometimes": True, "never": False},
     "lyrics_write_lrc": {"always": True, "sometimes": True, "never": False},
+    # Up next P7 (2026-11-12 / 2026-11-14): similar artists on under Yes
+    # only; popularity like the other small catalogue lookups.
+    "music_similar_artists_enabled": {"always": True, "sometimes": False, "never": False},
+    "music_popularity_enabled": {"always": True, "sometimes": True, "never": False},
 }
 # Read per tick / per call: these apply the moment the answer changes.
-LIVE = {"music_alias_fetch_enabled", "lyrics_lrclib_enabled", "lyrics_write_lrc"}
+LIVE = {"music_alias_fetch_enabled", "lyrics_lrclib_enabled", "lyrics_write_lrc",
+        "music_similar_artists_enabled", "music_popularity_enabled"}
 
 
 @pytest.fixture(autouse=True)
@@ -249,7 +254,8 @@ def test_apply_answer_sets_live_followers_and_lists_restart_ones(live) -> None:
     _save_answer(live, "always")
     result = internet_profile.apply_answer("", "always")
     # lyrics_write_lrc is already on (its own default), so only these move
-    assert result.applied == ["music_alias_fetch_enabled", "lyrics_lrclib_enabled"]
+    assert result.applied == ["music_alias_fetch_enabled", "lyrics_lrclib_enabled",
+                              "music_similar_artists_enabled", "music_popularity_enabled"]
     assert settings.music_alias_fetch_enabled is True
     assert settings.lyrics_lrclib_enabled is True and settings.lyrics_write_lrc is True
     # restart-tier: live value untouched, listed when the next boot differs

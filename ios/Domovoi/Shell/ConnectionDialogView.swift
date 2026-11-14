@@ -54,8 +54,11 @@ struct ConnectionDialogView: View {
                         onCancel: { picker.cancelForgetActive() },
                         onConfirm: {
                             picker.cancelForgetActive()
-                            model.forgetTheActiveServer()
                             model.dismissSheet()
+                            // After the parting calls (calendar sharing's
+                            // delete, while the token still works), which
+                            // bound their own wait.
+                            Task { await model.forgetTheActiveServerAfterParting() }
                         }
                     )
                 }

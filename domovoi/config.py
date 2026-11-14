@@ -255,6 +255,12 @@ PROFILE_DEFAULTS: tuple[ProfileDefault, ...] = (
     ProfileDefault("seed_voice_catalog", "Extra voices at startup", False, False, False, "restart"),
     ProfileDefault("lyrics_lrclib_enabled", "Synced lyrics (LRCLIB)", True, True, False, "live"),
     ProfileDefault("lyrics_write_lrc", "Save lyrics as .lrc files", True, True, False, "live"),
+    # Up next P7 (2026-11-14). Similar artists: the owner's decision of
+    # 2026-11-12, on under Yes only. Song popularity: its own switch, and
+    # Sometimes behaves like the other small catalogue lookups (alias
+    # fetch, LRCLIB): on, because it is a few dozen tiny requests a month.
+    ProfileDefault("music_similar_artists_enabled", "Similar artists (ListenBrainz)", True, False, False, "live"),
+    ProfileDefault("music_popularity_enabled", "Song popularity (ListenBrainz)", True, True, False, "live"),
 )
 PROFILE_FIELD_NAMES: frozenset[str] = frozenset(pd.name for pd in PROFILE_DEFAULTS)
 PROFILE_BY_NAME: dict[str, ProfileDefault] = {pd.name: pd for pd in PROFILE_DEFAULTS}
@@ -1343,6 +1349,11 @@ class Settings(BaseSettings):
     # per-feed last_polled_at isn't separately throttled (the whole set is
     # cheap: one HTTP GET + parse each).
     podcast_feed_poller_interval_sec: float = 1800.0
+    # Calendars by link (V055, domovoi/calendar_feeds.py): how often the
+    # refresher looks for a calendar that is due. Each calendar is read
+    # every 30 min (every 2 h when the internet answer is "sometimes"),
+    # backing off after failures; never under "never".
+    calendar_feed_tick_sec: float = 300.0
     # Default newest-N episodes to keep downloaded per show. Per-subscription
     # keep_n overrides this; used only as the default when a subscription
     # doesn't set its own. LRU eviction removes downloaded episodes beyond
@@ -1555,6 +1566,23 @@ class Settings(BaseSettings):
     lyrics_scan_interval_sec: float = 300.0
     # The LRCLIB worker's cadence (a small batch per tick, ~1 request/s).
     lyrics_fetch_interval_sec: float = 5.0
+    # ─── ListenBrainz for Up next (V056; workers/listenbrainz_fetch.py) ──
+    # Two switches, each off while the internet question is unanswered;
+    # otherwise their defaults follow the answer (PROFILE_DEFAULTS) and a
+    # hand-set value wins. Both send only MusicBrainz ids (public catalogue
+    # ids) of the library's artists or songs to listenbrainz.org, about a
+    # request a second, only while the server is online, from the
+    # background worker alone: building a queue never asks the network.
+    # Switching one off stops its requests and deletes what it stored, so
+    # the mix is the library's own again.
+    #   similar artists: one request per library artist with an id, asked
+    #     again after 90 days ("similar to <artist>" picks).
+    #   popularity: listen counts for songs with a recording id, 100 songs
+    #     a request, asked again after 30 days (an artist's well-known
+    #     songs come up a little more often).
+    music_similar_artists_enabled: bool = False
+    music_popularity_enabled: bool = False
+    listenbrainz_fetch_interval_sec: float = 60.0
 
     # ─── Session context ───────────────────────────────────────────────
     session_recent_turns_cap: int = 20

@@ -163,17 +163,18 @@ async def add_picks(db: "AsyncSession", session_id: str, batch_no: int, picks: S
     for i, p in enumerate(picks):
         await db.execute(
             text("INSERT INTO up_next_picks "
-                 "(session_id, seq, batch_no, track_id, reason_code, reason_label, seed_track_id) "
-                 "VALUES (:s, :seq, :b, :t, :code, :label, :seed)"),
+                 "(session_id, seq, batch_no, track_id, reason_code, reason_label, seed_track_id, why) "
+                 "VALUES (:s, :seq, :b, :t, :code, :label, :seed, CAST(:why AS jsonb))"),
             {"s": session_id, "seq": first + i, "b": batch_no, "t": p.track_id,
              "code": p.reason_code, "label": (labels or {}).get(i, p.reason_label),
-             "seed": p.seed_track_id})
+             "seed": p.seed_track_id,
+             "why": json.dumps([list(w) for w in p.why]) if p.why else None})
     return first
 
 
 _PICKS_SQL = """
 SELECT p.seq, p.batch_no, p.track_id, p.reason_code, p.reason_label, p.seed_track_id,
-       p.mpd_song_id, p.status, t.title, t.artist, t.album, t.duration_sec, t.artist_norm
+       p.mpd_song_id, p.status, p.why, t.title, t.artist, t.album, t.duration_sec, t.artist_norm
 FROM up_next_picks p JOIN library_tracks t ON t.id = p.track_id
 WHERE p.session_id = :s {where}
 ORDER BY p.seq {limit}
@@ -289,7 +290,7 @@ async def picks_by_song(db: "AsyncSession", session_id: str, song_ids: Iterable[
     if not want:
         return {}
     rows = (await db.execute(
-        text("SELECT seq, track_id, reason_code, reason_label, status, mpd_song_id "
+        text("SELECT seq, track_id, reason_code, reason_label, status, mpd_song_id, why "
              "FROM up_next_picks WHERE session_id = :s AND mpd_song_id = ANY(CAST(:ids AS int[])) "
              "ORDER BY seq"),
         {"s": session_id, "ids": want})).mappings().all()

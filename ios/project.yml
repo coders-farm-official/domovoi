@@ -204,6 +204,16 @@ targets:
           Domovoi saves a photo or video from your house into your photos when
           you ask it to.
 
+        # Settings → Phone calendars (1.3.0), and only when the person turns
+        # it on: read-only, the calendars they tick, to their own server.
+        # iOS 17+'s full-access key (requestFullAccessToEvents); no write
+        # key, because nothing is ever written to the phone's calendars.
+        NSCalendarsFullAccessUsageDescription:
+          Domovoi reads the calendars you choose, only if you turn on Phone
+          calendars, and shows their events on your household calendar. They
+          go only to your own Domovoi server, and nothing is ever changed on
+          this phone.
+
         # iOS 26 and later only; below that the assistant's "set a timer"
         # hides itself rather than pretending (plan 1.6).
         NSAlarmKitUsageDescription:

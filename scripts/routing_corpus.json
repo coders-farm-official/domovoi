@@ -1568,6 +1568,173 @@
       "path": "fast",
       "tags": ["action", "lists"],
       "note": "2026-11-11 lists: a playlist is never a list"
+    },
+    {
+      "utterance": "what's next",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the room's next two songs"
+    },
+    {
+      "utterance": "what's up next",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the room's next two songs"
+    },
+    {
+      "utterance": "what's on after this",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the room's next two songs. Not 'what's playing after this' here: 'what's playing' is a short-hold command of its own (test_early_commit)"
+    },
+    {
+      "utterance": "what's next in the kitchen",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the queue read takes a room"
+    },
+    {
+      "utterance": "play bohemian rhapsody next",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): insert right after the song playing now, not a search for 'bohemian rhapsody next'"
+    },
+    {
+      "utterance": "queue bohemian rhapsody next",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): play X next"
+    },
+    {
+      "utterance": "add bohemian rhapsody to the queue",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): after what was asked for, before the Up next picks"
+    },
+    {
+      "utterance": "queue up bohemian rhapsody",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): adds while something plays; plays it when the room is idle (owner 2026-11-12)"
+    },
+    {
+      "utterance": "queue bohemian rhapsody",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): add to the queue"
+    },
+    {
+      "utterance": "clear the queue",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): everything after the song playing now"
+    },
+    {
+      "utterance": "clear the queue in the office",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): clear takes a room"
+    },
+    {
+      "utterance": "skip this artist",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): skip, and the artist is out of this mix"
+    },
+    {
+      "utterance": "turn autoplay off",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the room's Autoplay switch"
+    },
+    {
+      "utterance": "turn on autoplay",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the room's Autoplay switch"
+    },
+    {
+      "utterance": "stop after this list",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): Autoplay off: the music stops when the queue ends"
+    },
+    {
+      "utterance": "why is this playing",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the pick's reason, in words"
+    },
+    {
+      "utterance": "why this song",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): the pick's reason, in words"
+    },
+    {
+      "utterance": "play something like this",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): Up next starts again from the song playing now, not a search for 'something like this'"
+    },
+    {
+      "utterance": "more like this",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): Up next from the song playing now"
+    },
+    {
+      "utterance": "play more like this",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): Up next from the song playing now"
+    },
+    {
+      "utterance": "play next",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): bait: a skip, never 'play X next' nor a search for a song called next"
+    },
+    {
+      "utterance": "play the next song",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): bait: a skip"
+    },
+    {
+      "utterance": "add milk to the shopping list",
+      "handler": "lists",
+      "path": "fast",
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): bait: the lists handler keeps it (band 178), never the queue"
+    },
+    {
+      "utterance": "queue it up",
+      "handler": null,
+      "tags": ["action", "upnext"],
+      "note": "2026-11-14 Up next P6 (plan section 7): bait: 'it' names no song, so no queue fast path takes it; the model answered it as Q&A (qwen3:8b, 2026-11-14), never a play of 'it up'"
     }
   ]
 }

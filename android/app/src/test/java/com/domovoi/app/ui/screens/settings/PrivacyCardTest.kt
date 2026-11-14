@@ -62,8 +62,9 @@ class PrivacyCardTest {
     @Test fun thePhoneChatsPointsOnlyWhereTheyAre() {
         val with = privacyPoints(assistant = true)
         val without = privacyPoints(assistant = false)
-        assertEquals(6, with.size)
-        assertEquals(4, without.size)
+        assertEquals(7, with.size)
+        assertEquals(5, without.size)
+        assertTrue(PRIVACY_CALENDAR_POINT in with && PRIVACY_CALENDAR_POINT in without)
         assertTrue(without.none { it.contains("phone chat", ignoreCase = true) || it.contains("home server") || it.contains("lookup") })
         assertTrue(without.any { it.startsWith("Room mode, which you turn on yourself") })
         assertTrue(with.any { it.startsWith("Phone chats open the microphone only after you tap it") })

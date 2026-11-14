@@ -120,7 +120,7 @@ async def play_in_room(
     playlist_id: int,
     shuffle: bool = False,
     person_id: int | None = None,
-    autoplay: bool = True,
+    autoplay: bool | None = None,
     up_next: bool = True,
 ) -> RoomPlaylistPlay:
     """Replace ``room_id``'s queue with the playlist and arm its Up next.

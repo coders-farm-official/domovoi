@@ -345,15 +345,9 @@ struct HomeView: View {
                 nowMs: home.nowMs,
                 timeZone: .current,
                 shared: shared,
-                // `HOME_PHONE_ROWS = 3` on a phone, `HOME_TODAY_ROWS = 6`
+                // `HOME_PHONE_ROWS = 3` on a phone, `HOME_NEXT_ROWS = 5`
                 // otherwise, and the cap is applied **before** the grouping.
-                limit: compact ? homePhoneRows : homeTodayRows
-            ),
-            emptyText: todayEmptyText(
-                events: home.calendar.data ?? [],
-                nowMs: home.nowMs,
-                timeZone: .current,
-                shared: shared
+                limit: compact ? homePhoneRows : homeNextRows
             ),
             onOpenCalendar: { model.navigate(.calendar) }
         )

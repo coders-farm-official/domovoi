@@ -57,7 +57,7 @@ from typing import Any, Iterable, Iterator
 
 from sqlalchemy import text
 
-from . import service, store
+from . import mix, service, store
 from .data import SqlLibrary
 from .model import DEFAULT_CONFIG
 from .session import SeedRef, UpNextSession
@@ -176,7 +176,7 @@ async def start(
     seed: SeedRef,
     name: str | None = None,
     person_id: int | None = None,
-    autoplay: bool = True,
+    autoplay: bool | None = None,
     client: Any = None,
     fill_now: bool = True,
     exclude_tracks: Iterable[int] = (),
@@ -185,13 +185,16 @@ async def start(
     start replaced the room's queue. ``list`` / ``library`` append the first
     batch now when ``client`` is the room's player (and ``fill_now``: a
     stream's follow-on waits for the stream's end, :func:`follow_stream`).
-    ``exclude_tracks`` are never picked. Returns the session id, or None
+    ``exclude_tracks`` are never picked. ``autoplay`` None: the
+    household's Music mix default. Returns the session id, or None
     when it couldn't start (logged; the music plays regardless)."""
     try:
-        sess = UpNextSession.start(target=target_for(room_id), mode=mode, seed=seed,
-                                   person_id=person_id, autoplay=autoplay)
-        sess.excluded_tracks.update(int(t) for t in exclude_tracks)
         async with _session_scope() as s:
+            if autoplay is None:
+                autoplay = (await mix.household(s)).autoplay
+            sess = UpNextSession.start(target=target_for(room_id), mode=mode, seed=seed,
+                                       person_id=person_id, autoplay=autoplay)
+            sess.excluded_tracks.update(int(t) for t in exclude_tracks)
             await store.create(s, sess, name=name)
         SEEN[sess.id] = _Seen(generation=_generation(client))
     except Exception as e:  # noqa: BLE001 — Up next is a nicety; the play stands
@@ -208,7 +211,7 @@ async def start(
 
 async def start_from_request(
     room_id: str, *, track_id: int | None, context: Any, person_id: int | None,
-    autoplay: bool, client: Any, whole_list: bool = False,
+    autoplay: bool | None, client: Any, whole_list: bool = False,
 ) -> str | None:
     """:func:`start` from a phone's, a browser's or the voice path's
     ``{track_id, context}`` (a :class:`service.ContextIn` or its dict).
@@ -394,7 +397,7 @@ async def follow_stream(room_id: str, client: Any, *, title: str | None, artist:
     person = STREAM_LISTENER.get()
     if person is _UNSET:
         person = prev.sess.person_id if prev is not None else None
-    autoplay = prev.sess.autoplay if prev is not None else True
+    autoplay = prev.sess.autoplay if prev is not None else None  # None: the household's
     if found is None:
         return await start(room_id, mode="library", seed=SeedRef(track_id=None), person_id=person,
                            autoplay=autoplay, client=client, fill_now=False)
@@ -620,6 +623,7 @@ async def queue_view(room_id: str, items: list[dict[str, Any]]) -> dict[str, Any
     for it in items:
         it.setdefault("origin", "explicit")
         it.setdefault("reason_label", None)
+        it.setdefault("why", None)
         it.setdefault("up_next_seq", None)
         it.setdefault("track_id", None)
     try:
@@ -636,6 +640,7 @@ async def queue_view(room_id: str, items: list[dict[str, Any]]) -> dict[str, Any
                 if p is not None and p["status"] != "removed":
                     it["origin"] = "auto"
                     it["reason_label"] = p["reason_label"]
+                    it["why"] = service.why_text(service._why_list(p.get("why")))
                     it["up_next_seq"] = int(p["seq"])
             seed = await service.track_row(s, st.sess.seed.track_id)
             out.update({

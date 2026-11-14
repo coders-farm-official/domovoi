@@ -50,7 +50,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from domovoi import admin_auth
+from domovoi import admin_auth, calendar_feeds
 from domovoi.config import settings as core_settings
 from domovoi.host_kind import host_kind
 from web.backend.api.csrf_guard import require_requested_with
@@ -500,6 +500,7 @@ async def auth_set_device_token(body: DeviceTokenRequest) -> dict:
         # The message, never the value.
         raise HTTPException(status_code=400, detail=str(e))
     admin_auth.write_device_token_file(token)
+    await calendar_feeds.after_device_token_change(session_scope)
     log.info("device token set by an admin (web)")
     return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER, "rotated": True}
 
@@ -515,5 +516,6 @@ async def auth_rotate_device_token() -> dict:
     async with session_scope() as s:
         token = await admin_auth.rotate_device_token(s)
     admin_auth.write_device_token_file(token)
+    await calendar_feeds.after_device_token_change(session_scope)
     log.info("device token rotated by an admin (web)")
     return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER, "rotated": True}

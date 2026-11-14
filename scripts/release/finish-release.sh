@@ -18,6 +18,8 @@
 #   ... --setup F --satellite-setup S                         # ...and its DomovoiSatelliteSetup.exe (default: beside the Setup)
 #   bash scripts/release/finish-release.sh --since v1.0.0-rc2 # the tag the notes count from
 #   ... --signing-key ~/keys/domovoi-release                  # the release key's private half (or DOMOVOI_RELEASE_SIGNING_KEY)
+#   ... --signing-agent                                       # the key an ssh-agent holds (the release workflow)
+#   bash scripts/release/finish-release.sh --plan plan.json   # the release workflow's gate: what to run, changes nothing
 #
 # The Setup builds on Windows only (windows/build.ps1 -Pin in a clean
 # worktree of the tag, run through Windows PowerShell from Git Bash);

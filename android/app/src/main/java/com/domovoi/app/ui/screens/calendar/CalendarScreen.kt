@@ -394,11 +394,11 @@ private fun AgendaRow(e: CalendarEvent, selected: Boolean, onClick: () -> Unit) 
     ) {
         Column(Modifier.width(64.dp)) {
             Text(
-                fmtClock(e.startLocal()),
+                if (e.all_day) "all day" else fmtClock(e.startLocal()),
                 style = MaterialTheme.typography.labelMedium,
                 color = Domovoi.colors.fg,
             )
-            if (e.ends_at != null) {
+            if (e.ends_at != null && !e.all_day) {
                 Text(
                     fmtClock(e.endLocal()),
                     style = MaterialTheme.typography.labelSmall,
@@ -436,6 +436,6 @@ private fun AgendaRow(e: CalendarEvent, selected: Boolean, onClick: () -> Unit) 
                 }
             }
         }
-        Pill(e.source ?: "local", if (e.isGoogle()) Tone.Idle else Tone.Ok)
+        SourceBadge(e)
     }
 }

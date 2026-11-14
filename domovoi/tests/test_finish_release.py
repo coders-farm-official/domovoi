@@ -1172,3 +1172,210 @@ def test_the_default_tag_is_pyproject_s(tmp_path):
     assert fr._default_tag(tmp_path) == "v1.0.0-rc2"
     for v in ("1.0.0", "1.0.0-rc2", "2.0.0-alpha1", "2.0.0-beta3"):
         assert fr.semver(fr.pep440(v)) == v
+
+
+# ─── the release workflow: --signing-agent and --plan ────────────────────
+
+def _agent_tools() -> Path | None:
+    """A folder holding ssh-agent, ssh-add and ssh-keygen of one OpenSSH
+    whose ssh-agent runs on its own (``-s``): Git for Windows' or a POSIX
+    one. Windows' own OpenSSH runs its agent as a service, so it is passed
+    over."""
+    exe = ".exe" if os.name == "nt" else ""
+    dirs = []
+    if shutil.which("ssh-agent"):
+        dirs.append(Path(shutil.which("ssh-agent")).parent)
+    if os.name == "nt" and GIT:
+        dirs.append(Path(GIT).resolve().parents[1] / "usr" / "bin")
+    for d in dirs:
+        if "system32" in str(d).lower():
+            continue
+        if all((d / (n + exe)).is_file() for n in ("ssh-agent", "ssh-add", "ssh-keygen")):
+            return d
+    return None
+
+
+AGENT_DIR = _agent_tools()
+requires_agent = pytest.mark.skipif(AGENT_DIR is None, reason="no ssh-agent that runs on its own")
+
+ASKPASS = b"#!/bin/sh\nprintf '%s\\n' \"$THROWAWAY_PASSPHRASE\"\n"
+
+
+@pytest.fixture
+def agent(tmp_path, monkeypatch):
+    """A throwaway, passphrase-protected ed25519 key, loaded into a private
+    ssh-agent the way the release workflow does it (the key text on
+    ssh-add's stdin, the passphrase from SSH_ASKPASS with
+    SSH_ASKPASS_REQUIRE=force, no terminal), then its file deleted: the
+    agent is the only place the private half is. Yields its public line."""
+    d = tmp_path / "agent-keys"
+    d.mkdir()
+    keygen = str(AGENT_DIR / "ssh-keygen")
+    passphrase = "throwaway passphrase, test only"
+    subprocess.run([keygen, "-q", "-t", "ed25519", "-N", passphrase, "-C", "throwaway", "-f", str(d / "k")], check=True)
+    key_text = (d / "k").read_bytes()
+    (d / "k").unlink()
+    public = (d / "k.pub").read_bytes()
+    out = subprocess.run([str(AGENT_DIR / "ssh-agent"), "-s"], capture_output=True, text=True, check=True).stdout
+    env = dict(re.findall(r"(SSH_AUTH_SOCK|SSH_AGENT_PID)=([^;]+);", out))
+    askpass = d / "askpass.sh"
+    askpass.write_bytes(ASKPASS)
+    askpass.chmod(0o700)
+    add_env = {**os.environ, **env, "SSH_ASKPASS": str(askpass), "SSH_ASKPASS_REQUIRE": "force",
+               "THROWAWAY_PASSPHRASE": passphrase}
+    add_env.pop("DISPLAY", None)
+    try:
+        subprocess.run([str(AGENT_DIR / "ssh-add"), "-q", "-"], input=key_text, env=add_env, check=True,
+                       capture_output=True)
+        listed = subprocess.run([str(AGENT_DIR / "ssh-add"), "-L"], env={**os.environ, **env},
+                                capture_output=True, text=True).stdout
+        assert public.decode().split()[1] in listed
+        monkeypatch.setenv("SSH_AUTH_SOCK", env["SSH_AUTH_SOCK"])
+        monkeypatch.delenv("DOMOVOI_RELEASE_SIGNING_KEY", raising=False)
+        # finish-release finds ssh-keygen on PATH: the agent's own first.
+        monkeypatch.setenv("PATH", str(AGENT_DIR) + os.pathsep + os.environ.get("PATH", ""))
+        yield public
+    finally:
+        subprocess.run([str(AGENT_DIR / "ssh-agent"), "-k"], env={**os.environ, **env}, capture_output=True)
+
+
+@requires_git
+@requires_agent
+def test_signing_agent_signs_with_the_agent_s_key_without_a_prompt_or_a_key_file(tmp_path, monkeypatch, agent):
+    public = agent
+    w = World(tmp_path, monkeypatch, version="1.0.0", release_key=public)
+    assert w.run("--signing-agent") == 0
+    stage = w.stage
+    assert _verify(stage / "DomovoiSetup.exe.sig", stage / "DomovoiSetup.exe", public, "domovoi-windows-setup", tmp_path)
+    assert _verify(stage / "DomovoiSetup.manifest.json.sig", stage / "DomovoiSetup.manifest.json", public,
+                   "domovoi-windows-setup-manifest", tmp_path)
+    assert not (stage / ".release-signing.pub").exists() and not (stage / ".allowed_signers").exists()
+    assert not (tmp_path / "agent-keys" / "k").exists(), "no private key file anywhere"
+    (upload,) = w.calls("upload")
+    assert "DomovoiSetup.manifest.json.sig" in [Path(a).name for a in upload]
+
+
+@requires_git
+@requires_agent
+def test_signing_agent_refuses_an_agent_without_the_tag_s_key(tmp_path, monkeypatch, agent):
+    _, other = _keypair(tmp_path, "other")
+    w = World(tmp_path, monkeypatch, version="1.0.0", release_key=other)
+    with pytest.raises(fr.Refused, match="does the agent hold the private half"):
+        w.run("--signing-agent")
+    assert w.calls("upload") == [] and w.stable() == ""
+
+
+@requires_git
+def test_signing_agent_needs_an_agent_and_a_pinned_key_and_not_a_key_file(tmp_path, monkeypatch):
+    w = World(tmp_path / "p", monkeypatch, version="1.0.0",
+              release_key=b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA x\n")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    with pytest.raises(fr.Refused, match="no SSH_AUTH_SOCK"):
+        w.run("--signing-agent")
+    with pytest.raises(fr.Refused, match="not both"):
+        w.run("--signing-agent", "--signing-key", str(tmp_path / "k"))
+    assert w.calls("upload") == []
+    (tmp_path / "u").mkdir()
+    unpinned = World(tmp_path / "u", monkeypatch, version="1.0.0")
+    with pytest.raises(fr.Refused, match="--signing-agent given, but the tag pins no release key"):
+        unpinned.run("--signing-agent")
+
+
+def _plan(w: World, *extra: str) -> dict:
+    out = w.tmp / "plan.json"
+    out.unlink(missing_ok=True)
+    assert fr.run(["--plan", str(out), *extra], tools=w.tools(), repo=w.work) == 0
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def _app_release_commit(w: World, head: str, tag: str) -> str:
+    """What release.ps1 makes: android/release.json naming ``tag``, on HEAD."""
+    doc = json.loads((w.work / "android" / "release.json").read_text(encoding="utf-8"))
+    doc["release"].update(tag=tag, commit=head, version_name="1.0.1", version_code=26101701)
+    _write(w.work, "android/release.json", json.dumps(doc, indent=2) + "\n")
+    _git(w.work, "commit", "--quiet", "-am", "android: release 1.0.1")
+    return _git(w.work, "rev-parse", "HEAD")
+
+
+APP_1_0_1 = '        versionCode = 26101701\n        versionName = "1.0.1"\n'
+
+
+@requires_git
+def test_plan_a_server_only_release_finishes_at_head(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    head = _server_only(w)
+    doc = _plan(w)
+    assert doc == {"tag": "v1.0.1", "version": "1.0.1", "head": head, "path": "server", "sign_app": False,
+                   "finish_at": head}
+    assert _local_tag(w, "v1.0.1") == "" and not _origin_has_tag(w, "v1.0.1"), "a plan changes nothing"
+    assert w.load()["calls"] == [], "nor reads GitHub's releases"
+
+
+@requires_git
+def test_plan_an_app_release_signs_it_first(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    head = _server_only(w, gradle=APP_1_0_1)
+    doc = _plan(w)
+    assert doc["path"] == "app" and doc["sign_app"] is True and doc["finish_at"] == head
+    assert doc["app"] == {"version_name": "1.0.1", "version_code": 26101701}
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"push": False}, "not origin/main's tip"),
+    ({"gradle": '        versionCode = 26101501\n        versionName = "1.0.1"\n'}, "not above the last release's"),
+    ({"manifest": '{"manifest_version": 1, "release": null}\n'}, "only android/scripts/release.ps1 writes it"),
+])
+@requires_git
+def test_plan_refuses_what_is_not_a_release_to_make(tmp_path, monkeypatch, change, why):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _server_only(w, **change)
+    with pytest.raises(fr.Refused, match=why):
+        _plan(w)
+
+
+@requires_git
+def test_plan_needs_main_s_tip_to_be_the_release_commit(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _server_only(w, push=False)
+    _write(w.work, "README.md", "after the release commit\n")
+    _git(w.work, "add", "-A"); _git(w.work, "commit", "--quiet", "-m", "later")
+    _git(w.work, "push", "--quiet", "origin", "main")
+    with pytest.raises(fr.Refused, match="not a release commit"):
+        _plan(w)
+
+
+@requires_git
+def test_plan_resumes_a_run_that_stopped_after_tagging(tmp_path, monkeypatch):
+    (tmp_path / "b").mkdir()
+    w = World(tmp_path / "b", monkeypatch, version="1.0.0")
+    head = _server_only(w)
+    # Path b: finish-release pushed the tag, then stopped.
+    _git(w.work, "push", "--quiet", "origin", f"{head}:refs/tags/v1.0.1")
+    doc = _plan(w)
+    assert doc["path"] == "server" and doc["sign_app"] is False and doc["finish_at"] == head
+    # Path a, its release commit published by an earlier attempt of the run
+    # (re-run on the commit it was dispatched on): finish at that commit.
+    (tmp_path / "a").mkdir()
+    w2 = World(tmp_path / "a", monkeypatch, version="1.0.0")
+    head2 = _server_only(w2, gradle=APP_1_0_1)
+    release_commit = _app_release_commit(w2, head2, "v1.0.1")
+    _git(w2.work, "push", "--quiet", "origin", f"{release_commit}:refs/tags/v1.0.1", f"{release_commit}:refs/heads/main")
+    _git(w2.work, "reset", "--quiet", "--hard", head2)
+    doc = _plan(w2)
+    assert doc["path"] == "app" and doc["sign_app"] is False and doc["finish_at"] == release_commit
+    # Dispatched again on main, now the release commit: finish there.
+    _git(w2.work, "reset", "--quiet", "--hard", release_commit)
+    doc = _plan(w2)
+    assert doc["path"] == "app" and doc["sign_app"] is False and doc["finish_at"] == release_commit
+
+
+@requires_git
+def test_plan_refuses_a_tag_on_github_elsewhere_or_a_finished_release(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    # main's tip after v1.0.0, no new version: v1.0.0 is on GitHub, before HEAD.
+    with pytest.raises(fr.Refused, match="neither HEAD"):
+        _plan(w)
+    _server_only(w)
+    _git(w.work, "push", "--quiet", "origin", f"{w.tag_commit}:refs/tags/v1.0.1")
+    with pytest.raises(fr.Refused, match="neither HEAD"):
+        _plan(w)

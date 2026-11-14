@@ -72,6 +72,7 @@ from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import satellites as satellites_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
+from web.backend.api import music_mix as music_mix_api
 from web.backend.api import videos as videos_api
 from web.backend.api import visualizer as visualizer_api
 from web.backend.api import voice as voice_api
@@ -416,6 +417,7 @@ app.include_router(music_genres_api.router)
 # clearing a person's and deleting all. Literal paths, its own module.
 app.include_router(music_listens_api.router)
 app.include_router(up_next_api.router)
+app.include_router(music_mix_api.router)
 # Lyrics (V021): the household tier's synced-lyrics reads. Its own module,
 # like the names above, so /api/music/lyrics/* and the /lyrics leaves stay
 # clear of music_api's /library/{track_id} matchers.

@@ -57,6 +57,9 @@ BODY_LIMITS: tuple[tuple[str, int], ...] = (
     # One release APK on its way to the core, which checks it against
     # android/release.json (domovoi/android_app.py caps an APK at 200 MiB).
     ("/api/satellites/android-app/upload", 210 * MB),
+    # A phone's shared calendars (api/calendar.py, at most 20,000 events
+    # of a few hundred bytes each).
+    ("/api/calendar/phones", 8 * MB),
 )
 
 

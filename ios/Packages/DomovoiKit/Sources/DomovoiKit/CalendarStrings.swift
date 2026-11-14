@@ -156,10 +156,43 @@ public enum CalendarStrings {
         "event #\(id)"
     }
 
-    /// `CalendarScreen.kt:426`, `EventEditor.kt:145` — the pill on a row with
-    /// no `source` at all. A row the house wrote says `local` itself
-    /// (`calendar.py:105`); this is for an older one that does not.
-    public static let localSource = "local"
+    /// `sourceLabel()` (`CalendarModels.kt:69-76`, 1.3.0): the badge on the
+    /// household's own events — a row whose `source` is `local`, or older
+    /// than the column. It said `local` before 1.3.0, when the badge was the
+    /// raw `source`; now it names the calendar.
+    public static let householdSource = "household"
+
+    /// V057's `also_in`, quietly under the badge: the other calendars the
+    /// same event is in.
+    public static func alsoIn(_ names: [String]) -> String {
+        "also in " + names.joined(separator: ", ")
+    }
+
+    /// The badge on a phone's event with no calendar name.
+    public static let phoneCalendarSource = "phone calendar"
+
+    /// The badge on a linked calendar's event with no name.
+    public static let linkedCalendarSource = "linked calendar"
+
+    /// `fmtRange` and the agenda's clock column for an all-day event
+    /// (`CalendarModels.kt:139`, `CalendarScreen.kt:397`).
+    public static let allDay = "all day"
+
+    /// `readOnlyNote()` for a phone's event (`CalendarModels.kt:87-89`):
+    /// `from Work on Pixel 8 — change it on that phone`. **Em dash**, U+2014,
+    /// a space each side, as the Kotlin writes it.
+    public static func readOnlyOnPhone(calendar: String?, owner: String?) -> String {
+        let onOwner: String? = owner.map { (name: String) -> String in "on \(name)" }
+        let parts: [String?] = [calendar ?? "a phone calendar", onOwner]
+        let from: String = parts.compactMap { $0 }.joined(separator: " ")
+        return "from \(from) \u{2014} change it on that phone"
+    }
+
+    /// `readOnlyNote()` for a linked calendar's event (`CalendarModels.kt:91`):
+    /// `from School — change it there`.
+    public static func readOnlyElsewhere(calendar: String?) -> String {
+        "from \(calendar ?? "another calendar") \u{2014} change it there"
+    }
 
     // MARK: - the editor
 

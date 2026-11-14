@@ -674,8 +674,12 @@ def _src(name: str) -> str:
 
 def test_both_queue_panels_draw_the_up_next_section() -> None:
     src = _src("player.jsx")
-    assert src.count("<PlayerUpNext p={p}/>") == 2
-    assert src.count("queue · {playerQueueCount(p.queue, p.index)}") == 2
+    # PlayerQueueView (P5) draws both panels: the section inside the
+    # floating panel's list, after the list in the sheet.
+    assert src.count("{!sheet && <PlayerUpNext p={p}/>}") == 1
+    assert src.count("{sheet && <PlayerUpNext p={p}/>}") == 1
+    assert src.count("<PlayerQueueView p={p}") == 2
+    assert src.count("queue · {playerQueueCount(p.queue, p.index)}") == 1
 
 
 def test_the_section_styles_exist_and_phone_targets_are_44px() -> None:

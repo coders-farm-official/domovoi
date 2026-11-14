@@ -75,6 +75,7 @@ from sqlalchemy import text
 
 from domovoi import music_listens
 from domovoi.admin_auth import require_device, require_device_read
+from domovoi.up_next import mix as up_next_mix
 from domovoi.up_next import service, store
 from domovoi.up_next.data import SqlLibrary
 from domovoi.up_next.service import ContextIn  # noqa: F401 — the request shape, re-exported
@@ -144,7 +145,8 @@ class SessionIn(BaseModel):
     start: StartIn
     listener_person_id: int | None = Field(default=None, ge=1)
     as_household: bool = False
-    autoplay: bool = True
+    # Absent: the household's Music mix default.
+    autoplay: bool | None = None
 
 
 class NextIn(BaseModel):
@@ -278,8 +280,11 @@ async def start_session(body: SessionIn, request: Request) -> dict[str, Any]:
         seed, name = await _seed(s, body.start)
         person = await _listener(s, device_id, body)
         mode = "continue" if body.start.whole_list else ("list" if seed.kind else "library")
+        autoplay = body.autoplay
+        if autoplay is None:
+            autoplay = (await up_next_mix.household(s)).autoplay
         sess = UpNextSession.start(target=f"device:{device_id}", mode=mode, seed=seed,
-                                   person_id=person, autoplay=body.autoplay)
+                                   person_id=person, autoplay=autoplay)
         st = await store.create(s, sess, name=name)
         picks: list[dict[str, Any]] = []
         if mode != "continue":

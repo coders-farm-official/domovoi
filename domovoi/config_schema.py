@@ -693,6 +693,32 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "bool", tier="hot", needs_internet=True,
     ),
     FieldSpec(
+        "music_similar_artists_enabled", "Similar artists from the internet", "Library",
+        "Ask ListenBrainz (listenbrainz.org) which artists are like the ones "
+        "in your library, so Up next can play 'similar to …' songs you already "
+        "have. Sends only the MusicBrainz ids of your library's artists (public "
+        "catalogue numbers, no names, nothing you played) — one request a "
+        "second, about 10 minutes the first time for 600 artists, then each "
+        "artist again after 90 days — and only while the server is online. "
+        "Up next never waits on it: it uses what was already fetched. Off = "
+        "no requests, and what was fetched is deleted. Follows the internet "
+        "answer (on for Yes) unless you set it. Applies immediately.",
+        "bool", tier="hot", needs_internet=True,
+    ),
+    FieldSpec(
+        "music_popularity_enabled", "Song popularity from the internet", "Library",
+        "Ask ListenBrainz (listenbrainz.org) how often songs in your library "
+        "are played around the world, so Up next leans a little toward an "
+        "artist's well-known songs (your own taste still counts more). Sends "
+        "only the MusicBrainz ids of songs that have one (100 songs a request: "
+        "about a minute the first time for 6,000 songs, then again after 30 "
+        "days), only while the server is online. Up next never waits on it. "
+        "Off = no requests, and what was fetched is deleted. Follows the "
+        "internet answer (on for Yes and Sometimes) unless you set it. "
+        "Applies immediately.",
+        "bool", tier="hot", needs_internet=True,
+    ),
+    FieldSpec(
         "music_match_play_threshold", "Play-without-asking score", "Library",
         "How sure (0-1) a sound match must be to play without asking. "
         "Lower = fewer questions and more wrong songs. Measured at 0.90; "

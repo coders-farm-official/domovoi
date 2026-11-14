@@ -915,15 +915,15 @@ internal fun HomeToday(
     compact: Boolean,
     onOpenCalendar: () -> Unit,
 ) {
-    HomeCard("today", action = { HomeLink("calendar", onClick = onOpenCalendar) }) {
+    HomeCard("today / next", action = { HomeLink("calendar", onClick = onOpenCalendar) }) {
         val list = events.orEmpty()
         // A phone shows three; the rest are one tap away, on Calendar.
-        val limit = if (compact) HOME_PHONE_ROWS else HOME_TODAY_ROWS
+        val limit = if (compact) HOME_PHONE_ROWS else HOME_NEXT_ROWS
         val days = if (answered && !failed) todayDays(list, nowMs, zone, shared, limit) else emptyList()
         when {
             !answered -> QuietLine("checking…")
             failed -> QuietLine("calendar unavailable")
-            days.isEmpty() -> QuietLine(todayEmptyText(list, nowMs, zone, shared))
+            days.isEmpty() -> QuietLine(HOME_CAL_EMPTY)
             else -> {
                 Column(Modifier.padding(bottom = 4.dp)) {
                     days.forEach { d ->
@@ -951,7 +951,7 @@ private fun TodayRowView(row: TodayRow, zone: ZoneId, onOpen: () -> Unit) {
     ) {
         Column(Modifier.width(64.dp)) {
             Text(
-                homeClock(row.startMs, zone),
+                if (row.allDay) "all day" else homeClock(row.startMs, zone),
                 style = MaterialTheme.typography.labelLarge,
                 fontFamily = FontFamily.Monospace,
                 color = Domovoi.colors.fg,
@@ -964,6 +964,11 @@ private fun TodayRowView(row: TodayRow, zone: ZoneId, onOpen: () -> Unit) {
                     color = Domovoi.colors.fgFaint,
                 )
             }
+        }
+        // The calendar's own colour, as a dot only; the household's own
+        // events have none (the one accent stays amber).
+        row.dot?.let { c ->
+            Box(Modifier.size(8.dp).background(androidx.compose.ui.graphics.Color(c), androidx.compose.foundation.shape.CircleShape))
         }
         Column(Modifier.weight(1f)) {
             Text(

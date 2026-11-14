@@ -122,7 +122,7 @@ public func calendarVisibleEvents(
             // top to bottom, so the order is the thing on screen — the same
             // sort the agenda and the month cells use, and total for the same
             // reason.
-            .sorted { ($0.startMsSort, $0.id) < ($1.startMsSort, $1.id) }
+            .sorted { (calendarStartMs($0, in: timeZone), $0.id) < (calendarStartMs($1, in: timeZone), $1.id) }
     case .agenda:
         let floor = anchor.startMs(in: timeZone)
         return events
@@ -131,8 +131,8 @@ public func calendarVisibleEvents(
             // unreadable `starts_at` would otherwise be kept, sort last, and
             // group under 1970-01-01 — a junk trailing day header. Month and
             // day view drop it through their own predicates.
-            .filter { calendarStartMs($0) != Int64.max && calendarEndMs($0) >= floor }
-            .sorted { ($0.startMsSort, $0.id) < ($1.startMsSort, $1.id) }
+            .filter { calendarStartMs($0, in: timeZone) != Int64.max && calendarEndMs($0, in: timeZone) >= floor }
+            .sorted { (calendarStartMs($0, in: timeZone), $0.id) < (calendarStartMs($1, in: timeZone), $1.id) }
             .prefix(25)
             .map { $0 }
     }
@@ -141,12 +141,7 @@ public func calendarVisibleEvents(
 /// The local date an event starts on — `e.startLocal().toLocalDate()`, which
 /// every window above and the agenda's grouping are keyed on.
 public func calendarLocalDay(_ entry: CalendarEntry, in timeZone: TimeZone) -> CalendarDay {
-    CalendarDay(ms: calendarStartMs(entry), in: timeZone)
-}
-
-private extension CalendarEntry {
-    /// ``calendarStartMs(_:)``, named so the sort above reads as a sort.
-    var startMsSort: Int64 { calendarStartMs(self) }
+    CalendarDay(ms: calendarStartMs(entry, in: timeZone), in: timeZone)
 }
 
 // MARK: - the agenda's day groups
@@ -482,13 +477,13 @@ public func calendarDayGridPlacement(
     let gridTop = dayStart + Int64(calendarGridStartHour) * 3_600_000
     let gridMinutes = calendarGridHours * 60
 
-    let startMinutes = Int((calendarStartMs(entry) - gridTop) / 60_000)
+    let startMinutes = Int((calendarStartMs(entry, in: timeZone) - gridTop) / 60_000)
     // ``calendarBlockEndMs(_:)`` and not ``calendarEndMs(_:)``: the latter
     // now invents an hour for an open-ended event (answer 17), which is the
     // AGENDA's floor and not a block height. Through it, `night walk` at
     // 23:15 with no `ends_at` would be drawn an hour tall instead of the
     // twenty minutes Android's own minimum gives it.
-    let rawDuration = Int((calendarBlockEndMs(entry) - calendarStartMs(entry)) / 60_000)
+    let rawDuration = Int((calendarBlockEndMs(entry, in: timeZone) - calendarStartMs(entry, in: timeZone)) / 60_000)
 
     // `gridMinutes - 20`, not `gridMinutes`: Android's own cap is
     // `coerceIn(0, GRID_HOURS * 60 - 20)` (`CalendarGrids.kt:313`), and the
@@ -581,7 +576,7 @@ public func calendarMonthCells(
         byDay[calendarLocalDay(entry, in: timeZone), default: []].append(entry)
     }
     for key in byDay.keys {
-        byDay[key] = byDay[key]?.sorted { ($0.startMsSort, $0.id) < ($1.startMsSort, $1.id) }
+        byDay[key] = byDay[key]?.sorted { (calendarStartMs($0, in: timeZone), $0.id) < (calendarStartMs($1, in: timeZone), $1.id) }
     }
     return (0..<42).map { index in
         let day = gridStart.adding(days: index)

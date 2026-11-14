@@ -53,6 +53,38 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
     public let externalID: String?
     public let lastSyncedAt: String?
 
+    /// 1.3.0 (`CalendarModels.kt:44-61`): an all-day event, whose
+    /// `starts_at` names the **date** (the house's local midnight, written
+    /// with its own offset) — read by its written date, never shifted into
+    /// this phone's zone.
+    public let allDay: Bool
+
+    /// The server's calendar source id (a linked or a phone calendar); nil
+    /// for the household's own.
+    public let calendarID: Int64?
+    public let calendarName: String?
+
+    /// `#rrggbb`, for the calendar's dot only — never a second accent.
+    public let calendarColor: String?
+
+    /// `link`, `phone`, or nil for the household's own.
+    public let calendarKind: String?
+
+    /// The person or phone the calendar comes from.
+    public let ownerName: String?
+
+    /// It comes from another calendar and can't be changed here: the server
+    /// answers 409 to an edit or a delete (`calendar.py` `_refuse_read_only`).
+    public let readOnly: Bool
+
+    /// V057: a private event a phone shared as busy — the server's title is
+    /// "Busy" and it has no place.
+    public let busy: Bool
+
+    /// V057: the other calendars the same event is in (same iCalendar UID and
+    /// start), `["Family · Galaxy"]`; listed once, these named quietly.
+    public let alsoIn: [String]
+
     public init(
         id: Int64 = 0,
         title: String = "",
@@ -62,7 +94,16 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         description: String? = nil,
         source: String? = nil,
         externalID: String? = nil,
-        lastSyncedAt: String? = nil
+        lastSyncedAt: String? = nil,
+        allDay: Bool = false,
+        calendarID: Int64? = nil,
+        calendarName: String? = nil,
+        calendarColor: String? = nil,
+        calendarKind: String? = nil,
+        ownerName: String? = nil,
+        readOnly: Bool = false,
+        busy: Bool = false,
+        alsoIn: [String] = []
     ) {
         self.id = id
         self.title = title
@@ -73,6 +114,15 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         self.source = source
         self.externalID = externalID
         self.lastSyncedAt = lastSyncedAt
+        self.allDay = allDay
+        self.calendarID = calendarID
+        self.calendarName = calendarName
+        self.calendarColor = calendarColor
+        self.calendarKind = calendarKind
+        self.ownerName = ownerName
+        self.readOnly = readOnly
+        self.busy = busy
+        self.alsoIn = alsoIn
     }
 
     enum CodingKeys: String, CodingKey {
@@ -81,6 +131,15 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         case endsAt = "ends_at"
         case externalID = "external_id"
         case lastSyncedAt = "last_synced_at"
+        case allDay = "all_day"
+        case calendarID = "calendar_id"
+        case calendarName = "calendar_name"
+        case calendarColor = "calendar_color"
+        case calendarKind = "calendar_kind"
+        case ownerName = "owner_name"
+        case readOnly = "read_only"
+        case busy
+        case alsoIn = "also_in"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -94,18 +153,68 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         source = try c.decodeIfPresent(String.self, forKey: .source)
         externalID = try c.decodeIfPresent(String.self, forKey: .externalID)
         lastSyncedAt = try c.decodeIfPresent(String.self, forKey: .lastSyncedAt)
+        allDay = try c.decodeIfPresent(Bool.self, forKey: .allDay) ?? false
+        calendarID = try c.decodeIfPresent(Int64.self, forKey: .calendarID)
+        calendarName = try c.decodeIfPresent(String.self, forKey: .calendarName)
+        calendarColor = try c.decodeIfPresent(String.self, forKey: .calendarColor)
+        calendarKind = try c.decodeIfPresent(String.self, forKey: .calendarKind)
+        ownerName = try c.decodeIfPresent(String.self, forKey: .ownerName)
+        readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
+        busy = try c.decodeIfPresent(Bool.self, forKey: .busy) ?? false
+        alsoIn = try c.decodeIfPresent([String].self, forKey: .alsoIn) ?? []
     }
 
-    /// `isGoogle()` (`CalendarModels.kt:28`) — what decides the colour bar,
-    /// the pill's tone and whether ``CalendarStrings/synced(_:)`` is shown.
+    /// `also in Family · Galaxy, School` for the detail sheet; nil when the
+    /// event is in no other calendar.
+    public var alsoInLine: String? {
+        let names = alsoIn.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return names.isEmpty ? nil : CalendarStrings.alsoIn(names)
+    }
+
+    /// `isGoogle()` (`CalendarModels.kt:61`).
     public var isGoogle: Bool { source == "google" }
 
-    /// The pill's word: the server's `source`, or `local` for a row that
-    /// predates the column (`CalendarScreen.kt:426`).
-    public var sourceLabel: String {
-        guard let source, !source.isEmpty else { return CalendarStrings.localSource }
-        return source
+    /// `isImported()` (`CalendarModels.kt:65`): it comes from a calendar
+    /// outside the house (a link, a phone, Google), so it is drawn in the
+    /// neutral tone, not the accent, and its `synced` line is shown.
+    public var isImported: Bool {
+        readOnly || calendarKind != nil || source == "google" || source == "link" || source == "phone"
     }
+
+    /// `sourceLabel()` (`CalendarModels.kt:69`): what the badge says — the
+    /// calendar's name, else where it came from (`household` for the house's
+    /// own, and for a row older than the column).
+    public var sourceLabel: String {
+        if let name = calendarName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
+        }
+        switch source {
+        case nil, "", "local": return CalendarStrings.householdSource
+        case "phone": return CalendarStrings.phoneCalendarSource
+        case "link": return CalendarStrings.linkedCalendarSource
+        default: return source ?? CalendarStrings.householdSource
+        }
+    }
+
+    /// `readOnlyNote()` (`CalendarModels.kt:83`): why a read-only event has
+    /// no edit or delete — `from Work on Pixel 8 — change it on that phone`,
+    /// `from School — change it there`. Nil for an event the house can
+    /// change.
+    public var readOnlyNote: String? {
+        guard readOnly else { return nil }
+        let name: String = calendarName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let owner: String = ownerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let named: String? = name.isEmpty ? nil : name
+        let owned: String? = owner.isEmpty ? nil : owner
+        if calendarKind == "phone" || source == "phone" {
+            return CalendarStrings.readOnlyOnPhone(calendar: named, owner: owned)
+        }
+        return CalendarStrings.readOnlyElsewhere(calendar: named)
+    }
+
+    /// The calendar's own colour for its dot (`dotColor()`,
+    /// `EventEditor.kt:385`), as `0xAARRGGBB`; nil for the household's own.
+    public var dotARGB: Int64? { homeHexColor(calendarColor) }
 }
 
 // MARK: - when an event is
@@ -130,8 +239,15 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
 /// whatever time it happens to be. That is worse than invisible and it is not
 /// copied. It also cannot be copied here without handing a clock to a pure
 /// function, which is the thing this file does not do.
-public func calendarStartMs(_ entry: CalendarEntry) -> Int64 {
-    isoMs(entry.startsAt) ?? Int64.max
+///
+/// **An all-day event** (1.3.0, `CalendarModels.kt:101`) starts at
+/// `timeZone`'s midnight of its **written date**: the server writes its
+/// bounds as the house's local midnights with the house's own offset, so the
+/// first ten characters are the date, and shifting the instant into a phone
+/// in another zone would put a holiday on the wrong day.
+public func calendarStartMs(_ entry: CalendarEntry, in timeZone: TimeZone = .current) -> Int64 {
+    if entry.allDay, let day = homeWrittenDay(entry.startsAt) { return day.startMs(in: timeZone) }
+    return isoMs(entry.startsAt) ?? Int64.max
 }
 
 /// The end a **window** measures an event against — ``eventEndMs(_:)``'s rule,
@@ -159,9 +275,16 @@ public func calendarStartMs(_ entry: CalendarEntry) -> Int64 {
 /// gave no end — "the hour exists for the filtering alone"). An invented hour
 /// that reached the screen would draw `3:00pm – 4:00pm` on a row the house
 /// never gave an end for.
-public func calendarEndMs(_ entry: CalendarEntry) -> Int64 {
+///
+/// An all-day event ends at the start of its (exclusive) end date, or of the
+/// day after its start when it names none (`CalendarModels.kt:105`).
+public func calendarEndMs(_ entry: CalendarEntry, in timeZone: TimeZone = .current) -> Int64 {
+    if entry.allDay {
+        if let end = homeWrittenDay(entry.endsAt) { return end.startMs(in: timeZone) }
+        if let start = homeWrittenDay(entry.startsAt) { return start.adding(days: 1).startMs(in: timeZone) }
+    }
     if let end = isoMs(entry.endsAt) { return end }
-    let start = calendarStartMs(entry)
+    let start = calendarStartMs(entry, in: timeZone)
     return start == Int64.max ? Int64.max : start + 3_600_000
 }
 
@@ -175,9 +298,10 @@ public func calendarEndMs(_ entry: CalendarEntry) -> Int64 {
 /// (`CalendarGrids.kt:314`), and answer 17 was about keeping such an event on
 /// the agenda, not about growing its block to an hour — so the drawn end is
 /// left exactly as Android has it.
-public func calendarBlockEndMs(_ entry: CalendarEntry) -> Int64 {
+public func calendarBlockEndMs(_ entry: CalendarEntry, in timeZone: TimeZone = .current) -> Int64 {
+    if entry.allDay, let end = homeWrittenDay(entry.endsAt) { return end.startMs(in: timeZone) }
     if let end = isoMs(entry.endsAt) { return end }
-    return calendarStartMs(entry)
+    return calendarStartMs(entry, in: timeZone)
 }
 
 // MARK: - a civil date

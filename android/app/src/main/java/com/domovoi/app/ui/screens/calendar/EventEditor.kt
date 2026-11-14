@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -79,7 +80,7 @@ internal fun EventDetailContent(
                     .width(4.dp)
                     .height(46.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(if (event.isGoogle()) Domovoi.colors.idle else Domovoi.colors.brand),
+                    .background(event.dotColor() ?: if (event.isImported()) Domovoi.colors.idle else Domovoi.colors.brand),
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
@@ -146,8 +147,8 @@ internal fun EventDetailContent(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Pill(event.source ?: "local", if (event.isGoogle()) Tone.Idle else Tone.Ok)
-            if (event.isGoogle() && event.last_synced_at != null) {
+            SourceBadge(event)
+            if (event.isImported() && event.last_synced_at != null) {
                 Text(
                     "synced ${relTime(event.last_synced_at)}",
                     style = MaterialTheme.typography.labelSmall,
@@ -155,14 +156,22 @@ internal fun EventDetailContent(
                 )
             }
         }
-        Text(
-            "event #${event.id}",
-            style = MaterialTheme.typography.labelSmall,
-            color = Domovoi.colors.fgFaint,
-        )
+        if (!event.read_only) {
+            Text(
+                "event #${event.id}",
+                style = MaterialTheme.typography.labelSmall,
+                color = Domovoi.colors.fgFaint,
+            )
+        }
 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // An event from a linked or phone calendar is the house's copy: no
+        // edit or delete here (they could only fail), and the note says
+        // where it is changed instead.
+        val note = event.readOnlyNote()
+        if (note != null) {
+            Text(note, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+        } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             // No `edit` for a row whose `starts_at` we cannot read (D18):
             // the editor has no honest time to put in its start field, so
             // the control is left out rather than quietly doing nothing
@@ -366,6 +375,36 @@ private fun DateTimeRow(value: LocalDateTime, onChange: (LocalDateTime) -> Unit)
                     Text("cancel", color = Domovoi.colors.fgMuted)
                 }
             },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where an event comes from: a dot in the calendar's own colour (the dot
+// only, never a second accent) and the calendar's name.
+// ---------------------------------------------------------------------------
+
+/** The calendar's own colour, for its dot; null for the household's. */
+internal fun CalendarEvent.dotColor(): androidx.compose.ui.graphics.Color? =
+    parseHexColor(calendar_color)?.let { androidx.compose.ui.graphics.Color(it) }
+
+@Composable
+internal fun SourceBadge(e: CalendarEvent) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            Modifier.size(8.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                .background(e.dotColor() ?: if (e.isImported()) Domovoi.colors.idle else Domovoi.colors.brand),
+        )
+        Text(
+            e.sourceLabel(),
+            style = MaterialTheme.typography.labelSmall,
+            color = Domovoi.colors.fgMuted,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 140.dp),
         )
     }
 }

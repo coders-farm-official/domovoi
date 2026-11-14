@@ -1,17 +1,17 @@
 import DomovoiKit
 import SwiftUI
 
-/// Home's **today** card — a port of `HomeToday` (`HomeSections.kt:898`),
-/// map §3.6.
+/// Home's **today / next** card — a port of `HomeToday`
+/// (`HomeSections.kt:911`, 1.3.0), map §3.6.
 ///
 /// **This is the one section that never disappears.** Every other card is
-/// absent when it has nothing to say; this one is always drawn, and
-/// ``todayEmptyText(events:nowMs:timeZone:shared:)`` is what it says when
-/// there is nothing in it — `nothing on today`, or `nothing more today` when
-/// something earlier today has already ended, and then
-/// `· next: <date> <clock> <title>` naming the first event from the day after
-/// tomorrow onward. The calendar read asks for a whole week precisely so that
-/// clause can exist.
+/// absent when it has nothing to say; this one is always drawn, and says
+/// ``HomeTodayStrings/calendarEmpty`` when the coming week is empty. Its rows
+/// are the week's next events across the household's calendar and every
+/// linked and phone calendar, under `today`, `tomorrow` or the day; an event
+/// from another calendar has a dot in that calendar's own colour (the dot
+/// only — the one accent stays amber), and an all-day one says `all day` in
+/// its time column.
 ///
 /// ### The clock here is the phone's
 ///
@@ -39,16 +39,13 @@ struct HomeTodayView: View {
     /// behind.
     let days: [TodayDay]
 
-    /// What the card says when `days` is empty.
-    let emptyText: String
-
     let onOpenCalendar: () -> Void
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HomeCard(
-            title: HomeTodayStrings.today,
+            title: HomeTodayStrings.title,
             actionLabel: HomeTodayStrings.calendar,
             onAction: onOpenCalendar
         ) {
@@ -77,7 +74,7 @@ struct HomeTodayView: View {
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
         } else if days.isEmpty {
-            Text(emptyText)
+            Text(HomeTodayStrings.calendarEmpty)
                 .font(.subheadline)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -112,12 +109,16 @@ struct HomeTodayView: View {
                     // grow is where text gets clipped.
                     VStack(alignment: .leading, spacing: 4) {
                         times(row)
-                        words(row)
+                        HStack(alignment: .top, spacing: 8) {
+                            dot(row)
+                            words(row)
+                        }
                     }
                 } else {
                     HStack(alignment: .top, spacing: 10) {
                         times(row)
                             .frame(width: 64, alignment: .leading)
+                        dot(row)
                         words(row)
                         Spacer(minLength: 8)
                     }
@@ -138,7 +139,7 @@ struct HomeTodayView: View {
     /// at a time nobody said it did.
     private func times(_ row: TodayRow) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(homeClock(ms: row.startMs, timeZone: .current))
+            Text(row.allDay ? HomeTodayStrings.allDay : homeClock(ms: row.startMs, timeZone: .current))
                 .font(.footnote.monospaced())
                 .fixedSize(horizontal: false, vertical: true)
             if let end = row.endMs {
@@ -147,6 +148,24 @@ struct HomeTodayView: View {
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    /// The calendar's own colour, as a dot only (`HomeSections.kt:968-972`);
+    /// the household's own events have none. Hidden from VoiceOver: the
+    /// colour is decoration, and the Calendar screen names the calendar.
+    @ViewBuilder
+    private func dot(_ row: TodayRow) -> some View {
+        if let argb = row.dot {
+            Circle()
+                .fill(Color(
+                    red: Double((argb >> 16) & 0xFF) / 255,
+                    green: Double((argb >> 8) & 0xFF) / 255,
+                    blue: Double(argb & 0xFF) / 255
+                ))
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+                .accessibilityHidden(true)
         }
     }
 

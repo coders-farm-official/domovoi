@@ -71,7 +71,7 @@ import java.time.ZoneId
  *   timers           every timer and reminder in the house, counting down
  *   rooms            one row per room: pause / resume / stop / play
  *   announce         say something in every room
- *   today            today's and tomorrow's events
+ *   today / next     the coming week's next events, every calendar
  *   everything       every screen that is not one of the bottom bar's tabs
  *
  * A wide pane (a tablet in landscape) gets the web desktop's two columns:

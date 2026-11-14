@@ -28,6 +28,12 @@ import SwiftUI
 ///   (`EventEditor.kt:165-168`). A later sync would overwrite such an edit;
 ///   refusing it here would be inventing a rule the house does not have
 ///   (DECISIONS §6).
+/// * **An event from a linked or a phone calendar has neither** (1.3.0,
+///   `EventEditor.kt:168-174`, ``CalendarEntry/readOnly``): the server
+///   answers 409 to both, so the controls are not drawn — the sheet says
+///   where it is changed instead (``CalendarEntry/readOnlyNote``) — and
+///   ``CalendarModel/openEditor(for:)`` and ``CalendarModel/askToDelete(_:)``
+///   refuse it too.
 struct CalendarEventSheetView: View {
 
     let entry: CalendarEntry
@@ -44,7 +50,7 @@ struct CalendarEventSheetView: View {
     @State private var openedAtMs: Int64?
 
     private var day: CalendarDay {
-        CalendarDay(ms: calendarStartMs(entry), in: calendar.zone)
+        CalendarDay(ms: calendarStartMs(entry, in: calendar.zone), in: calendar.zone)
     }
 
     var body: some View {
@@ -114,7 +120,7 @@ struct CalendarEventSheetView: View {
             // VoiceOver: the source pill below says the same thing in a
             // word, and a colour is never the only carrier of meaning.
             RoundedRectangle(cornerRadius: 2)
-                .fill(entry.isGoogle ? Color.fgMuted : Color.brandInk)
+                .fill(calendarDotColor(entry))
                 .frame(width: 4)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
@@ -125,14 +131,15 @@ struct CalendarEventSheetView: View {
                     .font(.subheadline)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                // The range, only when there is an end — `:93`.
-                if entry.endsAt != nil {
+                // The range, only when there is an end — `:93`; `all day`
+                // for an all-day event.
+                if entry.endsAt != nil || entry.allDay {
                     Text(calendarRange(entry, in: calendar.zone))
                         .font(.footnote)
                         .foregroundStyle(Color.fgMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text(calendarClock(ms: calendarStartMs(entry), timeZone: calendar.zone))
+                    Text(calendarClock(ms: calendarStartMs(entry, in: calendar.zone), timeZone: calendar.zone))
                         .font(.footnote)
                         .foregroundStyle(Color.fgMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -196,11 +203,18 @@ struct CalendarEventSheetView: View {
 
     private var provenance: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HomeTonePill(label: entry.sourceLabel, tone: entry.isGoogle ? .idle : .ok)
-            // `synced <relTime>` for a google row that has one, and only
-            // then (`EventEditor.kt:149-156`). There is no sync control to
-            // go with it, because there is no sync route.
-            if entry.isGoogle, entry.lastSyncedAt != nil {
+            CalendarSourceBadge(entry: entry)
+            // V057: the same event in other calendars, said quietly.
+            if let also = entry.alsoInLine {
+                Text(also)
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // `synced <relTime>` for a row from another calendar that has
+            // one, and only then (`EventEditor.kt:149-156`). There is no
+            // sync control to go with it on this screen.
+            if entry.isImported, entry.lastSyncedAt != nil {
                 Text(CalendarStrings.synced(
                     relTime(entry.lastSyncedAt, nowMs: openedAtMs ?? calendar.clockMs)
                 ))
@@ -215,17 +229,37 @@ struct CalendarEventSheetView: View {
             // the same words in two elements, which is a VoiceOver stop that
             // says the same thing twice and an ambiguous query for a test.
             // This sheet's bar carries `close` and nothing else.
-            Text(CalendarStrings.eventNumber(entry.id))
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+            // Not for a read-only event (`EventEditor.kt:159-165`): its
+            // number is the house's copy's, and means nothing to anyone.
+            if !entry.readOnly {
+                Text(CalendarStrings.eventNumber(entry.id))
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - what can be done to it
 
+    /// An event from a linked or phone calendar is the house's copy: no
+    /// edit or delete (they could only fail), and the note says where it is
+    /// changed instead (`EventEditor.kt:168-174`).
+    @ViewBuilder
     private var actions: some View {
+        if let note = entry.readOnlyNote {
+            Text(note)
+                .font(.footnote)
+                .foregroundStyle(Color.fgMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            editAndDelete
+        }
+    }
+
+    private var editAndDelete: some View {
         VStack(alignment: .leading, spacing: 4) {
             HomeLink(CalendarStrings.edit) { calendar.openEditor(for: entry) }
             Button {

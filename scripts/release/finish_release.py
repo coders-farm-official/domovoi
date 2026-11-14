@@ -115,6 +115,14 @@ so (a real run refuses). A tag it made here for path b (the Setup's build
 pins to it) is deleted again at the end, as it is when a real run stops
 before pushing it.
 
+For the release workflow (``.github/workflows/release.yml``) there are two
+opt-in flags; the owner's local runs never need them. ``--plan FILE`` is
+its gate: it checks HEAD is a release to make or to finish and writes what
+to run to FILE as JSON (see :func:`plan`), changing nothing.
+``--signing-agent`` signs with the release key an ssh-agent holds
+(``SSH_AUTH_SOCK``) instead of a key file: ssh-keygen is handed the tag's
+public key and asks the agent, so nothing prompts and no key is on disk.
+
 git, gh and Windows PowerShell are run by their absolute paths, never from
 the checkout (Windows would look in the current folder first). Standard
 library only. Never reads a key or a password (ssh-keygen reads the
@@ -782,21 +790,31 @@ def setup_manifest(tag: str, version: str, tag_commit: str, setup: Path) -> byte
     return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("ascii")
 
 
-def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: str, key: Path,
+def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: str, key: Path | None,
                public: bytes, repo: Path, ssh_keygen: str | None = None) -> dict[str, str]:
     """The Windows update's three files beside the staged Setup: the
     manifest, and both signatures by the release key's private half
     ``key`` (``ssh-keygen -Y sign``, which reads it and asks for its
     passphrase itself), each checked against the tag's pinned public key
-    (``ssh-keygen -Y verify``). Their SHA-256, by name."""
+    (``ssh-keygen -Y verify``). Their SHA-256, by name.
+
+    ``key`` None (``--signing-agent``, the release workflow): the private
+    half is held by the ssh-agent ``SSH_AUTH_SOCK`` names, and ssh-keygen is
+    handed the tag's own public key, so it signs with the agent's matching
+    key (and fails if the agent holds none) and never prompts: no key file
+    and no passphrase are on disk or asked for."""
     keygen = ssh_keygen or find_exe("ssh-keygen", repo)
     if not keygen:
         die("no ssh-keygen on PATH (OpenSSH's; Windows has it in C:\\Windows\\System32\\OpenSSH, Git Bash has its own)")
-    key = Path(key).expanduser().resolve()
-    if not key.is_file():
-        die(f"no release key at {key} (--signing-key)")
-    if key.is_relative_to(Path(repo).resolve()):
-        die("the release key is inside the checkout: keep it outside (and backed up)")
+    if key is None:
+        if not os.environ.get("SSH_AUTH_SOCK"):
+            die("--signing-agent: no SSH_AUTH_SOCK, so no ssh-agent to sign with (start one and ssh-add the release key)")
+    else:
+        key = Path(key).expanduser().resolve()
+        if not key.is_file():
+            die(f"no release key at {key} (--signing-key)")
+        if key.is_relative_to(Path(repo).resolve()):
+            die("the release key is inside the checkout: keep it outside (and backed up)")
     line = public.decode("ascii", "replace").strip().splitlines()[0] if public.strip() else ""
     parts = line.split()
     if len(parts) < 2 or parts[0] != "ssh-ed25519":
@@ -807,14 +825,23 @@ def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: 
     # Bytes, so Windows doesn't turn the newline into CRLF.
     allowed.write_bytes(f'{SIGNER} namespaces="{SETUP_NAMESPACE},{MANIFEST_NAMESPACE}" {parts[0]} {parts[1]}\n'
                         .encode("ascii"))
+    # With the agent: the tag's public key names which of its keys signs.
+    agent_pub = stage / ".release-signing.pub"
+    if key is None:
+        agent_pub.write_bytes(f"{parts[0]} {parts[1]}\n".encode("ascii"))
+    sign_with = str(agent_pub) if key is None else str(key)
+    how = "the key in ssh-agent" if key is None else str(key)
     try:
         for file, ns in ((setup, SETUP_NAMESPACE), (manifest, MANIFEST_NAMESPACE)):
             sig = file.with_name(file.name + ".sig")
             sig.unlink(missing_ok=True)
-            print(f"finish-release: signing {file.name} ({ns}) with {key}...", flush=True)
-            p = subprocess.run([keygen, "-Y", "sign", "-f", str(key), "-n", ns, str(file)])
+            print(f"finish-release: signing {file.name} ({ns}) with {how}...", flush=True)
+            # The agent path never reads a terminal: nothing to prompt for.
+            p = subprocess.run([keygen, "-Y", "sign", "-f", sign_with, "-n", ns, str(file)],
+                               stdin=subprocess.DEVNULL if key is None else None)
             if p.returncode != 0 or not sig.is_file():
-                die(f"ssh-keygen -Y sign failed for {file.name}")
+                die(f"ssh-keygen -Y sign failed for {file.name}"
+                    + (" (does the agent hold the private half of the tag's release key?)" if key is None else ""))
             with open(file, "rb") as data:
                 v = subprocess.run([keygen, "-Y", "verify", "-f", str(allowed), "-I", SIGNER, "-n", ns, "-s", str(sig)],
                                    stdin=data, capture_output=True)
@@ -823,7 +850,96 @@ def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: 
                     "private half?")
     finally:
         allowed.unlink(missing_ok=True)
+        agent_pub.unlink(missing_ok=True)
     return {name: sha256_file(stage / name) for name in SIGNATURE_ASSETS}
+
+
+def _pyproject_version_at(t: Tools, rev: str) -> str | None:
+    raw = t.git_bytes("show", f"{rev}:pyproject.toml")
+    try:
+        version = tomllib.loads(raw.decode("utf-8"))["project"]["version"] if raw is not None else None
+    except (ValueError, KeyError):
+        return None
+    return version if isinstance(version, str) else None
+
+
+def plan(t: Tools, repo: Path, tag_arg: str | None = None) -> dict[str, Any]:
+    """What the release workflow (.github/workflows/release.yml) runs, from
+    the commit it was dispatched on (HEAD), before anyone approves it.
+    Changes nothing (it fetches). One of:
+
+    - **A new release** (no tag ``v<pyproject version>`` on GitHub): HEAD is
+      ``origin/main``'s tip and a release commit (it raises pyproject's
+      version and leaves ``android/release.json`` alone). The app changed
+      when its versionName or versionCode differ from the ones
+      ``android/release.json`` names: ``sign_app`` (release.ps1 first, then
+      finish-release); otherwise finish-release alone (it tags HEAD).
+    - **A run to finish** (the tag is on GitHub already, from a run that
+      stopped): the tag is HEAD (path b's tag, or path a's release commit
+      dispatched again), or HEAD plus ``android/release.json`` alone (path
+      a's release commit, made by an earlier attempt of this same run):
+      finish-release at the tag; nothing is signed or tagged again.
+
+    Anything else is refused. The finish-release run itself checks the rest
+    (the app's release on GitHub, stable, the Setup)."""
+    _check_origin(t)
+    if t.git("status", "--porcelain").strip():
+        die("the checkout has uncommitted changes")
+    head = t.git("rev-parse", "HEAD").strip()
+    tag = tag_arg or _default_tag(repo)
+    if not TAG_RE.fullmatch(tag) or pep440(tag[1:]) is None:
+        die(f"{tag!r} is not v<X.Y.Z> or v<X.Y.Z>-(alpha|beta|rc)N")
+    if _pyproject_version_at(t, head) != pep440(tag[1:]):
+        die(f"HEAD's pyproject.toml says {_pyproject_version_at(t, head) or 'no version'}, not {tag}'s")
+    if not t.git_ok("fetch", "--quiet", "--tags", "origin", "+refs/heads/main:refs/remotes/origin/main"):
+        die("git fetch origin failed")
+    main = t.git("rev-parse", "--verify", "refs/remotes/origin/main").strip()
+    on_github = _remote_ref(t, f"refs/tags/{tag}")
+    doc: dict[str, Any] = {"tag": tag, "version": tag[1:], "head": head}
+
+    if on_github is None:
+        if head != main:
+            die(f"HEAD {head[:12]} is not origin/main's tip ({main[:12]}): main moved after the run was started, "
+                "or it was started elsewhere. Release main's tip: run the workflow again")
+        if t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"):
+            die(f"a tag {tag} here that GitHub doesn't have")
+        parent = t.git("rev-parse", "--verify", "--quiet", f"{head}^", check=False).strip()
+        if not parent or _pyproject_version_at(t, parent) == _pyproject_version_at(t, head):
+            die(f"HEAD {head[:12]} is not a release commit: it doesn't raise pyproject.toml's version "
+                f"(main's tip must be the release commit, docs/CONTRIBUTING.md, Releasing)")
+        changed = t.git("diff", "--name-only", parent, head).split()
+        if "android/release.json" in changed:
+            die("the release commit changes android/release.json: only android/scripts/release.ps1 writes it")
+        rel = _manifest_at(t, head)
+        if not rel:
+            die("HEAD's android/release.json names no release: the first app release is made by hand "
+                "(android/scripts/release.ps1)")
+        if rel.get("tag") == tag:
+            die(f"HEAD's android/release.json names {tag} already, but GitHub has no tag {tag}")
+        gradle = t.git_bytes("show", f"{head}:android/app/build.gradle.kts")
+        name, code = _gradle_app(gradle.decode("utf-8") if gradle is not None else "")
+        if name is None or code is None:
+            die("android/app/build.gradle.kts doesn't set versionName and versionCode exactly once each")
+        app_changed = (name, code) != (rel.get("version_name"), rel.get("version_code"))
+        if app_changed and not code > int(rel.get("version_code") or 0):
+            die(f"the app's versionCode {code} is not above the last release's ({rel.get('version_code')}): "
+                "raise it with versionName, or put both back")
+        doc.update(path="app" if app_changed else "server", sign_app=app_changed, finish_at=head)
+        if app_changed:
+            doc["app"] = {"version_name": name, "version_code": code}
+        return doc
+
+    if on_github == head:
+        app_changed = _manifest_at(t, head).get("tag") == tag
+        doc.update(path="app" if app_changed else "server", sign_app=False, finish_at=head)
+        return doc
+    parent = t.git("rev-parse", "--verify", "--quiet", f"{on_github}^", check=False).strip()
+    if (parent == head and t.git("diff", "--name-only", head, on_github).split() == ["android/release.json"]
+            and _manifest_at(t, on_github).get("tag") == tag):
+        doc.update(path="app", sign_app=False, finish_at=on_github)
+        return doc
+    die(f"the tag {tag} on GitHub is {on_github[:12]}, which is neither HEAD {head[:12]} nor its "
+        "android/release.json commit: nothing for this run to make or finish")
 
 
 def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None,
@@ -860,11 +976,28 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
     ap.add_argument("--since", help="the tag the notes' summary counts from (default: the previous one)")
     ap.add_argument("--signing-key", help="the private half of Domovoi's release key (an OpenSSH ed25519 key file, "
                     "outside the checkout; default DOMOVOI_RELEASE_SIGNING_KEY), for the Windows update's signatures")
+    ap.add_argument("--signing-agent", action="store_true",
+                    help="sign with the release key an ssh-agent holds (SSH_AUTH_SOCK) instead of a key file: "
+                    "the release workflow's way, which never prompts")
+    ap.add_argument("--plan", metavar="FILE",
+                    help="the release workflow's gate: check that HEAD is a release to make (or one to finish), "
+                    "write what to run as JSON to FILE, and change nothing")
     args = ap.parse_args(argv)
 
     repo = Path(repo or REPO)
     say = (tools.say if tools else (lambda m: print(f"finish-release: {m}", flush=True)))
     t = tools or Tools(repo, default_gh(repo), say)
+    if args.plan:
+        doc = plan(t, repo, args.tag)
+        Path(args.plan).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        say(f"plan: {doc['tag']}, " + ("the app changed: sign and publish it, then finish"
+                                      if doc["sign_app"] else
+                                      "finish (" + ("the app's release is published" if doc["path"] == "app"
+                                                    else "server and Windows only") + ")")
+            + f", at {doc['finish_at'][:12]}")
+        return 0
+    if args.signing_agent and args.signing_key:
+        die("--signing-agent or --signing-key, not both")
     publish = not args.no_publish
 
     # 1. The checks. --------------------------------------------------------
@@ -1081,9 +1214,16 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
 
     # The Windows update's signatures, when the tag pins the release key.
     release_key = t.git_bytes("show", f"{tag_commit}:{RELEASE_KEY}")
-    signing_key = args.signing_key or os.environ.get("DOMOVOI_RELEASE_SIGNING_KEY") or None
+    signing_key = None if args.signing_agent else (args.signing_key or os.environ.get("DOMOVOI_RELEASE_SIGNING_KEY") or None)
     signatures = None
-    if release_key is not None and not signing_key and not publish:
+    if args.signing_agent:
+        if release_key is None:
+            die(f"--signing-agent given, but the tag pins no release key ({RELEASE_KEY}): its Windows side couldn't "
+                "check the signatures anyway")
+        signatures = sign_setup(stage, staged_setup, tag=tag, version=version, tag_commit=tag_commit,
+                                key=None, public=release_key, repo=repo)
+        say(f"signed {SETUP_ASSET} and its manifest with the agent's key; both check out against the tag's {RELEASE_KEY}")
+    elif release_key is not None and not signing_key and not publish:
         say(f"warning: no signing key, so the Windows update's signatures are left out of this dry run "
             f"(the tag pins {RELEASE_KEY}; a real run needs --signing-key)")
     elif release_key is not None:

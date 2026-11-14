@@ -51,6 +51,9 @@ class ApiException(
      *  refused in a word ("ai-off": the household's AI features are off;
      *  "internet-off"). Null for any other error. */
     val refusal: String? = null,
+    /** The server's `Retry-After` header in seconds (a 429's "wait this
+     *  long"), when it sent a number; null otherwise. */
+    val retryAfterSec: Long? = null,
 ) : IOException(message) {
     /**
      * The part of the house the server says failed, from `failed` in a JSON
@@ -344,6 +347,7 @@ class ApiClient(
                     throw ApiException(
                         resp.code, "${resp.code} ${resp.message}: ${text.take(200)}", pairing,
                         body = text.take(4096), refusal = resp.header(REFUSAL_HEADER),
+                        retryAfterSec = resp.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it >= 0 },
                     )
                 }
                 if (trackPairing && _pairingRequired.value) _pairingRequired.value = false

@@ -173,8 +173,8 @@ final class HomeModelTests: XCTestCase {
         XCTAssertTrue(asked.contains("/api/plugins"))
         XCTAssertTrue(asked.contains("/api/acquisitions?status=pending&limit=100"))
         XCTAssertTrue(
-            asked.contains { $0.hasPrefix("/api/calendar/events?start=") && $0.hasSuffix("&limit=20") },
-            "the calendar's week, capped at twenty: \(asked)"
+            asked.contains { $0.hasPrefix("/api/calendar/events?start=") && $0.hasSuffix("&limit=50") },
+            "the calendar's week across every calendar, capped at fifty (1.3.0): \(asked)"
         )
         XCTAssertEqual(7, asked.count, "seven reads and nothing else: \(asked)")
 

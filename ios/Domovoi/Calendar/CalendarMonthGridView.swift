@@ -121,7 +121,7 @@ struct CalendarMonthGridView: View {
                 HStack(spacing: 3) {
                     ForEach(cell.marks) { mark in
                         Circle()
-                            .fill(mark.isGoogle ? Color.fgMuted : Color.brandInk)
+                            .fill(calendarDotColor(mark))
                             .frame(width: dot, height: dot)
                     }
                 }

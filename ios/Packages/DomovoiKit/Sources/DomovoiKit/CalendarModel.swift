@@ -556,7 +556,12 @@ public final class CalendarModel {
     /// (``CalendarDraft/init(_:)`` returns nil): an editor opened on a
     /// nonsense date would let a save overwrite the row's real time. Android
     /// opens it on `LocalDateTime.now()`, which is that overwrite.
+    /// No editor for an event from another calendar (1.3.0, `EventEditor.kt:168-174`):
+    /// the server answers 409 to its edit, so the control is not drawn and
+    /// this refuses as well, rather than open a form whose save could only
+    /// fail.
     public func openEditor(for entry: CalendarEntry) {
+        guard !entry.readOnly else { return }
         guard let opened = CalendarDraft(entry) else { return }
         draft = opened
     }
@@ -565,7 +570,10 @@ public final class CalendarModel {
         draft = nil
     }
 
+    /// Refused for an event from another calendar, for ``openEditor(for:)``'s
+    /// reason: the house only shows it, and it is deleted where it lives.
     public func askToDelete(_ entry: CalendarEntry) {
+        guard !entry.readOnly else { return }
         deleteTarget = entry
         deleteAskedServer = container.store.serverURL
     }

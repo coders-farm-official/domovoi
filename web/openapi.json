@@ -3360,6 +3360,166 @@
         }
       }
     },
+    "/api/music/mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Mix",
+        "operationId": "get_mix_api_music_mix_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Mix Api Music Mix Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Mix",
+        "operationId": "put_mix_api_music_mix_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MixIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Mix Api Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/people/{person_id}/music-mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Person Mix",
+        "operationId": "get_person_mix_api_people__person_id__music_mix_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Person Mix Api People  Person Id  Music Mix Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Person Mix",
+        "operationId": "put_person_mix_api_people__person_id__music_mix_put",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonMixIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Person Mix Api People  Person Id  Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -8130,7 +8290,7 @@
           "calendar"
         ],
         "summary": "List Events",
-        "description": "Events whose ``starts_at`` falls in ``[start, end)``.\n\nBoth bounds optional: omit ``start`` for a \"since the dawn of time\"\nsweep, omit ``end`` for everything from ``start`` onwards. Default\ncap at 500 keeps the JSON response sane on a year-spanning query.",
+        "description": "Events in ``[start, end)``: starting in it, or (from 1.3.0) begun\nbefore ``start`` and still under way at it (a multi-day event), in\nstart order, at most ``limit``.\n\nWith NEITHER bound the window is a day ago to 60 days ahead (until\n1.3.0 it was every event ever, oldest first, so the cap cut off what\nwas coming). One bound alone is open on the other side, as before.\nThe same event in two calendars (same iCalendar UID and start) is\nlisted once, with ``also_in`` naming the others.",
         "operationId": "list_events_api_calendar_events_get",
         "parameters": [
           {
@@ -8293,7 +8453,7 @@
           "calendar"
         ],
         "summary": "Patch Event",
-        "description": "Partial update. Only fields explicitly set on the request body\nare written; anything left unset stays as-is.",
+        "description": "Partial update. Only fields explicitly set on the request body\nare written; anything left unset stays as-is. An event from a linked\nor phone calendar is 409: it is changed where it lives.",
         "operationId": "patch_event_api_calendar_events__event_id__patch",
         "parameters": [
           {
@@ -8353,6 +8513,306 @@
             "schema": {
               "type": "integer",
               "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/sources": {
+      "get": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "List Sources",
+        "description": "Every calendar the house reads besides its own: links (address\nshown as ``host/\u2026`` only) and phones' shared calendars, with when each\nwas last read and, for a link, what went wrong in plain words; a phone\nnot heard from for a day is ``stale`` (\"last heard from \u2026\"). A phone's\n``device_id`` is in it for an admin only; ``account_name`` never.",
+        "operationId": "list_sources_api_calendar_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CalendarSource"
+                  },
+                  "type": "array",
+                  "title": "Response List Sources Api Calendar Sources Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Add Source",
+        "description": "Add a calendar by its private ICS / webcal link, then read it once\n(when the internet answer allows). The calendar is kept even when that\nfirst read fails: the answer says why, in plain words, and the\nrefresher keeps trying.",
+        "operationId": "add_source_api_calendar_sources_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarSourceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSourceRefresh"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/sources/{source_id}": {
+      "patch": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Patch Source",
+        "description": "Rename, recolour or re-own a calendar; for a link, also replace its\naddress (after the calendar company reset it). A phone's calendar takes\nits name and colour from the phone, so only its owner label changes.",
+        "operationId": "patch_source_api_calendar_sources__source_id__patch",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarSourcePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSource"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Delete Source",
+        "description": "Remove a calendar and its events from the house (the calendar\nitself, wherever it lives, is untouched). For a phone's calendar this\nis how one left behind goes (the app uninstalled, the phone lost); a\nphone still sharing it sends it again with its next update.",
+        "operationId": "delete_source_api_calendar_sources__source_id__delete",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/sources/{source_id}/refresh": {
+      "post": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Refresh Source",
+        "description": "Read a linked calendar now (\"refresh now\"). Under internet access\n\"never\" nothing is fetched and the answer says so.",
+        "operationId": "refresh_source_api_calendar_sources__source_id__refresh_post",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSourceRefresh"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/phones/{device_id}": {
+      "put": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Put Phone Snapshot",
+        "description": "The complete set of calendars this phone shares, with their events\nin a rolling window. Each listed calendar's events are replaced;\na calendar of this phone that is not listed is deleted (unpicked), and\n``calendars: []`` deletes them all.\n\nThe first snapshot from a phone answers ``calendar_key`` (once); every\nlater one must send it in ``X-Domovoi-Calendar-Key`` (403 without).\n410: sharing was turned off after this snapshot's ``generation``; 409:\nan update with a higher ``generation`` is already stored.",
+        "operationId": "put_phone_snapshot_api_calendar_phones__device_id__put",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneCalendarSnapshot"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneCalendarStored"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Delete Phone Calendars",
+        "description": "Every calendar a phone shared, and their events, leave the house.\n\nFrom the phone (sharing turned off): with its calendar key (403\nwithout, once it has one) and, optionally, the ``generation`` it was\nat, so an upload made before this and arriving after it is refused\n(410). From an admin (Settings \u2192 Household \u2192 Calendars, \"remove all of\nthis phone's\"): no key needed, and the phone's key is forgotten.",
+        "operationId": "delete_phone_calendars_api_calendar_phones__device_id__delete",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Generation"
             }
           }
         ],
@@ -9588,7 +10048,7 @@
           "playlists"
         ],
         "summary": "Add Track To Playlist",
-        "description": "Append a library track to the end of a playlist.\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
+        "description": "Append a library track to the end of a playlist.\n\n``{track_id}``: one song; 204, 404 for a song the library doesn't\nhave, 409 when it is already in the playlist.\n\n``{track_ids: [...]}`` (P5, up to 500): many songs in one request, in\nthe order sent, after the playlist's last song. Songs already in the\nplaylist, or sent twice, are kept once; ids the library doesn't have\nare left out. 200 ``{added, duplicates, missing}``. The browser's\n\"save as playlist\" uses it (it used to send one request per song).\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
         "operationId": "add_track_to_playlist_api_playlists__playlist_id__tracks_post",
         "parameters": [
           {
@@ -9614,6 +10074,16 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "200": {
+            "description": "track_ids: what the bulk add did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistBulkAdded"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -21133,6 +21603,83 @@
               }
             ],
             "title": "Last Synced At"
+          },
+          "all_day": {
+            "type": "boolean",
+            "title": "All Day",
+            "default": false
+          },
+          "calendar_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Id"
+          },
+          "calendar_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Name"
+          },
+          "calendar_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Color"
+          },
+          "calendar_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Kind"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Name"
+          },
+          "read_only": {
+            "type": "boolean",
+            "title": "Read Only",
+            "default": false
+          },
+          "busy": {
+            "type": "boolean",
+            "title": "Busy",
+            "default": false
+          },
+          "also_in": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Also In"
           }
         },
         "type": "object",
@@ -21262,6 +21809,322 @@
         },
         "type": "object",
         "title": "CalendarEventPatch"
+      },
+      "CalendarSource": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "link",
+              "phone"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Name"
+          },
+          "url_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url Display"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count",
+            "default": 0
+          },
+          "last_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Refreshed At"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "next_refresh_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Refresh At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_error_words": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Words"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "error",
+              "waiting",
+              "internet_off",
+              "stale"
+            ],
+            "title": "Status",
+            "default": "ok"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "color"
+        ],
+        "title": "CalendarSource",
+        "description": "A calendar the house reads from elsewhere (``GET /api/calendar/sources``).\nA link's address is never here: ``url_display`` is its host and \"\u2026\"."
+      },
+      "CalendarSourceCreate": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url",
+          "name"
+        ],
+        "title": "CalendarSourceCreate"
+      },
+      "CalendarSourcePatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CalendarSourcePatch"
+      },
+      "CalendarSourceRefresh": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/CalendarSource"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "events": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "ok"
+        ],
+        "title": "CalendarSourceRefresh"
       },
       "CaptureList": {
         "properties": {
@@ -21446,9 +22309,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -25118,6 +25987,62 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MixIn": {
+        "properties": {
+          "discovery_favorites": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Wander"
+          },
+          "autoplay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
+          },
+          "list_repeat_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 500.0,
+                "minimum": 20.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List Repeat Min"
+          }
+        },
+        "type": "object",
+        "title": "MixIn"
+      },
       "MoveIn": {
         "properties": {
           "target": {
@@ -25679,6 +26604,28 @@
         ],
         "title": "NowPlayingSong"
       },
+      "OverrideIn": {
+        "properties": {
+          "discovery_favorites": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Close Wander"
+          }
+        },
+        "type": "object",
+        "required": [
+          "discovery_favorites",
+          "close_wander"
+        ],
+        "title": "OverrideIn"
+      },
       "PasswordChangeRequest": {
         "properties": {
           "old_password": {
@@ -25976,6 +26923,22 @@
         ],
         "title": "Person"
       },
+      "PersonMixIn": {
+        "properties": {
+          "override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverrideIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "PersonMixIn"
+      },
       "PersonRename": {
         "properties": {
           "name": {
@@ -25990,6 +26953,225 @@
           "name"
         ],
         "title": "PersonRename"
+      },
+      "PhoneCalendar": {
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Calendar Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/PhoneCalendarEvent"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calendar_id",
+          "name"
+        ],
+        "title": "PhoneCalendar"
+      },
+      "PhoneCalendarEvent": {
+        "properties": {
+          "uid": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Uid"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "starts_at_ms": {
+            "type": "integer",
+            "title": "Starts At Ms"
+          },
+          "ends_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ends At Ms"
+          },
+          "all_day": {
+            "type": "boolean",
+            "title": "All Day",
+            "default": false
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "ical_uid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ical Uid"
+          },
+          "busy": {
+            "type": "boolean",
+            "title": "Busy",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "uid",
+          "starts_at_ms"
+        ],
+        "title": "PhoneCalendarEvent"
+      },
+      "PhoneCalendarSnapshot": {
+        "properties": {
+          "phone_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Name"
+          },
+          "window_start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start Ms"
+          },
+          "window_end_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End Ms"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
+          "calendars": {
+            "items": {
+              "$ref": "#/components/schemas/PhoneCalendar"
+            },
+            "type": "array",
+            "title": "Calendars"
+          }
+        },
+        "type": "object",
+        "title": "PhoneCalendarSnapshot",
+        "description": "``PUT /api/calendar/phones/{device_id}``: everything a phone shares."
+      },
+      "PhoneCalendarStored": {
+        "properties": {
+          "calendars": {
+            "type": "integer",
+            "title": "Calendars"
+          },
+          "events": {
+            "type": "integer",
+            "title": "Events"
+          },
+          "calendar_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calendars",
+          "events"
+        ],
+        "title": "PhoneCalendarStored"
       },
       "PhoneLookupBody": {
         "properties": {
@@ -26079,9 +27261,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -26178,9 +27366,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -26269,6 +27463,30 @@
         ],
         "title": "Playlist",
         "description": "One row in the Playlists tab. ``is_virtual=True`` is the\npinned-at-top \"Favorites\" entry \u2014 derived from\n``library_tracks.favorited`` rather than a real ``playlists``\nrow, so it can't be renamed or deleted from the dashboard."
+      },
+      "PlaylistBulkAdded": {
+        "properties": {
+          "added": {
+            "type": "integer",
+            "title": "Added"
+          },
+          "duplicates": {
+            "type": "integer",
+            "title": "Duplicates"
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "added",
+          "duplicates",
+          "missing"
+        ],
+        "title": "PlaylistBulkAdded",
+        "description": "What a bulk add did: songs appended, songs already in the playlist\n(or sent twice: saved once), ids the library doesn't have."
       },
       "PlaylistCreate": {
         "properties": {
@@ -26397,16 +27615,37 @@
       "PlaylistTrackAdd": {
         "properties": {
           "track_id": {
-            "type": "integer",
-            "minimum": 1.0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Track Id"
+          },
+          "track_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 500,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Ids"
           }
         },
         "type": "object",
-        "required": [
-          "track_id"
-        ],
-        "title": "PlaylistTrackAdd"
+        "title": "PlaylistTrackAdd",
+        "description": "Add one library song (``track_id``) or many at once (``track_ids``,\nin order, up to 500: \"save the queue as a playlist\" in one request\ninstead of one per song). Exactly one of the two."
       },
       "PollFailure": {
         "properties": {
@@ -27038,6 +28277,17 @@
             ],
             "title": "Reason Label"
           },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          },
           "up_next_seq": {
             "anyOf": [
               {
@@ -27259,6 +28509,17 @@
             "type": "boolean",
             "title": "Can Add",
             "default": false
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
           }
         },
         "type": "object",
@@ -28686,9 +29947,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           }
         },
         "type": "object",

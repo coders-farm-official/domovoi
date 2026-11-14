@@ -132,6 +132,7 @@ const itemFromTrack = (t) => ({
  *                purpose) | 'auto' (an Up next pick)
  *   upNextSeq    the pick's number in its session
  *   reasonLabel  why it was picked ("same artist", "90s", "from road trip")
+ *   why          the same in a plain sentence, from the picker's real signals
  *   sessionId    the session the song belongs to (the listening history
  *                carries it back, which is how skips and finishes feed it)
  * The queue panels show auto items in their own "up next" section
@@ -152,7 +153,7 @@ const _upNextSetAutoplayPref = (on) => {
 const itemFromPick = (pick, sessionId) => Object.assign(
   itemFromTrack({ id: pick.track_id, title: pick.title, artist: pick.artist, album: pick.album,
                   duration_sec: pick.duration_sec }),
-  { origin: 'auto', upNextSeq: pick.seq, reasonLabel: pick.reason_label || '', sessionId });
+  { origin: 'auto', upNextSeq: pick.seq, reasonLabel: pick.reason_label || '', why: pick.why || '', sessionId });
 /* Up next's calls that nobody pressed a button for (the start that rides
  * on a play, a refill, a removed pick): `noPrompt`, so a refused sign-in
  * never opens a prompt over the music. */
@@ -2001,6 +2002,9 @@ try {
 const MiniPlayer = () => {
   const p = usePlayback();
   const [showQueue, setShowQueue] = React.useState(false);
+  // Which queue the queue panel shows: 'browser' or a room (PlayerQueueView).
+  const [queueView, setQueueView] = React.useState('browser');
+  const [sheetQueue, setSheetQueue] = React.useState(0);   // bumped: the sheet opens on Queue
   const [showCast, setShowCast] = React.useState(false);
   const [showLyrics, setShowLyrics] = React.useState(false);
   // 'closed' | 'open' | 'closing' (the shrink back into the bar is running).
@@ -2087,6 +2091,26 @@ const MiniPlayer = () => {
     if (sheetRef.current === 'closed') openSheet('info');
     return true;
   };
+  // openQueueFor(room): the queue panel, aimed at that room.
+  const queueRef = React.useRef(null);
+  queueRef.current = (room) => {
+    if (!hasItem) return false;
+    setQueueView(room || 'browser');
+    let phone = false;
+    try { phone = typeof window.matchMedia === 'function' && window.matchMedia(_MP_PHONE).matches; } catch {}
+    if (phone) {
+      setSheetQueue((n) => n + 1);
+      if (sheetRef.current === 'closed') openSheet('queue');
+    } else {
+      setShowCast(false); setShowLyrics(false); setShowQueue(true);
+    }
+    return true;
+  };
+  React.useEffect(() => {
+    const fn = (room) => (queueRef.current ? queueRef.current(room) : false);
+    _mpQueueHub.openers.add(fn);
+    return () => { _mpQueueHub.openers.delete(fn); };
+  }, []);
   React.useEffect(() => {
     const fn = () => (openRef.current ? openRef.current() : false);
     _mpSheetHub.openers.add(fn);
@@ -2177,7 +2201,8 @@ const MiniPlayer = () => {
 
   return (
     <>
-      {showQueue && <QueuePanel p={p} onClose={() => setShowQueue(false)}/>}
+      {showQueue && <QueuePanel p={p} onClose={() => setShowQueue(false)}
+                                view={queueView} onView={setQueueView} fire={fire}/>}
       {showCast && <CastMenu p={p} onClose={() => setShowCast(false)}/>}
       {showLyrics && lyrId != null && typeof LyricsFloat === 'function' && (
         <LyricsFloat trackId={lyrId}
@@ -2185,7 +2210,9 @@ const MiniPlayer = () => {
                      onClose={() => setShowLyrics(false)}/>
       )}
       {sheetOpen && <PlayerSheet p={p} closing={sheet === 'closing'} originRef={barRef}
-                                 onClose={() => closeSheet()} onClosed={sheetClosed}/>}
+                                 onClose={() => closeSheet()} onClosed={sheetClosed}
+                                 queueView={queueView} onQueueView={setQueueView} queueAsk={sheetQueue}
+                                 fire={fire}/>}
       {toastNode}
       {/* `--dock-bottom` is 0 on a desktop and the phone strip's height at
           760px and below (styles.css), so on a phone the player docks ON
@@ -2364,7 +2391,8 @@ const playerSheetTab = ({ here, picked, lyricsTab, lyricsFound, lyricsLoading, e
 
 const _MP_TAB_LABELS = { lyrics: 'Lyrics', eq: 'Equalizer', queue: 'Queue', hide: 'Hide' };
 
-const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed }) => {
+const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed,
+                       queueView = 'browser', onQueueView = null, queueAsk = 0, fire = null }) => {
   const sheetRef = React.useRef(null);
   const innerRef = React.useRef(null);
   const closeRef = React.useRef(null);
@@ -2509,7 +2537,9 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed }) => {
     || (lyrDoc.text && (lyrDoc.status === 'plain' || lyrDoc.status === 'synced'))));
   const eqTab = !remote && typeof EqPanel === 'function';
   const songKey = remote && p.remoteNp ? `room:${p.remoteNp.track_id ?? ''}:${it.uid}` : it.uid;
-  const [here, setHere] = React.useState(null);           // { song, tab }
+  const [here, setHere] = React.useState(() => (queueAsk ? { song: songKey, tab: 'queue' } : null));  // { song, tab }
+  // A "queue" link (openQueueFor) while the sheet is open: to the Queue tab.
+  React.useEffect(() => { if (queueAsk) setHere({ song: songKey, tab: 'queue' }); }, [queueAsk]); // eslint-disable-line
   const [picked, setPicked] = React.useState(_mpTabGet);
   const tab = playerSheetTab({
     here: here && here.song === songKey ? here.tab : null, picked,
@@ -2556,18 +2586,7 @@ const PlayerSheet = ({ p, closing = false, originRef, onClose, onClosed }) => {
       )}
       {tab === 'eq' && <EqPanel p={p}/>}
       {tab === 'queue' && (
-        <>
-          <div className="mp-sheet-sec-head">
-            <span>queue · {playerQueueCount(p.queue, p.index)}</span>
-            <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue" aria-label="clear queue"/>
-          </div>
-          <div className="mp-q-list">
-            <PlayerQueueRows queue={p.queue} index={p.index}
-                             jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
-          </div>
-          <PlayerUpNext p={p}/>
-          <PlayerQueueAdd p={p}/>
-        </>
+        <PlayerQueueView p={p} sheet view={queueView} onView={onQueueView} fire={fire}/>
       )}
     </div>
   );
@@ -2673,31 +2692,60 @@ const CoverTile = ({ item, size = 44, radius = 'var(--r-sm)' }) => {
                    iconColor="inherit"/>;
 };
 
-/* The queue's rows — drag to reorder, tap to jump, x to remove — shared by
- * the desktop's floating QueuePanel and the phone sheet (styles.css sizes
- * them: 48px rows with a 44px remove button in the sheet). Memoised on
- * the queue and its actions, which are stable between frames, so the
- * position ticker re-rendering the player doesn't re-render every row. */
-const PlayerQueueRows = React.memo(function PlayerQueueRows({ queue, index, jumpTo, removeAt, moveItem }) {
+/* The queue's rows, shared by the desktop's floating QueuePanel and the
+ * phone sheet (styles.css sizes them: 48px rows with 44px buttons in the
+ * sheet). The same parts as a room's queue (components.jsx QueueGrip,
+ * QueueSectionHead; music.jsx QueueTab): "now playing" over the song
+ * playing and "next" over what somebody asked for after it; the grip
+ * drags, or moves a song one place with the arrow keys; tap a song to play
+ * it now; "play next" moves it right after the song playing; x removes
+ * it. Memoised on the queue and its actions, which are stable between
+ * frames, so the position ticker re-rendering the player doesn't
+ * re-render every row. */
+const PlayerQueueRows = React.memo(function PlayerQueueRows({ queue, index, jumpTo, removeAt, moveItem, grip = true }) {
   const dragFrom = React.useRef(null);
   // Up next's picks still to come have their own section (PlayerUpNext).
   const shown = queue.filter((it, i) => !_upNextWaiting(it, i, index));
+  const firstNext = queue.findIndex((it, i) => i > index && index >= 0 && !_upNextWaiting(it, i, index));
+  const count = queue.length;
+  // Where "play next" puts a song: right after the one playing (the move
+  // takes the place the song lands at once it has been taken out).
+  const nextSlot = (i) => {
+    if (index < 0 || i === index) return null;
+    const to = i < index ? index : index + 1;
+    return to === i ? null : to;
+  };
+  const play = (i) => jumpTo(i);
   return (
     <>
       {queue.map((it, i) => (_upNextWaiting(it, i, index) ? null : (
-        <div key={it.uid} className={`mp-q-row${i === index ? ' cur' : ''}`}
-             draggable onDragStart={() => { dragFrom.current = i; }}
-             onDragOver={(e) => e.preventDefault()}
-             onDrop={() => { const f = dragFrom.current; dragFrom.current = null; if (f != null && f !== i) moveItem(f, i); }}>
-          <div className="mp-q-num mono">
-            {i === index ? <Icon name="volume-2" size={12}/> : i + 1}
+        <React.Fragment key={it.uid}>
+          {i === index && <QueueSectionHead>now playing</QueueSectionHead>}
+          {i === firstNext && <QueueSectionHead>next</QueueSectionHead>}
+          <div className={`mp-q-row${i === index ? ' cur' : ''}`}
+               draggable onDragStart={() => { dragFrom.current = i; }}
+               onDragOver={(e) => e.preventDefault()}
+               onDrop={() => { const f = dragFrom.current; dragFrom.current = null; if (f != null && f !== i) moveItem(f, i); }}>
+            {grip && <QueueGrip index={i} count={count} onMove={moveItem} label={it.title || 'this song'}/>}
+            <div className="mp-q-num mono">
+              {i === index ? <Icon name="volume-2" size={12}/> : i + 1}
+            </div>
+            <div className="mp-q-main" role="button" tabIndex={0}
+                 title={i === index ? undefined : 'play now'}
+                 onClick={() => play(i)}
+                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (e.preventDefault) e.preventDefault(); play(i); } }}>
+              <div className="mp-q-title">{it.title}</div>
+              <div className="mp-q-sub mono">{it.artist || '—'}</div>
+            </div>
+            <div className="mp-un-acts">
+              {nextSlot(i) != null && (
+                <IconButton name="list-start" onClick={() => moveItem(i, nextSlot(i))}
+                            title="play next" aria-label={`play ${it.title || 'this song'} next`}/>
+              )}
+              <IconButton name="x" onClick={() => removeAt(i)} title="remove" aria-label={`remove ${it.title}`}/>
+            </div>
           </div>
-          <div className="mp-q-main" onClick={() => jumpTo(i)}>
-            <div className="mp-q-title">{it.title}</div>
-            <div className="mp-q-sub mono">{it.artist || '—'}</div>
-          </div>
-          <IconButton name="x" onClick={() => removeAt(i)} title="remove" aria-label={`remove ${it.title}`}/>
-        </div>
+        </React.Fragment>
       )))}
       {shown.length === 0 && <div className="mp-q-empty">queue is empty</div>}
     </>
@@ -2814,7 +2862,7 @@ const PlayerUpNextHere = ({ p }) => {
                 <div className="mp-q-title">{row.it.title}</div>
                 <div className="mp-un-sub">
                   <span className="mp-q-sub mono">{row.it.artist || '—'}</span>
-                  {row.it.reasonLabel && <span className="mp-un-why">{row.it.reasonLabel}</span>}
+                  <UpNextWhy label={row.it.reasonLabel} why={row.it.why}/>
                 </div>
               </div>
               <div className="mp-un-acts">
@@ -2929,7 +2977,7 @@ const RoomUpNext = ({ roomId, limit = null, onOpenQueue = null, send = null, cla
                 <div className="mp-q-title">{it.title || 'unknown'}</div>
                 <div className="mp-un-sub">
                   <span className="mp-q-sub mono">{it.artist || '—'}</span>
-                  {it.reason_label && <span className="mp-un-why">{it.reason_label}</span>}
+                  <UpNextWhy label={it.reason_label} why={it.why}/>
                 </div>
               </div>
               {editable && (
@@ -2980,11 +3028,12 @@ const PlayerQueueSave = ({ queue, roomId = null }) => {
         setName(''); setSaving(false); setOpen(false);
         return;
       }
+      // One request for the whole list (track_ids[], P5): a song in it
+      // twice is saved once, and the answer says how many were saved.
       const pl = await apiPost('/api/playlists', { name: name.trim() });
-      for (const tid of trackIds) {
-        try { await apiPost(`/api/playlists/${pl.id}/tracks`, { track_id: tid }); } catch {}
-      }
-      setNote(`Saved as "${name.trim()}".`);
+      const r = await apiPost(`/api/playlists/${pl.id}/tracks`, { track_ids: trackIds });
+      const n = r && typeof r.added === 'number' ? r.added : trackIds.length;
+      setNote(`Saved as "${name.trim()}" (${n} song${n === 1 ? '' : 's'}).`);
       setName(''); setSaving(false); setOpen(false);
     } catch (e) {
       setSaving(false);
@@ -3187,28 +3236,37 @@ const QueueSearchAdd = ({ onAdd, unavailable = null, idBase = 'mp-q', where = nu
  * "add to queue" lands after what was asked for and before the room's
  * Up next picks, "play next" right after the song playing there
  * (`where`, P4). */
+/* Add library songs to where the player plays: "play next" (right after
+ * the song playing) or "add to queue" (after what was asked for, before
+ * Up next's picks). While casting, to both the queue this browser keeps
+ * and the room's own queue (`where`, P4). Resolves to the line to show;
+ * the queue's search and every song row's menu (components.jsx
+ * SongRowMenu) use it. */
+const playerAddTracks = async (p, tracks, next, label) => {
+  const casting = !!(p.target && p.target.kind === 'room');
+  const items = tracks.map(itemFromTrack);
+  if (next) {
+    for (let i = items.length - 1; i >= 0; i--) p.playNext(items[i]);
+  } else {
+    p.enqueue(items);
+  }
+  if (casting) {
+    try {
+      await apiPost(roomQueuePath(p.target.roomId, '/add'),
+        { track_ids: tracks.map((t) => t.id), device_id: DeviceIdentity.id(), where: next ? 'next' : 'end' });
+    } catch (e) {
+      if (isAuthFailure(e)) return '';
+      return `Added "${label}" here, but ${p.target.roomId} didn't take it: ${apiErrorText(e)}`;
+    }
+  }
+  const n = items.length;
+  const where = casting ? ` in ${p.target.roomId}` : '';
+  return `${next ? 'Playing next' : 'Added'}${where}: ${label}${n > 1 ? ` (${n} songs)` : ''}`;
+};
+
 const PlayerQueueAdd = ({ p }) => {
   const casting = !!(p.target && p.target.kind === 'room');
-  const onAdd = async (tracks, next, label) => {
-    const items = tracks.map(itemFromTrack);
-    if (next) {
-      for (let i = items.length - 1; i >= 0; i--) p.playNext(items[i]);
-    } else {
-      p.enqueue(items);
-    }
-    if (casting) {
-      try {
-        await apiPost(roomQueuePath(p.target.roomId, '/add'),
-          { track_ids: tracks.map((t) => t.id), device_id: DeviceIdentity.id(), where: next ? 'next' : 'end' });
-      } catch (e) {
-        if (isAuthFailure(e)) return '';
-        return `Added "${label}" here, but ${p.target.roomId} didn't take it: ${apiErrorText(e)}`;
-      }
-    }
-    const n = items.length;
-    const where = casting ? ` in ${p.target.roomId}` : '';
-    return `${next ? 'Playing next' : 'Added'}${where}: ${label}${n > 1 ? ` (${n} songs)` : ''}`;
-  };
+  const onAdd = (tracks, next, label) => playerAddTracks(p, tracks, next, label);
   return (
     <div className="mp-q-save">
       <QueueSearchAdd onAdd={onAdd} where={casting ? p.target.roomId : null}
@@ -3218,29 +3276,98 @@ const PlayerQueueAdd = ({ p }) => {
   );
 };
 
+/* ── Which queue the panel shows (P5) ───────────────────────────────────
+ * The queue panel (the bar's floating one and the expanded player's Queue
+ * tab) shows this browser's queue, or a room's real queue: a picker in its
+ * head lists "this browser" and the rooms. A room is the Music page's Room
+ * queue view (music.jsx QueueTab, `embedded`), with everything it does:
+ * the real jump, move, remove, play next, the room's Up next and its
+ * Autoplay switch, add from the library, save as playlist, clear; a guest
+ * gets what a guest may do there. While casting, "this browser" is still
+ * the copy this browser sent (owner, 2026-11-12: no single shared queue);
+ * the room's own queue is one pick away.
+ *
+ * `view` is 'browser' or a room id, kept by MiniPlayer so Home's and a
+ * room drawer's "queue" links (openQueueFor) can aim it at a room. No
+ * picker when there are no rooms, or the Music page's view isn't loaded. */
+const PlayerQueueView = ({ p, view = 'browser', onView, fire = null, sheet = false, onClose = null }) => {
+  const { items: nowPlaying, error: npError, loading: npLoading } = useApiList('/api/music/now-playing',
+    { eventTypes: ['music.now_playing.changed'], quiet: true });
+  const np = nowPlaying || [];
+  const rooms = np.map((x) => x.room_id);
+  const roomView = typeof QueueTab === 'function';
+  const room = roomView && view && view !== 'browser' && (rooms.includes(view) || npLoading) ? view : null;
+  const say = typeof fire === 'function' ? fire : () => {};
+  const casting = p.target && p.target.kind === 'room' ? p.target.roomId : null;
+  const picker = roomView && rooms.length > 0 ? (
+    <select className="q-target" value={room || 'browser'} aria-label="which queue to show"
+            onChange={(e) => onView && onView(e.target.value)}>
+      <option value="browser">{casting ? `this browser (sent to ${casting})` : 'this browser'}</option>
+      {rooms.map((r) => <option key={r} value={r}>{r}</option>)}
+    </select>
+  ) : null;
+  const head = (
+    <div className={sheet ? 'mp-sheet-sec-head q-head' : 'q-panel-head q-head'}>
+      <span className="q-head-what">
+        {picker || <span>queue · {playerQueueCount(p.queue, p.index)}</span>}
+        {picker && !room && <span className="q-head-count">· {playerQueueCount(p.queue, p.index)}</span>}
+      </span>
+      <span className="q-head-acts">
+        {!room && <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue" aria-label="clear queue"/>}
+        {onClose && <IconButton name="x" onClick={onClose} title="close" aria-label="close the queue"/>}
+      </span>
+    </div>
+  );
+  if (room) {
+    return (
+      <>
+        {head}
+        <div className="q-room-view">
+          <QueueTab embedded rooms={rooms} nowPlaying={np} npError={npError} npLoading={!!npLoading}
+                    fire={say} room={room} onRoom={onView}/>
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      {head}
+      <div className={sheet ? 'mp-q-list' : 'mp-q-list q-panel-body'}>
+        <PlayerQueueRows queue={p.queue} index={p.index} grip={!sheet}
+                         jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
+        {!sheet && <PlayerUpNext p={p}/>}
+      </div>
+      {sheet && <PlayerUpNext p={p}/>}
+      <PlayerQueueAdd p={p}/>
+    </>
+  );
+};
+
 /* Queue panel — the desktop bar's queue, floating above it. */
-const QueuePanel = ({ p, onClose }) => (
+const QueuePanel = ({ p, onClose, view = 'browser', onView = null, fire = null }) => (
   <>
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 46 }}/>
-    <div style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 380, maxHeight: '60vh', zIndex: 47,
+    <div className="q-panel"
+         style={{ position: 'fixed', right: 14, bottom: 'calc(var(--dock-bottom, 0px) + 76px)', width: 380, maxHeight: '60vh', zIndex: 47,
                   background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                   boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>queue · {playerQueueCount(p.queue, p.index)}</div>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <IconButton name="trash-2" onClick={p.clearQueue} title="clear queue"/>
-          <IconButton name="x" onClick={onClose}/>
-        </div>
-      </div>
-      <div className="mp-q-list" style={{ overflowY: 'auto', flex: 1 }}>
-        <PlayerQueueRows queue={p.queue} index={p.index}
-                         jumpTo={p.jumpTo} removeAt={p.removeAt} moveItem={p.moveItem}/>
-        <PlayerUpNext p={p}/>
-      </div>
-      <PlayerQueueAdd p={p}/>
+      <PlayerQueueView p={p} view={view} onView={onView} fire={fire} onClose={onClose}/>
     </div>
   </>
 );
+
+/* Open the queue panel aimed at a room (Home's room cards, a room's
+ * drawer): the bar's floating queue on a desktop, the expanded player's
+ * Queue tab on a phone. With nothing in this browser's player there is no
+ * bar to open it from, so the Music page's Room queue (the same view, full
+ * page) opens instead. */
+const _mpQueueHub = { openers: new Set() };
+const openQueueFor = (room) => {
+  let opened = false;
+  _mpQueueHub.openers.forEach((fn) => { if (fn(room)) opened = true; });
+  if (!opened && typeof openRoomQueue === 'function') openRoomQueue(room);
+  return opened;
+};
 
 /* A cast a room didn't take, in words for the person. The core names the
  * part that failed (`failed` in the error body, 2026-10-01): the room's
@@ -3365,6 +3492,8 @@ Object.assign(window, {
   playerUrls, OfflineCache, SpokenAudio,
   CoverTile, EQ_BANDS, EQ_LABELS, EQ_MIN_DB, EQ_MAX_DB,
   ListenLog, PlayerUpNext, playerQueueCount,
+  // The queue panel's parts (P5): components.jsx SongRowMenu, home.jsx, satellites.jsx.
+  playerAddTracks, openQueueFor, PlayerQueueView,
   // A room's queue and its Up next (P4): music.jsx, satellites.jsx.
   RoomUpNext, PlayerQueueSave, upNextListenerFields,
 });

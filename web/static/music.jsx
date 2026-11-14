@@ -767,10 +767,7 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                 <td className="mono">{fmtDur(t.duration_sec)}</td>
                 <td className="actions" onClick={e => e.stopPropagation()}>
                   <div className="lib-acts">
-                    <IconButton name="list-plus" onClick={() => onQueueTrack(t)}
-                                title="add to browser queue"/>
-                    <IconButton name="corner-down-right" onClick={() => onPlayNextTrack(t)}
-                                title="play next in browser"/>
+                    <MusicSongMenu track={t} fire={fire}/>
                     <IconButton name="heart" onClick={() => onToggleFavorite(t)}
                                 style={t.favorited ? { color: 'var(--brand-ink)' } : undefined}
                                 title={t.favorited ? 'unfavorite' : 'favorite'}/>
@@ -899,7 +896,7 @@ const shuffledIds = (ids) => {
  * most ROOM_TRACK_CAP at once); this browser the songs loaded so far. */
 const ROOM_TRACK_CAP = 500;
 const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoom,
-                        onBrowserPlayTracks, onBrowserQueueTracks, onSelectTrack, onBrowserPlay, onQueueTrack }) => {
+                        onBrowserPlayTracks, onBrowserQueueTracks, onSelectTrack, onBrowserPlay, onQueueTrack, fire = null }) => {
   const [room, setRoom] = React.useState(rooms[0] || null);
   const [album, setAlbum] = React.useState(null);     // null = all songs; '' = no album
   React.useEffect(() => { setRoom(rooms[0] || null); }, [artist?.name, rooms.join(',')]);
@@ -971,7 +968,7 @@ const ArtistDrawer = ({ artist, rooms, onClose, onPlayTracks, onQueueTracksInRoo
                          context={context}
                          onClose={onClose} onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
                          onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}/>
-        <TrackSetSongs songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
+        <TrackSetSongs fire={fire} songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
                        onQueueTrack={onQueueTrack} context={context}
                        sub={(t) => [t.album, t.artist !== artist.name ? t.artist : null].filter(Boolean).join(' · ')}/>
       </aside>
@@ -1031,7 +1028,7 @@ const TrackSetActions = ({ rooms, room, onRoom, ids, songs, what, context = null
  * drawer, the buttons play or queue one in this browser. `sub(t)` is the
  * line under the title. Play starts Up next on `context`, the drawer's
  * list (the artist, album or genre; the loaded songs for an `ids` one). */
-const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack, context = null }) => {
+const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack, context = null, fire = null }) => {
   const loaded = songs.items || [];
   return (
     <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
@@ -1058,7 +1055,7 @@ const TrackSetSongs = ({ songs, sub, onSelectTrack, onBrowserPlay, onQueueTrack,
               </button>
               <div style={{ display: 'flex', gap: 2 }}>
                 <IconButton name="play" onClick={() => onBrowserPlay(t, context, loaded)} title="play in this browser"/>
-                <IconButton name="list-plus" onClick={() => onQueueTrack(t)} title="add to browser queue"/>
+                <MusicSongMenu track={t} fire={fire}/>
               </div>
             </div>
           ))}
@@ -1194,7 +1191,7 @@ const GenresTab = ({ onOpen }) => {
  * ?genre=&sort=artist, loaded as it scrolls) with the Artists drawer's
  * actions. `genre.key` '' is the tracks whose tags name no genre. */
 const GenreDrawer = ({ genre, rooms, onClose, onPlayTracks, onQueueTracksInRoom,
-                       onBrowserPlayTracks, onBrowserQueueTracks, onSelectTrack, onBrowserPlay, onQueueTrack }) => {
+                       onBrowserPlayTracks, onBrowserQueueTracks, onSelectTrack, onBrowserPlay, onQueueTrack, fire = null }) => {
   const [room, setRoom] = React.useState(rooms[0] || null);
   React.useEffect(() => { setRoom(rooms[0] || null); }, [genre?.key, rooms.join(',')]);
   const key = genre ? genre.key : null;
@@ -1231,7 +1228,7 @@ const GenreDrawer = ({ genre, rooms, onClose, onPlayTracks, onQueueTracksInRoom,
         <TrackSetActions rooms={rooms} room={room} onRoom={setRoom} ids={ids} songs={songs} what={genre.name}
                          context={context} onClose={onClose} onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
                          onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}/>
-        <TrackSetSongs songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
+        <TrackSetSongs fire={fire} songs={songs} onSelectTrack={onSelectTrack} onBrowserPlay={onBrowserPlay}
                        onQueueTrack={onQueueTrack} context={context}
                        sub={(t) => [t.artist, t.album].filter(Boolean).join(' · ')}/>
       </aside>
@@ -1378,6 +1375,15 @@ const JobsTab = ({ jobs, availability, loading, rooms, onCancel, fire, refresh }
  * who is asking (`guest`, `admin`); an admin gets a ban button on an entry
  * a guest added.
  */
+/* The shared queue and song-row parts (components.jsx, P5), through
+ * wrappers: this file is also drawn on its own (the test harnesses), where
+ * they aren't loaded; there the parts are simply left out. */
+const MusicSongMenu = (props) => (typeof SongRowMenu === 'function' ? <SongRowMenu {...props}/> : null);
+const MusicQueueSec = ({ children }) => (typeof QueueSectionHead === 'function'
+  ? <QueueSectionHead className="rq-sec">{children}</QueueSectionHead> : null);
+const MusicQueueGrip = (props) => (typeof QueueGrip === 'function'
+  ? <QueueGrip {...props}/> : <Icon name="grip-vertical" size={13}/>);
+
 const fmtQueueDur = (sec) => {
   if (sec == null) return '—';
   const m = Math.floor(sec / 60);
@@ -1448,8 +1454,15 @@ const roomPlaySig = (np) => (np ? `${np.state || ''}|${np.song ? `${np.song.file
  * (a real jump in the room's queue); "less like this" on a pick takes that
  * artist out of the mix; "save as playlist" keeps the queue. A guest gets
  * the jump, the moves and remove on a playing room — no switch, no "less
- * like this", no saving. */
-const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: pickedRoom, onRoom }) => {
+ * like this", no saving.
+ *
+ * The same rows as the player's queue (P5: components.jsx QueueGrip,
+ * QueueSectionHead): "now playing", "next", then "up next"; the grip drags
+ * or moves a song with the arrow keys. `embedded`: drawn inside the
+ * player's queue panel aimed at this room (player.jsx PlayerQueueView),
+ * whose head already picks the room, so no room chips. */
+const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: pickedRoom, onRoom,
+                    embedded = false }) => {
   // Default to the room this browser looked at last (kept per browser), so
   // the queue is read at once rather than after now-playing has answered;
   // else a room that's actually playing — that's the queue you came here to
@@ -1739,8 +1752,8 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
   return (
     <div>
       <div className="rq-rooms" style={{ borderBottom: '1px solid var(--border-soft)' }}>
-        <span className="label">room</span>
-        {roomChoices.map(r => (
+        {!embedded && <span className="label">room</span>}
+        {!embedded && roomChoices.map(r => (
           <button key={r} className="rq-room" onClick={() => setRoom(r)}
                   style={{ background: room === r ? 'var(--brand-soft)' : 'var(--card)',
                            color: room === r ? 'var(--brand-ink)' : 'var(--fg)' }}>{r}</button>
@@ -1824,9 +1837,14 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
             const canBan = admin && (item.guest_device_id || item.guest_source);
             const pick = item.origin === 'auto' && idx > cur;
             const head = idx === firstPick ? upNextHead : null;
+            // "now playing" over the song playing, "next" over what was
+            // asked for after it (the player's queue has the same heads).
+            const secHead = item.playing ? 'now playing'
+              : (idx === cur + 1 && cur >= 0 && !pick ? 'next' : null);
             return (
               <React.Fragment key={item.song_id}>
               {head}
+              {secHead && <MusicQueueSec>{secHead}</MusicQueueSec>}
               <div className="rq-row"
                    draggable={editable}
                    onDragStart={() => { dragFrom.current = idx; }}
@@ -1835,7 +1853,10 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
                    style={{ background: item.playing ? 'var(--brand-soft)' : 'transparent',
                             cursor: editable ? 'grab' : 'default' }}>
                 <span className="rq-grip">
-                  <Icon name={editable ? 'grip-vertical' : 'minus'} size={13}/>
+                  {editable
+                    ? <MusicQueueGrip index={idx} count={items.length} disabled={busy}
+                                 onMove={(f, t) => moveTo(f, t)} label={item.title || 'this song'}/>
+                    : <Icon name="minus" size={13}/>}
                 </span>
                 <span className="rq-num">
                   {item.playing
@@ -1859,8 +1880,9 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
                                                  overflow: 'hidden', textOverflow: 'ellipsis',
                                                  whiteSpace: 'nowrap' }}>
                     {item.artist || 'unknown artist'}
-                    {item.origin === 'auto' && item.reason_label && (
-                      <span className="rq-why"> · {item.reason_label}</span>
+                    {item.origin === 'auto' && (item.reason_label || item.why) && (
+                      <span className="rq-why"> · <UpNextWhy className="rq-why-chip" label={item.reason_label}
+                                                              why={item.why}/></span>
                     )}
                     {item.added_by && (
                       <span style={{ color: 'var(--fg-faint)' }}> · added by {item.added_by}</span>
@@ -2196,7 +2218,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                      onDragStart={() => { dragFrom.current = i; }}
                      onDragOver={e => e.preventDefault()}
                      onDrop={() => onDrop(i)}
-                     style={{ display: 'grid', gridTemplateColumns: '32px 1fr auto auto',
+                     style={{ display: 'grid', gridTemplateColumns: '32px 1fr auto auto auto',
                               alignItems: 'center', gap: 8,
                               padding: '8px 16px',
                               cursor: playlist.is_virtual ? 'default' : 'grab',
@@ -2214,6 +2236,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                     <IconButton name="play" onClick={() => onBrowserPlay(t, context, items)}
                                 title="play in this browser" aria-label={`play ${t.title || 'this song'} in this browser`}/>
                   )}
+                  <MusicSongMenu track={t} fire={fire}/>
                   <IconButton name="x"
                               onClick={() => onRemoveTrack(playlist, t).then(refresh)}
                               title="remove from playlist"/>
@@ -3045,13 +3068,13 @@ const MusicPage = () => {
                       onDelete={onDeletePlaylist} onEdit={onEditPlaylist}
                       onReorder={onReorderPlaylist}
                       fire={fire}/>
-      <ArtistDrawer artist={openArtist} rooms={rooms}
+      <ArtistDrawer artist={openArtist} rooms={rooms} fire={fire}
                     onClose={() => setOpenArtist(null)}
                     onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
                     onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}
                     onSelectTrack={(t) => { setOpenArtist(null); setSelected(t); }}
                     onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack}/>
-      <GenreDrawer genre={openGenre} rooms={rooms}
+      <GenreDrawer genre={openGenre} rooms={rooms} fire={fire}
                    onClose={() => setOpenGenre(null)}
                    onPlayTracks={onPlayTracks} onQueueTracksInRoom={onQueueTracksInRoom}
                    onBrowserPlayTracks={onBrowserPlayTracks} onBrowserQueueTracks={onBrowserQueueTracks}

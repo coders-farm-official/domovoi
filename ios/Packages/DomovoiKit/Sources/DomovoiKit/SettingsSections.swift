@@ -1,7 +1,7 @@
 import Foundation
 
 /// Settings' groups and sections, as pure data: the five group labels and the
-/// fifteen sections with their keys, labels, one-line descriptions, search
+/// sixteen sections with their keys, labels, one-line descriptions, search
 /// words, old keys and dashboard addresses.
 ///
 /// A port of `SettingsSection` and `SettingsGroup` in
@@ -96,7 +96,7 @@ public struct SettingsSection: Equatable, Sendable {
 
 public extension SettingsSection {
 
-    /// The fifteen sections, in the Kotlin's declaration order — which is
+    /// The sixteen sections, in the Kotlin's declaration order — which is
     /// the order they are listed in, so it is not incidental.
     static let all: [SettingsSection] = [
         SettingsSection(
@@ -120,6 +120,11 @@ public extension SettingsSection {
             key: "printers", label: "Printers & scanners", group: .household,
             sub: "The printers and scanners your home server prints and scans with.",
             words: "printer printers print printing scanner scanners scan scanning ink toner paper"
+        ),
+        SettingsSection(
+            key: "phone-calendars", label: "Phone calendars", group: .household,
+            sub: "Show this phone's calendars on the household calendar, read-only. Off until you turn it on.",
+            words: "calendar calendars share sharing events google microsoft outlook samsung agenda"
         ),
         SettingsSection(
             key: "wake-words", label: "Wake words", group: .voice,
@@ -198,7 +203,7 @@ public extension SettingsSection {
     /// things, as ``sharedScreenHidden`` leaves People off every launcher
     /// (`SharedScreenHiddenSections`, `SettingsScreen.kt:176-181`).
     /// Presentational, like the rest of the shared view.
-    static let sharedScreenHiddenKeys: Set<String> = ["people"]
+    static let sharedScreenHiddenKeys: Set<String> = ["people", "phone-calendars"]
 
     /// Whether this section is listed on a phone that is (or is not) a shared
     /// screen (`shownOn`).
