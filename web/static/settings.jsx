@@ -651,7 +651,19 @@ const VoicesPanel = () => {
  * only the Windows side is behind, "Update Domovoi" is that request alone.
  * The tray's outcome comes back to the card (declined, a bad signature, a
  * failed repair with its log), with "Try again". Under internet "never",
- * no Windows step is offered and the card says why.
+ * no Windows step is offered and the card says why. A result of `kind`
+ * "linux" is the tray menu's Linux part alone: nothing on Windows ran, so
+ * it is never "the Windows side updated" (2026-11-14: a 1.1.0 tray's
+ * "Update Domovoi" updated the Linux side only, and its "ok" sat beside a
+ * Windows side still at 1.1.0).
+ *
+ * One update action on a Windows install too: while the Windows step is
+ * needed, "Update Domovoi" is the only button ("Check for updates" is only
+ * honest when nothing is known to be pending). Before any check it checks
+ * first, so the one press still takes the Linux side along when that is
+ * behind as well: behind → the whole one-press update; not → the Windows
+ * step alone. While the PC has the request, nothing (finish on the PC);
+ * after a failed step, "Try again" and the check.
  *
  * Whenever no restart is waiting, an admin also gets "Restart Domovoi": the
  * same restart with nothing to load, for a setting changed by hand in
@@ -944,6 +956,13 @@ const WINDOWS_OUTCOME = {
   not_installed: 'this PC’s Domovoi wasn’t installed by Domovoi Setup',
   failed: 'the update didn’t finish',
 };
+// The Windows step's last run failed (and the step is still needed): the
+// card offers "Try again" rather than "Update Domovoi". A menu run's Linux
+// part (kind "linux") is no Windows step.
+const windowsStepFailed = (win) => {
+  const r = win && !win.request ? win.result : null;
+  return !!(r && r.kind !== 'linux' && r.outcome && r.outcome !== 'ok');
+};
 const browserOnThisPc = () => {
   try { return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(window.location.hostname); }
   catch { return false; }
@@ -957,6 +976,8 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
   const req = win.request;
   const tray = win.tray || {};
   const result = !req ? win.result : null;
+  // Only the tray menu's Linux part ran: not a Windows outcome at all.
+  const linuxOnly = !!(result && result.kind === 'linux');
   const target = win.target || null;
   const lines = [];
   if (channel === 'main' && target) {
@@ -985,7 +1006,18 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
   // up_to_date) is history: the card kept an Oct 31 not_newer refusal in
   // red for days while the side already ran the release (2026-11-02).
   const caughtUp = win.why_not === 'up_to_date';
-  if (result && result.outcome && result.outcome !== 'ok' && result.outcome !== 'nothing_new' && !caughtUp) {
+  if (linuxOnly) {
+    if (win.step_needed && target && (result.outcome === 'ok' || result.outcome === 'nothing_new')) {
+      lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--warn-ink)' }}>
+        The Domovoi icon’s update did the Linux part only; the Windows side is still {win.version}.
+        Update Domovoi below to bring it to {target.version}.
+      </div>);
+    } else if (result.outcome !== 'ok' && result.outcome !== 'nothing_new') {
+      lines.push(<div key="rs" className="version-windows-result" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
+        {`The update from the PC’s Domovoi icon didn’t finish: ${result.detail || WINDOWS_OUTCOME[result.outcome] || result.outcome}`}
+      </div>);
+    }
+  } else if (result && result.outcome && result.outcome !== 'ok' && result.outcome !== 'nothing_new' && !caughtUp) {
     // Worded by what ran: "half done" only after a press that updated the
     // Linux side first.
     const declined = result.outcome === 'declined';
@@ -1011,7 +1043,7 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
       release that has one.
     </div>);
   }
-  const retry = onRetry && win.step_needed && !req && !busy && result && result.outcome !== 'ok';
+  const retry = onRetry && win.step_needed && !req && !busy && windowsStepFailed(win);
   if (!lines.length && !retry) return null;
   return (
     <div className="version-windows-notes" style={{ padding: '0 16px 12px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1212,6 +1244,29 @@ const VersionSection = () => {
     if (w && w.present && w.step_needed) await requestWindows(true);
   };
 
+  // "Update Domovoi" while the Windows step is needed and nothing says the
+  // Linux side is behind: a check first when there has been none (the
+  // card hides "Check for updates" then), so the one press takes the Linux
+  // side along when it is behind too; else the Windows step alone.
+  const updateWindowsSide = async () => {
+    if (status == null) {
+      let res = null;
+      setChecking(true);
+      try {
+        res = await apiPost('/api/config/version/check', {});
+        setStatus(res);
+      } catch { /* the Windows step needs no check */ } finally {
+        setChecking(false);
+      }
+      const bad = core && core.bad_sha;
+      if (res && res.upstream && !res.error && (res.behind || 0) > 0 && !(bad && res.upstream_sha === bad)) {
+        await updateOnePress();
+        return;
+      }
+    }
+    await requestWindows(false);
+  };
+
   const pull = async () => {
     if (!window.confirm(
       'Pull the latest domovoi code (git pull --ff-only)?\n\n' +
@@ -1296,6 +1351,11 @@ const VersionSection = () => {
   // 'busy' first: while a restart is under way nothing else may start.
   const mode = serverRuns ? 'busy' : restartPending ? 'restart'
     : ((behind || 0) > 0 ? (upstreamIsBad ? 'held' : 'pull') : 'check');
+  // The Windows step is known to be pending (needed, and not after a
+  // failed run, which gets "Try again"): then "Check for updates" isn't
+  // offered; "Update Domovoi" (windowsUpdate), or the request the PC has.
+  const windowsPending = (mode === 'check' || mode === 'held') && !!(win && win.step_needed) && !windowsStepFailed(win);
+  const windowsUpdate = windowsPending && !win.request;
   // Restart Domovoi: an admin's, whenever no restart is waiting (that one
   // is the primary action, and it restarts too). On a host that can't
   // restart itself, the command to run instead.
@@ -1503,13 +1563,13 @@ const VersionSection = () => {
             {pulling ? 'Pulling…' : 'Update Domovoi'}
           </Button>
         )}
-        {(mode === 'check' || mode === 'held') && win && win.step_needed && !win.request && !(win.result && win.result.outcome && win.result.outcome !== 'ok') && (
-          <Button variant="primary" icon="download" onClick={() => requestWindows(false)} disabled={requesting || !!restarting}
-                  title="the Windows part: the tray on the PC downloads the release’s signed Setup, checks it, and runs it behind one Windows permission prompt">
-            {requesting ? 'Asking the PC…' : 'Update Domovoi'}
+        {windowsUpdate && (
+          <Button variant="primary" icon="download" onClick={updateWindowsSide} disabled={requesting || checking || pulling || !!restarting}
+                  title="the Windows part: the tray on the PC downloads the release’s signed Setup, checks it, and runs it behind one Windows permission prompt (and the Linux part first, when that is behind too)">
+            {requesting ? 'Asking the PC…' : checking ? 'Checking…' : pulling ? 'Pulling…' : 'Update Domovoi'}
           </Button>
         )}
-        {(mode === 'check' || mode === 'held') && (
+        {(mode === 'check' || mode === 'held') && !windowsPending && (
           <Button variant="secondary" icon="refresh-cw" onClick={check} disabled={checking || internetOff || !!restarting}
                   title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>
             {checking ? 'Checking…' : 'Check for updates'}

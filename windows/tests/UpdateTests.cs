@@ -628,9 +628,12 @@ static partial class Tests
             return ClaimedBy;
         }
 
-        public bool Report(string requestId, string claim, string outcome, string detail, string log, string version)
+        public readonly List<string> Kinds = new List<string>();
+
+        public bool Report(string requestId, string claim, string outcome, string detail, string log, string version, string kind, bool afterLinux)
         {
             Calls.Add("report " + outcome);
+            Kinds.Add(kind + (afterLinux ? " after_linux" : ""));
             if (requestId != null && claim != ClaimedBy) return true;   // refused: not retried
             Results.Add(outcome);
             if (requestId != null && requestId == RequestId) RequestId = null;
@@ -729,6 +732,45 @@ static partial class Tests
             Eq(UpdateAction.Nothing, UpdatePoll.Run(core, root, admin, DateTime.UtcNow, null, false, out st, out done), "nothing while Setup runs");
             True(done == null && PendingRun.Load(root) != null && !core.Calls.Exists(c => c.StartsWith("report")), "nothing reported yet");
         });
+        Run("update poll: a pending run's report says what ran", delegate
+        {
+            string root = TempDir("poll-kind"), admin = TempDir("poll-kind-admin");
+            PendingSetupRun(root, admin, "ok=1\r\nversion=1.0.1\r\n");
+            var core = new FakeCore { ClaimedBy = "token1" };
+            UpdateState st;
+            PendingDone done;
+            UpdatePoll.Run(core, root, admin, DateTime.UtcNow, null, false, out st, out done);
+            SeqEq(new[] { "windows after_linux" }, core.Kinds, "a Setup run: the Windows step");
+            string run = "20261022-213100-0a1b2c3e";
+            new PendingRun { Run = run, Kind = "linux", Started = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture) }.Save(root);
+            Directory.CreateDirectory(Path.Combine(admin, run));
+            File.WriteAllText(Path.Combine(Path.Combine(admin, run), UpdateRun.ResultFile), "ok=1\r\nlinux=updated\r\n");
+            UpdatePoll.Run(core, root, admin, DateTime.UtcNow, null, false, out st, out done);
+            SeqEq(new[] { "windows after_linux", "linux" }, core.Kinds, "the menu's Linux part: never a Windows result");
+            True(done != null && done.Result.Outcome == Outcome.Ok && done.Result.Version == null, "an ok with no version");
+        });
+        Run("update: the menu's Linux part that pulled a newer release goes on to the Windows part (2026-11-14)", delegate
+        {
+            // The 1.1.0 tray read "no Windows step" before the Linux part,
+            // which then pulled code with v1.2.0 in it; it stopped at "ok".
+            var linuxOk = new StepResult { Outcome = Outcome.Ok };
+            var now = new UpdateState { Installed = "1.1.0", TargetTag = "v1.2.0", TargetVersion = "1.2.0", StepNeeded = true, Internet = "always" };
+            True(UpdateDecision.WindowsAfterLinux("linux", linuxOk, now), "the Windows part is next");
+            True(!UpdateDecision.WindowsAfterLinux("setup", linuxOk, now), "a Setup run is the Windows part already");
+            True(!UpdateDecision.WindowsAfterLinux("linux", new StepResult { Outcome = Outcome.NothingNew }, now), "nothing new on Linux: nothing changed");
+            True(!UpdateDecision.WindowsAfterLinux("linux", new StepResult { Outcome = Outcome.LinuxFailed }, now), "not after a failed Linux part");
+            True(!UpdateDecision.WindowsAfterLinux("linux", new StepResult { Outcome = Outcome.Declined }, now), "not after a declined prompt");
+            True(!UpdateDecision.WindowsAfterLinux("linux", linuxOk, null), "not without a core");
+            now.LinuxBusy = true;
+            True(!UpdateDecision.WindowsAfterLinux("linux", linuxOk, now), "not while an update still runs");
+            now.LinuxBusy = false; now.StepNeeded = false;
+            True(!UpdateDecision.WindowsAfterLinux("linux", linuxOk, now), "not when the Windows side is current");
+            now.StepNeeded = true; now.Internet = "never";
+            True(!UpdateDecision.WindowsAfterLinux("linux", linuxOk, now), "not with internet access off");
+            Eq(ReportKind.Linux, ReportKind.Of("linux"), "linux");
+            Eq(ReportKind.Windows, ReportKind.Of("setup"), "setup");
+            Eq(ReportKind.Windows, ReportKind.Of(null), "a step that never launched");
+        });
         Run("update poll: two trays, one request: only the first claim runs", delegate
         {
             var core = new FakeCore();
@@ -758,14 +800,18 @@ static partial class Tests
                 var srv = new HttpUpdateServer(d.Url);
                 Eq("tok", srv.Claim("req-7"), "claimed");
                 True(srv.Claim("req-7") == null, "taken");
-                True(srv.Report("req-7", "tok", Outcome.Declined, "said \"no\"", null, null), "accepted");
+                True(srv.Report("req-7", "tok", Outcome.Declined, "said \"no\"", null, null, ReportKind.Windows, true), "accepted");
                 True(got.Contains("\"request_id\": \"req-7\"") && got.Contains("\"claim\": \"tok\"") && got.Contains("\"outcome\": \"declined\"") && got.Contains("said \\\"no\\\""), got);
+                True(got.Contains("\"kind\": \"windows\"") && got.Contains("\"after_linux\": true"), "what ran: " + got);
+                True(srv.Report(null, null, Outcome.Ok, null, null, null, ReportKind.Linux, false), "the menu's Linux part");
+                True(got.Contains("\"kind\": \"linux\"") && got.Contains("\"after_linux\": false") && got.Contains("\"version\": null"), "said as the Linux part: " + got);
+                True(srv.Report(null, null, Outcome.Ok, null, null, null, "anything else", false) && got.Contains("\"kind\": \"windows\""), "only the two words");
                 True(d.Seen.All(x => !x.Contains("NO-XRW")), "with X-Requested-With");
             }
             using (var d = new FakeDashboard())
             {
                 d.Answer = (k, bearer, body) => R(403, "{\"detail\": \"not this tray's\"}");
-                True(new HttpUpdateServer(d.Url).Report("req-7", "x", Outcome.Ok, null, null, null), "a refusal isn't retried forever");
+                True(new HttpUpdateServer(d.Url).Report("req-7", "x", Outcome.Ok, null, null, null, ReportKind.Windows, false), "a refusal isn't retried forever");
             }
         });
     }

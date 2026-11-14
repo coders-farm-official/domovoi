@@ -12,7 +12,14 @@ domovoi/windows_side.py; web/static/settings.jsx VersionSection).
 * the card says "Finish on your PC", "sign in on the PC to finish", the
   half-done update after a declined prompt (with "Try again"), the
   tray's failure with its log, why there is no step (internet "never", no
-  signed Setup), and on main that the Windows side follows releases.
+  signed Setup), and on main that the Windows side follows releases;
+* one update action at a time on a Windows install too: while the Windows
+  step is needed, "Update Domovoi" alone (no "Check for updates"; it checks
+  first itself), nothing while the PC has the request, "Try again" and the
+  check after a failed step;
+* the tray menu's Linux part alone (``kind`` "linux", 2026-11-14: a 1.1.0
+  tray's "ok" with no version beside a Windows side still at 1.1.0) is
+  never read as the Windows side updating.
 
 Driven through domovoi/tests/jsx_interact_harness.js. No DB; needs node.
 """
@@ -103,6 +110,11 @@ def _scenario(version: dict, act: str = NOTHING, check: dict | None = None, extr
             "script": _SCRIPT.replace("__ACT__", act)}
 
 
+def _updates(buttons: list[str]) -> list[str]:
+    """The card's update actions: "Restart Domovoi" is a restart, beside them."""
+    return [b for b in buttons if b != "Restart Domovoi"]
+
+
 _REQ_OK = {"POST /api/config/version/windows-request": {"ok": True, "request": {"id": "a" * 16}, "tray": {"running": True}}}
 
 SCENARIOS = {
@@ -111,15 +123,15 @@ SCENARIOS = {
     "linux_one_press": _scenario(_version({"present": False}), CHECK + UPDATE, _check(behind=2, upstream_version="1.0.2"), {
         "POST /api/config/version/pull": {"pulled": True, "new_sha": "0a1b2c3"},
         "POST /api/config/version/restart": {"ok": False, "error": "no sudoers grant"}}),
-    "already_updating": _scenario(_version(_win()), CHECK + UPDATE, _check(behind=3, upstream_version="1.0.2"), {
+    "already_updating": _scenario(_version(_win()), UPDATE, _check(behind=3, upstream_version="1.0.2"), {
         "POST /api/config/version/pull": {"pulled": False, "error": "a restart or update is under way; pull again once it has finished"}}),
     "windows_behind": _scenario(_version(_win()), UPDATE, extra=_REQ_OK),
     "windows_current": _scenario(_version(_win(step_needed=False, why_not="up_to_date", version="1.0.1"))),
-    "both_behind": _scenario(_version(_win()), CHECK + UPDATE, _check(behind=3, upstream_version="1.0.2"), {
+    "both_behind": _scenario(_version(_win()), UPDATE, _check(behind=3, upstream_version="1.0.2"), {
         "POST /api/config/version/pull": {"pulled": True, "new_sha": "0a1b2c3"},
         "POST /api/config/version/restart": {"ok": False, "error": "no sudoers grant"},
         **_REQ_OK}),
-    "both_behind_declined": _scenario(_version(_win()), CHECK + "w.__answer = false; " + UPDATE,
+    "both_behind_declined": _scenario(_version(_win()), "w.__answer = false; " + UPDATE,
                                       _check(behind=3, upstream_version="1.0.2")),
     "finish_on_pc": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": False, "at": "x"}))),
     "on_this_pc": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": True, "at": "x"}))),
@@ -137,6 +149,16 @@ SCENARIOS = {
     "internet_never": _scenario(_version(_win(step_needed=False, why_not="internet_off"))),
     "unsigned": _scenario(_version(_win(step_needed=False, why_not="unsigned_release"))),
     "main_channel": _scenario(_version(_win(), channel="main", version="1.0.1 + 4 (4d6b414)")),
+    # The live card on 2026-11-14 (windows_side as /api/config/version
+    # gave it, with the kind this core now works out).
+    "tray_linux_only": _scenario(_version(_win(
+        version="1.1.0", target={"tag": "v1.2.0", "version": "1.2.0", "commit": C},
+        result={"outcome": "ok", "detail": None, "log": None, "version": None, "at": "2026-11-14T05:53:23Z",
+                "request_id": None, "tag": None, "after_linux": False, "kind": "linux"}),
+        channel="main", version="1.2.0 + 2 (3a0a871)"), UPDATE, extra=_REQ_OK),
+    "tray_linux_failed": _scenario(_version(_win(result={
+        "outcome": "linux_failed", "detail": "The Linux part didn't update: the pull failed.", "log": None,
+        "version": None, "request_id": None, "kind": "linux"}))),
 }
 
 
@@ -186,14 +208,16 @@ def test_a_windows_install_shows_both_halves(driven) -> None:
     assert "Linux side" in b["text"] and "Windows side" in b["text"]
     assert b["windows"].startswith("1.0.1") and "(c0ffee0)" in b["windows"] and "updates on releases" in b["windows"]
     assert b["behind"] is None
-    assert "Update Domovoi" not in b["buttons"]
+    assert _updates(b["buttons"]) == ["Check for updates"], "nothing pending: the check alone"
 
 
 def test_behind_on_windows_only_update_asks_the_pc(driven) -> None:
     o = driven["windows_behind"]
     assert o["before"]["behind"] == "Windows side is behind: 1.0.1 is out"
     assert "Update Domovoi" in o["before"]["buttons"]
-    assert o["calls"] == ['POST /api/config/version/windows-request {"after_linux":false}']
+    assert _updates(o["before"]["buttons"]) == ["Update Domovoi"], "one action: no Check for updates beside it"
+    assert o["calls"] == ["POST /api/config/version/check",
+                          'POST /api/config/version/windows-request {"after_linux":false}'], "checks first itself"
     assert o["confirms"] == [], "asking the PC is not a question here: Windows asks there"
     assert "finish on your PC" in o["after"]["text"]
 
@@ -220,6 +244,7 @@ def test_finish_on_your_pc(driven) -> None:
     b = driven["finish_on_pc"]["before"]
     assert b["request"].startswith("Finish on your PC: click the Domovoi notification there")
     assert "Update Domovoi" not in b["buttons"], "asked already"
+    assert "Check for updates" not in b["buttons"], "the PC finishes it: nothing to press here"
     assert driven["on_this_pc"]["before"]["request"].startswith("Windows asks for an administrator’s permission on this PC")
 
 
@@ -243,7 +268,7 @@ def test_a_declined_windows_only_press_is_not_called_half_done(driven) -> None:
 def test_a_failed_repair_names_its_log(driven) -> None:
     r = driven["repair_failed"]["before"]["result"]
     assert "provision.sh failed at venv" in r and "setup.log" in r
-    assert "Try again" in driven["repair_failed"]["before"]["buttons"]
+    assert sorted(_updates(driven["repair_failed"]["before"]["buttons"])) == ["Check for updates", "Try again"]
 
 
 def test_an_update_that_worked_says_so(driven) -> None:
@@ -267,3 +292,24 @@ def test_on_main_the_windows_side_follows_releases(driven) -> None:
     c = driven["main_channel"]["before"]["channel"]
     assert c.startswith("The Linux side follows every change on main; the Windows side follows releases")
     assert "1.0.1" in c
+
+
+def test_the_tray_menus_linux_part_is_not_a_windows_result(driven) -> None:
+    """2026-11-14: the tray's "Update Domovoi" updated the Linux side only
+    (the Windows step wasn't needed when it read the state, before the
+    Linux side included v1.2.0), and its "ok" sat beside "Windows side
+    1.1.0" with both "Update" and "Check for updates" on the card."""
+    o = driven["tray_linux_only"]
+    b = o["before"]
+    assert b["behind"] == "Windows side is behind: 1.2.0 is out"
+    assert b["result"].startswith("The Domovoi icon’s update did the Linux part only; the Windows side is still 1.1.0")
+    assert "updated to" not in b["text"]
+    assert _updates(b["buttons"]) == ["Update Domovoi"], "one action, and it is the Windows step"
+    assert o["calls"][-1] == 'POST /api/config/version/windows-request {"after_linux":false}'
+
+
+def test_the_tray_menus_failed_linux_part_says_so(driven) -> None:
+    b = driven["tray_linux_failed"]["before"]
+    assert b["result"].startswith("The update from the PC’s Domovoi icon didn’t finish: The Linux part didn't update")
+    assert "The Windows part didn’t update" not in b["text"]
+    assert _updates(b["buttons"]) == ["Update Domovoi"], "no failed Windows step: no Try again"
