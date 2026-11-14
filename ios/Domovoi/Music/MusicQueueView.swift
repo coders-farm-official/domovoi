@@ -272,7 +272,6 @@ struct RoomUpNextHead: View {
                     Text(RoomUpNextStrings.head)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Color.fgMuted)
-                        .textCase(.uppercase)
                         .accessibilityAddTraits(.isHeader)
                     if !queue.upNextBasis.isEmpty {
                         Text(queue.upNextBasis)

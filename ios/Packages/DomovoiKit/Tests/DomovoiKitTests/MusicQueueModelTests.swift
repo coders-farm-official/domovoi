@@ -945,8 +945,10 @@ final class MusicQueueModelTests: XCTestCase {
         await started(queue, rooms: ["den"])
         defer { queue.stop() }
 
+        let store = try XCTUnwrap(container.store as? InMemoryShellStore)
+        store.trustServer("http://10.0.0.43:6369", identity: nil)
         queue.playNow(try entry(queue, 1))
-        XCTAssertTrue(container.store.setServerURL("http://10.0.0.43:6369"))
+        XCTAssertTrue(store.setServerURL("http://10.0.0.43:6369"))
         await settleUntil({ !queue.busy }, "the edit")
 
         XCTAssertNil(queue.toast)
