@@ -210,13 +210,6 @@
     "dashboard": true
    }
   },
-  "settings/phone-calendars": {
-   "dashboard": "#settings/calendars",
-   "app": {
-    "screen": "Settings",
-    "tab": "phone-calendars"
-   }
-  },
   "settings/voices": {
    "dashboard": "#settings/voices",
    "app": {
@@ -308,6 +301,13 @@
    "app": {
     "screen": "Settings",
     "tab": "voices"
+   }
+  },
+  "app/phone-calendars": {
+   "dashboard": null,
+   "app": {
+    "screen": "Settings",
+    "tab": "phone-calendars"
    }
   }
  },
@@ -3388,7 +3388,7 @@
        "text": "**By link** (an admin): [Settings → Household → Calendars](route:settings/calendars) → **add a calendar**, and paste the calendar's private link. Google Calendar: on a computer, the calendar's settings → **Secret address in iCal format**. Outlook: its calendar settings, **Shared calendars**, **Publish a calendar**, then the ICS link. iCloud: share the calendar as a **Public Calendar** and copy its link. Keep the link private: anyone with it can see that calendar. Domovoi reads it every half hour (every two hours when [Settings → Privacy → Internet](route:settings/internet) says **Sometimes**); with the internet answer **No** it keeps the last copy and says how old it is. **refresh now** reads it at once."
       },
       {
-       "text": "**From a phone**: in the Domovoi app on Android, [Settings → Household → Phone calendars](route:settings/phone-calendars), turn on **Share this phone's calendars with the house** and pick the calendars. The phone sends them to your Domovoi over your home network (no internet needed) and keeps them up to date; turn it off and they leave the house."
+       "text": "**From a phone**: in the Domovoi app on Android, [Settings → Phone calendars](route:app/phone-calendars) (under Household), turn on **Share this phone's calendars with the house** and pick the calendars. The phone sends them to your Domovoi over your home network (no internet needed) and keeps them up to date; turn it off and they leave the house."
       }
      ]
     },

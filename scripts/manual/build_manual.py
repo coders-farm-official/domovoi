@@ -70,8 +70,6 @@ ROUTES: dict[str, dict] = {
     # Calendars from elsewhere (1.3.0): links are added on the dashboard; a
     # phone shares its own calendars from the app's Phone calendars section.
     "settings/calendars": {"dashboard": "#settings/calendars", "app": {"dashboard": True}},
-    "settings/phone-calendars": {"dashboard": "#settings/calendars",
-                                 "app": {"screen": "Settings", "tab": "phone-calendars"}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
     "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"screen": "Settings", "tab": "wake-words"}},
     "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
@@ -88,6 +86,8 @@ ROUTES: dict[str, dict] = {
     # the app's own: plain text on the dashboard
     "app/connection": {"dashboard": None, "app": {"screen": "Settings", "tab": "phones-and-browsers"}},
     "app/voice": {"dashboard": None, "app": {"screen": "Settings", "tab": "voices"}},
+    # The app's own "Phone calendars" (1.3.0): sharing this phone's calendars.
+    "app/phone-calendars": {"dashboard": None, "app": {"screen": "Settings", "tab": "phone-calendars"}},
 }
 
 # ── the map ───────────────────────────────────────────────────────────────

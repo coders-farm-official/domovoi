@@ -752,7 +752,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   up_next_extender → music_listens_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → audiobook_indexer → room_book_positions →
+    #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
+    #   room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →

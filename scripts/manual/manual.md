@@ -1247,8 +1247,8 @@ Change an event where it lives (the event says where).
   **Sometimes**); with the internet answer **No**
   it keeps the last copy and says how old it is. **refresh now** reads it
   at once.
-- **From a phone**: in the Domovoi app on Android, [Settings → Household →
-  Phone calendars](#settings/phone-calendars), turn on **Share this phone's calendars with the
+- **From a phone**: in the Domovoi app on Android, [Settings → Phone
+  calendars](#app/phone-calendars) (under Household), turn on **Share this phone's calendars with the
   house** and pick the calendars. The phone sends them to your Domovoi
   over your home network (no internet needed) and keeps them up to date;
   turn it off and they leave the house.
