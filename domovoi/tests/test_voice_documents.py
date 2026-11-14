@@ -606,8 +606,8 @@ def _winner(said: str) -> str | None:
     ("read me the weather report", None), ("read me the traffic report", None),
     ("read me the recipe for pancakes", None), ("read me a recipe for banana bread", None),
     ("read me the pancake recipe", "documents"),
-    # lists, reminders, notes: not ours
-    ("read me my shopping list", None), ("read me my reminders", None), ("read me my notes", "voice_notes"),
+    # lists, reminders, notes: not ours (a shopping list is the Lists handler's since V048)
+    ("read me my shopping list", "lists"), ("read me my reminders", None), ("read me my notes", "voice_notes"),
     # "letter" claims only when a letter in Documents fits
     ("read me a letter from santa", None), ("read me my cover letter", "documents"),
     ("read me the letter to the lionthord", "documents"),
