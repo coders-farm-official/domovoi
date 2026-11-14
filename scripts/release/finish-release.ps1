@@ -3,15 +3,23 @@
 Finish a Domovoi release: the Windows Setup, one SHA256SUMS, the notes, then stable.
 
 .DESCRIPTION
-Run by the owner after android\scripts\release.ps1 has published
-v<version> (the two APKs, tagged at the commit that adds
-android/release.json to the commit they were built from). From a clean
-checkout at the tag or after it:
+The release is v<Domovoi's version> (pyproject.toml; owner decision
+2026-11-14). When the Android app changed, run by the owner after
+android\scripts\release.ps1 has published that tag (the two APKs, tagged
+at the commit that adds android/release.json to the commit they were built
+from). When it didn't, run alone from the release commit, pushed to main:
+android/release.json is unchanged, still naming the earlier release that
+holds the APKs; this script tags the commit and, on a real run, pushes the
+tag and creates the release with no APKs. From a clean checkout at the tag
+or after it:
 
 1. checks origin is the GitHub repository, the tag (annotated is fine)
-   and its pyproject version, that the tag's commit is only
-   android/release.json on the build commit, the GitHub release's APKs,
-   and that stable can fast-forward (a release without a suffix);
+   and its pyproject version; with the app changed, that the tag's commit
+   is only android/release.json on the build commit and the GitHub
+   release's APKs; with it unchanged, that android/release.json is the
+   one the release it names made, the app's versionName and versionCode
+   are the ones it names, and that release holds its APKs; and that
+   stable can fast-forward (a release without a suffix);
 2. builds DomovoiSetup.exe from the tag's own files: a clean worktree of
    the tag, where windows\build.ps1 -Pin <tag> moves the Setup's pins to
    the tag's commit and builds (anything but pins.iss changed, or a bundled
@@ -44,7 +52,11 @@ pins the release key. Never reads a key or a password itself: ssh-keygen
 reads the release key and asks for its passphrase.
 
 .PARAMETER Tag
-The release, v<version>. Default: v + the Android versionName.
+The release, v<version>. Default: v + pyproject.toml's version.
+
+.PARAMETER Prerelease
+A release this script creates (the app unchanged): mark it a pre-release
+on GitHub. Off by default: every release is a full one.
 
 .PARAMETER NoPublish
 Run the checks, build the Setup, write SHA256SUMS and the notes into
@@ -79,6 +91,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-relea
 param(
     [string]$Tag,
     [switch]$NoPublish,
+    [switch]$Prerelease,
     [string]$Setup,
     [string]$Tray,
     [string]$SatelliteSetup,
@@ -105,6 +118,7 @@ $script = Join-Path $PSScriptRoot 'finish_release.py'
 $pyArgs = @($script)
 if ($Tag) { $pyArgs += @('--tag', $Tag) }
 if ($NoPublish) { $pyArgs += '--no-publish' }
+if ($Prerelease) { $pyArgs += '--prerelease' }
 if ($Setup) { $pyArgs += @('--setup', $Setup) }
 if ($Tray) { $pyArgs += @('--tray', $Tray) }
 if ($SatelliteSetup) { $pyArgs += @('--satellite-setup', $SatelliteSetup) }

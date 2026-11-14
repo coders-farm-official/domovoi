@@ -166,9 +166,18 @@ Every later release must be signed with this key, or phones refuse the
 update (the script refuses too). A phone with a debug build installed
 uninstalls it once before the first release build goes on.
 
-**Every release:**
+**Every release that changes the app.** The app has its own
+`versionName` and `versionCode`, and is published only with a Domovoi
+release that changes it, under that release's tag (`v` + `pyproject.toml`'s
+version, which may differ from the app's `versionName`: Domovoi 1.2.1 can
+hand out app 1.2.0). A Domovoi release that doesn't change the app skips
+these steps: it is `scripts/release/finish-release.ps1` alone, and
+`android/release.json` stays as it is, naming the release that holds the
+APKs, so servers keep fetching them from there ([docs/CONTRIBUTING.md,
+"Releasing"](../docs/CONTRIBUTING.md#releasing)).
 
-1. Raise `versionCode` (and `versionName`) in `app/build.gradle.kts`,
+1. Raise `versionCode` (and `versionName`) in `app/build.gradle.kts`, and
+   the Domovoi version in the release commit (the tag must be new),
    commit, and push. `versionCode` is `YYMMDDNN`: the build's date and
    that day's number (`26101501` is the first build of 2026-10-15), one
    sequence for the GitHub releases and Google Play. The script refuses a
@@ -195,11 +204,12 @@ uninstalls it once before the first release build goes on.
    the same key as the last release), 16 KB page alignment, and the
    server's own check (`python -m domovoi.android_app check`). Then it
    writes `android/release.json`, commits it (`android: release <v> [skip
-   ci]`) and pushes it, and publishes the GitHub release `v<versionName>`
-   (the project-wide tag, e.g. `v1.0.0-rc3`) on
-   `coders-farm-official/domovoi` with `gh`, **tagged at that commit**: the
-   tag holds the manifest naming its own APKs, so a server installed at
-   the tag hands them out. The release carries the two APKs and an
+   ci]`) and pushes it, and publishes the GitHub release `v<Domovoi's
+   version>` (from `pyproject.toml`, e.g. `v1.3.0` or `v1.0.0-rc3`; not the
+   app's `versionName`) on `coders-farm-official/domovoi` with `gh`,
+   **tagged at that commit**: the tag holds the manifest naming its own
+   APKs, so a server installed at the tag hands them out, and so does
+   every later release until the app changes again. The release carries the two APKs and an
    APK-only `SHA256SUMS`, with the certificate's SHA-256 in the notes.
    Every release is a full one, marked Latest, release candidates
    (`1.0.0-rc3`) included: the suffix says what it is. `-Prerelease` / `--prerelease` makes one a pre-release.

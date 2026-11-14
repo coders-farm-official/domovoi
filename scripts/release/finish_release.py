@@ -1,9 +1,23 @@
 """Finish a Domovoi release: the Windows Setup, one SHA256SUMS, the notes, then ``stable``.
 
-Run by the owner after ``android/scripts/release.ps1`` (or ``.sh``) has
-published ``v<version>`` with the two APKs, tagged at the commit that adds
-``android/release.json`` to the commit they were built from. From a clean
-checkout at that tag or after it (``git pull --ff-only``)::
+The release number is Domovoi's own version (``pyproject.toml``; owner
+decision 2026-11-14): every release is one tag ``v<that version>`` and one
+GitHub release. The Android app keeps its own versionName and versionCode
+and is released only when it changes. So there are two paths:
+
+(a) **The app changed.** ``android/scripts/release.ps1`` (or ``.sh``) runs
+    first: it builds and signs the APKs, commits ``android/release.json``
+    (whose ``tag`` is this release's, ``v`` + pyproject's version) on top of
+    the commit they were built from, tags that commit and publishes the
+    GitHub release with the APKs. Then this script finishes it.
+(b) **Server and Windows only.** This script alone: the release commit is
+    pushed to main with ``android/release.json`` unchanged, still naming
+    the earlier release that holds the app's APKs. This script tags the
+    commit (HEAD, unless the tag exists), and on a real run pushes the tag
+    and creates the GitHub release with no APKs.
+
+From a clean checkout at the tag (path b: at the release commit) or after
+it (``git pull --ff-only``)::
 
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\release\\finish-release.ps1 [-Tag v1.0.0] [-NoPublish]
     bash scripts/release/finish-release.sh [--tag v1.0.0] [--no-publish] [--setup FILE]
@@ -14,13 +28,23 @@ every check has passed):
 1. The checks.
    - ``origin`` is the GitHub repository, every fetch and push URL of it.
    - The checkout is clean, and HEAD is the tag's commit or after it.
-   - The tag (default ``v`` + the Android versionName; lightweight or
-     annotated, peeled to its commit) is on GitHub at that same commit,
-     and its ``pyproject.toml`` says the same version.
-   - The tag's commit is ``android/release.json`` on top of the commit that
-     file names (the one the APKs were built from), and nothing else.
-   - The GitHub release exists, holds the APKs the manifest pins (size and
-     GitHub's SHA-256 digest), and nothing finish-release doesn't know.
+   - The tag (default ``v`` + HEAD's ``pyproject.toml`` version; lightweight
+     or annotated, peeled to its commit) is on GitHub at that same commit
+     (path b: or nowhere yet, then made here at HEAD, which must be on
+     origin/main), and its ``pyproject.toml`` says the same version.
+   - The tag's ``android/release.json`` names this tag (path a) or another
+     one (path b).
+     Path a: the tag's commit is ``android/release.json`` on top of the
+     commit that file names (the one the APKs were built from), and
+     nothing else; the GitHub release exists and holds the APKs the
+     manifest pins (size and GitHub's SHA-256 digest).
+     Path b: that other tag is an earlier release (here and on GitHub at
+     the same commit, before this one), its ``android/release.json`` is
+     byte for byte the one at this tag, the app at this tag
+     (``versionName``, ``versionCode`` in android/app/build.gradle.kts) is
+     the one it names, and its GitHub release holds those APKs. This
+     tag's GitHub release, if it exists yet, holds no APKs.
+   - The release holds nothing finish-release doesn't know.
    - For a release without a suffix, ``stable`` can fast-forward to the
      tag's commit.
 2. ``DomovoiSetup.exe``, built from the tag's own files: a clean, detached
@@ -60,7 +84,7 @@ every check has passed):
    pins a key is refused without one; a tag that pins none is released
    without signatures, and the Windows side then has no update step.
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
-   the manifest), the Setup and its signatures and manifest, the tray and
+   the manifest; path a only), the Setup and its signatures and manifest, the tray and
    the satellite Setup.
 4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
    one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
@@ -69,7 +93,9 @@ every check has passed):
    file at the tag. Then the files, their SHA-256, the commit the tag is,
    how the Setup was built, the app's signing certificate. Kept under
    20 KB, and never over GitHub's 125,000-character cap.
-5. Upload the Setup, the tray, the satellite Setup and ``SHA256SUMS`` (``--clobber``, so a second run
+5. Path b, a tag made here: push it (never forced), then create the
+   GitHub release with the files (``--prerelease`` marks it one).
+   Otherwise: upload the Setup, the tray, the satellite Setup and ``SHA256SUMS`` (``--clobber``, so a second run
    replaces them), set the title and the notes, and keep a pre-release one
    (only one GitHub already marks so: every release is a full one by
    default, release candidates included, owner decision 2026-10-15) or
@@ -84,14 +110,18 @@ every check has passed):
 ``--no-publish`` runs 1-4 (it fetches and reads the GitHub release, never
 changes it), leaves the Setup, its ``pins.iss``, ``SHA256SUMS`` and
 ``NOTES.md`` in ``windows/build/release/<tag>/``, and prints what a real
-run would do.
+run would do. Without a signing key it leaves the signatures out and says
+so (a real run refuses). A tag it made here for path b (the Setup's build
+pins to it) is deleted again at the end, as it is when a real run stops
+before pushing it.
 
 git, gh and Windows PowerShell are run by their absolute paths, never from
 the checkout (Windows would look in the current folder first). Standard
 library only. Never reads a key or a password (ssh-keygen reads the
 release key's private half, at the path given); the only writes
 outside ``windows/build/`` are a temporary worktree's registration in
-``.git``, the GitHub release's assets and notes, and the ``stable`` branch.
+``.git``, path b's tag (here, then on GitHub), the GitHub release's assets
+and notes, and the ``stable`` branch.
 """
 
 from __future__ import annotations
@@ -313,6 +343,9 @@ class Release:
     tray_sha256: str | None = None    # DomovoiTray.exe, when the tag's build makes one
     satellite_setup_sha256: str | None = None  # DomovoiSatelliteSetup.exe, likewise
     signatures: dict[str, str] | None = None  # the Windows update's files -> their SHA-256
+    #: Path b: the app this release hands phones, released earlier
+    #: (version_name, version_code, tag); its APKs are not in ``apks``.
+    app_from: dict[str, Any] | None = None
 
 
 def _who(abi: str) -> str:
@@ -349,10 +382,19 @@ def body(rel: Release) -> str:
     else:
         how = (f"It was built outside this script and handed to it (`--setup`); `windows/build.ps1 -Pin {rel.tag}` "
                "on the tag's own files builds the same installer.")
+    if rel.app_from:
+        app = rel.app_from
+        app_line = (f"Its `android/release.json` is unchanged: the Android app is still {app['version_name']} "
+                    f"(versionCode {app['version_code']}), whose APKs are on the release "
+                    f"[{app['tag']}]({REPO_URL}/releases/tag/{app['tag']}); a server fetches them from there and "
+                    "hands them to the household's phones.")
+    else:
+        app_line = ("Its `android/release.json` names the two APKs above, which a server hands to the household's "
+                    "phones.")
     facts = [
         "",
         f"- The tag `{rel.tag}` is commit `{rel.tag_commit}`: the code a server installed from this release runs. "
-        "Its `android/release.json` names the two APKs above, which a server hands to the household's phones.",
+        + app_line,
         f"- `{SETUP_ASSET}` installs that commit. {how} It is not code-signed, so Windows says \"Unknown publisher\": "
         f"[docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md).",
         *([f"- A Windows install updates its Windows side from `{SETUP_ASSET}` once its signatures check out against the "
@@ -510,11 +552,47 @@ def default_gh(repo: Path) -> list[str] | None:
 
 # ─── the run ─────────────────────────────────────────────────────────────
 
-def _version_name(text: str) -> str:
-    found = re.findall(r'^\s*versionName = "([^"]+)"\s*$', text, re.M)
-    if len(found) != 1:
-        die("android/app/build.gradle.kts names no single versionName: pass --tag")
-    return found[0]
+def semver(pep: str) -> str | None:
+    """pyproject.toml's version as a tag spells it (the inverse of
+    :func:`pep440`): ``1.2.1`` stays, ``1.0.0rc2`` is ``1.0.0-rc2``."""
+    m = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)(?:(a|b|rc)([0-9]+))?", pep or "", re.ASCII)
+    if not m:
+        return None
+    base, pre, n = m.groups()
+    return base if not pre else f"{base}-{ {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[pre] }{n}"
+
+
+def _default_tag(repo: Path) -> str:
+    """``v`` + the checkout's pyproject.toml version: the release number is
+    Domovoi's own version, never the Android app's."""
+    try:
+        version = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    except (OSError, ValueError, KeyError):
+        version = None
+    sv = semver(version) if isinstance(version, str) else None
+    if not sv:
+        die("pyproject.toml names no X.Y.Z or X.Y.Z(a|b|rc)N version: pass --tag")
+    return f"v{sv}"
+
+
+def _gradle_app(text: str) -> tuple[str | None, int | None]:
+    """(versionName, versionCode) android/app/build.gradle.kts sets, each
+    None unless it is set exactly once."""
+    names = re.findall(r'^\s*versionName = "([^"]+)"\s*$', text, re.M)
+    codes = re.findall(r"^\s*versionCode = ([0-9]+)\s*$", text, re.M)
+    return (names[0] if len(names) == 1 else None), (int(codes[0]) if len(codes) == 1 else None)
+
+
+def _manifest_at(t: "Tools", rev: str) -> dict[str, Any]:
+    """The ``release`` object of ``android/release.json`` at ``rev`` ({} when
+    there is none or it is unreadable)."""
+    raw = t.git_bytes("show", f"{rev}:android/release.json")
+    try:
+        doc = json.loads(raw.decode("utf-8")) if raw is not None else {}
+    except ValueError:
+        doc = {}
+    rel = doc.get("release") if isinstance(doc, dict) else None
+    return rel if isinstance(rel, dict) else {}
 
 
 def _check_origin(t: Tools) -> None:
@@ -606,6 +684,25 @@ def _check_published_apks(release: dict[str, Any], apks: list[dict[str, Any]]) -
         d = _digest(a)
         if d is not None and d != e["sha256"]:
             die(f"{e['file']} on GitHub is not the file android/release.json pins (SHA-256 {d})")
+
+
+def _check_app_release(release: dict[str, Any] | None, app_tag: str, apks: list[dict[str, Any]]) -> None:
+    """Path b: the earlier release the manifest names holds its APKs (it
+    may hold anything else: that is that release's business)."""
+    if release is None:
+        die(f"no GitHub release {app_tag}, which the tag's android/release.json names for the app's APKs")
+    if release.get("isDraft"):
+        die(f"the GitHub release {app_tag}, which holds the app's APKs, is a draft")
+    assets = {a["name"]: a for a in release.get("assets") or []}
+    for e in apks:
+        a = assets.get(e["file"])
+        if a is None:
+            die(f"the release {app_tag} has no {e['file']}, which android/release.json names there")
+        if a.get("size") != e["size"]:
+            die(f"{e['file']} on {app_tag} is {a.get('size')} bytes, the manifest says {e['size']}")
+        d = _digest(a)
+        if d is not None and d != e["sha256"]:
+            die(f"{e['file']} on {app_tag} is not the file android/release.json pins (SHA-256 {d})")
 
 
 def _verify_published(t: Tools, tag: str, sums: str) -> None:
@@ -731,10 +828,30 @@ def sign_setup(stage: Path, setup: Path, *, tag: str, version: str, tag_commit: 
 
 def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None,
         build_setup: Callable[[Path, str, Path], Path] | None = None) -> int:
+    """The release (see the module notes). A tag made here for path b is
+    deleted again unless it was pushed: a dry run, or a run that stopped
+    first, leaves no tag behind to be taken for a release later."""
+    made: dict[str, Any] = {}
+    try:
+        return _run(argv, tools=tools, repo=repo, build_setup=build_setup, made=made)
+    finally:
+        if made.get("tag") and not made.get("pushed"):
+            t, tag, sha = made["tools"], made["tag"], made["commit"]
+            now = t.git_run("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}")
+            if now.returncode == 0 and now.stdout.decode("ascii", "replace").strip() == sha:
+                t.git_run("tag", "-d", tag)
+                t.say(f"deleted the tag {tag} made here (it was not pushed)")
+
+
+def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
+         build_setup: Callable[[Path, str, Path], Path] | None, made: dict[str, Any]) -> int:
     ap = argparse.ArgumentParser(prog="finish-release", description=(
-        "Finish a Domovoi release after android/scripts/release: build the Windows Setup from the tag and attach "
-        "it, write one SHA256SUMS, set the notes, then (a release without a suffix) fast-forward stable."))
-    ap.add_argument("--tag", help="the release, v<version> (default: v + the Android versionName)")
+        "Finish a Domovoi release (after android/scripts/release when the app changed; alone when it didn't): "
+        "build the Windows Setup from the tag and attach it, write one SHA256SUMS, set the notes, then (a release "
+        "without a suffix) fast-forward stable."))
+    ap.add_argument("--tag", help="the release, v<version> (default: v + pyproject.toml's version)")
+    ap.add_argument("--prerelease", action="store_true",
+                    help="a release this script creates (the app unchanged): mark it a pre-release on GitHub")
     ap.add_argument("--no-publish", action="store_true", help="check, build and write everything; change nothing on GitHub")
     ap.add_argument("--setup", help="a DomovoiSetup.exe built by windows/build.ps1 -Pin <tag> from the tag, instead of building it")
     ap.add_argument("--tray", help="with --setup: the DomovoiTray.exe of that build (default: bin/DomovoiTray.exe beside the Setup)")
@@ -755,8 +872,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     if t.git("status", "--porcelain").strip():
         die("the checkout has uncommitted changes: commit or stash them first")
     head = t.git("rev-parse", "HEAD").strip()
-    gradle = (repo / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
-    tag = args.tag or f"v{_version_name(gradle)}"
+    tag = args.tag or _default_tag(repo)
     m = TAG_RE.fullmatch(tag)
     if not m:
         die(f"{tag!r} is not v<X.Y.Z> or v<X.Y.Z>-<suffix>")
@@ -775,15 +891,40 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         if publish:
             die("git fetch origin failed")
         say("warning: git fetch origin failed; checking against what this checkout has")
-    if not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"):
-        die(f"no tag {tag}: android/scripts/release.ps1 publishes the release and makes it")
-    tag_commit = t.git("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}").strip()
+    # No tag yet: only a release that doesn't change the app (path b) is
+    # tagged here, at HEAD; path a's tag is release.ps1's.
+    make_tag = not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}")
+    if make_tag:
+        if _manifest_at(t, head).get("tag") == tag:
+            die(f"no tag {tag}: HEAD's android/release.json names it, so android/scripts/release.ps1 publishes the "
+                "release and makes the tag")
+        tag_commit = head
+    else:
+        tag_commit = t.git("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}").strip()
+    rel = _manifest_at(t, tag_commit)
+    if not rel:
+        die(f"the tag's android/release.json names no release: android/scripts/release.ps1 makes the first one")
+    app_changed = rel.get("tag") == tag   # path a; otherwise path b
+
     on_github = _remote_ref(t, f"refs/tags/{tag}") if fetched else None
     if fetched and on_github != tag_commit:
-        if on_github is None and not publish:
+        if on_github is not None:
+            die(f"the tag {tag} here is {tag_commit[:12]}, on GitHub {on_github} (a published tag never moves)")
+        if app_changed and publish:
+            die(f"the tag {tag} here is {tag_commit[:12]}, on GitHub missing")
+        if app_changed:
             say(f"warning: the tag {tag} is not on GitHub")
-        else:
-            die(f"the tag {tag} here is {tag_commit[:12]}, on GitHub {on_github or 'missing'}")
+    push_tag = not app_changed and on_github is None
+    if push_tag:
+        # The tag goes on GitHub at a commit GitHub has, on main's history
+        # (windows/build.ps1 -Pin refuses anything else, too).
+        on_main = fetched and t.git_ok("merge-base", "--is-ancestor", tag_commit, "refs/remotes/origin/main")
+        if not on_main:
+            if publish:
+                die(f"{tag_commit[:12]} is not on origin/main: push the release commit to main first, then run again")
+            say(f"warning: {tag_commit[:12]} is not on origin/main (a real run refuses)")
+        if not make_tag:
+            say(f"the tag {tag} is here only, at {tag_commit[:12]}: a real run pushes it")
     if not t.git_ok("merge-base", "--is-ancestor", tag_commit, head):
         die(f"HEAD {head[:12]} does not come after the tag {tag} ({tag_commit[:12]}): git pull, or check out the tag")
 
@@ -795,43 +936,79 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     if py_version != want_py:
         die(f"the tag's pyproject.toml says {py_version or 'no version'}, not {want_py} ({tag})")
 
-    raw = t.git_bytes("show", f"{tag_commit}:android/release.json")
-    try:
-        manifest = json.loads(raw.decode("utf-8")) if raw is not None else {}
-    except ValueError:
-        manifest = {}
-    rel = manifest.get("release") or {}
-    if rel.get("version_name") != version or rel.get("tag") != tag:
-        die(f"the tag's android/release.json names {rel.get('version_name') or 'no release'}, not {version}: "
-            "android/scripts/release.ps1 commits the manifest and tags that commit (an older one tagged before it)")
     apks = list(rel.get("apks") or [])
     cert = str(rel.get("cert_sha256") or "")
     if not apks or not cert:
         die("the tag's android/release.json names no APKs or no certificate")
-    parent = t.git("rev-parse", "--verify", "--quiet", f"{tag_commit}^", check=False).strip()
-    if not parent or rel.get("commit") != parent:
-        die(f"the tag's commit is not android/release.json on top of the commit its APKs were built from: "
-            f"its parent is {parent[:12] or 'none'}, the manifest names {str(rel.get('commit'))[:12]}")
-    changed = t.git("diff", "--name-only", parent, tag_commit).split()
-    if changed != ["android/release.json"]:
-        die(f"the tag's commit changes more than android/release.json: {', '.join(changed)}")
+    app_from = None
+    app_release = None
+    if app_changed:
+        parent = t.git("rev-parse", "--verify", "--quiet", f"{tag_commit}^", check=False).strip()
+        if not parent or rel.get("commit") != parent:
+            die(f"the tag's commit is not android/release.json on top of the commit its APKs were built from: "
+                f"its parent is {parent[:12] or 'none'}, the manifest names {str(rel.get('commit'))[:12]}")
+        changed = t.git("diff", "--name-only", parent, tag_commit).split()
+        if changed != ["android/release.json"]:
+            die(f"the tag's commit changes more than android/release.json: {', '.join(changed)}")
+    else:
+        # Path b: the app is the one an earlier release holds, unchanged.
+        app_tag = rel.get("tag")
+        if not isinstance(app_tag, str) or not TAG_RE.fullmatch(app_tag):
+            die(f"the tag's android/release.json names no release tag ({app_tag!r})")
+        if not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{app_tag}"):
+            die(f"the tag's android/release.json names {app_tag}, which is no tag here (git fetch --tags)")
+        app_commit = t.git("rev-parse", "--verify", f"refs/tags/{app_tag}^{{commit}}").strip()
+        if app_commit == tag_commit or not t.git_ok("merge-base", "--is-ancestor", app_commit, tag_commit):
+            die(f"{app_tag}, which holds the app's APKs, is not a release before {tag}")
+        if fetched:
+            app_on_github = _remote_ref(t, f"refs/tags/{app_tag}")
+            if app_on_github != app_commit:
+                die(f"the tag {app_tag} here is {app_commit[:12]}, on GitHub {app_on_github or 'missing'}")
+        if t.git_bytes("show", f"{tag_commit}:android/release.json") != t.git_bytes(
+                "show", f"{app_commit}:android/release.json"):
+            die(f"android/release.json at {tag} is not the one {app_tag} released: a release that changes the app "
+                "is made by android/scripts/release.ps1 (path a)")
+        gradle = t.git_bytes("show", f"{tag_commit}:android/app/build.gradle.kts")
+        name, code = _gradle_app(gradle.decode("utf-8") if gradle is not None else "")
+        if (name, code) != (rel.get("version_name"), rel.get("version_code")):
+            die(f"the app at {tag} is {name or '?'} ({code or '?'}), but android/release.json hands phones "
+                f"{rel.get('version_name')} ({rel.get('version_code')}) from {app_tag}: the app changed, so release it "
+                "first with android/scripts/release.ps1 (path a), or put its versionName and versionCode back")
+        app_from = {"version_name": rel.get("version_name"), "version_code": rel.get("version_code"), "tag": app_tag}
+        app_release = _release_json(t, app_tag) if (publish or t.gh_cmd) else None
+        if app_release is None and not publish:
+            say(f"warning: can't read the GitHub release {app_tag} (or no gh): its APKs go unchecked")
+        else:
+            _check_app_release(app_release, app_tag, apks)
+        say(f"the app is unchanged: {app_from['version_name']} ({app_from['version_code']}), its APKs on {app_tag}; "
+            f"{tag} gets no APKs")
+        apks = []
     tag_provision = t.git_bytes("show", f"{tag_commit}:scripts/linux/provision.sh")
     if tag_provision is None:
         die(f"the tag {tag} has no scripts/linux/provision.sh")
 
     release = _release_json(t, tag) if (publish or t.gh_cmd) else None
+    create_release = False
     if release is None:
-        if publish:
+        if app_changed and publish:
             die(f"no GitHub release {tag} (or gh can't read it): android/scripts/release.ps1 publishes it first")
-        say(f"warning: no GitHub release {tag} to check (or no gh): the run goes on with the manifest's files")
+        if app_changed:
+            say(f"warning: no GitHub release {tag} to check (or no gh): the run goes on with the manifest's files")
+        else:
+            create_release = True
     else:
         if release.get("isDraft"):
             die(f"the GitHub release {tag} is a draft: publish it first")
         _check_published_apks(release, apks)
     # Every release is a full one unless GitHub already marks it a pre-release
-    # (release.ps1 -Prerelease); only a version without a suffix that is not
-    # one moves stable.
-    prerelease = bool(release and release.get("isPrerelease"))
+    # (release.ps1 -Prerelease, or --prerelease here when this script creates
+    # it); only a version without a suffix that is not one moves stable.
+    if release is not None:
+        prerelease = bool(release.get("isPrerelease"))
+        if args.prerelease and not prerelease:
+            die(f"--prerelease: the GitHub release {tag} exists already, as a full release")
+    else:
+        prerelease = bool(args.prerelease)
     moves_stable = not by_name and not prerelease
 
     stable = ("skip", None)
@@ -840,6 +1017,13 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
         if stable[0] == "refused":
             die(f"stable on GitHub is {stable[1]}, which the tag's commit doesn't come after: refusing "
                 "(stable only ever fast-forwards to a release; it is never rewound or forced)")
+
+    # Path b: the tag, here only for now (windows/build.ps1 -Pin pins to a
+    # tag); pushed in step 5, deleted again if it isn't.
+    if make_tag:
+        t.git("tag", tag, tag_commit)
+        made.update(tag=tag, commit=tag_commit, tools=t)
+        say(f"tagged {tag_commit[:12]} {tag} here (the app unchanged, so this script makes the tag)")
 
     # 2. The Setup, from the tag's own files. ----------------------------------
     stage = repo / "windows" / "build" / "release" / tag
@@ -899,7 +1083,10 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     release_key = t.git_bytes("show", f"{tag_commit}:{RELEASE_KEY}")
     signing_key = args.signing_key or os.environ.get("DOMOVOI_RELEASE_SIGNING_KEY") or None
     signatures = None
-    if release_key is not None:
+    if release_key is not None and not signing_key and not publish:
+        say(f"warning: no signing key, so the Windows update's signatures are left out of this dry run "
+            f"(the tag pins {RELEASE_KEY}; a real run needs --signing-key)")
+    elif release_key is not None:
         if not signing_key:
             die(f"the tag pins Domovoi's release key ({RELEASE_KEY}), so its Setup must be signed: pass --signing-key "
                 "with the path of the key's private half (or set DOMOVOI_RELEASE_SIGNING_KEY); docs/CONTRIBUTING.md, "
@@ -923,7 +1110,7 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
                    setup_sha256=sha256_file(staged_setup), setup_built=not args.setup, previous_tag=since,
                    tray_sha256=sha256_file(staged_tray) if staged_tray.is_file() else None,
                    satellite_setup_sha256=sha256_file(staged_sat) if staged_sat.is_file() else None,
-                   signatures=signatures, candidate_of=m.group(1) if by_name else None)
+                   signatures=signatures, candidate_of=m.group(1) if by_name else None, app_from=app_from)
     if hand is not None:
         info.notes = hand.decode("utf-8")
         say(f"the notes: docs/release/{tag}.md at the tag")
@@ -958,9 +1145,16 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
     stable_push = f"{tag_commit}:refs/heads/stable"
     if not publish:
         say("not published (--no-publish). A real run then:")
-        print(f"    gh release upload {tag} {' '.join(u.name for u in uploads)} --repo {REPO_SLUG} --clobber")
-        print(f"    gh release edit {tag} --repo {REPO_SLUG} --title \"Domovoi v{version}\" --notes-file NOTES.md "
-              + ("--prerelease" if prerelease else "--latest") + f"    ({kind})")
+        if push_tag:
+            print(f"    git push origin {tag_commit}:refs/tags/{tag}    (the tag, never forced)")
+        if create_release:
+            print(f"    gh release create {tag} {' '.join(u.name for u in uploads)} --repo {REPO_SLUG} --verify-tag "
+                  f"--title \"Domovoi v{version}\" --notes-file NOTES.md "
+                  + ("--prerelease" if prerelease else "--latest") + f"    ({kind})")
+        else:
+            print(f"    gh release upload {tag} {' '.join(u.name for u in uploads)} --repo {REPO_SLUG} --clobber")
+            print(f"    gh release edit {tag} --repo {REPO_SLUG} --title \"Domovoi v{version}\" --notes-file NOTES.md "
+                  + ("--prerelease" if prerelease else "--latest") + f"    ({kind})")
         print("    (checks every file on GitHub against SHA256SUMS)")
         if not moves_stable:
             print(f"    stable stays where it is: {STABLE_STAYS}")
@@ -973,12 +1167,25 @@ def run(argv: list[str], *, tools: Tools | None = None, repo: Path | None = None
             print(f"    git push origin {stable_push}    ({tag}){frm}")
         return 0
 
-    # 5. Upload and edit. -----------------------------------------------------
-    say(f"uploading {', '.join(u.name for u in uploads)} to {tag}...")
-    t.gh("release", "upload", tag, *(str(u) for u in uploads), "--repo", REPO_SLUG, "--clobber")
-    say(f"setting the title and notes, as {kind}...")
-    t.gh("release", "edit", tag, "--repo", REPO_SLUG, "--title", f"Domovoi v{version}", "--notes-file", str(notes_file),
-         "--prerelease" if prerelease else "--latest")
+    # 5. Path b's tag, then upload and edit (or create). ----------------------
+    if push_tag:
+        say(f"pushing the tag {tag} ({tag_commit[:12]}) to GitHub...")
+        # A plain push of a new tag: refused if GitHub has one of that name.
+        t.git("push", "--quiet", "origin", f"{tag_commit}:refs/tags/{tag}")
+        made["pushed"] = True
+        if _remote_ref(t, f"refs/tags/{tag}") != tag_commit:
+            die(f"the tag {tag} on GitHub is not {tag_commit[:12]} after the push")
+    if create_release:
+        say(f"creating the GitHub release {tag} with {', '.join(u.name for u in uploads)}, as {kind}...")
+        t.gh("release", "create", tag, *(str(u) for u in uploads), "--repo", REPO_SLUG, "--verify-tag",
+             "--title", f"Domovoi v{version}", "--notes-file", str(notes_file),
+             "--prerelease" if prerelease else "--latest")
+    else:
+        say(f"uploading {', '.join(u.name for u in uploads)} to {tag}...")
+        t.gh("release", "upload", tag, *(str(u) for u in uploads), "--repo", REPO_SLUG, "--clobber")
+        say(f"setting the title and notes, as {kind}...")
+        t.gh("release", "edit", tag, "--repo", REPO_SLUG, "--title", f"Domovoi v{version}", "--notes-file",
+             str(notes_file), "--prerelease" if prerelease else "--latest")
 
     # 6. Check what GitHub has. -----------------------------------------------
     _verify_published(t, tag, sums)

@@ -43,9 +43,9 @@ This module is the core's half:
   ``DomovoiSatelliteSetup.exe`` is attached to Domovoi's GitHub releases
   by scripts/release/finish-release.ps1, beside ``DomovoiSetup.exe``, and
   listed in that release's ``SHA256SUMS``. Only when an admin presses the
-  dashboard's button, this server downloads it from the release that
-  ``android/release.json`` names (the release this checkout belongs to),
-  else from the latest release, through the outbound gate
+  dashboard's button, this server downloads it from the release this
+  checkout is (``v`` + its pyproject.toml version), else from the latest
+  release, through the outbound gate
   (domovoi/net_safety.py), and keeps it only if its SHA-256 is the one that
   release's ``SHA256SUMS`` lists and it is a Windows program. It is not
   code-signed yet (owner decision 2026-10-21), so what vouches for it is
@@ -253,16 +253,14 @@ def _bucket() -> Path:
 
 
 def release_tag() -> str | None:
-    """The release this checkout belongs to: the tag android/release.json
-    names (the release scripts write it at the tag), or None before the
-    first release."""
+    """The release this checkout belongs to: ``v`` + its pyproject.toml
+    version (domovoi.android_app.release_tag), or None. Not the tag
+    android/release.json names: that is the release holding the Android
+    app's APKs, which a server-only release leaves pointing at an older
+    one (owner decision 2026-11-14), whose Setup is older than this one."""
     from domovoi import android_app
 
-    try:
-        rel = android_app.load_manifest().get("release")
-    except android_app.ManifestError:
-        return None
-    return rel.get("tag") if isinstance(rel, dict) else None
+    return android_app.release_tag()
 
 
 def sources(tag: str | None) -> list[tuple[str, str]]:

@@ -9,7 +9,8 @@ file juggling.
 What may be handed out is pinned in the repo: ``android/release.json``,
 written by the owner's release script (android/scripts/release.ps1 or
 release.sh) when he signs and publishes a release on GitHub. It names the
-release (version, versionCode, tag), the **SHA-256 of the release key's
+release (version, versionCode, and the tag of the GitHub release that holds
+its APKs), the **SHA-256 of the release key's
 signing certificate**, and per ABI (arm64-v8a, armeabi-v7a) the APK's
 file name, GitHub release URL, size and SHA-256. ``release`` is null until
 the first release exists, and then every page says so plainly.
@@ -118,10 +119,43 @@ def file_name(version_name: str, abi: str) -> str:
     return f"domovoi-{version_name}-{abi}.apk"
 
 
-def tag_for(version_name: str) -> str:
-    """The GitHub release the APKs are attached to: the project-wide tag
-    ``v<versionName>`` (``v1.0.0-rc1``), owner decision 2026-10-15."""
-    return f"v{version_name}"
+def tag_for(version: str) -> str:
+    """A Domovoi release's tag: ``v`` + its version in SemVer spelling
+    (``v1.2.1``, ``v1.0.0-rc1``)."""
+    return f"v{version}"
+
+
+#: A Domovoi release tag, whole: what a manifest's ``tag`` may be.
+TAG_RE = re.compile(r"^v[0-9]{1,4}(\.[0-9]{1,4}){1,3}(-[0-9A-Za-z.]{1,20})?$")
+
+
+def semver(pep440: str) -> str | None:
+    """pyproject.toml's version (PEP 440) in the tags' SemVer spelling:
+    ``1.2.1`` stays, ``1.0.0rc2`` is ``1.0.0-rc2`` (``a``/``b`` become
+    ``-alpha``/``-beta``); None for anything else."""
+    m = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)(?:(a|b|rc)([0-9]+))?", pep440 or "", re.ASCII)
+    if not m:
+        return None
+    base, pre, n = m.groups()
+    return base if not pre else f"{base}-{ {'a': 'alpha', 'b': 'beta', 'rc': 'rc'}[pre] }{n}"
+
+
+def release_tag(pyproject: Path | None = None) -> str | None:
+    """The tag of the Domovoi release a checkout is: ``v`` + its
+    pyproject.toml version in SemVer spelling, or None (no file, no
+    version). Since 2026-11-14 the release number is Domovoi's own version;
+    the Android app keeps its own versionName and is released only when it
+    changes, so a manifest's ``tag`` names the (possibly older) release
+    that holds the app's APKs, not necessarily this one."""
+    import tomllib
+
+    try:
+        with open(pyproject or REPO / "pyproject.toml", "rb") as f:
+            version = tomllib.load(f).get("project", {}).get("version")
+    except (OSError, ValueError):
+        return None
+    sv = semver(version) if isinstance(version, str) else None
+    return tag_for(sv) if sv else None
 
 
 def load_manifest(path: Path | None = None) -> dict[str, Any]:
@@ -147,8 +181,13 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
     code = rel.get("version_code")
     if not isinstance(code, int) or isinstance(code, bool) or not 1 <= code <= 2_100_000_000:
         raise ManifestError(f"bad version_code {code!r}")
-    if rel.get("tag") != tag_for(version):
-        raise ManifestError(f"the tag must be {tag_for(version)}")
+    # The GitHub release that holds the APKs: a Domovoi release tag, not
+    # necessarily v<version_name> (the app is released only when it
+    # changes, under the Domovoi release being cut then; a later
+    # server-only release keeps pointing here).
+    tag = rel.get("tag")
+    if not isinstance(tag, str) or not TAG_RE.match(tag):
+        raise ManifestError(f"bad tag {tag!r} (v<X.Y.Z> or v<X.Y.Z>-<suffix>)")
     cert = rel.get("cert_sha256")
     if not isinstance(cert, str) or not _SHA_RE.match(cert):
         raise ManifestError("cert_sha256 must be 64 lower-case hex digits")
@@ -179,7 +218,7 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
         name = file_name(version, abi)
         if entry.get("file") != name:
             raise ManifestError(f"{abi}: the file must be {name}")
-        if entry.get("url") != RELEASE_DOWNLOAD + tag_for(version) + "/" + name:
+        if entry.get("url") != RELEASE_DOWNLOAD + tag + "/" + name:
             raise ManifestError(f"{abi}: the URL is not this release's GitHub download")
         sha = entry.get("sha256")
         if not isinstance(sha, str) or not _SHA_RE.match(sha):
@@ -193,7 +232,7 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
         "manifest_version": 1,
         "release": {
             "package": PACKAGE, "version_name": version, "version_code": code,
-            "tag": rel["tag"], "cert_sha256": cert, "commit": commit, "published": published,
+            "tag": tag, "cert_sha256": cert, "commit": commit, "published": published,
             "min_served_version_code": min_served, "apks": out_apks,
         },
     }
@@ -726,15 +765,17 @@ MANIFEST_ABOUT = [
 
 
 def build_manifest(folder: Path, *, version_name: str, version_code: int, cert_sha256: str,
-                   commit: str | None, published: str | None) -> dict[str, Any]:
+                   commit: str | None, published: str | None, tag: str) -> dict[str, Any]:
     """The release.json document for the signed APKs in ``folder``
-    (``domovoi-<version>-<abi>.apk`` for every ABI in :data:`ABIS`)."""
+    (``domovoi-<version>-<abi>.apk`` for every ABI in :data:`ABIS`),
+    attached to the GitHub release ``tag`` (the Domovoi release being cut,
+    :func:`release_tag`)."""
     apks = []
     for abi in ABIS:
         name = file_name(version_name, abi)
         path = Path(folder) / name
         apks.append({
-            "abi": abi, "file": name, "url": RELEASE_DOWNLOAD + tag_for(version_name) + "/" + name,
+            "abi": abi, "file": name, "url": RELEASE_DOWNLOAD + tag + "/" + name,
             "sha256": _sha256(path), "size": path.stat().st_size,
         })
     return {
@@ -742,7 +783,7 @@ def build_manifest(folder: Path, *, version_name: str, version_code: int, cert_s
         "about": MANIFEST_ABOUT,
         "release": {
             "package": PACKAGE, "version_name": version_name, "version_code": version_code,
-            "tag": tag_for(version_name), "commit": commit, "published": published,
+            "tag": tag, "commit": commit, "published": published,
             "cert_sha256": cert_sha256, "apks": apks,
         },
     }
@@ -755,10 +796,13 @@ def _main(argv: list[str]) -> int:
     * ``check MANIFEST DIR`` — hold every APK the manifest names, found by
       name in DIR, to :func:`check_apk`: exactly what a Domovoi server does
       before it serves them.
-    * ``write OUT DIR --version-name V --version-code N --cert HEX
+    * ``write OUT DIR --version-name V --version-code N --cert HEX --tag vX.Y.Z
       [--commit SHA] [--published YYYY-MM-DD]`` — write the release.json
       for the signed APKs in DIR (and ``SHA256SUMS`` beside them), checked
-      by :func:`load_manifest` before it is written.
+      by :func:`load_manifest` before it is written. ``--tag`` is the
+      Domovoi release the APKs are published under (``tag`` below).
+    * ``tag [PYPROJECT]`` — print the Domovoi release tag of the checkout
+      (:func:`release_tag`): what the release scripts tag.
     """
     import argparse
     import sys
@@ -776,12 +820,24 @@ def _main(argv: list[str]) -> int:
     w.add_argument("--cert", required=True)
     w.add_argument("--commit")
     w.add_argument("--published")
+    w.add_argument("--tag", required=True)
+    tg = sub.add_parser("tag")
+    tg.add_argument("pyproject", nargs="?")
     args = ap.parse_args(argv)
+
+    if args.cmd == "tag":
+        found = release_tag(Path(args.pyproject) if args.pyproject else None)
+        if not found:
+            print("pyproject.toml names no X.Y.Z or X.Y.Z(a|b|rc)N version", file=sys.stderr)
+            return 2
+        print(found)
+        return 0
 
     if args.cmd == "write":
         try:
             doc = build_manifest(Path(args.dir), version_name=args.version_name, version_code=args.version_code,
-                                 cert_sha256=args.cert.lower(), commit=args.commit, published=args.published)
+                                 cert_sha256=args.cert.lower(), commit=args.commit, published=args.published,
+                                 tag=args.tag)
         except OSError as e:
             print(f"an APK is missing: {e}", file=sys.stderr)
             return 2

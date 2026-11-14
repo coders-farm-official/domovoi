@@ -7,10 +7,16 @@ Builds the per-ABI release APKs (arm64-v8a, armeabi-v7a), signs them with
 YOUR release key, checks them the way a Domovoi server will, writes
 android/release.json, commits it ("android: release <v> [skip ci]") and
 pushes it to the branch's upstream, then publishes the GitHub release
-v<versionName> on coders-farm-official/domovoi with gh, tagged at THAT
-commit: the tag holds the manifest naming its own APKs (they are built from
-the commit before it, which differs only by that file). Last it downloads
-each file back by the manifest's URL.
+v<Domovoi's version> (pyproject.toml's, NOT the app's versionName: owner
+decision 2026-11-14) on coders-farm-official/domovoi with gh, tagged at
+THAT commit: the tag holds the manifest naming its own APKs (they are built
+from the commit before it, which differs only by that file). Last it
+downloads each file back by the manifest's URL.
+
+Run it only for a release that changes the app (its versionName and
+versionCode raised). A release that doesn't is
+scripts\release\finish-release.ps1 alone: android/release.json stays as it
+is, naming the earlier release that holds the APKs.
 
 If a run stops after the commit (a failed push, gh or download), run it
 again from the same checkout: it sees the release commit at HEAD and
@@ -281,7 +287,7 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
             "| $($entry.file) | $who | ``$($entry.sha256)`` |"
         }
         $notes = @(
-            "Domovoi $versionName. The Android app (versionCode $versionCode), built from $($manifest.commit); the release is tagged at $ReleaseCommit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes.",
+            "Domovoi $tag. The Android app $versionName (versionCode $versionCode), built from $($manifest.commit); the release is tagged at $ReleaseCommit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes.",
             '',
             'Install the app from your own Domovoi server: on the dashboard, Settings -> Rooms -> add a spare device (for a room) or Settings -> Phones & browsers -> get the Domovoi app. The server checks these files against android/release.json before it hands them out.',
             '',
@@ -297,7 +303,7 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
         Say "publishing $tag on $RepoSlug at $($ReleaseCommit.Substring(0, 12)), $kind..."
         $assets = @($manifest.apks | ForEach-Object { Join-Path $signed $_.file }) + @($sumsFile)
         $ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $ReleaseCommit, '--verify-tag',
-            '--title', "Domovoi v$versionName", '--notes-file', $notesFile)
+            '--title', "Domovoi $tag", '--notes-file', $notesFile)
         $ghArgs += if ($isPrerelease) { '--prerelease' } else { '--latest' }
         $created = Invoke-Tool $Gh $ghArgs
         if ($null -eq $created) {
@@ -336,9 +342,10 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
 # --- carry on from a release commit --------------------------------------
 if ($resume) {
     $versionName = [string]$resume.version_name; $versionCode = [long]$resume.version_code
-    $tag = "v$versionName"
+    # The release the manifest at HEAD names (Domovoi's version when it was made).
+    $tag = [string]$resume.tag
     $isPrerelease = [bool]$Prerelease
-    Say "Domovoi $versionName (versionCode $versionCode): HEAD $($commit.Substring(0, 12)) is its release commit (android/release.json on top of $($resume.commit.Substring(0, 12)), which the APKs were built from), so this run carries on from there; nothing is built or signed again"
+    Say "the Android app $versionName (versionCode $versionCode), release $($tag): HEAD $($commit.Substring(0, 12)) is its release commit (android/release.json on top of $($resume.commit.Substring(0, 12)), which the APKs were built from), so this run carries on from there; nothing is built or signed again"
     # The first run's checks against the release before it, on what is committed.
     $prevCode = 0; $prevCert = $null
     $prevText = Invoke-Tool $Git @('show', "$($resume.commit):android/release.json")
@@ -396,13 +403,16 @@ foreach ($abi in $Abis) {
     if ($null -eq $versionName) { $versionName = $vn; $versionCode = $vc }
     if ($vn -ne $versionName -or $vc -ne $versionCode) { Die 'the APKs disagree on their version' }
 }
-# The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
-# tag_for, which the manifest's URLs are checked against.
-$tag = "v$versionName"
+# The release is Domovoi's: v + pyproject.toml's version in SemVer spelling
+# (v1.2.1, v1.0.0-rc1; domovoi.android_app's release_tag), not the app's
+# versionName (owner decision 2026-11-14). The manifest's tag and URLs name it.
+$tagOut = Invoke-Tool $python @('-m', 'domovoi.android_app', 'tag', 'pyproject.toml')
+if ($null -eq $tagOut) { Die 'pyproject.toml names no X.Y.Z or X.Y.Z(a|b|rc)N version' }
+$tag = ([string]$tagOut[0]).Trim()
 # A full release, marked Latest, unless -Prerelease (a release candidate too:
 # the suffix says what it is, owner decision 2026-10-15).
 $isPrerelease = [bool]$Prerelease
-Say "Domovoi $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12))"
+Say "the Android app $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12)), published as Domovoi's release $tag"
 
 # versionCode is YYMMDDNN (android\app\build.gradle.kts): the build's date
 # and that day's number, one sequence for these APKs and the Play bundle
@@ -513,7 +523,7 @@ Say "kept the R8 mapping as $signed\domovoi-$versionName-mapping.txt"
 $staged = Join-Path $signed 'release.json'
 $published = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 if ($null -eq (Invoke-Tool $python @('-m', 'domovoi.android_app', 'write', $staged, $signed, '--version-name', $versionName,
-        '--version-code', "$versionCode", '--cert', $cert, '--commit', $commit, '--published', $published))) {
+        '--version-code', "$versionCode", '--cert', $cert, '--commit', $commit, '--published', $published, '--tag', $tag))) {
     $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
     Die 'writing the manifest failed'
 }
