@@ -289,8 +289,20 @@ class HomeModelsTest {
         val rows = todayDays(events, now, zone, shared = true).single().rows
         assertEquals(0xFF33B679L, rows[0].dot)
         assertNull(rows[1].dot)
-        // A shared screen still says "busy" for every calendar.
+        // A shared screen still says "busy" for every calendar, and names none.
         assertEquals(listOf("busy", "busy"), rows.map { it.title })
+        assertEquals(listOf<String?>(null, null), rows.map { it.calendar })
+        // Elsewhere the source is said in words, not by the dot's colour alone.
+        val own = todayDays(events, now, zone, shared = false).single().rows
+        assertEquals(listOf("Work", null), own.map { it.calendar })
+    }
+
+    /** The server's real shape: midnight in the household's offset. */
+    @Test fun anAllDayEventInTheHouseholdsOffsetSitsOnItsWrittenDate() {
+        val now = ms("2026-09-28T00:00:00Z")           // 7pm Sunday in Chicago
+        val e = HomeEvent(1, "Holiday", "2026-09-28T00:00:00-04:00", "2026-09-29T00:00:00-04:00", all_day = true)
+        val row = todayDays(listOf(e), now, zone, shared = false).single().rows.single()
+        assertEquals(ms("2026-09-28T05:00:00Z"), row.startMs)  // Monday's local midnight in Chicago
     }
 
     @Test fun anAllDayEventSitsOnItsWrittenDateInAnyZone() {
@@ -623,5 +635,16 @@ class HomeModelsTest {
     @Test fun dashboardLinksLandOnTheConnectedServer() {
         assertEquals("http://10.0.0.5:6369/#plugins", dashboardUrl("http://10.0.0.5:6369/", "#plugins"))
         assertNull(dashboardUrl("  ", "#plugins"))
+    }
+
+    /** Server V057: a private event shared as busy shows as "Busy", no place. */
+    @Test fun aBusyEventShowsAsBusy() {
+        val now = ms("2026-09-28T14:00:00Z")
+        val e = HomeEvent(1, "secret", "2026-09-28T15:00:00Z", location = "somewhere", calendar_name = "Work",
+            calendar_kind = "phone", busy = true)
+        val row = todayDays(listOf(e), now, zone, shared = false).single().rows.single()
+        assertEquals("Busy", row.title)
+        assertNull(row.location)
+        assertEquals("Work", row.calendar)
     }
 }

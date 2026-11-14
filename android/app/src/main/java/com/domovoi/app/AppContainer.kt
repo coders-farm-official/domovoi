@@ -214,6 +214,24 @@ class AppContainer(context: Context) {
                 ServerScope.of(url, IdentityGate.pinKey(url)?.let { pins[it] })
             }.distinctUntilChanged().collect { player.serverChanged(it) }
         }
+        // Calendar sharing's jobs follow the active, paired server
+        // (calendarshare/CalendarShareWork.kt): matched to it at start, and
+        // a send or delete owed to a server goes when the app is back on it.
+        val appContext = context.applicationContext
+        scope.launch {
+            var first = true
+            combine(prefs.serverUrl, prefs.deviceToken) { url, token ->
+                com.domovoi.app.data.ServerCredentials.normalize(url) to !token.isNullOrBlank()
+            }.distinctUntilChanged().collect {
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    runCatching {
+                        if (first) com.domovoi.app.calendarshare.CalendarShare.schedule(appContext)
+                        else com.domovoi.app.calendarshare.CalendarShare.serverChanged(appContext)
+                    }
+                }
+                first = false
+            }
+        }
     }
 
     /** Developer options (data/DeveloperOptions.kt): the benchmark and the

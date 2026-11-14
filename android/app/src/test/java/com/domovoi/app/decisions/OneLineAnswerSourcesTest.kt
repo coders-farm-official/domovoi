@@ -260,13 +260,20 @@ class OneLineAnswerSourcesTest {
             it.contains("onClick = onEdit") && it.contains("Text(\"edit\"")
         }
         assertTrue("the detail sheet's `edit` button moved or was renamed", editButton >= 0)
-        // The guard is on the line above it, or on the one above that.
+        // The guard is on the line above it, or on the one above that: the
+        // pure canEdit(event), which asks editDraftOf (and is tested as
+        // behaviour in CalendarImportedTest.editAndDeleteAreOfferedOnlyWhereTheyCanWork).
         val guard = lines.subList(maxOf(0, editButton - 3), editButton)
-            .any { it.contains("editDraftOf(event) != null") }
+            .any { it.contains("canEdit(event)") }
         assertTrue(
-            "the `edit` control is drawn without asking editDraftOf(event): it " +
+            "the `edit` control is drawn without asking canEdit(event): it " +
                 "opens an editor whose start field is a lie (D18, owner 2026-11-03)",
             guard,
+        )
+        assertTrue(
+            "canEdit no longer asks editDraftOf",
+            source("ui/screens/calendar/CalendarModels.kt").lines()
+                .any { it.contains("fun canEdit(") && it.contains("editDraftOf(e) != null") },
         )
     }
 }

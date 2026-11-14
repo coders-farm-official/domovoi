@@ -73,7 +73,9 @@ internal fun privacyPoints(assistant: Boolean): List<String> = listOfNotNull(
 /** Settings → Phone calendars (1.3.0), off until turned on. */
 internal const val PRIVACY_CALENDAR_POINT =
     "If you turn on Phone calendars, the calendars you tick are copied to your Domovoi server, and nowhere " +
-        "else: their events' titles, times and places, never descriptions or guests. Turning it off deletes that copy."
+        "else: their events' titles, times and places (private events as \"busy\" only), never descriptions or " +
+        "guests. Everyone in your household can see them, and Domovoi can read them out in any room. Turning " +
+        "it off, or forgetting the server, deletes that copy."
 
 /** This install's points: the phone chats' only where they are in the app
  *  (64-bit installs, [AssistantSupport]). */

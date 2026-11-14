@@ -58,7 +58,16 @@ class Prefs(
         PrefsVaultStore(context, CLAIM_KEYS_FILE),
         KeystoreSealer(CLAIM_KEYS_ALIAS, CLAIM_KEYS_AAD),
     ) { Log.w(TAG, it.replace("token", "claim key")) },
-) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook, ClaimBook {
+    /** The calendar keys (calendarshare/: the key a server hands this phone
+     *  with its first calendar snapshot, sent on every later one), per
+     *  server: sealed under a Keystore key of their own, in a file of their
+     *  own, outside every backup and transfer like everything here. */
+    private val calendarKeyVault: TokenVault = TokenVault(
+        PrefsVaultStore(context, CALENDAR_KEYS_FILE),
+        KeystoreSealer(CALENDAR_KEYS_ALIAS, CALENDAR_KEYS_AAD),
+    ) { Log.w(TAG, it.replace("token", "calendar key")) },
+) : IdentityGate.PinStore, DeveloperOptions.Store, TokenHealth.RejectedBook, ClaimBook,
+    com.domovoi.app.calendarshare.CalendarKeys {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val kServer = stringPreferencesKey("server_url")
@@ -152,6 +161,10 @@ class Prefs(
     /** The claim key held per server (never logged, never shown). */
     @Volatile
     private var claimKeys: Map<String, String> = emptyMap()
+
+    /** The calendar key held per server (never logged, never shown). */
+    @Volatile
+    private var calendarKeys: Map<String, String> = emptyMap()
 
     /** Bumped whenever a claim key comes or goes, so a screen that shows
      *  "can't prove it yet" follows. Carries no key. */
@@ -300,6 +313,7 @@ class Prefs(
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
             _deviceOwners.value = decodeDeviceOwners(p[kDeviceOwners])
             claimKeys = claimVault.read()
+            calendarKeys = calendarKeyVault.read()
             var picks = ServerCredentials.decodeOwners(p[kListenerPicks])
             val legacyPick = p[kListener]
             if (legacyPick != null) {
@@ -543,6 +557,7 @@ class Prefs(
         setOwners(ServerCredentials.withOwner(_owners.value, url, null))
         rememberDeviceOwner(url, null, null)
         setListenerPicks(ServerCredentials.withOwner(_listenerPicks.value, url, null))
+        setCalendarKey(url, null)
     }
 
     // ── Shared screen ──────────────────────────────────────────────────
@@ -698,6 +713,23 @@ class Prefs(
         recomputeListener()
     }
 
+    // ── The calendar key (calendarshare/CalendarKeys) ───────────────────
+
+    override fun calendarKeyFor(server: String): String? =
+        calendarKeys[ServerCredentials.normalize(server)]?.takeIf { it.isNotBlank() }
+
+    @Synchronized
+    override fun setCalendarKey(server: String, key: String?) {
+        val clean = ServerCredentials.normalize(server)
+        if (clean.isBlank()) return
+        val next = ServerCredentials.withToken(calendarKeys, clean, key)
+        if (next == calendarKeys) return
+        calendarKeys = next
+        // The map as it is when the write runs: two quick changes never
+        // leave the older one on disk.
+        scope.launch { calendarKeyVault.write(calendarKeys) }
+    }
+
     // ── "Listening as" ────────────────────────────────────────────────
 
     /** Pick who the phone listens as on the active server: a person id, or
@@ -767,6 +799,9 @@ class Prefs(
         const val CLAIM_KEYS_FILE = "domovoi-claim-keys"
         const val CLAIM_KEYS_ALIAS = "domovoi-claim-keys"
         val CLAIM_KEYS_AAD: ByteArray = "domovoi-claim-keys-v1".toByteArray(Charsets.UTF_8)
+        const val CALENDAR_KEYS_FILE = "domovoi-calendar-keys"
+        const val CALENDAR_KEYS_ALIAS = "domovoi-calendar-keys"
+        val CALENDAR_KEYS_AAD: ByteArray = "domovoi-calendar-keys-v1".toByteArray(Charsets.UTF_8)
 
         private val deviceOwnersSerializer = MapSerializer(String.serializer(), DeviceOwner.serializer())
 

@@ -189,7 +189,7 @@ private fun MonthChip(
             )
         }
         Text(
-            e.title,
+            e.displayTitle(),
             fontSize = 10.sp,
             color = if (dimmed) Domovoi.colors.fgMuted else Domovoi.colors.fg,
             maxLines = 1,
@@ -331,7 +331,7 @@ private fun DayColumn(
                     .padding(4.dp),
             ) {
                 Text(
-                    e.title,
+                    e.displayTitle(),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Domovoi.colors.fg,

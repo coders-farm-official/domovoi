@@ -25,9 +25,10 @@ internal data class CalendarEvent(
     val source: String? = null,
     val external_id: String? = null,
     val last_synced_at: String? = null,
-    /** 1.3.0: an all-day event. Its `starts_at` names the DATE (a UTC
-     *  midnight from a phone calendar): read by its written date, never
-     *  shifted into this phone's zone. */
+    /** 1.3.0: an all-day event. Its `starts_at` names the DATE: the server
+     *  writes it as midnight in the HOUSEHOLD's offset
+     *  ("2026-11-26T00:00:00-05:00"), so it is read by its written date,
+     *  never shifted into this phone's zone (which may be another one). */
     val all_day: Boolean = false,
     /** The server's calendar source id (a linked or a phone calendar). */
     val calendar_id: Long? = null,
@@ -40,7 +41,22 @@ internal data class CalendarEvent(
     val owner_name: String? = null,
     /** Can't be changed here: it comes from another calendar. */
     val read_only: Boolean = false,
+    /** A private event a phone shared as busy (server V057): its title is
+     *  "Busy" and it has no place. */
+    val busy: Boolean = false,
+    /** The other calendars holding the same event (same iCalendar UID and
+     *  start), listed once: `["Family · Galaxy"]`. */
+    val also_in: List<String> = emptyList(),
 )
+
+/** What the event is called on screen: "Busy" for a private one. */
+internal fun CalendarEvent.displayTitle(): String = if (busy) "Busy" else title
+
+/** The quiet line on the detail: "also in Family · Galaxy, School"; null
+ *  when the event is in one calendar only. */
+internal fun CalendarEvent.alsoInLine(): String? =
+    also_in.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        .takeIf { it.isNotEmpty() }?.joinToString(", ", prefix = "also in ")
 
 internal fun CalendarEvent.isGoogle(): Boolean = source == "google"
 
@@ -75,6 +91,15 @@ internal fun CalendarEvent.readOnlyNote(): String? {
         "from ${name ?: "another calendar"} — change it there"
     }
 }
+
+/** Whether the detail's `edit` is offered: not for an event from a linked
+ *  or phone calendar (the house's read-only copy: it could only fail), nor
+ *  for a row whose `starts_at` we cannot read (D18: the editor has no
+ *  honest time to start from). Pure, so the hiding is tested, not just drawn. */
+internal fun canEdit(e: CalendarEvent): Boolean = !e.read_only && editDraftOf(e) != null
+
+/** Whether the detail's `delete` is offered: not for a read-only copy. */
+internal fun canDelete(e: CalendarEvent): Boolean = !e.read_only
 
 /** "#33b679" → 0xFF33B679; anything else null. */
 internal fun parseHexColor(hex: String?): Long? {
@@ -210,13 +235,32 @@ internal fun visibleEvents(
  * the same defect as the chapter counts (D48), fixed with the same
  * helper.
  *
- * Android counts the WHOLE list, not the current window, because the whole
- * list is what it read (`GET /api/calendar/events` with no window). iOS
- * reads a window per view and so says "in view" and counts that
- * (`CalendarStrings.subtitle(count:)`).
+ * It counts what was read: the six weeks of the month grid around the
+ * anchor ([calendarRangePath]), the same window the sidebar badge counts
+ * for this month. iOS reads a window per view and so says "in view" and
+ * counts that (`CalendarStrings.subtitle(count:)`).
  */
 internal fun calendarSubtitle(events: List<CalendarEvent>): String =
     "${plural(events.withReadableStart().size, "event")} · the household's calendar"
+
+/**
+ * What the calendar asks the server for: the six weeks of the month grid
+ * around [anchor] (every view, and the agenda from the anchor on, falls
+ * inside it), as the dashboard does (web/static/calendar.jsx `calPath`).
+ * Never the whole list: the server's default answer is its OLDEST 500
+ * events, which hides today and the weeks ahead once a busy linked or
+ * phone calendar is shared. Asked again when the month changes.
+ */
+internal fun calendarRangePath(anchor: LocalDate, zone: ZoneId = ZoneId.systemDefault()): String {
+    val gs = monthGridStart(anchor)
+    fun enc(d: LocalDate) = java.net.URLEncoder.encode(
+        IsoUtcFmt.format(d.atStartOfDay(zone).toInstant()), "UTF-8",
+    )
+    return "/api/calendar/events?start=${enc(gs)}&end=${enc(gs.plusDays(42))}&limit=$CALENDAR_RANGE_LIMIT"
+}
+
+/** The server's largest page (`limit` le=2000), as the dashboard asks. */
+internal const val CALENDAR_RANGE_LIMIT = 2000
 
 // ---------------------------------------------------------------------------
 // Formatting — lowercase chrome, US-style clock like the web helpers.

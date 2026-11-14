@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.domovoi.app.calendarshare.CalendarShare
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -261,7 +262,13 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                     Text("use", style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.brand)
                 }
                 if (saved && !active) {
-                    IconButton(onClick = { app.prefs.removeKnownServer(url) }, modifier = Modifier.size(26.dp)) {
+                    IconButton(onClick = {
+                        // Not the active server: nothing can be sent to it,
+                        // so a copy of this phone's calendars there is said.
+                        val gone = CalendarShare.forgetInactive(context, url)
+                        app.prefs.removeKnownServer(url)
+                        if (!gone) toast("forgot ${ServerCredentials.address(url)} — ${CalendarShare.LEFT_ON_HOUSE}")
+                    }, modifier = Modifier.size(26.dp)) {
                         Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
                     }
                 }
@@ -318,7 +325,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
             onDismiss = { confirmForgetActive = false },
             onConfirm = {
                 confirmForgetActive = false
-                forgetActiveServer(app, toast)
+                forgetActiveServer(app, context, toast)
             },
         )
     }

@@ -80,8 +80,13 @@ fun CalendarScreen() {
     val compact = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass ==
         WindowWidthSizeClass.COMPACT
 
-    val state = rememberApi(eventTypes = setOf("calendar.events.changed")) { a ->
-        a.api.get("/api/calendar/events").decode<List<CalendarEvent>>()
+    var anchor by remember { mutableStateOf(LocalDate.now()) }
+    // The six weeks around the month shown (calendarRangePath), asked again
+    // when the month changes: never the whole list, whose first 500 are the
+    // OLDEST events.
+    val rangePath = calendarRangePath(anchor)
+    val state = rememberApi(rangePath, eventTypes = setOf("calendar.events.changed")) { a ->
+        a.api.get(rangePath).decode<List<CalendarEvent>>()
     }
     // The whole list, as read. A row whose `starts_at` we cannot read is
     // dropped by the two functions that put rows and counts on the page —
@@ -95,7 +100,6 @@ fun CalendarScreen() {
     var view by remember(compact) {
         mutableStateOf(if (compact) CalView.Agenda else CalView.Month)
     }
-    var anchor by remember { mutableStateOf(LocalDate.now()) }
     var selectedId by remember { mutableStateOf<Long?>(null) }
     var editorDraft by remember { mutableStateOf<EventDraft?>(null) }
     var deleteTarget by remember { mutableStateOf<CalendarEvent?>(null) }
@@ -408,7 +412,7 @@ private fun AgendaRow(e: CalendarEvent, selected: Boolean, onClick: () -> Unit) 
         }
         Column(Modifier.weight(1f)) {
             Text(
-                e.title,
+                e.displayTitle(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = Domovoi.colors.fg,
                 maxLines = 1,

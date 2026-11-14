@@ -977,6 +977,16 @@ private fun TodayRowView(row: TodayRow, zone: ZoneId, onOpen: () -> Unit) {
                 color = Domovoi.colors.fg,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
+            // Which calendar, in words: the dot's colour alone says
+            // nothing to someone who can't tell the colours apart.
+            row.calendar?.let { name ->
+                Text(
+                    name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Domovoi.colors.fgMuted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
             row.location?.let { loc ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Icon(Icons.Filled.Place, contentDescription = null, tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(11.dp))

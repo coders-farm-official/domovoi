@@ -656,6 +656,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
     }
     val openConnection = LocalOpenConnection.current
     val toast = LocalToast.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     // A reinstalled or replaced Domovoi at the saved address proved a new
     // key: the banner says so in household words and offers the yes that
     // pins it (IdentityChanged.kt). Never without the person's answer.
@@ -668,7 +669,7 @@ private fun OfflineShell(choice: ServerChoice, verdict: IdentityVerdict?) {
             onDismiss = { askTrustAgain = false },
             onConfirm = {
                 askTrustAgain = false
-                trustAgain(app, savedServer, changed, toast)
+                trustAgain(app, context, savedServer, changed, toast)
             },
         )
     }
