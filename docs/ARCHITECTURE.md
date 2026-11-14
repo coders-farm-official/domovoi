@@ -1038,7 +1038,8 @@ never produces a phantom event.
 
 Core channels map NOTIFY → realtime like `acquisitions_changed →
 acquisitions`, `playlists_changed → playlists`, `library_changed →
-library.indexer`, `wake_words_changed → wake_words`, `timers_changed →
+library.indexer`, `library_cover_changed → library.cover` (a track's cover version moved, V059),
+`wake_words_changed → wake_words`, `timers_changed →
 timers` (a timer set, cancelled or fired), `chat_changed → chat.changed` (a
 thread or message written, so a second open dashboard's list stays fresh),
 `plugins_changed` (the plugin registry), and more. One channel has no NOTIFY: `files` (the filesystem

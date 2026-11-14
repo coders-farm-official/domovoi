@@ -64,7 +64,9 @@ const RECENT_MAX = 60;
 const absMedia = (p) => (p && p.startsWith('/') ? `${API_BASE}${p}` : p);
 const playerUrls = {
   audio: (trackId) => absMedia(`/api/music/library/${trackId}/audio`),
-  cover: (trackId) => absMedia(`/api/music/library/${trackId}/cover`),
+  // Versioned (?v=, V059) through the shared builder, so a cover the
+  // Cover Art Archive or an Undo changed is fetched anew (components.jsx).
+  cover: (trackId, coverV) => libraryCoverUrl(trackId, coverV),
 };
 
 /* ── Plugin player-source registry (design §5.2 step 4) ────────────────
@@ -116,7 +118,7 @@ const itemFromTrack = (t) => ({
   artist: t.artist || '',
   album: t.album || '',
   src: playerUrls.audio(t.id),
-  coverUrl: playerUrls.cover(t.id),
+  coverUrl: playerUrls.cover(t.id, t.cover_v),
   durationSec: t.duration_sec ?? null,
   seekable: true,
   cacheable: true,

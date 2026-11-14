@@ -89,7 +89,8 @@ class LibraryAPI:
            where it is.
         2. Upsert: an existing ``(source, source_id)`` row is updated in
            place; otherwise upsert on the UNIQUE ``file_path``.
-        3. Soft playlist attach (skipped with a log if the playlist died).
+        3. Soft playlist attach (skipped with a log if the playlist died,
+           or if it was made from the music files: read-only, V058).
         4. MPD update fan-out to every room (per-room DBs, no inotify).
         5. ``pg_notify('library_changed', ...)`` on the caller's session
            (commit-coupled) + ``core.library_track_added`` bus event.
@@ -206,13 +207,21 @@ class LibraryAPI:
 
         # 3 — soft playlist attach (NO FK — locked 5).
         if attach_to_playlist_id is not None:
-            attached = await self._attach_to_playlist(
+            from domovoi import library_playlists_import as file_playlists
+
+            outcome = await self._attach_to_playlist(
                 session, attach_to_playlist_id, track.id
             )
-            if not attached:
+            if outcome == file_playlists.ATTACH_MISSING:
                 log.info(
                     "ingest_track: playlist %s vanished before attach; skipping",
                     attach_to_playlist_id,
+                )
+            elif outcome == file_playlists.ATTACH_IMPORTED:
+                # Made from the music files: read-only everywhere (V058).
+                log.info(
+                    "ingest_track: playlist %s comes from the music files "
+                    "(read-only); not attaching", attach_to_playlist_id,
                 )
 
         # 4 — MPD fan-out (best-effort; the track row is already durable).
@@ -284,33 +293,12 @@ class LibraryAPI:
     @staticmethod
     async def _attach_to_playlist(
         session: AsyncSession, playlist_id: int, track_id: int
-    ) -> bool:
-        exists = (
-            await session.execute(
-                text("SELECT 1 FROM playlists WHERE id = :pid"),
-                {"pid": playlist_id},
-            )
-        ).first()
-        if exists is None:
-            return False
-        await session.execute(
-            text(
-                """
-                INSERT INTO playlist_tracks (playlist_id, track_id, position)
-                VALUES (
-                    :pid, :tid,
-                    COALESCE((SELECT MAX(position) + 1 FROM playlist_tracks
-                              WHERE playlist_id = :pid), 0)
-                )
-                ON CONFLICT (playlist_id, track_id) DO NOTHING
-                """
-            ),
-            {"pid": playlist_id, "tid": track_id},
-        )
-        await session.execute(
-            text("SELECT pg_notify('playlists_changed', 'attached')")
-        )
-        return True
+    ) -> str:
+        """:func:`domovoi.library_playlists_import.attach_track`: refuses a
+        playlist made from the music files, as the web route does."""
+        from domovoi.library_playlists_import import attach_track
+
+        return await attach_track(session, playlist_id, track_id)
 
     # ── Search / dedup wrappers ────────────────────────────────────────
     async def find_fuzzy_match(

@@ -278,7 +278,7 @@ const LtCover = ({ fire, confirm }) => {
       {(d.items || []).map(it => (
         <div key={it.track_id} style={{ display: 'grid', gridTemplateColumns: '40px 1fr auto', gap: 10,
                                         alignItems: 'center', padding: '8px 16px', borderTop: '1px solid var(--border-soft)' }}>
-          <CoverArt src={libraryCoverUrl(it.track_id)} size={40}/>
+          <CoverArt src={libraryCoverUrl(it.track_id, it.cover_v)} size={40}/>
           <div style={{ minWidth: 0 }}>
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {it.title || '?'}{it.artist ? ` — ${it.artist}` : ''}

@@ -58,6 +58,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from domovoi import guest_bans
+from domovoi.library_cover_version import cover_url
 from domovoi.admin_auth import (
     GUEST_BANNED_DETAIL,
     GUEST_DEVICE_HEADER,
@@ -225,6 +226,13 @@ class QueueItem(BaseModel):
     why: str | None = None
     up_next_seq: int | None = None
     track_id: int | None = None
+    # For a library song (``track_id`` set), as on a library Track: every
+    # artist the file credits ([] when nobody beyond ``artist``), and the
+    # cover's version with the versioned cover URL (V059). [] / null / null
+    # for anything else.
+    artists: list[str] = Field(default_factory=list)
+    cover_v: int | None = None
+    cover_url: str | None = None
 
 
 class RoomQueue(BaseModel):
@@ -502,6 +510,23 @@ async def read_queue(
             )
             guest_ids = {int(r[0]): (r[1], r[2]) for r in found.all()}
 
+        # The library songs' credited artists and cover versions (V059), in
+        # one read; a database that can't answer leaves them out.
+        track_ids = sorted({int(t) for t in (i.get("track_id") for i in raw_items)
+                            if isinstance(t, int) and not isinstance(t, bool)})
+        library_meta: dict[int, tuple[Any, Any, int]] = {}
+        if track_ids:
+            try:
+                async with s.begin_nested():
+                    found_meta = await s.execute(
+                        text("SELECT id, artist_credits, artist, cover_rev FROM library_tracks "
+                             "WHERE id = ANY(:ids)"),
+                        {"ids": track_ids},
+                    )
+                    library_meta = {int(r[0]): (r[1], r[2], int(r[3] or 0)) for r in found_meta.all()}
+            except Exception as e:  # noqa: BLE001 — the queue reads without them
+                log.warning("queue: couldn't read library details: %s", e)
+
     blocked_reason = _blocked_message(block, room_id) if block else None
     if guest and block is not None:
         blocked_reason = GUEST_BLOCKED_REASON   # never the block's own words
@@ -517,6 +542,8 @@ async def read_queue(
             banned = True
         if banned:
             blocked_reason = GUEST_BANNED_REASON
+
+    from web.backend.api.music import credited_artists
 
     items: list[QueueItem] = []
     for raw in raw_items:
@@ -537,6 +564,8 @@ async def read_queue(
             # rides on it, so the queue no longer hands it out.
             dev_id = None
         who_guest = guest_ids.get(song_id, (None, None))
+        track_id = raw.get("track_id")
+        meta = library_meta.get(track_id) if isinstance(track_id, int) else None
         items.append(
             QueueItem(
                 song_id=song_id,
@@ -556,7 +585,10 @@ async def read_queue(
                 reason_label=raw.get("reason_label"),
                 why=raw.get("why") if isinstance(raw.get("why"), str) else None,
                 up_next_seq=raw.get("up_next_seq"),
-                track_id=raw.get("track_id"),
+                track_id=track_id,
+                artists=credited_artists(meta[0], meta[1]) if meta else [],
+                cover_v=meta[2] if meta else None,
+                cover_url=cover_url(track_id, meta[2]) if meta else None,
             )
         )
     return RoomQueue(

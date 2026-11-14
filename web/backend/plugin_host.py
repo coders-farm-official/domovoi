@@ -177,6 +177,8 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.cover_art_writer",
     "domovoi.library_file_ids",
     "domovoi.library_playlists_import",
+    # The cover version (V059): cover URLs, the Undo bump.
+    "domovoi.library_cover_version",
     "domovoi.clients.musicbrainz",
     # The Version card's "restart the core" when the core doesn't answer
     # (web/backend/core_restart.py): the restart grant probe, and the update

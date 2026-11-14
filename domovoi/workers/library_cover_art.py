@@ -260,6 +260,11 @@ def apply_cover(track_id: int, file_path: str, image: bytes, mime: str) -> dict[
         return out
     out.update(state="written", snapshot_path=res.snapshot_path, had_art=res.had_art,
                created_tag=res.created_tag, size=res.size, mtime_ns=res.mtime_ns)
+    # The file as written now, so the next rescan doesn't count the same
+    # change twice (V059, domovoi/library_cover_version.py).
+    from domovoi.library_cover_version import cover_signature
+
+    out["cover_sig"] = cover_signature(path)
     return out
 
 
@@ -318,6 +323,11 @@ async def _record(track_id: int, outcome: dict[str, Any], kind: str | None, sid:
         if outcome["state"] in ("written", "cached"):
             await s.execute(text("SELECT pg_notify('library_changed', :p)"),
                             {"p": f"cover={track_id}"})
+            # The track's cover version (V059): its cover URL changes and
+            # `library.cover.changed` names it.
+            from domovoi import library_cover_version
+
+            await library_cover_version.bump(s, [track_id], {track_id: outcome.get("cover_sig")})
         await s.commit()
 
 

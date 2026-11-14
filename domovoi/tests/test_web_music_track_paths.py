@@ -33,7 +33,7 @@ ADDED = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
 def _row(track_id: int, file_path: str) -> tuple:
     return (track_id, file_path, "Song", "Artist", "Album", 200, None, None, None,
-            ADDED, None, None, False)
+            ADDED, None, None, False, None, 0)
 
 
 class _Result:

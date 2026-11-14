@@ -106,7 +106,9 @@ const useLibraryPage = ({ pageSize = 50 } = {}) => {
     return `/api/music/library?${params.toString()}`;
   }, [qDebounced, source, favoritedOnly, sort]);
 
-  const list = usePagedList(path, { pageSize, eventTypes: ['library.indexer.changed'] });
+  // `library.cover.changed`: a cover moved (V059), so the rows' cover_v —
+  // and with it each cover URL — is read again.
+  const list = usePagedList(path, { pageSize, eventTypes: ['library.indexer.changed', 'library.cover.changed'] });
 
   return {
     list, items: list.items, total: list.total ?? 0, loading: list.loading,
@@ -533,7 +535,7 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onQueue
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
-          <CoverArt src={libraryCoverUrl(track.id)} size={72}/>
+          <CoverArt src={libraryCoverUrl(track.id, track.cover_v)} size={72}/>
           {editing ? (
             <div style={{ minWidth: 0, flex: 1, display: 'grid', gap: 6 }}>
               {TRACK_TAG_FIELDS.map(tagInput)}
@@ -549,6 +551,9 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onQueue
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>{track.title || 'unknown title'}</div>
                 <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>{track.artist || 'unknown artist'}</div>
+                {creditedWith(track) && (
+                  <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{creditedWith(track)}</div>
+                )}
                 <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{track.album || '—'}</div>
               </div>
               {onEdit && <IconButton name="pencil" title="edit tags" onClick={startEdit}/>}
@@ -747,7 +752,7 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                     "Library table"); the copy that isn't shown never loads. */}
                 <td onClick={e => e.stopPropagation()}>
                   <span className="lib-play">
-                    <span className="lib-cover-phone"><CoverArt src={libraryCoverUrl(t.id)} size={32} icon={null}/></span>
+                    <span className="lib-cover-phone"><CoverArt src={libraryCoverUrl(t.id, t.cover_v)} size={32} icon={null}/></span>
                     <IconButton name="play" onClick={() => onBrowserPlay(t, rowContext, items)} title="play in this browser"/>
                   </span>
                 </td>
@@ -757,10 +762,14 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
                     button). */}
                 <td style={{ paddingTop: 8, paddingBottom: 8 }}>
                   <div className="lib-track">
-                    <span className="lib-cover-desk"><CoverArt src={libraryCoverUrl(t.id)} size={40}/></span>
+                    <span className="lib-cover-desk"><CoverArt src={libraryCoverUrl(t.id, t.cover_v)} size={40}/></span>
                     <div className="lib-track-text">
                       <div style={{ fontWeight: 500 }}>{t.title || '—'}</div>
-                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{t.artist || '—'}</div>
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                        {t.artist || '—'}
+                        {/* Further credited artists (the file's ARTISTS tag), quieter than the artist. */}
+                        {creditedWith(t) && <span style={{ color: 'var(--fg-faint)' }}> · {creditedWith(t)}</span>}
+                      </div>
                       <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>{t.album || '—'}</div>
                     </div>
                   </div>
@@ -2250,6 +2259,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                     </div>
                     <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.artist || '—'}
+                      {creditedWith(t) && <span style={{ color: 'var(--fg-faint)' }}> · {creditedWith(t)}</span>}
                     </div>
                   </div>
                   {onBrowserPlay && (

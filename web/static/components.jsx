@@ -630,8 +630,48 @@ const IconButton = ({ name, ...rest }) => (
  * row never asks again: one request per artless track per visit, not one
  * per render, and nothing logged from here. */
 const coverMisses = new Set();
-const libraryCoverUrl = (trackId) => (trackId == null ? null
-  : `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`);
+/* The cover's version (V059): a track row's `cover_v`, carried on the URL
+ * as ?v= so the browser's cached picture (and a remembered miss) is
+ * replaced exactly when the art changes. `library.cover.changed` names the
+ * tracks whose version just moved; remembered here, so a tile drawn from a
+ * row read before the change (the player bar, a room card) asks for the
+ * new picture on its next render too. */
+const coverVersions = new Map();
+let coverVersionsListening = false;
+/* Listen once the page's state socket is running anyway: never starts it
+ * (a page without live state, or a test harness, keeps none open). */
+const listenForCoverVersions = () => {
+  if (coverVersionsListening || typeof stateBus === 'undefined' || !stateBus
+      || !stateBus.shouldRun || !stateBus.subscribe) return;
+  coverVersionsListening = true;
+  stateBus.subscribe((ev) => {
+    if (!ev || ev.type !== 'library.cover.changed') return;
+    const tracks = (ev.data && Array.isArray(ev.data.tracks)) ? ev.data.tracks : [];
+    for (const t of tracks) {
+      if (t && t.id != null && Number.isFinite(t.cover_v)) {
+        coverVersions.set(t.id, Math.max(t.cover_v, coverVersions.get(t.id) || 0));
+      }
+    }
+  });
+};
+const libraryCoverUrl = (trackId, coverV) => {
+  if (trackId == null) return null;
+  listenForCoverVersions();
+  const known = coverVersions.get(trackId);
+  const v = Math.max(Number.isFinite(coverV) ? coverV : 0, known || 0);
+  return `${typeof API_BASE === 'string' ? API_BASE : ''}/api/music/library/${encodeURIComponent(trackId)}/cover`
+    + (v > 0 || Number.isFinite(coverV) ? `?v=${v}` : '');
+};
+/* The artists a track credits beyond the one its artist line already
+ * names (schemas.Track `artists`, in the file's order): what the library
+ * shows, quietly, as "with B, C". '' when there are none. */
+const creditedWith = (t) => {
+  const names = (t && Array.isArray(t.artists)) ? t.artists : [];
+  const shown = String((t && t.artist) || '').toLowerCase();
+  const extra = names.filter((n) => typeof n === 'string' && n.trim()
+    && !shown.includes(n.trim().toLowerCase()));
+  return extra.length ? `with ${extra.join(', ')}` : '';
+};
 const CoverArt = ({ src, size = 40, radius = 'var(--r-sm)', icon = 'music',
                     background = 'var(--sunken)', iconColor = 'var(--fg-faint)' }) => {
   // 'loading' (the <img> is in, still invisible) · 'shown' · 'none', held
@@ -5099,7 +5139,7 @@ Object.assign(window, {
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState,
   TimerFireAlerts,
-  CoverArt, libraryCoverUrl, coverMisses,
+  CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,
   CONTAINER_GUARD_GUEST_TEXT,
   DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,
