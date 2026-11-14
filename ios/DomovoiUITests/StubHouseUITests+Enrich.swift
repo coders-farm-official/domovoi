@@ -288,10 +288,15 @@ extension StubHouseUITests {
         control("enrich", "{\"cover_bump\":502}", port: 6601, what: "a cover written into 502")
         enrichLeaveAndComeBack(app)
 
-        let gained = enrichExactly(app, MusicMoreUnderTest.coverArt).waitForExistence(timeout: 25)
+        // Not "cover art" anywhere: the other rows behind the sheet already
+        // say that (I045). The coverless track's own "no cover art" going
+        // away is the gained cover, and the stub saw it asked again.
+        let gained = waitUntilGone(enrichExactly(app, MusicMoreUnderTest.noCoverArt), timeout: 25)
         evidence(app, "enrich-70-cover-gained")
         if !gained { enrichTree(app, "the gained cover never drew") }
         XCTAssertTrue(gained, "the remembered 404 was never asked again")
+        let asks = enrichCoverAsks(enrichSent(), 502)
+        XCTAssertTrue(asks.contains { ($0["status"] as? Int) == 200 }, "502 was never fetched again: \(asks)")
     }
 }
 
@@ -314,14 +319,25 @@ extension StubHouseUITests {
         }
         control("enrich", "{\"cover_bump\":502}", port: 6601, what: "a cover written into 502")
 
-        let gained = enrichExactly(app, MusicMoreUnderTest.coverArt).waitForExistence(timeout: 25)
-        evidence(app, "enrich-80-cover-event")
-        if !gained { enrichTree(app, "the event did not redraw the cover") }
-        XCTAssertTrue(gained, "the cover-changed event did not redraw the sheet's cover")
-        let asks = enrichCoverAsks(enrichSent(), 502)
+        // The stub's socket pushes every 3 s, so the ask is waited for — and
+        // waited for on the STUB's record. I045 asserted "cover art" anywhere
+        // on screen, which every other library row behind the sheet already
+        // said, so the wait returned at once and the record was read before
+        // the event had even gone out.
+        let sent = enrichWaitFor(30) { record in
+            self.enrichCoverAsks(record, 502).contains { ($0["v"] as? String) == "1" }
+        }
+        let asks = enrichCoverAsks(sent, 502)
         let fresh = asks.filter { ($0["v"] as? String) == "1" }
+        if fresh.isEmpty { enrichTree(app, "version 1 never asked for") }
         XCTAssertFalse(fresh.isEmpty, "version 1 was never asked for: \(asks)")
         XCTAssertEqual("", fresh.first?["if_none_match"] as? String, "a new version is fetched fresh")
+        // Every "no cover art" for 502 — the sheet's and its library row's —
+        // is gone: both drew version 1. Nothing else on screen says it.
+        let redrawn = waitUntilGone(enrichExactly(app, MusicMoreUnderTest.noCoverArt), timeout: 20)
+        evidence(app, "enrich-80-cover-event")
+        if !redrawn { enrichTree(app, "the event did not redraw the cover") }
+        XCTAssertTrue(redrawn, "the cover-changed event did not redraw 502's cover")
     }
 
     /// A versioned cover already held is shown on return without asking:

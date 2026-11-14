@@ -200,6 +200,31 @@ final class MusicCoverVersionTests: XCTestCase {
         XCTAssertEqual("/api/music/library/12/cover?v=3", asks.current.last?.0.path)
     }
 
+    /// A remembered "no cover" at one version never blocks the next: a song
+    /// that gains art (I045's track 502, v0 a 404, then the event's v1) is
+    /// asked for at v1, unconditionally, and draws it.
+    func testARemembered404AtOneVersionDoesNotBlockTheNext() async {
+        let asks = Shared<[MusicCoverKey]>([])
+        let covers = MusicCoverStore(renewal: MusicCoverRenewal(), revalidate: { key, _ in
+            asks.mutate { $0.append(key) }
+            if key.version == 0 {
+                throw DomovoiError.httpError(ApiFailure(status: 404, message: "404: no cover"))
+            }
+            return .picture(Self.picture, etag: "\"v1\"")
+        })
+        let versions = MusicCoverVersions()
+        let v0 = MusicCoverKey(trackID: 502, version: versions.version(502, row: 0))
+        covers.want(v0)
+        await settleUntil({ covers.cover(v0) == .absent }, "the 404 at v0")
+
+        versions.received(frame(#"[{"id":502,"cover_v":1}]"#), server: server)
+        let v1 = MusicCoverKey(trackID: 502, version: versions.version(502, row: 0))
+        XCTAssertEqual(1, v1.version, "the event's version wins over the row's")
+        covers.want(v1)
+        await settleUntil({ covers.cover(v1) == .image(Self.picture) }, "the picture at v1")
+        XCTAssertEqual([v0, v1], asks.current)
+    }
+
     /// While a new version is fetched the old picture is what there is.
     func testTheNewestPictureHeldIsFoundForAnyVersion() async {
         let covers = MusicCoverStore(renewal: MusicCoverRenewal(), revalidate: { _, _ in
