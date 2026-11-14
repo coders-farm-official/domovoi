@@ -50,6 +50,20 @@ NULL`` — the enrichment timestamp marker.
 * ``disagreed``    — a provider answered, but with a song that shares
                      nothing with the names the file already has (see
                      "Agreement" below), so those names were kept.
+* ``file``         — the file names its own MusicBrainz recording id
+                     (V058, the indexer / tag backfill): never fingerprinted.
+* ``reviewed``     — a person applied a candidate from "Needs review"
+                     (V058, ``web/backend/api/library_tools.py``).
+
+**Length, submissions, review** (V058). A candidate whose recording is
+more than :data:`LENGTH_TOLERANCE_SEC` longer or shorter than the file is
+another recording and never used; AcoustID is asked for lengths,
+submissions (``sources``) and albums, and among equal scores more
+submissions win; the album named is a plain album over a compilation,
+single or live one. A ``disagreed`` lookup, and a ``no_match`` whose best
+answer was under the score but not far under it (:data:`REVIEW_MIN_SCORE`),
+keep up to five candidates in ``library_match_candidates`` for the
+dashboard's "Needs review".
 
 **Agreement** (2026-11-13). A fingerprint answer is not taken blindly: a
 library once had "In the End" by Linkin Park renamed to the title "Linkin
@@ -168,6 +182,23 @@ class EnrichmentResult:
     album: str | None = None
     musicbrainz_recording_id: str | None = None
     source: str = ""  # "acoustid" or "shazam"
+    # AcoustID only (V058): the result's score (0-1), how many submissions
+    # link the fingerprint to this recording, the recording's length in
+    # seconds, and the album (release group) chosen for it.
+    score: float | None = None
+    sources: int | None = None
+    length_sec: int | None = None
+    release_group_id: str | None = None
+
+    def as_candidate(self) -> dict[str, Any]:
+        """How "Needs review" stores and shows it (V058)."""
+        return {
+            "title": self.title, "artist": self.artist, "album": self.album,
+            "length_sec": self.length_sec,
+            "score": None if self.score is None else round(float(self.score), 3),
+            "sources": self.sources, "recording_id": self.musicbrainz_recording_id,
+            "release_group_id": self.release_group_id, "source": self.source,
+        }
 
 
 class Verdict(enum.Enum):
@@ -191,9 +222,11 @@ class Lookup:
     # NOT_ASKED only: the provider can't run on this box at all (its
     # package or fpcalc is missing), so the sweep stops asking it.
     unusable: bool = False
-    # MATCH only: every answer at or above the score, best first (AcoustID
-    # can return several recordings; ``result`` is the first of them).
-    # Empty means ``result`` is the only one.
+    # MATCH: every answer at or above the score, best first (AcoustID can
+    # return several recordings; ``result`` is the first of them). Empty
+    # means ``result`` is the only one. DISAGREED: what was refused, best
+    # first. NO_MATCH: answers under the score but not far under it
+    # (:data:`REVIEW_MIN_SCORE`), for "Needs review" (V058).
     candidates: tuple[EnrichmentResult, ...] = ()
 
 
@@ -486,6 +519,20 @@ def names_agree(
     return bool(has_title and _same_title(our_title, their_title)) or bool(artist_ok)
 
 
+#: A candidate whose recording is this many seconds longer or shorter than
+#: the file is another recording (a radio edit, a live take, an extended
+#: mix, or simply a wrong answer), when both lengths are known (V058).
+LENGTH_TOLERANCE_SEC = 45
+
+
+def length_plausible(file_len: float | None, their_len: float | None) -> bool:
+    """Is a candidate's length within :data:`LENGTH_TOLERANCE_SEC` of the
+    file's? True when either is unknown. Pure."""
+    if not file_len or not their_len or file_len <= 0 or their_len <= 0:
+        return True
+    return abs(float(file_len) - float(their_len)) <= LENGTH_TOLERANCE_SEC
+
+
 def file_names(
     file_path: str | Path, title: str | None, artist: str | None,
 ) -> tuple[str | None, str | None]:
@@ -551,10 +598,11 @@ def _answer_error(answer: object) -> tuple[object, str] | None:
     return error.get("code"), str(error.get("message") or f"status: {answer.get('status')}")
 
 
-def _match_results(acoustid: Any, answer: object) -> list[Any]:
-    """The ``(score, recording_id, title, artist)`` tuples of a lookup
-    answer (``acoustid.match(..., parse=False)``); an error answer raises
-    ``WebServiceError`` carrying AcoustID's own code and message."""
+def _match_results(acoustid: Any, answer: object) -> list["EnrichmentResult"]:
+    """Every recording of a lookup answer (``acoustid.match(...,
+    parse=False)``) as an :class:`EnrichmentResult` carrying its score,
+    in AcoustID's order; an error answer raises ``WebServiceError``
+    carrying AcoustID's own code and message."""
     error = _answer_error(answer)
     if error is not None:
         code, message = error
@@ -562,7 +610,80 @@ def _match_results(acoustid: Any, answer: object) -> list[Any]:
         if code is not None:
             exc.code = code
         raise exc
-    return list(acoustid.parse_lookup_result(answer))
+    return parse_answer(answer)
+
+
+#: What a lookup asks AcoustID to say about each recording (V058): its
+#: title, artists and length, its albums (release groups, with their
+#: types) and how many submissions link the fingerprint to it.
+ACOUSTID_META = ["recordings", "releasegroups", "sources", "compress"]
+
+#: How an album (release group) ranks for a recording, best first: a plain
+#: album, an EP, a single, then anything with a secondary type
+#: (compilation, live, soundtrack, remix ...), then the rest.
+_RG_RANK = {"album": 0, "ep": 1, "single": 2}
+
+
+def _rg_rank(rg: Any) -> int:
+    if not isinstance(rg, dict):
+        return 99
+    secondary = rg.get("secondarytypes")
+    kind = str(rg.get("type") or "").lower()
+    base = _RG_RANK.get(kind, 3)
+    return base + (4 if isinstance(secondary, list) and secondary else 0)
+
+
+def choose_release_group(groups: Any) -> dict[str, Any] | None:
+    """The release group to name a recording's album by: a plain album
+    first (:data:`_RG_RANK`), AcoustID's order among equals. Pure."""
+    if not isinstance(groups, list):
+        return None
+    usable = [g for g in groups[:64] if isinstance(g, dict) and g.get("title")]
+    if not usable:
+        return None
+    return min(usable, key=_rg_rank)
+
+
+def _credit_name(artists: Any) -> str | None:
+    if not isinstance(artists, list):
+        return None
+    name = "".join(
+        str(a.get("name") or "") + str(a.get("joinphrase") or "")
+        for a in artists[:16] if isinstance(a, dict)
+    ).strip()
+    return name or None
+
+
+def parse_answer(answer: Any) -> list["EnrichmentResult"]:
+    """Every recording an AcoustID lookup answer names, in its order, each
+    with its result's score and (when asked for) its submissions, length
+    and best album. A result with no recording is skipped. Pure."""
+    out: list[EnrichmentResult] = []
+    results = answer.get("results") if isinstance(answer, dict) else None
+    for res in results if isinstance(results, list) else []:
+        if not isinstance(res, dict):
+            continue
+        score = res.get("score")
+        score = float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else None
+        for rec in res.get("recordings") or []:
+            if not isinstance(rec, dict) or not rec.get("id"):
+                continue
+            dur = rec.get("duration")
+            src = rec.get("sources")
+            rg = choose_release_group(rec.get("releasegroups"))
+            out.append(EnrichmentResult(
+                title=rec.get("title") or None,
+                artist=_credit_name(rec.get("artists")),
+                album=(rg or {}).get("title") or None,
+                musicbrainz_recording_id=str(rec["id"]),
+                source="acoustid",
+                score=score,
+                sources=int(src) if isinstance(src, int) and not isinstance(src, bool) else None,
+                length_sec=int(round(dur)) if isinstance(dur, (int, float))
+                and not isinstance(dur, bool) and dur > 0 else None,
+                release_group_id=str(rg["id"]) if rg and rg.get("id") else None,
+            ))
+    return out
 
 
 def _note_acoustid_error(e: Exception) -> None:
@@ -738,7 +859,8 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
     try:
         results = await asyncio.to_thread(
             lambda: _match_results(acoustid, acoustid.match(
-                api_key, str(file_path), parse=False, timeout=ACOUSTID_TIMEOUT_SEC,
+                api_key, str(file_path), meta=ACOUSTID_META, parse=False,
+                timeout=ACOUSTID_TIMEOUT_SEC,
             )),
         )
     except acoustid.NoBackendError:
@@ -770,33 +892,37 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
 
     if not results:
         return Lookup(Verdict.NO_MATCH, detail="AcoustID: no result")
-    # acoustid.match yields tuples of (score, recording_id, title, artist);
-    # one fingerprint can name several recordings. Every one at or above
-    # the score is a candidate, best first (the sort is stable, so equal
-    # scores keep AcoustID's order); _enrich_one uses the first that
-    # agrees with the file's names, not simply the first.
+    # One fingerprint can name several recordings. Every one at or above
+    # the score is a candidate, best first: by score, then by how many
+    # submissions link the fingerprint to it (crowd agreement, V058); the
+    # sort is stable, so equals keep AcoustID's order. _enrich_one uses the
+    # first that agrees with the file's names and length, not simply the
+    # first.
     floor = settings.library_enricher_acoustid_min_score
-    scored = sorted(
-        (r for r in results if r[0] is not None and r[0] >= floor),
-        key=lambda r: -r[0],
-    )
+    ranked = rank_candidates(results)
+    scored = tuple(r for r in ranked if r.score is not None and r.score >= floor)
     if not scored:
-        score = results[0][0]
+        score = results[0].score
         log.debug(
             "AcoustID match for %s below threshold (score=%s)",
             file_path.name, score,
         )
-        return Lookup(Verdict.NO_MATCH, detail=f"AcoustID: score {score}")
-    candidates = tuple(
-        EnrichmentResult(
-            title=title or None,
-            artist=artist or None,
-            musicbrainz_recording_id=recording_id or None,
-            source="acoustid",
-        )
-        for _score, recording_id, title, artist in scored
-    )
-    return Lookup(Verdict.MATCH, result=candidates[0], candidates=candidates)
+        near = tuple(r for r in ranked if r.score is not None and r.score >= REVIEW_MIN_SCORE)
+        return Lookup(Verdict.NO_MATCH, detail=f"AcoustID: score {score}",
+                      candidates=near[:MAX_REVIEW_CANDIDATES])
+    return Lookup(Verdict.MATCH, result=scored[0], candidates=scored)
+
+
+#: An AcoustID answer under the score but at or above this is kept for
+#: "Needs review" as a low-confidence candidate (V058); below it, nothing.
+REVIEW_MIN_SCORE = 0.4
+#: Most candidates kept per track for "Needs review".
+MAX_REVIEW_CANDIDATES = 5
+
+
+def rank_candidates(results: list[EnrichmentResult]) -> list[EnrichmentResult]:
+    """Best first: score, then submissions (more is better); stable. Pure."""
+    return sorted(results, key=lambda r: (-(r.score or 0.0), -(r.sources or 0)))
 
 
 # ─── "Test the key" (Settings → Advanced) ───────────────────────────
@@ -961,30 +1087,46 @@ class _Providers:
 _NOT_ASKED = Lookup(Verdict.NOT_ASKED, detail="not asked")
 
 
-def _agreeing(lookup: Lookup, names: tuple[str | None, str | None] | None) -> Lookup:
+def _agreeing(
+    lookup: Lookup, names: tuple[str | None, str | None] | None,
+    length: float | None = None,
+) -> Lookup:
     """A MATCH whose result agrees with ``names`` (``(title, artist)``,
-    :func:`names_agree`): the first candidate that does, or DISAGREED when
-    none does. ``names`` None: no check (the lookup as it is)."""
-    if lookup.verdict is not Verdict.MATCH or lookup.result is None or names is None:
+    :func:`names_agree`) and whose length is plausible for the file's
+    (``length`` seconds, :func:`length_plausible`): the first candidate
+    that does, or DISAGREED (carrying every candidate) when none does.
+    ``names`` None: no name check; ``length`` None: no length check."""
+    if lookup.verdict is not Verdict.MATCH or lookup.result is None:
         return lookup
-    our_title, our_artist = names
-    for cand in lookup.candidates or (lookup.result,):
-        if names_agree(our_title, our_artist, cand.title, cand.artist):
+    if names is None and not length:
+        return lookup
+    our_title, our_artist = names if names is not None else (None, None)
+    pool = lookup.candidates or (lookup.result,)
+    wrong_length = 0
+    for cand in pool:
+        if not length_plausible(length, cand.length_sec):
+            wrong_length += 1
+            continue
+        if names is None or names_agree(our_title, our_artist, cand.title, cand.artist):
             if cand is lookup.result:
                 return lookup
             return Lookup(Verdict.MATCH, result=cand, candidates=lookup.candidates)
     first = lookup.result
+    why = (f"its length is {first.length_sec} s, the file's {float(length):.0f} s"
+           if wrong_length == len(pool) and length else
+           f"doesn't agree with {our_title!r} by {our_artist!r}")
     return Lookup(
         Verdict.DISAGREED,
         result=first,
-        detail=f"{first.source}: {first.title!r} by {first.artist!r} doesn't agree with "
-               f"{our_title!r} by {our_artist!r}",
+        candidates=tuple(pool),
+        detail=f"{first.source}: {first.title!r} by {first.artist!r}: {why}",
     )
 
 
 async def _enrich_one(
     file_path: Path, providers: _Providers | None = None,
     names: tuple[str | None, str | None] | None = None,
+    length: float | None = None,
 ) -> Lookup:
     """AcoustID, then Shazam. A match from either that agrees with the
     file's ``names`` (``(title, artist)``, :func:`file_names`; None: no
@@ -997,13 +1139,13 @@ async def _enrich_one(
     ac = await _enrich_via_acoustid(file_path) if providers.acoustid else _NOT_ASKED
     if ac.unusable:
         providers.acoustid = False
-    ac = _agreeing(ac, names)
+    ac = _agreeing(ac, names, length)
     if ac.verdict is Verdict.MATCH:
         return ac
     sh = await _enrich_via_shazam(file_path) if providers.shazam else _NOT_ASKED
     if sh.unusable:
         providers.shazam = False
-    sh = _agreeing(sh, names)
+    sh = _agreeing(sh, names, length)
     if sh.verdict is Verdict.MATCH:
         return sh
     errors = [x for x in (ac, sh) if x.verdict is Verdict.ERROR]
@@ -1023,11 +1165,12 @@ async def _enrich_one(
         return Lookup(
             Verdict.DISAGREED, result=disagreed[0].result,
             detail="; ".join(x.detail for x in disagreed),
+            candidates=tuple(c for x in disagreed for c in (x.candidates or (x.result,)) if c),
         )
     if Verdict.NO_MATCH in (ac.verdict, sh.verdict):
         return Lookup(Verdict.NO_MATCH, detail="; ".join(
             x.detail for x in (ac, sh) if x.verdict is Verdict.NO_MATCH
-        ))
+        ), candidates=ac.candidates if ac.verdict is Verdict.NO_MATCH else ())
     return Lookup(Verdict.NOT_ASKED, detail="; ".join((ac.detail, sh.detail)))
 
 
@@ -1071,12 +1214,22 @@ async def waiting_count(session) -> int:
     )).scalar_one() or 0)
 
 
+# An album only Shazam names replaces the row's (as before); one AcoustID's
+# release groups give fills only an empty album (V058). The album's release
+# group goes with the recording id: a new recording drops the old one's
+# release and release group.
 _MATCH_SQL = """
     UPDATE library_tracks
     SET title = COALESCE(:t, title),
         artist = COALESCE(:a, artist),
-        album = COALESCE(:al, album),
-        musicbrainz_recording_id = COALESCE(:mb, musicbrainz_recording_id),
+        album = COALESCE(:al, NULLIF(album, ''), :alf),
+        musicbrainz_release_id = CASE WHEN CAST(:mb AS text) IS NOT NULL
+            AND CAST(:mb AS text) IS DISTINCT FROM musicbrainz_recording_id
+            THEN NULL ELSE musicbrainz_release_id END,
+        musicbrainz_release_group_id = CASE WHEN CAST(:mb AS text) IS NOT NULL
+            AND CAST(:mb AS text) IS DISTINCT FROM musicbrainz_recording_id
+            THEN CAST(:rg AS text) ELSE COALESCE(CAST(:rg AS text), musicbrainz_release_group_id) END,
+        musicbrainz_recording_id = COALESCE(CAST(:mb AS text), musicbrainz_recording_id),
         enriched_at = NOW(),
         enrich_outcome = :matched
     WHERE id = :id
@@ -1087,13 +1240,61 @@ _FILL_ONLY_SQL = """
     UPDATE library_tracks
     SET title = COALESCE(NULLIF(title, ''), :t, title),
         artist = COALESCE(NULLIF(artist, ''), :a, artist),
-        album = COALESCE(NULLIF(album, ''), :al, album),
-        musicbrainz_recording_id = COALESCE(musicbrainz_recording_id, :mb),
+        album = COALESCE(NULLIF(album, ''), :al, :alf, album),
+        musicbrainz_release_group_id = CASE WHEN musicbrainz_recording_id IS NULL
+            THEN COALESCE(CAST(:rg AS text), musicbrainz_release_group_id)
+            ELSE musicbrainz_release_group_id END,
+        musicbrainz_recording_id = COALESCE(musicbrainz_recording_id, CAST(:mb AS text)),
         enriched_at = NOW(),
         enrich_outcome = :matched
     WHERE id = :id
 """
 _STAMP_SQL = "UPDATE library_tracks SET enriched_at = NOW(), enrich_outcome = :outcome WHERE id = :id"
+
+# "Needs review" (V058): the candidates of a lookup that wasn't used. A
+# track a person already decided (applied / skipped) is not asked again.
+_CANDIDATES_SQL = """
+    INSERT INTO library_match_candidates (track_id, reason, candidates, stored_at)
+    VALUES (:id, :reason, CAST(:c AS jsonb), now())
+    ON CONFLICT (track_id) DO UPDATE
+        SET reason = EXCLUDED.reason, candidates = EXCLUDED.candidates,
+            stored_at = EXCLUDED.stored_at
+        WHERE library_match_candidates.decided IS NULL
+"""
+_CANDIDATES_CLEAR_SQL = (
+    "DELETE FROM library_match_candidates WHERE track_id = :id AND decided IS NULL"
+)
+
+
+def review_candidates(lookup: Lookup) -> list[dict[str, Any]]:
+    """The candidates "Needs review" keeps for a lookup, best first, each
+    recording once, at most :data:`MAX_REVIEW_CANDIDATES`. Pure."""
+    out: list[dict[str, Any]] = []
+    seen: set[tuple] = set()
+    for c in lookup.candidates or ((lookup.result,) if lookup.result else ()):
+        if c is None or not (c.title or c.artist):
+            continue
+        key = (c.musicbrainz_recording_id or "", c.title or "", c.artist or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c.as_candidate())
+        if len(out) >= MAX_REVIEW_CANDIDATES:
+            break
+    return out
+
+
+async def _store_candidates(session: Any, track_id: int, reason: str, lookup: Lookup) -> None:
+    cands = review_candidates(lookup)
+    if not cands:
+        return
+    try:
+        async with session.begin_nested():
+            await session.execute(text(_CANDIDATES_SQL), {
+                "id": track_id, "reason": reason, "c": json.dumps(cands),
+            })
+    except Exception as e:  # noqa: BLE001 — a lane without V058; the stamp still lands
+        log.debug("enricher: couldn't keep review candidates for %s: %s", track_id, e)
 
 
 async def enrich_library() -> dict[str, Any]:
@@ -1157,7 +1358,7 @@ async def _sweep() -> dict[str, Any]:
         rows = (
             await session.execute(
                 text(
-                    "SELECT id, file_path, title, artist, enrich_outcome, "
+                    "SELECT id, file_path, title, artist, enrich_outcome, duration_sec, "
                     f"({LEGACY_UNANSWERED_WHERE}) AS legacy "
                     "FROM library_tracks "
                     f"WHERE {WAITING_WHERE} "
@@ -1204,6 +1405,7 @@ async def _sweep() -> dict[str, Any]:
             try:
                 lookup = await _enrich_one(
                     file_path, providers, file_names(row.file_path, row.title, row.artist),
+                    length=row.duration_sec,
                 )
             except Exception as e:  # _enrich_one doesn't raise; belt and braces
                 log.warning("enricher unexpected failure for %s: %s", file_path.name, e)
@@ -1219,11 +1421,18 @@ async def _sweep() -> dict[str, Any]:
                         "id": row.id,
                         "t": _without_upload_words(result.title),
                         "a": result.artist,
-                        "al": result.album,
+                        "al": result.album if result.source != "acoustid" else None,
+                        "alf": result.album if result.source == "acoustid" else None,
                         "mb": result.musicbrainz_recording_id,
+                        "rg": result.release_group_id,
                         "matched": OUTCOME_MATCHED,
                     },
                 )
+                try:
+                    async with session.begin_nested():
+                        await session.execute(text(_CANDIDATES_CLEAR_SQL), {"id": row.id})
+                except Exception as e:  # noqa: BLE001 — a lane without V058
+                    log.debug("enricher: couldn't clear review candidates: %s", e)
                 counts["matched"] += 1
                 consecutive_errors = 0
                 log.info(
@@ -1242,6 +1451,7 @@ async def _sweep() -> dict[str, Any]:
                 await session.execute(
                     text(_STAMP_SQL), {"id": row.id, "outcome": OUTCOME_DISAGREED},
                 )
+                await _store_candidates(session, row.id, "disagreed", lookup)
                 log.info("enricher: kept the names of %s (%s)", file_path.name[:60], lookup.detail)
             elif lookup.verdict is Verdict.NO_MATCH:
                 counts["no_match"] += 1
@@ -1250,6 +1460,8 @@ async def _sweep() -> dict[str, Any]:
                 await session.execute(
                     text(_STAMP_SQL), {"id": row.id, "outcome": OUTCOME_NO_MATCH},
                 )
+                if lookup.candidates:
+                    await _store_candidates(session, row.id, "low_confidence", lookup)
             else:
                 # An error, or nothing could answer for this file: leave
                 # the row exactly as it is, so the next sweep retries it.

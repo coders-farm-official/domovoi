@@ -252,12 +252,12 @@ async def test_ingest_track_keeps_a_year_and_reads_tags_again(db_session, monkey
 
 ROWS = [
     # (title, artist, genre_keys, tags_version)
-    ("S1", "Aretha", ["soul"], 1),
-    ("S2", "Otis", ["soul", "r&b"], 1),
-    ("S3", "Bill", ["soul"], 1),
-    ("H1", "Nas", ["hip hop"], 1),
-    ("N1", "Nobody", None, 1),             # read, no genre
-    ("N2", "Nobody", [], 1),               # read, an empty list counts the same
+    ("S1", "Aretha", ["soul"],  TAGS_VERSION),
+    ("S2", "Otis", ["soul", "r&b"],  TAGS_VERSION),
+    ("S3", "Bill", ["soul"],  TAGS_VERSION),
+    ("H1", "Nas", ["hip hop"],  TAGS_VERSION),
+    ("N1", "Nobody", None,  TAGS_VERSION),             # read, no genre
+    ("N2", "Nobody", [],  TAGS_VERSION),               # read, an empty list counts the same
     ("U1", "Unread", None, 0),             # not read yet
 ]
 

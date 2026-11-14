@@ -157,6 +157,12 @@ class MbRecordingDetails:
     year: int | None = None
     genres: tuple[str, ...] = ()
     genre_from: str | None = None
+    # The release chosen to name the album by (V058, :func:`choose_release`):
+    # its title, its id and its release group's id. None when the answer
+    # lists no releases.
+    album: str | None = None
+    release_id: str | None = None
+    release_group_id: str | None = None
 
 
 #: Most genres kept from MusicBrainz for one track (the top-voted).
@@ -261,13 +267,59 @@ def recording_genres(data: Any) -> tuple[tuple[str, ...], str | None]:
     return (), None
 
 
+_PRIMARY_RANK = {"album": 0, "ep": 1, "single": 2}
+
+
+def _release_rank(rel: Mapping[str, Any]) -> tuple[int, int, int, str]:
+    """How a release ranks for naming a recording's album, lower is
+    better: an Official release first; then a plain one (no secondary
+    type: not a compilation, live album, soundtrack, remix, DJ-mix ...);
+    then an album, EP, single, other; then the earliest date (a release
+    with no date last)."""
+    rg = rel.get("release-group") if isinstance(rel.get("release-group"), Mapping) else {}
+    status = 0 if str(rel.get("status") or "").lower() == "official" else 1
+    primary = _PRIMARY_RANK.get(str(rg.get("primary-type") or "").lower(), 3)
+    secondary = rg.get("secondary-types")
+    has_secondary = 1 if isinstance(secondary, list) and secondary else 0
+    date = str(rel.get("date") or rg.get("first-release-date") or "") or "9999"
+    return (status, has_secondary, primary, date)
+
+
+def choose_release(data: Any) -> Mapping[str, Any] | None:
+    """The release of a recording lookup (``inc=releases+release-groups``)
+    to name its album and year by (V058): an Official plain album, the
+    earliest; else the best of the rest by :func:`_release_rank`. None when
+    the answer lists none."""
+    if not isinstance(data, Mapping):
+        return None
+    releases = data.get("releases")
+    usable = [r for r in (releases if isinstance(releases, list) else [])[:MAX_MB_RELEASES]
+              if isinstance(r, Mapping) and is_mbid(r.get("id"))]
+    if not usable:
+        return None
+    return min(usable, key=_release_rank)
+
+
 def recording_details_of(data: Any) -> MbRecordingDetails:
-    """:class:`MbRecordingDetails` of one recording lookup's JSON."""
+    """:class:`MbRecordingDetails` of one recording lookup's JSON. The year
+    is the chosen release's album's first release (:func:`choose_release`:
+    an Official album over a compilation, single or live album, V058),
+    else the recording's own first release."""
     if not isinstance(data, Mapping):
         return MbRecordingDetails()
     genres, source = recording_genres(data)
-    return MbRecordingDetails(year=year_of_date(data.get("first-release-date")),
-                              genres=genres, genre_from=source)
+    rel = choose_release(data)
+    rg = rel.get("release-group") if rel is not None and isinstance(
+        rel.get("release-group"), Mapping) else {}
+    year = (year_of_date(rg.get("first-release-date")) or year_of_date((rel or {}).get("date"))
+            or year_of_date(data.get("first-release-date")))
+    title = (rel or {}).get("title")
+    return MbRecordingDetails(
+        year=year, genres=genres, genre_from=source,
+        album=str(title)[:300] if isinstance(title, str) and title.strip() else None,
+        release_id=str(rel["id"]) if rel is not None else None,
+        release_group_id=str(rg["id"]) if is_mbid(rg.get("id")) else None,
+    )
 
 
 class MusicBrainzClient(Protocol):

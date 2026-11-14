@@ -174,7 +174,7 @@ async def test_the_sweep_lookup_has_a_timeout(box, monkeypatch, tmp_path) -> Non
 
     with patch("acoustid.match", match):
         await le._enrich_via_acoustid(tmp_path / "x.mp3")
-    assert seen == [{"parse": False, "timeout": le.ACOUSTID_TIMEOUT_SEC}]
+    assert seen == [{"meta": le.ACOUSTID_META, "parse": False, "timeout": le.ACOUSTID_TIMEOUT_SEC}]
     assert le.KEY_CHECK_TIMEOUT_SEC == le.ACOUSTID_TIMEOUT_SEC < 30    # under the web hop's 30 s
 
 

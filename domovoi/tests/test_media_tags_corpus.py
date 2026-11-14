@@ -50,9 +50,12 @@ _GENRE_YEAR = ("genre", "genre_keys", "year")
 
 def _library(path: Path) -> dict:
     """The library indexer's title / artist / album / length answer (the
-    mutagen-era fields) — genre and year (V050) are their own answer."""
+    mutagen-era fields) — genre and year (V050) are their own answer, and
+    the file's own ids, credits and playlists (V058) are tested apart
+    (test_library_tools.py)."""
     got = _safe(library_indexer._read_tags, path)
-    return {k: v for k, v in got.items() if k not in _GENRE_YEAR} if "raises" not in got else got
+    skip = set(_GENRE_YEAR) | set(library_indexer._NO_IDS)
+    return {k: v for k, v in got.items() if k not in skip} if "raises" not in got else got
 
 
 def _genre_year(path: Path) -> dict:

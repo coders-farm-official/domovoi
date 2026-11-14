@@ -35,6 +35,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 from sqlalchemy import text
 
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
+from domovoi.cover_art_writer import cover_cache_file
 from web.backend.api import music_search, paging
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.api.paging import SortKey
@@ -1867,6 +1868,12 @@ async def track_cover(track_id: int, request: Request):
     if probe is None:
         return _no_cover()
     etag, folder = probe
+    # Domovoi's own copy of the Cover Art Archive's cover, for a file it
+    # doesn't write into (V058): shown only when the file has no art of its
+    # own; part of the ETag so its arrival or its Undo shows at once.
+    cached = await anyio.to_thread.run_sync(cover_cache_file, track_id)
+    if cached is not None:
+        etag = etag[:-1] + "-c%d" % cached[1].st_mtime_ns + '"'
     headers = {"ETag": etag, "Cache-Control": _COVER_CACHE_CONTROL}
     if _etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
@@ -1881,6 +1888,13 @@ async def track_cover(track_id: int, request: Request):
             _iter_file(path, 0, fst.st_size - 1),
             media_type=mime,
             headers={**headers, "Content-Length": str(fst.st_size)},
+        )
+    if cached is not None:
+        cpath, cst, cmime = cached
+        return StreamingResponse(
+            _iter_file(cpath, 0, cst.st_size - 1),
+            media_type=cmime,
+            headers={**headers, "Content-Length": str(cst.st_size)},
         )
     return _no_cover()
 

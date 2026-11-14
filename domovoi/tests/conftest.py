@@ -246,6 +246,9 @@ TABLES_TO_TRUNCATE = [
     # music is (event data).
     "music_listens",
     "music_room_listeners",
+    # Library tools (V058): duplicates kept, copies moved to the trash.
+    "library_duplicate_keeps",
+    "library_trash",
 ]
 
 

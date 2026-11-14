@@ -756,7 +756,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
-    #   library_tag_backfill → library_year_fetch.
+    #   library_tag_backfill → library_year_fetch → library_cover_art.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -851,6 +851,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     WORKERS.add_worker(LibraryTagBackfill(), owner="core")
     WORKERS.add_worker(LibraryYearFetch(), owner="core")
+    # Cover art from the Cover Art Archive for identified tracks (V058),
+    # written into MP3 / FLAC files; self-gated per tick on
+    # library_cover_art_enabled, INTERNET_ACCESS and the probe
+    # (domovoi/workers/library_cover_art.py).
+    from domovoi.workers.library_cover_art import LibraryCoverArt
+
+    WORKERS.add_worker(LibraryCoverArt(), owner="core")
     # (The former office-suite stale-lock sweeper is gone with the
     # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 
@@ -7764,6 +7771,18 @@ async def admin_library_reindex() -> dict[str, Any]:
             await index_music_dir()
         except Exception as e:
             log.warning("admin reindex: library indexer failed: %s", e)
+        # "Rescan library" asks the Cover Art Archive again about tracks it
+        # had no art for, or that were skipped (V058).
+        try:
+            from domovoi.db.session import session_scope as _scope
+
+            async with _scope() as s:
+                await s.execute(text(
+                    "DELETE FROM library_cover_art WHERE state IN ('no_art', 'skipped')"
+                ))
+                await s.commit()
+        except Exception as e:  # noqa: BLE001 â€” a lane without V058
+            log.debug("admin reindex: couldn't clear cover-art misses: %s", e)
         # Each per-room MPD has its own database file, so every daemon
         # has to rescan — `update` on one doesn't index the new file in
         # the others.

@@ -460,6 +460,60 @@ Your music library, on the server, played in any room or in the browser.
   `.json`. A `.milk` file's custom shaders aren't converted, so it may
   look plainer than in MilkDrop.
 
+- **Library tools** *(admin)*: [Music → Tools](#music/tools) (shown when
+  you're signed in as admin) has four parts: **Duplicates**, **Needs review**, **Cover
+  art** and **Trash**. Every change asks once before it happens.
+- **Duplicates** lists songs the library has more than once: the same
+  MusicBrainz recording, or the same artist and title (a download's
+  "Artist - Title (Official Video)" counts as the title). Each group says
+  whether it is likely the same recording (lengths within 3 seconds), the
+  same identified recording with different lengths, or the same song at a
+  different length (a live take, a radio edit). The best copy is picked for
+  you: the highest bitrate, then identified, then tagged, then the one with
+  cover art. Pick another if you like, then **Move N other copies to
+  trash**: the other files move to a `.domovoi-trash` folder inside your
+  music folder (nothing is deleted), and the copy you keep takes over
+  their places in playlists, their favourite and their listening history.
+  **Keep both** hides the group until a copy joins or leaves it.
+- **Trash** lists what was moved; **Restore** puts a copy back where it
+  was (not back into playlists). Empty the trash folder with a file
+  manager when you're sure.
+- **Needs review** lists songs song recognition found an answer for but
+  didn't use: the answer's names didn't match the file's, its length was
+  more than 45 seconds off, or it wasn't sure enough. Each shows the
+  file's names and length and up to five answers (title, artist, album,
+  length, score, how many people submitted it). **Apply** renames the song
+  like an edit by hand (song recognition won't change it again) and looks
+  up its year and genre; **Skip** keeps the file's names and is
+  remembered.
+- **Cover art** comes from the Cover Art Archive for songs Domovoi has
+  identified: song recognition's checked match, a **Needs review** choice,
+  or a MusicBrainz id the file already carries. MP3 and FLAC files get the
+  album's front cover written in; other files (M4A, Ogg, Opus, WMA) show
+  Domovoi's own copy instead. [Settings → System →
+  Advanced](#settings/advanced) → Library → **Cover art from the Cover Art Archive** turns it on or off (it follows
+  your internet answer until you set it), and **Cover art: which files**
+  picks **Replace existing art** (the default) or **Only add missing
+  art**. Folder images like `cover.jpg` are never changed. **Undo** on a
+  song puts the file's own pictures back exactly as they were (or takes
+  the added one out); Domovoi then leaves that song alone. A song the
+  archive has no cover for is asked again after 30 days, or after
+  **Rescan library**.
+- Files tagged by another app (MusicBrainz Picard, a phone app) are read
+  as they are: a MusicBrainz id in the file means song recognition never
+  has to listen to it; every artist the file credits (its `ARTISTS` tag)
+  finds the song, so "play songs by" a featured artist works; and
+  `.m3u` playlist files in the music folder, and the songs' own
+  `PLAYLIST` tags, become playlists. A playlist made from files follows
+  the files and can't be edited in Domovoi: **Copy to a new playlist** in
+  it makes one you can change. One with the same name as a playlist you
+  made is called "<name> (from files)".
+- Right after this update the server reads every song's tags again in the
+  background (the same reading as the Genres tab's), which also clears
+  "genres" like "People & Blogs" that were a video site's category.
+
+[More detail](docs/FAQ.md#who-added-that-song-and-can-i-stop-someone-adding-more)
+
 **Try saying**
 
 - "how many songs do I have"
@@ -467,8 +521,6 @@ Your music library, on the server, played in any room or in the browser.
 
 **Also:** guests on your Wi-Fi can change the queue of a room that's
 playing. See [Guests, household, admin](#node:guests).
-
-[More detail](docs/FAQ.md#who-added-that-song-and-can-i-stop-someone-adding-more)
 
 ### Up next
 

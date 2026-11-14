@@ -748,6 +748,19 @@ class PlaylistHandler(Handler):
         ctx: Context,
         session: AsyncSession,
     ) -> Response:
+        # A playlist made from the music files (V058) is the files'.
+        from domovoi.library_playlists_import import is_imported
+
+        try:
+            async with session.begin_nested():
+                imported = await is_imported(session, playlist_id)
+        except Exception:  # noqa: BLE001 â€” a database without V058
+            imported = False
+        if imported:
+            return self._reply(
+                ctx, f"{playlist_name} comes from your music files, so I can't change it. "
+                "Copy it to a new playlist in the dashboard to change it."
+            )
         # Dup check.
         dup = (
             await session.execute(

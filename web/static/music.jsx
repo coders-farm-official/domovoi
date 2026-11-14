@@ -2093,6 +2093,16 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
     { eventTypes: ['playlists.changed', 'library.indexer.changed'] },
   );
   if (!playlist) return null;
+  // A playlist made from the music files (V058) is the files': no edit,
+  // reorder, remove or delete here; "Copy to a new playlist" to change it.
+  const fixed = !!(playlist.is_virtual || playlist.imported);
+  const onCopy = async () => {
+    try {
+      const p = await apiPost(`/api/playlists/${playlist.id}/copy`);
+      fire(`copied to “${p.name}”`);
+      onClose();
+    } catch (e) { reportMutationFailure(fire, 'copy playlist', e); }
+  };
   const items = order || tracks || [];
   // The header count follows the track list, not the playlist row
   // captured when the drawer opened: removing a track refreshes the list
@@ -2136,7 +2146,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                       boxShadow: 'var(--shadow-md)', zIndex: 41,
                       display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)' }}>
-          <div className="eyebrow">{playlist.is_virtual ? 'virtual' : 'playlist'} · #{playlist.id}</div>
+          <div className="eyebrow">{playlist.is_virtual ? 'virtual' : playlist.imported ? 'from your music files' : 'playlist'} · #{playlist.id}</div>
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', borderBottom: '1px solid var(--border-soft)' }}>
@@ -2160,10 +2170,13 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                     onClick={() => { if (room) { onShuffle(playlist, room); onClose(); } }}>
               shuffle
             </Button>
-            {!playlist.is_virtual && (
+            {!fixed && (
               <Button icon="edit-2" onClick={() => (editing ? setEditing(false) : startEdit())}>
                 {editing ? 'cancel' : 'edit'}
               </Button>
+            )}
+            {playlist.imported && (
+              <Button icon="copy" onClick={onCopy}>Copy to a new playlist</Button>
             )}
           </div>
           <div className="label" style={{ margin: '12px 0 6px' }}>this browser</div>
@@ -2173,7 +2186,13 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
             <Button icon="shuffle" disabled={items.length === 0}
                     onClick={() => { onBrowserPlayTracks(shuffledIds(items), playlist.name, context); onClose(); }}>shuffle here</Button>
           </div>
-          {editing && !playlist.is_virtual && (
+          {playlist.imported && (
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 10 }}>
+              This playlist comes from your music files (a playlist file or the songs' own tags),
+              so it changes when they do. Copy it to change it here.
+            </div>
+          )}
+          {editing && !fixed && (
             <div style={{ marginTop: 12 }}>
               <PlaylistForm form={form} setForm={setForm} onSubmit={saveEdit} submitLabel="save"/>
             </div>
@@ -2192,14 +2211,14 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
             <div style={{ padding: '4px 0' }}>
               {items.map((t, i) => (
                 <div key={t.id}
-                     draggable={!playlist.is_virtual}
+                     draggable={!fixed}
                      onDragStart={() => { dragFrom.current = i; }}
                      onDragOver={e => e.preventDefault()}
                      onDrop={() => onDrop(i)}
                      style={{ display: 'grid', gridTemplateColumns: '32px 1fr auto auto',
                               alignItems: 'center', gap: 8,
                               padding: '8px 16px',
-                              cursor: playlist.is_virtual ? 'default' : 'grab',
+                              cursor: fixed ? 'default' : 'grab',
                               borderBottom: i === items.length - 1 ? 'none' : '1px solid var(--border-soft)' }}>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', textAlign: 'right' }}>{i + 1}</div>
                   <div style={{ minWidth: 0 }}>
@@ -2214,16 +2233,18 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onBrowser
                     <IconButton name="play" onClick={() => onBrowserPlay(t, context, items)}
                                 title="play in this browser" aria-label={`play ${t.title || 'this song'} in this browser`}/>
                   )}
-                  <IconButton name="x"
-                              onClick={() => onRemoveTrack(playlist, t).then(refresh)}
-                              title="remove from playlist"/>
+                  {!playlist.imported ? (
+                    <IconButton name="x"
+                                onClick={() => onRemoveTrack(playlist, t).then(refresh)}
+                                title="remove from playlist"/>
+                  ) : <span/>}
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {!playlist.is_virtual && (
+        {!fixed && (
           <div style={{ padding: 16, borderTop: '1px solid var(--border)', background: 'var(--sunken)' }}>
             <Button variant="secondary" icon="trash-2"
                     onClick={() => onDelete(playlist)}
@@ -2409,13 +2430,14 @@ const MUSIC_PAGE_TABS = [
   // No 'player' since 2026-11-12: #music/player opens the expanded player
   // over this page (player.jsx PLAYER_SHEET_ROUTE).
   { id: 'library' }, { id: 'artists' }, { id: 'genres' }, { id: 'queue' },
-  { id: 'playlists' }, { id: 'stats' }, { id: 'jobs' },
+  { id: 'playlists' }, { id: 'stats' }, { id: 'jobs' }, { id: 'tools' },
 ];
 
 const MusicPage = () => {
   // #music/queue opens Room queue, a tab click writes its address, Back
   // goes to the tab before.
   const [tab, setTab] = useRouteTab('music', MUSIC_PAGE_TABS, 'library');
+  const adminSignedIn = useAdminSignedIn();
   const [selected, setSelected] = React.useState(null);
   // The rooms strip is folded away until asked for (a simple page by
   // default); the choice is kept per browser, and the page works without it.
@@ -2951,6 +2973,9 @@ const MusicPage = () => {
     { id: 'playlists', label: 'Playlists', count: playlists.length || undefined },
     { id: 'stats',     label: 'Stats' },
     { id: 'jobs',      label: 'Jobs',      count: activeJobs || undefined },
+    // Duplicates, Needs review, Cover art, Trash (V058; library_tools.jsx):
+    // they move and change files, so only a signed-in admin sees them.
+    ...(adminSignedIn ? [{ id: 'tools', label: 'Tools' }] : []),
   ];
 
   return (
@@ -3029,6 +3054,9 @@ const MusicPage = () => {
                                           room={queueRoom} onRoom={setQueueRoom}/>}
         {tab === 'playlists' && <PlaylistsTab playlists={playlists} loading={playlistsLoading} onSelect={setOpenPlaylist} onPlay={onPlayPlaylistInFirstRoom} onCreate={onCreatePlaylist} fire={fire}/>}
         {tab === 'stats'     && <StatsTab     stats={stats} loading={!stats}/>}
+        {tab === 'tools'     && (adminSignedIn
+          ? <LibraryToolsTab fire={fire}/>
+          : <Empty glyph="sleeping" title="sign in as admin" sub="the library tools move and change files, so they need the admin sign-in"/>)}
         {tab === 'jobs'      && <JobsTab jobs={acquisitions} availability={acqData} loading={acqLoading} rooms={rooms} onCancel={onCancelAcquisition} fire={fire} refresh={refreshAcquisitions}/>}
       </Card>
       </div>

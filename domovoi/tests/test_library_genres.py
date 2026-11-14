@@ -245,7 +245,10 @@ async def test_backfill_reads_a_batch_per_tick_and_stamps_missing_files(tmp_path
     clock = _Clock()
     w = bf.LibraryTagBackfill(store=store, clock=clock)
     assert await w.tick() == {"read": 1, "missing": 1, "deferred": 0, "refused": 0}
-    assert store.written[0] == (1, {"genre": "Soul", "genre_keys": ["soul"], "year": 1970})
+    assert store.written[0] == (1, {"genre": "Soul", "genre_keys": ["soul"], "year": 1970,
+                                    "mb_recording_id": None, "mb_release_id": None,
+                                    "mb_release_group_id": None, "artist_credits": None,
+                                    "file_playlists": None})
     assert store.written[1] == (2, None)                     # stamped, so the pass ends
     assert (await w.tick())["read"] == 1
     # Nothing left: idle for a minute, then one look.

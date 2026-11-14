@@ -78,6 +78,7 @@ const SHELL_ASSETS = [
   '/player.jsx',
   '/lyrics.jsx',
   '/music_player_panel.jsx',
+  '/library_tools.jsx',
   '/music.jsx',
   '/people.jsx',
   '/satellites.jsx',

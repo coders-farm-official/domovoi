@@ -61,7 +61,9 @@ def test_the_two_fieldspecs_sit_right_after_the_musicbrainz_one() -> None:
     names = [f.name for f in FIELD_SPECS]
     i = names.index("music_alias_fetch_enabled")
     assert names[i + 1:i + 3] == ["lyrics_lrclib_enabled", "lyrics_write_lrc"]
-    assert names[i + 3] == "music_match_play_threshold"
+    # the Cover Art Archive pair (V058) follows them
+    assert names[i + 3:i + 6] == ["library_cover_art_enabled", "library_cover_art_mode",
+                                  "music_match_play_threshold"]
     specs = {f.name: f for f in FIELD_SPECS}
     lrclib, write = specs["lyrics_lrclib_enabled"], specs["lyrics_write_lrc"]
     assert (lrclib.label, lrclib.group, lrclib.type, lrclib.tier, lrclib.section) == (

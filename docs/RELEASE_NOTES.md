@@ -4,6 +4,73 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — Library tools: duplicates, needs review, cover art written into files (V058)
+
+**Migration V058** (`library_match_candidates`, `library_duplicate_keeps`,
+`library_trash`, `library_cover_art`; `library_tracks` gains
+`musicbrainz_release_group_id`, `artist_credits`, `file_playlists`, and
+`search_text` is recreated to search the credits; `playlists` gains
+`imported_from` / `import_name`). The tag reader's version goes to 2, so
+**after the update the tag backfill reads every file again** (paced, local,
+about the time the Genres tab's first read took). That read is how existing
+rows are fixed:
+
+* **A video site's category is no genre.** "People & Blogs", "Film &
+  Animation", "Music", "Entertainment" and the rest of the upload
+  categories, as a whole genre value, count as no genre (before, "People &
+  Blogs" became the genres "people" and "blogs"). Such a song loses those
+  keys and, when song recognition identified it, is asked of MusicBrainz for
+  real genres. The Genres tab writes "R&B", "AOR", "EDM", "UK", "DJ" in
+  capitals.
+* **A file's own MusicBrainz ids** (`UFID` http://musicbrainz.org,
+  `TXXX:MusicBrainz Album Id` / `Release Group Id`, and the Vorbis, MP4 and
+  WMA names Picard writes) are kept: a song that carries its recording id is
+  **never fingerprinted** (outcome `file`) and its year and genre are looked
+  up by that id. Every credited artist (`ARTISTS`) is searchable, and "play
+  songs by" one finds songs whose artist field names someone else.
+* **Playlists from files:** `.m3u`/`.m3u8` files under the music folder and
+  the songs' `PLAYLIST` tags become playlists, re-synced on every rescan.
+  They follow the files and are read-only in Domovoi (`409` on edits;
+  **Copy to a new playlist**). A household playlist with the same name is
+  never touched: the imported one is "<name> (from files)".
+
+**Song recognition matches more carefully.** An answer whose recording is
+more than 45 seconds longer or shorter than the file is refused; among
+answers with the same score the one more people submitted wins (AcoustID is
+now asked for lengths, submissions and albums); a song's album is a plain
+Official album over a compilation, single or live album (the year fetch now
+takes the year of that album's first release). This week's name agreement
+rules stand.
+
+**Music → Tools** (admin only):
+
+* **Duplicates**: copies of one song (same recording id, or same artist and
+  title, upload noise ignored) in groups, the best copy picked (bitrate,
+  then identified > tagged > untagged, then cover art). **Move N other
+  copies to trash** moves the files into `.domovoi-trash/` inside the music
+  folder (never deleted; **Trash → Restore**) and gives the kept copy their
+  playlist places, favourite and listening history. **Keep both** is
+  remembered until the group changes.
+* **Needs review**: songs recognition didn't rename (disagreed, or not sure)
+  with up to five candidates each; **Apply** renames like a hand edit
+  (outcome `reviewed`), **Skip** is remembered. Candidates are kept from
+  sweeps from now on; tracks marked `disagreed` before the update get theirs
+  when they are put back in the queue (the repair's `requeue_disagreed`).
+* **Cover art from the Cover Art Archive**, the one time Domovoi writes into
+  music files: for an identified song, the album's front cover is written
+  into MP3 and FLAC files (verified copy, atomic rename, never over a file
+  that changed); other formats show Domovoi's own copy. New setting
+  "Cover art from the Cover Art Archive" (`library_cover_art_enabled`, its
+  default follows the internet answer like LRCLIB: on for Yes and
+  Sometimes) and "Cover art: which files" (`library_cover_art_mode`:
+  **Replace existing art**, the default, or **Only add missing art**). The
+  file's own pictures are saved first in `~/.domovoi/cover_art/originals/`
+  and **Undo** puts them back. Folder images are never touched. New egress
+  host: coverartarchive.org (redirecting to archive.org).
+
+New routes: `/api/music/library-tools/*` (docs/API_REFERENCE.md) and
+`POST /api/playlists/{id}/copy`.
+
 ## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
 
 A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm
