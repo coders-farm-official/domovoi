@@ -237,9 +237,9 @@ final class MusicMixTests: XCTestCase {
 
     func testTheHouseholdsDefaultIsKeptByServer() {
         let d = MixDefaults()
-        d.heard("http://192.0.2.1:6369/", MusicMix(autoplay: false))
-        XCTAssertEqual(false, d.autoplayDefault(for: "http://192.0.2.1:6369"))
-        XCTAssertNil(d.autoplayDefault(for: "http://192.0.2.9:6369"), "another house's switch learns nothing")
+        d.heard("http://10.0.0.51:6369/", MusicMix(autoplay: false))
+        XCTAssertEqual(false, d.autoplayDefault(for: "http://10.0.0.51:6369"))
+        XCTAssertNil(d.autoplayDefault(for: "http://10.0.0.59:6369"), "another house's switch learns nothing")
     }
 
     func testThisPhonesLineUnderTheDefault() {
