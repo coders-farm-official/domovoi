@@ -170,6 +170,10 @@ public struct ShareSnapshotBody: Equatable, Sendable, Encodable {
         }
     }
 
+    /// What the house records this phone as (`SharePayload.PLATFORM`; the
+    /// server accepts `android` or `ios`).
+    public static let platform = "ios"
+
     public let phoneName: String?
     public let windowStartMs: Int64
     public let windowEndMs: Int64
@@ -191,7 +195,7 @@ public struct ShareSnapshotBody: Equatable, Sendable, Encodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case calendars, generation
+        case calendars, generation, platform
         case phoneName = "phone_name"
         case windowStartMs = "window_start_ms"
         case windowEndMs = "window_end_ms"
@@ -199,6 +203,7 @@ public struct ShareSnapshotBody: Equatable, Sendable, Encodable {
 
     public func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(Self.platform, forKey: .platform)
         try c.encodeIfPresent(phoneName, forKey: .phoneName)
         try c.encode(windowStartMs, forKey: .windowStartMs)
         try c.encode(windowEndMs, forKey: .windowEndMs)

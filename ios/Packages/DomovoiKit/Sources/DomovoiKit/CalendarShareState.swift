@@ -224,10 +224,20 @@ public enum CalendarShareRules {
         max(nowMs, (e?.lastGeneration ?? 0) + 1)
     }
 
-    /// The house no longer takes this phone's calendar key (403, V057): an
-    /// admin removed its calendars, or the household's device token changed.
-    /// Sharing stops, the key is forgotten (by the caller), and the notice
-    /// says what to do.
+    /// A DELETE refused with 403 (`ShareRules.KEY_REFUSED_OFF`): trying again
+    /// changes nothing, so nothing stays pending, and the notice says the
+    /// copy is left to an admin.
+    public static func keyRefusedOff(_ e: CalendarShareEntry) -> CalendarShareEntry {
+        var next = deleted(e)
+        next.notice = CalendarShareStrings.keyRefusedOffNotice
+        return next
+    }
+
+    /// The house no longer takes this phone's calendar key (403 on a PUT,
+    /// V057; `ShareRules.keyRefused`): it holds a key this phone doesn't
+    /// have. Sharing is off with nothing pending (a DELETE would be refused
+    /// the same way), the key is forgotten (by the caller), and the notice
+    /// says the step that works.
     public static func keyRefused(_ e: CalendarShareEntry) -> CalendarShareEntry {
         var next = e
         next.enabled = false

@@ -200,7 +200,14 @@ public actor CalendarShareSync {
     private func failed(_ server: String, _ error: any Error, at t: Int64, deleting: Bool) -> Outcome {
         let status = Self.status(error)
         if status == 403 {
-            // The calendar key is gone on the house's side (V057).
+            if deleting {
+                // The copy is the house's to remove now; the key is kept,
+                // as Android does (`ShareSync.remove`).
+                store.update(server) { CalendarShareRules.keyRefusedOff($0 ?? CalendarShareEntry()) }
+                return .done
+            }
+            // The house holds a key this phone doesn't have (V057): sharing
+            // goes off, the useless key is dropped.
             keys.forget(server: server)
             store.update(server) { CalendarShareRules.keyRefused($0 ?? CalendarShareEntry()) }
             return .done

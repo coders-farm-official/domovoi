@@ -71,11 +71,21 @@ public enum CalendarShareStrings {
         "Your Domovoi no longer accepts this phone, so sharing is off. If the house still shows this phone's "
             + "calendars, ask whoever runs your Domovoi to remove them."
 
-    /// A 403 on the calendar key (V057): an admin removed this phone's
-    /// calendars, or the household's device token changed.
+    /// Where the dashboard removes a phone's calendars (`ShareRules.DASHBOARD_REMOVE`).
+    public static let dashboardRemove =
+        "Ask whoever runs Domovoi to remove this phone's calendars on the dashboard (Settings \u{2192} Household "
+            + "\u{2192} Calendars, \"remove all from this phone\")"
+
+    /// A 403 on a PUT (`ShareRules.KEY_REFUSED`): the house holds a key this
+    /// phone doesn't have, and only an admin's removal clears it. Sharing is
+    /// off here, so "turn it on again" is a real step.
     public static let keyRefusedNotice =
-        "Your Domovoi no longer accepts this phone's calendars. Turn sharing off and on again to share them "
-            + "afresh."
+        "The house no longer accepts this phone's calendars. " + dashboardRemove + ", then turn sharing on again."
+
+    /// A 403 on a DELETE (`ShareRules.KEY_REFUSED_OFF`): the copy is the
+    /// house's to remove now.
+    public static let keyRefusedOffNotice =
+        "The house no longer accepts this phone's calendars, so it may still show them. " + dashboardRemove + "."
 
     /// A ticked calendar that has gone (correction 7):
     /// `Work is no longer on this phone`.
