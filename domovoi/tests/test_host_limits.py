@@ -225,9 +225,11 @@ def test_both_hops_are_admin_gated() -> None:
     from domovoi.main import app as core_app
     from web.backend.main import app as web_app
 
+    from domovoi.tests.route_walk import iter_route_contexts
+
     def deps(app, path, method):
-        for r in app.routes:
-            if getattr(r, "path", None) == path and method in getattr(r, "methods", set()):
+        for r in iter_route_contexts(app.routes):
+            if getattr(r, "path", None) == path and method in (getattr(r, "methods", None) or set()):
                 return {d.call.__name__ for d in r.dependant.dependencies}
         raise AssertionError(f"no {method} {path}")
 

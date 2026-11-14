@@ -36,6 +36,7 @@ same in bash (``clear_stale_git_locks``), with the same threshold.
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import subprocess
 import sys
@@ -422,7 +423,10 @@ def safe_path(repo: str | os.PathLike, path: str) -> bool:
     parts = path.replace("\\", "/").split("/")
     if any(x in ("", ".", "..") for x in parts) or parts[0].lower() == ".git":
         return False
-    if os.path.splitdrive(path)[0]:
+    # A drive ("C:/x", "C:x") is refused on every OS, not only where
+    # os.path knows drives: the rule is the same on the Linux core as on
+    # Windows (CI, 2026-11-14).
+    if ntpath.splitdrive(path)[0]:
         return False
     if len(parts) == 1:
         return True

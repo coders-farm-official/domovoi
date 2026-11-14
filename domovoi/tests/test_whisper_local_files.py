@@ -243,7 +243,9 @@ def outbound_recorder(monkeypatch):
     # Online-looking huggingface_hub: not in offline mode, so ONLY our
     # local_files_only keeps it off the network.
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-    import huggingface_hub.constants as hf_constants
+    # huggingface_hub comes with the real-clients extra (faster-whisper's
+    # model download); the suite runs on stubs without it, as CI does.
+    hf_constants = pytest.importorskip("huggingface_hub.constants")
 
     monkeypatch.setattr(hf_constants, "HF_HUB_OFFLINE", False)
     return attempts

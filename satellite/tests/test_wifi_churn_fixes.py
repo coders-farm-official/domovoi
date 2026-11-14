@@ -21,6 +21,7 @@ import json
 import logging
 import subprocess
 import types
+from pathlib import Path
 
 import pytest
 
@@ -132,12 +133,22 @@ class Runner:
         return subprocess.CompletedProcess(argv, rc, "", err)
 
 
+_NO_HELPER = Path(__file__).parent / "no-such-helper"
+
+
 def _recovering_sat(monkeypatch, plan, results):
     sat = object.__new__(client.Satellite)
     sat.cfg = types.SimpleNamespace(wifi_enabled=False)
     monkeypatch.setattr(client.wifi_profiles, "list_wifi_profiles", lambda *a, **k: [])
     monkeypatch.setattr(client.wifi_profiles, "visible_ssids", lambda *a, **k: set())
     monkeypatch.setattr(client.wifi_profiles, "plan_recovery", lambda *a, **k: plan)
+    # A unit without the security-check and radio-reset helpers (cards from
+    # before 2026-10-17), and NetworkManager's state not asked: on Linux
+    # health.run_tool would otherwise run `nmcli` through the same patched
+    # subprocess.run and eat a result meant for the plan (Windows skips it).
+    monkeypatch.setattr(client, "WIFI_ADAPT_HELPER", _NO_HELPER)
+    monkeypatch.setattr(client, "WIFI_RESET_HELPER", _NO_HELPER)
+    monkeypatch.setattr(client.health, "read_nm_state", lambda *a, **k: None)
     runner = Runner(results)
     monkeypatch.setattr(client.subprocess, "run", runner)
     return sat, runner

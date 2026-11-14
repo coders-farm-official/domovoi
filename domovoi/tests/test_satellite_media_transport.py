@@ -402,9 +402,14 @@ def test_hash_password_degrades_when_openssl_is_missing(monkeypatch):
 def test_hash_password_rejects_a_wrong_format(monkeypatch):
     import subprocess as sp
     monkeypatch.setattr(overlay.shutil, "which", lambda n: "/usr/bin/openssl")
-    monkeypatch.setattr(overlay.subprocess, "run", lambda *a, **k:
-                        sp.CompletedProcess(a, 0, stdout="$1$md5hash\n", stderr=""))
-    assert overlay.hash_password("x") is None
+    # Through the `run` seam: its default is bound when the module loads,
+    # so patching overlay.subprocess.run reached nothing. The real openssl
+    # ran and gave a good $6$ hash wherever one is installed (CI's Linux);
+    # on Windows the made-up /usr/bin/openssl failed to start instead.
+    def run(*a, **k):
+        return sp.CompletedProcess(a, 0, stdout="$1$md5hash\n", stderr="")
+
+    assert overlay.hash_password("x", run=run) is None
 
 
 @needs_openssl

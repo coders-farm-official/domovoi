@@ -351,6 +351,7 @@ def test_early_switches_network_preseeding_off_and_drops_the_boot_file(tmp_path)
     seen = tmp_path / "seen"
     (root / "etc" / "udhcpc" / "default.script").write_bytes(
         f'#!/bin/sh\necho "file=[$boot_file] $1" >"{_posix(seen)}"\n'.encode())
+    (root / "etc" / "udhcpc" / "default.script").chmod(0o755)  # as Debian ships it; Linux checks the bit
     shutil.copy(STICK / "installer" / "udhcpc-default.script", stick / "udhcpc-default.script")
     env = {**os.environ, "DS_ROOT": _posix(root), "DS_STICK_DIR": _posix(stick)}
     for _ in range(2):  # twice: nothing doubles
@@ -404,6 +405,7 @@ def _late(tmp_path: Path, *, uefi: bool, debug: bool = False) -> tuple[Path, lis
                                   "grub-common\ngrub2-common\nlinux-image-amd64\n")
     for name, body in LATE_STUBS.items():
         (sb / name).write_bytes(("#!/bin/sh\n" + body).encode())
+        (sb / name).chmod(0o755)  # or Linux runs the real one further down PATH
     env = {**os.environ, "SB": _posix(sb), "DS_ROOT": _posix(root), "DS_STICK_DIR": _posix(stick),
            "DS_SRC": _posix(src / "domovoi"), "DS_TARGET": _posix(t), "DS_LOG": _posix(sb / "log")}
     env["PATH"] = _posix(sb) + (":/usr/bin:/bin" if sys.platform == "win32" else os.pathsep + env["PATH"])
@@ -471,6 +473,7 @@ def _firstboot(tmp_path: Path, *, rcs: list[int], made: int = 1_760_000_000, tam
     (sb / "synced").touch()
     for name, body in FB_STUBS.items():
         (sb / name).write_bytes(("#!/bin/sh\n" + body).encode())
+        (sb / name).chmod(0o755)  # or Linux runs the real one further down PATH
     env = {**os.environ, "SB": _posix(sb), "FB_LIB": _posix(lib), "FB_STATE": _posix(state),
            "FB_LOG": _posix(sb / "log"), "FB_PY": _posix(Path(sys.executable)), "FB_SYNCED": _posix(sb / "synced"),
            "FB_PATH": _posix(sb) + ":/usr/bin:/bin" + ("" if sys.platform == "win32" else ":" + os.environ["PATH"])}

@@ -167,6 +167,17 @@ def device(tmp_path):
     _stub(bin_dir, "apt-get", f'printf \'apt-get %s\\n\' "$*" >>"{calls.as_posix()}"\n')
     _stub(bin_dir, "dpkg", f'printf \'dpkg %s\\n\' "$*" >>"{calls.as_posix()}"\n')
     _stub(bin_dir, "python3", f'exec "{Path(sys.executable).as_posix()}" "$@"\n')
+    # On a systemd host (a Linux CI runner, a dev box) the helper re-runs
+    # itself as a transient unit, which a non-root test account may not
+    # start. The stand-in keeps that re-run, in process: the --setenv
+    # options become the environment, the command runs as-is.
+    _stub(bin_dir, "systemd-run",
+          'while [ $# -gt 0 ]; do case $1 in\n'
+          '  --setenv=*) export "${1#--setenv=}"; shift;;\n'
+          '  --*) shift;;\n'
+          '  *) break;;\n'
+          'esac; done\n'
+          'exec "$@"\n')
 
     def run(env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         env = dict(os.environ)

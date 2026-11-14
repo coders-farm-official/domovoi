@@ -130,17 +130,19 @@ class ManualContentTest {
         }
     }
 
-    @Test fun theWakeWordIsHeyJarvisUntilTheRoomsSayOtherwise() {
+    // The published synthetic "Domovoi" word is a new install's default
+    // since wf/wake-default-domovoi (233a27e4); rooms set up before keep theirs.
+    @Test fun theWakeWordIsDomovoiUntilTheRoomsSayOtherwise() {
         val ww = doc.wakeWord
-        assertEquals(WakeInfo("Hey Jarvis", emptyList()), wakeInfo(ww, null))
-        assertEquals(WakeInfo("Hey Jarvis", emptyList()), wakeInfo(ww, emptyList()))
+        assertEquals(WakeInfo("Domovoi", emptyList()), wakeInfo(ww, null))
+        assertEquals(WakeInfo("Domovoi", emptyList()), wakeInfo(ww, emptyList()))
         val mixed = listOf(
-            ManualRoom("kitchen", "Kitchen", "online", "hey_jarvis"),
+            ManualRoom("kitchen", "Kitchen", "online", "domovoi_v1"),
             ManualRoom("office", null, "online", "hey_domovoi", "hey domovoi"),
             ManualRoom("garage", null, "offline", null),
         )
         val info = wakeInfo(ww, mixed)
-        assertEquals("Hey Jarvis", info.lead)
+        assertEquals("Domovoi", info.lead)
         assertEquals(listOf("Hey Domovoi" to listOf("office")), info.others)
         assertEquals("Some rooms answer to another word: “Hey Domovoi” in office.", wakeNote(ww, info))
         // No room answers to the default: name the word they do answer to.
