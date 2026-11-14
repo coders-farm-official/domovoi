@@ -23,6 +23,8 @@ defaults.
 - [Lookups in Chat](#lookups-in-chat)
 - [Changing it later](#changing-it-later)
 - [What goes out](#what-goes-out)
+- [Egress inventory](#egress-inventory): every host, and which answer allows it
+- [Check it yourself](#check-it-yourself)
 
 ---
 
@@ -614,8 +616,219 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Privacy → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
 | Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Voice → Wake words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
 | A USB stick for an old computer — **only when an admin prepares one** | Debian's installer image (793 MB), once, kept for the next stick; on a server installed before October 2026, the `xorriso` package at the next update or restart | cdimage.debian.org (held to a pinned SHA-256); Ubuntu's archive | Don't press **Prepare the stick**. Under **No** it is refused unless the image is already on the server, and the update unit installs nothing. The old computer itself downloads Debian's packages and the satellite's libraries while it sets up ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)) |
-| Things an admin starts | Downloads, only when an admin clicks: **Update Domovoi** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media | GitHub; PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
+| Things an admin starts | Downloads, only when an admin clicks: **Update Domovoi** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media, the font catalogue and a font added for Documents | GitHub (the fonts: GitHub's copy of Google Fonts); PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
 
 The install-time trust screen for any *third-party* plugin lists that plugin's own network behavior — see [What are plugins, and are they safe?](FAQ.md#what-are-plugins-and-are-they-safe)
 
+Every host behind these rows is in the [egress inventory](#egress-inventory).
+
 More on the security side: [Security & privacy → What leaves your network](SECURITY_PRIVACY.md#what-leaves-your-network--and-how-to-turn-each-thing-off).
+
+---
+
+## Egress inventory
+
+Every host on the internet that Domovoi's own code can contact, who
+contacts it, what for, and which internet answer allows it. The table
+above says what each feature sends; this one lists the destinations, so a
+household (or its router) can check traffic against it. A test,
+`domovoi/tests/test_egress_inventory.py`, reads these tables and fails
+when the code gains an internet address that isn't listed here
+([keeping it complete](#keeping-the-inventory-complete)).
+
+What the answer columns mean:
+
+- **on**: may go out by itself, as the features in
+  [What each answer changes](#what-each-answer-changes) are set;
+- **asked**: only when someone asks for it (a voice request, a button, a
+  setting an admin turns on);
+- **refused**: the server refuses it, whatever anyone asks
+  (`domovoi/egress.py` is the one choke point: the HTTP clients, the
+  outbound-URL check in `domovoi/net_safety.py`, and plugins' requests
+  through the SDK all go through it);
+- **not the server**: a phone, a satellite or an installer making its own
+  connection; the server's answer doesn't reach it (see
+  [what the answer can't reach](#internet-in-the-house-but-domovoi-shouldnt-use-it)).
+
+Hosts that redirect (GitHub release downloads, Hugging Face files) hand
+the download on to their own storage hosts, listed in the same row; under
+**No** a redirect is refused like the first request.
+
+### The server
+
+| Host | Contacted by | What for | Yes | Sometimes | No |
+|---|---|---|---|---|---|
+| `1.1.1.1` (TCP 443, no data) | core | The internet check, every 30 s (`CONNECTIVITY_PROBE_TARGET`) | on | on | off |
+| `huggingface.co` · `cdn-lfs.huggingface.co` · `cas-bridge.xethub.hf.co` | core | Whisper models (a size not on disk yet), Piper voices (a voice not on disk yet; the extra voices) | asked | asked | refused |
+| `registry.ollama.ai` · `ollama.com` | Ollama, at the core's request | Model pulls (Settings → Models). An Ollama `-cloud` model sends every question to `ollama.com` | asked | asked | pulls refused; a `-cloud` model is Ollama's own connection, which Settings → Internet warns about |
+| `github.com` · `objects.githubusercontent.com` · `release-assets.githubusercontent.com` | core, the update unit | **Update Domovoi** (`git fetch` of the project); the Android app for phones; the Windows satellite Setup; the Linux satellite's pinned Python (python-build-standalone); the wake-word models (openWakeWord's release, Domovoi's wake-word models repository); the fast lane's model (sherpa-onnx); the XVF3800 host tool for satellite cards | asked; the newer Android app an update names is fetched by itself | asked | refused |
+| `api.github.com` · `codeload.github.com` | core | Installing a plugin from GitHub | asked | asked | refused |
+| `api.github.com` · `raw.githubusercontent.com` | dashboard | Fonts: the font catalogue, and the files of a font you add (Documents) | asked | asked | refused |
+| `pypi.org` · `files.pythonhosted.org` · `download.pytorch.org` | core, the update unit | A plugin's Python packages; the update's dependency sync; the satellites' wheels for **Refresh caches** | asked | asked | refused |
+| `www.python.org` | core | The Windows satellite's embeddable Python, for **Refresh caches** | asked | asked | refused |
+| `registry-1.docker.io` · `auth.docker.io` · `production.cloudflare.docker.com` · `deb.debian.org` | Docker on the server, at Domovoi's request | Container images (Postgres, Flyway, the search helper, Letta, the music player's Debian base), and Debian packages for the music image and the satellite cards | asked (an update, a first start, **Refresh caches**) | asked | refused: the update unit refuses an update that would download |
+| `musicbrainz.org` | core | Other names for artists; song recognition's metadata and genres | on | on | off |
+| `lrclib.net` | core | Synced lyrics | on | on | off |
+| `api.acoustid.org` | core | Song recognition (fingerprints); **test the key** | on, with a key | on, with a key | off |
+| `amp.shazam.com` | core (the `shazam` add-on), radio plugin | Song recognition when AcoustID has no answer; naming the song on a favorited station | on, with the add-on | on, with the add-on | off |
+| `itunes.apple.com` | core, dashboard | Podcast search (by voice, and Discover) | asked | asked | refused |
+| `feeds.bbci.co.uk` · `feeds.npr.org` · `feeds.arstechnica.com` · `www.theverge.com` · `www.sciencedaily.com` · `www.espn.com`, and the feeds you add | core | The news briefing's default feeds, and your own | on | on | off |
+| The host of each podcast feed you subscribe to, and wherever its episodes and artwork live | core | Feed checks, episode downloads, each show's artwork once | on | asked (downloads off) | refused |
+| `en.wikipedia.org` · `api.search.brave.com`, your own SearXNG, a page you name | core | Chat lookups, each after you allow it on its card | asked | asked | refused |
+| The public search engines in SearXNG's default settings, `en.wikipedia.org`, `query.wikidata.org`, `clearurls.xyz`, `raw.githubusercontent.com`, the radio-browser server list | the search helper (SearXNG, a local container) | Web answers, "double-check that", news feed discovery; its own rule lists at every start | on | on | the container is stopped |
+| `cdimage.debian.org` | core | The Debian installer image for a USB stick for an old computer | asked | asked | refused unless the image is already on the server |
+| `f002.backblazeb2.com` · `huggingface.co` · `github.com` · `download.pytorch.org` · `pypi.org` · `archive.ubuntu.com` · `nvidia.github.io` | the wake-word trainer's build, the update unit | Wake-word training: the trainer image, its training data, and on an NVIDIA box the NVIDIA Container Toolkit | asked (an admin turns training on) | asked | refused |
+| `de1.api.radio-browser.info` | radio plugin | Station search; an FM favorite's call sign | on | on | refused |
+| `transition.fcc.gov` | radio plugin | **Import FCC FM** | asked | asked | refused |
+| Each internet station's own stream host | core (the rooms' music players), radio plugin | Playing a station; its song titles (ICY); short clips for song detection | on | on | refused, and stations leave the queues |
+
+### Installing, and the other devices
+
+| Host | Contacted by | What for | Yes | Sometimes | No |
+|---|---|---|---|---|---|
+| `download.docker.com` · `github.com` · `nvidia.github.io`, Ubuntu's archive | the Linux install script (`provision.sh`) | Docker, Ollama's release, the NVIDIA toolkit, the system's packages: installing needs the internet | not the server | not the server | not the server |
+| `releases.ubuntu.com` · `github.com` · `raw.githubusercontent.com` | the Windows Setup and the tray icon | Ubuntu's WSL image, WSL itself, the install script; the Windows part of **Update Domovoi** (when an admin asks) | not the server | not the server | the tray offers no Windows update |
+| `github.com` · `pypi.org` · `files.pythonhosted.org` · `www.python.org` · `deb.debian.org`, Raspberry Pi OS's archive and time servers | a satellite being set up, and its operating system | Packages, Python and wake-word models the server's card or cache doesn't carry; the system clock | not the server | not the server | not the server; the Domovoi part of a satellite talks only to the server |
+| `huggingface.co` · `en.wikipedia.org` · `api.search.brave.com`, your own SearXNG, a page you name | the Android app | On-device models and voices you choose to download; a phone chat's lookups away from home, after its card | not the server | not the server | not the server; at home the phone's lookups go through the server and follow its answer |
+
+Plugins installed from elsewhere make their own connections: each one's
+install screen lists them, and Settings → Internet lists every enabled
+plugin that "may reach the internet on its own". They are outside this
+inventory. Links in the dashboard and the app (to this repository, to
+AcoustID's sign-up page, to the Raspberry Pi imager) open in your browser
+only when you click them.
+
+### Voice requests that use the internet
+
+Every voice handler declares whether it needs the internet
+(`requires_network`, [ARCHITECTURE.md](ARCHITECTURE.md)). These are the
+ones that do, and where they go; the test holds this list equal to the
+handlers' own declarations. Every other handler declares `no` and holds no
+internet address of its own.
+
+| Handler | Declares | Uses |
+|---|---|---|
+| `double_check` | yes | The search helper (SearXNG) |
+| `news` | degraded | The news feeds; the search helper for topic feeds |
+| `spoken_audio` | degraded | `itunes.apple.com`; the podcast feeds' own hosts |
+| `radio` (radio plugin) | degraded | `de1.api.radio-browser.info`; the stations' own hosts |
+
+Two handlers that declare `no` can start a download when someone asks for
+one: `voice` ("download Linda's voice", from `huggingface.co`) and
+`library` (identifying songs, through song recognition). Under **No** both
+say they're set to stay off the internet, and download nothing.
+
+### Keeping the inventory complete
+
+`domovoi/tests/test_egress_inventory.py` scans the code that runs on the
+server, the satellites, the Windows host and the Android app for
+`http://` and `https://` addresses. Each host must be one of:
+
+- in a backticked host of the inventory's tables above;
+- local, by `domovoi/egress.py`'s own rule (loopback and private
+  addresses, `localhost`, `.local`, `.lan`, `.home.arpa`, single-label
+  names), or a documentation name (`example.com`, `.example`, `.test`,
+  `.invalid`);
+- on the test's short list of addresses the code never contacts: XML
+  namespaces, licence and attribution links, help links shown to people.
+
+Adding a host? Add it to the right row here (or a new row, with the answer
+that allows it), and make the request go through `domovoi/egress.py`. A
+link that is only shown to people goes on the test's never-contacted list,
+with a comment saying where it is shown. A host the code reaches without
+writing an address (a library's own endpoint, a `docker pull`) can't be
+found by the scan: list it here by hand, as the Ollama, Docker Hub and
+Shazam rows are.
+
+---
+
+## Check it yourself
+
+You don't have to take the inventory's word for it. Answer **No**, restart
+the core once (Settings → Internet asks for it), then watch the server's
+traffic.
+
+**What you should still see under No,** all of it inside your network:
+the satellites and the phones talking to the server (ports 6369, 6370 and
+the rooms' music streams, 8050 and up), Ollama on the same box (11434),
+multicast name lookups (mDNS, `224.0.0.251` port 5353) so `domovoi.local`
+works, and DNS questions to your router. What the operating system does
+for itself is not Domovoi: its clock (NTP) and its own update checks (on a
+Linux server with the update unit, answering No masks Ubuntu's own
+updaters: [LINUX_HOST.md → Internet or not](LINUX_HOST.md#internet-or-not)).
+
+### At the router
+
+The surest check, because it sees everything that leaves the house, the
+containers and the operating system included. Give the server a fixed
+address (a DHCP reservation), then look at the router's connection log or
+traffic monitor for that address, or add a rule that blocks and logs its
+traffic to the internet. With No answered, the log should stay empty apart
+from the operating system's own clock and update checks.
+
+### On a Linux server
+
+Connections open right now, with the program that holds each, leaving out
+the ones inside your network:
+
+```bash
+sudo ss -tunp | grep -vE '127\.0\.0\.|192\.168\.|[^0-9]10\.|172\.(1[6-9]|2[0-9]|3[01])\.|\[::1\]|\[f[cde][0-9a-f]*:'
+```
+
+`ss` sees the core, the dashboard and Ollama, but not the containers (the
+search helper, the rooms' music players, Postgres), which have their own
+network. `tcpdump` sees both: every packet the box sends to an address
+outside your network, for as long as you leave it running:
+
+```bash
+sudo tcpdump -ni any '(ip and not dst net 10.0.0.0/8 and not dst net 172.16.0.0/12
+  and not dst net 192.168.0.0/16 and not dst net 127.0.0.0/8
+  and not dst net 169.254.0.0/16 and not dst net 224.0.0.0/4
+  and not dst host 255.255.255.255)
+  or (ip6 and not dst net fe80::/10 and not dst net fc00::/7
+  and not dst net ff00::/8 and not dst host ::1)'
+```
+
+(Install it with `sudo apt install tcpdump` while the answer is still Yes.)
+If your network uses another range (a VPN's `100.64.0.0/10`, say), leave it
+out the same way. To catch a timer or a worker, leave it running for a
+day, or add `-w egress.pcap` and open the file in Wireshark later.
+
+### On the Windows install
+
+The server runs inside its own WSL2 virtual machine, which belongs to a
+hidden account and has no shell for you to open, so its connections don't
+show as a Windows program in Resource Monitor or `netstat -b`. Watch the
+PC's network adapter instead, with Windows' own packet monitor, from an
+administrator PowerShell:
+
+```powershell
+pktmon start --capture --comp nics --file-name "$env:USERPROFILE\domovoi-egress.etl"
+# ...leave it running for a while, then:
+pktmon stop
+pktmon etl2pcap "$env:USERPROFILE\domovoi-egress.etl" --out "$env:USERPROFILE\domovoi-egress.pcapng"
+```
+
+Open the `.pcapng` in Wireshark with the display filter
+`ip && !(ip.dst==10.0.0.0/8 || ip.dst==172.16.0.0/12 || ip.dst==192.168.0.0/16 || ip.dst==224.0.0.0/4 || ip.dst==255.255.255.255)`.
+The capture holds the whole PC: Windows, your browser and every other
+program talk to the internet too, so the router check above is the clean
+one. With WSL's mirrored networking the server uses the PC's own address,
+so at the router its traffic and the PC's share one row.
+
+### What Domovoi says about itself
+
+Under **No**, every refusal is written to the core's log, once per kind of
+request, as `internet off: refused <what>` (on Linux,
+`journalctl -u domovoi-core | grep 'internet off'`; on Windows, `core.log`
+from the tray icon's **Save logs for support...**). And you can ask the
+gate itself whether it would let an address out (on a Linux server
+installed by the script; in a checkout of your own, from its folder with
+its Python):
+
+```bash
+cd /opt/domovoi
+.venv/bin/python -m domovoi.egress --print-policy                   # never
+.venv/bin/python -m domovoi.egress --check https://musicbrainz.org  # the refusal
+.venv/bin/python -m domovoi.egress --check http://192.168.1.20      # allowed: on your network
+```

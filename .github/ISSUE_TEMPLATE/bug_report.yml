@@ -1,0 +1,78 @@
+name: Bug report
+description: Something in Domovoi doesn't work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. **A security problem goes to private reporting instead** (the Security tab, or [SECURITY.md](https://github.com/coders-farm-official/domovoi/blob/main/SECURITY.md)), never a public issue.
+        Questions and install help are quicker on [Discord](https://discord.gg/j3H5XamSxg) or in [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
+  - type: input
+    id: version
+    attributes:
+      label: Domovoi version
+      description: Settings → System → About & updates shows it (for example `1.2.1`, or a `main` commit). For the Android app, its own version from the app's About.
+      placeholder: "1.2.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Server
+      options:
+        - Linux
+        - Windows (DomovoiSetup.exe, the server in WSL2)
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: room
+    attributes:
+      label: Where it happened
+      description: Pick every one that applies.
+      multiple: true
+      options:
+        - The web dashboard
+        - Voice, in a Raspberry Pi room
+        - Voice, in a Linux PC room
+        - Voice, in a Windows PC room
+        - A phone or tablet in room mode
+        - A video satellite (a room with a screen)
+        - The Android app (not room mode)
+        - The Windows tray icon or Setup
+        - A plugin (say which below)
+        - Somewhere else
+    validations:
+      required: true
+  - type: dropdown
+    id: internet
+    attributes:
+      label: Internet answer
+      description: Settings → Internet.
+      options:
+        - "Yes, always"
+        - Sometimes
+        - "No, keep everything in the house"
+        - Not answered yet
+        - Not sure
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: What you said or clicked, what Domovoi did, and what you expected it to do.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Say "play some jazz in the kitchen"
+        2. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or a problem report
+      description: |
+        The dashboard's Help → **report a problem** builds a summary with the values it knows blanked out; on Windows, **Save logs for support...** in the tray icon's menu collects the logs. Read what you paste first: remove passwords, tokens, setup codes, API keys, addresses and names. Never paste your `.env`.
+      render: text

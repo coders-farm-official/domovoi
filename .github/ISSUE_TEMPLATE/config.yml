@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/coders-farm-official/domovoi/security/advisories/new
+    about: Privately, through GitHub's vulnerability reporting. Please don't open a public issue. SECURITY.md has the details and the email alternative.
+  - name: Questions and install help (Discord)
+    url: https://discord.gg/j3H5XamSxg
+    about: Ask the community and the maintainers.
+  - name: Questions and ideas (Discussions)
+    url: https://github.com/coders-farm-official/domovoi/discussions
+    about: Longer questions, show-and-tell, and ideas that aren't a feature request yet.
