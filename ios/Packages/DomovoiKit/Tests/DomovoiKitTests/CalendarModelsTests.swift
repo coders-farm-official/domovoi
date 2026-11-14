@@ -84,9 +84,9 @@ final class CalendarModelsTests: XCTestCase {
         XCTAssertNil(row.description)
         XCTAssertFalse(row.isGoogle)
         XCTAssertEqual(
-            CalendarStrings.localSource,
+            "household",
             row.sourceLabel,
-            "a row with no source has to say something, and `local` is what the house would write"
+            "a row with no source is the household's own (1.3.0's badge, `sourceLabel()`)"
         )
     }
 

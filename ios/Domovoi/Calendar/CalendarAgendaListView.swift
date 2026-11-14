@@ -97,7 +97,9 @@ struct CalendarAgendaRowView: View {
     @ScaledMetric(relativeTo: .caption2) private var pinGlyph: CGFloat = 11
 
     private var startClock: String {
-        calendarClock(ms: calendarStartMs(entry), timeZone: calendar.zone)
+        entry.allDay
+            ? CalendarStrings.allDay
+            : calendarClock(ms: calendarStartMs(entry, in: calendar.zone), timeZone: calendar.zone)
     }
 
     /// The end, only when there is one: ``calendarBlockEndMs(_:)`` falls back
@@ -110,8 +112,8 @@ struct CalendarAgendaRowView: View {
     /// parse falls through it, and through the window's rule it would be
     /// drawn as `3:00pm – 4:00pm` — an hour this row invented.
     private var endClock: String? {
-        guard entry.endsAt != nil else { return nil }
-        return calendarClock(ms: calendarBlockEndMs(entry), timeZone: calendar.zone)
+        guard entry.endsAt != nil, !entry.allDay else { return nil }
+        return calendarClock(ms: calendarBlockEndMs(entry, in: calendar.zone), timeZone: calendar.zone)
     }
 
     private var place: String? {
@@ -198,10 +200,10 @@ struct CalendarAgendaRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// `Pill(source ?: "local")`, `Idle` for google and `Ok` for local
-    /// (`:426`) — as words in an ink, never a colour on its own.
+    /// `SourceBadge(e)` (`CalendarScreen.kt:439`, 1.3.0): the calendar's
+    /// name beside a dot in its colour — words, never a colour on its own.
     private var pill: some View {
-        HomeTonePill(label: entry.sourceLabel, tone: entry.isGoogle ? .idle : .ok)
+        CalendarSourceBadge(entry: entry)
     }
 
     private var clockSpoken: String {

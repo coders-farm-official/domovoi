@@ -49,7 +49,7 @@ import Foundation
 /// The reads are capped **server-side, at sizes chosen to be whole answers
 /// rather than first pages**: no cap on rooms, plugins or timers (the server
 /// caps `fires` at 20), `?status=pending&limit=100` on acquisitions, and
-/// `&limit=20` over a week on the calendar. Nothing here takes an offset or a
+/// `&limit=50` over a week on the calendar. Nothing here takes an offset or a
 /// cursor and nothing should grow one: `Pagination.swift` has no business on
 /// this screen.
 public enum HomeRead: String, CaseIterable, Sendable, Hashable {
@@ -142,7 +142,7 @@ extension HomeApi {
         )
     }
 
-    /// `GET /api/calendar/events?start=…&end=…&limit=20` (`HomeIo.kt:42`).
+    /// `GET /api/calendar/events?start=…&end=…&limit=50` (`HomeIo.kt:42`).
     /// **Device read → tracked.**
     public static func calendar(
         _ client: DomovoiClient,
@@ -161,20 +161,20 @@ extension HomeApi {
 /// The path for the events Home needs — `calendarPath`
 /// (`HomeModels.kt:675`).
 ///
-/// From local midnight through **a week**, and the week is not an accident:
-/// an empty today still has to be able to say `· next: …`, which means the
-/// read has to reach past tomorrow. The start is midnight rather than now
-/// because the server filters on `starts_at`, so an event already under way
-/// would drop out of a window that began now.
+/// From local midnight through **a week**: the card is "today / next", the
+/// coming week's next events across every calendar the house shows (1.3.0).
+/// Fifty rows, not twenty, because the linked and phone calendars share the
+/// read. The start is midnight rather than now so that an event already
+/// under way is still read.
 ///
 /// Pinned against the Kotlin's own test, which asserts the query string
 /// character for character
 /// (`HomeModelsTest.calendarReadStartsAtLocalMidnightForAWeek`):
-/// `/api/calendar/events?start=2026-09-28T05%3A00%3A00Z&end=2026-10-05T05%3A00%3A00Z&limit=20`.
+/// `/api/calendar/events?start=2026-09-28T05%3A00%3A00Z&end=2026-10-05T05%3A00%3A00Z&limit=50`.
 public func calendarPath(dayStartMs start: Int64, timeZone: TimeZone) -> String {
     let end = DomovoiKit.dayStartMs(ms: start, timeZone: timeZone, plusDays: 7)
     return "/api/calendar/events?start=\(isoInstantEncoded(start))"
-        + "&end=\(isoInstantEncoded(end))&limit=20"
+        + "&end=\(isoInstantEncoded(end))&limit=50"
 }
 
 /// `URLEncoder.encode(Instant.ofEpochMilli(ms).toString(), "UTF-8")`.

@@ -337,7 +337,12 @@ public final class ShellModel {
             owners.forget(server: url)
             listenerStore.forgetPick(for: url)
             listenOutbox?.forget(server: normalized)
-            Task { @MainActor in shell?.ownersChanged() }
+            Task { @MainActor in
+                shell?.ownersChanged()
+                // Whatever else the app keeps per server (calendar sharing's
+                // entry and its key, 1.3.0) goes at the same signal.
+                shell?.onServerForgotten?(normalized)
+            }
         }
         // A launch straight onto a waiting card has to count down too, and
         // the first `.active` is not a return, so `scenePhaseChanged` will
@@ -762,6 +767,41 @@ public final class ShellModel {
     /// ``takePendingRoute()``, which is above both shells.
     ///
     /// The address forgotten, or nil when there was no active server.
+    /// Told of every server this phone forgets, by normalised address, on
+    /// the main actor, after the forget. The app's per-server state that
+    /// lives outside this model (calendar sharing) drops its entry here.
+    @ObservationIgnored public var onServerForgotten: ((String) -> Void)?
+
+    /// ``forgetTheActiveServer()``, after `parting` has had its turn to reach
+    /// the server **while this phone's token still works** — calendar
+    /// sharing's DELETE, so a forgotten house does not keep this phone's
+    /// calendars (review correction 2, 2026-11-14). `parting` bounds its own
+    /// wait. When the saved server changed meanwhile, nothing is forgotten:
+    /// the person moved on, and the forget they asked for was of the other
+    /// house.
+    /// What has to reach a server before this phone forgets it (the app
+    /// sets calendar sharing's parting delete). Nil: nothing does.
+    @ObservationIgnored public var beforeForgetting: ((String) async -> Void)?
+
+    /// The forget the screens call: ``forgetTheActiveServer(parting:)`` with
+    /// ``beforeForgetting``.
+    @discardableResult
+    public func forgetTheActiveServerAfterParting() async -> String? {
+        guard let parting = beforeForgetting else { return forgetTheActiveServer() }
+        return await forgetTheActiveServer(parting: parting)
+    }
+
+    @discardableResult
+    public func forgetTheActiveServer(parting: (String) async -> Void) async -> String? {
+        let url = container.store.serverURL
+        guard !ServerCredentials.isBlank(url) else { return forgetTheActiveServer() }
+        await parting(url)
+        guard ServerCredentials.normalize(container.store.serverURL) == ServerCredentials.normalize(url) else {
+            return nil
+        }
+        return forgetTheActiveServer()
+    }
+
     @discardableResult
     public func forgetTheActiveServer() -> String? {
         guard let url = container.store.forgetActiveServer() else { return nil }

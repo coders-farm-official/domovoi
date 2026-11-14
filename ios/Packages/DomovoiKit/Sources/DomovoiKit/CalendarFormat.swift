@@ -41,9 +41,13 @@ public func calendarClock(ms: Int64, timeZone: TimeZone) -> String {
 /// answer 17 gives an open-ended event an hour: that hour is what the agenda's
 /// floor measures against, and a clock built on it would read
 /// `3:00pm – 4:00pm` for a row the house never gave an end for.
+///
+/// An all-day event's range is the words `all day` (1.3.0,
+/// `CalendarModels.kt:139`).
 public func calendarRange(_ entry: CalendarEntry, in timeZone: TimeZone) -> String {
-    let start = calendarClock(ms: calendarStartMs(entry), timeZone: timeZone)
-    let end = calendarClock(ms: calendarBlockEndMs(entry), timeZone: timeZone)
+    if entry.allDay { return CalendarStrings.allDay }
+    let start = calendarClock(ms: calendarStartMs(entry, in: timeZone), timeZone: timeZone)
+    let end = calendarClock(ms: calendarBlockEndMs(entry, in: timeZone), timeZone: timeZone)
     return "\(start) – \(end)"
 }
 
