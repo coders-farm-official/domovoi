@@ -47,6 +47,25 @@ NULL`` — the enrichment timestamp marker.
 * ``manual``       — a person edited the tags in the dashboard
                      (``web/backend/api/music.py`` ``patch_track``).
 * ``recheck``      — requeued by the one-off recovery below.
+* ``disagreed``    — a provider answered, but with a song that shares
+                     nothing with the names the file already has (see
+                     "Agreement" below), so those names were kept.
+
+**Agreement** (2026-11-13). A fingerprint answer is not taken blindly: a
+library once had "In the End" by Linkin Park renamed to the title "Linkin
+Park" by "Boomin". When the row already has names (a title and/or an
+artist, from tags or the file name), a provider's answer is used only when
+it plausibly agrees with them (:func:`names_agree`): its title is our
+title, or its artist is (one of) our artist(s), compared after
+normalising (case, accents, punctuation, "feat.", "(Official Video)" and
+the like) and allowing small spelling differences. An answer whose title
+is OUR ARTIST while its artist is someone else is always refused. AcoustID
+can return several recordings for one fingerprint: the best-scoring one
+that agrees is used, not simply the first. With no agreeing answer the row
+keeps its names and is stamped ``disagreed``. A row with no real names (no
+artist, and a title that is just the file name) is matched as before.
+:func:`repair_disagreeing` puts back the file's own names on rows an
+earlier sweep already overwrote that way.
 
 A network error, a refused key, the internet being turned off, or no
 provider configured at all is NOT "no match": the row is left exactly as
@@ -115,6 +134,7 @@ OUTCOME_NO_MATCH = "no_match"
 OUTCOME_MISSING_FILE = "missing_file"
 OUTCOME_MANUAL = "manual"
 OUTCOME_RECHECK = "recheck"
+OUTCOME_DISAGREED = "disagreed"
 
 # Rows stamped before V020 with nothing to show a provider ever answered:
 # no outcome (V020 marked every stamped row WITH a MusicBrainz id
@@ -148,6 +168,7 @@ class Verdict(enum.Enum):
     MATCH = "match"          # identified it
     NO_MATCH = "no_match"    # answered: nothing (at or above the score)
     NOT_ASKED = "not_asked"  # no key / not installed / can't fingerprint this file
+    DISAGREED = "disagreed"  # answered, but nothing it said agrees with the file's names
     ERROR = "error"          # didn't answer: network, service, refused key, internet off
 
 
@@ -162,6 +183,99 @@ class Lookup:
     # NOT_ASKED only: the provider can't run on this box at all (its
     # package or fpcalc is missing), so the sweep stops asking it.
     unusable: bool = False
+    # MATCH only: every answer at or above the score, best first (AcoustID
+    # can return several recordings; ``result`` is the first of them).
+    # Empty means ``result`` is the only one.
+    candidates: tuple[EnrichmentResult, ...] = ()
+
+
+# ─── Agreement with the names a file already has ────────────────────────
+
+#: rapidfuzz ratio (0-100) of two normalised names at or above which they
+#: are the same name spelt slightly differently ("Five Finger Death Punch"
+#: / "Five Fingers Death Punch"). Normalised keys that are equal agree.
+NAME_AGREE_MIN_RATIO = 85
+
+
+def _name_key(name: str | None) -> str:
+    """A title or artist as compared: decoration dropped ("(Official
+    Video)", "[Remastered]", "feat. X", " - Live"), then the household
+    name key (case, accents, punctuation, "&"/"and", numbers as words,
+    leading "the" and spaces dropped)."""
+    from domovoi.handlers.shared.spoken_names import alias_key, clean_title
+
+    raw = (name or "").strip()
+    if not raw:
+        return ""
+    return alias_key(clean_title(raw)) or alias_key(raw)
+
+
+def _keys_agree(a: str, b: str) -> bool:
+    from rapidfuzz import fuzz
+
+    if not a or not b:
+        return False
+    return a == b or fuzz.ratio(a, b) >= NAME_AGREE_MIN_RATIO
+
+
+def _same_title(a: str | None, b: str | None) -> bool:
+    return _keys_agree(_name_key(a), _name_key(b))
+
+
+def _credit_keys(credit: str | None) -> set[str]:
+    """The whole credit's key and each performer's ("Massive Attack & Mos
+    Def" agrees with "Massive Attack")."""
+    from domovoi.handlers.shared.spoken_names import split_credit
+
+    raw = (credit or "").strip()
+    if not raw:
+        return set()
+    return {k for k in (_name_key(p) for p in (raw, *split_credit(raw))) if k}
+
+
+def _same_artist(a: str | None, b: str | None) -> bool:
+    ka, kb = _credit_keys(a), _credit_keys(b)
+    return any(_keys_agree(x, y) for x in ka for y in kb)
+
+
+def names_agree(
+    our_title: str | None, our_artist: str | None,
+    their_title: str | None, their_artist: str | None,
+) -> bool:
+    """Does a provider's answer (``their_*``) plausibly name the same song
+    as the names a row already has (``our_*``)? True when we have no names
+    to compare; when its title is our title or its artist is our artist;
+    or when it is our two names the other way round (a file name read
+    "Artist - Title" that was really "Title - Artist"). Never when its
+    title is our ARTIST but its artist isn't: that is how a wrong
+    fingerprint answer looked ("In the End" by Linkin Park answered as the
+    title "Linkin Park" by "Boomin")."""
+    has_title = bool(_name_key(our_title))
+    has_artist = bool(_credit_keys(our_artist))
+    if not has_title and not has_artist:
+        return True
+    artist_ok = has_artist and _same_artist(our_artist, their_artist)
+    if has_title and has_artist and not artist_ok:
+        if _same_title(our_artist, their_title) and _same_artist(our_title, their_artist):
+            return True  # our names the other way round
+    if has_artist and not artist_ok and _same_artist(our_artist, their_title):
+        return False  # their title is our artist, their artist someone else
+    title_ok = has_title and _same_title(our_title, their_title)
+    return bool(artist_ok or title_ok)
+
+
+def file_names(
+    file_path: str | Path, title: str | None, artist: str | None,
+) -> tuple[str | None, str | None]:
+    """The names to hold a provider's answer against: ``(title,
+    artist)``, or ``(None, None)`` when there are none worth holding it
+    to: no artist and a title that is just the file's name (the indexer's
+    last resort, which is what the enricher is for)."""
+    t = (title or "").strip() or None
+    a = (artist or "").strip() or None
+    if a is None and (t is None or t == Path(str(file_path)).stem.strip()):
+        return None, None
+    return t, a
 
 
 def provider_available() -> bool:
@@ -434,23 +548,33 @@ async def _enrich_via_acoustid(file_path: Path) -> Lookup:
 
     if not results:
         return Lookup(Verdict.NO_MATCH, detail="AcoustID: no result")
-    # acoustid.match yields tuples of (score, recording_id, title, artist)
-    score, recording_id, title, artist = results[0]
-    if score is None or score < settings.library_enricher_acoustid_min_score:
+    # acoustid.match yields tuples of (score, recording_id, title, artist);
+    # one fingerprint can name several recordings. Every one at or above
+    # the score is a candidate, best first (the sort is stable, so equal
+    # scores keep AcoustID's order); _enrich_one uses the first that
+    # agrees with the file's names, not simply the first.
+    floor = settings.library_enricher_acoustid_min_score
+    scored = sorted(
+        (r for r in results if r[0] is not None and r[0] >= floor),
+        key=lambda r: -r[0],
+    )
+    if not scored:
+        score = results[0][0]
         log.debug(
             "AcoustID match for %s below threshold (score=%s)",
             file_path.name, score,
         )
         return Lookup(Verdict.NO_MATCH, detail=f"AcoustID: score {score}")
-    return Lookup(
-        Verdict.MATCH,
-        result=EnrichmentResult(
+    candidates = tuple(
+        EnrichmentResult(
             title=title or None,
             artist=artist or None,
             musicbrainz_recording_id=recording_id or None,
             source="acoustid",
-        ),
+        )
+        for _score, recording_id, title, artist in scored
     )
+    return Lookup(Verdict.MATCH, result=candidates[0], candidates=candidates)
 
 
 # ─── "Test the key" (Settings → Advanced) ───────────────────────────
@@ -615,20 +739,49 @@ class _Providers:
 _NOT_ASKED = Lookup(Verdict.NOT_ASKED, detail="not asked")
 
 
-async def _enrich_one(file_path: Path, providers: _Providers | None = None) -> Lookup:
-    """AcoustID, then Shazam. A match from either wins. Otherwise an
-    error from either means the track isn't decided (it is retried
-    later); a no-match from one with no error from the other is a
-    genuine no-match; nothing answered at all is NOT_ASKED."""
+def _agreeing(lookup: Lookup, names: tuple[str | None, str | None] | None) -> Lookup:
+    """A MATCH whose result agrees with ``names`` (``(title, artist)``,
+    :func:`names_agree`): the first candidate that does, or DISAGREED when
+    none does. ``names`` None: no check (the lookup as it is)."""
+    if lookup.verdict is not Verdict.MATCH or lookup.result is None or names is None:
+        return lookup
+    our_title, our_artist = names
+    for cand in lookup.candidates or (lookup.result,):
+        if names_agree(our_title, our_artist, cand.title, cand.artist):
+            if cand is lookup.result:
+                return lookup
+            return Lookup(Verdict.MATCH, result=cand, candidates=lookup.candidates)
+    first = lookup.result
+    return Lookup(
+        Verdict.DISAGREED,
+        result=first,
+        detail=f"{first.source}: {first.title!r} by {first.artist!r} doesn't agree with "
+               f"{our_title!r} by {our_artist!r}",
+    )
+
+
+async def _enrich_one(
+    file_path: Path, providers: _Providers | None = None,
+    names: tuple[str | None, str | None] | None = None,
+) -> Lookup:
+    """AcoustID, then Shazam. A match from either that agrees with the
+    file's ``names`` (``(title, artist)``, :func:`file_names`; None: no
+    check) wins. Otherwise an error from either means the track isn't
+    decided (it is retried later); an answer that didn't agree with the
+    names, with no error, is DISAGREED; a no-match from one with no error
+    from the other is a genuine no-match; nothing answered at all is
+    NOT_ASKED."""
     providers = providers if providers is not None else _Providers()
     ac = await _enrich_via_acoustid(file_path) if providers.acoustid else _NOT_ASKED
     if ac.unusable:
         providers.acoustid = False
+    ac = _agreeing(ac, names)
     if ac.verdict is Verdict.MATCH:
         return ac
     sh = await _enrich_via_shazam(file_path) if providers.shazam else _NOT_ASKED
     if sh.unusable:
         providers.shazam = False
+    sh = _agreeing(sh, names)
     if sh.verdict is Verdict.MATCH:
         return sh
     errors = [x for x in (ac, sh) if x.verdict is Verdict.ERROR]
@@ -637,11 +790,17 @@ async def _enrich_one(file_path: Path, providers: _Providers | None = None) -> L
         # counts toward stopping the sweep only when NO provider answered:
         # one provider down while the other keeps answering is not "the
         # line is down".
-        answered = any(x.verdict is Verdict.NO_MATCH for x in (ac, sh))
+        answered = any(x.verdict in (Verdict.NO_MATCH, Verdict.DISAGREED) for x in (ac, sh))
         return Lookup(
             Verdict.ERROR,
             detail="; ".join(x.detail for x in errors),
             transient=any(x.transient for x in errors) and not answered,
+        )
+    disagreed = [x for x in (ac, sh) if x.verdict is Verdict.DISAGREED]
+    if disagreed:
+        return Lookup(
+            Verdict.DISAGREED, result=disagreed[0].result,
+            detail="; ".join(x.detail for x in disagreed),
         )
     if Verdict.NO_MATCH in (ac.verdict, sh.verdict):
         return Lookup(Verdict.NO_MATCH, detail="; ".join(
@@ -655,6 +814,7 @@ def _counts(**over: Any) -> dict[str, Any]:
         "scanned": 0,
         "matched": 0,
         "no_match": 0,
+        "disagreed": 0,
         "errors": 0,
         "skipped_missing_file": 0,
         "requeued_legacy": 0,
@@ -775,7 +935,7 @@ async def _sweep() -> dict[str, Any]:
         rows = (
             await session.execute(
                 text(
-                    "SELECT id, file_path, enrich_outcome, "
+                    "SELECT id, file_path, title, artist, enrich_outcome, "
                     f"({LEGACY_UNANSWERED_WHERE}) AS legacy "
                     "FROM library_tracks "
                     f"WHERE {WAITING_WHERE} "
@@ -820,7 +980,9 @@ async def _sweep() -> dict[str, Any]:
                 continue
 
             try:
-                lookup = await _enrich_one(file_path, providers)
+                lookup = await _enrich_one(
+                    file_path, providers, file_names(row.file_path, row.title, row.artist),
+                )
             except Exception as e:  # _enrich_one doesn't raise; belt and braces
                 log.warning("enricher unexpected failure for %s: %s", file_path.name, e)
                 lookup = Lookup(Verdict.ERROR, detail=str(e), transient=True)
@@ -849,6 +1011,16 @@ async def _sweep() -> dict[str, Any]:
                     result.title, result.artist,
                     result.musicbrainz_recording_id or "—",
                 )
+            elif lookup.verdict is Verdict.DISAGREED:
+                # A provider answered, with a song that isn't this file's:
+                # its names stay, and it is not asked again.
+                counts["disagreed"] += 1
+                consecutive_errors = 0
+                await _requeue_once()
+                await session.execute(
+                    text(_STAMP_SQL), {"id": row.id, "outcome": OUTCOME_DISAGREED},
+                )
+                log.info("enricher: kept the names of %s (%s)", file_path.name[:60], lookup.detail)
             elif lookup.verdict is Verdict.NO_MATCH:
                 counts["no_match"] += 1
                 consecutive_errors = 0
@@ -891,9 +1063,137 @@ async def _sweep() -> dict[str, Any]:
         await session.commit()
 
     log.info(
-        "library enricher: scanned=%d matched=%d no_match=%d errors=%d "
+        "library enricher: scanned=%d matched=%d no_match=%d disagreed=%d errors=%d "
         "missing=%d requeued_legacy=%d aborted=%s",
-        counts["scanned"], counts["matched"], counts["no_match"], counts["errors"],
+        counts["scanned"], counts["matched"], counts["no_match"], counts["disagreed"],
+        counts["errors"],
         counts["skipped_missing_file"], counts["requeued_legacy"], counts["aborted"],
     )
     return counts
+
+
+# ─── Repair: rows an earlier sweep renamed to a song that isn't theirs ──
+
+# The enricher's own matches only: a row a person edited is ``manual`` and
+# never looked at.
+_REPAIR_ROWS_SQL = (
+    "SELECT id, file_path, title, artist FROM library_tracks "
+    "WHERE enrich_outcome = :matched ORDER BY id"
+)
+# The file's names back, the wrong match's MusicBrainz id gone, with the
+# year and genre that were fetched by that id; stamped ``disagreed`` so no
+# sweep matches it again. An album only where the file names one (an
+# AcoustID match never wrote an album).
+_RESTORE_SQL = """
+    UPDATE library_tracks
+    SET title = :t,
+        artist = :a,
+        album = COALESCE(:al, album),
+        musicbrainz_recording_id = NULL,
+        year = CASE WHEN year_source = 'musicbrainz' THEN NULL ELSE year END,
+        year_source = CASE WHEN year_source = 'musicbrainz' THEN NULL ELSE year_source END,
+        genre = CASE WHEN genre_source = 'musicbrainz' THEN NULL ELSE genre END,
+        genre_keys = CASE WHEN genre_source = 'musicbrainz' THEN NULL ELSE genre_keys END,
+        genre_source = CASE WHEN genre_source = 'musicbrainz' THEN NULL ELSE genre_source END,
+        enriched_at = NOW(),
+        enrich_outcome = :disagreed
+    WHERE id = :id AND enrich_outcome = :matched
+"""
+
+
+async def repair_disagreeing() -> dict[str, Any]:
+    """Find rows an earlier sweep renamed to a song that isn't theirs, and
+    put the file's own names back.
+
+    Looks at every row the enricher matched (outcome ``matched``; a row a
+    person edited is ``manual`` and is never touched), reads the file's
+    own names the way the indexer does (tags, else the file name), and
+    holds the row's names to them with :func:`names_agree`, as a sweep now
+    holds a provider's answer. Where they don't agree, the row gets the
+    file's title and artist (and its album, when the file names one) back,
+    loses the MusicBrainz id the wrong match brought and any year or genre
+    fetched by it, and is stamped ``disagreed`` so no sweep renames it
+    again. Rows whose file is gone, or whose file has no names worth
+    holding the row to (no artist, title just the file name), are left as
+    they are. No network. Not while a sweep runs.
+
+    Returns ``{"checked", "restored", "kept", "unjudged", "missing_file",
+    "errors", "skipped"}`` (``skipped``: "" when it ran, else "running").
+    """
+    global _sweep_running
+    counts: dict[str, Any] = {
+        "checked": 0, "restored": 0, "kept": 0, "unjudged": 0,
+        "missing_file": 0, "errors": 0, "skipped": "",
+    }
+    if _sweep_running:
+        log.info("library enricher repair: a sweep is running; not now")
+        counts["skipped"] = "running"
+        return counts
+    _sweep_running = True
+    try:
+        await _repair(counts)
+    finally:
+        _sweep_running = False
+    log.info(
+        "library enricher repair: checked=%d restored=%d kept=%d unjudged=%d "
+        "missing=%d errors=%d",
+        counts["checked"], counts["restored"], counts["kept"], counts["unjudged"],
+        counts["missing_file"], counts["errors"],
+    )
+    return counts
+
+
+async def _repair(counts: dict[str, Any]) -> None:
+    from domovoi.workers import library_indexer
+
+    async with session_scope() as session:
+        rows = (await session.execute(
+            text(_REPAIR_ROWS_SQL), {"matched": OUTCOME_MATCHED},
+        )).all()
+        known_artists = await library_indexer.known_artist_keys(session) if rows else None
+        for row in rows:
+            counts["checked"] += 1
+            path = Path(row.file_path)
+            if not path.exists():
+                counts["missing_file"] += 1
+                continue
+            try:
+                meta = await library_indexer.read_metadata(path, known_artists)
+            except Exception as e:  # noqa: BLE001 — one unreadable file
+                counts["errors"] += 1
+                log.debug("library enricher repair: couldn't read %s: %s", path.name, e)
+                continue
+            ours = file_names(row.file_path, meta.get("title"), meta.get("artist"))
+            if ours == (None, None):
+                counts["unjudged"] += 1
+                continue
+            if names_agree(ours[0], ours[1], row.title, row.artist):
+                counts["kept"] += 1
+                continue
+            await session.execute(text(_RESTORE_SQL), {
+                "id": row.id,
+                "t": meta.get("title"),
+                "a": meta.get("artist"),
+                "al": meta.get("album"),
+                "matched": OUTCOME_MATCHED,
+                "disagreed": OUTCOME_DISAGREED,
+            })
+            await session.commit()
+            counts["restored"] += 1
+            log.info(
+                "library enricher repair: %s: %r by %r → %r by %r (the file's names)",
+                path.name[:60], row.title, row.artist, meta.get("title"), meta.get("artist"),
+            )
+        if counts["restored"]:
+            await session.execute(
+                text("SELECT pg_notify('library_changed', :payload)"),
+                {"payload": f"repaired={counts['restored']}"},
+            )
+        await session.commit()
+    if counts["restored"]:
+        try:
+            from domovoi.handlers.shared import library_match
+
+            library_match.invalidate(library=True)
+        except Exception as e:  # noqa: BLE001 — the fingerprint catches up anyway
+            log.debug("library enricher repair: couldn't refresh the name index: %s", e)

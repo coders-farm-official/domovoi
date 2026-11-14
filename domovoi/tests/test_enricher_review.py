@@ -185,7 +185,7 @@ async def test_a_refused_key_with_shazam_makes_progress(lane, refused_key, monke
         p.write_bytes(b"")
         paths.append(p)
         await lane.execute(text("INSERT INTO library_tracks (file_path, title) VALUES (:fp, :t)"),
-                           {"fp": str(p), "t": f"file {i}"})
+                           {"fp": str(p), "t": p.stem})
     await lane.commit()
     monkeypatch.setattr(f"{ENRICHER}.provider_available", lambda: True)
     misses = {p.name for p in paths[:5]}
@@ -227,9 +227,13 @@ async def test_legacy_rows_are_requeued_only_after_a_real_answer(lane, monkeypat
     legacy = await _row(lane, ids["legacy_unanswered"])
     assert legacy.enriched_at is not None and legacy.enrich_outcome is None   # untouched
 
+    # Answers that agree with each row's title (2026-11-13).
+    agreeing = {"01": "01 - Track", "03": "My Corrected Title", "04": "04 - Track"}
+
     async def found(p):
         return Lookup(Verdict.MATCH, result=EnrichmentResult(
-            title="Catalog", artist="Filled", musicbrainz_recording_id=f"mb-{p.stem}", source="acoustid"))
+            title=agreeing[p.stem], artist="Filled", musicbrainz_recording_id=f"mb-{p.stem}",
+            source="acoustid"))
 
     monkeypatch.setattr(f"{ENRICHER}._enrich_via_acoustid", found)
     counts = await enrich_library()

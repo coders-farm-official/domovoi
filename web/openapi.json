@@ -2064,6 +2064,26 @@
         }
       }
     },
+    "/api/music/library/enrich/repair": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Enrich Repair",
+        "description": "Put the file's own names back on tracks song recognition renamed\nto a song that isn't theirs. Admin tier at both hops, like the\nenrich it repairs after; hand-edited tracks are never touched.",
+        "operationId": "enrich_repair_api_music_library_enrich_repair_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/audio": {
       "get": {
         "tags": [

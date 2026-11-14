@@ -357,7 +357,9 @@ async def lane(db_session, monkeypatch):
 async def _tracks(session, tmp_path, n: int) -> list[int]:
     ids = []
     for i in range(n):
-        f = tmp_path / f"t{i}.mp3"
+        # Named like its title: no names beyond the file name, so any
+        # match is used (the agreement check has nothing to hold it to).
+        f = tmp_path / f"file {i}.mp3"
         f.write_bytes(b"")
         row = (await session.execute(
             text("INSERT INTO library_tracks (file_path, title) VALUES (:fp, :t) RETURNING id"),

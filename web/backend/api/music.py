@@ -1297,6 +1297,17 @@ async def enrich(request: Request):
     return bridge_response(status, payload)
 
 
+@router.post("/library/enrich/repair", dependencies=ADMIN)
+async def enrich_repair(request: Request):
+    """Put the file's own names back on tracks song recognition renamed
+    to a song that isn't theirs. Admin tier at both hops, like the
+    enrich it repairs after; hand-edited tracks are never touched."""
+    status, payload = await post_admin(
+        "/v1/admin/library/enrich/repair", headers=auth_forward_headers(request)
+    )
+    return bridge_response(status, payload)
+
+
 # ─── Browser music player (client-side playback) ────────────────────────────
 # These back the dashboard's in-browser Web-Audio player. Unlike the action
 # endpoints above (which drive server-side MPD in a room), these stream the
