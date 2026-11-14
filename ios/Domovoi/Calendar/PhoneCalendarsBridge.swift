@@ -255,8 +255,8 @@ final class PhoneCalendarsBridge {
         model.beforeForgetting = { [weak self] server in await self?.part(server) }
         // A forgotten server takes its entry and its calendar key with it.
         model.onServerForgotten = { [weak self] server in
-            self?.store.forget(server)
-            self?.keys.forget(server: server)
+            guard let self else { return }
+            self.store.differentHouse(server, keys: self.keys)
         }
 
         let centre = NotificationCenter.default
