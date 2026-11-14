@@ -194,23 +194,30 @@ def read_side() -> dict | None:
 
 # ─── the release the Linux side includes ────────────────────────────────
 
-_TARGET_CACHE: dict[tuple[str, str | None], dict | None] = {}
+_TARGET_CACHE: dict[tuple[str, str | None], tuple[float, dict | None]] = {}
+#: How long a target is believed (the tray polls every 30 s; describe is
+#: one local git call).
+TARGET_CACHE_SEC = 300
 
 
 def target_release(running_sha: str, channel: str | None) -> dict | None:
     """Blocking. ``{tag, version, commit}``: the newest release tag the
     running code includes (``git describe``), not counting release
     candidates on ``stable``; None before the first release or when git
-    can't say. Cached per running commit (it doesn't change until a
-    restart; a fetch can only add tags after it, never before)."""
+    can't say. Cached per running commit for :data:`TARGET_CACHE_SEC`
+    only: a release is tagged on a commit already on main, so a fetch CAN
+    add a tag the running code includes (main runs 788c2a96, then v1.2.0
+    is tagged there), and a cache kept until the restart hid that release
+    from the Windows side until the next update."""
     from domovoi import git_version
 
     sha = (running_sha or "").removesuffix("-dirty")
     if not re.match(r"^[0-9a-f]{7,64}$", sha):
         return None
     key = (sha, "stable" if channel == "stable" else None)
-    if key in _TARGET_CACHE:
-        return _TARGET_CACHE[key]
+    cached = _TARGET_CACHE.get(key)
+    if cached is not None and _now() - cached[0] < TARGET_CACHE_SEC:
+        return cached[1]
     args = ["describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"]
     if channel == "stable":
         args += ["--exclude", "v*-*"]
@@ -228,7 +235,7 @@ def target_release(running_sha: str, channel: str | None) -> dict | None:
     if _TAG_RE.match(tag):
         found = {"tag": tag, "version": tag[1:],
                  "commit": commit if commit and _COMMIT_RE.match(commit) else None}
-    _TARGET_CACHE[key] = found
+    _TARGET_CACHE[key] = (_now(), found)
     return found
 
 
@@ -338,11 +345,38 @@ def _claim_ok(request_id: str, token: object) -> bool:
     return hmac.compare_digest(_token_hash(token), doc["sha256"])
 
 
+#: What a result is about (windows/tray/Updater.cs StepResult.Kind):
+#: ``windows`` the Windows step (a Setup run, or why none ran), ``linux``
+#: only the Linux part of the tray menu's "Update Domovoi" (nothing on
+#: Windows ran).
+RESULT_KINDS = ("windows", "linux")
+
+
+def _result_kind(kind: object, outcome: object, request_id: object, version: object) -> str:
+    """The kind the tray said, or, from a tray that doesn't say (1.2.0 and
+    before), what its outcome shows: an ``ok`` or ``nothing_new`` for no
+    request that names no installed version is the menu's Linux part alone
+    (WindowsStep.Finish gives a Setup run's ``ok`` the release's version,
+    always). 2026-11-14: such a result read as "the Windows side updated"
+    while it stayed at 1.1.0."""
+    if kind in RESULT_KINDS:
+        return kind
+    if request_id is None and outcome in ("ok", "nothing_new") and not valid_version(version):
+        return "linux"
+    return "windows"
+
+
 def read_result() -> dict | None:
     doc = _read_json("result.json")
     if not isinstance(doc, dict) or doc.get("outcome") not in OUTCOMES:
         return None
-    return {k: doc.get(k) for k in ("outcome", "detail", "log", "version", "at", "request_id", "tag", "after_linux")}
+    out = {k: doc.get(k) for k in ("outcome", "detail", "log", "version", "at", "request_id", "tag", "after_linux")}
+    out["kind"] = _result_kind(doc.get("kind"), out["outcome"], out["request_id"], out["version"])
+    if out["kind"] == "linux":
+        # Kept by a core before this one: the release the Linux side
+        # included when it answered, which nothing on Windows ran.
+        out["tag"] = None
+    return out
 
 
 def _unsigned() -> list[str]:
@@ -366,7 +400,9 @@ def record_result(body: dict, target_tag: str | None) -> dict:
     having no signed Setup (``unsigned.json``), so a stray POST can't hide
     an update. An answer for no request (the tray menu's own run) is shown
     and changes nothing else. Only known outcomes and plain text are kept.
-    PermissionError: a request id without its claim."""
+    ``kind`` (:data:`RESULT_KINDS`) keeps a menu run's Linux part from
+    reading as a Windows result. PermissionError: a request id without its
+    claim."""
     outcome = body.get("outcome")
     if outcome not in OUTCOMES:
         raise ValueError("unknown outcome")
@@ -377,16 +413,22 @@ def record_result(body: dict, target_tag: str | None) -> dict:
     if rid is not None and not claimed:
         raise PermissionError("only the tray that claimed this request answers it")
     log_path = body.get("log")
-    version = body.get("version")
+    version = body.get("version") if valid_version(body.get("version")) else None
+    kind = _result_kind(body.get("kind"), outcome, rid, version)
+    answered = req is not None and req["id"] == rid
     doc = {
         "outcome": outcome,
         "detail": _clean_text(body.get("detail"), 400),
         "log": log_path if isinstance(log_path, str) and _LOG_RE.match(log_path) else None,
-        "version": version if valid_version(version) else None,
+        "version": version,
         "at": _iso(_now()),
         "request_id": rid,
-        "tag": target_tag,
-        "after_linux": bool(req and req["id"] == rid and req["after_linux"]),
+        # The release a Windows step was about; none for the Linux part.
+        "tag": target_tag if kind == "windows" else None,
+        "kind": kind,
+        # Words only: the request's own flag, else the tray's (its menu
+        # run's Windows part after the Linux part).
+        "after_linux": bool(req["after_linux"]) if answered else (rid is None and body.get("after_linux") is True),
     }
     _write_json("result.json", doc)
     if req is not None and claimed and rid == req["id"]:

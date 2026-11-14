@@ -380,13 +380,15 @@ namespace Domovoi.Windows.Tray
         // dashboard request (claimed first: one tray only). asked: someone
         // here clicked, so a problem gets a message box rather than a
         // notification.
-        void StartWindowsStep(UpdateState known, bool linuxFirst, bool asked)
+        // afterLinuxPart: the Windows part of a menu run whose Linux part
+        // just updated (UpdateDecision.WindowsAfterLinux).
+        void StartWindowsStep(UpdateState known, bool linuxFirst, bool asked, bool afterLinuxPart = false)
         {
             if (stepRunning) return;
             stepRunning = true;
             string requestId = linuxFirst ? null : (known != null ? known.RequestId : null);
-            bool afterLinux = !linuxFirst && known != null && known.RequestAfterLinux;
-            log.Write("update: " + (linuxFirst ? "both halves, from the menu" : "the Windows step"));
+            bool afterLinux = afterLinuxPart || (!linuxFirst && known != null && known.RequestAfterLinux);
+            log.Write("update: " + (linuxFirst ? "both halves, from the menu" : afterLinuxPart ? "the Windows step, after the Linux part" : "the Windows step"));
             ThreadPool.QueueUserWorkItem(delegate
             {
                 StepResult r;
@@ -417,7 +419,7 @@ namespace Domovoi.Windows.Tray
                 }
                 if (!r.Launched)
                 {
-                    Done(r, requestId, claim, afterLinux, asked);
+                    Done(r, r.Kind, requestId, claim, afterLinux, asked);
                     return;
                 }
                 bool setup = r.Kind == "setup";
@@ -451,26 +453,37 @@ namespace Domovoi.Windows.Tray
                 if (fin == null) fin = new StepResult { Outcome = Outcome.RepairFailed, Detail = "Setup ended without saying how it went.", Log = r.Log };
                 pending.Outcome = fin.Outcome; pending.Detail = fin.Detail; pending.Log = fin.Log; pending.Version = fin.Version ?? pending.Version;
                 pending.Save(updatesRoot);
-                Done(fin, requestId, claim, afterLinux, asked);
+                Done(fin, r.Kind, requestId, claim, afterLinux, asked);
             });
         }
 
-        // An outcome: reported to the core (with the claim), said here, and
-        // the run forgotten once the core has it.
-        void Done(StepResult r, string requestId, string claim, bool afterLinux, bool asked)
+        // An outcome: reported to the core (with the claim and what ran),
+        // said here, and the run forgotten once the core has it. After the
+        // menu run's Linux part alone, the Windows part when the code it
+        // pulled now needs one (UpdateDecision.WindowsAfterLinux).
+        void Done(StepResult r, string kind, string requestId, string claim, bool afterLinux, bool asked)
         {
             log.Write("update: " + r.Outcome + (r.Detail != null ? " (" + r.Detail + ")" : "") + (r.Log != null ? " log " + r.Log : ""));
-            bool reported = updates.Report(requestId, claim, r.Outcome, r.Detail, r.Log, r.Version);
+            bool reported = updates.Report(requestId, claim, r.Outcome, r.Detail, r.Log, r.Version, ReportKind.Of(kind), afterLinux);
             PendingRun p = PendingRun.Load(updatesRoot);
             if (p != null && p.Outcome != null)
             {
                 if (reported) PendingRun.Clear(updatesRoot);
                 else { p.Shown = true; p.Save(updatesRoot); }
             }
+            UpdateState now = kind == "linux" && r.Outcome == Outcome.Ok ? updates.State() : null;
+            bool windowsNext = UpdateDecision.WindowsAfterLinux(kind, r, now);
             string words = WindowsStep.Words(r, afterLinux);
             Invoke(delegate
             {
                 stepRunning = false;
+                if (windowsNext)
+                {
+                    log.Write("update: the Linux part now includes Domovoi " + now.TargetVersion + "; the Windows part is next");
+                    updateState = now;
+                    StartWindowsStep(now, false, asked, true);
+                    return;
+                }
                 if (asked && !r.Ok && r.Outcome != Outcome.Declined)
                     MessageBox.Show(words, "Update Domovoi", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 else if (icon.Visible)
