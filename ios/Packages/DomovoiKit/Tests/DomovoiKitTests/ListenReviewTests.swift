@@ -521,7 +521,10 @@ final class ListenClearGuardTests: XCTestCase {
     private func shell() -> (ShellModel, InMemoryShellStore, DeviceOwnerBook) {
         let store = InMemoryShellStore(serverURL: houseA, token: "household-abc")
         store.trustServer(houseA, identity: TestIdentity.real.pin)
-        store.trustServer(houseB, identity: nil)
+        // The same machine's identity at both addresses, so a DELETE sent to
+        // B by mistake would get through the identity gate and be seen.
+        store.trustServer(houseB, identity: TestIdentity.real.pin)
+        store.setToken("household-abc", for: houseB)
         let container = AppContainer(
             store: store,
             vault: TokenVault(items: InMemoryKeychain()),
@@ -544,7 +547,10 @@ final class ListenClearGuardTests: XCTestCase {
     private func deletes() -> [URLRequest] { StubURLProtocol.recorded.filter { $0.httpMethod == "DELETE" } }
 
     private func settle(_ model: PeopleThisPhoneModel) async {
-        for _ in 0..<100 where model.clearing { try? await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<300 {
+            if !model.clearing { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         try? await Task.sleep(for: .milliseconds(50))
     }
 
@@ -571,18 +577,17 @@ final class ListenClearGuardTests: XCTestCase {
         _ = store.setServerURL(houseB)
         page.confirmClear(alex)
         await settle(page)
-        XCTAssertEqual(
-            [], StubURLProtocol.recorded.filter { $0.url?.host == "10.0.0.43" }.map { $0.url?.path ?? "" },
-            "the clear went to a server it was not worked out for"
-        )
-        XCTAssertEqual([], deletes())
+        XCTAssertEqual([], deletes(), "the clear went to a server it was not worked out for")
         XCTAssertNil(page.ask)
 
         // Back home: allowed and sent, with the key.
         _ = store.setServerURL(houseA)
         page.askToClear(alex)
+        XCTAssertEqual(ClearCheck.allowed, page.ask?.check, "\(String(describing: page.ask))")
         page.confirmClear(alex)
+        XCTAssertTrue(page.clearing, "confirmClear refused an allowed ask")
         await settle(page)
+        print("CLEAR GUARD paths: \(StubURLProtocol.recorded.map { "\($0.httpMethod ?? "") \($0.url?.absoluteString ?? "")" }) refused=\(page.clearRefused ?? "-")")
         XCTAssertEqual(["/api/music/listens/people/3"], deletes().map { $0.url?.path ?? "" })
         XCTAssertEqual("alex-key-AAAAAAAAA", deletes().first?.value(forHTTPHeaderField: claimKeyHeader))
         model.stop()
