@@ -163,7 +163,15 @@ struct MusicView: View {
     /// written on every tap.
     @State private var roomsOpen = MusicRoomsOpenStore().open
 
+    /// The queues unit's tools (search to add, Play next / Add to queue, a
+    /// room's queue sheet), for everything on this screen and its sheets.
+    /// Outside ``page``'s chain: one more modifier there is past what the
+    /// type checker will take in reasonable time.
     var body: some View {
+        page.environment(\.queueTools, model.queueTools())
+    }
+
+    private var page: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
@@ -479,6 +487,7 @@ struct MusicView: View {
             guard let deviceID = model.deviceID else { return }
             playlists = MusicPlaylistsModel(container: model.container, deviceID: deviceID)
         }
+        playlists?.listener = model.queueTools()?.listener ?? .unnamed
         playlists?.start()
     }
 
@@ -529,11 +538,13 @@ struct MusicView: View {
 
     private func openPlaylist(_ playlist: Playlist) {
         guard let deviceID = model.deviceID else { return }
-        sheet = .playlist(MusicPlaylistDetailModel(
+        let detail = MusicPlaylistDetailModel(
             playlist: playlist,
             container: model.container,
             deviceID: deviceID
-        ))
+        )
+        detail.listener = model.queueTools()?.listener ?? .unnamed
+        sheet = .playlist(detail)
     }
 
     /// Open the add-to-playlist sheet, **in place of** the track sheet it was

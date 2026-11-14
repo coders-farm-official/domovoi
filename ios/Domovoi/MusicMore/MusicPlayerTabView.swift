@@ -31,12 +31,8 @@ import SwiftUI
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// * **"Save queue as playlist"** (`MusicScreen.kt:515`).
-///   ``MusicLocalQueueModel/libraryIDsToSave`` names the ids it would store
-///   and nothing writes them: that is a create-then-add-per-id loop, which
-///   belongs to a model and there is none. A button with no request behind
-///   it is the control [[no-misleading-controls]] forbids, so it is absent
-///   until the engine's item brings the write.
+/// * **"Save queue as playlist"** is under the queue's search box now
+///   (``QueueAddBox``, 21b5ccfb), offered only with a library song queued.
 /// * **Songs stored on the phone** (``MusicPlayKind/device``). This app has
 ///   no list of them; it is the `phonemedia` item's.
 /// * **Speed and chapters while casting.** A room plays at its own rate and
@@ -417,6 +413,13 @@ struct MusicPlayerTabView: View {
                     HomeLink(MusicMoreStrings.clear) { player.engine?.clearQueue() }
                 }
             }
+            // The queue's search box (21b5ccfb): adds where the player plays
+            // — the room it casts to, else this phone — and "save as
+            // playlist" under it for the library songs queued here.
+            QueueAddBox(
+                target: .following(castsTo: player.castingTo),
+                saveIDs: player.maySaveAsPlaylist ? player.libraryIDsToSave : nil
+            )
             LazyVStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(player.queue.enumerated()), id: \.element.uid) { index, item in
                     MusicPlayerQueueRow(player: player, item: item, index: index)

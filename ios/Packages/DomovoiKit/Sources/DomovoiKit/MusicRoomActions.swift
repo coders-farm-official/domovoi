@@ -212,3 +212,52 @@ public struct EnrichReply: Equatable, Sendable, Decodable {
         }
     }
 }
+
+// MARK: - "play in <room>" starts the room's mix (cb780e90)
+
+public extension MusicModel {
+
+    /// Play one library row in one room, **starting the room's Up next**:
+    /// the song plays, then songs like it (or the rest of `context`) follow
+    /// it there, the mix following whoever this phone listens as
+    /// (`TrackDrawer.kt:92-117`).
+    ///
+    /// ``play(_:in:)``'s rules and words — a room the server never reported
+    /// is refused here, the toast is the same — with the body Android sends
+    /// since P4: `device_id`, the list the song was opened from, and the
+    /// listener fields (``RoomPlayBodies/playTrack(room:trackID:deviceID:context:listener:autoplay:)``).
+    /// Worked out at the tap, for the server the tap was on, and its answer
+    /// is said only while the app still talks to that server.
+    @discardableResult
+    func play(
+        _ track: LibraryTrack,
+        in room: String,
+        deviceID: String,
+        context: UpNextContext?,
+        listener: RoomListener
+    ) -> Bool {
+        guard castRooms.contains(room) else { return false }
+        let label = track.displayTitle
+        let client = container.client
+        let server = container.store.serverURL
+        let body = RoomPlayBodies.playTrack(
+            room: room,
+            trackID: track.id,
+            deviceID: deviceID,
+            context: context,
+            listener: listener
+        )
+        Task { @MainActor [weak self] in
+            do throws(DomovoiError) {
+                try await client.send(method: "POST", path: "/api/music/play-track", body: body)
+                guard let self, self.container.store.serverURL == server else { return }
+                self.setToast(MusicStrings.queuedInRoom(label, room: room))
+                self.nowPlaying.refresh()
+            } catch let trouble {
+                guard let self, self.container.store.serverURL == server else { return }
+                self.setToast(MusicStrings.playFailed(trouble.message))
+            }
+        }
+        return true
+    }
+}
