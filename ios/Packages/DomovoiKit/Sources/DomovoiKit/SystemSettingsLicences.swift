@@ -12,30 +12,29 @@ import Foundation
 /// CMUdict, three Piper voices, the Liberation fonts, ONNX Runtime 1.28.0,
 /// sherpa-onnx 1.13.8, LiteRT-LM 0.18.0, CameraX and ZXing — and then its
 /// card lists all 137 Maven libraries out of the APK's own dependency graph.
-/// **None of that is in this app.** The rows here are driven off
+/// **Most of that is not in this app.** The rows here are driven off
 /// ``Licences/rules``, the hand-kept list of every package this app *may*
-/// link, intersected with what it actually links — which today is nothing —
-/// so the batch that adds a package gets its row by adding its rule, the
-/// procedure `Licences.swift:11-13` already describes.
+/// link, intersected with what it actually links — since batch 2026-11-14,
+/// ONNX Runtime 1.24.2 (room mode) and nothing else — so the batch that adds a
+/// package gets its row by adding its rule, the procedure
+/// `Licences.swift:11-13` already describes.
 ///
 /// `SystemSettingsLicencesTests` holds the guard rather than care:
 /// no part may name a package that is not in ``Licences/rules``.
+///
+/// ### The notices
+///
+/// A linked package's notice files ship in the app (`ios/licences/notices/`,
+/// bundled as `notices/`) and the card opens each behind a "show …" toggle,
+/// in 40-line pieces as Android does (`NoticeToggle`, `NoticeText`,
+/// `LicencesCard.kt:213-280`): ONNX Runtime's third-party notice is 325 KB.
 ///
 /// ### What is not, and why there is no control for it
 ///
 ///  - **"every library in this build" and its show/hide toggle**
 ///    (`LicencesCard.kt:184-191`). There is no dependency graph to read:
-///    SwiftPM writes no licence metadata, and `Package.resolved` does not
-///    exist because the package has no dependencies at all. A toggle over an
-///    empty list is a control that reveals nothing, so the card says it in
-///    one sentence (``SystemSettingsStrings/licencesNothingLinked``).
-///  - **The licence notice texts** (`NoticeToggle`, `NoticeText`,
-///    `LicencesCard.kt:216-280`, read out of the APK's assets in 40-line
-///    chunks because LiteRT-LM's notice is 2 MB). They are the notices
-///    shipped with the *Android* APK for libraries this app does not link.
-///    With nothing linked there is no notice to show; the row that ships with
-///    the first real dependency brings its notice then, which is step three
-///    of `ios/licences/README.md`'s procedure.
+///    SwiftPM writes no licence metadata, so the one-row-per-package list
+///    above IS the build's list.
 public struct SystemSettingsLicencePart: Equatable, Sendable {
     /// What the card calls it.
     public let title: String
@@ -45,24 +44,26 @@ public struct SystemSettingsLicencePart: Equatable, Sendable {
     /// send anyone, and a row with an empty source line reads as a mistake.
     public let source: String?
     public let note: String?
+    /// Its notice files, as paths under the app's bundled `notices/`.
+    public let notices: [String]
 
-    public init(title: String, licence: String, source: String?, note: String? = nil) {
+    public init(title: String, licence: String, source: String?, note: String? = nil, notices: [String] = []) {
         self.title = title
         self.licence = licence
         self.source = source
         self.note = note
+        self.notices = notices
     }
 }
 
 /// The identities of the packages this build actually links, lowercased as
 /// `Package.resolved` writes them.
 ///
-/// **Empty, and that is the fact rather than a placeholder**: this app has no
-/// dependencies — `Package.swift` declares no `dependencies:` — which is also
-/// why there is no `Package.resolved` to read it out of. The day one is added
-/// its identity comes here and its ``LicenceRule`` comes to
-/// ``Licences/rules``, and `LicencesTests` already fails until both are done.
-public let systemSettingsLinkedIdentities: [String] = []
+/// ONNX Runtime, since batch 2026-11-14 (DomovoiKit's `Package.swift`, its
+/// one dependency). The day another is added its identity comes here and its
+/// ``LicenceRule`` comes to ``Licences/rules``; `LicencesTests` fails until
+/// both are done, and checks this list against `Package.resolved`.
+public let systemSettingsLinkedIdentities: [String] = ["onnxruntime-swift-package-manager"]
 
 /// Apple's frameworks: part of the OS, like Android's own APIs, and not a
 /// dependency we ship (`ios/licences/README.md`'s first table row).
@@ -95,11 +96,33 @@ public func systemSettingsLicenceParts(
                 title: rule.title,
                 licence: rule.licence,
                 source: rule.source,
-                note: rule.note
+                note: rule.note,
+                notices: rule.notices
             )
         )
     }
     return parts
+}
+
+/// A notice's name on its toggle: the path under `notices/`
+/// ("onnxruntime/LICENSE"), as Android's `noticeLabel` keeps the path after
+/// its folder (`LicencesCard.kt:262-271`).
+public func systemSettingsNoticeLabel(_ path: String) -> String {
+    path.hasPrefix("notices/") ? String(path.dropFirst("notices/".count)) : path
+}
+
+/// A notice's text cut into pieces of `lines` lines each (`noticeChunks`,
+/// `LicencesCard.kt:274-275`), so a 325 KB notice is drawn lazily.
+public func systemSettingsNoticeChunks(_ text: String, lines: Int = 40) -> [String] {
+    let all = text.split(separator: "\n", omittingEmptySubsequences: false)
+    var out: [String] = []
+    var at = 0
+    while at < all.count {
+        let end = min(all.count, at + max(1, lines))
+        out.append(all[at..<end].joined(separator: "\n"))
+        at = end
+    }
+    return out.isEmpty ? [""] : out
 }
 
 /// Whether the card draws ``SystemSettingsStrings/licencesNothingLinked``:

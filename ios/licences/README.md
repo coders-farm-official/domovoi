@@ -17,22 +17,26 @@ metadata at all, so nothing in the build can work it out for us.
 - **Prefer Apple's own frameworks.** They are part of the OS, like Android's
   own APIs, and are not dependencies we ship.
 
-**Adding a package means three things, in this order:** read its licence at
+**Adding a package means four things, in this order:** read its licence at
 its own source (not at a package index), add a `LicenceRule` in
-`ios/Packages/DomovoiKit/Sources/DomovoiKit/Licences.swift`, and add its row
-below. `LicencesTests` fails until all three are done.
+`ios/Packages/DomovoiKit/Sources/DomovoiKit/Licences.swift` (with the notice
+files it ships), put those notices under `notices/<package>/` here (the app
+bundles that folder as `notices/` and the licences card opens each one), and
+add its row below and its identity to `systemSettingsLinkedIdentities`.
+`LicencesTests` fails until all of them are done.
 
 ## The parts
 
 Each licence below was read from the project's own licence file on 2026-10-21
-(plan section 3). **Nothing is linked yet:** this batch has no dependencies at
-all. Each row arrives for real in the batch that adds the package.
+(plan section 3). **Linked today: ONNX Runtime 1.24.2 only** (batch
+2026-11-14, room mode; DomovoiKit's `Package.swift`). Each other row arrives
+for real in the batch that adds the package.
 
 | Part | Licence | Shipped? | Where it was read |
 |---|---|---|---|
 | Apple's frameworks (SwiftUI, AVFoundation, MediaPlayer, CryptoKit, Network, Security, PDFKit, PhotosUI, AlarmKit, ActivityKit, WidgetKit, App Intents, CarPlay, MetricKit) | Part of the OS | No | — |
 | LiteRT-LM (`litert-lm`), the phone assistant's model runtime | Apache-2.0 | Yes | github.com/google-ai-edge/LiteRT-LM |
-| ONNX Runtime (`onnxruntime-swift-package-manager`) | MIT | Yes | github.com/microsoft/onnxruntime-swift-package-manager |
+| ONNX Runtime 1.24.2 (`onnxruntime-swift-package-manager`, exact pin) | MIT | **Yes, linked** (about 20.5 MB of the app binary uncompressed, 7.2 MB compressed; measured 2026-11-14) | github.com/microsoft/onnxruntime-swift-package-manager at tag 1.24.2 (`b7fb7f7d`); its binary target `pod-archive-onnxruntime-c-1.24.2.zip`, SHA-256 `f7100a99…600b54`, with ios-arm64, ios-arm64_x86_64-simulator and macos-arm64_x86_64 slices. Notices shipped: `notices/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`, from microsoft/onnxruntime at v1.24.2; they list what is compiled in, Eigen (MPL-2.0, unmodified) among them |
 | ZIPFoundation (`zipfoundation`), for .docx and .xlsx | MIT | Yes, if chosen (owner answer Q7) | github.com/weichsel/ZIPFoundation |
 | sherpa-onnx (`sherpa-onnx`) | Apache-2.0 | Only if the speech fallback is needed | github.com/k2-fsa/sherpa-onnx |
 | XcodeGen | MIT | No — a build tool on the Mac | github.com/yonaskolb/XcodeGen |

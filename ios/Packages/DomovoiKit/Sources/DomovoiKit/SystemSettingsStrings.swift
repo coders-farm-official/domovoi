@@ -185,9 +185,9 @@ public enum SystemSettingsStrings {
     /// **iOS-only.** Android's card ends in `SectionLabel("every library in
     /// this build")` and a summary of its dependency graph
     /// (`LicencesCard.kt:184-187`). There is no graph to read here — SwiftPM
-    /// writes no licence metadata and the package has no dependencies at all,
-    /// so `Package.resolved` does not exist — and this app links nothing. One
-    /// sentence is the honest answer; an empty expandable list is not.
+    /// writes no licence metadata. Drawn only by a build that links nothing
+    /// (``systemSettingsLinksNothing(linked:)``); since batch 2026-11-14 this
+    /// app links ONNX Runtime, so today's card draws its row instead.
     public static let licencesNothingLinked =
         "This build links no third-party package: everything above is Apple's own."
 }
