@@ -570,7 +570,7 @@ across the room, its Settings tab has **Wake sensitivity** (0.7 by
 default; higher wakes less) and **Wake confirmation** (2 by default; 3
 ignores more blips, 1 wakes on the first strong moment).
 
-**Train a custom wake word.** The default is the built-in `hey_jarvis`.
+**Train a custom wake word.** A new install's rooms wake on "Domovoi" (Coders Farm's published model, which the server downloads; under internet access "never" they wake on `hey_jarvis` and Settings → Voice → Wake words says why).
 Record clips through a room's own mic (or use synthetic voices only),
 train on the server, and push to the room — all from Settings → Voice →
 Wake words, no cloud, no third-party service. Covered in

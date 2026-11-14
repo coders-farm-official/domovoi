@@ -266,10 +266,17 @@ server builds from the Dockerfile in `scripts/wake_word/docker`; Domovoi
 doesn't distribute the image. The NVIDIA Container Toolkit is an
 Apache-2.0 operating-system package installed from NVIDIA's repository.
 
-A model trained here can't become one of Domovoi's shipped defaults: that
-would need training data with permissive licences throughout. Coders Farm publishes
-its own trained models, under the same CC BY-NC-SA 4.0, in a separate
-repository: [domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models).
+Nothing trained here goes into Domovoi itself, which stays MIT. Coders
+Farm publishes its own trained models, under the same CC BY-NC-SA 4.0, in
+a separate repository:
+[domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models).
+One of them, **Domovoi** (`domovoi_v1`, trained with this trainer on
+synthetic voices only), is the wake word a new install's rooms are given:
+each server downloads it from that repository's `domovoi-v1` release, held
+to a pinned SHA-256, the way it fetches openWakeWord's `hey_jarvis`
+(`domovoi/wake_default.py`). Its model card there lists every input and its
+licence. A default that could ship anywhere, commercially included, would
+need training data with permissive licences throughout.
 
 **Your household's voices.** A model trained on recordings of your
 household is yours to share or not. The `.onnx` file holds learned

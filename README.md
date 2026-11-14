@@ -271,8 +271,8 @@ We build Domovoi in public. Here's where it stands.
   the system's `ffmpeg`, run as a program. Every model, voice and dataset
   a server, the app or the wake-word trainer downloads is listed with its
   licence in [docs/LICENSES.md](docs/LICENSES.md); two defaults aren't
-  permissive, the `hey_jarvis` wake word (non-commercial) and the answer
-  model `llama3.2:3b` (the Llama 3.2 Community License). Settings → System →
+  permissive, the wake words (Domovoi and `hey_jarvis`, non-commercial) and
+  the answer model `llama3.2:3b` (the Llama 3.2 Community License). Settings → System →
   About & updates links to it, on the dashboard and in the app.
 - **The web dashboard** manages all of it, from plugins to training your own
   wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
@@ -424,9 +424,10 @@ up to date.
 - **An iPhone app.** Its own track, apart from 1.0.0.
 - **The Windows installer out of preview,** so one download turns the household
   gaming PC into a Domovoi server.
-- **"Hey Domovoi" as a default wake word.** A model trained at home can't be
-  shipped to everyone: its training data isn't licensed for that. A shipped
-  default needs training data with permissive licences throughout.
+- **A permissive default wake word.** The "Domovoi" word a new install
+  wakes on is CC BY-NC-SA 4.0 because of its training data, so it stays out
+  of this repository and can't ride in anything sold. One trained on
+  permissively licensed data throughout could ship anywhere.
 - **Signed releases.** Release commits and tags signed, and servers on
   `stable` checking the signature before they update; the update verifier
   already does the checking wherever an `allowed_signers` file is in place
@@ -467,10 +468,15 @@ Wi-Fi:
   list: [Satellite hardware guide](docs/SATELLITE_HARDWARE.md). A spare
   laptop, PC or old phone can be a room instead
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
-- **The wake word** defaults to openWakeWord's built-in `hey_jarvis` model,
-  and the documented path is to train your own **"Hey Domovoi"** from the
-  dashboard: record at least 15 clips through the room's own mic (or train
-  on synthetic voices alone), train on the server, push to the room. If a
+- **The wake word** is **"Domovoi"** on a new install: a model Coders Farm
+  trains on synthetic voices and publishes separately, which your server
+  downloads once and gives to each new room. An install from before keeps
+  what its rooms wake on (openWakeWord's `hey_jarvis`), and every room wakes
+  on "Hey Jarvis" until its server gives it its word, or while the
+  server can't download it (internet access "never"); Settings → Voice →
+  Wake words says which. You can also train your own from the dashboard:
+  record at least 15 clips through the room's own mic (or train on
+  synthetic voices alone), train on the server, push to the room. If a
   room wakes on the TV or misses you, its Settings tab has **Wake
   sensitivity** (0.7 by default) and **Wake confirmation** (2). Training runs on your server, not in a
   cloud; it needs a server with 24 GB of memory and a one-time download of
@@ -955,15 +961,18 @@ Mellon Pronouncing Dictionary (BSD-2-Clause style; its licence ships in
 `domovoi/phonemizer/data/cmudict/LICENSE`); no espeak-ng code or data is
 used.
 
-The default wake word, `hey_jarvis`, is one of openWakeWord's pre-trained
-models, which are licensed CC BY-NC-SA 4.0 (non-commercial). A wake word
+A new install's wake word, **Domovoi** (`domovoi_v1`), is Coders Farm's own
+model, published in
+[domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models)
+with a model card naming every dataset it was trained on. Like
+`hey_jarvis`, one of openWakeWord's pre-trained models (an older install's
+default), it is licensed CC BY-NC-SA 4.0 (non-commercial), and each server
+downloads it itself: neither is in this repository or the app. A wake word
 you train on your own server can be shared under the same CC BY-NC-SA 4.0:
 Settings → Voice → Wake words → **Download** gives a zip with the model,
 `SHA256SUMS`, `MODEL_CARD.md` and the `LICENSE-NOTICE.md` to pass on with
 it. A model trained on your household's voices is your call to share
 ([details](scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)).
-Coders Farm's own trained models are in
-[domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models).
 Domovoi itself stays MIT.
 
 The Android app's own chat runs Gemma 4 E2B (Apache-2.0) on

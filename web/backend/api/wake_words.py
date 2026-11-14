@@ -58,6 +58,7 @@ from domovoi.admin_auth import (
     require_device_read,
 )
 from domovoi import wake_clip_quality as wq
+from domovoi import wake_default
 from domovoi.canned_sounds import wake_slug
 from domovoi.config import settings
 from domovoi.db.repositories import WakeWordsRepository
@@ -70,6 +71,7 @@ from web.backend.domovoi_client import (
     get_admin,
     get_admin_bytes,
     post_admin,
+    put_admin,
 )
 
 log = logging.getLogger(__name__)
@@ -360,6 +362,13 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
     name = payload.name.strip()
     phrase = payload.phrase.strip()
     slug = wake_slug(name)
+    if wake_default.is_reserved_slug(slug):
+        # A room would load the stock or published model for this slug,
+        # never the word trained under it.
+        raise HTTPException(
+            status_code=409,
+            detail=f"“{name}” is the name of a wake word rooms already have; pick another name",
+        )
     threshold = payload.threshold if payload.threshold is not None else 0.7
     try:
         async with session_scope() as s:
@@ -851,6 +860,11 @@ async def patch_wake_word(wake_word_id: int, payload: WakeWordPatch) -> WakeWord
                         status_code=404, detail=f"wake word {wake_word_id} not found"
                     )
             if payload.set_default:
+                if (await repo.get(wake_word_id) or {}).get("status") == "ready":
+                    # The word NEW rooms are given (domovoi/wake_default.py);
+                    # rooms that have a word keep it.
+                    await wake_default.set_household_default(
+                        s, (await repo.get(wake_word_id))["slug"])
                 if not await repo.set_default(wake_word_id):
                     # The repo refuses a missing row OR a row that isn't
                     # 'ready' (you can't default an untrained wake word).
@@ -914,6 +928,57 @@ async def export_wake_word(wake_word_id: int, request: Request) -> Response:
                  or f'attachment; filename="wake-word-{wake_word_id}.zip"',
                  "Cache-Control": "no-store"},
     )
+
+
+# ─── The household's wake word (domovoi/wake_default.py) ──────────────────
+# The word a NEW room is given; rooms that have one keep it. The core owns
+# the download (internet gate, pin) and the rooms, so these proxy it.
+
+class WakeDefaultBody(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=80)
+
+
+class WakeUseBody(BaseModel):
+    room_id: str = Field(..., min_length=1, max_length=120)
+    slug: str = Field(..., min_length=1, max_length=80)
+
+
+@router.get("/default", dependencies=[Depends(require_admin_read)])
+async def wake_default_status(request: Request):
+    """The household word, the words it can be, rooms waiting for it, and
+    a sentence when rooms can't be given it (or can't wake at all)."""
+    status, payload = await get_admin(
+        "/v1/admin/wake/default", timeout=15.0, headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
+@router.put("/default", dependencies=[Depends(require_admin_mutation)])
+async def wake_default_set(body: WakeDefaultBody, request: Request):
+    """Set the word new rooms are given (409 with the reason when it can't be)."""
+    status, payload = await put_admin(
+        "/v1/admin/wake/default", {"slug": body.slug}, timeout=120.0,
+        headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
+@router.post("/default/download", dependencies=[Depends(require_admin_mutation)])
+async def wake_default_download(request: Request):
+    """Download the household's published wake word now; the answer says
+    whether it worked and why not."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/default/download", {}, timeout=120.0,
+        headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
+
+
+@router.post("/use", dependencies=[Depends(require_admin_mutation)])
+async def wake_use(body: WakeUseBody, request: Request):
+    """Give a connected room "Hey Jarvis" or a published word (a trained
+    word goes through /{id}/push)."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/use", {"room_id": body.room_id, "slug": body.slug}, timeout=120.0,
+        headers=auth_forward_headers(request))
+    return bridge_response(status, payload)
 
 
 @router.post("/{wake_word_id}/push", dependencies=[Depends(require_admin_mutation)])

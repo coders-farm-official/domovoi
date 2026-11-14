@@ -150,12 +150,18 @@ def test_the_live_slots_are_known() -> None:
     assert slots == {"things-to-say", "rooms", "plugins", "wake-word"}
 
 
-def test_the_wake_word_is_hey_jarvis_out_of_the_box() -> None:
-    """A v1.0.0 room answers to hey_jarvis (owner, 2026-10-17): the manual
-    must name that, never a word a fresh install doesn't answer to."""
+def test_the_wake_word_is_the_new_install_word_out_of_the_box() -> None:
+    """A new install's rooms are given the published "Domovoi" word (owner,
+    2026-11-14, domovoi/wake_default.py); an upgraded house keeps "Hey
+    Jarvis", which the manual shows once its rooms report it (umWake leads
+    with the word most rooms use). Both names must be known."""
+    from domovoi import wake_default
+
     ww = DOC["wake_word"]
-    assert ww["default"] == "hey_jarvis" and ww["names"]["hey_jarvis"] == "Hey Jarvis"
-    assert "Domovoi" not in json.dumps(ww)
+    assert ww["default"] == wake_default.NEW_INSTALL_WORD
+    assert ww["names"][wake_default.NEW_INSTALL_WORD] == wake_default.PUBLISHED[
+        wake_default.NEW_INSTALL_WORD].name
+    assert ww["names"]["hey_jarvis"] == "Hey Jarvis"
     assert "{wake}" in json.dumps(DOC["start"])
 
 

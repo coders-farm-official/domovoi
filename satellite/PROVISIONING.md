@@ -360,7 +360,7 @@ domovoi_url = "ws://<server-ip-or-hostname>:6370"    # or "auto": find it (below
 
 ```toml
 [wake]
-wake_word = "hey_jarvis"                             # dev wake word for now
+wake_word = "hey_jarvis"                             # boot word; the server then gives the room the household's
 threshold = 0.7
 ```
 

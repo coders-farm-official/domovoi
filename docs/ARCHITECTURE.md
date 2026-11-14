@@ -100,10 +100,13 @@ A full sequence diagram is in [uml/voice-turn.md](uml/voice-turn.md); the wire
 protocol is in [uml/satellite-protocol.md](uml/satellite-protocol.md). In
 prose:
 
-1. **The Pi owns wake.** Wake-word detection (openWakeWord, default
-   `hey_jarvis`; custom wake words such as "Hey Domovoi" are trained
-   in-product), VAD, noise gate, and barge-in detection all run on the
-   satellite. On a wake it acknowledges first — a spoken greeting, a chime
+1. **The Pi owns wake.** Wake-word detection (openWakeWord: the
+   household's word, `hey_jarvis` or Coders Farm's published "Domovoi";
+   custom wake words are trained in-product), VAD, noise gate, and barge-in detection all run on the
+   satellite. A new room boots on `hey_jarvis` and, the first time it
+   connects, the server pushes it the household's wake word
+   (`domovoi/wake_default.py`: "Domovoi" on a new install); rooms that
+   already have a word keep it. On a wake it acknowledges first — a spoken greeting, a chime
    or the LED alone (`[wake] ack_mode`, per satellite) — plays that to the
    end, drops what its mic heard meanwhile, and only then listens.
    Captured audio streams to the core as 16 kHz mono int16 PCM between

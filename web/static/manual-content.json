@@ -54,8 +54,9 @@
   "plugins_none": "no plugins installed"
  },
  "wake_word": {
-  "default": "hey_jarvis",
+  "default": "domovoi_v1",
   "names": {
+   "domovoi_v1": "Domovoi",
    "hey_jarvis": "Hey Jarvis",
    "alexa": "Alexa",
    "hey_mycroft": "Hey Mycroft",

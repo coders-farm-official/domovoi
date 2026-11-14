@@ -447,7 +447,9 @@ Household → Phones & browsers → get the Domovoi app** shows a QR code and a 
 page without a room code; open it on the phone, install, then open
 Domovoi, which finds your server on the Wi-Fi.
 
-The wake word is the server's default, `hey_jarvis`; a wake word you train
+The phone starts on `hey_jarvis` and the server then gives it the
+household's wake word ("Domovoi" on a new install), as it does every new
+room; a wake word you train
 and push from the dashboard (Settings → Voice → Wake words) reaches the phone the
 same way it reaches a Pi. Phone and PC rooms start at the same wake defaults
 as a Pi: **Wake sensitivity** 0.7 and **Wake confirmation** 2, both in the

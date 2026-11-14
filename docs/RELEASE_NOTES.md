@@ -4,6 +4,39 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
+
+A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm
+trained on synthetic voices only and publishes in its own repository,
+[domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models),
+under CC BY-NC-SA 4.0 (non-commercial, because of its training data; it is
+not part of Domovoi, which stays MIT). The server downloads it once from
+the `domovoi-v1` release (a tag that never moves), checks it against the
+SHA-256 this version expects, and gives it to each new room the first
+time the room connects, the way a dashboard push gives a trained word (a
+Pi or PC room restarts once to load it). A phone in room mode takes it
+the same way; the app doesn't change.
+
+**What an update changes: nothing a room wakes on.** The update records
+every room the server has ever had, and those rooms keep their word.
+The household's wake word (Settings → Voice → Wake words, the new
+**Household wake word** card) is the word NEW rooms get: after an update
+it is "Hey Jarvis", or your own default trained word if you had made
+one, so a room you add later matches the house. Pick "Domovoi" there to
+have new rooms get it, and **Use "Domovoi" here** on a room to switch that
+room. A word you push to a room is that room's choice from then on.
+
+**When the server can't download it** (internet access "never", no
+connection): new rooms wake on "Hey Jarvis" meanwhile and the card says
+why; they are given "Domovoi" as soon as it is here (**Download
+"Domovoi" now**, or by itself at the next start or connection). If the
+"Hey Jarvis" model isn't on the server either, the card says plainly that
+new rooms can't wake yet and what fixes it.
+
+A trained word can no longer be named after a word rooms already have
+("Hey Jarvis", "Alexa", "Domovoi v1"…): a room would load the stock model
+for it instead of the one you trained.
+
 ## 2026-11-14 — 1.2.1
 
 Version 1.2.1: the server and the Windows Setup (1.2.1, with the Windows

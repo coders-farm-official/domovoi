@@ -151,10 +151,17 @@ permissions = "automatic"
 # kiosk_watch_interval_sec = 30
 
 [wake]
-# openWakeWord built-ins: hey_jarvis | alexa | hey_mycroft | hey_rhasspy | timer | weather
-# Once a custom "Hey Domovoi" model is trained (see scripts/wake_word/README.md),
-# uncomment `wake_word_model_path` to use it. The `wake_word` value must match
-# the model file's stem (e.g. "hey_domovoi" for hey_domovoi.onnx).
+# The BOOT word: what this room wakes on before it has reached its server,
+# from openWakeWord's stock files (hey_jarvis | alexa | hey_mycroft |
+# hey_rhasspy | timer | weather). The first time a new room connects, the
+# server gives it the household's wake word ("Domovoi", domovoi_v1, on a new
+# install) the same way a dashboard push does (the sidecar below); a room
+# that existed before keeps its word (domovoi/wake_default.py). Settings →
+# Voice → Wake words shows each room's word and sets the household's.
+#
+# A model file of your own: uncomment `wake_word_model_path`. The
+# `wake_word` value must match the model file's stem (e.g. "hey_domovoi"
+# for hey_domovoi.onnx).
 #
 # Easier path (Feature #5): a custom wake word can be recorded + trained +
 # pushed entirely from the dashboard's Settings > Wake words tab — record the

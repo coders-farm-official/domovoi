@@ -2110,12 +2110,17 @@ async def _last_heard_or_empty(room_id: str | None = None) -> dict[str, Any]:
 
 async def _wake_phrases_or_empty() -> dict[str, str]:
     """slug → phrase of the trained wake words (the ``wake_words``
-    registry), for each room's ``wake_phrase``. {} on any failure: the
+    registry) and Domovoi's published ones, for each room's ``wake_phrase``. {} on any failure: the
     roster must not fail over a phrase."""
     try:
         async with session_scope() as s:
             rows = await s.execute(text("SELECT slug, phrase FROM wake_words"))
-            return {r[0]: r[1] for r in rows.all() if r[0] and r[1]}
+            # Domovoi's published words aren't rows; their phrase is known.
+            from domovoi.wake_default import PUBLISHED
+
+            out = {w.slug: w.phrase for w in PUBLISHED.values()}
+            out.update({r[0]: r[1] for r in rows.all() if r[0] and r[1]})
+            return out
     except Exception as e:  # noqa: BLE001
         log.debug("wake word phrases unavailable: %s", e)
         return {}

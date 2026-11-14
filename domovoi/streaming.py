@@ -3212,6 +3212,12 @@ class StreamSession:
                 if words is None:
                     words = self.ws.app.state.satellite_wake_word = {}
                 words[self.room_id] = wake
+            # The household's default wake word, for a room seen for the
+            # first time (or one still waiting for it): pushed like a
+            # trained word. Rooms that already existed are never touched
+            # (domovoi/wake_default.py). In its own task: a download never
+            # holds up the hello.
+            self._apply_wake_default(wake)
             # An upgrade the core asked this room for is over: the code
             # version it came back on says how it went
             # (domovoi/satellite_upgrades.py).
@@ -4309,6 +4315,21 @@ class StreamSession:
                 )
         except RuntimeError:
             pass
+
+    def _apply_wake_default(self, reported: str | None) -> None:
+        """Hand this hello to :func:`domovoi.wake_default.on_hello` in a
+        task of its own, held until done."""
+        from domovoi import wake_default
+
+        async def push(slug: str, threshold: float | None) -> None:
+            await self.request_set_wake_word(slug=slug, threshold=threshold)
+
+        task = asyncio.create_task(
+            wake_default.on_hello(self.room_id, reported,
+                                  self.abilities.allows("wake_models"), push),
+            name=f"wake-default:{self.room_id}")
+        _TIMING_WRITES.add(task)
+        task.add_done_callback(_TIMING_WRITES.discard)
 
     def _track_history_write(self, coro: Any) -> None:
         """Run a history write in a task of its own (a barge-in cancelling

@@ -318,11 +318,16 @@ PHRASES: dict[str, tuple] = {
 # answers to hey_jarvis (owner, 2026-10-17); the live slot shows what the
 # household's rooms really answer to.
 WAKE_WORD = {
-    "default": "hey_jarvis",
-    # openWakeWord's own words; a trained word's phrase comes from the
-    # server (the satellite row's wake_phrase), else its slug in words.
-    "names": {"hey_jarvis": "Hey Jarvis", "alexa": "Alexa", "hey_mycroft": "Hey Mycroft",
-              "hey_rhasspy": "Hey Rhasspy"},
+    # A new install's household word (domovoi/wake_default.py NEW_INSTALL_WORD),
+    # shown while no room has said which word it answers to; once rooms
+    # have, the word most of them use leads (an upgraded house keeps
+    # "Hey Jarvis").
+    "default": "domovoi_v1",
+    # openWakeWord's own words and Domovoi's published one; a trained word's
+    # phrase comes from the server (the satellite row's wake_phrase), else
+    # its slug in words.
+    "names": {"domovoi_v1": "Domovoi", "hey_jarvis": "Hey Jarvis", "alexa": "Alexa",
+              "hey_mycroft": "Hey Mycroft", "hey_rhasspy": "Hey Rhasspy"},
     # {wake}: the word most rooms answer to (the default while any room
     # does, or nothing is known), in quotes.
     "quoted": "“{phrase}”",

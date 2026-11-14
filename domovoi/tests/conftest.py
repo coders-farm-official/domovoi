@@ -226,6 +226,8 @@ TABLES_TO_TRUNCATE = [
     # Satellite inventory rows (V003) — adoption/type metadata written by
     # tests, never reference data.
     "satellites",
+    # Which rooms the household's default wake word still applies to (V054).
+    "room_wake_words",
     # Printers and scanners (V033) and their job log. print_limits is a
     # seeded single row; the printing tests reset it themselves.
     "print_jobs",
