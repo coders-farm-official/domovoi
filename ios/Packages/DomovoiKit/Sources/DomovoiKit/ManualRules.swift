@@ -132,7 +132,11 @@ public struct ManualRoom: Equatable, Sendable, Decodable {
 
 /// `titleWords` (`ManualContent.kt:241`): `living_room` → `Living Room`.
 public func manualTitleWords(_ text: String?) -> String {
-    let spaced = (text ?? "").map { $0 == "_" || $0 == "-" ? " " : $0 }
+    // Types spelled out: Swift 6.2 (Xcode 26.3, the CI runner's) resolves
+    // `(text ?? "").map { … }` to Optional.map and makes this a `String?`;
+    // Swift 6.3 picks the String one. Both agree on these.
+    let base: String = text ?? ""
+    let spaced: [Character] = base.map { $0 == "_" || $0 == "-" ? Character(" ") : $0 }
     // Kotlin replaces the `[_-]+` run with one space, trims and splits on
     // `\s+`; splitting on each space and dropping the empties is the same
     // thing without a regex engine.
