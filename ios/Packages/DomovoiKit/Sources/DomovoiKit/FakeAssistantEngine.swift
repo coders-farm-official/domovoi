@@ -29,6 +29,38 @@ public enum AssistantEngineChoice: String, Equatable, Sendable {
     public static func fromProcess() -> AssistantEngineChoice {
         of(ProcessInfo.processInfo.arguments)
     }
+
+    // MARK: - what the real choice may run (owner answer Q11)
+
+    /// Whether a build may offer Apple's on-device model at all. **Off.**
+    ///
+    /// The owner decided on 2026-11-14 ("Hide it for 1.0"): Apple's model is
+    /// not offered, and the phone's own chat comes later with our own pinned
+    /// model (Gemma, as on Android). ``AppleAssistantEngine`` stays compiled
+    /// so a later version can revisit it, but with this false nothing reaches
+    /// it, and with no engine the phone place is hidden everywhere — the
+    /// place switch draws the house alone and the no-server shell has no Chat
+    /// tab, as Android does on a phone without its engine
+    /// (`AssistantSupport.kt`). Turning this on is an owner decision, not a
+    /// code change to make in passing; `AssistantEngineTests` fails if it is.
+    public static let offersAppleModel = false
+
+    /// The engine the real path builds, given whether this OS has Apple's
+    /// framework. Pure, so a package test can pin it; the app target only
+    /// turns the answer into an engine (`AssistantEngineHost.swift`).
+    public static func production(osHasAppleModel: Bool) -> AssistantProductionEngine {
+        guard offersAppleModel else { return .none(osHasAppleModel ? .deviceNotEligible : .osTooOld) }
+        return osHasAppleModel ? .apple : .none(.osTooOld)
+    }
+}
+
+/// What ``AssistantEngineChoice/production(osHasAppleModel:)`` answers.
+public enum AssistantProductionEngine: Equatable, Sendable {
+    /// ``AppleAssistantEngine``. Unreachable while
+    /// ``AssistantEngineChoice/offersAppleModel`` is false.
+    case apple
+    /// ``AssistantNoEngine`` with this reason: the phone place is hidden.
+    case none(AssistantUnavailableReason)
 }
 
 /// The engine the UI cases and the package tests drive.

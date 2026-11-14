@@ -326,7 +326,8 @@ struct HomeView: View {
             onStopAll: { stopAll(in: home) },
             onTransport: { transport($0, verb: $1, in: home) },
             busy: busyRooms.contains,
-            onOpenRooms: { model.navigate(.satellites) }
+            onOpenRooms: { model.navigate(.satellites) },
+            tools: model.queueTools()
         )
 
         HomeAnnounceView(

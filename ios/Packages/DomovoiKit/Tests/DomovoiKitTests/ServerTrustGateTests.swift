@@ -202,6 +202,9 @@ final class RefusingShellStore: ShellStore {
     func replacePin(url: String, pin: ServerIdentity.Pin) { inner.replacePin(url: url, pin: pin) }
     func removeKnownServer(_ url: String) -> TrustBook.ForgetReach { inner.removeKnownServer(url) }
     func forgetActiveServer() -> String? { inner.forgetActiveServer() }
+    func notifyServerForgotten(to sink: @escaping @Sendable (String) -> Void) {
+        inner.notifyServerForgotten(to: sink)
+    }
 
     func pinFor(_ key: String) -> ServerIdentity.Pin? { inner.pinFor(key) }
     func pin(_ key: String, _ pin: ServerIdentity.Pin) { inner.pin(key, pin) }

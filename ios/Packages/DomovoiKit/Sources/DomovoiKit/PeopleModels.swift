@@ -41,6 +41,11 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
     /// counted in SQL (`people.py:101-103`), not here.
     public let namesakes: Int
 
+    /// How many phones and browsers are claimed as this person ("this is
+    /// me", `PUT /api/devices/{id}/person`; `device_count`, `people.py`).
+    /// Zero from a server older than claims.
+    public let deviceCount: Int
+
     public init(
         id: Int = 0,
         name: String = "",
@@ -49,7 +54,8 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         notes: String? = nil,
         voiceProfileCount: Int = 0,
         presenceTier: String? = nil,
-        namesakes: Int = 0
+        namesakes: Int = 0,
+        deviceCount: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -59,6 +65,7 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         self.voiceProfileCount = voiceProfileCount
         self.presenceTier = presenceTier
         self.namesakes = namesakes
+        self.deviceCount = deviceCount
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -67,6 +74,7 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         case lastSeenAt = "last_seen_at"
         case voiceProfileCount = "voice_profile_count"
         case presenceTier = "presence_tier"
+        case deviceCount = "device_count"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -79,6 +87,7 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         voiceProfileCount = try values.decodeIfPresent(Int.self, forKey: .voiceProfileCount) ?? 0
         presenceTier = try values.decodeIfPresent(String.self, forKey: .presenceTier)
         namesakes = try values.decodeIfPresent(Int.self, forKey: .namesakes) ?? 0
+        deviceCount = (try? values.decodeIfPresent(Int.self, forKey: .deviceCount)) ?? 0
     }
 }
 

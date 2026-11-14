@@ -31,6 +31,12 @@ struct MusicNowPlayingStrip: View {
     /// synced yet, and for a house with no lyrics store.
     let lyrics: (NowPlayingRoom) -> MusicRoomLyricsModel?
 
+    /// The room's queue, one tap from its card (21b5ccfb): the queue tools
+    /// the screen set, and which room's sheet is up. The sheet hangs off the
+    /// strip, not a card, so a card redrawn under it cannot take it down.
+    @Environment(\.queueTools) private var tools
+    @State private var queueRoom: RoomQueueSheetItem?
+
     var body: some View {
         // Nothing at all while no room has answered: a card saying "nothing
         // playing" over a house whose satellites simply have not been read
@@ -44,8 +50,15 @@ struct MusicNowPlayingStrip: View {
                         music: music,
                         room: room,
                         covers: covers,
-                        lyrics: lyrics(room)
+                        lyrics: lyrics(room),
+                        tools: tools,
+                        onOpenQueue: { queueRoom = RoomQueueSheetItem(room: $0) }
                     )
+                }
+            }
+            .sheet(item: $queueRoom) { item in
+                if let tools {
+                    RoomQueueSheet(room: item.room, tools: tools)
                 }
             }
         }
@@ -111,6 +124,10 @@ struct MusicRoomCard: View {
 
     /// This room's lyrics, or nil.
     let lyrics: MusicRoomLyricsModel?
+
+    /// The queue button's tools (nil: no button), and what it opens.
+    var tools: QueueTools?
+    var onOpenQueue: (String) -> Void = { _ in }
 
     private var isLive: Bool { room.isPlaying }
     private var hasSong: Bool { room.song != nil && (room.isPlaying || room.isPaused) }
@@ -219,7 +236,10 @@ struct MusicRoomCard: View {
             // for five buttons.
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) { transportButtons }
-                favouriteButton
+                HStack(spacing: 4) {
+                    queueButton
+                    favouriteButton
+                }
             }
         }
     }
@@ -228,7 +248,13 @@ struct MusicRoomCard: View {
     private var buttons: some View {
         transportButtons
         Spacer(minLength: 0)
+        queueButton
         favouriteButton
+    }
+
+    /// The room's queue, one tap from its card (`NowPlayingCards.kt:146`).
+    private var queueButton: some View {
+        RoomQueueButton(room: room.roomID, tools: tools) { onOpenQueue(room.roomID) }
     }
 
     @ViewBuilder
@@ -292,8 +318,12 @@ struct MusicRoomCard: View {
                 .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            HomeLink(MusicStrings.playSomething) {
-                music.playSomething(in: room.roomID)
+            HStack(spacing: 8) {
+                HomeLink(MusicStrings.playSomething) {
+                    music.playSomething(in: room.roomID)
+                }
+                Spacer(minLength: 0)
+                queueButton
             }
         }
     }

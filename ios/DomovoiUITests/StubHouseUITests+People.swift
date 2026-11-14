@@ -285,12 +285,21 @@ extension StubHouseUITests {
     ///
     /// `dy` is how far the **content** should move: positive brings something
     /// above the viewport down into it.
+    ///
+    /// **The drag is longer than `dy` by ``peopleDragSlop``.** A scroll view
+    /// starts following a finger only once it has travelled the pan's
+    /// hysteresis, so the content moves by the drag less about ten points.
+    /// Train I037 measured it: a 192.3-point drag moved Chevy's page 182.3,
+    /// leaving `this is me` 2 points over the foot, and the ten 10-point
+    /// drags that followed moved it **nothing** — both ThisIsMe cases ran out
+    /// of tries with the button built, two points from the viewport.
     @MainActor
     func peopleNudge(_ app: XCUIApplication, _ dy: CGFloat) {
         let viewport = peopleViewport(app)
         guard viewport.height > 32 else { return }
         let room = viewport.height - 16
-        let step = max(-room, min(room, dy))
+        let wanted = dy + (dy < 0 ? -Self.peopleDragSlop : Self.peopleDragSlop)
+        let step = max(-room, min(room, wanted))
         // x = 8 is inside the scroll view and left of every field, button and
         // row on this screen, so the drag is never taken for a control's own
         // gesture.
@@ -303,6 +312,12 @@ extension StubHouseUITests {
                 thenDragTo: origin.withOffset(CGVector(dx: x, dy: from + step))
             )
     }
+
+    /// What a drag loses to the pan's hysteresis before the content follows
+    /// (I037: 192.3 dragged, 182.3 moved). Added to every
+    /// ``peopleNudge(_:_:)``; an overshoot of a point or two is inside the
+    /// eight-point clearance ``peopleReveal(_:_:flicks:)`` asks for.
+    static let peopleDragSlop: CGFloat = 10
 
     /// Scroll until `element` is built **and inside the viewport**.
     ///

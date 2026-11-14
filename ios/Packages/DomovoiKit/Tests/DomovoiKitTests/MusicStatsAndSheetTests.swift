@@ -259,9 +259,10 @@ final class MusicStatsAndSheetTests: XCTestCase {
     /// launch). Both arms are asserted below, which is why the case reads the
     /// same either way.
     func testTheTabsAreTheOnesThatHaveSomethingBehindThem() {
-        XCTAssertEqual([.library, .queue, .playlists, .stats], MusicTab.shown(hasPlayer: false))
+        // `genres` second since Android 3cdd261b (`MusicScreen.kt:353`).
+        XCTAssertEqual([.library, .genres, .queue, .playlists, .stats], MusicTab.shown(hasPlayer: false))
         XCTAssertEqual(
-            [.library, .player, .queue, .playlists, .stats],
+            [.library, .genres, .player, .queue, .playlists, .stats],
             MusicTab.shown(hasPlayer: true)
         )
         // `allCases` holds the player; a bar built from it would offer a tab

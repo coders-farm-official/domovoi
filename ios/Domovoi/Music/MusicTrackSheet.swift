@@ -16,13 +16,20 @@ import SwiftUI
 /// because there is exactly one of it and whether a song has art is worth
 /// being told.
 ///
+/// ### Where to play it (21b5ccfb, cb780e90)
+///
+/// A room, picked from the rooms the server reported, and three things to do
+/// in it: `play in <room>` — which starts the room's Up next, the mix
+/// following whoever this phone listens as — `play next in <room>` and `add
+/// to <room>'s queue`. Then `this device`: `play next` and `add to queue` on
+/// this phone's own queue, drawn only where this build has a player. What
+/// those say is said on a line in the sheet, which covers the shell's toast.
+///
 /// ### What is not here
 ///
-/// `play here` and `queue` (this phone's own player) and `save` (a download
-/// to the device) are other batches'. The buttons for them are **absent, not
-/// disabled**: the owner's standing rule is that a control which cannot do
-/// what it says is not drawn, and a greyed-out `play here` would be a
-/// promise with a date on it.
+/// `play here` and `save` (a download to the device) are other batches'.
+/// The buttons for them are **absent, not disabled**: the owner's standing
+/// rule is that a control which cannot do what it says is not drawn.
 struct MusicTrackSheet: View {
 
     let music: MusicModel
@@ -38,6 +45,18 @@ struct MusicTrackSheet: View {
     /// Open the add-to-playlist sheet. A closure, because a sheet over a
     /// sheet is the screen's business and not this view's.
     let onAddToPlaylist: () -> Void
+
+    /// The list the track was opened from, when there is one (a genre's
+    /// songs): `play in <room>` then plays on through that list.
+    var listContext: UpNextContext?
+
+    @Environment(\.queueTools) private var tools
+
+    /// The picked room; nil means the first the server reported.
+    @State private var picked: String?
+
+    /// What the last queue button said, inside the sheet.
+    @State private var said: String?
 
     /// Dismisses the sheet. Held rather than passed so that the two places
     /// that close it — the `close` button and a confirmed delete — close it
@@ -175,32 +194,75 @@ struct MusicTrackSheet: View {
 
     /// Play in a room — the rooms the **server reported**, and nothing at all
     /// when it has reported none.
+    ///
+    /// A picker and the room's three buttons, Android's shape
+    /// (`TrackDrawer.kt:186-224`). The first port drew one `play in <room>`
+    /// per room, which was one tap each for one verb; three verbs a room is
+    /// nine links in a three-room house.
     @ViewBuilder
     private var play: some View {
         let rooms = music.castRooms
+        let room = picked.flatMap { rooms.contains($0) ? $0 : nil } ?? rooms.first
         VStack(alignment: .leading, spacing: 8) {
             Text(MusicStrings.playInRoom)
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            if rooms.isEmpty {
+            if let room {
+                if rooms.count > 1 {
+                    Picker(MusicStrings.roomLabel, selection: Binding(get: { room }, set: { picked = $0 })) {
+                        ForEach(rooms, id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                }
+                HomeLink(MusicStrings.playIn(room: room)) {
+                    playInRoom(room)
+                    dismiss()
+                }
+                if let tools, tools.paired {
+                    HomeLink(QueueStrings.playNextIn(room)) { queue(.room(room), next: true, tools) }
+                    HomeLink(QueueStrings.addToRoomQueue(room)) { queue(.room(room), next: false, tools) }
+                }
+            } else {
                 Text(MusicStrings.noRoomsOnline)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-            } else {
-                // One button per room rather than a picker and a button.
-                // Android pairs a chip row with a `play in <room>` button,
-                // which is two taps and a held selection for a list that is
-                // usually two rooms long; these are one tap each and say
-                // where they will play in their own label.
-                ForEach(rooms, id: \.self) { room in
-                    HomeLink(MusicStrings.playIn(room: room)) {
-                        music.play(track, in: room)
-                        dismiss()
-                    }
-                }
             }
+            if let tools, tools.mayQueueHere {
+                Text(QueueStrings.thisDevice)
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+                HomeLink(QueueStrings.playNext) { queue(.phone, next: true, tools) }
+                HomeLink(QueueStrings.addToQueue) { queue(.phone, next: false, tools) }
+            }
+            if let said {
+                Text(said)
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(Self.statusID)
+            }
+        }
+    }
+
+    static let statusID = "track-sheet-queue-status"
+
+    /// `play in <room>`: the room's mix, with this phone's listener and the
+    /// list the song was opened from (``MusicModel/play(_:in:tools:context:)``).
+    private func playInRoom(_ room: String) {
+        music.play(track, in: room, tools: tools, context: listContext)
+    }
+
+    /// Play next / add to queue, to the room or this phone, said in the
+    /// sheet. The adder's `Task`, not a row's: the sheet may close first.
+    private func queue(_ target: QueueTarget, next: Bool, _ tools: QueueTools) {
+        let adder = tools.adder()
+        let track = track
+        Task { @MainActor in
+            said = await adder.song(target, track: track, next: next)
         }
     }
 

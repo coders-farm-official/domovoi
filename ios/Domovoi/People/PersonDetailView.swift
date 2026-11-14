@@ -37,6 +37,13 @@ struct PersonDetailView: View {
     /// Inside Settings → People, which already scrolls (``PeopleView/embedded``).
     var embedded = false
 
+    /// "This phone" and "listening history" (2026-11-12), nil while the
+    /// screen has not built it.
+    var thisPhone: PeopleThisPhoneModel?
+
+    /// The roster, re-read after a claim that changed who has a phone.
+    var onPeopleChanged: @MainActor () -> Void = {}
+
     @State private var tab: PersonDetailTab = .profile
 
     var body: some View {
@@ -122,6 +129,12 @@ struct PersonDetailView: View {
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
             notes
+            // Whose this phone is, and their listening history
+            // (`PersonDetail.kt` ProfileTab, 2026-11-12).
+            if let thisPhone {
+                Divider()
+                PersonThisPhoneSection(person: person, model: thisPhone, onPeopleChanged: onPeopleChanged)
+            }
         }
     }
 

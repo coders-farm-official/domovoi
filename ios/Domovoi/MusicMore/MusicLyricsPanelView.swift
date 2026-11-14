@@ -61,6 +61,17 @@ struct MusicLyricsPanelView: View {
     /// worth a stored preference of its own.
     @State var open: Bool
 
+    /// Whether the fold-open header is drawn. False under the player tab's
+    /// `lyrics` panel tab (``MusicPlayerPanelTab``), where the tab strip is
+    /// what opens and closes it — the body is then always open.
+    var titled = true
+
+    /// Whether anything is drawn. False while another panel tab is picked:
+    /// the view **stays in the hierarchy**, so its one `.task`/`.onDisappear`
+    /// pair (below) keeps the model reading — the tab's default rule needs to
+    /// know whether this song has words before anyone looks.
+    var shown = true
+
     /// Half the container at most, and never under the floor
     /// (`LyricsPanel.kt:134`'s `capLyricsHeight`). The reason survives the
     /// port: a phone on its side with a panel filling it has no scrollable
@@ -89,10 +100,10 @@ struct MusicLyricsPanelView: View {
     /// and it is the smaller of the two prices (DECISIONS).
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if !lyrics.isHidden {
+            if !lyrics.isHidden, shown {
                 VStack(alignment: .leading, spacing: 8) {
-                    header
-                    if open {
+                    if titled { header }
+                    if open || !titled {
                         stateBody(for: lyrics.state)
                         footer
                     }

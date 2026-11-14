@@ -23,8 +23,8 @@ import SwiftUI
 ///
 /// Android draws `play` always and *disables* it (`:223`). Here it is absent:
 /// a control that cannot do what it says is not drawn, and the meta line
-/// already says `· pending` or `· failed` where the button would be, which is
-/// the answer to "why can I not play this". The save is absent for the same
+/// already says `not downloaded` or `download failed` where the button would
+/// be, which is the answer to "why can I not play this". The save is absent for the same
 /// row and the same reason — there is no file to save.
 ///
 /// ### What is not, and why there is no control for it
@@ -61,6 +61,7 @@ struct PodcastEpisodesSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     heading
+                    showDetails
                     listeningAsChip
                     saving
                     unsubscribeTrouble
@@ -197,6 +198,26 @@ struct PodcastEpisodesSheet: View {
         }
     }
 
+    /// The show's info line and its description (`PodcastsEpisodes.kt:186-197`):
+    /// `57 episodes · updated 1h ago`, then the feed's description as plain
+    /// text, two lines until it is tapped.
+    ///
+    /// The count is the server's `episode_count`, then the list's own total
+    /// (``PodcastFormat/subInfo(_:total:now:)``). The clock is read here, at
+    /// draw time, as Android reads `Instant.now()` at composition.
+    @ViewBuilder
+    private var showDetails: some View {
+        Text(verbatim: PodcastFormat.subInfo(show, total: podcasts.episodes?.state.total, now: Date()))
+            .font(.caption)
+            .monospaced()
+            .foregroundStyle(Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
+        let about = PodcastFormat.plainText(show.description)
+        if !about.isEmpty {
+            PodcastDescriptionText(text: about)
+        }
+    }
+
     /// A failed unsubscribe, said **in this sheet** rather than toasted.
     ///
     /// The unsubscribe is the one write on this screen that fails with a
@@ -256,9 +277,13 @@ struct PodcastEpisodesSheet: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .accessibilityLabel(PodcastStrings.episodesNoun)
             }
+            // One clock for the whole list, read when the list is drawn, so
+            // two rows cannot disagree about what "today" is.
+            let now = Date()
             ForEach(Array(episodes.state.items.enumerated()), id: \.element.id) { index, episode in
                 PodcastEpisodeRow(
                     episode: episode,
+                    now: now,
                     // Both answered by a model, never by the row: whether a
                     // play control is drawn is ``PodcastsModel/canPlay(_:)``
                     // (the house has the file **and** this phone has a
@@ -373,16 +398,16 @@ struct PodcastEpisodesSheet: View {
     }
 }
 
-/// One episode: its name, a mono line saying how long it is, how many
-/// chapters it has and — when the house has no file — what the download is
-/// doing, and the two controls Android draws.
+/// One episode: an unplayed dot, its name, the mono meta line, a thin bar for
+/// an unfinished place, the description, and the two controls Android draws.
 ///
-/// `PodcastsEpisodes.kt:216-265`'s `EpisodeRow`, with both of its controls:
-/// `play` (`:183`, `:223`) and `save to this device` (`:258`).
+/// `PodcastsEpisodes.kt:246-328`'s `EpisodeRow` as of Android `bd84d970`,
+/// with both of its controls: `play` (`:183`, `:223`) and `save to this
+/// device` (`:258`).
 ///
-/// The whole line comes from ``PodcastEpisode/metaLine``, which is where
-/// `has_file` and `download_status` are read **together** — the one pair on
-/// this screen that must agree.
+/// The meta line is ``PodcastFormat/meta(_:now:calendar:)``:
+/// `yesterday · 53 min · 24 min left · 2 chapters · downloaded`, the web's
+/// words in the web's order, with the unfinished place in the brand's ink.
 ///
 /// ### The row holds nothing
 ///
@@ -402,6 +427,9 @@ struct PodcastEpisodeRow: View {
 
     let episode: PodcastEpisode
 
+    /// The list's clock, so every row measures "today" from one instant.
+    let now: Date
+
     /// Whether this phone can play it — ``PodcastsModel/canPlay(_:)``, which
     /// is the house having the file **and** this phone having a player.
     let canPlay: Bool
@@ -414,6 +442,10 @@ struct PodcastEpisodeRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @ScaledMetric(relativeTo: .title2) private var glyph: CGFloat = 30
+
+    /// Android's 7 dp dot (`PodcastsEpisodes.kt:274`), scaled with the title
+    /// it sits beside.
+    @ScaledMetric(relativeTo: .subheadline) private var dot: CGFloat = 7
 
     var body: some View {
         layout {
@@ -430,28 +462,95 @@ struct PodcastEpisodeRow: View {
             : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
     }
 
+    private var progress: PodcastProgress { PodcastFormat.progress(episode) }
+
     private var words: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(episode.displayTitle)
-                .font(.subheadline)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
-            Text(episode.metaLine)
-                .font(.caption)
-                .monospaced()
-                // `errInk` for a download that failed, `fgMuted` otherwise —
-                // and never `.red`, which is not an ink (NIGHT-RULES §3). The
-                // colour is **not** the only carrier: the word `failed` is in
-                // the line it colours.
-                .foregroundStyle(episode.downloadFailed ? Color.errInk : Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 4) {
+            summary
+            // Outside the combined element: it is a control of its own (tap
+            // to show the whole text), and a combined element swallows a
+            // button.
+            let about = PodcastFormat.plainText(episode.description)
+            if !about.isEmpty {
+                PodcastDescriptionText(text: about)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // One stop for the words, reading the name and then the line: two
-        // elements would make a back catalogue of fifty-seven a hundred and
-        // fourteen stops. The controls stay separate, because a combined
-        // element swallows a button.
+    }
+
+    /// The dot, the name, the meta line and the bar as **one** accessibility
+    /// stop, reading the dot's words, the name and then the line: two or
+    /// three elements a row would make a back catalogue of fifty-seven well
+    /// over a hundred stops. The controls stay separate, because a combined
+    /// element swallows a button.
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Centred, as Android's `Alignment.CenterVertically` row is.
+            HStack(alignment: .center, spacing: 6) {
+                if progress == .new {
+                    // A shape is no accessibility element of its own, so it
+                    // is made one to carry its words into the combined row:
+                    // the dot's colour is never the only thing that says it.
+                    Circle()
+                        .fill(Color.brand)
+                        .frame(width: dot, height: dot)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(PodcastStrings.notPlayedYet)
+                }
+                Text(episode.displayTitle)
+                    .font(.subheadline)
+                    // Semibold while unplayed, medium otherwise — Android's
+                    // `FontWeight.SemiBold` / `Medium` (`:283`).
+                    .fontWeight(progress == .new ? .semibold : .medium)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            meta
+                .font(.caption)
+                .monospaced()
+                .fixedSize(horizontal: false, vertical: true)
+            if case .partial(_, let pct) = progress {
+                bar(pct)
+            }
+        }
         .accessibilityElement(children: .combine)
+    }
+
+    /// `today · 38 min · 24 min left · 12 chapters · downloaded`, muted, with
+    /// an **unfinished** place in the brand's colour as the web draws it
+    /// (`PodcastsEpisodes.kt:289-300`). ``Color/brandInk`` and not the amber
+    /// ``Color/brand``: this is text, and the amber as text is the 2.05:1 that
+    /// Apple's audit failed on train S004. `played` stays muted, as Android's
+    /// `prog !is Played` leaves it. The colour is never the only carrier —
+    /// the words say it.
+    private var meta: Text {
+        let parts = PodcastFormat.meta(episode, now: now, calendar: PodcastFormat.phoneCalendar)
+        let marked = progress == .played ? nil : PodcastFormat.progressLabel(progress)
+        var out = Text(verbatim: "")
+        for (index, part) in parts.enumerated() {
+            if index > 0 { out = out + Text(verbatim: " · ").foregroundStyle(Color.fgMuted) }
+            let ink = part == marked ? Color.brandInk : Color.fgMuted
+            out = out + Text(verbatim: part).foregroundStyle(ink)
+        }
+        return out
+    }
+
+    /// The thin bar under an unfinished episode (`PodcastsEpisodes.kt:303-311`):
+    /// 3 points, the brand's colour over a track. Hidden from VoiceOver — the
+    /// meta line already says `24 min left`, and a bar has no words.
+    private func bar(_ pct: Int) -> some View {
+        Capsule()
+            .fill(Color(.tertiarySystemFill))
+            .frame(height: 3)
+            .overlay(alignment: .leading) {
+                GeometryReader { track in
+                    Capsule()
+                        .fill(Color.brand)
+                        .frame(width: track.size.width * CGFloat(pct) / 100)
+                }
+            }
+            .padding(.top, 2)
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -507,5 +606,47 @@ enum PodcastEpisodes {
         let ext = (episode.fileExt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let suffix = ext.isEmpty ? "mp3" : ext.hasPrefix(".") ? String(ext.dropFirst()) : ext
         return "\(episode.displayTitle).\(suffix)"
+    }
+}
+
+/// A feed's description, already plain text (``PodcastFormat/plainText(_:)``):
+/// two lines, and a tap shows the whole text (`PodcastsEpisodes.kt:330-346`,
+/// `PodText`).
+///
+/// **Drawn with `Text(verbatim:)`**, so nothing in it is read as Markdown:
+/// the text came out of a feed on the internet, and `&lt;b&gt;` in it is the
+/// literal `<b>`. Never a web view and never `AttributedString(markdown:)`.
+///
+/// Android caps the open text at 280 dp and scrolls inside it; here the open
+/// text simply grows, because it already sits in the sheet's own scroll view
+/// and a scroll view inside a scroll view is a gesture fight on iOS.
+///
+/// The open/closed state is the view's own `@State`: a recycled lazy row
+/// forgets it, which is Android's `remember(text)` too.
+struct PodcastDescriptionText: View {
+
+    let text: String
+
+    @State private var open = false
+
+    var body: some View {
+        Button {
+            open.toggle()
+        } label: {
+            Text(verbatim: text)
+                .font(.footnote)
+                .foregroundStyle(Color.fgMuted)
+                .lineLimit(open ? nil : 2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: open)
+                // 44 points of target, which two lines of footnote are not.
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        // The whole text is the label whether or not it is cut, so VoiceOver
+        // reads all of it; the hint is Android's `onClickLabel`.
+        .accessibilityLabel(Text(verbatim: text))
+        .accessibilityHint(open ? PodcastStrings.showLess : PodcastStrings.showMore)
     }
 }

@@ -33,8 +33,12 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertNil(show.feedURL)
         XCTAssertNil(show.author)
         XCTAssertNil(show.artwork)
-        XCTAssertEqual(0, show.episodeCount)
+        // No count is **nil**, not zero: the sheet's header then falls back
+        // to the list's own total (Android `episode_count: Int? = null`).
+        XCTAssertNil(show.episodeCount)
         XCTAssertEqual(0, show.downloadedCount)
+        XCTAssertNil(show.description)
+        XCTAssertNil(show.lastPolledAt)
         XCTAssertEqual(PodcastStrings.untitledShow, show.displayTitle)
         XCTAssertEqual("0/0 downloaded", show.downloadedLine)
     }
@@ -61,6 +65,8 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertEqual("/api/podcasts/subscriptions/12/artwork", show.artwork)
         XCTAssertEqual(57, show.episodeCount)
         XCTAssertEqual(9, show.downloadedCount)
+        XCTAssertEqual("Cooking, slowly.", show.description)
+        XCTAssertEqual("2026-11-01T09:00:00Z", show.lastPolledAt)
         XCTAssertEqual("The Kitchen Table", show.displayTitle)
         // Downloaded first, total second. A swap here is the invisible kind:
         // "57/9 downloaded" reads like a number somebody meant.
@@ -159,56 +165,31 @@ final class PodcastModelsTests: XCTestCase {
     }
 
     /// `duration_sec` absent is **not** zero: a zero-length episode and an
-    /// unknown length read the same on a row and mean opposite things.
-    func testAnEpisodeWithNoDurationKeepsItUnknownAndShowsADash() throws {
+    /// unknown length read the same on a row and mean opposite things. Since
+    /// Android `bd84d970` an unknown length is simply **left out** of the
+    /// line (`PodFormat.length` is `""`), where it used to be an em dash.
+    func testAnEpisodeWithNoDurationKeepsItUnknownAndSaysNoLength() throws {
         let episode: PodcastEpisode = try decode(#"{"id":7,"title":"Untimed","has_file":true}"#)
 
         XCTAssertNil(episode.durationSec)
-        XCTAssertEqual(
-            "—", episode.metaLine,
-            "an em dash, not 0:00 — which would read as a real zero-length episode"
-        )
+        let line = PodcastFormat.metaLine(episode, now: Date(), calendar: PodcastFormat.phoneCalendar)
+        XCTAssertEqual("downloaded", line)
+        XCTAssertFalse(line.contains("0:00"), "an unknown length drawn as a real zero-length episode")
+        XCTAssertFalse(line.contains("min"), "an unknown length drawn as a length")
     }
 
-    /// `PodcastsEpisodes.kt:238-246`'s `buildString`, branch for branch.
-    func testTheMetaLineIsDurationThenChaptersThenWhyThereIsNoFile() {
-        let played = PodcastEpisode(
-            id: 1, durationSec: 3180, hasFile: true, downloadStatus: "downloaded",
-            chapters: [PodcastChapter(title: "a", startSec: 0), PodcastChapter(title: "b", startSec: 9)]
-        )
-        XCTAssertEqual("53:00 · 2 chapters", played.metaLine)
-
-        // The status appears only when there is no file — it is the answer to
-        // "why can I not play this", and a downloaded episode has no such
-        // question.
-        let downloadedNoChapters = PodcastEpisode(
-            id: 2, durationSec: 60, hasFile: true, downloadStatus: "downloaded"
-        )
-        XCTAssertEqual("1:00", downloadedNoChapters.metaLine)
-
-        let pending = PodcastEpisode(
-            id: 3, durationSec: 1800, hasFile: false, downloadStatus: "pending"
-        )
-        XCTAssertEqual("30:00 · pending", pending.metaLine)
-        XCTAssertFalse(pending.canPlay, "the audio route answers 409 for this row")
-
-        // A blank status is no status: the row would otherwise read
-        // "30:00 · " with a dangling separator.
-        let blankStatus = PodcastEpisode(id: 4, durationSec: 1800, hasFile: false, downloadStatus: "  ")
-        XCTAssertEqual("30:00", blankStatus.metaLine)
-
-        let failed = PodcastEpisode(id: 5, hasFile: false, downloadStatus: "failed")
-        XCTAssertEqual("— · failed", failed.metaLine)
-    }
-
-    /// D48 (2026-11-03): both phones say `1 chapter` now, so this pins the
-    /// fix rather than the infelicity it used to pin.
-    func testOneChapterSaysChaptersOnBothPhones() {
+    /// D48 (2026-11-03): both phones say `1 chapter`, and still do now that
+    /// the count goes through ``PodcastFormat/meta(_:now:calendar:)``
+    /// (`OneLineAnswerSourcesTest` moved Android's site to `PodcastsFormat.kt`).
+    func testOneChapterSaysChapterOnBothPhones() {
         let one = PodcastEpisode(
             id: 1, durationSec: 120, hasFile: true,
             chapters: [PodcastChapter(title: "only", startSec: 0)]
         )
-        XCTAssertEqual("2:00 · 1 chapter", one.metaLine)
+        XCTAssertEqual(
+            "2 min · 1 chapter · downloaded",
+            PodcastFormat.metaLine(one, now: Date(), calendar: PodcastFormat.phoneCalendar)
+        )
     }
 
     func testAnEpisodeWithNoTitleIsCalledEpisode() throws {
@@ -280,36 +261,6 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertEqual("0/1 downloaded", blank.spokenDetail)
     }
 
-    /// Which row the episodes list colours.
-    ///
-    /// ``PodcastEpisode/metaLine`` shows a `download_status` only when there
-    /// is **no file**, so `downloadFailed` has to agree with it: a row that
-    /// has the audio must not be coloured by a stale word left over from an
-    /// earlier attempt, which is a row the server really can send
-    /// (`download_status` is not cleared on a later success for a different
-    /// episode, and a reader comparing the two fields would see them
-    /// disagree).
-    func testOnlyARowWithNoFileCountsAsAFailedDownload() {
-        let failed = PodcastEpisode(
-            id: 1, title: "Burnt ends", durationSec: 1800, hasFile: false,
-            downloadStatus: "failed"
-        )
-        XCTAssertTrue(failed.downloadFailed)
-        XCTAssertEqual("30:00 · failed", failed.metaLine)
-
-        let pending = PodcastEpisode(id: 2, hasFile: false, downloadStatus: "pending")
-        XCTAssertFalse(pending.downloadFailed, "pending is not failed")
-
-        let stale = PodcastEpisode(
-            id: 3, durationSec: 60, hasFile: true, downloadStatus: "failed"
-        )
-        XCTAssertFalse(
-            stale.downloadFailed,
-            "a row that has its audio was coloured by an old status word"
-        )
-        XCTAssertEqual("1:00", stale.metaLine, "and its line says nothing about it either")
-    }
-
     /// Both lists answer under `items`, not under a per-endpoint key the way
     /// the video feed does (``VideoRow/itemsKey`` is `"videos"`).
     func testBothRowsReadTheirRowsFromItems() {
@@ -361,6 +312,9 @@ final class PodcastModelsTests: XCTestCase {
             "Polled — 3 downloaded, 2 new",
             PodcastStrings.polled(downloaded: result.downloaded, fresh: result.fresh)
         )
+        // An older server sends no `failures`, and the toast is the counts.
+        XCTAssertEqual([], result.failures)
+        XCTAssertEqual("Polled — 3 downloaded, 2 new", PodcastStrings.polled(result))
 
         // An older poller that answered fewer keys reports zeroes, as
         // Android's `intOrNull ?: 0` does, rather than failing the write that

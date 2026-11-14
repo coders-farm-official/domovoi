@@ -228,3 +228,110 @@ func jsonDetail(of body: String?) -> String? {
     guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
     return object["detail"] as? String
 }
+
+// ===========================================================================
+// "This is me": the claim key (2026-11-12, MOBILE-HANDOFF-2026-11-12 §1)
+// ===========================================================================
+
+/// The header the claim key goes in (`devices.py` `CLAIM_KEY_HEADER`,
+/// `DeviceRegistry.kt` `CLAIM_KEY_HEADER`).
+public let claimKeyHeader = "X-Domovoi-Claim-Key"
+
+/// The header this phone names itself by on the calls that act as its
+/// person (the server's `files.caller_device_id`; `DeviceRegistry.kt`
+/// `DEVICE_ID_HEADER`). Not a secret: the device id is in every queue row.
+public let deviceIDHeader = "X-Device-Id"
+
+/// A claim key as the server mints it (url-safe base64, 43 characters):
+/// printable ASCII without a space, at most 200 bytes, or nothing.
+/// `DeviceRegistry.kt` `headerSafeClaimKey`, byte for byte: 0x21…0x7E.
+///
+/// Over `utf8` for the reason ``isStorableDeviceToken(_:)`` gives.
+public func headerSafeClaimKey(_ key: String?) -> String? {
+    guard let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !trimmed.isEmpty, trimmed.utf8.count <= 200,
+          trimmed.utf8.allSatisfy({ $0 >= 0x21 && $0 <= 0x7E })
+    else { return nil }
+    return trimmed
+}
+
+/// The headers a call acting as this phone's person carries: its id, and
+/// the claim key **only when one is held** for the server the call goes to
+/// (`claimHeaders`, `DeviceRegistry.kt`). A nil or unsendable key adds no
+/// header at all — never an empty one.
+public func claimHeaders(deviceID: String, claimKey: String?) -> [String: String] {
+    var out = [deviceIDHeader: deviceID]
+    if let key = headerSafeClaimKey(claimKey) { out[claimKeyHeader] = key }
+    return out
+}
+
+/// Where the claim keys rest: the Keychain, one generic password per server,
+/// **beside** the household tokens and never in the same item.
+///
+/// Android seals them in their own Keystore-backed vault
+/// (`domovoi-claim-keys`, `Prefs.kt`); the iOS counterpart of a vault of
+/// their own is a Keychain **service** of their own, with the same two
+/// attributes ``TokenVault`` documents: this-device-only (not in a backup,
+/// not restorable onto another phone) and never synchronised. Never in
+/// `UserDefaults`, never logged: no method here returns or throws a key in a
+/// message.
+public struct ClaimKeyVault: Sendable {
+
+    /// The service the claim keys are filed under — not
+    /// ``TokenVault/service``, so forgetting one can never take the other.
+    public static let service = "org.codersfarm.domovoi.claim-key"
+
+    private let items: any KeychainItems
+
+    /// The real Keychain, under this service (pinned by ListenClaimTests).
+    public static func systemItems() -> SystemKeychain { SystemKeychain(service: service) }
+
+    public init(items: any KeychainItems = ClaimKeyVault.systemItems()) {
+        self.items = items
+    }
+
+    /// The key held for `server`, or nil (nothing saved, unreadable, or a
+    /// Keychain that would not answer — all of which mean "can't prove it").
+    public func key(for server: String) -> String? {
+        let account = ServerCredentials.normalize(server)
+        guard !account.isEmpty,
+              let data = try? items.get(account: account),
+              let text = String(data: data, encoding: .utf8)
+        else { return nil }
+        return headerSafeClaimKey(text)
+    }
+
+    /// What a read found: a key, nothing (the Keychain said there is no such
+    /// item), or a failure — a locked or unanswering Keychain, which is NOT
+    /// "no key" and must not be remembered as one.
+    public enum Read: Equatable, Sendable {
+        case key(String)
+        case none
+        case failed
+    }
+
+    public func read(for server: String) -> Read {
+        let account = ServerCredentials.normalize(server)
+        guard !account.isEmpty else { return .none }
+        let data: Data?
+        do { data = try items.get(account: account) } catch { return .failed }
+        guard let data else { return .none }
+        guard let text = String(data: data, encoding: .utf8), let safe = headerSafeClaimKey(text) else {
+            return .none
+        }
+        return .key(safe)
+    }
+
+    /// Hold `key` for `server`; nil (or an unsendable value) removes it.
+    /// Never throws: a Keychain that refuses leaves the phone without a key,
+    /// which the People page already says ("can't prove it yet").
+    public func set(_ key: String?, for server: String) {
+        let account = ServerCredentials.normalize(server)
+        guard !account.isEmpty else { return }
+        if let safe = headerSafeClaimKey(key), let data = safe.data(using: .utf8) {
+            try? items.set(data, account: account)
+        } else {
+            try? items.remove(account: account)
+        }
+    }
+}

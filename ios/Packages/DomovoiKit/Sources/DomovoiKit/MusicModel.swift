@@ -284,7 +284,7 @@ public final class MusicModel {
     /// Internal, for the extension in ``MusicRoomActions`` — and a method
     /// rather than loosening `private(set)`, so that "what can set a toast"
     /// stays a list `grep` can produce.
-    func setToast(_ said: String) { toast = said }
+    public func setToast(_ said: String) { toast = said }
 
     // MARK: - the query, and the one place a new list is built
 
@@ -395,8 +395,13 @@ public final class MusicModel {
     /// here**, not sent: the picker only offers rooms the server reported
     /// (``MusicPage/castRooms(_:)``), and a model that would send any string
     /// it was handed makes that offer a courtesy rather than a rule.
+    ///
+    /// **Not public** (integration fix A2): this body carries no
+    /// `device_id`, list or listener, so the room's Up next would follow
+    /// nobody. Every screen goes through
+    /// ``play(_:in:tools:context:)``, which sends them.
     @discardableResult
-    public func play(_ track: LibraryTrack, in room: String) -> Bool {
+    func play(_ track: LibraryTrack, in room: String) -> Bool {
         guard castRooms.contains(room) else { return false }
         let id = track.id
         let label = track.displayTitle
