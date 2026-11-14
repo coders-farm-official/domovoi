@@ -190,6 +190,12 @@ async def lib(db_session, monkeypatch):
             text("INSERT INTO library_tracks (id, file_path, title, artist, album) VALUES (:i, :f, :t, :a, :al)"),
             {"i": tid, "f": fp, "t": title, "a": artist, "al": album},
         )
+    # Fixed ids leave the sequence behind them; move it past them so a later
+    # test inserting by the sequence (without truncating first, e.g.
+    # test_playlists_bulk_add) can't collide with these rows.
+    await db_session.execute(text(
+        "SELECT setval(pg_get_serial_sequence('library_tracks', 'id'), "
+        "(SELECT max(id) FROM library_tracks))"))
     await db_session.execute(text(
         "INSERT INTO devices (device_id, name) VALUES ('test-alias-dev-a', 'Kitchen tablet'), "
         "('test-alias-dev-b', 'Den phone') ON CONFLICT (device_id) DO UPDATE SET name = EXCLUDED.name"
