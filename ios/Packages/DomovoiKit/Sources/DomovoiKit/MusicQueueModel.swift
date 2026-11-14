@@ -123,7 +123,7 @@ public final class MusicQueueModel {
     /// This room's answer on this server, or nil while it is still reading
     /// (``RoomQueueWindow/queue(_:server:room:)``).
     public var answer: RoomQueue? {
-        RoomQueueWindow.queue(read.data, server: container.serverURL, room: room)
+        RoomQueueWindow.queue(read.data, server: container.store.serverURL, room: room)
     }
 
     /// The answer, or an empty queue nobody may edit.
@@ -131,7 +131,7 @@ public final class MusicQueueModel {
 
     /// The rows shown: the queue's, less the picks just taken back.
     public var items: [QueueItem] {
-        RoomUpNextRules.visible(queue, dropped: dropped, server: container.serverURL, room: room)
+        RoomUpNextRules.visible(queue, dropped: dropped, server: container.store.serverURL, room: room)
     }
 
     public var controls: RoomQueueControls { RoomQueueControls(queue) }
@@ -229,7 +229,7 @@ public final class MusicQueueModel {
             // The rest of a long playlist arrives after the play's answer:
             // read again when asked (``RoomQueueNudges``, a few times at most).
             nudgeSink = RoomQueueNudges.shared.listen { [weak self] server, room in
-                guard let self, server == self.container.serverURL, room == self.room else { return }
+                guard let self, server == self.container.store.serverURL, room == self.room else { return }
                 self.read.refresh()
             }
         }
@@ -282,7 +282,7 @@ public final class MusicQueueModel {
     /// (``RoomPlayWatch``); an event without the rooms re-reads, as before.
     public func received(_ event: StateEvent) {
         guard Self.events.contains(event.type) else { return }
-        if watch.shouldReread(server: container.serverURL, room: room, data: RoomQueueWindow.eventData(event)) {
+        if watch.shouldReread(server: container.store.serverURL, room: room, data: RoomQueueWindow.eventData(event)) {
             read.refresh()
         }
     }
@@ -389,7 +389,7 @@ public final class MusicQueueModel {
         guard let index = items.firstIndex(of: item), mayLessLike(index),
               let seq = item.upNextSeq, let session = queue.sessionID else { return }
         let artist = item.artist
-        let server = container.serverURL
+        let server = container.store.serverURL
         edit(failure: { "less like this failed: \($0)" }, { (api: RoomQueueApi, _: String) async throws(DomovoiError) in
             try await api.lessLikeThis(session: session, seq: seq)
         }, done: { [weak self] removed in
@@ -408,14 +408,14 @@ public final class MusicQueueModel {
         guard maySave, let room, save.canSaveRoom else { return }
         let flow = save
         let api = api
-        let server = container.serverURL
+        let server = container.store.serverURL
         Task { @MainActor [weak self] in
             let went = await flow.saveRoom { (name: String) async throws(DomovoiError) -> RoomSaveResult in
                 try await api.savePlaylist(room, name: name)
             }
             // The flow belongs to this room and server: a note for a save
             // sent elsewhere is never shown here.
-            guard let self, self.container.serverURL == server, self.room == room, self.save === flow else { return }
+            guard let self, self.container.store.serverURL == server, self.room == room, self.save === flow else { return }
             self.speak(flow.note, failed: !went)
         }
     }
@@ -433,20 +433,20 @@ public final class MusicQueueModel {
         done: @escaping (T) -> String? = { _ in nil }
     ) {
         guard let room, !busy else { return }
-        let server = container.serverURL
+        let server = container.store.serverURL
         let api = api
         busy = true
         Task { @MainActor [weak self] in
             defer { self?.busy = false }
             do throws(DomovoiError) {
                 let answer = try await action(api, room)
-                guard let self, self.container.serverURL == server, self.room == room else { return }
+                guard let self, self.container.store.serverURL == server, self.room == room else { return }
                 if let line = done(answer) { self.speak(line, failed: false) }
                 // The server is the truth about the order and about what is
                 // playing; the list is re-read rather than patched locally.
                 self.read.refresh()
             } catch let trouble {
-                guard let self, self.container.serverURL == server else { return }
+                guard let self, self.container.store.serverURL == server else { return }
                 self.speak(failure(queueErrorText(trouble)), failed: true)
             }
         }

@@ -37,6 +37,8 @@ final class MusicQueueModelTests: XCTestCase {
         let editStatus = Shared(200)
         /// How many times each room's queue has been read.
         let reads = Shared<[String: Int]>([:])
+        /// What a "less like this" answers.
+        let feedbackAnswer = Shared(#"{"removed":[5,6]}"#)
 
         func install() {
             StubURLProtocol.dispatch { [self] request in
@@ -50,9 +52,26 @@ final class MusicQueueModelTests: XCTestCase {
                     let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
                     return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
                 }
+                if path.hasPrefix("/api/music/up-next/sessions/") {
+                    // `{removed: [seq]}` (`up_next.py:412`) for a feedback;
+                    // the session itself for a PATCH.
+                    return path.hasSuffix("/feedback")
+                        ? .json(self.feedbackAnswer.current)
+                        : .json(#"{"id":"s-1","autoplay":false}"#)
+                }
                 guard path.hasPrefix("/api/music/queue/") else { return .json("{}", status: 404) }
                 let rest = String(path.dropFirst("/api/music/queue/".count))
-                if rest.hasSuffix("/remove") || rest.hasSuffix("/move") || rest.hasSuffix("/clear") {
+                if rest.hasSuffix("/save-playlist") {
+                    guard self.editStatus.current == 200 else {
+                        return .json(#"{"detail":"playlist named 'Road' already exists (id=3)"}"#, status: 409)
+                    }
+                    return .json(#"{"playlist_id":12,"name":"Road","saved":3,"skipped":1,"duplicates":1}"#, status: 201)
+                }
+                if rest.hasSuffix("/add") {
+                    return .json(#"{"queued":[{"song_id":41,"file":"a.mp3"}],"requested":1}"#)
+                }
+                if rest.hasSuffix("/remove") || rest.hasSuffix("/move") || rest.hasSuffix("/clear")
+                    || rest.hasSuffix("/play") {
                     guard self.editStatus.current == 200 else {
                         return .json(
                             #"{"detail":"that queue would not move"}"#,
@@ -724,5 +743,255 @@ final class MusicQueueModelTests: XCTestCase {
         for _ in 0..<64 { await Task.yield() }
 
         XCTAssertEqual(1, house.reads.current["den"])
+    }
+
+    // MARK: - Up next in the room (cb780e90), the jump, the push filter
+
+    /// A room with a session: the song playing, one somebody asked for, and
+    /// two of the room's own picks.
+    private let upNextQueue = """
+    {"current_song_id":7,"editable":true,"guest":false,"session_id":"s-1","autoplay":true,
+     "up_next":{"session_id":"s-1","mode":"library","autoplay":true,
+                "seed":{"track_id":3,"title":"Hey Jude"},"ended":false},
+     "items":[{"song_id":7,"pos":0,"title":"Hey Jude","artist":"The Beatles","playing":true,"track_id":3},
+              {"song_id":8,"pos":1,"title":"Asked For","artist":"Alex"},
+              {"song_id":9,"pos":2,"title":"Pick One","artist":"Kestrel","origin":"auto",
+               "reason_label":"same artist","up_next_seq":5,"track_id":11},
+              {"song_id":10,"pos":3,"title":"Pick Two","artist":"Kestrel","origin":"auto",
+               "reason_label":"90s","up_next_seq":6,"track_id":12}]}
+    """
+
+    /// A pick waiting between two songs somebody asked for.
+    private let pickBetween = """
+    {"current_song_id":7,"editable":true,"guest":false,"session_id":"s-1","autoplay":true,
+     "items":[{"song_id":7,"pos":0,"title":"Hey Jude","playing":true},
+              {"song_id":9,"pos":1,"title":"Pick One","artist":"Kestrel","origin":"auto","up_next_seq":5},
+              {"song_id":8,"pos":2,"title":"Asked For"},
+              {"song_id":10,"pos":3,"title":"Also Asked"}]}
+    """
+
+    private func bodyFields(_ request: URLRequest?) throws -> [String: Any] {
+        let data = try XCTUnwrap(request?.httpBody, "no body was sent")
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    /// A row's tap is the room's own jump — `POST …/play` with the entry's
+    /// song id — and never offered on the row that is playing.
+    func testQueues_ATapPlaysTheEntryNowThroughTheRoomsJump() async throws {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": upNextQueue])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        XCTAssertFalse(queue.mayPlayNow(try entry(queue, 0)), "the song playing is not a jump")
+        queue.playNow(try entry(queue, 2))
+        await settleUntil({ queue.toast != nil }, "the jump")
+
+        XCTAssertEqual(#"playing "Pick One" in den"#, queue.takeToast())
+        let fields = try bodyFields(requests(to: "/api/music/queue/den/play").first)
+        XCTAssertEqual(9, fields["song_id"] as? Int)
+        XCTAssertEqual(phone, fields["device_id"] as? String)
+        XCTAssertTrue(requests(to: "/skip").isEmpty, "no move-and-skip chain")
+    }
+
+    /// The push carries every room's now-playing: only **this** room's state
+    /// or song re-reads it (6d14aa91).
+    func testQueues_APushForAnotherRoomDoesNotReReadThisOne() async {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": twoEntries])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        func push(_ data: String) -> StateEvent {
+            StateEvent(
+                type: "music.now_playing.changed",
+                frame: #"{"type":"music.now_playing.changed","data":"# + data + "}"
+            )
+        }
+        // The first one seen re-reads: what the room did before it is unknown.
+        queue.received(push(#"{"den":{"state":"play","song":{"file":"a.mp3","title":"Hey Jude"}}}"#))
+        await settleUntil({ (house.reads.current["den"] ?? 0) >= 2 }, "the first push")
+        // Another room's song changes; this room's is the same.
+        queue.received(push(
+            #"{"den":{"state":"play","song":{"file":"a.mp3","title":"Hey Jude"}},"kitchen":{"state":"play","song":{"file":"k.mp3"}}}"#
+        ))
+        for _ in 0..<64 { await Task.yield() }
+        XCTAssertEqual(2, house.reads.current["den"], "another room's song re-read this room's queue")
+        // This room's song changes.
+        queue.received(push(#"{"den":{"state":"play","song":{"file":"b.mp3","title":"Come Together"}}}"#))
+        await settleUntil({ (house.reads.current["den"] ?? 0) >= 3 }, "this room's change")
+    }
+
+    /// "Less like this" sends the pick's seq and takes back what the session
+    /// said at once; the row playing is never one of them.
+    func testQueues_LessLikeThisTakesThePicksOutAtOnce() async throws {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": upNextQueue])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        XCTAssertFalse(queue.mayLessLike(1), "a song somebody asked for is not a pick")
+        XCTAssertTrue(queue.mayLessLike(2))
+        queue.lessLike(try entry(queue, 2))
+        await settleUntil({ queue.toast != nil }, "the feedback")
+
+        XCTAssertEqual("no more Kestrel in this mix (1 more taken out)", queue.takeToast())
+        XCTAssertEqual([7, 8], queue.items.map(\.songID))
+        let sent = requests(to: "/api/music/up-next/sessions/s-1/feedback")
+        let fields = try bodyFields(sent.first)
+        XCTAssertEqual(5, fields["seq"] as? Int)
+        XCTAssertEqual("less_like_this", fields["kind"] as? String)
+    }
+
+    /// With a pick hidden from the view, a move sends the room's own
+    /// position for the row it lands on, not the shown index.
+    func testQueues_AMoveAfterAPickWasTakenBackSendsTheRoomsPosition() async throws {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": pickBetween])
+        house.feedbackAnswer.set(#"{"removed":[5]}"#)
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        queue.lessLike(try entry(queue, 1))
+        await settleUntil({ queue.items.count == 3 && !queue.busy }, "the pick taken back")
+        XCTAssertEqual([7, 8, 10], queue.items.map(\.songID))
+
+        queue.moveUp(2)
+        await settleUntil({ !self.requests(to: "/api/music/queue/den/move").isEmpty }, "the move")
+        XCTAssertEqual(
+            #"{"song_id":10,"to_position":2,"device_id":"\#(phone)"}"#,
+            try firstBody(of: requests(to: "/api/music/queue/den/move"))
+        )
+    }
+
+    func testQueues_TheAutoplaySwitchPatchesTheRoomsSession() async throws {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": upNextQueue])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        XCTAssertTrue(queue.mayAutoplay)
+        queue.setAutoplay(false)
+        await settleUntil({ queue.toast != nil }, "the switch")
+
+        XCTAssertEqual("autoplay off in den — the queue stops at the end", queue.takeToast())
+        let sent = requests(to: "/api/music/up-next/sessions/s-1")
+        XCTAssertEqual("PATCH", sent.first?.httpMethod)
+        XCTAssertEqual(false, try bodyFields(sent.first)["autoplay"] as? Bool)
+    }
+
+    /// A guest gets the jump, the moves and remove — no switch, no "less like
+    /// this", no saving, no clear.
+    func testQueues_AGuestGetsNoSwitchNoLessLikeNoSaveNoClear() async throws {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": upNextQueue.replacingOccurrences(of: #""guest":false"#, with: #""guest":true"#)])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        XCTAssertTrue(queue.mayPlayNow(try entry(queue, 1)))
+        XCTAssertTrue(queue.mayMove)
+        XCTAssertFalse(queue.mayAutoplay)
+        XCTAssertFalse(queue.mayLessLike(2))
+        XCTAssertFalse(queue.maySave)
+        XCTAssertFalse(queue.mayClear)
+    }
+
+    /// Saving the room's queue says the server's counts, the web's sentence.
+    func testQueues_SavingTheRoomsQueueSaysWhatTheServerKept() async throws {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": upNextQueue])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        XCTAssertTrue(queue.maySave)
+        queue.save.ask()
+        queue.save.name = "  Road "
+        queue.saveQueue()
+        await settleUntil({ queue.toast != nil }, "the save")
+
+        XCTAssertEqual(
+            #"Saved as "Road" (3 songs); 1 left out: not songs from the library, 1 repeat saved once."#,
+            queue.takeToast()
+        )
+        XCTAssertFalse(queue.save.open)
+        let fields = try bodyFields(requests(to: "/api/music/queue/den/save-playlist").first)
+        XCTAssertEqual("Road", fields["name"] as? String)
+        XCTAssertEqual(phone, fields["device_id"] as? String)
+    }
+
+    /// A name already taken is the server's own sentence.
+    func testQueues_ASaveRefusedSaysTheServersSentence() async {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": upNextQueue])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        house.editStatus.set(409)
+        queue.save.ask()
+        queue.save.name = "Road"
+        queue.saveQueue()
+        await settleUntil({ queue.said != nil }, "the refusal")
+
+        XCTAssertEqual("Couldn't save the playlist: playlist named 'Road' already exists (id=3)", queue.said)
+        XCTAssertTrue(queue.saidFailed)
+        XCTAssertTrue(queue.save.open, "the name field stays, to try another")
+    }
+
+    /// An edit answered after the app moved house says nothing
+    /// ([[read-after-await-wrong-key]]).
+    func testQueues_AnEditAnsweredAfterMovingHouseSaysNothing() async throws {
+        let (queue, container, house) = rig()
+        house.queues.set(["den": upNextQueue])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        queue.playNow(try entry(queue, 1))
+        XCTAssertTrue(container.store.setServerURL("http://10.0.0.43:6369"))
+        await settleUntil({ !queue.busy }, "the edit")
+
+        XCTAssertNil(queue.toast)
+        XCTAssertNil(queue.said)
+    }
+
+    /// A playlist still filling the room nudges its open queue to read
+    /// again (bd274c2f) — this room on this server, and no other.
+    func testQueues_ANudgeForThisRoomReReadsAndOneForAnotherDoesNot() async {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": twoEntries])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        RoomQueueNudges.shared.nudge(server: server, room: "kitchen")
+        RoomQueueNudges.shared.nudge(server: "http://10.0.0.43:6369", room: "den")
+        for _ in 0..<64 { await Task.yield() }
+        XCTAssertEqual(1, house.reads.current["den"])
+
+        RoomQueueNudges.shared.nudge(server: server, room: "den")
+        await settleUntil({ (house.reads.current["den"] ?? 0) >= 2 }, "the nudge")
+    }
+
+    /// `stop()` leaves the nudges too.
+    func testQueues_StopLeavesTheNudges() async {
+        let (queue, _, _) = rig()
+        let before = RoomQueueNudges.shared.count
+        await started(queue, rooms: ["den"])
+        XCTAssertEqual(before + 1, RoomQueueNudges.shared.count)
+        queue.stop()
+        XCTAssertEqual(before, RoomQueueNudges.shared.count)
+    }
+
+    /// The Up next head's words come from the answer, and it sits before the
+    /// first pick still to come.
+    func testQueues_TheHeadSaysWhatTheMixIsBuiltFrom() async {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": upNextQueue])
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        XCTAssertEqual("based on Hey Jude", queue.upNextBasis)
+        XCTAssertNil(queue.upNextLine, "picks are waiting and autoplay is on")
+        XCTAssertEqual([.entry(0), .entry(1), .upNextHead, .entry(2), .entry(3)], queue.lines)
+        XCTAssertTrue(queue.isWaitingPick(2))
+        XCTAssertFalse(queue.isWaitingPick(1))
     }
 }

@@ -361,7 +361,7 @@ public final class QueueSearchModel {
             return
         }
         let client = container.client
-        let server = container.serverURL
+        let server = container.store.serverURL
         let wait = debounceNs
         pending = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: wait)
@@ -369,11 +369,11 @@ public final class QueueSearchModel {
             self.busy = true
             do throws(DomovoiError) {
                 let found = try await queueSearch(client: client, term: term)
-                guard !Task.isCancelled, self.container.serverURL == server else { return }
+                guard !Task.isCancelled, self.container.store.serverURL == server else { return }
                 self.finds = found
                 self.status = ""
             } catch let trouble {
-                guard !Task.isCancelled, self.container.serverURL == server else { return }
+                guard !Task.isCancelled, self.container.store.serverURL == server else { return }
                 self.finds = []
                 self.status = QueueStrings.searchFailed(queueErrorText(trouble))
             }
@@ -386,12 +386,12 @@ public final class QueueSearchModel {
     /// answers still hears how it went; nothing is said once the app talks to
     /// another server.
     public func add(_ find: QueueFind, next: Bool) {
-        let server = container.serverURL
+        let server = container.store.serverURL
         let adder = adder
         let target = target
         Task { @MainActor [weak self] in
             let said = await adder.add(target, find: find, next: next)
-            guard let self, self.container.serverURL == server else { return }
+            guard let self, self.container.store.serverURL == server else { return }
             self.status = said
         }
     }

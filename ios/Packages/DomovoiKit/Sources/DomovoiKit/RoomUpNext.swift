@@ -523,7 +523,7 @@ public enum RoomPlaylistPlay {
         deviceID: String,
         listener: RoomListener
     ) async throws(DomovoiError) -> PlayPlaylistAnswer? {
-        let server = container.serverURL
+        let server = container.store.serverURL
         let body = RoomPlayBodies.playPlaylist(
             room: room, playlistID: playlistID, shuffle: shuffle, deviceID: deviceID, listener: listener
         )
@@ -531,7 +531,7 @@ public enum RoomPlaylistPlay {
         let answer = PlayPlaylistAnswer.read(data)
         if answer?.loading == true {
             Task { @MainActor in
-                _ = await RoomQueueNudges.follow(answer, server: server, room: room, serverNow: { container.serverURL })
+                _ = await RoomQueueNudges.follow(answer, server: server, room: room, serverNow: { container.store.serverURL })
             }
         }
         return answer

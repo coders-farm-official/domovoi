@@ -239,7 +239,7 @@ public extension MusicModel {
         guard castRooms.contains(room) else { return false }
         let label = track.displayTitle
         let client = container.client
-        let server = container.serverURL
+        let server = container.store.serverURL
         let body = RoomPlayBodies.playTrack(
             room: room,
             trackID: track.id,
@@ -250,11 +250,11 @@ public extension MusicModel {
         Task { @MainActor [weak self] in
             do throws(DomovoiError) {
                 try await client.send(method: "POST", path: "/api/music/play-track", body: body)
-                guard let self, self.container.serverURL == server else { return }
+                guard let self, self.container.store.serverURL == server else { return }
                 self.setToast(MusicStrings.queuedInRoom(label, room: room))
                 self.nowPlaying.refresh()
             } catch let trouble {
-                guard let self, self.container.serverURL == server else { return }
+                guard let self, self.container.store.serverURL == server else { return }
                 self.setToast(MusicStrings.playFailed(trouble.message))
             }
         }
