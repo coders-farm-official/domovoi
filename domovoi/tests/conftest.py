@@ -183,6 +183,8 @@ TABLES_TO_TRUNCATE = [
     "calendar_events",
     # Calendars by link and phones' shared calendars (V055).
     "calendar_sources",
+    # Phones' calendar keys and tombstones (V057).
+    "calendar_phones",
     "voice_notes",
     "connectivity_events",
     "voice_profiles",

@@ -453,10 +453,22 @@ two-way sync, no sign-in with Google, Microsoft, Apple or Samsung):
   token (`PUT /api/calendar/phones/{device_id}`, device tier, once a
   minute at most, 8 MB). Unpicking a calendar or turning sharing off
   deletes the server's copy (`DELETE …/phones/{device_id}`; the app keeps
-  retrying a delete it couldn't send). A device id is self-asserted, as
-  everywhere in the device tier: a paired client could send under another
-  phone's id, which is the household trust the rest of that tier already
-  assumes.
+  retrying a delete it couldn't send). A device id is self-asserted, so
+  the phone's first snapshot is handed a **calendar key** (only its
+  SHA-256 is kept, V057 `calendar_phones`) and every later PUT or DELETE
+  for that id must carry it (`X-Domovoi-Calendar-Key`, else `403`): another
+  household device can't write or delete that phone's calendars. A
+  snapshot may carry a growing `generation`; turning sharing off records
+  it, and an upload made earlier that lands after the delete is refused
+  (`410`). Calendars left behind (an uninstalled app, a lost phone, a
+  server the phone forgot) show as stale after a day without an update
+  (phones send every 6 hours) and are deleted after 7 days by the
+  calendar refresher; an admin can remove one, or all of a phone's,
+  sooner (Settings → Household → Calendars), and replacing the household
+  device token removes every phone's. The list gives a phone's device id
+  to admins only, and the account a calendar lives in (usually an e-mail
+  address) is not kept. A private event the phone sends as `busy` is kept
+  as "Busy", with no title or place.
 * **Everywhere they show** they are household data like the calendar: the
   same device-read tier, masked to "busy" on a shared screen's Home, and
   read aloud by voice with the rest. An imported event can't be edited or

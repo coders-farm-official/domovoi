@@ -4,6 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — Phones' calendars: whose they are, how long they last (V057)
+
+Review fixes to the phone calendars below, before 1.3.0 ships.
+
+- **Only the phone itself changes its calendars.** The first snapshot a
+  phone sends is answered with a `calendar_key`; every later
+  `PUT`/`DELETE /api/calendar/phones/{device_id}` must carry it
+  (`X-Domovoi-Calendar-Key`, `403` without). An admin can remove a phone
+  calendar, or all of one phone's, in **Settings → Household →
+  Calendars**, e.g. one left behind by an uninstalled app.
+- **Left-behind calendars go by themselves.** A phone not heard from for
+  a day shows as stale ("Last heard from … 30 hours ago"); after 7 days
+  without an update its calendars are deleted (the calendar refresher).
+  Replacing the household device token removes every phone's calendars;
+  phones given the new token send them again.
+- **A late upload can't bring them back**: a snapshot's optional
+  `generation` older than the moment sharing was turned off is refused
+  (`410`).
+- **`GET /api/calendar/events` with no `start`/`end`** now answers a day
+  ago to 60 days ahead (it was every event, oldest first, capped at 500).
+- The same event shared by two phones (`ical_uid`, optional) is listed
+  once, with `also_in`. A private event a phone sends as `busy` shows and
+  is read aloud as busy time ("Tomorrow you're busy from 3 PM to 4 PM").
+- `GET /api/calendar/sources`: a phone's `device_id` is for admins only,
+  `account_name` is no longer kept or returned, `status` may be `stale`,
+  and a phone's calendars carry `expires_at`.
+
+**What an update needs:** the migration (V057: `calendar_phones`, and
+`ical_uid` / `busy` on `calendar_events`; it clears stored
+`account_name`s). A phone app built before this keeps working until its
+second snapshot, which needs the key: update the app.
+
 ## 2026-11-14 — Other calendars on the household calendar, read-only (V055)
 
 The Calendar page, Home and voice ("what's on my calendar today") can now

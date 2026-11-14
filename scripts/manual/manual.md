@@ -1298,7 +1298,11 @@ Change an event where it lives (the event says where).
   calendars](#app/phone-calendars) (under Household), turn on **Share this phone's calendars with the
   house** and pick the calendars. The phone sends them to your Domovoi
   over your home network (no internet needed) and keeps them up to date;
-  turn it off and they leave the house.
+  turn it off and they leave the house. A phone that stops sending (the
+  app uninstalled, the phone lost) shows as not heard from after a day,
+  and its calendars leave the house after 7 days; an admin can remove
+  them sooner in [Settings → Household →
+  Calendars](#settings/calendars). A private event shows as **Busy**.
 
 Home's **today / next** card shows what's still on today and the next few
 events of the week, from every calendar.

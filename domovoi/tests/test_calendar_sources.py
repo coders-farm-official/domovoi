@@ -334,10 +334,15 @@ async def test_a_phone_snapshot_replaces_unpicks_and_never_touches_another_phone
         _pcal("1", "Work", _pev("10:1", "Standup", t, t + 900_000)),
         _pcal("2", "Family", _pev("20:1", "", day, day + 86_400_000, all_day=True)),
     ), headers=DEVICE)
-    assert r.status_code == 200 and r.json() == {"calendars": 2, "events": 2}
+    assert r.status_code == 200
+    key_a = r.json().pop("calendar_key")
+    assert key_a and r.json() == {"calendars": 2, "events": 2, "calendar_key": key_a}
     r = await _call("PUT", "/api/calendar/phones/android-bbbb",
                     _snapshot(_pcal("1", "Work", _pev("9:1", "Other phone", t)), name="Galaxy"), headers=DEVICE)
     assert r.status_code == 200
+    key_b = r.json()["calendar_key"]
+    assert key_b and key_b != key_a
+    phone_a = {**DEVICE, calendar_feeds.CALENDAR_KEY_HEADER: key_a}
 
     events = (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()
     fam = next(e for e in events if e["calendar_name"] == "Family")
@@ -347,7 +352,7 @@ async def test_a_phone_snapshot_replaces_unpicks_and_never_touches_another_phone
     assert r.status_code == 409 and "on that phone" in r.json()["detail"]
 
     # Too soon for the same phone.
-    r = await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(), headers=DEVICE)
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(), headers=phone_a)
     assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
 
     # Unpicking Family: only that calendar goes, and only this phone's.
@@ -355,21 +360,212 @@ async def test_a_phone_snapshot_replaces_unpicks_and_never_touches_another_phone
 
     cal_api._last_snapshot.clear()
     r = await _call("PUT", "/api/calendar/phones/android-aaaa",
-                    _snapshot(_pcal("1", "Work", _pev("10:2", "Standup moved", t + 3_600_000))), headers=DEVICE)
-    assert r.json() == {"calendars": 1, "events": 1}
+                    _snapshot(_pcal("1", "Work", _pev("10:2", "Standup moved", t + 3_600_000))), headers=phone_a)
+    assert r.json() == {"calendars": 1, "events": 1, "calendar_key": None}
     titles = sorted(e["title"] for e in (await _call("GET", "/api/calendar/events", headers=DEVICE)).json())
     assert titles == ["Other phone", "Standup moved"]
 
+    # Device ids are an admin's to see; the account (an e-mail) nobody's.
     srcs = (await _call("GET", "/api/calendar/sources", headers=DEVICE)).json()
+    assert {(s["device_id"], s["name"]) for s in srcs} == {(None, "Work")}
+    assert all(s["account_name"] is None for s in srcs) and "alex@example.com" not in json.dumps(srcs)
+    srcs = (await _call("GET", "/api/calendar/sources")).json()
     assert {(s["device_id"], s["name"]) for s in srcs} == {("android-aaaa", "Work"), ("android-bbbb", "Work")}
-    # A phone's calendar is stopped on the phone, not here.
-    r = await _call("DELETE", f"/api/calendar/sources/{srcs[0]['id']}")
-    assert r.status_code == 409
+    assert (await house.execute(text(
+        "SELECT count(*) FROM calendar_sources WHERE account_name IS NOT NULL"))).scalar() == 0
 
     # Sharing turned off.
-    assert (await _call("DELETE", "/api/calendar/phones/android-aaaa", headers=DEVICE)).status_code == 204
+    assert (await _call("DELETE", "/api/calendar/phones/android-aaaa", headers=phone_a)).status_code == 204
     titles = [e["title"] for e in (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()]
     assert titles == ["Other phone"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_one_phone_cannot_write_or_delete_another_phones_calendars(house) -> None:
+    t = 1_795_000_000_000
+    from web.backend.api import calendar as cal_api
+
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa",
+                    _snapshot(_pcal("1", "Work", _pev("1", "Mine", t))), headers=DEVICE)
+    key_a = r.json()["calendar_key"]
+    r = await _call("PUT", "/api/calendar/phones/android-bbbb",
+                    _snapshot(_pcal("1", "Work", _pev("1", "B's", t))), headers=DEVICE)
+    key_b = r.json()["calendar_key"]
+    cal_api._last_snapshot.clear()
+
+    # Device B (or anything with only the household token) on A's id: refused.
+    for headers in (DEVICE, {**DEVICE, calendar_feeds.CALENDAR_KEY_HEADER: key_b},
+                    {**DEVICE, calendar_feeds.CALENDAR_KEY_HEADER: "guess"}):
+        r = await _call("PUT", "/api/calendar/phones/android-aaaa",
+                        _snapshot(_pcal("1", "Work", _pev("1", "Hijacked", t))), headers=headers)
+        assert r.status_code == 403, r.text
+        assert (await _call("DELETE", "/api/calendar/phones/android-aaaa", headers=headers)).status_code == 403
+    titles = sorted(e["title"] for e in (await _call("GET", "/api/calendar/events", headers=DEVICE)).json())
+    assert titles == ["B's", "Mine"]
+
+    # A phone's own key works; an admin needs none.
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa",
+                    _snapshot(_pcal("1", "Work", _pev("1", "Mine 2", t))),
+                    headers={**DEVICE, calendar_feeds.CALENDAR_KEY_HEADER: key_a})
+    assert r.status_code == 200 and r.json()["calendar_key"] is None
+    assert (await _call("DELETE", "/api/calendar/phones/android-bbbb")).status_code == 204
+    titles = [e["title"] for e in (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()]
+    assert titles == ["Mine 2"]
+    # The admin's removal forgot B's key: B, still sharing, starts over.
+    cal_api._last_snapshot.clear()
+    r = await _call("PUT", "/api/calendar/phones/android-bbbb",
+                    _snapshot(_pcal("1", "Work", _pev("1", "B again", t))),
+                    headers={**DEVICE, calendar_feeds.CALENDAR_KEY_HEADER: key_b})
+    assert r.status_code == 200 and r.json()["calendar_key"] not in (None, key_b)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_admin_removes_a_phone_calendar_left_behind(house) -> None:
+    t = 1_795_000_000_000
+    await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(
+        _pcal("1", "Work", _pev("1", "Standup", t)), _pcal("2", "Family", _pev("2", "Dinner", t))),
+        headers=DEVICE)
+    srcs = (await _call("GET", "/api/calendar/sources")).json()
+    work = next(s for s in srcs if s["name"] == "Work")
+    assert (await _call("DELETE", f"/api/calendar/sources/{work['id']}", headers=DEVICE)).status_code in (401, 403)
+    assert (await _call("DELETE", f"/api/calendar/sources/{work['id']}")).status_code == 204
+    titles = [e["title"] for e in (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()]
+    assert titles == ["Dinner"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_silent_phone_goes_stale_after_a_day_and_leaves_after_a_week(house, monkeypatch) -> None:
+    from domovoi.workers.calendar_feed_refresher import CalendarFeedRefresher
+
+    t = 1_795_000_000_000
+    clock = {"now": datetime.now(timezone.utc)}
+    monkeypatch.setattr(calendar_feeds, "_now", lambda: clock["now"])
+    await _call("PUT", "/api/calendar/phones/android-aaaa",
+                _snapshot(_pcal("1", "Work", _pev("1", "Standup", t))), headers=DEVICE)
+
+    clock["now"] += timedelta(hours=23)
+    src = (await _call("GET", "/api/calendar/sources", headers=DEVICE)).json()[0]
+    assert src["status"] == "ok" and src["last_error_words"] is None
+
+    clock["now"] += timedelta(hours=7)  # 30 h without a snapshot
+    src = (await _call("GET", "/api/calendar/sources", headers=DEVICE)).json()[0]
+    assert src["status"] == "stale" and src["last_error"] == "stale"
+    assert src["last_error_words"].startswith("Last heard from Pixel 8 30 hours ago.")
+    assert (await CalendarFeedRefresher().tick())["expired"] == 0
+
+    clock["now"] += timedelta(days=6)  # 7 days and 6 hours
+    assert (await CalendarFeedRefresher().tick())["expired"] == 1
+    assert (await _call("GET", "/api/calendar/sources", headers=DEVICE)).json() == []
+    assert (await house.execute(text("SELECT count(*) FROM calendar_events"))).scalar() == 0
+    assert (await house.execute(text("SELECT count(*) FROM calendar_phones"))).scalar() == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_upload_made_before_sharing_was_turned_off_is_refused(house) -> None:
+    from web.backend.api import calendar as cal_api
+
+    t = 1_795_000_000_000
+    body = {**_snapshot(_pcal("1", "Work", _pev("1", "Standup", t))), "generation": 100}
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa", body, headers=DEVICE)
+    phone = {**DEVICE, calendar_feeds.CALENDAR_KEY_HEADER: r.json()["calendar_key"]}
+    cal_api._last_snapshot.clear()
+    # The phone read generation 105, went off mid-upload; sharing was then
+    # turned off at 106; the 105 upload lands after the DELETE.
+    async with _client(phone) as c:
+        assert (await c.delete("/api/calendar/phones/android-aaaa", params={"generation": 106})).status_code == 204
+    late = {**_snapshot(_pcal("1", "Work", _pev("1", "Ghost", t))), "generation": 105}
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa", late, headers=phone)
+    assert r.status_code == 410
+    assert (await _call("GET", "/api/calendar/sources", headers=DEVICE)).json() == []
+    # Sharing turned on again later: a newer generation is taken.
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa", {**late, "generation": 107}, headers=phone)
+    assert r.status_code == 200
+    # An older one than stored is refused; the same one again (a retry) is fine.
+    cal_api._last_snapshot.clear()
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa", {**late, "generation": 106}, headers=phone)
+    assert r.status_code == 410
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa", {**late, "generation": 107}, headers=phone)
+    assert r.status_code == 200
+    cal_api._last_snapshot.clear()
+    await _call("PUT", "/api/calendar/phones/android-aaaa", {**late, "generation": 200}, headers=phone)
+    cal_api._last_snapshot.clear()
+    r = await _call("PUT", "/api/calendar/phones/android-aaaa", {**late, "generation": 150}, headers=phone)
+    assert r.status_code == 409
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_replacing_the_device_token_removes_every_phones_calendars(house) -> None:
+    t = 1_795_000_000_000
+    await _call("PUT", "/api/calendar/phones/android-aaaa",
+                _snapshot(_pcal("1", "Work", _pev("1", "Standup", t))), headers=DEVICE)
+    from web.backend.db import session_scope
+
+    await calendar_feeds.after_device_token_change(session_scope)
+    assert (await house.execute(text("SELECT count(*) FROM calendar_sources"))).scalar() == 0
+    assert (await house.execute(text("SELECT count(*) FROM calendar_phones"))).scalar() == 0
+
+
+def test_the_token_routes_remove_phones_calendars() -> None:
+    import inspect
+
+    from domovoi import main as core_main
+    from web.backend.api import auth as web_auth
+
+    for fn in (web_auth.auth_rotate_device_token, web_auth.auth_set_device_token,
+               core_main.admin_rotate_device_token, core_main.admin_set_device_token):
+        assert "after_device_token_change" in inspect.getsource(fn), fn.__name__
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_events_default_to_a_day_back_and_sixty_ahead(house) -> None:
+    now = datetime.now(timezone.utc)
+    for title, at in (("Long ago", now - timedelta(days=10)), ("Yesterday", now - timedelta(hours=20)),
+                      ("Soon", now + timedelta(days=2)), ("Far", now + timedelta(days=90))):
+        r = await _call("POST", "/api/calendar/events", {"title": title, "starts_at": at.isoformat()},
+                        headers=DEVICE)
+        assert r.status_code == 201
+    titles = [e["title"] for e in (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()]
+    assert titles == ["Yesterday", "Soon"]
+    # One bound alone stays open on the other side, as before.
+    async with _client(DEVICE) as c:
+        r = await c.get("/api/calendar/events", params={"start": (now - timedelta(days=30)).isoformat()})
+    assert [e["title"] for e in r.json()] == ["Long ago", "Yesterday", "Soon", "Far"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_one_event_from_two_phones_is_listed_once(house) -> None:
+    t = 1_795_000_000_000
+    ev = {**_pev("7:1", "Grandma's birthday", t), "ical_uid": "abc123@google.com"}
+    other = {**_pev("99:1", "Grandma's birthday", t), "ical_uid": "abc123@google.com"}
+    await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(_pcal("1", "Family", ev)), headers=DEVICE)
+    await _call("PUT", "/api/calendar/phones/android-bbbb",
+                _snapshot(_pcal("5", "Family", other, _pev("98:1", "No uid", t)), name="Galaxy"), headers=DEVICE)
+    events = (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()
+    assert sorted(e["title"] for e in events) == ["Grandma's birthday", "No uid"]
+    bday = next(e for e in events if e["title"] == "Grandma's birthday")
+    assert bday["owner_name"] == "Pixel 8" and bday["also_in"] == ["Family · Galaxy"]
+    # A different start (another instance) is a different event.
+    assert calendar_feeds.master_uid("abc123@google.com@2026-11-17T09:00:00") == "abc123@google.com"
+    assert calendar_feeds.master_uid("abc123@google.com") == "abc123@google.com"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_private_event_is_busy_with_no_title_or_place(house) -> None:
+    t = 1_795_000_000_000
+    ev = {**_pev("1", "Therapy", t, t + 3_600_000), "location": "Dr. Smith", "busy": True}
+    await _call("PUT", "/api/calendar/phones/android-aaaa", _snapshot(_pcal("1", "Work", ev)), headers=DEVICE)
+    e = (await _call("GET", "/api/calendar/events", headers=DEVICE)).json()[0]
+    assert e["busy"] is True and e["title"] == "Busy" and e["location"] is None
+    stored = (await house.execute(text("SELECT title, location FROM calendar_events"))).first()
+    assert tuple(stored) == ("Busy", None)
 
 
 @requires_db
