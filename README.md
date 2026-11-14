@@ -13,10 +13,15 @@
 
 <p align="center">
   <a href="https://github.com/coders-farm-official/domovoi/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/coders-farm-official/domovoi?display_name=tag&sort=semver&label=latest%20release&color=2EA043&style=flat-square&labelColor=1F1A14"></a>
+  <a href="docs/LINUX_HOST.md#release-channels"><img alt="server, Windows and rooms: the version on stable" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fcoders-farm-official%2Fdomovoi%2Fstable%2Fpyproject.toml&query=%24.project.version&prefix=v&label=server%20%C2%B7%20Windows%20%C2%B7%20rooms&color=2EA043&style=flat-square&labelColor=1F1A14"></a>
+  <a href="https://play.google.com/store/apps/details?id=com.domovoi.app"><img alt="Android app: the version on stable" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fcoders-farm-official%2Fdomovoi%2Fstable%2Fandroid%2Frelease.json&query=%24.release.version_name&prefix=v&label=Android%20app&color=2EA043&style=flat-square&labelColor=1F1A14"></a>
+  <img alt="iPhone app: coming soon" src="https://img.shields.io/badge/iPhone%20app-coming%20soon-8B8178?style=flat-square&labelColor=1F1A14">
+  <br>
+  <a href="docs/CONTRIBUTING.md#running-the-tests"><img alt="tests: 26,600+ (server and rooms, Android app, Windows)" src="https://img.shields.io/badge/tests-26%2C600%2B-2EA043?style=flat-square&labelColor=1F1A14"></a>
   <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
   <br>
   <img alt="runs on: Linux, Windows, Raspberry Pi, Android" src="https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows%20%C2%B7%20Raspberry%20Pi%20%C2%B7%20Android-F2A618?style=flat-square&labelColor=1F1A14">
-  <img alt="built with: Python, Kotlin" src="https://img.shields.io/badge/built%20with-Python%20%C2%B7%20Kotlin-F2A618?style=flat-square&labelColor=1F1A14">
+  <img alt="built with: Python, Kotlin, C#" src="https://img.shields.io/badge/built%20with-Python%20%C2%B7%20Kotlin%20%C2%B7%20C%23-F2A618?style=flat-square&labelColor=1F1A14">
 </p>
 
 <p align="center">

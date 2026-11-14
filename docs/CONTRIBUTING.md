@@ -517,6 +517,13 @@ doesn't change it ships no APKs and leaves `android/release.json` as it
 is, still naming the earlier release that holds them, so servers keep
 fetching the app from there. (The iPhone app is separate again.)
 
+The README's version badges read `pyproject.toml` and `android/release.json`
+on `stable`, so they follow each release by themselves. Its **tests** badge
+is a fixed number: in the release commit, set it to the sum of
+`pytest --collect-only -q` (server, satellites and the bundled plugin),
+`./gradlew testDebugUnitTest` (Android) and `windows/build.ps1 -SkipInstaller`
+(Windows), rounded down to the hundred.
+
 Two branches: `main` carries every change; **`stable`** points at the
 latest release and only ever fast-forwards to one. Release candidates
 (`rcN`) are full GitHub releases (the suffix says what they are; owner
