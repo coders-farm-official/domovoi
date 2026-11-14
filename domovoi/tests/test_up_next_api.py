@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -333,12 +334,16 @@ async def test_feedback_remove_less_like_this_and_skip(_db, clean) -> None:
         assert set(same) | {first["seq"]} <= set(nxt["removed"])
         got = (await c.get(f"{BASE}/sessions/{sid}")).json()
         assert victim["artist"] not in {p["artist"] for p in got["picks"]}
-        # Two early skips of one artist exclude it.
-        other = next(p for p in nxt["picks"] if p["artist"] != victim["artist"])
-        art = other["artist"]
+        # Two early skips of one artist exclude it. The session's shuffle is
+        # unseeded, so take an artist with two waiting picks (the newest batch
+        # alone can hold just one of each: 2 runs in 40 did).
+        waiting = list({p["seq"]: p for p in got["picks"] + nxt["picks"]}.values())
+        by_artist = Counter(p["artist"] for p in waiting if p["artist"] != victim["artist"])
+        art = next((a for a, k in sorted(by_artist.items()) if k >= 2), None)
+        assert art is not None, by_artist
+        other, second = [p for p in waiting if p["artist"] == art][:2]
         r1 = (await fb({"track_id": other["track_id"], "kind": "skip", "played_sec": 5})).json()
         assert r1 == {"removed": []}
-        second = next(p for p in nxt["picks"] if p["artist"] == art and p["seq"] != other["seq"])
         r2 = (await fb({"seq": second["seq"], "kind": "skip", "played_sec": 5})).json()
         assert r2["removed"] and all(
             p["artist"] == art for p in nxt["picks"] + got["picks"] if p["seq"] in r2["removed"])

@@ -139,27 +139,36 @@ class ListenSource(Protocol):
 
 # ─── The library ──────────────────────────────────────────────────────────
 
+# Each part picks its tracks by id and hash alone, and only those ids read
+# the full rows: sorting thousands of whole rows (genre arrays included) per
+# year or genre cost a third of the refill on a 100,000-track library. Same
+# tracks, same order (part, then seed, then hash) as sorting the rows.
 _NEAR_SQL = text(f"""
-SELECT t.* FROM unnest(CAST(:artists AS text[])) AS a(n)
-CROSS JOIN LATERAL (
-    SELECT {_COLS} FROM library_tracks lt
-    WHERE lt.artist_norm = a.n
-    ORDER BY hashtext(lt.id::text || :salt) LIMIT :artist_lim
-) t
-UNION ALL
-SELECT t.* FROM unnest(CAST(:years AS int[])) AS y(v)
-CROSS JOIN LATERAL (
-    SELECT {_COLS} FROM library_tracks lt
-    WHERE lt.year BETWEEN y.v - :span AND y.v + :span
-    ORDER BY hashtext(lt.id::text || :salt) LIMIT :era_lim
-) t
-UNION ALL
-SELECT t.* FROM unnest(CAST(:keys AS text[])) AS g(k)
-CROSS JOIN LATERAL (
-    SELECT {_COLS} FROM library_tracks lt
-    WHERE lt.genre_keys && ARRAY[g.k]
-    ORDER BY hashtext(lt.id::text || :salt) LIMIT :genre_lim
-) t
+WITH picked AS (
+    SELECT 1 AS part, a.o, t.h, t.id FROM unnest(CAST(:artists AS text[])) WITH ORDINALITY AS a(n, o)
+    CROSS JOIN LATERAL (
+        SELECT lt.id, hashtext(lt.id::text || :salt) AS h FROM library_tracks lt
+        WHERE lt.artist_norm = a.n
+        ORDER BY h LIMIT :artist_lim
+    ) t
+    UNION ALL
+    SELECT 2, y.o, t.h, t.id FROM unnest(CAST(:years AS int[])) WITH ORDINALITY AS y(v, o)
+    CROSS JOIN LATERAL (
+        SELECT lt.id, hashtext(lt.id::text || :salt) AS h FROM library_tracks lt
+        WHERE lt.year BETWEEN y.v - :span AND y.v + :span
+        ORDER BY h LIMIT :era_lim
+    ) t
+    UNION ALL
+    SELECT 3, g.o, t.h, t.id FROM unnest(CAST(:keys AS text[])) WITH ORDINALITY AS g(k, o)
+    CROSS JOIN LATERAL (
+        SELECT lt.id, hashtext(lt.id::text || :salt) AS h FROM library_tracks lt
+        WHERE lt.genre_keys && ARRAY[g.k]
+        ORDER BY h LIMIT :genre_lim
+    ) t
+)
+SELECT {', '.join('lt.' + c for c in _COLS.split(', '))}
+FROM picked p JOIN library_tracks lt ON lt.id = p.id
+ORDER BY p.part, p.o, p.h
 """)
 
 _TRACKS_SQL = text(f"SELECT {_COLS} FROM library_tracks WHERE id = ANY(CAST(:ids AS int[]))")

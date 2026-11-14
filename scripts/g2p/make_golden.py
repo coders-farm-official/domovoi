@@ -237,12 +237,13 @@ def edit_distance(a, b):
 
 
 def near_tie_ok(expected, got, case):
-    """A near-tie case may differ by one phoneme (at most two code points,
-    "iː" against "ɪ") per near-tie word, nothing else: same sentence count."""
+    """A near-tie case may differ by one phoneme (at most three code points,
+    "iː" against "ɪ", or "ˌiː" dropped for a blank) per near-tie word,
+    nothing else: same sentence count."""
     ties = case.get("near_tie") or []
     if not ties or len(expected) != len(got):
         return False
-    return edit_distance(" | ".join(expected), " | ".join(got)) <= 2 * len(ties)
+    return edit_distance(" | ".join(expected), " | ".join(got)) <= 3 * len(ties)
 
 
 def render(header, cases):
