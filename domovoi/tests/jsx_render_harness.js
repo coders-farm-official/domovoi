@@ -75,6 +75,8 @@ const render = ({ file, component, props = {}, fnProps = [], apiObject = null, a
   sandbox.fmtCount = (n) => (typeof n === 'number' ? n.toLocaleString() : '—');
   sandbox.useStateEvents = () => {};
   sandbox.useDebouncedValue = (v) => v;
+  // components.jsx's credited-artists line ("with B, C"): a song row's quiet extra.
+  sandbox.creditedWith = () => '';
   sandbox.stateBus = { subscribe: () => () => {} };
   sandbox.globalThis = sandbox;
   if (theme) {

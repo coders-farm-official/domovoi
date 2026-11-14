@@ -268,8 +268,59 @@ READ_ONLY_MESSAGE = (
     "Copy it to a new playlist to change it in Domovoi."
 )
 
+# What :func:`attach_track` did.
+ATTACHED = "attached"
+ATTACH_MISSING = "missing"      # the playlist is gone (a soft reference)
+ATTACH_IMPORTED = "imported"    # made from files: read-only, nothing written
+
+# Why a finished download wasn't put on the playlist it asked for, kept on
+# its acquisition row (``result.attach_skipped``).
+ATTACH_IMPORTED_NOTE = (
+    "Not added to the playlist: it comes from your music files, "
+    "so it is read-only in Domovoi."
+)
+
+
+async def attach_track(session: Any, playlist_id: int, track_id: int) -> str:
+    """Append ``track_id`` to the end of playlist ``playlist_id`` (no-op if
+    it is already there) and fire ``playlists_changed``, unless the
+    playlist is gone (:data:`ATTACH_MISSING`) or was made from the music
+    files (:data:`ATTACH_IMPORTED`): read-only everywhere, as the web route
+    refuses it (409, :data:`READ_ONLY_MESSAGE`), so nothing is written.
+    The one place a finished download (``domovoi/acquisitions.py``) and a
+    plugin's ingest (``domovoi/sdk/library.py``) put a song on a playlist."""
+    row = (await session.execute(
+        text("SELECT imported_from FROM playlists WHERE id = :pid"), {"pid": playlist_id},
+    )).first()
+    if row is None:
+        return ATTACH_MISSING
+    if row[0] is not None:
+        return ATTACH_IMPORTED
+    await session.execute(
+        text(
+            """
+            INSERT INTO playlist_tracks (playlist_id, track_id, position)
+            VALUES (
+                :pid, :tid,
+                COALESCE((SELECT MAX(position) + 1 FROM playlist_tracks
+                          WHERE playlist_id = :pid), 0)
+            )
+            ON CONFLICT (playlist_id, track_id) DO NOTHING
+            """
+        ),
+        {"pid": playlist_id, "tid": track_id},
+    )
+    await session.execute(text("SELECT pg_notify('playlists_changed', 'attached')"))
+    return ATTACHED
+
+
 __all__ = [
+    "ATTACHED",
+    "ATTACH_IMPORTED",
+    "ATTACH_IMPORTED_NOTE",
+    "ATTACH_MISSING",
     "READ_ONLY_MESSAGE",
+    "attach_track",
     "build_playlists",
     "is_imported",
     "parse_m3u",

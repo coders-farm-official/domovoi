@@ -141,14 +141,14 @@ async def list_playlist_tracks(playlist_id: int) -> list[Track]:
     Virtual Favorites: ``library_tracks.id ASC`` (proxy for
     chronological since there's no ``favorited_at`` column today).
     """
+    from web.backend.api.music import track_columns
+
     async with session_scope() as s:
         if playlist_id == FAVORITES_VIRTUAL_ID:
             rows = await s.execute(
                 text(
-                    """
-                    SELECT id, file_path, title, artist, album, duration_sec,
-                           source, source_id, musicbrainz_recording_id,
-                           added_at, added_via, enriched_at, favorited
+                    f"""
+                    SELECT {track_columns()}
                     FROM library_tracks
                     WHERE favorited
                     ORDER BY id ASC
@@ -171,11 +171,8 @@ async def list_playlist_tracks(playlist_id: int) -> list[Track]:
                 )
             rows = await s.execute(
                 text(
-                    """
-                    SELECT lt.id, lt.file_path, lt.title, lt.artist, lt.album,
-                           lt.duration_sec, lt.source, lt.source_id,
-                           lt.musicbrainz_recording_id, lt.added_at,
-                           lt.added_via, lt.enriched_at, lt.favorited
+                    f"""
+                    SELECT {track_columns("lt")}
                     FROM playlist_tracks pt
                     JOIN library_tracks lt ON pt.track_id = lt.id
                     WHERE pt.playlist_id = :id
@@ -660,22 +657,8 @@ async def remove_track_from_playlist(playlist_id: int, track_id: int) -> None:
 
 
 def _row_to_track(r: Any) -> Track:
-    # Library-relative, never the absolute server path (WEB-16) — the
-    # same helper the library reads use.
-    from web.backend.api.music import public_track_path
+    # The library reads' own builder: library-relative paths (WEB-16),
+    # the credited artists and the cover version, the same everywhere.
+    from web.backend.api.music import _row_to_track as music_row_to_track
 
-    return Track(
-        id=int(r[0]),
-        file_path=public_track_path(r[1]),
-        title=r[2],
-        artist=r[3],
-        album=r[4],
-        duration_sec=r[5],
-        source=r[6],
-        source_id=r[7],
-        musicbrainz_recording_id=r[8],
-        added_at=r[9],
-        added_via=r[10],
-        enriched_at=r[11],
-        favorited=bool(r[12]),
-    )
+    return music_row_to_track(r)

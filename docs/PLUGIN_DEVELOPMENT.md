@@ -1161,7 +1161,9 @@ For media providers:
   source, source_id, added_via, attach_to_playlist_id=None, metadata=None)`
   — the one write path: Windows-strict sanitize/rename to
   `MUSIC_DIR/<artist>/<title>.mp3` **before** the insert, upsert on
-  `(source, source_id)` then `file_path`, soft playlist attach, MPD update
+  `(source, source_id)` then `file_path`, soft playlist attach (skipped,
+  with one log line, when the playlist is gone or was made from the music
+  files: those are read-only everywhere), MPD update
   fan-out, commit-coupled `library_changed` NOTIFY, and a
   `core.library_track_added` bus event. `added_via` must be `'voice'` or
   `'manual'`; `source` is an open enum registered on first use.

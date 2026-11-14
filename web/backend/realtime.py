@@ -105,6 +105,7 @@ from sqlalchemy import text
 
 from domovoi.config import settings as core_settings
 from domovoi.db.session import connect_url
+from domovoi.library_cover_version import cover_url
 
 from web.backend import satellite_adoption, timer_fires
 from web.backend.db import session_scope
@@ -148,6 +149,13 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # `library.indexer.changed` event so an upload surfaces the moment
     # indexing lands instead of after a timed guess.
     "library_changed": "library.indexer",
+    # A library track's cover art changed (V059, domovoi/library_cover_version.py):
+    # the Cover Art Archive wrote or cached it, an Undo took it out, or a
+    # rescan found the file or its folder image changed. The resulting
+    # `library.cover.changed` event names the tracks and their new
+    # ``cover_v``, so a page or app swaps those pictures (the cover URL
+    # carries ``?v=``) without re-reading whole lists.
+    "library_cover_changed": "library.cover",
     # Custom wake words. Net-new realtime plumbing (the Voices
     # page it clones uses no realtime). Fires from THREE sites, each in
     # its own transaction: the web CRUD endpoints, the Domovoi server's
@@ -624,6 +632,34 @@ async def _snapshot_library_index() -> dict[str, Any]:
     return {"count": int(row[0]), "latest_added": _isoformat(row[1])}
 
 
+# How many of the most recent cover changes `library.cover` carries.
+LIBRARY_COVER_RECENT = 50
+
+
+async def _snapshot_library_covers() -> dict[str, Any]:
+    """The most recent cover-art changes (V059): ``{"tracks": [{"id",
+    "cover_v", "cover_url"}, ...]}``, newest first, at most
+    :data:`LIBRARY_COVER_RECENT`. Moves only when a cover version does, so
+    ``library.cover.changed`` fires exactly then; a client compares each
+    ``cover_v`` with the one it holds and redraws the ones that moved.
+    Read from a partial index (``cover_changed_at IS NOT NULL``)."""
+    async with session_scope() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT id, cover_rev FROM library_tracks "
+                    "WHERE cover_changed_at IS NOT NULL "
+                    "ORDER BY cover_changed_at DESC, id DESC LIMIT :n"
+                ),
+                {"n": LIBRARY_COVER_RECENT},
+            )
+        ).all()
+    return {"tracks": [
+        {"id": int(r[0]), "cover_v": int(r[1]), "cover_url": cover_url(int(r[0]), int(r[1]))}
+        for r in rows
+    ]}
+
+
 async def _snapshot_lyrics() -> dict[str, Any]:
     """A cheap digest of the lyrics tables (V021) for the ``lyrics`` channel:
     how many songs have a row, have lyrics, have timed lyrics, were asked
@@ -1082,6 +1118,7 @@ StatePollLoop._CHANNEL_HELPERS = {
     "music.now_playing": _snapshot_now_playing,
     "playlists":         _snapshot_playlists,
     "library.indexer":   _snapshot_library_index,
+    "library.cover":     _snapshot_library_covers,
     "lyrics": _snapshot_lyrics,
     "wake_words":        _snapshot_wake_words,
     "podcasts":          _snapshot_podcasts,

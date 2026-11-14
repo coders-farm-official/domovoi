@@ -4,7 +4,7 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## 1.3.0 (unreleased) — Library tools: duplicates, needs review, cover art written into files (V058)
+## 1.3.0 (unreleased) — Library tools: duplicates, needs review, cover art written into files (V058, V059)
 
 **Migration V058**, after the calendars' V055/V057 and Up next's V056
 (`library_match_candidates`, `library_duplicate_keeps`, `library_trash`,
@@ -69,6 +69,26 @@ rules stand.
   file's own pictures are saved first in `~/.domovoi/cover_art/originals/`
   and **Undo** puts them back. Folder images are never touched. New egress
   host: coverartarchive.org (redirecting to archive.org).
+
+**Migration V059** (`library_tracks.cover_rev`, `cover_sig`,
+`cover_changed_at`): a track's cover version.
+
+* **Every artist on a song.** Library tracks (lists, one track, playlist
+  tracks) and room-queue rows carry `artists`: every artist the file
+  credits, in its order (`[]` when nobody beyond `artist`). The Library
+  list, a playlist's songs and the track drawer show the others quietly
+  ("with B, C").
+* **New covers show at once.** Track and queue rows carry `cover_v` and a
+  `cover_url` with `?v=<cover_v>`; it moves when the Cover Art Archive
+  writes art (or keeps Domovoi's copy), on Undo, and when a rescan finds a
+  file or its album-folder image changed (the first rescan after the update
+  only notes what is there). The realtime channel `library.cover` names
+  the tracks whose cover changed; the dashboard redraws them.
+* **Playlists from files stay read-only everywhere.** A download that
+  asked to go on one (`attach_to_playlist_id`) lands in the library only,
+  with `result.attach_skipped` saying why; a plugin's
+  `sdk.library.ingest_track(..., attach_to_playlist_id=)` skips it the same
+  way, with one log line.
 
 New routes: `/api/music/library-tools/*` (docs/API_REFERENCE.md) and
 `POST /api/playlists/{id}/copy`.
