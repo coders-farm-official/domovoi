@@ -43,6 +43,9 @@ public struct QueueItem: Equatable, Sendable, Decodable {
     /// `explicit` for one somebody asked for (`music_queue.py:220`).
     public let origin: String
     public let reasonLabel: String?
+    /// "Why this song?" (1.3.0): the server's sentence for a pick, nil for
+    /// anything else or a pick from before. Shown as it is.
+    public let why: String?
     public let upNextSeq: Int?
     /// The library song the entry is; nil for a stream, a podcast or a file
     /// the library does not know.
@@ -68,6 +71,7 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         playing: Bool = false,
         origin: String = "explicit",
         reasonLabel: String? = nil,
+        why: String? = nil,
         upNextSeq: Int? = nil,
         trackID: Int64? = nil,
         artists: [String] = [],
@@ -87,6 +91,7 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         self.playing = playing
         self.origin = origin
         self.reasonLabel = reasonLabel
+        self.why = why
         self.upNextSeq = upNextSeq
         self.trackID = trackID
         self.artists = artists
@@ -95,7 +100,7 @@ public struct QueueItem: Equatable, Sendable, Decodable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pos, file, title, artist, album, playing, origin, artists
+        case pos, file, title, artist, album, playing, origin, artists, why
         case coverV = "cover_v"
         case coverURL = "cover_url"
         case reasonLabel = "reason_label"
@@ -135,6 +140,7 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         // origin that is not `auto` is `explicit`, as the server writes it.
         origin = (try? values.decodeIfPresent(String.self, forKey: .origin)) == "auto" ? "auto" : "explicit"
         reasonLabel = try? values.decodeIfPresent(String.self, forKey: .reasonLabel)
+        why = try? values.decodeIfPresent(String.self, forKey: .why)
         upNextSeq = try? values.decodeIfPresent(Int.self, forKey: .upNextSeq)
         trackID = try? values.decodeIfPresent(Int64.self, forKey: .trackID)
         artists = (try? values.decodeIfPresent([String].self, forKey: .artists)) ?? []

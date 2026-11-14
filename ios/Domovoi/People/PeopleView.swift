@@ -192,6 +192,7 @@ struct PeopleView: View {
                     forgetting: $forgetting,
                     embedded: embedded,
                     thisPhone: thisPhone,
+                    shell: model,
                     onPeopleChanged: { people.roster.refresh() }
                 )
             } else {

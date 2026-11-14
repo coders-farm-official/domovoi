@@ -60,6 +60,8 @@ public struct MusicPlayerItem: Equatable, Sendable, Identifiable {
     public var queueOrigin: PlayerQueueOrigin = .explicit
     public var upNextSeq: Int?
     public var reasonLabel: String?
+    /// "Why this song?" (1.3.0): the server's sentence, as it sent it.
+    public var why: String?
     public var sessionID: String?
 
     public init(
@@ -571,6 +573,7 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
         out.queueOrigin = item.queueOrigin
         out.upNextSeq = item.upNextSeq
         out.reasonLabel = item.reasonLabel
+        out.why = item.why
         out.sessionID = item.sessionID
         return out
     }

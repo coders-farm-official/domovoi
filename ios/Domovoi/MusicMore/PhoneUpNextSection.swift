@@ -143,35 +143,14 @@ struct PhoneUpNextRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            Button {
-                player.tapped(index)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Image(systemName: "sparkles")
-                            .font(.caption2)
-                            .foregroundStyle(Color.fgMuted)
-                            .accessibilityLabel(PhoneUpNextStrings.pick)
-                        Text(item.title)
-                            .font(.subheadline)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Text(item.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "—")
-                        .font(.caption)
-                        .foregroundStyle(Color.fgMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                    // Why it was picked: a muted chip ("same artist", "90s").
-                    if let reason = item.reasonLabel?.trimmingCharacters(in: .whitespaces), !reason.isEmpty {
-                        HomeTonePill(label: reason, tone: .idle)
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(.rect)
-                .accessibilityElement(children: .combine)
+            VStack(alignment: .leading, spacing: 2) {
+                play
+                // Why it was picked: a muted chip ("same artist", "90s"); with
+                // the server's sentence ("why this song?", 1.3.0) a button of
+                // its own, OUTSIDE the play button, that shows the sentence
+                // under the row and never plays the song.
+                UpNextWhyBlock(chip: WhyChip.phone(item))
             }
-            .buttonStyle(.plain)
-            .accessibilityHint(PhoneUpNextStrings.playNow)
-            .accessibilityIdentifier("player-upnext-pick-\(item.upNextSeq ?? -1)")
             if player.mayLessLike(index) {
                 control("hand.thumbsdown", RoomUpNextStrings.lessLikeLabel(item.artist), tint: .fgMuted) {
                     player.lessLike(index)
@@ -182,6 +161,35 @@ struct PhoneUpNextRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Tap = play it now.
+    private var play: some View {
+        Button {
+            player.tapped(index)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: "sparkles")
+                        .font(.caption2)
+                        .foregroundStyle(Color.fgMuted)
+                        .accessibilityLabel(PhoneUpNextStrings.pick)
+                    Text(item.title)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(item.artist.flatMap { $0.isEmpty ? nil : $0 } ?? "—")
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(.rect)
+            .accessibilityElement(children: .combine)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(PhoneUpNextStrings.playNow)
+        .accessibilityIdentifier("player-upnext-pick-\(item.upNextSeq ?? -1)")
     }
 
     private func control(

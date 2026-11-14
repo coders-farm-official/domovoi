@@ -442,6 +442,12 @@ struct MusicPlayerTabView: View {
                 PhoneUpNextSection(player: player)
             }
         }
+        // The household's Music mix Autoplay default (1.3.0), read while the
+        // queue is on screen so the switch says it until the person flips
+        // it here (Android's ReadMixDefaults). Kept under the server asked.
+        .task(id: player.upNext?.mayAsk == true) {
+            await player.upNext?.readHouseholdDefault()
+        }
     }
 
     // MARK: - the two shapes every control row here uses

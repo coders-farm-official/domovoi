@@ -83,7 +83,7 @@ final class SettingsPlaceTests: XCTestCase {
         XCTAssertEqual(SettingsSection.all.count, counted)
         // The table's own order survives the filter.
         XCTAssertEqual(
-            ["rooms", "people", "phones-and-browsers", "printers", "phone-calendars"],
+            ["rooms", "people", "phones-and-browsers", "music-mix", "printers", "phone-calendars"],
             sections(of: .household).map(\.key)
         )
     }
@@ -98,7 +98,7 @@ final class SettingsPlaceTests: XCTestCase {
         )
         XCTAssertEqual(
             [
-                ["Rooms", "People", "Phones & browsers", "Printers & scanners", "Phone calendars"],
+                ["Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars"],
                 ["Wake words", "Voices", "Greetings"],
                 ["Models", "Chat"],
                 ["Internet", "Voice history"],
@@ -113,7 +113,7 @@ final class SettingsPlaceTests: XCTestCase {
     /// calendars.
     func testASharedScreenLeavesPeopleOutOfSettingsToo() {
         XCTAssertEqual(
-            ["Rooms", "Phones & browsers", "Printers & scanners"],
+            ["Rooms", "Phones & browsers", "Music mix", "Printers & scanners"],
             sections(of: .household, sharedScreen: true).map(\.label)
         )
         XCTAssertEqual(.group(.household), settingsPlace(of: "phone-calendars", sharedScreen: true))

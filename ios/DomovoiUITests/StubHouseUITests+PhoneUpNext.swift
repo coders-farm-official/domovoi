@@ -136,7 +136,9 @@ extension StubHouseUITests {
                     && context?["kind"] as? String == "playlist"
                     && context?["ref"] as? String == "41"
                     && target?["kind"] as? String == "device"
-                    && body["autoplay"] as? Bool == true
+                    // 1.3.0 (unit mix): never flipped here, so autoplay is
+                    // left out and the house's Music mix default applies.
+                    && body["autoplay"] == nil
             },
             "no whole-list start for the playlist reached the house"
         )

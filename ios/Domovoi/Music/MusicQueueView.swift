@@ -329,9 +329,20 @@ struct MusicQueueRow: View {
         )
     }
 
+    /// The text, and under it why the room picked it: a muted chip ("same
+    /// artist", "90s"); with the server's sentence ("why this song?", 1.3.0)
+    /// a button of its own, OUTSIDE the play-now button, that shows the
+    /// sentence under the row and never plays the song.
+    private var what: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            playable
+            UpNextWhyBlock(chip: WhyChip.room(item))
+        }
+    }
+
     /// The text, as the button that plays it now where that can be done.
     @ViewBuilder
-    private var what: some View {
+    private var playable: some View {
         if queue.mayPlayNow(item) {
             Button { queue.playNow(item) } label: {
                 text
@@ -364,10 +375,6 @@ struct MusicQueueRow: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            // Why the room picked it: a muted chip ("same artist", "90s").
-            if item.isPick, let reason = item.reasonLabel?.trimmingCharacters(in: .whitespaces), !reason.isEmpty {
-                HomeTonePill(label: reason, tone: .idle)
-            }
         }
         .accessibilityElement(children: .combine)
     }
