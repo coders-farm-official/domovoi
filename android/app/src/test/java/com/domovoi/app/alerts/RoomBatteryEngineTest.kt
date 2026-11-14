@@ -65,7 +65,7 @@ class RoomBatteryEngineTest {
         web.shutdown()
     }
 
-    private fun w(id: Long, room: String = "pako", threshold: Int = 20, percent: Int = 19) =
+    private fun w(id: Long, room: String = "den", threshold: Int = 20, percent: Int = 19) =
         """{"id":$id,"room_id":"$room","name":"${room.replaceFirstChar { it.uppercase() }}","threshold":$threshold,""" +
             """"percent":$percent,"text":"${room.replaceFirstChar { it.uppercase() }} is at $percent%. Plug it in.","created_at":"2026-10-25T10:00:00Z"}"""
 
@@ -81,25 +81,25 @@ class RoomBatteryEngineTest {
         assertEquals(1, sink.posted.size)
         val (k, posted) = sink.posted.single()
         assertEquals(key, k)
-        assertEquals("Pako is at 19%. Plug it in.", posted.text)
-        assertEquals(mapOf("pako" to 1L), book.books[key])
+        assertEquals("Den is at 19%. Plug it in.", posted.text)
+        assertEquals(mapOf("den" to 1L), book.books[key])
     }
 
     @Test fun theTenPercentWarningReplacesTheTwenty() {
         push(w(1))
         push(w(1), w(2, threshold = 10, percent = 10))
         assertEquals(listOf(1L, 2L), sink.posted.map { it.second.id })
-        assertEquals(mapOf("pako" to 2L), book.books[key])
+        assertEquals(mapOf("den" to 2L), book.books[key])
         assertEquals(emptyList<Any>(), sink.withdrawn)
     }
 
     @Test fun chargingTakesItBack() {
-        push(w(1), w(5, room = "den", percent = 18))
-        push(w(5, room = "den", percent = 18))
-        assertEquals(listOf(key to "pako"), sink.withdrawn.toList())
-        assertEquals(mapOf("den" to 5L), book.books[key])
+        push(w(1), w(5, room = "attic", percent = 18))
+        push(w(5, room = "attic", percent = 18))
+        assertEquals(listOf(key to "den"), sink.withdrawn.toList())
+        assertEquals(mapOf("attic" to 5L), book.books[key])
         push()
-        assertEquals(listOf(key to "pako", key to "den"), sink.withdrawn.toList())
+        assertEquals(listOf(key to "den", key to "attic"), sink.withdrawn.toList())
         assertEquals(emptyMap<String, Long>(), book.books[key])
     }
 
@@ -127,15 +127,15 @@ class RoomBatteryEngineTest {
     }
 
     @Test fun thePlanAndTheBookArePure() {
-        val a = RoomBatteryWarning(1, "pako", "Pako", 20, 19, "Pako is at 19%. Plug it in.")
+        val a = RoomBatteryWarning(1, "den", "Den", 20, 19, "Den is at 19%. Plug it in.")
         val b = a.copy(id = 2, threshold = 10, percent = 9)
-        val plan = planBatteryNotifications(listOf(a, b), mapOf("den" to 7), canPost = true)
+        val plan = planBatteryNotifications(listOf(a, b), mapOf("attic" to 7), canPost = true)
         assertEquals(listOf(b), plan.post)
-        assertEquals(listOf("den"), plan.withdraw)
-        assertEquals(mapOf("pako" to 2L), plan.book)
-        assertEquals("den=7,pako=2", encodeBook(mapOf("pako" to 2L, "den" to 7L)))
-        assertEquals(mapOf("pako" to 2L, "den" to 7L), decodeBook("den=7,pako=2"))
+        assertEquals(listOf("attic"), plan.withdraw)
+        assertEquals(mapOf("den" to 2L), plan.book)
+        assertEquals("attic=7,den=2", encodeBook(mapOf("den" to 2L, "attic" to 7L)))
+        assertEquals(mapOf("den" to 2L, "attic" to 7L), decodeBook("attic=7,den=2"))
         assertEquals(emptyMap<String, Long>(), decodeBook(null))
-        assertEquals("Pako is at 9%. Plug it in.", batteryText("Pako", 9))
+        assertEquals("Den is at 9%. Plug it in.", batteryText("Den", 9))
     }
 }

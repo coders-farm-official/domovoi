@@ -4,8 +4,8 @@ A phone in room mode (``board`` ``android_room``) sends its battery in the
 ``health`` frame, ``battery`` = ``{percent, charging, on_power}``
 (:func:`domovoi.satellite_health.validate_sample`), once a minute and again
 when the level moves about 5 % or the charger goes on or off. A phone room
-that is not on its charger runs down and goes offline with no warning (the
-owner's "Pako", 2026-10-25). The core's side, all here:
+that is not on its charger runs down and goes offline with no warning
+(2026-10-25). The core's side, all here:
 
 * **The last report** is kept per room (``room_battery``, V040), written
   when it changes and at least every :data:`REPORT_REFRESH_SEC`. The room
@@ -23,7 +23,7 @@ owner's "Pako", 2026-10-25). The core's side, all here:
   (the app reads ``GET /api/satellites/battery-warnings`` and the live
   ``room_battery.changed``) both come from it, while the room's "Notify
   when the battery is low" is on. And the room says it itself, "This is
-  Pako. My battery is low. Please plug me in.", while its "Say when the
+  Den. My battery is low. Please plug me in.", while its "Say when the
   battery is low" is on and it is not quiet hours.
 * **Quiet hours** (:mod:`domovoi.quiet_hours`: the house's hours, or the
   room's own, or off for the room). Inside them the room doesn't say it;
@@ -140,7 +140,7 @@ def warning_due(reading: Reading, warned: set[int] | frozenset[int]) -> int | No
 
 def display_name(room_id: str, label: str | None = None) -> str:
     """How a notice names the room: its label, else its id with the
-    underscores read as spaces, first letter capital ("pako" -> "Pako")."""
+    underscores read as spaces, first letter capital ("den" -> "Den")."""
     name = " ".join((label or "").split()) or " ".join(
         room_id.replace("_", " ").replace("-", " ").split()
     )
@@ -148,7 +148,7 @@ def display_name(room_id: str, label: str | None = None) -> str:
 
 
 def notice_text(name: str, percent: int) -> str:
-    """The notification's words: "Pako is at 15%. Plug it in." """
+    """The notification's words: "Den is at 15%. Plug it in." """
     return f"{name} is at {int(percent)}%. Plug it in."
 
 

@@ -507,11 +507,11 @@ battery with its health sample once a minute, and again when the charger
 goes on or off or the level moves 5 % (1 % under 20 %, off its charger). Off its charger, at **20 %** and
 again at **10 %**, once per charge (`domovoi/room_battery.py`):
 
-- Home and Health → Rooms show "Pako's battery is low (15%) · plug it in",
-  and the Domovoi app on the household's phones notifies "Pako is at 15%.
+- Home and Health → Rooms show "Den's battery is low (15%) · plug it in",
+  and the Domovoi app on the household's phones notifies "Den is at 15%.
   Plug it in." (**Room batteries** channel). The notification goes away
   once the room charges.
-- The room itself says "This is Pako. My battery is low. Please plug me
+- The room itself says "This is Den. My battery is low. Please plug me
   in." Not during the room's quiet hours (Settings → Advanced → Voice & speech, or
   the room's Settings tab); then only the notice and the notification go.
 - A phone room that went offline after a last report at 5 % or less, off

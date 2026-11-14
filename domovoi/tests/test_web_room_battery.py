@@ -97,8 +97,8 @@ def claimed(monkeypatch):
 
 @pytest.fixture
 def seam(monkeypatch):
-    rec: dict[str, Any] = {"known": {"pako", "kitchen"}, "switches": {}, "set": [], "missing": False,
-                           "warnings": [{"id": 3, "room_id": "pako", "threshold": 20, "percent": 15,
+    rec: dict[str, Any] = {"known": {"den", "kitchen"}, "switches": {}, "set": [], "missing": False,
+                           "warnings": [{"id": 3, "room_id": "den", "threshold": 20, "percent": 15,
                                          "spoken": True, "created_at": T0, "room_label": None, "notify": True}]}
 
     @asynccontextmanager
@@ -144,22 +144,22 @@ def _client(headers: dict[str, str] | None = None, **kw) -> AsyncClient:
 async def test_the_reads_need_a_household_credential(claimed, seam) -> None:
     async with _client() as c:
         assert (await c.get("/api/satellites/battery-warnings")).status_code == 401
-        assert (await c.get("/api/satellites/pako/battery-alerts")).status_code == 401
+        assert (await c.get("/api/satellites/den/battery-alerts")).status_code == 401
     async with _client({HEADER: DEVICE_TOKEN}) as c:
         r = await c.get("/api/satellites/battery-warnings")
         assert r.status_code == 200
         assert r.json()["warnings"] == [{
-            "id": 3, "room_id": "pako", "name": "Pako", "threshold": 20, "percent": 15,
-            "text": "Pako is at 15%. Plug it in.", "created_at": "2026-10-25T15:00:00Z",
+            "id": 3, "room_id": "den", "name": "Den", "threshold": 20, "percent": 15,
+            "text": "Den is at 15%. Plug it in.", "created_at": "2026-10-25T15:00:00Z",
         }]
-        r = await c.get("/api/satellites/pako/battery-alerts")
-        assert r.json() == {"room_id": "pako", "say": True, "notify": True}
+        r = await c.get("/api/satellites/den/battery-alerts")
+        assert r.json() == {"room_id": "den", "say": True, "notify": True}
         assert (await c.get("/api/satellites/nowhere/battery-alerts")).status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_the_switches_take_a_household_credential(claimed, seam) -> None:
-    path = "/api/satellites/pako/battery-alerts"
+    path = "/api/satellites/den/battery-alerts"
     async with _client(BROWSER) as c:
         assert (await c.put(path, json={"say": False})).status_code == 401
     async with _client(BROWSER, cookies={COOKIE: ADMIN_TOKEN}) as c:
@@ -167,15 +167,15 @@ async def test_the_switches_take_a_household_credential(claimed, seam) -> None:
     assert seam["set"] == []
     async with _client({**BROWSER, HEADER: DEVICE_TOKEN}) as c:
         r = await c.put(path, json={"say": False})
-        assert r.status_code == 200 and r.json() == {"room_id": "pako", "say": False, "notify": True}
+        assert r.status_code == 200 and r.json() == {"room_id": "den", "say": False, "notify": True}
         assert (await c.get(path)).json()["say"] is False
         assert (await c.put(path, json={"say": "no"})).status_code == 422
         assert (await c.put(path, json={"loud": True})).status_code == 422
         assert (await c.put("/api/satellites/nowhere/battery-alerts", json={"say": True})).status_code == 404
     async with _client({**BROWSER, **bearer(ADMIN_TOKEN)}) as c:
         r = await c.put(path, json={"notify": False})
-        assert r.json() == {"room_id": "pako", "say": False, "notify": False}
-    assert seam["set"] == [("pako", False, None), ("pako", None, False)]
+        assert r.json() == {"room_id": "den", "say": False, "notify": False}
+    assert seam["set"] == [("den", False, None), ("den", None, False)]
 
 
 @pytest.mark.asyncio
@@ -183,31 +183,31 @@ async def test_without_v041_the_reads_say_none_and_the_write_says_so(claimed, se
     seam["missing"] = True
     async with _client({**BROWSER, HEADER: DEVICE_TOKEN}) as c:
         assert (await c.get("/api/satellites/battery-warnings")).json() == {"warnings": []}
-        assert (await c.get("/api/satellites/pako/battery-alerts")).json()["say"] is True
-        r = await c.put("/api/satellites/pako/battery-alerts", json={"say": False})
+        assert (await c.get("/api/satellites/den/battery-alerts")).json()["say"] is True
+        r = await c.put("/api/satellites/den/battery-alerts", json={"say": False})
         assert r.status_code == 503 and "V040" in r.text
 
 
 # ─── the roster row ──────────────────────────────────────────────────────
 
 
-def _bats(pct, charging=False, on_power=False, low=True, room="pako"):
+def _bats(pct, charging=False, on_power=False, low=True, room="den"):
     return {"reports": {room: {"percent": pct, "charging": charging, "on_power": on_power, "reported_at": T0}},
             "low": {room} if low else set()}
 
 
 def test_only_a_phone_room_has_a_battery() -> None:
-    assert sat_api._battery_for("pako", "linux_pc", True, _bats(15)) is None
-    assert sat_api._battery_for("pako", None, True, _bats(15)) is None
-    assert sat_api._battery_for("pako", "android_room", True, {}) is None
-    b = sat_api._battery_for("pako", "android_room", True, _bats(15))
+    assert sat_api._battery_for("den", "linux_pc", True, _bats(15)) is None
+    assert sat_api._battery_for("den", None, True, _bats(15)) is None
+    assert sat_api._battery_for("den", "android_room", True, {}) is None
+    b = sat_api._battery_for("den", "android_room", True, _bats(15))
     assert (b.percent, b.charging, b.low, b.probably_out) == (15, False, True, False)
 
 
 def test_low_needs_the_room_online_off_its_charger_and_notifying() -> None:
-    assert not sat_api._battery_for("pako", "android_room", False, _bats(15)).low
-    assert not sat_api._battery_for("pako", "android_room", True, _bats(15, charging=True)).low
-    assert not sat_api._battery_for("pako", "android_room", True, _bats(15, low=False)).low
+    assert not sat_api._battery_for("den", "android_room", False, _bats(15)).low
+    assert not sat_api._battery_for("den", "android_room", True, _bats(15, charging=True)).low
+    assert not sat_api._battery_for("den", "android_room", True, _bats(15, low=False)).low
 
 
 @pytest.mark.parametrize(("online", "pct", "charging", "out"), [
@@ -215,7 +215,7 @@ def test_low_needs_the_room_online_off_its_charger_and_notifying() -> None:
     (False, 3, True, False), (True, 3, False, False),
 ])
 def test_the_offline_row_says_probably_out_of_battery(online, pct, charging, out) -> None:
-    b = sat_api._battery_for("pako", "android_room", online, _bats(pct, charging=charging))
+    b = sat_api._battery_for("den", "android_room", online, _bats(pct, charging=charging))
     assert b.probably_out is out
 
 
@@ -230,17 +230,17 @@ async def test_the_live_channel_carries_the_warnings_and_the_levels(monkeypatch)
 
     async def open_warnings(s, room_id=None, *, notify_only=False):
         assert notify_only
-        return [{"id": 1, "room_id": "pako", "threshold": 10, "percent": 9, "created_at": T0, "room_label": None}]
+        return [{"id": 1, "room_id": "den", "threshold": 10, "percent": 9, "created_at": T0, "room_label": None}]
 
     async def last_reports(s, room_id=None):
-        return {"pako": {"percent": 9, "charging": False, "on_power": False, "reported_at": T0}}
+        return {"den": {"percent": 9, "charging": False, "on_power": False, "reported_at": T0}}
 
     monkeypatch.setattr(realtime, "session_scope", fake_scope)
     monkeypatch.setattr(rb, "open_warnings", open_warnings)
     monkeypatch.setattr(rb, "last_reports", last_reports)
     snap = await realtime._snapshot_room_battery()
-    assert snap["warnings"][0]["text"] == "Pako is at 9%. Plug it in."
-    assert snap["rooms"] == [{"room_id": "pako", "percent": 9, "charging": False, "on_power": False}]
+    assert snap["warnings"][0]["text"] == "Den is at 9%. Plug it in."
+    assert snap["rooms"] == [{"room_id": "den", "percent": 9, "charging": False, "on_power": False}]
 
 
 # ─── the dashboard ───────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ def room(rid: str, status: str = "online", **kw) -> dict:
     return r
 
 
-def phone(rid="pako", status="online", pct=15, charging=False, on_power=False, low=False, out=False):
+def phone(rid="den", status="online", pct=15, charging=False, on_power=False, low=False, out=False):
     return room(rid, status, board="android_room",
                 supports=["announce_after_session_end", "capture_control", "sounds", "speech_pause", "wake_models"],
                 battery={"percent": pct, "charging": charging, "on_power": on_power,
@@ -271,7 +271,7 @@ SETUP = r"""
 globalThis.__writes = [];
 apiFetch = (path, opts) => {
   __writes.push({ path, method: (opts && opts.method) || 'GET', body: (opts && opts.body) || null });
-  return Promise.resolve(Object.assign({ room_id: 'pako', say: true, notify: true }, JSON.parse(opts.body)));
+  return Promise.resolve(Object.assign({ room_id: 'den', say: true, notify: true }, JSON.parse(opts.body)));
 };
 reportMutationFailure = (fire, verb, e) => fire(`${verb} failed`);
 """
@@ -341,13 +341,13 @@ SCENARIOS = {
         }) + ";",
         "script": _CHECKS,
     },
-    "settings": {"files": FILES, "component": "RoomBatterySettings", "props": {"room": "pako"},
+    "settings": {"files": FILES, "component": "RoomBatterySettings", "props": {"room": "den"},
                  "fnProps": ["fire"], "setup": SETUP,
-                 "api": {"GET /api/satellites/pako/battery-alerts": {"room_id": "pako", "say": True, "notify": True}},
+                 "api": {"GET /api/satellites/den/battery-alerts": {"room_id": "den", "say": True, "notify": True}},
                  "script": _SETTINGS},
     "drawer_phone": {"files": FILES, "component": "SatDrawer", "props": {"s": phone(), "sats": [phone()]},
                      "fnProps": ["onClose", "fire", "refresh"], "setup": SETUP,
-                     "api": {"GET /api/satellites/pako/battery-alerts": {"room_id": "pako", "say": True, "notify": True}},
+                     "api": {"GET /api/satellites/den/battery-alerts": {"room_id": "den", "say": True, "notify": True}},
                      "script": _DRAWER},
     "drawer_laptop": {"files": FILES, "component": "SatDrawer",
                       "props": {"s": room("study", board="linux_pc", supports=["sounds"]),
@@ -398,12 +398,12 @@ def test_health_rooms_battery_row_and_offline_line(driven) -> None:
     fine = next(x for x in c["phone_fine"] if x["key"] == "battery")
     assert fine["tone"] == "ok"
     low = next(x for x in c["phone_low"] if x["key"] == "battery")
-    assert (low["tone"], low["text"]) == ("warn", "pako's battery is low (15%) · plug it in")
+    assert (low["tone"], low["text"]) == ("warn", "den's battery is low (15%) · plug it in")
     assert next(x for x in c["phone_very_low"] if x["key"] == "battery")["tone"] == "err"
     out = next(x for x in c["phone_out"] if x["key"] == "offline")
-    assert out["text"] == "pako is offline · probably out of battery"
+    assert out["text"] == "den is offline · probably out of battery"
     plain = next(x for x in c["phone_offline"] if x["key"] == "offline")
-    assert plain["text"] == "pako is offline · it can't hear anyone right now"
+    assert plain["text"] == "den is offline · it can't hear anyone right now"
     # Offline, the battery row is not the story (the offline row is).
     assert next(x for x in c["phone_out"] if x["key"] == "battery")["tone"] == "ok"
 
@@ -412,9 +412,9 @@ def test_the_settings_switches(driven) -> None:
     s = driven["settings"]
     assert "Say when the battery is low" in s["text"] and "Notify when the battery is low" in s["text"]
     assert s["before"] == [True, True] and s["after"] == [False, True]
-    assert s["writes"] == [{"path": "/api/satellites/pako/battery-alerts", "method": "PUT",
+    assert s["writes"] == [{"path": "/api/satellites/den/battery-alerts", "method": "PUT",
                             "body": json.dumps({"say": False}, separators=(",", ":"))}]
-    assert ["fire", "pako won't say when its battery is low"] in s["fired"]
+    assert ["fire", "den won't say when its battery is low"] in s["fired"]
 
 
 def test_only_a_phone_rooms_settings_tab_has_the_switches(driven) -> None:
@@ -442,7 +442,7 @@ def test_quiet_hours_read_is_household_and_write_is_device_tier() -> None:
 def quiet_seam(monkeypatch):
     from domovoi import quiet_hours as qh
 
-    rec: dict[str, Any] = {"known": {"pako", "kitchen"}, "choices": {}}
+    rec: dict[str, Any] = {"known": {"den", "kitchen"}, "choices": {}}
 
     @asynccontextmanager
     async def fake_scope():
@@ -491,7 +491,7 @@ async def test_a_rooms_quiet_hours_choice(claimed, quiet_seam) -> None:
 
 QUIET_SCENARIOS = {
     "quiet_custom": {"files": FILES, "component": "RoomQuietHoursSettings", "props": {"room": "kitchen"},
-                     "fnProps": ["fire"], "setup": SETUP.replace("{ room_id: 'pako', say: true, notify: true }", "{ room_id: 'kitchen' }"),
+                     "fnProps": ["fire"], "setup": SETUP.replace("{ room_id: 'den', say: true, notify: true }", "{ room_id: 'kitchen' }"),
                      "api": {"GET /api/satellites/kitchen/quiet-hours": {"room_id": "kitchen", "mode": "custom",
                                                                          "start": "21:30", "end": "06:15"}},
                      "script": r"""

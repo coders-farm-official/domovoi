@@ -23,8 +23,9 @@ voice and optional AI, all at home), published by Coders Farm
 (github.com/coders-farm-official/domovoi). A domovoi is a Slavic household
 guardian spirit, often taking the form of a cat; the cat mascot appears
 throughout the UI. The system runs on the user's own hardware: a central
-server, Raspberry Pi wake-word satellites around the house, a LAN web
-dashboard, and an Android app.
+server, wake-word satellites in the rooms around the house (a Raspberry
+Pi, a spare Windows or Linux PC, or a phone in the Android app's room
+mode), a LAN web dashboard, and phone apps for Android and iPhone.
 
 **Host platforms: Linux-first, Windows fully supported.** Linux is the
 primary target for a dedicated always-on server; Windows stays first-class
@@ -40,8 +41,10 @@ wheels live in their own `cuda` extra. See `docs/LINUX_HOST.md` and
 |---|---|
 | `domovoi/` | Core service (FastAPI, port **6370**): STT → intent routing → handlers → TTS, WebSocket streaming for satellites, persistence, background workers, the plugin runtime. |
 | `web/` | Management dashboard (separate FastAPI process, port **6369**): reads the same Postgres, proxies live-state actions to core admin endpoints, no-build Babel React frontend. |
-| `satellite/` | Raspberry Pi client — wake word, VAD, barge-in, audio streaming. Config in `~/.domovoi/`, systemd unit `domovoi-satellite.service`. |
-| `android/` | Kotlin/Compose app (`com.domovoi.app`) — dashboard parity + local player. |
+| `satellite/` | Satellite client — wake word, VAD, barge-in, audio streaming. Runs on a Raspberry Pi (config in `~/.domovoi/`, systemd unit `domovoi-satellite.service`) and, as the same Python code, on a spare Windows or Linux PC as a room (Linux: `satellite/scripts/install-pc.sh` with `satellite/pc_install.py`; Windows: `DomovoiSatelliteSetup.exe`, runs in the signed-in account; see [docs/SPARE_DEVICE_SATELLITES.md](docs/SPARE_DEVICE_SATELLITES.md)). |
+| `android/` | Kotlin/Compose app (`com.domovoi.app`) — dashboard parity + local player, and room mode (a phone or tablet as a room). Has its own app version. |
+| `ios/` | Native Swift/SwiftUI app for iPhone and iPad; ships separately on the App Store. See `ios/README.md`. |
+| `windows/` | The Windows host: one-click `DomovoiSetup.exe` that runs the Linux core in a private WSL2 distro, `DomovoiHost` (the service that keeps it running) and `DomovoiTray` (the tray icon), plus the Windows satellite installer (`windows/installer/`). See [docs/WINDOWS_HOST.md](docs/WINDOWS_HOST.md). |
 | `plugins/` | Bundled plugins. `plugins/radio/` is the open-source radio-stations plugin from Coders Farm and the reference example for plugin development. |
 | `docs/` | User and developer documentation. Start at [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); don't duplicate its content here. |
 
