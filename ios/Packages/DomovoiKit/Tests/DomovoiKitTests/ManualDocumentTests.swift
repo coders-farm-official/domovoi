@@ -29,6 +29,40 @@ final class ManualDocumentTests: XCTestCase {
     /// track has paid for before.
     private struct NotTheDocument: Error {}
 
+    /// The shipped file read a second way, without ``ManualDoc``: plain
+    /// JSON for the counts, and the raw text for the links. The server edits
+    /// the manual often, so the expected numbers come from the file itself
+    /// rather than being pinned here; a parser that drops a link, a piece or
+    /// a route still disagrees with them.
+    private struct Independent {
+        let topics: Int
+        let pieces: Int
+        let routes: Int
+        let mores: Int
+        let links: [String: Int]
+    }
+
+    private func independentCounts() throws -> Independent {
+        let file = Self.repositoryRoot.appendingPathComponent("web/static/manual-content.json")
+        let data = try Data(contentsOf: file)
+        let root = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let topics = try XCTUnwrap(root["topics"] as? [Any])
+        let pieces = try XCTUnwrap(root["pieces"] as? [[String: Any]])
+        let routes = try XCTUnwrap(root["routes"] as? [String: Any])
+        let text = try XCTUnwrap(String(data: data, encoding: .utf8))
+        var links: [String: Int] = [:]
+        for kind in ["route", "node", "doc"] {
+            links[kind] = text.components(separatedBy: "](\(kind):").count - 1
+        }
+        return Independent(
+            topics: topics.count,
+            pieces: pieces.count,
+            routes: routes.count,
+            mores: pieces.filter { $0["more"] != nil && !($0["more"] is NSNull) }.count,
+            links: links
+        )
+    }
+
     private func shippedDocument() throws -> ManualDoc {
         let file = Self.repositoryRoot.appendingPathComponent("web/static/manual-content.json")
         let data = try Data(contentsOf: file)
@@ -49,9 +83,11 @@ final class ManualDocumentTests: XCTestCase {
             doc.docBase,
             "doc_base carries the {ref} placeholder manualDocURL fills in"
         )
-        XCTAssertEqual(10, doc.topics.count)
-        XCTAssertEqual(63, doc.pieces.count)
-        XCTAssertEqual(38, doc.routes.count)
+        let raw = try independentCounts()
+        XCTAssertGreaterThan(raw.pieces, 0, "a manual with no pieces is not a manual")
+        XCTAssertEqual(raw.topics, doc.topics.count)
+        XCTAssertEqual(raw.pieces, doc.pieces.count)
+        XCTAssertEqual(raw.routes, doc.routes.count)
         XCTAssertEqual("domovoi", doc.centre.id)
         XCTAssertEqual("how-it-works", doc.centre.opens)
         XCTAssertEqual(
@@ -138,12 +174,15 @@ final class ManualDocumentTests: XCTestCase {
             }
         }
         // The counts are here so that a parser that found no links at all
-        // cannot pass this test by asserting nothing.
-        XCTAssertEqual(101, counted["route"])
-        XCTAssertEqual(54, counted["node"])
-        XCTAssertEqual(5, counted["doc"])
+        // cannot pass this test by asserting nothing: they come from the raw
+        // text (``independentCounts()``), so a missed link still fails.
+        let raw = try independentCounts()
+        XCTAssertGreaterThan(raw.links["route"] ?? 0, 0, "the manual has route links")
+        XCTAssertEqual(raw.links["route"], counted["route"])
+        XCTAssertEqual(raw.links["node"], counted["node"])
+        XCTAssertEqual(raw.links["doc"], counted["doc"])
         XCTAssertEqual(
-            43,
+            raw.mores,
             doc.pieces.filter { $0.more != nil }.count,
             "the More detail footers, which are targets too"
         )
