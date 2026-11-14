@@ -413,9 +413,11 @@ jobs:
       - name: Package tests (DomovoiKit)
         working-directory: ios/Packages/DomovoiKit
         run: swift test
-      - name: Package tests (DomovoiPhonemizer)
+      # DomovoiPhonemizer has no test target of its own (its tests run in
+      # DomovoiKit's), so here it is only built.
+      - name: Package builds (DomovoiPhonemizer)
         working-directory: ios/Packages/DomovoiPhonemizer
-        run: swift test
+        run: swift build
       - name: XcodeGen
         run: brew install xcodegen
       - name: The app and its UI tests compile for the Simulator (unsigned)

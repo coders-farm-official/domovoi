@@ -133,7 +133,7 @@ object SharePayload {
     private val URL = Regex("""(?i)\b(?:https?://|www\.)\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/\S*""")
 
     /** [location] with every link replaced by [ONLINE_MEETING]
-     *  ("Room 4; https://zoom.us/j/1?pwd=x" → "Room 4; online meeting"). */
+     *  ("Room 4; https://meet.example.com/j/1?pwd=x" → "Room 4; online meeting"). */
     fun place(location: String?): String? {
         val t = location?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         if (!URL.containsMatchIn(t)) return t
