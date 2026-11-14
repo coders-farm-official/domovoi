@@ -132,6 +132,39 @@ class PlayerController(
      *  in the tests: nothing is logged. */
     var listens: com.domovoi.app.listens.ListenLog? = null
 
+    /** The phone's own Up next session (PhoneUpNext.kt), set by
+     *  AppContainer with [upNextHost]; null in the tests: no Up next. */
+    var upNext: PhoneUpNext? = null
+
+    /** The queue as [PhoneUpNext] edits it: picks join at the end, picks it
+     *  takes back leave, the session's id goes on the songs of its start. */
+    val upNextHost: PhoneUpNext.Host = object : PhoneUpNext.Host {
+        override val queue: List<PlayItem> get() = _queue.value
+        override val index: Int get() = _index.value
+        override val casting: Boolean get() = _target.value is PlayTarget.Room
+        override fun retag(f: (PlayItem) -> PlayItem) {
+            _queue.value = _queue.value.map(f)
+        }
+        override fun append(items: List<PlayItem>) {
+            if (items.isEmpty() || _queue.value.isEmpty()) return
+            tagQueued(items, replaced = false)
+            _queue.value = _queue.value + items
+            items.forEach { exoPlayer.addMediaItem(mediaItemFor(it)) }
+        }
+        override fun removeWaiting(drop: (PlayItem) -> Boolean) {
+            val q = _queue.value
+            val at = _index.value
+            val gone = q.indices.filter { it > at && drop(q[it]) }
+            if (gone.isEmpty()) return
+            val set = gone.toSet()
+            _queue.value = q.filterIndexed { i, _ -> i !in set }
+            gone.asReversed().forEach { exoPlayer.removeMediaItem(it) }
+        }
+        override fun sessionArrived() {
+            listens?.sessionArrived(current)
+        }
+    }
+
     private var saveJob: Job? = null
     private var sleepJob: Job? = null
     private var remotePollJob: Job? = null
@@ -176,6 +209,8 @@ class PlayerController(
 
     private fun dropServerMedia() {
         queueServer = null
+        // The session lives on the server being left.
+        upNext?.drop()
         if (_target.value is PlayTarget.Room) {
             // The room is the old server's: stop watching it, and say
             // nothing about it to the new one.
@@ -215,6 +250,18 @@ class PlayerController(
                 _index.value = player.currentMediaItemIndex
                 val natural = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
                 listens?.transition(current, natural, _target.value is PlayTarget.Local, player.isPlaying)
+                // Up next asks for more when the queue is nearly over. Not
+                // while a play is replacing the queue: the engine calls this
+                // from inside setMediaItems, before that play's own start.
+                if (!holdUpNext) upNext?.check()
+            }
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                // A move or a removal around the song playing shifts its
+                // place without a transition: the queue's index follows the
+                // engine's, so Up next counts what is left from the right row.
+                if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED && !player.currentTimeline.isEmpty) {
+                    _index.value = player.currentMediaItemIndex
+                }
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state == Player.STATE_ENDED) listens?.ended()
@@ -330,6 +377,86 @@ class PlayerController(
         onLeft: ((room: String, paused: Boolean) -> Unit)? = null,
     ): String? {
         if (items.isEmpty()) return null
+        // A new play replaces the Up next session; what it plays was asked
+        // for (a restored queue's old picks included). A queue of library
+        // songs then gets a session of its own near its end (check).
+        upNext?.newPlay()
+        val left = playHere(items.map(::asAskedFor), startIndex, resumeSec, speed, onLeft)
+        upNext?.check()
+        return left
+    }
+
+    /**
+     * A library song tapped inside a list (Up next P8, the web's
+     * playFromList): the song plays here on its own, and Up next goes on
+     * with the rest of [context] (null: songs like it from the whole
+     * library). [list] is the list as shown, [at] the tapped one.
+     */
+    internal fun playFromList(
+        list: List<PlayItem>,
+        at: Int,
+        context: com.domovoi.app.ui.screens.music.UpNextContext?,
+        onLeft: ((room: String, paused: Boolean) -> Unit)? = null,
+    ): String? {
+        if (list.isEmpty()) return null
+        val track = list[at.coerceIn(0, list.lastIndex)]
+        val u = upNext
+        val gen = u?.newPlay() ?: 0
+        val left = playHere(listOf(asAskedFor(track).copy(upNextGen = gen)), 0, 0.0, null, onLeft)
+        u?.startFromList(track.id, context, list.filter { it.isLibrarySong }.map { it.id })
+        return left
+    }
+
+    /**
+     * A whole list played (or shuffled) on purpose (the web's playList): the
+     * list is the queue, as it is; Up next carries on with similar songs
+     * when it is nearly over, while autoplay is on.
+     */
+    internal fun playList(
+        items: List<PlayItem>,
+        context: com.domovoi.app.ui.screens.music.UpNextContext?,
+        onLeft: ((room: String, paused: Boolean) -> Unit)? = null,
+    ): String? {
+        if (items.isEmpty()) return null
+        val u = upNext
+        val gen = u?.newPlay() ?: 0
+        val tagged = items.map { asAskedFor(it).copy(queueOrigin = QueueOrigin.WholeList, upNextGen = gen) }
+        val left = playHere(tagged, 0, 0.0, null, onLeft)
+        u?.startWholeList(context, items.filter { it.isLibrarySong }.map { it.id })
+        return left
+    }
+
+    /** [item] without any Up next tags: somebody asked for it. */
+    private fun asAskedFor(item: PlayItem): PlayItem =
+        if (item.queueOrigin == QueueOrigin.Explicit && item.sessionId == null && item.upNextSeq == null && item.upNextGen == 0) item
+        else item.copy(queueOrigin = QueueOrigin.Explicit, upNextSeq = null, reasonLabel = null, sessionId = null, upNextGen = 0)
+
+    /** True while a play replaces the queue ([playHere]): the engine's
+     *  transition callbacks then ask Up next nothing. */
+    private var holdUpNext = false
+
+    private fun playHere(
+        items: List<PlayItem>,
+        startIndex: Int,
+        resumeSec: Double,
+        speed: Float?,
+        onLeft: ((room: String, paused: Boolean) -> Unit)?,
+    ): String? {
+        holdUpNext = true
+        try {
+            return playHereNow(items, startIndex, resumeSec, speed, onLeft)
+        } finally {
+            holdUpNext = false
+        }
+    }
+
+    private fun playHereNow(
+        items: List<PlayItem>,
+        startIndex: Int,
+        resumeSec: Double,
+        speed: Float?,
+        onLeft: ((room: String, paused: Boolean) -> Unit)?,
+    ): String? {
         val window = QueueWindow.around(items, startIndex)
         playHereGen.incrementAndGet()
         val left = leaveRoom(onLeft)
@@ -346,21 +473,34 @@ class PlayerController(
         return left
     }
 
+    /** "Add to queue": after the songs somebody asked for, before the
+     *  first Up next pick still to come ([UpNextRules.addAt]). */
     fun enqueue(items: List<PlayItem>) {
         if (items.isEmpty()) return
         if (_queue.value.isEmpty()) { playItems(items); return }
-        tagQueued(items, replaced = false)
-        _queue.value = _queue.value + items
-        items.forEach { exoPlayer.addMediaItem(mediaItemFor(it)) }
+        val add = items.map(::asAskedFor)
+        tagQueued(add, replaced = false)
+        val at = UpNextRules.addAt(_queue.value, _index.value)
+        if (at >= _queue.value.size) {
+            _queue.value = _queue.value + add
+            add.forEach { exoPlayer.addMediaItem(mediaItemFor(it)) }
+        } else {
+            _queue.value = _queue.value.toMutableList().apply { addAll(at, add) }
+            add.forEachIndexed { i, it -> exoPlayer.addMediaItem(at + i, mediaItemFor(it)) }
+        }
+        upNext?.check()
     }
 
+    /** "Play next": right after the song playing. */
     fun playNext(items: List<PlayItem>) {
         if (items.isEmpty()) return
         if (_queue.value.isEmpty()) { playItems(items); return }
-        tagQueued(items, replaced = false)
+        val add = items.map(::asAskedFor)
+        tagQueued(add, replaced = false)
         val at = _index.value + 1
-        _queue.value = _queue.value.toMutableList().apply { addAll(at, items) }
-        items.forEachIndexed { i, it -> exoPlayer.addMediaItem(at + i, mediaItemFor(it)) }
+        _queue.value = _queue.value.toMutableList().apply { addAll(at, add) }
+        add.forEachIndexed { i, it -> exoPlayer.addMediaItem(at + i, mediaItemFor(it)) }
+        upNext?.check()
     }
 
     fun jumpTo(i: Int) {
@@ -380,9 +520,13 @@ class PlayerController(
 
     fun removeAt(i: Int) {
         if (i !in _queue.value.indices) return
+        val gone = _queue.value[i]
         if (i == _index.value) listens?.skip()
         _queue.value = _queue.value.toMutableList().apply { removeAt(i) }
         exoPlayer.removeMediaItem(i)
+        // An Up next pick taken out: the session hears it (best-effort).
+        if (gone.queueOrigin == QueueOrigin.Auto) upNext?.removed(gone)
+        upNext?.check()
     }
 
     fun moveItem(from: Int, to: Int) {
@@ -411,6 +555,7 @@ class PlayerController(
     fun clearQueue() {
         listens?.stopped()
         flushSpokenPosition()
+        upNext?.drop()
         queueServer = null
         _queue.value = emptyList()
         _index.value = 0
@@ -883,6 +1028,10 @@ class PlayerController(
         }
         _target.value = PlayTarget.Local
         _remote.value = null
+        // Up next comes home with the music: the session the room carried
+        // on moves back to this phone (or is dropped when the room no
+        // longer has it).
+        upNext?.handBack()
         val play = wasPlaying && paused && queue.isNotEmpty()
         if (play) resumeLocal()
         return CastOutcome.Here(
@@ -909,6 +1058,10 @@ class PlayerController(
             // The room waits paused there until play (a core from before
             // 2026-10-01 ignores it and plays, as every cast used to).
             if (startPaused) put("start_paused", true)
+            // Up next goes with the queue (P4): this phone's session carries
+            // on in the room, whose server refills it there; without one the
+            // room arms its own. Autoplay and whose mix it is go too.
+            upNext?.castFields(this)
         })
         if (playHereGen.get() != gen) return false
         // Only once the room has taken it: a failed cast leaves the phone

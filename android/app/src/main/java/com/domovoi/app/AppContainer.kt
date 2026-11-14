@@ -42,6 +42,8 @@ import com.domovoi.app.net.TokenHealth
 import com.domovoi.app.ui.screens.manual.ManualRepository
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.player.PhoneUpNext
+import com.domovoi.app.player.HttpUpNextApi
 import com.domovoi.app.player.ServerScope
 import com.domovoi.app.voice.PhoneVoice
 import kotlinx.coroutines.CoroutineScope
@@ -184,6 +186,24 @@ class AppContainer(context: Context) {
 
     init {
         player.bookPositions = bookPositions
+        // Up next on the phone itself (player/PhoneUpNext.kt): the server
+        // the app talks to keeps a session for this phone's queue. Only
+        // while paired, never in room mode.
+        player.upNext = PhoneUpNext(
+            api = HttpUpNextApi(api) { prefs.deviceId },
+            host = player.upNextHost,
+            env = object : PhoneUpNext.Env {
+                override fun server() = prefs.serverUrl.value
+                override fun paired() = prefs.isPaired() && !com.domovoi.app.net.HouseholdLock.roomModeActive
+                override fun deviceId() = prefs.deviceId
+                override fun autoplay() = prefs.upNextAutoplay.value
+                override fun saveAutoplay(on: Boolean) = prefs.setUpNextAutoplay(on)
+                override fun listenerPick(server: String) = prefs.listenerPickFor(server)
+                override fun shared(server: String) = prefs.sharedHere(server)
+                override fun setListener(personId: String?) = prefs.setListenerPersonId(personId)
+            },
+            launch = { block -> scope.launch { block() } },
+        )
         // What the phone queued from a server belongs to that server
         // (player/ServerScope.kt): the player hears which server the app
         // talks to — by its pinned identity, else its address — now, and on

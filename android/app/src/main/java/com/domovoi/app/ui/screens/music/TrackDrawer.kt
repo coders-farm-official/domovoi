@@ -108,6 +108,8 @@ internal fun TrackDrawer(
             context = listContext,
             pick = app.prefs.listenerPickFor(server),
             shared = app.prefs.sharedHere(server),
+            // This phone's Autoplay switch goes with it (on: left out).
+            autoplay = app.prefs.upNextAutoplay.value,
         )
         scope.launchAction(
             action = { app.api.post("/api/music/play-track", body, onlyTo = server) },

@@ -40,6 +40,20 @@ data class PlayItem(
     val savedKey: String? = null,
     /** The server a saved book came from: where its place goes. */
     val origin: ServerScope? = null,
+    /** Up next (V053): why this song is in the queue — asked for, part of
+     *  a whole list played on purpose, or one of Up next's picks
+     *  ([UpNextRules]). The listening history sends it as `origin`. */
+    val queueOrigin: QueueOrigin = QueueOrigin.Explicit,
+    /** A pick's number in its session (`seq`); null for anything else. */
+    val upNextSeq: Int? = null,
+    /** Why a pick was picked ("same artist", "90s"), shown as a chip. */
+    val reasonLabel: String? = null,
+    /** The Up next session this song belongs to: a pick's, or the songs a
+     *  start played, once the session's id came back. Listens carry it. */
+    val sessionId: String? = null,
+    /** Which start ([PhoneUpNext.newPlay]) queued this song, so the session
+     *  id can be put on it when it arrives; 0 = none. Never sent. */
+    val upNextGen: Int = 0,
 ) {
     companion object {
         fun fromTrack(id: Long, title: String, artist: String?, album: String?, durationSec: Double?) =
@@ -106,4 +120,17 @@ data class PlayItem(
     }
 
     val isSpoken: Boolean get() = kind == PlayKind.Podcast || kind == PlayKind.Audiobook
+
+    /** A song of the server's library: the only kind Up next knows. */
+    val isLibrarySong: Boolean get() = kind == PlayKind.Library && id > 0
+}
+
+/** Why a song is in the queue (API_REFERENCE §3.5e/§3.5f `origin`). */
+enum class QueueOrigin(val wire: String) {
+    /** Somebody asked for it: a tap, play next, add to queue. */
+    Explicit("explicit"),
+    /** Part of a whole list played (or shuffled) on purpose. */
+    WholeList("list"),
+    /** One of Up next's picks. */
+    Auto("auto"),
 }

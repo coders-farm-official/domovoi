@@ -86,6 +86,8 @@ class TrackDrawerPlayTest {
             // "Listening as" a person on this server: the room's mix follows them (P4).
             setField(prefs, "_listenerPicks", MutableStateFlow(mapOf(base to "3")))
             setField(prefs, "_sharedScreens", MutableStateFlow(emptyMap<String, Boolean>()))
+            // This phone's Autoplay switch is off (Up next P8): the room is told.
+            setField(prefs, "upNextAutoplay", MutableStateFlow(false))
             val bus = allocateWithoutConstructor(StateBus::class.java)
             setField(bus, "events", MutableSharedFlow<WsEvent>())
             val app = allocateWithoutConstructor(AppContainer::class.java)
@@ -143,6 +145,7 @@ class TrackDrawerPlayTest {
             // Up next P4: who asks, whose mix, and never the old one-song play.
             assertTrue(body, "\"device_id\":\"android-test\"" in body && "\"listener_person_id\":3" in body)
             assertFalse(body, "up_next" in body)
+            assertTrue(body, "\"autoplay\":false" in body)
             assertEquals("the play's answer never landed", 1, refreshed)
             assertEquals(listOf("playing \"ZipLoc Bag Boys\" in mobile…"), toasts)
         } finally {

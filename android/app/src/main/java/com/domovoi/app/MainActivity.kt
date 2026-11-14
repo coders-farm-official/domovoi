@@ -115,6 +115,9 @@ class MainActivity : ComponentActivity() {
         (application as DomovoiApplication).container.containerAlerts.onAppResumed()
         (application as DomovoiApplication).container.helpAlerts.onAppResumed()
         (application as DomovoiApplication).container.batteryAlerts.onAppResumed()
+        // Up next's picks still waiting, read again: the server may have
+        // taken some back while the app was away (player/PhoneUpNext.kt).
+        (application as DomovoiApplication).container.player.upNext?.reread()
     }
 
     /** True (and on its way to the room screen) while room mode is on.

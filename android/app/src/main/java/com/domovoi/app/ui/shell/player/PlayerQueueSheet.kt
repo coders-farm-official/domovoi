@@ -75,6 +75,8 @@ import com.domovoi.app.ui.screens.music.QueueTarget
 import com.domovoi.app.ui.screens.music.RoomQueueDialogs
 import com.domovoi.app.ui.screens.music.queueTab
 import com.domovoi.app.ui.screens.music.rememberRoomQueue
+import com.domovoi.app.ui.screens.music.phoneUpNext
+import com.domovoi.app.ui.screens.music.rememberPhoneUpNextView
 import com.domovoi.app.ui.screens.music.savableTrackIds
 import com.domovoi.app.player.LyricsResult
 import com.domovoi.app.ui.screens.music.LyricsBody
@@ -136,6 +138,10 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
     // The room's own queue while casting (a new room, a new model).
     val roomQueue = room?.let { r -> key(r.roomId) { rememberRoomQueue(listOf(r.roomId), r.roomId) } }
     val phoneDrag = remember { QueueDragState() }
+    // The phone's own Up next: its picks still to come have their own
+    // section under the queue rows, and aren't counted.
+    val upNext = rememberPhoneUpNextView(queue, casting = isRemote)
+    val rows = upNext.explicitRows(queue, index)
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -193,7 +199,7 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                             Modifier.fillMaxWidth().padding(top = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            SectionLabel("queue · ${queue.size}")
+                            SectionLabel("queue · ${rows.size}")
                             Spacer(Modifier.weight(1f))
                             if (queue.isNotEmpty()) {
                                 TextButton(
@@ -223,10 +229,11 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                             )
                         }
                     } else {
-                        itemsIndexed(queue, key = { i, it -> "${it.uid}-$i" }) { i, item ->
+                        itemsIndexed(rows, key = { _, i -> "${queue[i].uid}-$i" }) { k, i ->
+                            val item = queue[i]
                             QueueRow(
-                                position = i,
-                                count = queue.size,
+                                position = k,
+                                count = rows.size,
                                 title = item.title,
                                 artist = item.artist,
                                 durationSec = item.durationSec,
@@ -234,10 +241,16 @@ fun PlayerQueueSheet(onDismiss: () -> Unit) {
                                 isPlaying = effPlaying,
                                 drag = phoneDrag,
                                 onJump = { app.player.jumpTo(i) },
-                                onMove = { from, to -> app.player.moveItem(from, to) },
+                                // Positions among the rows shown, moved in the real queue.
+                                onMove = { from, to ->
+                                    val a = rows.getOrNull(from)
+                                    val b = rows.getOrNull(to)
+                                    if (a != null && b != null) app.player.moveItem(a, b)
+                                },
                                 onRemove = { app.player.removeAt(i) },
                             )
                         }
+                        phoneUpNext(upNext, queue, index, keyPrefix = "sheet")
                     }
                 }
             }
