@@ -82,7 +82,7 @@ class PublishedWord:
     name: str
     phrase: str
     tag: str
-    #: Pinned when the release exists; None = not published yet.
+    #: The release asset's SHA-256 and size; None = not published yet.
     sha256: str | None
     size: int | None
 
@@ -105,7 +105,10 @@ class PublishedWord:
 PUBLISHED: dict[str, PublishedWord] = {
     "domovoi_v1": PublishedWord(
         slug="domovoi_v1", name="Domovoi", phrase="domovoi", tag="domovoi-v1",
-        sha256=None, size=None,
+        # Trained 2026-11-14 on synthetic voices only (its model card in the
+        # release lists every input); the release asset's digest and size.
+        sha256="71405e3858af1382a8ec06dd0d57dbcb5dabea829d67b083e8b084dbb175b3e3",
+        size=205430,
     ),
 }
 

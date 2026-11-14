@@ -352,3 +352,9 @@ def test_the_published_word_comes_from_an_exact_release_tag():
         "https://github.com/coders-farm-official/domovoi-wake-word-models/releases/download/")
     assert "/main/" not in word.url and "latest" not in word.url
     assert word.url.endswith(f"/{word.tag}/domovoi_v1.onnx")
+
+
+def test_the_published_word_is_pinned():
+    word = wake_default.PUBLISHED["domovoi_v1"]
+    assert word.pinned
+    assert re.fullmatch(r"[0-9a-f]{64}", word.sha256) and word.size > 100_000
