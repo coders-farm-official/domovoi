@@ -18,6 +18,7 @@
   <img alt="iPhone app: coming soon" src="https://img.shields.io/badge/iPhone%20app-coming%20soon-8B8178?style=flat-square&labelColor=1F1A14">
   <br>
   <a href="docs/CONTRIBUTING.md#running-the-tests"><img alt="tests: 26,600+ (server and rooms, Android app, Windows)" src="https://img.shields.io/badge/tests-26%2C600%2B-2EA043?style=flat-square&labelColor=1F1A14"></a>
+  <a href="https://github.com/coders-farm-official/domovoi/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI on main" src="https://img.shields.io/github/actions/workflow/status/coders-farm-official/domovoi/ci.yml?branch=main&label=CI&style=flat-square&labelColor=1F1A14"></a>
   <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
   <br>
   <img alt="runs on: Linux, Windows, Raspberry Pi, Android" src="https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows%20%C2%B7%20Raspberry%20Pi%20%C2%B7%20Android-F2A618?style=flat-square&labelColor=1F1A14">

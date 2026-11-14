@@ -1,0 +1,368 @@
+# Continuous integration: every push to main, and by hand from the Actions
+# tab (workflow_dispatch, which runs every job whatever changed). The repo is
+# public, so GitHub's standard hosted runners cost nothing (owner decision
+# 2026-11-14). docs/CONTRIBUTING.md, "CI", says what runs and how to read a
+# red run.
+#
+# Jobs, and what starts them (the `changes` job decides from the pushed
+# commits' files; anything it can't tell runs everything):
+#   docs     every push: the documentation gates (privacy, licences, version
+#            copies, mermaid, the manual) and the workflow pins.
+#   python   any change beyond docs: the whole pytest suite (core, radio
+#            plugin, satellite), split into shards, each on its own Postgres.
+#   web      any change beyond docs: the .jsx compile + duplicate globals,
+#            and web/openapi.json and the manual's content file up to date.
+#   harness  scripts/linux/ changed: the bash harnesses in their pinned
+#            Linux containers (scripts/dev/run-linux-harness.sh all).
+#   android  the app or a file its build reads changed: unit tests and a
+#            debug APK (artifact `domovoi-debug-apk`; debug-signed, a test
+#            build, not a release: android/README.md "Release-signed builds").
+#   windows  windows/ (or a file its tests read) changed: build.ps1, the C#
+#            unit tests, and the installer when Inno Setup is on the runner.
+# A new job slots into `jobs:` beside these; `changes` also has an `ios`
+# output (ios/ or a workflow changed) for an iPhone-app job to gate on.
+#
+# No secrets anywhere, and none may be added: release signing and publishing
+# stay on the owner's PC with the owner's keys. Every action is pinned by
+# commit SHA (the comment names the release that commit was), so a moved
+# tag can't change what runs; to move one, look up the new release's commit
+# and replace both (pick a release at least two weeks old).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref makes the older run moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job only reads the repository; artifact uploads use the runner's own
+# token, not GITHUB_TOKEN scopes.
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12" # requirements.lock is the suite's set, for Python 3.12
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      harness: ${{ steps.filter.outputs.harness }}
+      android: ${{ steps.filter.outputs.android }}
+      windows: ${{ steps.filter.outputs.windows }}
+      # For an iPhone-app job (none yet): ios/ or this workflow changed.
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          all() { for k in code harness android windows ios; do echo "$k=true"; done >>"$GITHUB_OUTPUT"; echo "running every job: $1"; }
+          if [ "$EVENT" != push ]; then all "started by $EVENT"; exit 0; fi
+          case "$BEFORE" in ''|0000000000000000000000000000000000000000) all "no previous commit to compare with"; exit 0 ;; esac
+          if ! git fetch -q --no-tags --depth=1 origin "$BEFORE" 2>/dev/null; then
+            all "the previous commit $BEFORE is not fetchable (force push?)"; exit 0
+          fi
+          git diff --name-only "$BEFORE" "$AFTER" >"$RUNNER_TEMP/changed.txt"
+          echo "changed files:"; sed 's/^/  /' "$RUNNER_TEMP/changed.txt"
+          has() { grep -qE "$1" "$RUNNER_TEMP/changed.txt" && echo true || echo false; }
+          # Docs-only: Markdown anywhere, pictures under docs/. Everything
+          # else (docs/uml's JSON fixtures, say) is code to some test.
+          code=$(grep -qvE '(\.md$|^LICENSE$|^docs/.*\.(png|jpe?g|gif|svg|webp)$)' "$RUNNER_TEMP/changed.txt" && echo true || echo false)
+          {
+            echo "code=$code"
+            echo "harness=$(has '^(scripts/linux/|scripts/dev/(run-linux-harness\.sh|.*harness\.Dockerfile)$|\.github/workflows/)')"
+            # The app's build and tests read beyond android/
+            # (android/app/build.gradle.kts: the phonemizer, voice clips,
+            # drafts, docs/uml fixtures, the manual, satellite_media).
+            echo "android=$(has '^(android/|domovoi/|docs/uml/|web/static/manual-content\.json$|\.github/workflows/)')"
+            # build.ps1's tests read domovoi/lan_name/vectors.json.
+            echo "windows=$(has '^(windows/|domovoi/lan_name/|\.github/workflows/)')"
+            echo "ios=$(has '^(ios/|\.github/workflows/)')"
+          } >>"$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  docs:
+    name: docs gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # No database here: these tests read files only. The URL just has to
+      # satisfy the conftest's guard; nothing listens on port 1.
+      TEST_DATABASE_URL: postgresql+asyncpg://domovoi:domovoi@127.0.0.1:1/domovoi_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install (requirements.lock, hash-checked)
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: The manual's content file is built from its source
+        run: python scripts/manual/build_manual.py --check
+      - name: Docs gates
+        run: |
+          python -m pytest -p no:cacheprovider -q \
+            domovoi/tests/test_repo_privacy.py \
+            domovoi/tests/test_docs_mermaid.py \
+            domovoi/tests/test_manual_content.py \
+            domovoi/tests/test_manual_weak_spots.py \
+            domovoi/tests/test_licences_doc.py \
+            domovoi/tests/test_dependency_licences.py \
+            domovoi/tests/test_shipped_font_licences.py \
+            domovoi/tests/test_version_copies.py \
+            domovoi/tests/test_ops_ci_workflow.py
+
+  python:
+    name: pytest ${{ matrix.shard }}/6
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    services:
+      # The dev compose file's Postgres (domovoi/docker-compose.yml), by
+      # digest. Each shard's job has its own; the workers' copies
+      # (pytest -n) are made from it by domovoi/tests/xdist_db.py.
+      postgres:
+        image: postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+        env:
+          POSTGRES_DB: domovoi_test
+          POSTGRES_USER: domovoi
+          POSTGRES_PASSWORD: domovoi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -p 5432 -U domovoi -d domovoi_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # Port 5432, not the live install's 6432, so no opt-in is needed
+      # (domovoi/tests/db_guard.py).
+      TEST_DATABASE_URL: postgresql+asyncpg://domovoi:domovoi@127.0.0.1:5432/domovoi_test
+      # Red on NEW failures only: a failure listed in
+      # domovoi/tests/known_failures.toml is still printed, but exits 0.
+      DOMOVOI_FAIL_ON_NEW_ONLY: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      # The suite and the web checks run JavaScript under Node (the
+      # dashboard's render harnesses, scripts/dev/jsxcheck.js); some of it
+      # needs a newer Node than the runner image's default.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: System tools some tests use (ffmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null
+      - name: Install (requirements.lock, hash-checked)
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+      # Two imports the suite makes that requirements.lock (core + dev)
+      # doesn't carry, from their own floors through pip's resolver:
+      # scipy (BSD) for the satellite's resampler (satellite/requirements.txt),
+      # feedparser (BSD) for the podcast and news feed readers (the
+      # real-clients extra). The rest of real-clients (Whisper, ONNX voices)
+      # stays out: the suite runs on stubs.
+      - name: Install what the tests import beyond the lock (scipy, feedparser)
+        run: python -m pip install "scipy>=1.11,<2" "feedparser>=6.0"
+      - name: Migrate the test database (Flyway, as the compose file's flyway-test)
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE/domovoi/db/migrations:/flyway/sql:ro" \
+            flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949 \
+            -url=jdbc:postgresql://127.0.0.1:5432/domovoi_test -user=domovoi -password=domovoi \
+            -connectRetries=20 migrate
+      - name: The database is there (no requires_db test may skip quietly)
+        run: |
+          python - <<'EOF'
+          import asyncio, asyncpg
+          async def main():
+              c = await asyncpg.connect("postgresql://domovoi:domovoi@127.0.0.1:5432/domovoi_test")
+              n = await c.fetchval("SELECT count(*) FROM flyway_schema_history WHERE success")
+              await c.close()
+              assert n > 0, "no migrations applied"
+              print(f"domovoi_test: {n} migrations applied")
+          asyncio.run(main())
+          EOF
+      - name: Pick this shard's test files
+        run: |
+          python scripts/dev/ci_shard.py --summary 6
+          python scripts/dev/ci_shard.py ${{ matrix.shard }} 6 >"$RUNNER_TEMP/shard.txt"
+          echo "$(wc -l <"$RUNNER_TEMP/shard.txt") files in shard ${{ matrix.shard }}"
+      - name: pytest -n 4
+        run: |
+          mkdir -p .test-results
+          xargs -a "$RUNNER_TEMP/shard.txt" -d '\n' \
+            python -m pytest -n 4 -p no:cacheprovider -q -ra --durations=15 \
+              --junitxml=".test-results/junit-${{ matrix.shard }}.xml"
+      - name: Upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pytest-junit-${{ matrix.shard }}
+          path: .test-results/junit-${{ matrix.shard }}.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  web:
+    name: web (jsx, openapi, manual)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: The .jsx compile, and no duplicate top-level names (vendored Babel)
+        run: node scripts/dev/jsxcheck.js
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Install (requirements.lock, hash-checked)
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: web/openapi.json is up to date (python -m web.scripts.dump_openapi)
+        run: |
+          python -m web.scripts.dump_openapi
+          git diff --stat --exit-code -- web/openapi.json \
+            || { echo "::error file=web/openapi.json::out of date: run python -m web.scripts.dump_openapi and commit it"; exit 1; }
+      - name: web/static/manual-content.json is up to date (scripts/manual/build_manual.py)
+        run: |
+          python scripts/manual/build_manual.py
+          git diff --stat --exit-code -- web/static/manual-content.json \
+            || { echo "::error file=web/static/manual-content.json::out of date: run python scripts/manual/build_manual.py and commit it"; exit 1; }
+
+  harness:
+    name: bash harnesses
+    needs: changes
+    if: needs.changes.outputs.harness == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: scripts/dev/run-linux-harness.sh all
+        run: bash scripts/dev/run-linux-harness.sh all
+      - name: Upload the harness logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-harness-logs
+          path: .test-results/linux-harness/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  android:
+    name: android
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      # Caches Gradle's downloads and validates the wrapper jar. The runner
+      # image's Android SDK (ANDROID_HOME) has its licences accepted, so the
+      # Android Gradle plugin fetches any platform it lacks by itself.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - name: Unit tests and the debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Record the APK's SHA-256
+        run: |
+          {
+            echo "### Debug APK (debug-signed, not a release)"
+            echo '```'
+            sha256sum app/build/outputs/apk/debug/app-debug.apk
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: domovoi-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the unit-test reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-test-reports
+          path: android/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  windows:
+    name: windows
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell # Windows PowerShell 5.1, as build.ps1 expects
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build.ps1 -SkipInstaller (the exes and the C# unit tests)
+        run: .\windows\build.ps1 -SkipInstaller
+      # The installer too when the runner image has Inno Setup 6, so a
+      # broken .iss shows up here. Built, not uploaded: it is unsigned and
+      # carries the pinned release commit (installer\pins.iss), not this one.
+      - name: The installers compile (Inno Setup 6, when the runner has it)
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            Write-Output "::notice::Inno Setup 6 is not on this runner image; the installer build was skipped"
+            exit 0
+          }
+          .\windows\build.ps1 -SkipTests -Iscc $iscc
