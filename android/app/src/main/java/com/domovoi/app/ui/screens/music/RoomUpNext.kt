@@ -262,8 +262,9 @@ internal fun JsonObjectBuilder.listenerFields(pick: String?, shared: Boolean) {
 /**
  * `POST /api/music/play-track`'s body for "play in <room>": the song starts
  * the room's Up next (the song and a first batch of picks after it). With
- * [context] the session is a `list` one, else `library`. [autoplay] off is
- * said; on is the server's default and left out (the web's roomStartBody).
+ * [context] the session is a `list` one, else `library`. [autoplay]: what the
+ * person chose on this phone, sent as it is; null (never flipped here) is
+ * left out, so the room takes the household's Music mix default.
  */
 internal fun roomPlayTrackBody(
     room: String,
@@ -272,14 +273,14 @@ internal fun roomPlayTrackBody(
     context: UpNextContext?,
     pick: String?,
     shared: Boolean,
-    autoplay: Boolean = true,
+    autoplay: Boolean? = null,
 ): JsonObject = buildJsonObject {
     put("room_id", room)
     put("track_id", trackId)
     put("device_id", deviceId)
     context?.let { put("context", it.toJson()) }
     listenerFields(pick, shared)
-    if (!autoplay) put("autoplay", false)
+    autoplay?.let { put("autoplay", it) }
 }
 
 // ── A playlist in a room: the whole playlist becomes the room's queue ────
@@ -288,7 +289,7 @@ internal fun roomPlayTrackBody(
  * `POST /api/music/play-playlist`'s body: the room loads the whole playlist
  * as its queue and arms a `continue` Up next with it as the source. The
  * listener fields as for "play in <room>" ([listenerFields]); [autoplay]
- * off (this phone's switch) is said, on is the server's default.
+ * as for "play in <room>": this phone's choice, or left out.
  */
 internal fun roomPlayPlaylistBody(
     room: String,
@@ -297,14 +298,14 @@ internal fun roomPlayPlaylistBody(
     deviceId: String,
     pick: String?,
     shared: Boolean,
-    autoplay: Boolean = true,
+    autoplay: Boolean? = null,
 ): JsonObject = buildJsonObject {
     put("room_id", room)
     put("playlist_id", playlistId)
     put("shuffle", shuffle)
     put("device_id", deviceId)
     listenerFields(pick, shared)
-    if (!autoplay) put("autoplay", false)
+    autoplay?.let { put("autoplay", it) }
 }
 
 /**

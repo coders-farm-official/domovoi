@@ -128,6 +128,10 @@ internal enum class SettingsSection(
     PhonesAndBrowsers("phones-and-browsers", "Phones & browsers", SettingsGroup.Household,
         "Which server this phone talks to, and who's listening. The household's other phones and browsers are on the dashboard.",
         "connection server pair pairing household token phone device identity trust", listOf("connection")),
+    MusicMix("music-mix", "Music mix", SettingsGroup.Household,
+        "How Up next picks the songs that follow: discovery or favorites, close or wandering, autoplay, repeats, similar artists.",
+        "music mix up next autoplay shuffle discovery favorites favourites wander similar artists popularity listenbrainz repeats radio station",
+        listOf("mix", "up-next")),
     Printers("printers", "Printers & scanners", SettingsGroup.Household,
         "The printers and scanners your home server prints and scans with.",
         "printer printers print printing scanner scanners scan scanning ink toner paper"),
@@ -292,6 +296,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
                     SettingsSection.Rooms -> SatellitesScreen(embedded = true)
                     SettingsSection.People -> PeopleScreen(embedded = true)
                     SettingsSection.PhonesAndBrowsers -> ConnectionPanel()
+                    SettingsSection.MusicMix -> MusicMixPanel()
                     SettingsSection.Printers -> PrintersPanel()
                     SettingsSection.PhoneCalendars -> PhoneCalendarsPanel()
                     SettingsSection.AppLayout -> PhoneBarPanel()

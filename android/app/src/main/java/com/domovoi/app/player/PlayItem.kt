@@ -48,6 +48,8 @@ data class PlayItem(
     val upNextSeq: Int? = null,
     /** Why a pick was picked ("same artist", "90s"), shown as a chip. */
     val reasonLabel: String? = null,
+    /** "Why this song?" (1.3.0): the server's sentence, as it sent it. */
+    val why: String? = null,
     /** The Up next session this song belongs to: a pick's, or the songs a
      *  start played, once the session's id came back. Listens carry it. */
     val sessionId: String? = null,

@@ -108,7 +108,8 @@ internal fun TrackDrawer(
             context = listContext,
             pick = app.prefs.listenerPickFor(server),
             shared = app.prefs.sharedHere(server),
-            // This phone's Autoplay switch goes with it (on: left out).
+            // This phone's Autoplay, only once flipped here (else the
+            // household's Music mix default applies).
             autoplay = app.prefs.upNextAutoplay.value,
         )
         scope.launchAction(

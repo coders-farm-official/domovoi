@@ -211,11 +211,16 @@ class Prefs(
     private val _preferLocal = MutableStateFlow(false)
     val preferLocal: StateFlow<Boolean> = _preferLocal
 
-    /** Up next's Autoplay (per device, on until switched off; the web's
-     *  localStorage `domovoi-upnext-autoplay`): keep playing similar songs
-     *  when the queue ends. Sent with every start and cast. */
-    private val _upNextAutoplay = MutableStateFlow(true)
-    val upNextAutoplay: StateFlow<Boolean> = _upNextAutoplay
+    /** Up next's Autoplay on THIS phone (the web's localStorage
+     *  `domovoi-upnext-autoplay`): null until the person flips the switch
+     *  here, then what they chose. While null nothing is sent, so a start,
+     *  cast or room play takes the household's Music mix default (1.3.0);
+     *  once set it goes with every one. The key is written only by a flip
+     *  ([setUpNextAutoplay]), so a phone switched before 1.3.0 keeps its
+     *  choice. What the switch shows while null:
+     *  [com.domovoi.app.mix.effectiveAutoplay]. */
+    private val _upNextAutoplay = MutableStateFlow<Boolean?>(null)
+    val upNextAutoplay: StateFlow<Boolean?> = _upNextAutoplay
 
     /** Folders added to the phone's Files tab (data/PhoneFolders.kt). */
     private val _phoneFolders = MutableStateFlow<List<PhoneFolder>>(emptyList())
@@ -335,7 +340,7 @@ class Prefs(
             _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
             _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
             _preferLocal.value = p[kPreferLocal] ?: false
-            _upNextAutoplay.value = p[kUpNextAutoplay] ?: true
+            _upNextAutoplay.value = p[kUpNextAutoplay]
             _phoneFolders.value = PhoneFolders.decode(p[kPhoneFolders])
             // The retired Assistant tab moves to Chat, written back once
             // (PhoneBar.migrate).

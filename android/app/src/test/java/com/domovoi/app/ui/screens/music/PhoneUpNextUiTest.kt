@@ -68,4 +68,24 @@ class PhoneUpNextUiTest {
         assertEquals("false", off["autoplay"].toString())
         assertFalse("on is the server's default", "autoplay" in roomPlayPlaylistBody("office", 3, false, "d", null, false))
     }
+
+    @Test fun neverFlippedTheSwitchShowsTheHouseholdsDefault() {
+        // Unset here: the household's Music mix default, read from the server.
+        assertFalse(PhoneUpNextView.of(true, queue, null, false, autoplayPref = null, householdDefault = false).autoplay)
+        assertTrue(PhoneUpNextView.of(true, queue, null, false, autoplayPref = null, householdDefault = true).autoplay)
+        assertTrue("not read yet: on, the server's own default", PhoneUpNextView.of(true, queue, null, false, null, null).autoplay)
+        // Flipped here: the choice, whatever the household says.
+        assertTrue(PhoneUpNextView.of(true, queue, null, false, autoplayPref = true, householdDefault = false).autoplay)
+        assertFalse(PhoneUpNextView.of(true, queue, null, false, autoplayPref = false, householdDefault = true).autoplay)
+        // A session's own answer is what it does.
+        assertTrue(PhoneUpNextView.of(true, queue, UpNextState("srv", 1, autoplay = true), false, null, false).autoplay)
+    }
+
+    @Test fun aRoomPlayOrPlaylistSaysAutoplayOnlyOnceFlippedHere() {
+        assertFalse("autoplay" in roomPlayTrackBody("office", 12, "d", null, null, false, autoplay = null))
+        assertEquals("true", roomPlayTrackBody("office", 12, "d", null, null, false, autoplay = true)["autoplay"].toString())
+        assertEquals("false", roomPlayTrackBody("office", 12, "d", null, null, false, autoplay = false)["autoplay"].toString())
+        assertFalse("autoplay" in roomPlayPlaylistBody("office", 3, false, "d", null, false, autoplay = null))
+        assertEquals("true", roomPlayPlaylistBody("office", 3, false, "d", null, false, autoplay = true)["autoplay"].toString())
+    }
 }

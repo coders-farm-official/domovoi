@@ -28,6 +28,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +49,8 @@ import com.domovoi.app.LocalToast
 import com.domovoi.app.net.ApiException
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.mix.effectiveAutoplay
+import com.domovoi.app.mix.readHouseholdMix
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PhoneUpNext
 import com.domovoi.app.player.UP_NEXT_AUTOPLAY_LABEL
@@ -56,7 +59,6 @@ import com.domovoi.app.player.UpNextState
 import com.domovoi.app.player.phoneUpNextForShown
 import com.domovoi.app.player.phoneUpNextLine
 import com.domovoi.app.player.phoneUpNextShown
-import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.launchAction
 import com.domovoi.app.ui.theme.Domovoi
@@ -81,7 +83,8 @@ internal data class PhoneUpNextView(
     /** The section shows ([phoneUpNextShown]). */
     val shown: Boolean,
     val state: UpNextState?,
-    /** What the switch says: the session's, else this phone's preference. */
+    /** What the switch says: the session's, else what the person chose on
+     *  this phone, else the household's Music mix default, else on. */
     val autoplay: Boolean,
 ) {
     /** The queue rows drawn above the section (real indices): all of them
@@ -98,12 +101,43 @@ internal data class PhoneUpNextView(
     companion object {
         val NONE = PhoneUpNextView(shown = false, state = null, autoplay = true)
 
-        fun of(paired: Boolean, queue: List<PlayItem>, state: UpNextState?, casting: Boolean, autoplayPref: Boolean) =
+        fun of(
+            paired: Boolean,
+            queue: List<PlayItem>,
+            state: UpNextState?,
+            casting: Boolean,
+            autoplayPref: Boolean?,
+            householdDefault: Boolean? = null,
+        ) =
             PhoneUpNextView(
                 shown = phoneUpNextShown(paired, queue, state, casting),
                 state = state,
-                autoplay = state?.autoplay ?: autoplayPref,
+                autoplay = state?.autoplay ?: effectiveAutoplay(autoplayPref, householdDefault),
             )
+    }
+}
+
+/**
+ * Reads the household's Music mix (device read) for the server the app
+ * talks to while [paired], so the Autoplay switch can show the household's
+ * default until the person flips it here. Kept under the server it was
+ * asked of; quiet on failure (the switch then says on, the server's own
+ * default, and the session's answer corrects it).
+ */
+@Composable
+internal fun ReadMixDefaults(paired: Boolean) {
+    val app = LocalApp.current
+    val server by app.prefs.serverUrl.collectAsState()
+    LaunchedEffect(server, paired) {
+        if (!paired) return@LaunchedEffect
+        val at = server
+        try {
+            app.mixDefaults.heard(at, readHouseholdMix(app.api, at))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // An older server (no Music mix), or not reachable: nothing learnt.
+        }
     }
 }
 
@@ -118,8 +152,13 @@ internal fun rememberPhoneUpNextView(queue: List<PlayItem>, casting: Boolean): P
     val state by upNext.state.collectAsState()
     val token by app.prefs.deviceToken.collectAsState()
     val autoplayPref by app.prefs.upNextAutoplay.collectAsState()
-    return remember(queue, state, token, casting, autoplayPref) {
-        PhoneUpNextView.of(!token.isNullOrBlank(), queue, state, casting, autoplayPref)
+    val server by app.prefs.serverUrl.collectAsState()
+    val defaults by app.mixDefaults.autoplay.collectAsState()
+    val paired = !token.isNullOrBlank()
+    ReadMixDefaults(paired)
+    val householdDefault = remember(server, defaults) { app.mixDefaults.autoplayFor(server) }
+    return remember(queue, state, token, casting, autoplayPref, householdDefault) {
+        PhoneUpNextView.of(paired, queue, state, casting, autoplayPref, householdDefault)
     }
 }
 
@@ -249,6 +288,8 @@ private fun PhoneUpNextRow(i: Int, item: PlayItem, u: UpNextState?) {
     val app = LocalApp.current
     val toast = LocalToast.current
     var busy by remember(item.uid, item.upNextSeq) { mutableStateOf(false) }
+    var whyOpen by remember(item.uid, item.upNextSeq) { mutableStateOf(false) }
+    val chip = whyChip(item.reasonLabel, item.why)
     // "less like this" only on a pick of the session the phone follows now.
     val canLessLike = u?.id != null && item.sessionId == u.id && item.upNextSeq != null
     Row(
@@ -285,9 +326,11 @@ private fun PhoneUpNextRow(i: Int, item: PlayItem, u: UpNextState?) {
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    // Why it was picked: a muted chip ("same artist", "90s").
-                    item.reasonLabel?.let { Pill(it) }
+                    // Why it was picked: a muted chip ("same artist", "90s");
+                    // with the server's sentence, a tap shows it under the row.
+                    chip?.let { UpNextWhyChip(it, whyOpen) { whyOpen = !whyOpen } }
                 }
+                whyLine(chip, whyOpen)?.let { UpNextWhyLine(it, Modifier.padding(top = 4.dp)) }
             }
         }
         if (canLessLike) {

@@ -41,6 +41,10 @@ data class UpNextPick(
     @SerialName("reason_code") val reasonCode: String? = null,
     @SerialName("reason_label") val reasonLabel: String? = null,
     val status: String? = null,
+    /** "Why this song?" in plain words (1.3.0), built on the server from the
+     *  signals the picker really used; null for a pick made before. Shown
+     *  as it is, never made up here. */
+    val why: String? = null,
 )
 
 /** A `Session` (service.py session_json). */
@@ -152,6 +156,7 @@ object UpNextRules {
                 queueOrigin = QueueOrigin.Auto,
                 upNextSeq = p.seq,
                 reasonLabel = p.reasonLabel?.takeIf { it.isNotBlank() },
+                why = p.why?.takeIf { it.isNotBlank() },
                 sessionId = sessionId,
             )
 }

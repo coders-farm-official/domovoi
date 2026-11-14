@@ -99,6 +99,10 @@ class AppContainer(context: Context) {
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
 
+    /** The household's Music mix Autoplay default, by server (mix/MusicMix.kt):
+     *  what Up next's switch shows until the person flips it on this phone. */
+    val mixDefaults = com.domovoi.app.mix.MixDefaults()
+
     /** Listening history from the phone's own player: the outbox and its
      *  sending (listens/ListenLog.kt). The player calls its hooks. */
     val listens: com.domovoi.app.listens.ListenLog =
@@ -196,7 +200,8 @@ class AppContainer(context: Context) {
                 override fun server() = prefs.serverUrl.value
                 override fun paired() = prefs.isPaired() && !com.domovoi.app.net.HouseholdLock.roomModeActive
                 override fun deviceId() = prefs.deviceId
-                override fun autoplay() = prefs.upNextAutoplay.value
+                override fun autoplayChoice() = prefs.upNextAutoplay.value
+                override fun autoplayDefault(server: String) = mixDefaults.autoplayFor(server)
                 override fun saveAutoplay(on: Boolean) = prefs.setUpNextAutoplay(on)
                 override fun listenerPick(server: String) = prefs.listenerPickFor(server)
                 override fun shared(server: String) = prefs.sharedHere(server)

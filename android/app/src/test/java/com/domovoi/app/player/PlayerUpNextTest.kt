@@ -60,11 +60,11 @@ class PlayerUpNextTest {
     }
 
     private class Env(private val base: () -> String) : PhoneUpNext.Env {
-        var autoplay = true
+        var autoplay: Boolean? = null
         override fun server(): String = base()
         override fun paired() = true
         override fun deviceId() = "android-1a2b"
-        override fun autoplay(): Boolean = autoplay
+        override fun autoplayChoice(): Boolean? = autoplay
         override fun saveAutoplay(on: Boolean) { autoplay = on }
         override fun listenerPick(server: String): String? = null
         override fun shared(server: String) = false

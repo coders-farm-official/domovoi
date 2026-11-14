@@ -453,7 +453,7 @@ class PlayerController(
     /** [item] without any Up next tags: somebody asked for it. */
     private fun asAskedFor(item: PlayItem): PlayItem =
         if (item.queueOrigin == QueueOrigin.Explicit && item.sessionId == null && item.upNextSeq == null && item.upNextGen == 0) item
-        else item.copy(queueOrigin = QueueOrigin.Explicit, upNextSeq = null, reasonLabel = null, sessionId = null, upNextGen = 0)
+        else item.copy(queueOrigin = QueueOrigin.Explicit, upNextSeq = null, reasonLabel = null, why = null, sessionId = null, upNextGen = 0)
 
     /** True while a play replaces the queue ([playHere]): the engine's
      *  transition callbacks then ask Up next nothing. */
