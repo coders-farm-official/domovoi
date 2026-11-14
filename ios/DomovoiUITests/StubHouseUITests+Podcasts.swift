@@ -388,13 +388,14 @@ extension StubHouseUITests {
             podcastRow(app, StubPodcasts.pendingEpisode, StubPodcasts.pendingMeta).exists,
             "the undownloaded episode does not say what its download is doing"
         )
-        // The downloaded one must NOT carry a status word: the meta line
-        // shows `download_status` only when there is no file
-        // (``PodcastEpisode/metaLine``), and a row that showed `downloaded`
-        // beside a file it already has would be noise on every row.
-        XCTAssertFalse(
+        // The downloaded one says so. This was the opposite assertion until
+        // the 2026-11-14 batch: the line used to show `download_status` only
+        // when there was no file. Android `bd84d970` moved to the web's
+        // wording, where every row ends with its download state
+        // (`PodFormat.download`), so a row with its file reads `downloaded`.
+        XCTAssertTrue(
             podcastRow(app, StubPodcasts.newestEpisode, StubPodcasts.downloadedWord).exists,
-            "an episode with its file still shows a download status"
+            "an episode with its file does not say it is downloaded"
         )
         // The row with no file has no play button. Matched by the **name**,
         // because that is what the button carries
@@ -437,23 +438,30 @@ extension StubHouseUITests {
         )
     }
 
-    /// An episode whose feed did not say how long it is shows an em dash.
+    /// An episode whose feed did not say how long it is says **no length at
+    /// all**.
     ///
-    /// `fmtDur(nil)` is `—`, and the reason it is not `0:00` is that a
-    /// zero-length episode and an unknown length read the same on a row and
-    /// mean opposite things. The seeded row is the only one with a null
-    /// duration, and it **has** its file, so the dash cannot be confused with
-    /// a pending row's.
+    /// Until the 2026-11-14 batch this was `testPodcasts_AnEpisodeWithNoDurationShowsADash`:
+    /// `fmtDur(nil)` drew `—`. Android `bd84d970` moved the line to the web's
+    /// words, where an unknown length is left out (`PodFormat.length` is
+    /// `""`) — so the dash is now as wrong as `0:00` ever was. The row is
+    /// still told apart by what it does say: the stub seeds a place in it,
+    /// and with no length to count down from that place reads `at 24 min`
+    /// (`PodFormat.Progress.Resumed`).
     @MainActor
-    func testPodcasts_AnEpisodeWithNoDurationShowsADash() throws {
+    func testPodcastDetails_AnEpisodeWithNoDurationLeavesTheLengthOut() throws {
+        resetPodcastHouse()
         let (app, landed) = openPodcasts()
         XCTAssertTrue(landed, "the shows list never answered")
         XCTAssertTrue(openTheKitchenTable(app), "the show's episodes never drew")
+        let row = podcastRow(app, StubPodcasts.noDurationEpisode, StubPodcasts.noDurationPlace)
+        let built = row.exists || podcastsScrollUntilBuilt(app, row, flicks: 6)
         evidence(app, "podcasts-22-no-duration")
 
-        XCTAssertTrue(
+        XCTAssertTrue(built, "the episode with no duration did not say its place")
+        XCTAssertFalse(
             podcastRow(app, StubPodcasts.noDurationEpisode, StubPodcasts.emDash).exists,
-            "an episode with no duration did not draw the em dash"
+            "an unknown duration still draws the old em dash"
         )
         XCTAssertFalse(
             podcastRow(app, StubPodcasts.noDurationEpisode, StubPodcasts.zeroDuration).exists,
@@ -1207,12 +1215,21 @@ enum StubPodcasts {
     // the episodes
     static let episodeCountLine = "showing 50 of 57 episodes"
     static let newestEpisode = "Brining a bird"
-    static let newestMeta = "53:00 · 2 chapters"
+    /// The meta line without its date (`yesterday` for this row): the date
+    /// is the Simulator's calendar day against a timestamp taken 24 hours
+    /// before the read, and the line's own case is ``StubPodcastDetails``'.
+    /// Since Android `bd84d970` every row says its download state, so a
+    /// downloaded row ends `downloaded` (`PodFormat.download`).
+    static let newestMeta = "53 min · 2 chapters · downloaded"
     static let pendingEpisode = "Stock from a carcass"
-    static let pendingMeta = "41:00 · pending"
-    /// The word a downloaded row must **not** carry.
+    static let pendingMeta = "41 min · not downloaded"
+    /// The word a downloaded row now **must** carry.
     static let downloadedWord = "downloaded"
     static let noDurationEpisode = "A quiet kitchen"
+    /// What the no-duration row says instead of a length: its place, which
+    /// the stub seeds (`stubhouse.patch`, 1440 s into an episode of no
+    /// known length).
+    static let noDurationPlace = "at 24 min"
     static let emDash = "—"
     static let zeroDuration = "0:00"
     /// Episode fifty-seven: page two, and only page two.
@@ -1248,7 +1265,11 @@ enum StubPodcasts {
     static let inTheDashboard = "playing or saving an episode is done in the dashboard"
 
     // polling
-    static let polledToast = "Polled — 3 downloaded, 2 new"
+    /// The counts, then the one show whose feed the stub's poll could not
+    /// read (`PollResult.failures`, `stubhouse.patch`), by name and in the
+    /// server's own words (`PodFormat.pollText`).
+    static let polledToast = "Polled — 3 downloaded, 2 new. "
+        + "1 show couldn't be read: Tuesday Night Shift 05 — feed not found"
 
     // subscribing
     static let byFeedURL = "by rss url"

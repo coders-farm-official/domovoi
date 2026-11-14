@@ -16,11 +16,13 @@ import Foundation
 
 /// One subscribed show, as `GET /api/podcasts/subscriptions` answers it.
 ///
-/// The server's row carries more than this — `description`, `keep_n`,
-/// `last_polled_at`, `added_at`, and a paged answer adds the keyset key
-/// columns (`podcasts.py:140-152, 200`). Nothing on this screen draws them,
-/// so nothing here decodes them; a `Decodable` ignores what it is not asked
-/// for, which is what lets the server grow a column without this app caring.
+/// The server's row carries more than this — `keep_n`, `added_at`, and a
+/// paged answer adds the keyset key columns (`podcasts.py:140-152, 200`).
+/// Nothing on this screen draws them, so nothing here decodes them; a
+/// `Decodable` ignores what it is not asked for, which is what lets the
+/// server grow a column without this app caring. `description` and
+/// `last_polled_at` **are** decoded since the 2026-11-14 batch: the episodes
+/// sheet's header draws both (Android `bd84d970`, `PodcastsModels.kt:15-18`).
 public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
 
     public let id: Int64
@@ -36,8 +38,21 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
     /// contacting a publisher on an older server's say-so.
     public let artwork: String?
 
-    public let episodeCount: Int
+    /// Nil when the server sent no count, which is **not** zero: the
+    /// header then falls back to the episode list's own total
+    /// (``PodcastFormat/subInfo(_:total:now:)``), as Android's
+    /// `episode_count: Int? = null` does (`PodcastsModels.kt:15`).
+    public let episodeCount: Int?
     public let downloadedCount: Int
+
+    /// The feed's own description: **HTML from the internet**, so it is only
+    /// ever drawn through ``PodcastFormat/plainText(_:)`` and a verbatim
+    /// `Text` — never rendered as markup, never in a web view.
+    public let description: String?
+
+    /// When the house last read this feed, as the server's ISO timestamp, or
+    /// nil for a feed never read ("not checked yet").
+    public let lastPolledAt: String?
 
     public init(
         id: Int64 = 0,
@@ -45,8 +60,10 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
         feedURL: String? = nil,
         author: String? = nil,
         artwork: String? = nil,
-        episodeCount: Int = 0,
-        downloadedCount: Int = 0
+        episodeCount: Int? = nil,
+        downloadedCount: Int = 0,
+        description: String? = nil,
+        lastPolledAt: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -55,13 +72,16 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
         self.artwork = artwork
         self.episodeCount = episodeCount
         self.downloadedCount = downloadedCount
+        self.description = description
+        self.lastPolledAt = lastPolledAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, author, artwork
+        case id, title, author, artwork, description
         case feedURL = "feed_url"
         case episodeCount = "episode_count"
         case downloadedCount = "downloaded_count"
+        case lastPolledAt = "last_polled_at"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -71,8 +91,10 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
         feedURL = try values.decodeIfPresent(String.self, forKey: .feedURL)
         author = try values.decodeIfPresent(String.self, forKey: .author)
         artwork = try values.decodeIfPresent(String.self, forKey: .artwork)
-        episodeCount = try values.decodeIfPresent(Int.self, forKey: .episodeCount) ?? 0
+        episodeCount = try values.decodeIfPresent(Int.self, forKey: .episodeCount)
         downloadedCount = try values.decodeIfPresent(Int.self, forKey: .downloadedCount) ?? 0
+        description = try values.decodeIfPresent(String.self, forKey: .description)
+        lastPolledAt = try values.decodeIfPresent(String.self, forKey: .lastPolledAt)
     }
 
     /// `title ?: feed_url ?: "podcast"` (`PodcastsScreen.kt:241`).
@@ -114,7 +136,7 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
     /// four digits of episodes does not exist. Said here rather than in the
     /// card so the two numbers cannot be swapped in a view.
     public var downloadedLine: String {
-        "\(downloadedCount)/\(episodeCount) \(PodcastStrings.downloadedSuffix)"
+        "\(downloadedCount)/\(episodeCount ?? 0) \(PodcastStrings.downloadedSuffix)"
     }
 
     /// Everything on the card except its name, in one sentence, for the
@@ -138,12 +160,13 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
 /// One episode of one show, as `GET /api/podcasts/subscriptions/{id}/episodes`
 /// answers it.
 ///
-/// The server sends `subscription_id`, `guid`, `description`, `published_at`
-/// and `downloaded_at` too (`_EP_COLUMNS`, `podcasts.py:306-308`); this
-/// screen draws none of them. **`file_path` is popped** on the way out and
-/// clients get `file_ext` alone (`_episode_row`, `:311-317`) — so an episode
-/// row carries no size, which is why there is no save-to-device control
-/// (DECISIONS.md).
+/// The server sends `subscription_id`, `guid` and `downloaded_at` too
+/// (`_EP_COLUMNS`, `podcasts.py:306-308`); this screen draws none of them.
+/// `published_at`, `description` and `position_sec` **are** decoded since the
+/// 2026-11-14 batch, for the row's date, its description and the listener's
+/// place (Android `bd84d970`, `PodcastsModels.kt:36-49`). **`file_path` is
+/// popped** on the way out and clients get `file_ext` alone (`_episode_row`,
+/// `:320-326`) — so an episode row carries no size.
 public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
 
     public let id: Int64
@@ -166,8 +189,8 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
 
     /// `pending` · `downloading` · `downloaded` · `failed` · `skipped`
     /// (`domovoi/workers/podcast_feed_poller.py:262, 315, 399, 435, 440,
-    /// 454`). Shown on the meta line **only when there is no file**, which is
-    /// when it is the answer to "why can I not play this".
+    /// 454`). Read through ``PodcastFormat/download(_:)``, where a file here
+    /// wins over any status word.
     public let downloadStatus: String?
 
     /// `".mp3"` and friends. Android names a save-to-device file with it;
@@ -183,6 +206,28 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
     /// and giving them one representation is what stops a view asking.
     public let chapters: [PodcastChapter]
 
+    /// When the feed says the episode came out, as the server's ISO
+    /// timestamp; nil for a feed that did not say.
+    public let publishedAt: String?
+
+    /// The feed's description: **HTML from the internet**, drawn only through
+    /// ``PodcastFormat/plainText(_:)`` and a verbatim `Text`.
+    public let description: String?
+
+    /// The listening-as person's place in seconds, which the episodes read
+    /// carries when it is sent `device_id` (`podcasts.py:337-356`). Nil is
+    /// "not started".
+    public let positionSec: Double?
+
+    /// Whether the row said anything about a place at all.
+    ///
+    /// A server older than 2026-11-12 sends **no `position_sec` key**, which
+    /// is not the same answer as `null` ("not started"): Android marks it
+    /// with a NaN default and shows no progress rather than an unplayed dot
+    /// (`PodcastsModels.kt:40-49`). The memberwise default is `false` for the
+    /// same reason Android's default is the not-sent marker.
+    public let positionKnown: Bool
+
     public init(
         id: Int64 = 0,
         title: String? = nil,
@@ -190,7 +235,11 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
         hasFile: Bool = false,
         downloadStatus: String? = nil,
         fileExt: String? = nil,
-        chapters: [PodcastChapter] = []
+        chapters: [PodcastChapter] = [],
+        publishedAt: String? = nil,
+        description: String? = nil,
+        positionSec: Double? = nil,
+        positionKnown: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -199,14 +248,20 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
         self.downloadStatus = downloadStatus
         self.fileExt = fileExt
         self.chapters = chapters
+        self.publishedAt = publishedAt
+        self.description = description
+        self.positionSec = positionSec
+        self.positionKnown = positionKnown
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, chapters
+        case id, title, chapters, description
         case durationSec = "duration_sec"
         case hasFile = "has_file"
         case downloadStatus = "download_status"
         case fileExt = "file_ext"
+        case publishedAt = "published_at"
+        case positionSec = "position_sec"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -218,6 +273,11 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
         downloadStatus = try values.decodeIfPresent(String.self, forKey: .downloadStatus)
         fileExt = try values.decodeIfPresent(String.self, forKey: .fileExt)
         chapters = try values.decodeIfPresent([PodcastChapter].self, forKey: .chapters) ?? []
+        publishedAt = try values.decodeIfPresent(String.self, forKey: .publishedAt)
+        description = try values.decodeIfPresent(String.self, forKey: .description)
+        // Present-and-null is "not started"; absent is an older server.
+        positionKnown = values.contains(.positionSec)
+        positionSec = try values.decodeIfPresent(Double.self, forKey: .positionSec)
     }
 
     /// `"episode"` for a feed item with no title (`PodcastsEpisodes.kt:230`).
@@ -228,30 +288,13 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
         return title
     }
 
-    /// The row's mono meta line: `53:00 · 2 chapters`, `— · pending`.
-    ///
-    /// `PodcastsEpisodes.kt:238-246`'s `buildString`, branch for branch — the
-    /// duration or an em dash, then the chapter count when there is one, then
-    /// the download status **only when there is no file**.
-    ///
-    /// Android writes `"${chapters.size} chapters"` with no singular form, so
-    /// a one-chapter episode read `1 chapters` on both phones. **Fixed in
-    /// both at once**, 2026-11-03 (D48, and the Android half is the android
-    /// unit's): ``PodcastStrings/chapterCount(_:)`` pluralises, so this reads
-    /// `1 chapter`.
-    ///
-    /// A **computed property, not a line in the row view**: it is the one
-    /// place `has_file` and `download_status` are read together, and the
-    /// whole point of the row's play control is that those two agree.
-    public var metaLine: String {
-        var out = fmtDur(durationSec)
-        if !chapters.isEmpty { out += " · " + PodcastStrings.chapterCount(chapters.count) }
-        if !hasFile, let status = downloadStatus,
-           !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            out += " · \(status)"
-        }
-        return out
-    }
+    // The row's mono meta line is ``PodcastFormat/meta(_:now:calendar:)``:
+    // `yesterday · 53 min · 24 min left · 2 chapters · downloaded`, in the
+    // web's order (`PodcastsFormat.kt:94-101`). It replaced this type's
+    // `metaLine` (`53:00 · 2 chapters`, the status only when there was no
+    // file) and `downloadFailed` (which coloured that status) when Android
+    // moved to the web's wording in `bd84d970`: the download state is now on
+    // every row, and the one coloured word is the listener's place.
 
     /// Whether this row gets a play control at all — and since the
     /// 2026-11-03 batch it really is a play control
@@ -260,21 +303,22 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
     /// Android draws the button always and **disables** it
     /// (`PodcastsEpisodes.kt:223`). Here a row with no file draws no button:
     /// the owner's standing rule is that a control which cannot do what it
-    /// says is not drawn, the meta line already says `· pending` in its
-    /// place, and a disabled filled button is the shape this track has twice
+    /// says is not drawn, the meta line already says `not downloaded` or
+    /// `download failed` in its place, and a disabled filled button is the shape this track has twice
     /// been caught shipping. Same decision as ``FilePath/deleteNeedsAnAdmin``.
     public var canPlay: Bool { hasFile }
 
-    /// Whether the house **tried** to fetch this episode's audio and could
-    /// not (`download_status = 'failed'`,
-    /// `podcast_feed_poller.py:435, 440`).
-    ///
-    /// The one branch of the meta line that is not ordinary news, so it is
-    /// the one the row colours — and `hasFile` is checked first for
-    /// ``metaLine``'s reason: a status is only shown when there is no file,
-    /// so a row that has the audio is never coloured by a stale word from the
-    /// attempt before.
-    public var downloadFailed: Bool { !hasFile && downloadStatus == "failed" }
+    /// This row with its place marked **not asked** — for a read that sent
+    /// no device, whose `position_sec: null` is the server not knowing who
+    /// is listening rather than the listener not having started.
+    public var placeUnknown: PodcastEpisode {
+        PodcastEpisode(
+            id: id, title: title, durationSec: durationSec, hasFile: hasFile,
+            downloadStatus: downloadStatus, fileExt: fileExt, chapters: chapters,
+            publishedAt: publishedAt, description: description,
+            positionSec: nil, positionKnown: false
+        )
+    }
 }
 
 /// One chapter mark. `EpisodeChapterRow` (`PodcastsModels.kt:19-23`).
@@ -368,8 +412,9 @@ public struct PodcastDiscovery: Decodable, Identifiable, Equatable, Sendable {
 }
 
 /// What one `POST /api/podcasts/poll` found: `{"polled", "new",
-/// "downloaded", "evicted"}`, all ints (`PodcastFeedPoller.tick`,
-/// `domovoi/workers/podcast_feed_poller.py:535-543`).
+/// "downloaded", "evicted", "failed", "failures"}` (`PollResult`,
+/// `podcasts.py:510-517`). `failed` and `failures` arrived on 2026-11-12; an
+/// older server sends neither, and then the toast is the counts alone.
 ///
 /// Android reads `downloaded` and `new` out of the raw `JsonObject` with
 /// `intOrNull ?: 0` (`PodcastsScreen.kt:117-120`); this decodes the whole
@@ -392,15 +437,26 @@ public struct PodcastPoll: Decodable, Equatable, Sendable {
     /// Episodes dropped by the keep-N rule.
     public let evicted: Int
 
-    public init(polled: Int = 0, fresh: Int = 0, downloaded: Int = 0, evicted: Int = 0) {
+    /// The shows whose feed could not be read on this pass, which the toast
+    /// names (``PodcastStrings/polled(_:)``). Empty from an older server.
+    public let failures: [PodcastPollFailure]
+
+    public init(
+        polled: Int = 0,
+        fresh: Int = 0,
+        downloaded: Int = 0,
+        evicted: Int = 0,
+        failures: [PodcastPollFailure] = []
+    ) {
         self.polled = polled
         self.fresh = fresh
         self.downloaded = downloaded
         self.evicted = evicted
+        self.failures = failures
     }
 
     private enum CodingKeys: String, CodingKey {
-        case polled, downloaded, evicted
+        case polled, downloaded, evicted, failures
         case fresh = "new"
     }
 
@@ -410,6 +466,50 @@ public struct PodcastPoll: Decodable, Equatable, Sendable {
         fresh = try values.decodeIfPresent(Int.self, forKey: .fresh) ?? 0
         downloaded = try values.decodeIfPresent(Int.self, forKey: .downloaded) ?? 0
         evicted = try values.decodeIfPresent(Int.self, forKey: .evicted) ?? 0
+        // **Lenient**, as Android's per-field `JsonPrimitive` reads are
+        // (`PodcastsFormat.kt:166-180`): the poll already happened, and a
+        // `failures` this app cannot read must not turn a pass that fetched
+        // every feed into a toast saying the poll failed.
+        failures = (try? values.decodeIfPresent([PodcastPollFailure].self, forKey: .failures)) ?? []
+    }
+}
+
+/// One show whose feed could not be read on a poll: `PollFailure`
+/// (`podcasts.py:496-506`). Every field optional and each read on its own, so
+/// one odd field costs that field and not the row.
+public struct PodcastPollFailure: Decodable, Equatable, Sendable {
+
+    public let subscriptionID: Int64?
+
+    /// The show's name, or nil/blank for a feed the house never titled.
+    public let title: String?
+
+    /// `too_large` · `not_found` · `http_error` · `not_a_feed` ·
+    /// `unreachable` · `refused` · `error`. Not drawn: ``message`` is the
+    /// same reason in plain words.
+    public let reason: String?
+
+    /// The reason in plain words, for the toast ("feed too large").
+    public let message: String?
+
+    public init(subscriptionID: Int64? = nil, title: String? = nil, reason: String? = nil, message: String? = nil) {
+        self.subscriptionID = subscriptionID
+        self.title = title
+        self.reason = reason
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title, reason, message
+        case subscriptionID = "subscription_id"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        subscriptionID = (try? values.decodeIfPresent(Int64.self, forKey: .subscriptionID)) ?? nil
+        title = (try? values.decodeIfPresent(String.self, forKey: .title)) ?? nil
+        reason = (try? values.decodeIfPresent(String.self, forKey: .reason)) ?? nil
+        message = (try? values.decodeIfPresent(String.self, forKey: .message)) ?? nil
     }
 }
 
@@ -513,11 +613,28 @@ public enum PodcastPath {
     /// One show's episodes, newest first (the server's default), with the
     /// server's search over the **title only** (`:339-341` — unlike the shows
     /// search, which also covers the author and the feed URL).
-    public static func episodes(showID: Int64, search: String = "") -> String {
+    ///
+    /// Then the listener's slot — the same `device_id` + `person_id` the
+    /// player saves positions under — so each row carries that listener's
+    /// place (`PodcastsFormat.kt:183-190`). `person_id` goes only with a
+    /// device and only when it parses as an integer: the server types it
+    /// `Optional[int]` (`podcasts.py:341`), and a non-numeric one is a 422
+    /// that would cost the whole list, not just the progress.
+    public static func episodes(
+        showID: Int64,
+        search: String = "",
+        deviceID: String? = nil,
+        personID: String? = nil
+    ) -> String {
         let base = "/api/podcasts/subscriptions/\(showID)/episodes"
+        var query: [String] = []
         let needle = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return base }
-        return "\(base)?q=\(esc(needle))"
+        if !needle.isEmpty { query.append("q=\(esc(needle))") }
+        if let deviceID, !deviceID.isEmpty {
+            query.append("device_id=\(esc(deviceID))")
+            if let personID, let number = Int64(personID) { query.append("person_id=\(number)") }
+        }
+        return query.isEmpty ? base : base + "?" + query.joined(separator: "&")
     }
 
     /// The directory search. Device tier, and the server refuses it with the
