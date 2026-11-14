@@ -304,7 +304,7 @@ _FULL_FP_SQL = text(
     " (SELECT max(updated_at) FROM library_aliases)"
 )
 _TRACKS_SQL = text(
-    "SELECT id, title, artist, album, file_path FROM library_tracks ORDER BY id"
+    "SELECT id, title, artist, album, file_path, artist_credits FROM library_tracks ORDER BY id"
 )
 _ALIASES_SQL = text(
     "SELECT id, alias, alias_key, target_type, target_key, target_name,"

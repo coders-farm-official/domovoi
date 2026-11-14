@@ -51,6 +51,9 @@ class Playlist(BaseModel):
     description: str | None = None
     cover_color: str | None = None
     cover_emoji: str | None = None
+    # Made from the music files (.m3u files, the songs' PLAYLIST tags; V058):
+    # read-only in Domovoi, "Copy to a new playlist" to change it.
+    imported: bool = False
 
 
 class PlaylistCreate(BaseModel):

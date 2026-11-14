@@ -719,6 +719,29 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "bool", tier="hot", needs_internet=True,
     ),
     FieldSpec(
+        "library_cover_art_enabled", "Cover art from the Cover Art Archive", "Library",
+        "For songs Domovoi has identified (song recognition, a 'Needs review' "
+        "choice, or the file's own MusicBrainz id), fetch the album's front "
+        "cover from the Cover Art Archive (coverartarchive.org) and write it "
+        "into the MP3 or FLAC file; other kinds of file show it from Domovoi's "
+        "own copy. Sends the album's MusicBrainz id, about one request a "
+        "second, only while the server is online. A file's own pictures are "
+        "kept so Undo puts them back; folder images (cover.jpg) are never "
+        "touched. Follows the internet answer unless you set it. Applies "
+        "immediately.",
+        "bool", tier="hot", needs_internet=True,
+    ),
+    FieldSpec(
+        "library_cover_art_mode", "Cover art: which files", "Library",
+        "Replace existing art: the archive's cover replaces the picture a file "
+        "has (Undo puts the file's own back). Only add missing art: only "
+        "files with no picture of their own and no cover image in their "
+        "folder get one. Applies immediately.",
+        "choice", tier="hot", choices=["replace", "add_missing"],
+        choice_labels={"replace": "Replace existing art", "add_missing": "Only add missing art"},
+        needs_internet=True,
+    ),
+    FieldSpec(
         "music_match_play_threshold", "Play-without-asking score", "Library",
         "How sure (0-1) a sound match must be to play without asking. "
         "Lower = fewer questions and more wrong songs. Measured at 0.90; "

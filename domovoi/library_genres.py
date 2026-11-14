@@ -35,6 +35,14 @@ ID3v2.4's NUL-separated list) and a value may hold several genres
    dropped; a key is kept
    once, in first-seen order, at most :data:`MAX_KEYS` per track.
 
+Before step 2, a WHOLE value that is one of a video site's upload
+categories (:data:`VIDEO_SITE_CATEGORIES`: "People & Blogs", "Film &
+Animation", "Music", "Entertainment" ...) is no genre at all: a
+downloader writes the uploader's category into the genre tag, and split on
+" & " it became the genres "people" and "blogs" (2026-11-14, a real
+library). Such a file counts as having no genre, so MusicBrainz's genre
+fills it for a recognised track.
+
 ``library_tracks.genre`` is the first value as tagged (after step 1),
 without control or format characters (NUL, bidi overrides), trimmed to
 :data:`MAX_GENRE_CHARS`, for display; :func:`genre_label` is
@@ -62,7 +70,11 @@ from domovoi.media_tags._id3 import ID3V1_GENRES
 #: when the reader learns something the rows already there should get
 #: (and give V050's partial index ``idx_library_tracks_tags_pending`` a
 #: wider twin in that change's migration).
-TAGS_VERSION = 1
+TAGS_VERSION = 2
+# 2 (V058, 2026-11-14): video-site categories are no genre; the file's own
+# MusicBrainz ids, full artist credits (ARTISTS) and playlist names
+# (PLAYLIST) are read too. Every row is read again by the tag backfill,
+# which is how genre keys like "blogs" leave a library already there.
 
 #: Most genre keys kept per track (V050's CHECK allows 16).
 MAX_KEYS = 8
@@ -131,6 +143,22 @@ ALIASES: dict[str, str] = {
     "christmas music": "christmas",
     "holiday": "christmas",
 }
+
+#: A video site's upload categories, normalised (step 3): a whole genre
+#: value that is one of these is the uploader's category, not a genre.
+VIDEO_SITE_CATEGORIES = frozenset({
+    "film & animation", "autos & vehicles", "music", "pets & animals", "sports",
+    "travel & events", "gaming", "people & blogs", "comedy", "entertainment",
+    "news & politics", "howto & style", "education", "science & technology",
+    "nonprofits & activism",
+})
+
+#: Words :func:`genre_label` writes in capitals wherever they appear in a
+#: key ("uk garage" -> "UK Garage", "aor" -> "AOR", "dj mix" -> "DJ Mix").
+ACRONYMS = frozenset({
+    "r&b", "aor", "edm", "ebm", "idm", "uk", "us", "usa", "dj", "mc", "rnb", "ost",
+    "nwobhm", "dnb", "jrock", "kpop", "jpop", "cpop", "uk2",
+})
 
 #: How :func:`genre_label` writes keys that are not just capitalised words.
 LABELS: dict[str, str] = {
@@ -248,6 +276,8 @@ def genre_keys(values: Iterable[str]) -> list[str]:
     for raw in bounded(values):
         for name in resolve_numeric(raw):
             whole = _norm(name)
+            if whole in VIDEO_SITE_CATEGORIES:
+                continue  # the uploader's category, not a genre
             parts = [name] if whole in ALIASES or whole in LABELS else _SPLIT_RE.split(name)
             for part in parts:
                 key = _key_of(part)
@@ -272,10 +302,13 @@ def display_genre(values: Iterable[str]) -> str | None:
 
 def genre_label(key: str) -> str:
     """How the Genres tab names a key: :data:`LABELS`, else each word
-    capitalised ("alternative rock" -> "Alternative Rock")."""
+    capitalised ("alternative rock" -> "Alternative Rock"), an
+    :data:`ACRONYMS` word in capitals ("uk r&b" -> "UK R&B")."""
     if key in LABELS:
         return LABELS[key]
-    return " ".join(w[:1].upper() + w[1:] for w in key.split(" "))
+    return " ".join(
+        w.upper() if w in ACRONYMS else w[:1].upper() + w[1:] for w in key.split(" ")
+    )
 
 
 def parse_year(value: object, *, today: date | None = None) -> int | None:
@@ -297,6 +330,7 @@ def parse_year(value: object, *, today: date | None = None) -> int | None:
 
 
 __all__ = [
+    "ACRONYMS",
     "ALIASES",
     "LABELS",
     "MAX_KEYS",
@@ -305,4 +339,5 @@ __all__ = [
     "genre_label",
     "parse_year",
     "resolve_numeric",
+    "VIDEO_SITE_CATEGORIES",
 ]

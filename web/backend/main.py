@@ -60,6 +60,7 @@ from web.backend.api import music_genres as music_genres_api
 from web.backend.api import lyrics as lyrics_api
 from web.backend.api import lists as lists_api
 from web.backend.api import music_queue as music_queue_api
+from web.backend.api import library_tools as library_tools_api
 from web.backend.api import nav_layout as nav_layout_api
 from web.backend.api import news as news_api
 from web.backend.api import playlists as playlists_api
@@ -413,6 +414,9 @@ app.include_router(music_aliases_api.router)
 app.include_router(music_artists_api.router)
 # Genres (V050): the Music page's Genres tab, open reads like Artists.
 app.include_router(music_genres_api.router)
+# Library tools (V058): /api/music/library-tools/* — its own literal
+# prefix, clear of music_api's /library/{track_id} matchers.
+app.include_router(library_tools_api.router)
 # Listening history (V051, Up next P1): the players' listens, the summary,
 # clearing a person's and deleting all. Literal paths, its own module.
 app.include_router(music_listens_api.router)

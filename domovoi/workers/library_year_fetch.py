@@ -7,8 +7,11 @@ a MusicBrainz recording id (song recognition or a provider download found
 it), MusicBrainz knows the recording's first release and genres, and this
 worker asks for both in ONE request:
 ``GET /ws/2/recording/<id>?fmt=json&inc=genres+artist-credits+releases+release-groups``
-(``MusicBrainzClient.recording_details``), reading ``first-release-date``
-and the genres: the recording's own, else its albums' (release groups'),
+(``MusicBrainzClient.recording_details``), reading the year (the album's
+first release, the album chosen as an Official plain album over a
+compilation, single or live one, the earliest; else the recording's
+``first-release-date``; V058), the album and its ids for a row that has
+none, and the genres: the recording's own, else its albums' (release groups'),
 else its first credited artist's — the top-voted three at most, normalised
 by ``domovoi.library_genres`` so they match the Genres page's
 (``domovoi.clients.musicbrainz.recording_genres``). MusicBrainz includes
@@ -165,6 +168,11 @@ _RECORD_SQL = text(
     "genre_source = CASE WHEN genre_keys IS NULL AND CAST(:gk AS text[]) IS NOT NULL "
     "THEN 'musicbrainz' ELSE genre_source END, "
     "genre_keys = COALESCE(genre_keys, CAST(:gk AS text[])), "
+    # The chosen release (V058): an album only where there is none, and its
+    # ids where the row has none (the cover-art lookup reads them).
+    "album = COALESCE(NULLIF(album, ''), CAST(:al AS text)), "
+    "musicbrainz_release_id = COALESCE(musicbrainz_release_id, CAST(:rel AS text)), "
+    "musicbrainz_release_group_id = COALESCE(musicbrainz_release_group_id, CAST(:rg AS text)), "
     "year_checked_at = COALESCE(year_checked_at, now()), "
     "genre_checked_at = CASE WHEN genre_keys IS NULL THEN COALESCE(genre_checked_at, now()) "
     "ELSE genre_checked_at END "
@@ -178,7 +186,8 @@ def _record_params(recording_id: str, details: MbRecordingDetails) -> dict[str, 
     display name) their labels joined, as the Genres page names them."""
     keys = list(details.genres) or None
     display = "; ".join(genre_label(k) for k in keys)[:MAX_GENRE_CHARS] if keys else None
-    return {"mbid": recording_id, "y": details.year, "gk": keys, "g": display}
+    return {"mbid": recording_id, "y": details.year, "gk": keys, "g": display,
+            "al": details.album, "rel": details.release_id, "rg": details.release_group_id}
 
 
 class DbYearFetchStore:

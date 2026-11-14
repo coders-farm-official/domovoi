@@ -25,7 +25,18 @@ gave; when the file says nothing they are NULL, except that a MusicBrainz
 genre stays (``library_year_fetch.py``); ``year`` only when the file gives
 one (``year_source = 'tag'``) — a year MusicBrainz gave earlier stays when
 the file has none. Title, artist and album are never touched: the
-household may have edited them. Each row is written under its own
+household may have edited them.
+
+**Since TAGS_VERSION 2 (V058)** a read also takes the file's own
+MusicBrainz ids (a recording id only fills a row that has none; a row the
+enricher never decided is then stamped ``file``, so it is never
+fingerprinted, and the year fetch looks it up by that id), every credited
+artist (``artist_credits``) and the playlists it names
+(``file_playlists``). A row whose tag genre the new rules drop (a video
+site's category such as "People & Blogs") loses it and is asked of
+MusicBrainz for one (``genre_checked_at`` cleared). At the end of a pass
+that read anything, the playlists named by files are synced
+(``domovoi/library_playlists_import.py``). Each row is written under its own
 savepoint: a row the database refuses is stamped read with no genre
 instead, so one bad file can never roll back its batch and have the
 same files re-read every second (security review of V050, finding 2).
@@ -92,10 +103,13 @@ def read_genre_year(path: Path) -> dict[str, Any] | None:
     except OSError:
         return None
     tags = _read_tags(path)
+    from domovoi.workers.library_indexer import _NO_IDS
+
     return {
         "genre": tags.get("genre"),
         "genre_keys": tags.get("genre_keys") or None,
         "year": tags.get("year"),
+        **{k: tags.get(k) for k in _NO_IDS},
     }
 
 
@@ -127,6 +141,22 @@ _WRITE_SQL = text(
     "WHEN genre_source = 'musicbrainz' THEN genre_source ELSE NULL END, "
     "year = COALESCE(CAST(:y AS smallint), year), "
     "year_source = CASE WHEN CAST(:y AS smallint) IS NULL THEN year_source ELSE 'tag' END, "
+    # A tag genre the rules now drop: asked of MusicBrainz again (V058).
+    "genre_checked_at = CASE WHEN CAST(:gk AS text[]) IS NULL AND genre_source = 'tag' "
+    "THEN NULL ELSE genre_checked_at END, "
+    # The file's own ids (V058): a recording id fills only an empty one,
+    # and a row never decided is then identified by its file.
+    "enriched_at = CASE WHEN musicbrainz_recording_id IS NULL AND CAST(:mb AS text) IS NOT NULL "
+    "AND enriched_at IS NULL THEN now() ELSE enriched_at END, "
+    "enrich_outcome = CASE WHEN musicbrainz_recording_id IS NULL AND CAST(:mb AS text) IS NOT NULL "
+    "AND (enriched_at IS NULL OR enrich_outcome IS NULL "
+    "OR enrich_outcome IN ('no_match', 'recheck', 'disagreed')) THEN 'file' "
+    "ELSE enrich_outcome END, "
+    "musicbrainz_recording_id = COALESCE(musicbrainz_recording_id, CAST(:mb AS text)), "
+    "musicbrainz_release_id = COALESCE(CAST(:mbr AS text), musicbrainz_release_id), "
+    "musicbrainz_release_group_id = COALESCE(CAST(:mbg AS text), musicbrainz_release_group_id), "
+    "artist_credits = CAST(:ac AS text[]), "
+    "file_playlists = CAST(:fpl AS text[]), "
     "tags_version = :v "
     "WHERE id = :id AND tags_version < :v"
 )
@@ -160,7 +190,10 @@ class DbBackfillStore:
 
 
 def _params(meta: dict[str, Any]) -> dict[str, Any]:
-    return {"g": meta.get("genre"), "gk": meta.get("genre_keys"), "y": meta.get("year")}
+    return {"g": meta.get("genre"), "gk": meta.get("genre_keys"), "y": meta.get("year"),
+            "mb": meta.get("mb_recording_id"), "mbr": meta.get("mb_release_id"),
+            "mbg": meta.get("mb_release_group_id"), "ac": meta.get("artist_credits"),
+            "fpl": meta.get("file_playlists")}
 
 
 class LibraryTagBackfill(Worker):
@@ -183,6 +216,24 @@ class LibraryTagBackfill(Worker):
         self._after_id = 0
         # Row id -> when it was first seen missing in a mostly-missing batch.
         self._missing_since: dict[int, float] = {}
+        # Whether this pass read any file (its end then syncs playlists).
+        self._read_this_pass = False
+
+    async def _after_pass(self) -> None:
+        """A pass read files: sync the playlists the files name, and let
+        the voice resolver see new credits. Best-effort."""
+        try:
+            from domovoi.library_playlists_import import sync_file_playlists
+
+            await sync_file_playlists()
+        except Exception as e:  # noqa: BLE001 — a rescan syncs them again
+            log.warning("tag backfill: couldn't sync playlists from files: %s", e)
+        try:
+            from domovoi.handlers.shared import library_match
+
+            library_match.invalidate(library=True)
+        except Exception as e:  # noqa: BLE001
+            log.debug("tag backfill: couldn't refresh the name index: %s", e)
 
     async def tick(self) -> dict[str, int]:
         result = {"read": 0, "missing": 0, "deferred": 0, "refused": 0}
@@ -205,6 +256,10 @@ class LibraryTagBackfill(Worker):
             # what a mostly-missing batch left behind) after a pause.
             self._after_id = 0
             self._idle_until = now + IDLE_RECHECK_SEC
+            if self._read_this_pass:
+                self._read_this_pass = False
+                if isinstance(self._store, DbBackfillStore):
+                    await self._after_pass()
             return result
         started = self._clock()
         read: list[tuple[int, dict[str, Any] | None]] = []
@@ -236,6 +291,8 @@ class LibraryTagBackfill(Worker):
                 result["missing"] += 1
                 self._missing_since.pop(track_id, None)
         result["read"] = len(read)
+        if read:
+            self._read_this_pass = True
         if out:
             result["refused"] = await self._store.write(out, TAGS_VERSION)
         log.debug("tag backfill: %s in %.2f s", result, self._clock() - started)

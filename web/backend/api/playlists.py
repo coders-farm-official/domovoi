@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_device
+from domovoi.library_playlists_import import READ_ONLY_MESSAGE
 from web.backend.db import session_scope
 from web.backend.schemas import (
     Playlist,
@@ -63,7 +64,7 @@ _PATCH_ALLOWED = ("name", "description", "cover_color", "cover_emoji")
 _COLOR_RE = re.compile(r"^[#A-Za-z0-9().,%/ -]{0,64}$")
 
 
-def _playlist_from_row(r: Any, *, track_count: int) -> Playlist:
+def _playlist_from_row(r: Any, *, track_count: int, imported: bool = False) -> Playlist:
     """Build a Playlist from a row selecting
     (id, name, created_at, description, cover_color, cover_emoji)."""
     return Playlist(
@@ -75,7 +76,17 @@ def _playlist_from_row(r: Any, *, track_count: int) -> Playlist:
         cover_emoji=r[5],
         track_count=track_count,
         is_virtual=False,
+        imported=imported,
     )
+
+
+async def _refuse_if_imported(s: Any, playlist_id: int) -> None:
+    """A playlist made from the music files (V058) is the files': 409."""
+    rows = (await s.execute(
+        text("SELECT imported_from FROM playlists WHERE id = :id"), {"id": playlist_id},
+    )).all()
+    if rows and rows[0][0] is not None:
+        raise HTTPException(status_code=409, detail=READ_ONLY_MESSAGE)
 
 
 # ─── List + per-playlist read ────────────────────────────────────────────
@@ -97,7 +108,8 @@ async def list_playlists() -> list[Playlist]:
                 """
                 SELECT p.id, p.name, p.created_at,
                        p.description, p.cover_color, p.cover_emoji,
-                       COALESCE(c.track_count, 0)::bigint AS track_count
+                       COALESCE(c.track_count, 0)::bigint AS track_count,
+                       p.imported_from IS NOT NULL AS imported
                 FROM playlists p
                 LEFT JOIN (
                     SELECT playlist_id, COUNT(*) AS track_count
@@ -116,7 +128,7 @@ async def list_playlists() -> list[Playlist]:
         is_virtual=True,
     )
     real = [
-        _playlist_from_row(r, track_count=int(r[6])) for r in rows.all()
+        _playlist_from_row(r, track_count=int(r[6]), imported=bool(r[7])) for r in rows.all()
     ]
     return [favorites] + real
 
@@ -251,6 +263,7 @@ async def update_playlist(playlist_id: int, payload: PlaylistPatch) -> Playlist:
             detail="cover_color must be a color value (hex, rgb(), oklch())",
         )
     async with session_scope() as s:
+        await _refuse_if_imported(s, playlist_id)
         if "name" in updates:
             dup = (
                 await s.execute(
@@ -329,6 +342,7 @@ async def reorder_playlist(playlist_id: int, payload: PlaylistReorder) -> None:
         )
     track_ids = payload.track_ids
     async with session_scope() as s:
+        await _refuse_if_imported(s, playlist_id)
         current = {
             int(r[0])
             for r in (
@@ -366,6 +380,7 @@ async def delete_playlist(playlist_id: int) -> None:
             detail="the Favorites playlist is virtual and can't be deleted",
         )
     async with session_scope() as s:
+        await _refuse_if_imported(s, playlist_id)
         result = await s.execute(
             text("DELETE FROM playlists WHERE id = :id"),
             {"id": playlist_id},
@@ -379,6 +394,42 @@ async def delete_playlist(playlist_id: int) -> None:
 
 
 # ─── Membership: add / remove ─────────────────────────────────────────────
+
+
+@router.post(
+    "/{playlist_id}/copy", response_model=Playlist, status_code=201, dependencies=DEVICE
+)
+async def copy_playlist(playlist_id: int) -> Playlist:
+    """A new household playlist with the same songs, in the same order:
+    how a playlist made from the music files (read-only, V058) is changed
+    in Domovoi. Named "<name> (copy)", "<name> (copy 2)" ..."""
+    if playlist_id == FAVORITES_VIRTUAL_ID:
+        raise HTTPException(status_code=400, detail="the Favorites playlist can't be copied")
+    async with session_scope() as s:
+        src = (await s.execute(
+            text("SELECT name, description FROM playlists WHERE id = :id"), {"id": playlist_id},
+        )).first()
+        if src is None:
+            raise HTTPException(status_code=404, detail=f"playlist {playlist_id} not found")
+        name, n = f"{src[0]} (copy)"[:120], 1
+        while (await s.execute(
+            text("SELECT 1 FROM playlists WHERE LOWER(name) = LOWER(:n)"), {"n": name},
+        )).first() is not None:
+            n += 1
+            name = f"{src[0]} (copy {n})"[:120]
+        row = (await s.execute(text(
+            "INSERT INTO playlists (name, description) VALUES (:n, :d) "
+            "RETURNING id, name, created_at, description, cover_color, cover_emoji"
+        ), {"n": name, "d": src[1]})).first()
+        await s.execute(text(
+            "INSERT INTO playlist_tracks (playlist_id, track_id, position) "
+            "SELECT :new, track_id, position FROM playlist_tracks WHERE playlist_id = :old"
+        ), {"new": int(row[0]), "old": playlist_id})
+        count = (await s.execute(text(
+            "SELECT count(*) FROM playlist_tracks WHERE playlist_id = :p"), {"p": int(row[0])},
+        )).scalar_one()
+        await s.execute(text("SELECT pg_notify('playlists_changed', 'created')"))
+    return _playlist_from_row(row, track_count=int(count))
 
 
 @router.post(
@@ -399,6 +450,9 @@ async def add_track_to_playlist(
     playlist, or sent twice, are kept once; ids the library doesn't have
     are left out. 200 ``{added, duplicates, missing}``. The browser's
     "save as playlist" uses it (it used to send one request per song).
+
+    A playlist made from the music files (V058) is read-only: 409 for
+    either body (copy it to a new playlist with ``POST .../copy``).
 
     Refused for the virtual Favorites playlist (``id == 0``) —
     favoriting is done via ``PATCH /api/music/library/{id}
@@ -426,6 +480,9 @@ async def add_track_to_playlist(
             raise HTTPException(
                 status_code=404, detail=f"playlist {playlist_id} not found"
             )
+        # Read-only (made from the music files, V058): refused before either
+        # body is looked at, so the bulk add can't write into one either.
+        await _refuse_if_imported(s, playlist_id)
         if payload.track_ids is not None:
             result = await _add_many(s, playlist_id, payload.track_ids)
             return JSONResponse(result.model_dump())
@@ -571,6 +628,7 @@ async def remove_track_from_playlist(playlist_id: int, track_id: int) -> None:
                     detail=f"track {track_id} is not currently favorited",
                 )
             return
+        await _refuse_if_imported(s, playlist_id)
         result = await s.execute(
             text(
                 "DELETE FROM playlist_tracks "

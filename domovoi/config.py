@@ -261,6 +261,7 @@ PROFILE_DEFAULTS: tuple[ProfileDefault, ...] = (
     # fetch, LRCLIB): on, because it is a few dozen tiny requests a month.
     ProfileDefault("music_similar_artists_enabled", "Similar artists (ListenBrainz)", True, False, False, "live"),
     ProfileDefault("music_popularity_enabled", "Song popularity (ListenBrainz)", True, True, False, "live"),
+    ProfileDefault("library_cover_art_enabled", "Cover art from the Cover Art Archive", True, True, False, "live"),
 )
 PROFILE_FIELD_NAMES: frozenset[str] = frozenset(pd.name for pd in PROFILE_DEFAULTS)
 PROFILE_BY_NAME: dict[str, ProfileDefault] = {pd.name: pd for pd in PROFILE_DEFAULTS}
@@ -1583,6 +1584,25 @@ class Settings(BaseSettings):
     music_similar_artists_enabled: bool = False
     music_popularity_enabled: bool = False
     listenbrainz_fetch_interval_sec: float = 60.0
+
+    # â”€â”€â”€ Cover art from the Cover Art Archive (V058; workers/library_cover_art.py) â”€â”€
+    # For a track whose identity is confirmed (song recognition's match, a
+    # "Needs review" choice, or the file's own MusicBrainz id), fetch its
+    # album's front cover from coverartarchive.org and write it into the
+    # file (MP3 and FLAC; other formats keep it in Domovoi's own copy).
+    # OPT-IN, off while the internet question is unanswered; otherwise its
+    # default follows the answer (on for always and sometimes, off for
+    # never), and a hand-set value wins. Sends the album's MusicBrainz id.
+    library_cover_art_enabled: bool = False
+    # "replace": the archive's cover replaces the art a file has (the
+    # file's own pictures are kept for Undo); "add_missing": only files with
+    # no art of their own (embedded or a cover image in the folder) get one.
+    library_cover_art_mode: str = "replace"
+    # The worker's cadence (a small batch per tick, ~1 request/s).
+    library_cover_art_interval_sec: float = 20.0
+    # Where the original pictures (for Undo) and the covers of files Domovoi
+    # doesn't write are kept. Never inside the music folder.
+    cover_art_dir: str = os.path.expanduser("~/.domovoi/cover_art")
 
     # ─── Session context ───────────────────────────────────────────────
     session_recent_turns_cap: int = 20

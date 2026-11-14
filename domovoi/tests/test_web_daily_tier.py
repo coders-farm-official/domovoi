@@ -108,6 +108,8 @@ DEVICE_TIER = [
     ("DELETE", "/api/playlists/{playlist_id}"),
     ("POST", "/api/playlists/{playlist_id}/tracks"),
     ("DELETE", "/api/playlists/{playlist_id}/tracks/{track_id}"),
+    # a household copy of a playlist (how one made from files is changed, V058)
+    ("POST", "/api/playlists/{playlist_id}/copy"),
     # podcasts + audiobooks
     ("DELETE", "/api/podcasts/subscriptions/{sub_id}"),
     ("POST", "/api/podcasts/positions/{episode_id}"),
@@ -151,6 +153,14 @@ ADMIN_TIER = [
     ("POST", "/api/music/library/reindex"),
     ("POST", "/api/music/library/enrich"),
     ("POST", "/api/music/library/enrich/repair"),
+    # library tools (V058): they move files into the trash, rename songs
+    # and change the pictures in files.
+    ("POST", "/api/music/library-tools/duplicates/resolve"),
+    ("POST", "/api/music/library-tools/duplicates/keep-both"),
+    ("POST", "/api/music/library-tools/trash/{item_id}/restore"),
+    ("POST", "/api/music/library-tools/review/{track_id}/apply"),
+    ("POST", "/api/music/library-tools/review/{track_id}/skip"),
+    ("POST", "/api/music/library-tools/cover-art/{track_id}/undo"),
     ("POST", "/api/satellites/{room_id}/restart"),
     ("POST", "/api/satellites/{room_id}/display"),
     ("PATCH", "/api/satellites/{room_id}/config"),

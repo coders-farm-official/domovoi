@@ -254,6 +254,9 @@ TABLES_TO_TRUNCATE = [
     "artist_similarity",
     "artist_similarity_lookups",
     "recording_popularity",
+    # Library tools (V058): duplicates kept, copies moved to the trash.
+    "library_duplicate_keeps",
+    "library_trash",
 ]
 
 

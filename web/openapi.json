@@ -2873,6 +2873,373 @@
         }
       }
     },
+    "/api/music/library-tools/duplicates": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Duplicates",
+        "description": "Groups of copies of one song (module docstring).",
+        "operationId": "list_duplicates_api_music_library_tools_duplicates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Duplicates Api Music Library Tools Duplicates Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/duplicates/resolve": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Resolve Duplicates",
+        "description": "Keep ``keep_id``; move every other copy in ``member_ids`` into the\ntrash folder (not deleted: Restore puts it back).",
+        "operationId": "resolve_duplicates_api_music_library_tools_duplicates_resolve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Resolve Duplicates Api Music Library Tools Duplicates Resolve Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/duplicates/keep-both": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Keep Both",
+        "operationId": "keep_both_api_music_library_tools_duplicates_keep_both_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeepBothBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Keep Both Api Music Library Tools Duplicates Keep Both Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/trash": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Trash",
+        "operationId": "list_trash_api_music_library_tools_trash_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Trash Api Music Library Tools Trash Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/trash/{item_id}/restore": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Restore From Trash",
+        "operationId": "restore_from_trash_api_music_library_tools_trash__item_id__restore_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Restore From Trash Api Music Library Tools Trash  Item Id  Restore Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/review": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Review",
+        "operationId": "list_review_api_music_library_tools_review_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Review Api Music Library Tools Review Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/review/{track_id}/apply": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Apply Review",
+        "operationId": "apply_review_api_music_library_tools_review__track_id__apply_post",
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Apply Review Api Music Library Tools Review  Track Id  Apply Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/review/{track_id}/skip": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Skip Review",
+        "operationId": "skip_review_api_music_library_tools_review__track_id__skip_post",
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Skip Review Api Music Library Tools Review  Track Id  Skip Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/cover-art": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Cover Art Status",
+        "operationId": "cover_art_status_api_music_library_tools_cover_art_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Cover Art Status Api Music Library Tools Cover Art Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/library-tools/cover-art/{track_id}/undo": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Undo Cover Art",
+        "description": "Put the file back as it was before Domovoi's first cover write (its\nown pictures back, or none), or drop Domovoi's own copy. The song is\nthen left alone (``undone``) unless its album changes.",
+        "operationId": "undo_cover_art_api_music_library_tools_cover_art__track_id__undo_post",
+        "parameters": [
+          {
+            "name": "track_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Track Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Undo Cover Art Api Music Library Tools Cover Art  Track Id  Undo Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/listens": {
       "post": {
         "tags": [
@@ -10048,7 +10415,7 @@
           "playlists"
         ],
         "summary": "Add Track To Playlist",
-        "description": "Append a library track to the end of a playlist.\n\n``{track_id}``: one song; 204, 404 for a song the library doesn't\nhave, 409 when it is already in the playlist.\n\n``{track_ids: [...]}`` (P5, up to 500): many songs in one request, in\nthe order sent, after the playlist's last song. Songs already in the\nplaylist, or sent twice, are kept once; ids the library doesn't have\nare left out. 200 ``{added, duplicates, missing}``. The browser's\n\"save as playlist\" uses it (it used to send one request per song).\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
+        "description": "Append a library track to the end of a playlist.\n\n``{track_id}``: one song; 204, 404 for a song the library doesn't\nhave, 409 when it is already in the playlist.\n\n``{track_ids: [...]}`` (P5, up to 500): many songs in one request, in\nthe order sent, after the playlist's last song. Songs already in the\nplaylist, or sent twice, are kept once; ids the library doesn't have\nare left out. 200 ``{added, duplicates, missing}``. The browser's\n\"save as playlist\" uses it (it used to send one request per song).\n\nA playlist made from the music files (V058) is read-only: 409 for\neither body (copy it to a new playlist with ``POST .../copy``).\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
         "operationId": "add_track_to_playlist_api_playlists__playlist_id__tracks_post",
         "parameters": [
           {
@@ -10216,6 +10583,49 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/playlists/{playlist_id}/copy": {
+      "post": {
+        "tags": [
+          "playlists"
+        ],
+        "summary": "Copy Playlist",
+        "description": "A new household playlist with the same songs, in the same order:\nhow a playlist made from the music files (read-only, V058) is changed\nin Domovoi. Named \"<name> (copy)\", \"<name> (copy 2)\" ...",
+        "operationId": "copy_playlist_api_playlists__playlist_id__copy_post",
+        "parameters": [
+          {
+            "name": "playlist_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Playlist Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Playlist"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -20972,6 +21382,21 @@
         ],
         "title": "AnnounceRequest"
       },
+      "ApplyBody": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 0.0,
+            "title": "Index"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index"
+        ],
+        "title": "ApplyBody"
+      },
       "ArtistAlbum": {
         "properties": {
           "name": {
@@ -24571,6 +24996,24 @@
         ],
         "title": "ImportResponse"
       },
+      "KeepBothBody": {
+        "properties": {
+          "member_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 2,
+            "title": "Member Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "member_ids"
+        ],
+        "title": "KeepBothBody"
+      },
       "LabelBody": {
         "properties": {
           "label": {
@@ -27462,6 +27905,11 @@
               }
             ],
             "title": "Cover Emoji"
+          },
+          "imported": {
+            "type": "boolean",
+            "title": "Imported",
+            "default": false
           }
         },
         "type": "object",
@@ -28571,6 +29019,29 @@
         },
         "type": "object",
         "title": "ReportBody"
+      },
+      "ResolveBody": {
+        "properties": {
+          "keep_id": {
+            "type": "integer",
+            "title": "Keep Id"
+          },
+          "member_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 2,
+            "title": "Member Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "keep_id",
+          "member_ids"
+        ],
+        "title": "ResolveBody"
       },
       "RestoreRequest": {
         "properties": {

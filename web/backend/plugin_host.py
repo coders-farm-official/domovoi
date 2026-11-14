@@ -169,6 +169,15 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # inside handlers (embedded cover art, every room's now-playing read).
     "domovoi.media_tags",
     "domovoi.clients.mpd_protocol",
+    # Library tools (V058): the duplicates rules, the trash, the cover-art
+    # writer (Undo), and what the indexer reads lazily when a restored copy
+    # is indexed again.
+    "domovoi.library_duplicates",
+    "domovoi.library_trash",
+    "domovoi.cover_art_writer",
+    "domovoi.library_file_ids",
+    "domovoi.library_playlists_import",
+    "domovoi.clients.musicbrainz",
     # The Version card's "restart the core" when the core doesn't answer
     # (web/backend/core_restart.py): the restart grant probe, and the update
     # unit's state it reads through git_version, for the sudo route.

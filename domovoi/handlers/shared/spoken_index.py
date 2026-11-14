@@ -393,6 +393,23 @@ def _row_parts(row: Mapping[str, Any]) -> tuple[str, list[str], str, str]:
     return credit, parts, title, album
 
 
+def _extra_credits(row: Mapping[str, Any], have: Sequence[str]) -> list[str]:
+    """The row's ``artist_credits`` (V058) not already among its performers
+    (by key), in order."""
+    raw = row.get("artist_credits")
+    if not raw or not isinstance(raw, (list, tuple)):
+        return []
+    seen = set(have)
+    out: list[str] = []
+    for name in raw[:32]:
+        n = " ".join(str(name or "").split())
+        k = alias_key(n) if n else ""
+        if k and k not in seen:
+            seen.add(k)
+            out.append(n)
+    return out
+
+
 def _forms_of(names: Iterable[str], *, cleaned: bool) -> tuple[tuple[str, str, str], ...]:
     out: dict[str, None] = {}
     for name in names:
@@ -445,6 +462,16 @@ def build(tracks: Sequence[Mapping[str, Any]], aliases: Sequence[Mapping[str, An
             part_keys.append(k)
         if len(parts) == 1 or _FEATURE_SEP_RE.search(f" {credit} "):
             named.update(part_keys)
+        # Every artist the file credits (its ARTISTS tag, V058): each is a
+        # performer of this song in its own right, so "play songs by B"
+        # finds a song whose artist field names only A.
+        for p in _extra_credits(r, part_keys):
+            k = alias_key(p)
+            acc = artists.setdefault(k, _Acc())
+            acc.spell[p] += 1
+            acc.ids[tid] = None
+            part_keys.append(k)
+            named.add(k)
         ckey = ""
         if len(parts) > 1:
             ckey = alias_key(credit)

@@ -175,6 +175,13 @@ def _no_nul(text: str | None) -> str | None:
     return cleaned or None
 
 
+#: What :func:`_read_tags` gives for a file with none of the V058 fields.
+_NO_IDS: dict[str, Any] = {
+    "mb_recording_id": None, "mb_release_id": None, "mb_release_group_id": None,
+    "artist_credits": None, "file_playlists": None,
+}
+
+
 def _read_tags(path: Path) -> dict[str, Any]:
     """Pull title / artist / album / duration_sec / genre / genre_keys /
     year from a file's tags (genre and year since V050; the rules are
@@ -204,7 +211,7 @@ def _read_tags(path: Path) -> dict[str, Any]:
         return {}
 
     out: dict[str, Any] = {"title": None, "artist": None, "album": None, "duration_sec": None,
-                           "genre": None, "genre_keys": None, "year": None}
+                           "genre": None, "genre_keys": None, "year": None, **_NO_IDS}
 
     if f.duration is not None and f.duration > 0:
         out["duration_sec"] = int(f.duration)
@@ -229,6 +236,14 @@ def _read_tags(path: Path) -> dict[str, Any]:
         out["year"] = _year_of(tags)
     except Exception as e:  # noqa: BLE001 — best-effort, like the read itself
         log.debug("genre/year read failed for %s: %s", path, e)
+    # The file's own MusicBrainz ids, every credited artist and the
+    # playlists it names (TAGS_VERSION 2, V058; domovoi/library_file_ids.py).
+    try:
+        from domovoi.library_file_ids import read_ids
+
+        out.update(read_ids(tags))
+    except Exception as e:  # noqa: BLE001 — best-effort, like the read itself
+        log.debug("id/credit read failed for %s: %s", path, e)
     return out
 
 
@@ -344,6 +359,7 @@ def _resolve_metadata_for(
         "genre": tags.get("genre"),
         "genre_keys": tags.get("genre_keys"),
         "year": tags.get("year"),
+        **{k: tags.get(k) for k in _NO_IDS},
     }
 
 
@@ -411,12 +427,21 @@ async def _insert_track(
             """
             INSERT INTO library_tracks
               (file_path, title, artist, album, duration_sec, added_via,
-               genre, genre_keys, genre_source, year, year_source, tags_version)
+               genre, genre_keys, genre_source, year, year_source, tags_version,
+               musicbrainz_recording_id, musicbrainz_release_id,
+               musicbrainz_release_group_id, artist_credits, file_playlists,
+               enriched_at, enrich_outcome)
             SELECT :fp, :t, :a, :al, :d, 'manual',
                    :g, CAST(:gk AS text[]),
                    CASE WHEN CAST(:gk AS text[]) IS NULL THEN NULL ELSE 'tag' END,
                    CAST(:y AS smallint),
-                   CASE WHEN CAST(:y AS smallint) IS NULL THEN NULL ELSE 'tag' END, :tv
+                   CASE WHEN CAST(:y AS smallint) IS NULL THEN NULL ELSE 'tag' END, :tv,
+                   CAST(:mb AS text), CAST(:mbr AS text), CAST(:mbg AS text),
+                   CAST(:ac AS text[]), CAST(:fpl AS text[]),
+                   -- A file that names its own recording is identified: it
+                   -- is never fingerprinted (outcome 'file', V058).
+                   CASE WHEN CAST(:mb AS text) IS NULL THEN NULL ELSE NOW() END,
+                   CASE WHEN CAST(:mb AS text) IS NULL THEN NULL ELSE 'file' END
             WHERE NOT EXISTS (
               SELECT 1 FROM library_tracks WHERE file_path = :fp
             )
@@ -432,6 +457,11 @@ async def _insert_track(
             "gk": meta.get("genre_keys"),
             "y": meta.get("year"),
             "tv": TAGS_VERSION,
+            "mb": meta.get("mb_recording_id"),
+            "mbr": meta.get("mb_release_id"),
+            "mbg": meta.get("mb_release_group_id"),
+            "ac": meta.get("artist_credits"),
+            "fpl": meta.get("file_playlists"),
         },
     )
     return (result.rowcount or 0) > 0
@@ -455,6 +485,10 @@ def _under_music_dir(path: Path) -> Path | None:
         return None
     if resolved.suffix.lower() not in _AUDIO_EXTENSIONS:
         return None
+    from domovoi.library_trash import TRASH_DIR_NAME
+
+    if TRASH_DIR_NAME in resolved.relative_to(root).parts:
+        return None  # a copy the duplicates finder moved out of the library
     if not resolved.is_file():
         return None
     return resolved
@@ -533,9 +567,13 @@ async def index_paths(paths: Iterable[Path | str]) -> dict[str, int]:
 
 
 def _audio_files(music_dir: Path) -> list[Path]:
-    """Every audio file under ``music_dir`` (blocking: a worker thread)."""
+    """Every audio file under ``music_dir`` (blocking: a worker thread),
+    except what is in Domovoi's trash folder (``domovoi/library_trash.py``)."""
+    from domovoi.library_trash import TRASH_DIR_NAME
+
     return [p for p in music_dir.rglob("*")
-            if p.suffix.lower() in _AUDIO_EXTENSIONS and p.is_file()]
+            if p.suffix.lower() in _AUDIO_EXTENSIONS and TRASH_DIR_NAME not in p.parts
+            and p.is_file()]
 
 
 async def index_music_dir() -> dict[str, int]:
@@ -611,4 +649,12 @@ async def index_music_dir() -> dict[str, int]:
         # Each room's MPD plays from its own database, which a Windows or
         # network music folder never tells about new files (F-V023).
         await update_rooms_for(added, reason="library indexer")
+    # Playlists the files name (.m3u files, PLAYLIST tags; V058): synced on
+    # every walk, so a rescan picks up a changed playlist file.
+    try:
+        from domovoi.library_playlists_import import sync_file_playlists
+
+        await sync_file_playlists()
+    except Exception as e:  # noqa: BLE001 — the playlists wait for the next walk
+        log.warning("library indexer: couldn't sync playlists from files: %s", e)
     return {"scanned": scanned, "inserted": inserted, "skipped": skipped, "errors": errors}
