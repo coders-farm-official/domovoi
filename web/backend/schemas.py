@@ -36,6 +36,18 @@ class Track(BaseModel):
     added_via: Literal["voice", "manual"] | None = None
     enriched_at: datetime | None = None
     favorited: bool = False
+    # Every artist the file credits (its ARTISTS tag and the like, V058),
+    # in the file's order; [] when it credits nobody beyond ``artist``,
+    # which stays the primary credit as before.
+    artists: list[str] = Field(default_factory=list)
+    # The cover's version (V059): moves whenever the track's art changes (a
+    # Cover Art Archive write, its Undo, a rescan that finds the file or
+    # its album-folder image changed). ``cover_url`` carries it as ``?v=``
+    # so a cached picture is replaced exactly when there is a new one; the
+    # route may still answer 404 (no art). The ``library.cover.changed``
+    # realtime event names the tracks whose version moved.
+    cover_v: int = 0
+    cover_url: str | None = None
 
 
 class Playlist(BaseModel):

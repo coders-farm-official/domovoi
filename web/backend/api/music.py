@@ -36,6 +36,7 @@ from sqlalchemy import text
 
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
 from domovoi.cover_art_writer import cover_cache_file
+from domovoi.library_cover_version import cover_url
 from web.backend.api import music_search, paging
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.api.paging import SortKey
@@ -119,10 +120,23 @@ _SORT_KEYS: dict[str, list[SortKey]] = {
               SortKey("id", kind="int")],
 }
 
-_TRACK_COLUMNS = """id, file_path, title, artist, album, duration_sec,
-                       source, source_id, musicbrainz_recording_id,
-                       added_at, added_via, enriched_at, favorited"""
-_TRACK_COLUMN_COUNT = 13
+# What every Track answer reads, in _row_to_track's order. ``track_columns``
+# prefixes them for a join (web/backend/api/playlists.py).
+_TRACK_COLUMN_NAMES = (
+    "id", "file_path", "title", "artist", "album", "duration_sec",
+    "source", "source_id", "musicbrainz_recording_id",
+    "added_at", "added_via", "enriched_at", "favorited",
+    "artist_credits", "cover_rev",
+)
+
+
+def track_columns(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return ", ".join(prefix + c for c in _TRACK_COLUMN_NAMES)
+
+
+_TRACK_COLUMNS = track_columns()
+_TRACK_COLUMN_COUNT = len(_TRACK_COLUMN_NAMES)
 
 
 @router.get("/library", response_model=LibraryPage)
@@ -344,14 +358,7 @@ async def library_stats() -> LibraryStats:
 async def get_track(track_id: int) -> Track:
     async with session_scope() as s:
         row = await s.execute(
-            text(
-                """
-                SELECT id, file_path, title, artist, album, duration_sec,
-                       source, source_id, musicbrainz_recording_id,
-                       added_at, added_via, enriched_at, favorited
-                FROM library_tracks WHERE id = :id
-                """
-            ),
+            text(f"SELECT {_TRACK_COLUMNS} FROM library_tracks WHERE id = :id"),
             {"id": track_id},
         )
         result = row.first()
@@ -388,9 +395,7 @@ async def patch_track(track_id: int, payload: TrackPatch) -> Track:
                 UPDATE library_tracks
                 SET {', '.join(set_fragments)}
                 WHERE id = :id
-                RETURNING id, file_path, title, artist, album, duration_sec,
-                          source, source_id, musicbrainz_recording_id,
-                          added_at, added_via, enriched_at, favorited
+                RETURNING {_TRACK_COLUMNS}
                 """
             ),
             params,
@@ -2020,7 +2025,27 @@ def _music_roots(music_dir: str) -> list[str]:
     return roots
 
 
+def credited_artists(credits: Any, artist: str | None) -> list[str]:
+    """``library_tracks.artist_credits`` as a Track's ``artists``: the
+    file's order, blanks and repeats dropped; [] when the file credits
+    nobody beyond the primary ``artist``."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in credits or ():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        key = name.strip().casefold()
+        if key not in seen:
+            seen.add(key)
+            out.append(name.strip())
+    primary = (artist or "").strip().casefold()
+    if all(n.casefold() == primary for n in out):
+        return []
+    return out
+
+
 def _row_to_track(r: Any) -> Track:
+    cover_v = int(r[14] or 0)
     return Track(
         id=int(r[0]),
         file_path=public_track_path(r[1]),
@@ -2035,6 +2060,9 @@ def _row_to_track(r: Any) -> Track:
         added_via=r[10],
         enriched_at=r[11],
         favorited=bool(r[12]),
+        artists=credited_artists(r[13], r[3]),
+        cover_v=cover_v,
+        cover_url=cover_url(int(r[0]), cover_v),
     )
 
 

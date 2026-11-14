@@ -44,7 +44,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from domovoi import cover_art_writer, library_trash
+from domovoi import cover_art_writer, library_cover_version, library_trash
 from domovoi import library_duplicates as dups
 from domovoi import library_file_ids as _library_file_ids  # noqa: F401 — the indexer's lazy import (restore)
 from domovoi import library_playlists_import as _playlists_import  # noqa: F401 — preloaded for the guard
@@ -416,7 +416,7 @@ async def cover_art_status() -> dict[str, Any]:
             "SELECT state, count(*) FROM library_cover_art GROUP BY state"))).all()}
         rows = (await s.execute(text(
             "SELECT c.track_id, c.state, c.note, c.had_art, c.written_at, c.checked_at, "
-            "t.title, t.artist, t.album FROM library_cover_art c "
+            "t.title, t.artist, t.album, t.cover_rev FROM library_cover_art c "
             "JOIN library_tracks t ON t.id = c.track_id "
             "WHERE c.state IN ('written', 'cached', 'skipped') "
             "ORDER BY c.checked_at DESC LIMIT 300"
@@ -429,6 +429,8 @@ async def cover_art_status() -> dict[str, Any]:
             "track_id": int(r.track_id), "state": r.state, "note": r.note, "had_art": r.had_art,
             "written_at": r.written_at.isoformat() if r.written_at else None,
             "title": r.title, "artist": r.artist, "album": r.album,
+            # The track's cover version (V059), for a ?v= cover URL.
+            "cover_v": int(r.cover_rev or 0),
         } for r in rows],
     }
 
@@ -449,11 +451,17 @@ async def _undo_one(track_id: int) -> dict[str, Any]:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except OSError as e:
             raise HTTPException(status_code=409, detail=f"couldn't change the file: {e.strerror or e}") from e
+    # The file as Undo left it, so the next rescan doesn't count it again.
+    sig = (None if r.state == "cached" else
+           await anyio.to_thread.run_sync(library_cover_version.cover_signature, r.file_path))
     async with session_scope() as s:
         await s.execute(text(
             "UPDATE library_cover_art SET state = 'undone', note = 'undone', checked_at = now() "
             "WHERE track_id = :id"), {"id": track_id})
         await s.execute(text("SELECT pg_notify('library_changed', :p)"), {"p": f"cover={track_id}"})
+        # A new cover version (V059): the cover URL changes and
+        # `library.cover.changed` names the track.
+        await library_cover_version.bump(s, [track_id], {track_id: sig})
         await s.commit()
     return {"undone": True, "track_id": track_id}
 

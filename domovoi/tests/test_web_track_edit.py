@@ -65,7 +65,8 @@ class _FakeSession:
             p = params or {}
             return _Result((p["id"], "/music/hearth_06.mp3", p.get("title", "Warm Stones"),
                             p.get("artist", "Hearth Ensemble"), p.get("album", "By The Hearth"),
-                            200, None, None, None, ADDED, "manual", None, p.get("favorited", False)))
+                            200, None, None, None, ADDED, "manual", None, p.get("favorited", False),
+                            None, 0))
         return _Result(None)
 
 

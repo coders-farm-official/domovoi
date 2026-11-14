@@ -511,15 +511,18 @@ Your music library, on the server, played in any room or in the browser.
   song puts the file's own pictures back exactly as they were (or takes
   the added one out); Domovoi then leaves that song alone. A song the
   archive has no cover for is asked again after 30 days, or after
-  **Rescan library**.
+  **Rescan library**. A new cover, an Undo, or a picture you changed in
+  the file or its folder (noticed at the next **Rescan library**) shows on
+  every open page and phone right away, without reloading.
 - Files tagged by another app (MusicBrainz Picard, a phone app) are read
   as they are: a MusicBrainz id in the file means song recognition never
   has to listen to it; every artist the file credits (its `ARTISTS` tag)
-  finds the song, so "play songs by" a featured artist works; and
+  finds the song, so "play songs by" a featured artist works, and the
+  library shows them quietly next to the artist ("with B, C"); and
   `.m3u` playlist files in the music folder, and the songs' own
   `PLAYLIST` tags, become playlists. A playlist made from files follows
-  the files and can't be edited in Domovoi: **Copy to a new playlist** in
-  it makes one you can change. One with the same name as a playlist you
+  the files and can't be edited in Domovoi, nor added to by a download
+  or a plugin: **Copy to a new playlist** in it makes one you can change. One with the same name as a playlist you
   made is called "<name> (from files)".
 - Right after this update the server reads every song's tags again in the
   background (the same reading as the Genres tab's), which also clears

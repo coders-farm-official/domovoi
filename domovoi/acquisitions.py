@@ -433,7 +433,9 @@ class AcquisitionService:
         file_path: str,
     ) -> None:
         """Mark done + perform the playlist attach (soft ref — skipped
-        with a log if the playlist died meanwhile, locked 5)."""
+        with a log if the playlist died meanwhile, locked 5; skipped too
+        for a playlist made from the music files, read-only (V058), with
+        ``result.attach_skipped`` saying why)."""
         registered_values.require("acquisition_status", "done")
         row = (
             await session.execute(
@@ -459,14 +461,40 @@ class AcquisitionService:
         acq = _row_to_acquisition(row)
 
         if acq.attach_to_playlist_id is not None:
-            attached = await self._attach_to_playlist(
+            from domovoi import library_playlists_import as file_playlists
+
+            outcome = await self._attach_to_playlist(
                 session, acq.attach_to_playlist_id, library_track_id
             )
-            if not attached:
+            if outcome == file_playlists.ATTACH_MISSING:
                 log.info(
                     "acquisition %s: playlist %s vanished before attach; skipping",
                     acq_id, acq.attach_to_playlist_id,
                 )
+            elif outcome == file_playlists.ATTACH_IMPORTED:
+                # Made from the music files: read-only everywhere (V058). The
+                # download still lands in the library; the row says why it
+                # isn't on the playlist (result.attach_skipped).
+                log.info(
+                    "acquisition %s: playlist %s comes from the music files "
+                    "(read-only); not attaching", acq_id, acq.attach_to_playlist_id,
+                )
+                row = (
+                    await session.execute(
+                        text(
+                            f"""
+                            UPDATE media_acquisitions
+                            SET result = COALESCE(result, '{{}}'::jsonb)
+                                || jsonb_build_object('attach_skipped', CAST(:note AS text))
+                            WHERE id = :id
+                            RETURNING {_ROW_COLUMNS}
+                            """
+                        ),
+                        {"id": acq_id, "note": file_playlists.ATTACH_IMPORTED_NOTE},
+                    )
+                ).first()
+                if row is not None:
+                    acq = _row_to_acquisition(row)
 
         await _notify(session, "done")
         EVENTS.emit("core.acquisition_completed", acq.snapshot())
@@ -474,33 +502,12 @@ class AcquisitionService:
     @staticmethod
     async def _attach_to_playlist(
         session: AsyncSession, playlist_id: int, track_id: int
-    ) -> bool:
-        exists = (
-            await session.execute(
-                text("SELECT 1 FROM playlists WHERE id = :pid"),
-                {"pid": playlist_id},
-            )
-        ).first()
-        if exists is None:
-            return False
-        await session.execute(
-            text(
-                """
-                INSERT INTO playlist_tracks (playlist_id, track_id, position)
-                VALUES (
-                    :pid, :tid,
-                    COALESCE((SELECT MAX(position) + 1 FROM playlist_tracks
-                              WHERE playlist_id = :pid), 0)
-                )
-                ON CONFLICT (playlist_id, track_id) DO NOTHING
-                """
-            ),
-            {"pid": playlist_id, "tid": track_id},
-        )
-        await session.execute(
-            text("SELECT pg_notify('playlists_changed', 'attached')")
-        )
-        return True
+    ) -> str:
+        """:func:`domovoi.library_playlists_import.attach_track`: refuses a
+        playlist made from the music files, as the web route does."""
+        from domovoi.library_playlists_import import attach_track
+
+        return await attach_track(session, playlist_id, track_id)
 
     async def fail(
         self,
