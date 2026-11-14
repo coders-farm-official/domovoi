@@ -493,7 +493,7 @@ def voice_id(pipeline, monkeypatch):
         seen["identify"].append((len(pcm), kw.get("embedding", "embed it here")))
         return None
 
-    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", _embed)
+    monkeypatch.setattr("domovoi.voice_identifier.embed_print", _embed)
     monkeypatch.setattr("domovoi.voice_identifier.identify", _identify)
     return seen
 
@@ -609,7 +609,7 @@ def test_the_embedding_runs_after_the_decode_never_beside_it(pipeline, voice_id,
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
     log = _Log()
     pipeline["whisper"], embed = _logged(log, ("set a timer for ten minutes",), stt=0.1, embed=0.1)
-    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    monkeypatch.setattr("domovoi.voice_identifier.embed_print", embed)
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         _connect(ws, hints=True)
         ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
@@ -632,7 +632,7 @@ def test_a_decode_after_a_copy_waits_for_its_embedding(pipeline, voice_id, monke
     pipeline["whisper"], embed = _logged(
         log, ("set a timer", "set a timer for ten minutes"), stt=0.05, embed=0.3,
     )
-    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    monkeypatch.setattr("domovoi.voice_identifier.embed_print", embed)
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         _connect(ws, hints=True)
         ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
@@ -659,7 +659,7 @@ def test_a_copy_superseded_while_it_decoded_is_never_embedded(pipeline, voice_id
     pipeline["whisper"], embed = _logged(
         log, ("set a timer for ten", "set a timer for ten minutes"), stt=0.3, embed=0.05,
     )
-    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    monkeypatch.setattr("domovoi.voice_identifier.embed_print", embed)
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         _connect(ws, hints=True)
         ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 7}))
@@ -713,7 +713,7 @@ def test_the_transcript_is_not_held_for_the_embedding(pipeline, voice_id, monkey
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
     log = _Log()
     pipeline["whisper"], embed = _logged(log, ("volume up",), stt=0.05, embed=0.8)
-    monkeypatch.setattr("domovoi.voice_identifier.embed_voice", embed)
+    monkeypatch.setattr("domovoi.voice_identifier.embed_print", embed)
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         _connect(ws, hints=True)
         ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))
