@@ -417,8 +417,10 @@ the codebase actually does, consistently:
   f-string interpolation of values (schema/column names composed from
   validated constants are the only exception).
 * **Async everywhere** in core and web; blocking work goes to subprocesses
-  or thread executors.
-* **Windows first**: ASCII-only console output (a stray arrow glyph crashes
+  or to a named, bounded pool through `domovoi/executors.py`
+  (`executors.run("tags", fn)`), not the default `asyncio.to_thread` pool
+  that database connects need ([Architecture §4](ARCHITECTURE.md#4-workers-and-startup-hooks)).
+* **Keep Windows first-class** (Linux is the primary server): ASCII-only console output (a stray arrow glyph crashes
   cp1252 consoles), path handling through `pathlib`, no reliance on
   inotify, and never reorder the DLL bootstrap imports in
   `domovoi/main.py` / `domovoi/bootstrap.py`. Keep `NullPool` in
@@ -456,7 +458,12 @@ The database is migration-only — no runtime DDL, no ORM auto-create.
   `REFERENCES` (use soft refs + events + a reconciliation sweep — see
   [Plugin Development §6.3](PLUGIN_DEVELOPMENT.md#63-per-schema-db-only)).
 * The runner applies to prod first, then the `_test` sibling; fresh installs
-  are both-or-neither.
+  are both-or-neither. It runs at install/upgrade confirm, at enable and on
+  every core boot (catch-up), so a new file in a bundled plugin applies on
+  the next restart.
+* Plugin code reads and writes its own tables through `sdk.db.session_scope()`,
+  which sets the plugin schema's `search_path`; the core's `session_scope()`
+  can't see unqualified plugin table names.
 
 Rule of thumb for reviews: if a PR edits an existing migration file, it's
 wrong unless that migration has never shipped anywhere.
@@ -477,8 +484,9 @@ wrong unless that migration has never shipped anywhere.
   the two Ollama models (`OLLAMA_MODEL` for Q&A, `OLLAMA_TOOL_MODEL` for
   tool dispatch — change one at a time).
 * New dependencies need a stated reason in `pyproject.toml` (look at the
-  existing comments — every dep says why it's there) and must have Windows
-  wheels.
+  existing comments — every dep says why it's there), a permissive licence
+  (above), and wheels for Windows and for the Linux server (cp314 manylinux
+  x86_64).
 * Update the docs you invalidate (`docs/`, plugin READMEs, endpoint changes
   → regenerate `web/openapi.json` via `python -m web.scripts.dump_openapi`).
 * Public API changes (SDK surface, event payloads, manifest schema, band
@@ -519,7 +527,8 @@ release gets a warning in its notes and a patch release.
 
 Everything is built on the owner's PC; GitHub only hosts, and pushing a tag
 starts no workflow. Every pushed commit carries `[skip ci]`. There are two
-paths, by whether the Android app changed. In order:
+paths, by whether the Android app changed: **app changed**, steps 1, 2 and
+3; **server and Windows only**, steps 1 and 3. In order:
 
 1. **The release commit** on `main`, pushed: the version in every copy
    (the test above), the release notes, and `docs/release/v<version>.md`

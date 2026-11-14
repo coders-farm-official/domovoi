@@ -37,7 +37,7 @@ A GPU makes speech-to-text and the AI models faster; none is required.
 flowchart LR
     subgraph House["Rooms"]
         SAT1["Satellite Pi<br/>(kitchen)"]
-        SAT2["Satellite Pi<br/>(office)"]
+        SAT2["Satellite PC or phone<br/>(office)"]
         BROWSER["Browser /<br/>Android app"]
     end
 
@@ -70,7 +70,7 @@ flowchart LR
 | Process | Port | What it is |
 |---|---|---|
 | **Core voice service** (`python -m domovoi.main`) | **6370** | FastAPI app. STT → intent routing → handlers → TTS, the satellite WebSocket endpoint, background workers, the plugin runtime, admin endpoints. Whisper (faster-whisper; CUDA when there is an NVIDIA GPU, otherwise the CPU) runs in-process. |
-| **Web dashboard** (`python -m web.backend.main`) | **6369** | A separate FastAPI process. Reads the same Postgres directly; anything touching *live* state (connected satellites, now playing) is proxied to core admin endpoints. Serves the no-build React frontend. **Never imports the plugin runtime.** |
+| **Web dashboard** (`python -m web.backend.main`) | **6369** | A separate FastAPI process. Reads the same Postgres directly; anything touching *live* state (connected satellites, now playing) is proxied to core admin endpoints. Serves the no-build React frontend. **Never runs the plugin runtime** (no handlers, workers or SDK): it mounts each enabled plugin's `web` module behind an import guard that lets plugin code reach only `domovoi.webkit` (`web/backend/plugin_host.py`). |
 | **Postgres** (docker compose, `domovoi/docker-compose.yml`) | **6432** (host) → 5432 (container) | Databases `domovoi` and `domovoi_test`. The non-default host port lets Domovoi coexist with any Postgres already on 5432. |
 | **Per-room MPD** (docker, lazy) | control **6650+N**, http-stream **8050+N** | One MPD daemon per satellite room so queues/volume are independent. Provisioned on first WebSocket connect for an unknown `room_id` by `domovoi/mpd_provisioner.py`; **not** in the compose file. Container `domovoi-mpd-<room>` maps host ports onto in-container 6600/8001. Assignments persist in the `mpd_rooms` table (allocation is `max + 1` from the bases, serialized by a Postgres advisory lock). |
 | **Ollama** | 11434 | Two model slots — see below. |
@@ -354,6 +354,14 @@ Everything runs on the **single core event loop** — deliberately. In-memory
 state assumptions (registries, `app.state` caches) stay valid because there is
 exactly one process and one loop that mutate them.
 
+Blocking work leaves the loop through **named, bounded thread pools**
+(`domovoi/executors.py`, `executors.run("speech", fn)`), never the default
+`asyncio.to_thread` pool: `speech` (Whisper and the voice embedder, 8),
+`tts` (4), `downloads` (2), `plugins` (2), `tags` (reading audio files' tags
+with `domovoi/media_tags`, 2), `pictures` (3), `sheets` (1) and `documents`
+(2). A saturated pool makes only its own work wait; the default pool, which
+database connects need, stays free. The web process uses the same pools.
+
 Core's own workers live in `domovoi/workers/`: the timer watcher, library
 indexer + enricher, playback-state sweeper, media-plays pruner, news fetcher,
 podcast feed poller, audiobook indexer, memory extractor, wake-word trainer,
@@ -424,6 +432,16 @@ ownership split:
     `DO`, `COPY`, `ALTER SYSTEM`, `CREATE ROLE` or `LOAD`. (A tripwire in
     front of the role; plugins are trusted code once installed, but a
     migration file is confined to its schema by Postgres, not by review.)
+
+The runner runs at install or upgrade **confirm** (not at stage), at
+**enable**, and on **every core boot** as a catch-up for each enabled plugin,
+bundled ones included; never at disable.
+
+At run time a plugin reaches its own tables through `sdk.db.session_scope()`
+(`domovoi/sdk/facade.py`), which sets `search_path = plugin_<slug>, public`
+for the transaction. The core's own `domovoi.db.session.session_scope()`
+has the default path, so unqualified plugin table names fail there; core
+tables go through SDK APIs, not raw SQL.
 
 Plugins never run DDL against core tables. Cross-schema references are **soft
 refs** (e.g. `media_acquisitions.attach_to_playlist_id` has no FK); consumers
@@ -981,6 +999,21 @@ described here, which every paired device shares.
   phone as a "Help: …" chat (`help_deliveries`): only to phones marked as
   theirs, never to everyone.
 
+### Server identity and the signed file channels (`domovoi/server_identity.py`)
+
+Each install has an Ed25519 key pair (`~/.domovoi/server-identity.json`,
+0600); its fingerprint (`SHA256:…`) is shown on the dashboard and baked
+into prepared satellite images. It signs two things. A **challenge** on
+`GET /v1/health?challenge=` (optionally bound to the address the caller
+dialed), so a satellite can tell its own server from anything else on port
+6370. And the **file-channel manifests** satellites mirror: code
+(`/v1/satellite-code`), plugin payloads (`/v1/satellite-plugins`), sounds
+(`/v1/sounds`), trained wake models (`/v1/wake-models`) and the shared wake
+base models (`/v1/wake-base`). Each has a `manifest.sig` envelope carrying
+the list, a per-channel `serial` and `issued_at`, so a pinned satellite
+refuses a list its server did not sign and an older list replayed to it.
+The plain `manifest` endpoints remain for devices that predate signing.
+
 ---
 
 ## 7. Realtime: how a DB change reaches the dashboard
@@ -1141,4 +1174,6 @@ bug even if nothing fails immediately.
   data change, never after or outside it.
 * **Web process stays out of the plugin runtime.** It reads plugin state from
   the `plugins` table (manifest JSONB) and talks to core over HTTP. It never
-  imports `domovoi.plugins_runtime` or plugin code.
+  loads handlers, workers or the SDK; the only plugin code it imports is each
+  enabled plugin's `web` module, behind the import guard in
+  `web/backend/plugin_host.py` (plugin code may reach `domovoi.webkit` only).

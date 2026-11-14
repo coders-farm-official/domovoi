@@ -1080,10 +1080,15 @@ transaction, so SQL against your own tables is unqualified. Core tables go
 through the SDK APIs, not raw SQL (convention enforced by review — and the
 migration lint makes the schema boundary hard, see [§6.3](#63-per-schema-db-only)).
 
-One caveat from the bundled radio plugin: the **router** hands handlers a
-session with the *core* default search_path — inside handler bodies,
-schema-qualify your tables (`plugin_radio.radio_stations`) or open your own
-`sdk.db.session_scope()`.
+**Every query of your own tables goes through `sdk.db.session_scope()`**
+(or `ctx.db_session_scope()` in the web process), from handlers, workers,
+routers and snapshot functions alike. Any other session has the *core*
+default search_path: the router's session handed to a handler, and
+`domovoi.db.session.session_scope()` imported directly. There an
+unqualified `my_table` fails with `relation "my_table" does not exist`,
+and the failure surfaces only on the live server, since a unit test with a
+recording double never touches Postgres. Open your own
+`sdk.db.session_scope()`, or schema-qualify (`plugin_radio.radio_stations`).
 
 ### 4.5 Playback — `sdk.playback`
 
@@ -2220,6 +2225,9 @@ history) is why the default is keep.
 * **Hand-copying into `~/.domovoi/plugins/installed/` is not an install
   path** — unregistered dirs are ignored and flagged on the dashboard. Use
   `domovoi plugin dev` or the install flow.
+* **Your tables need your session.** Querying them through the core's
+  `session_scope()` (or the router's session) fails with "relation does
+  not exist": use `sdk.db.session_scope()` ([§4.4](#44-database--sdkdb)).
 * **`sdk.state` is per-process memory.** It's the right home for live
   objects, and the wrong home for anything that must survive a restart.
 * **Snapshot functions must be cheap and safe to call every poll tick** —

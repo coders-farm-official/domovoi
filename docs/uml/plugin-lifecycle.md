@@ -154,3 +154,6 @@ contract-check step does **not** roll back: the plugin lands as
 Bundled plugins (like `plugins/radio`, publisher Coders Farm) auto-register
 at boot from the repo's `plugins/` directory — unless a tombstone row says
 the user uninstalled them, which sticks until an explicit reinstall.
+Every core boot also runs migration catch-up for each enabled plugin,
+bundled ones included, before loading it: a pulled `plugins/radio` with a
+new `V###` file applies on the next restart. Disable never runs migrations.

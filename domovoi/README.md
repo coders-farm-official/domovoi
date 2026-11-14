@@ -471,6 +471,16 @@ identifies each track acoustically and writes back canonical metadata:
                               enriched_at = NOW()
 ```
 
+**An answer must agree with the file's names** (since 2026-11-13,
+`names_agree`). A fingerprint answer is used only when its title or artist
+matches the row's; when the row has a real artist, the answer's artist must
+match it, and an answer that adds "instrumental", "remix", "cover" and the
+like to the title is refused. AcoustID's candidates are tried best first
+and the first that agrees wins. With none, the row keeps its names and is
+stamped `disagreed`. Rows an older enricher renamed wrongly are put back by
+`POST /v1/admin/library/enrich/repair` (admin; the dashboard proxies it),
+which never touches hand-edited (`manual`) rows.
+
 `COALESCE` on UPDATE means the indexer's existing data is preserved
 when the API returns NULL for a field. A match and a genuine "no match"
 both stamp `enriched_at` (and `enrich_outcome`, V020) so the same tracks
@@ -926,10 +936,13 @@ never touches real data. The test conftest TRUNCATEs `library_tracks`,
 `voice_profiles`, `voice_notes`, `download_jobs`, etc. before each
 test — running pytest against the prod DB would wipe everything.
 
-The conftest auto-derives the test URL from `DATABASE_URL` by appending
+The conftest derives the test URL from `DATABASE_URL` by appending
 `_test` to the dbname and refuses to run if the resolved URL doesn't
-end in `_test`. You don't have to set `TEST_DATABASE_URL` unless your
-test DB lives somewhere unusual.
+end in `_test`. Set `TEST_DATABASE_URL` (or `DATABASE_URL`) every time:
+with neither the run stops, and a database on port 6432 (the port an
+installed Domovoi's live Postgres uses) also needs
+`DOMOVOI_TEST_DB_ON_6432=1` (`tests/db_guard.py`; see
+[docs/CONTRIBUTING.md, "Running the tests"](../docs/CONTRIBUTING.md#running-the-tests)).
 
 **Fresh installs** get the test DB created automatically by the
 `db/init/01-create-test-db.sql` script that fires on Postgres' first
@@ -979,21 +992,11 @@ database 'domovoi'`, your `TEST_DATABASE_URL` is misconfigured
 recognized; either unset `TEST_DATABASE_URL` and use the standard
 `domovoi_test` convention, or set it explicitly to a test database.
 
-Test breakdown:
-
-- `tests/test_registry.py` — pure-Python contract: every handler with `requires_network != "no"` must override `fallback_offline`. No DB.
-- `tests/test_timer_handler.py` — regex parsing (no DB) + DB-backed CRUD.
-- `tests/test_clock_handler.py` — pure-Python: ordinal/format helpers, regex coverage for every supported phrasing, frozen-clock behavior tests for each `kind`. No DB.
-- `tests/test_intercom_handler.py` — regex coverage for announce/broadcast/tell, room-phrase resolution against `_room_ports`, fan-out target population. Behavior tests use module rebinds for `_room_ports`. No DB needed.
-- `tests/test_reminder_handler.py` — regex coverage + DB-backed insert/list/cancel via TimerRepository (reminders are timers with non-null `message`).
-- `tests/test_voice_notes_handler.py` — regex + DB-backed CRUD against the `voice_notes` table.
-- `tests/test_homelab_handler.py` — pure-Python: format helpers + behavior with mocked nvidia-smi / Ollama-API responses. No DB.
-- `tests/test_voice_embedder.py` — stub-embedder determinism + unit-norm output + empty-input handling. No DB.
-- `tests/test_voice_identifier.py` — pure-Python helpers (cosine, presence tier) + DB-backed match / no-match / closest-of-N / last_seen-touch behavior under the stub embedder.
-- `tests/test_voice_profile_handler.py` — regex coverage (incl. adjective false-positive defense), DB-backed self-intro / confirmation / forget flows, edge case for embedding-less acknowledgment.
-- `tests/test_router.py` — fast-path dispatch, offline gate, `intents_log` writes.
-- `tests/test_connectivity.py` — state transitions logged once per change.
-- `tests/test_integration.py` — end-to-end `POST /v1/intent` against real Postgres, timer watcher firing.
+The suite has over six hundred test modules, one or more per
+module under test (`tests/test_<module>.py`; a handler's are
+`tests/test_<name>_handler.py`). The contract every handler must keep is
+`tests/test_registry.py` (no DB); the end-to-end `POST /v1/intent` path
+against real Postgres is `tests/test_integration.py`.
 
 ## Auditing conversation history
 

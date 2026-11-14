@@ -295,8 +295,9 @@ names, rooms or paths.
   distances, voices) and **Train again**. A trained word keeps recording:
   new clips add to the set and its model stays in use until the new one
   is trained.
-- **Quieter than `hey_jarvis`**: usually the threshold. Lower it to 0.4 for
-  that word.
+- **Quieter than `hey_jarvis`**: usually the threshold. A new word starts
+  at 0.7, the rooms' default; lower that word's toward 0.5 and push it
+  again.
 - **Works in testing, not on the satellite**: record the clips on that
   satellite's own board (HAT or XVF3800) and train again.
 - **Score the recorded clips** against the trained model:
