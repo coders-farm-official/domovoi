@@ -339,6 +339,30 @@ class PlayerController(
             .build()
     }
 
+    /**
+     * `library.cover.changed` moved some covers' versions (CoverArt.versions):
+     * every library song in the queue whose cover is now older takes the
+     * new versioned URL, in the queue (the player screens) and in the
+     * engine, whose item is swapped in place (same audio URI, so the song
+     * plays on). The session's metadata changes with it, and Media3's
+     * bitmap loader, which keeps the last picture by URI, loads the new one
+     * for the notification and the lock screen. A song whose version did
+     * not move is left alone.
+     */
+    fun coversChanged() {
+        val q = _queue.value
+        val changes = q.mapIndexedNotNull { i, item -> CoverArt.refreshedItem(item)?.let { i to it } }
+        if (changes.isEmpty()) return
+        _queue.value = q.toMutableList().apply { changes.forEach { (i, item) -> set(i, item) } }
+        // The engine holds the same items in the same order; swap only an
+        // entry that is still the same song there.
+        changes.forEach { (i, item) ->
+            if (i < exoPlayer.mediaItemCount && exoPlayer.getMediaItemAt(i).mediaId == item.uid) {
+                exoPlayer.replaceMediaItem(i, mediaItemFor(item))
+            }
+        }
+    }
+
     private fun ensureService() {
         runCatching {
             context.startService(Intent(context, PlaybackService::class.java))

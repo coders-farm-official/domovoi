@@ -56,12 +56,13 @@ data class PlayItem(
     val upNextGen: Int = 0,
 ) {
     companion object {
-        fun fromTrack(id: Long, title: String, artist: String?, album: String?, durationSec: Double?) =
+        /** [coverV]: the row's cover version (V059), null when it had none. */
+        fun fromTrack(id: Long, title: String, artist: String?, album: String?, durationSec: Double?, coverV: Int? = null) =
             PlayItem(
                 uid = "lib-$id", kind = PlayKind.Library, id = id,
                 title = title, artist = artist, album = album,
                 src = "/api/music/library/$id/audio",
-                coverPath = CoverArt.libraryPath(id),
+                coverPath = CoverArt.libraryPath(id, coverV),
                 durationSec = durationSec,
             )
 

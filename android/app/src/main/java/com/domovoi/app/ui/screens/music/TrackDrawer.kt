@@ -131,7 +131,7 @@ internal fun TrackDrawer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                CoverImage(CoverArt.model(CoverArt.libraryPath(track.id), app.api::absolute), 64.dp)
+                CoverImage(CoverArt.model(CoverArt.libraryPath(track.id, track.coverV), app.api::absolute), 64.dp)
                 Column(Modifier.weight(1f)) {
                     Text(
                         track.title ?: "unknown title",
@@ -147,6 +147,16 @@ internal fun TrackDrawer(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // Further credited artists (the file's ARTISTS tag), quieter.
+                    creditedWith(track).takeIf { it.isNotEmpty() }?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgFaint,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
                         track.album ?: "—",
                         style = MaterialTheme.typography.bodySmall,

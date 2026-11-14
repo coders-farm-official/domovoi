@@ -232,6 +232,19 @@ class AppContainer(context: Context) {
                 first = false
             }
         }
+        // A cover changed on the server (V059 `library.cover.changed`): the
+        // tracks it names take their new version (player/CoverArt.kt), so
+        // every cover on screen redraws, and the phone's queue (and with it
+        // the notification's artwork) moves to the new picture. Only the
+        // active server's events count; a switch forgets the old versions.
+        scope.launch { prefs.serverUrl.collect { com.domovoi.app.player.CoverArt.serverIs(it) } }
+        scope.launch {
+            bus.events.collect { ev ->
+                if (ev.type != com.domovoi.app.player.CoverArt.COVER_CHANGED_EVENT) return@collect
+                val moved = com.domovoi.app.player.CoverArt.onCoverChanged(ev.server, prefs.serverUrl.value, ev.payload)
+                if (moved.isNotEmpty()) player.coversChanged()
+            }
+        }
     }
 
     /** Developer options (data/DeveloperOptions.kt): the benchmark and the
