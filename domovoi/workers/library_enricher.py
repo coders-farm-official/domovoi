@@ -64,8 +64,15 @@ can return several recordings for one fingerprint: the best-scoring one
 that agrees is used, not simply the first. With no agreeing answer the row
 keeps its names and is stamped ``disagreed``. A row with no real names (no
 artist, and a title that is just the file name) is matched as before.
+Since 2026-11-14 it also agrees when the answer's title AND artist both
+appear in our names taken together, upload noise ("(Lyrics)", "Official
+Video", "HD", a video id) ignored: an upload's "Bruno Mars - That's what I
+like (Lyrics)" by the channel "Pizza Music" agrees with "That's What I
+Like" by Bruno Mars, and so does a file name read the wrong way round.
 :func:`repair_disagreeing` puts back the file's own names on rows an
-earlier sweep already overwrote that way.
+earlier sweep already overwrote that way, but only on a real
+disagreement and never with names that look like an upload's;
+:func:`requeue_disagreed` undoes a repair over a time window.
 
 A network error, a refused key, the internet being turned off, or no
 provider configured at all is NOT "no match": the row is left exactly as
@@ -110,6 +117,7 @@ import enum
 import importlib.util
 import json
 import logging
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -197,17 +205,83 @@ class Lookup:
 NAME_AGREE_MIN_RATIO = 85
 
 
+# Upload noise: what a video upload adds to a song's names ("(Lyrics)",
+# "Lyric Video", "OFFICIAL", "HD Video", "LYRICS ON SCREEN", "2009
+# Remaster", "[<video id>]"). Stripped before names are compared. "Video"
+# or "Audio" goes only after "official"/"music"/"lyric"/"HD" ("Video
+# Killed the Radio Star" keeps its title).
+_VIDEO_ID_RE = re.compile(r"\[[A-Za-z0-9_-]{11}\]")
+_UPLOAD_NOISE_RE = re.compile(
+    r"\b(?:official\s+(?:music\s+|lyrics?\s+)?|music\s+|lyrics?\s+|hd\s+|hq\s+)"
+    r"(?:video|audio|visuali[sz]er)\b"
+    r"|\blyrics?\b(?:\s+on\s+screen)?"
+    r"|\bon\s+screen\b"
+    r"|\bofficial\b"
+    r"|\b(?:hd|hq|4k)\b"
+    r"|\bexplicit\b"
+    r"|\b(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\b"
+    r"|\bradio\s+edit\b",
+    re.I,
+)
+# What is left of a bracket or a separator once its words are gone.
+_EMPTY_BITS_RE = re.compile(r"[\(\[\{][\s\-–—]*[\)\]\}]")
+_EDGE_SEP_RE = re.compile(r"^[\s\-–—:|]+|[\s\-–—:|]+$")
+
+
+def strip_upload_noise(name: str | None) -> str:
+    """``name`` without upload noise (``_UPLOAD_NOISE_RE``), a video id,
+    empty brackets and a separator left dangling at either end ("Green Day
+    Lyrics" → "Green Day", "Supermarket Flowers Lyrics - Ed Sheeran" →
+    "Supermarket Flowers - Ed Sheeran"). The input (spaces collapsed) when
+    nothing would be left. Pure."""
+    raw = " ".join((name or "").split())
+    t = _VIDEO_ID_RE.sub(" ", raw)
+    t = _UPLOAD_NOISE_RE.sub(" ", t)
+    t = _EMPTY_BITS_RE.sub(" ", t)
+    t = " ".join(t.split())
+    t = _EDGE_SEP_RE.sub("", t)
+    return t or raw
+
+
+def has_upload_noise(name: str | None) -> bool:
+    raw = " ".join((name or "").split())
+    return bool(raw) and strip_upload_noise(raw) != raw
+
+
+# An artist field that is a video channel, not a performer ("LaBoucheVEVO",
+# "Mixed Lyrics", "Audioandlyrics", "rostrumrecords", "X - Topic").
+_CHANNEL_RE = re.compile(r"vevo$|lyrics|records$|\s-\s*topic$", re.I)
+# A title holding a whole "Artist - Title" (or "Title - Artist").
+_DASHED_RE = re.compile(r"\S\s*[-–—]\s+\S|\S\s+[-–—]\s*\S")
+
+
+def looks_like_upload_names(title: str | None, artist: str | None) -> bool:
+    """Do these names look like a video upload's rather than a song's: the
+    title or artist carries upload noise or a video id, the title holds a
+    whole "Artist - Title" ("Bruno Mars - That's what I like (Lyrics)"),
+    or the artist is a channel ("LaBoucheVEVO")? The repair never puts
+    names like these back over a row's names. Pure."""
+    t = " ".join((title or "").split())
+    a = " ".join((artist or "").split())
+    if has_upload_noise(t) or has_upload_noise(a) or _VIDEO_ID_RE.search(t):
+        return True
+    if _DASHED_RE.search(t):
+        return True
+    return bool(a and _CHANNEL_RE.search(a))
+
+
 def _name_key(name: str | None) -> str:
-    """A title or artist as compared: decoration dropped ("(Official
-    Video)", "[Remastered]", "feat. X", " - Live"), then the household
-    name key (case, accents, punctuation, "&"/"and", numbers as words,
-    leading "the" and spaces dropped)."""
+    """A title or artist as compared: upload noise and decoration dropped
+    ("Lyrics", "(Official Video)", "[Remastered]", "feat. X", " - Live"),
+    then the household name key (case, accents, punctuation, "&"/"and",
+    numbers as words, leading "the" and spaces dropped)."""
     from domovoi.handlers.shared.spoken_names import alias_key, clean_title
 
     raw = (name or "").strip()
     if not raw:
         return ""
-    return alias_key(clean_title(raw)) or alias_key(raw)
+    quiet = strip_upload_noise(raw)
+    return alias_key(clean_title(quiet)) or alias_key(quiet) or alias_key(raw)
 
 
 def _keys_agree(a: str, b: str) -> bool:
@@ -238,18 +312,100 @@ def _same_artist(a: str | None, b: str | None) -> bool:
     return any(_keys_agree(x, y) for x in ka for y in kb)
 
 
+def _words(text: str | None) -> list[str]:
+    """The words of a name's primary spoken form (case, accents,
+    apostrophes and "&" folded: "That’s" → "thats", "A$AP" → "asap")."""
+    from domovoi.handlers.shared.spoken_names import spoken_forms
+
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    forms = spoken_forms(raw)
+    return forms[0].split() if forms else []
+
+
+#: rapidfuzz partial_ratio of a candidate name's compact key within our
+#: names' compact text at or above which it counts as in our names; only
+#: for keys of at least ``_PARTIAL_MIN_LEN`` letters (a short key is a
+#: substring of almost anything).
+NAME_CONTAINED_MIN_RATIO = 90
+_PARTIAL_MIN_LEN = 8
+
+
+def _contained(name: str | None, our_words: set[str], our_compact: str) -> bool:
+    """Is ``name`` (a candidate's title, or one performer) in our names:
+    each of its words among ours (a word of 4+ letters may be spelt a
+    little differently), or its compact key nearly a substring of ours."""
+    from rapidfuzz import fuzz
+
+    from domovoi.handlers.shared.spoken_names import clean_title
+
+    words = _words(clean_title(strip_upload_noise(name)))
+    if not words:
+        return False
+
+    def found(w: str) -> bool:
+        if w in our_words:
+            return True
+        return len(w) >= 4 and any(
+            len(o) >= 4 and fuzz.ratio(w, o) >= NAME_AGREE_MIN_RATIO for o in our_words
+        )
+
+    if all(found(w) for w in words):
+        return True
+    key = "".join(words)
+    return (
+        len(key) >= _PARTIAL_MIN_LEN
+        and fuzz.partial_ratio(key, our_compact) >= NAME_CONTAINED_MIN_RATIO
+    )
+
+
+def _named_in(
+    our_texts: tuple[str | None, ...], their_title: str | None, their_artist: str | None,
+) -> bool:
+    """Do BOTH the candidate's title and its artist (the whole credit or
+    one performer) appear in our texts taken together? That is how an
+    upload's names carry the song: "Bruno Mars - That's what I like
+    (Lyrics)" by the channel "Pizza Music", or a file name read the wrong
+    way round ("Green Day Lyrics" by "Longview")."""
+    from domovoi.handlers.shared.spoken_names import split_credit
+
+    title = (their_title or "").strip()
+    credit = (their_artist or "").strip()
+    if not title or not credit:
+        return False
+    words: list[str] = []
+    for t in our_texts:
+        words.extend(_words(_VIDEO_ID_RE.sub(" ", t or "")))
+    if not words:
+        return False
+    our_words, our_compact = set(words), "".join(words)
+    if not _contained(title, our_words, our_compact):
+        return False
+    return any(
+        _contained(p, our_words, our_compact)
+        for p in dict.fromkeys((credit, *split_credit(credit)))
+    )
+
+
 def names_agree(
     our_title: str | None, our_artist: str | None,
     their_title: str | None, their_artist: str | None,
+    *, our_extra: str | None = None,
 ) -> bool:
     """Does a provider's answer (``their_*``) plausibly name the same song
     as the names a row already has (``our_*``)? True when we have no names
     to compare; when its title is our title or its artist is our artist;
-    or when it is our two names the other way round (a file name read
-    "Artist - Title" that was really "Title - Artist"). Never when its
-    title is our ARTIST but its artist isn't: that is how a wrong
-    fingerprint answer looked ("In the End" by Linkin Park answered as the
-    title "Linkin Park" by "Boomin")."""
+    when it is our two names the other way round (a file name read
+    "Artist - Title" that was really "Title - Artist"); or (2026-11-14)
+    when its title AND its artist both appear in our names taken together
+    (an upload's "Artist - Title (Lyrics)" by "<channel>"). ``our_extra``:
+    more of our text to look in for that (the file's name). Never when its
+    title is our ARTIST and its artist appears nowhere in our names: that
+    is how a wrong fingerprint answer looked ("In the End" by Linkin Park
+    answered as the title "Linkin Park" by "Boomin"). Upload noise
+    ("(Lyrics)", "Official Video", "HD", a video id) is ignored
+    throughout."""
     has_title = bool(_name_key(our_title))
     has_artist = bool(_credit_keys(our_artist))
     if not has_title and not has_artist:
@@ -258,6 +414,8 @@ def names_agree(
     if has_title and has_artist and not artist_ok:
         if _same_title(our_artist, their_title) and _same_artist(our_title, their_artist):
             return True  # our names the other way round
+    if _named_in((our_title, our_artist, our_extra), their_title, their_artist):
+        return True  # both of its names are in ours
     if has_artist and not artist_ok and _same_artist(our_artist, their_title):
         return False  # their title is our artist, their artist someone else
     title_ok = has_title and _same_title(our_title, their_title)
@@ -1117,12 +1275,21 @@ async def repair_disagreeing() -> dict[str, Any]:
     holding the row to (no artist, title just the file name), are left as
     they are. No network. Not while a sweep runs.
 
-    Returns ``{"checked", "restored", "kept", "unjudged", "missing_file",
-    "errors", "skipped"}`` (``skipped``: "" when it ran, else "running").
+    Since 2026-11-14 it acts only on a real disagreement and never makes
+    a row's names worse: a row whose names agree with the file's either
+    way round, or whose names appear in the file's (an upload's "Artist -
+    Title (Lyrics)" by a channel, a file name read the wrong way round),
+    is kept; and where the file's names look like an upload's
+    (:func:`looks_like_upload_names`) the row is left as it is
+    (``unsure``).
+
+    Returns ``{"checked", "restored", "kept", "unsure", "unjudged",
+    "missing_file", "errors", "skipped"}`` (``skipped``: "" when it ran,
+    else "running").
     """
     global _sweep_running
     counts: dict[str, Any] = {
-        "checked": 0, "restored": 0, "kept": 0, "unjudged": 0,
+        "checked": 0, "restored": 0, "kept": 0, "unsure": 0, "unjudged": 0,
         "missing_file": 0, "errors": 0, "skipped": "",
     }
     if _sweep_running:
@@ -1135,12 +1302,26 @@ async def repair_disagreeing() -> dict[str, Any]:
     finally:
         _sweep_running = False
     log.info(
-        "library enricher repair: checked=%d restored=%d kept=%d unjudged=%d "
+        "library enricher repair: checked=%d restored=%d kept=%d unsure=%d unjudged=%d "
         "missing=%d errors=%d",
-        counts["checked"], counts["restored"], counts["kept"], counts["unjudged"],
-        counts["missing_file"], counts["errors"],
+        counts["checked"], counts["restored"], counts["kept"], counts["unsure"],
+        counts["unjudged"], counts["missing_file"], counts["errors"],
     )
     return counts
+
+
+def _row_fits_file(
+    ours: tuple[str | None, str | None], stem: str,
+    row_title: str | None, row_artist: str | None,
+) -> bool:
+    """Do a matched row's names agree with its file's (``ours``, plus the
+    file's name ``stem``), either way round? Only a row that fits in
+    neither direction is a real disagreement the repair may act on."""
+    if names_agree(ours[0], ours[1], row_title, row_artist, our_extra=stem):
+        return True
+    if not (row_title or "").strip() and not (row_artist or "").strip():
+        return False
+    return names_agree(row_title, row_artist, ours[0], ours[1])
 
 
 async def _repair(counts: dict[str, Any]) -> None:
@@ -1167,8 +1348,18 @@ async def _repair(counts: dict[str, Any]) -> None:
             if ours == (None, None):
                 counts["unjudged"] += 1
                 continue
-            if names_agree(ours[0], ours[1], row.title, row.artist):
+            if _row_fits_file(ours, path.stem, row.title, row.artist):
                 counts["kept"] += 1
+                continue
+            if looks_like_upload_names(*ours):
+                # The file's names are an upload's ("Artist - Title
+                # (Lyrics)" by a channel): never put back over the row's.
+                counts["unsure"] += 1
+                log.info(
+                    "library enricher repair: %s: kept %r by %r (the file's %r by %r "
+                    "look like an upload's)",
+                    path.name[:60], row.title, row.artist, ours[0], ours[1],
+                )
                 continue
             await session.execute(text(_RESTORE_SQL), {
                 "id": row.id,
@@ -1197,3 +1388,43 @@ async def _repair(counts: dict[str, Any]) -> None:
             library_match.invalidate(library=True)
         except Exception as e:  # noqa: BLE001 — the fingerprint catches up anyway
             log.debug("library enricher repair: couldn't refresh the name index: %s", e)
+
+
+# ─── Undo: rows a repair marked ``disagreed`` in a given window ─────────
+
+# Back in the queue as never enriched, so the next sweep asks the providers
+# again under the current agreement rule and a match writes the song's
+# names and MusicBrainz id over the file's. A year or genre with none now
+# is asked of MusicBrainz again once the id is back (the year fetch only
+# asks rows never asked). ``manual`` rows can't match: the outcome must be
+# ``disagreed``.
+_REQUEUE_DISAGREED_SQL = """
+    UPDATE library_tracks
+    SET enriched_at = NULL,
+        enrich_outcome = NULL,
+        year_checked_at = CASE WHEN year IS NULL THEN NULL ELSE year_checked_at END,
+        genre_checked_at = CASE WHEN genre_keys IS NULL THEN NULL ELSE genre_checked_at END
+    WHERE enrich_outcome = :disagreed
+      AND enriched_at >= :since AND enriched_at < :until
+"""
+
+
+async def requeue_disagreed(since: Any, until: Any) -> dict[str, Any]:
+    """Put back in the enrichment queue every row stamped ``disagreed``
+    with ``since <= enriched_at < until`` (timezone-aware datetimes): the
+    undo for a repair that marked rows wrongly (2026-11-14). Only
+    ``disagreed`` rows are touched, never ``manual`` or ``matched`` ones.
+    Their current names stay until a sweep matches them. Not while a sweep
+    or a repair runs. Returns ``{"requeued", "skipped"}``."""
+    if _sweep_running:
+        return {"requeued": 0, "skipped": "running"}
+    async with session_scope() as session:
+        result = await session.execute(text(_REQUEUE_DISAGREED_SQL), {
+            "disagreed": OUTCOME_DISAGREED, "since": since, "until": until,
+        })
+        await session.commit()
+    n = int(result.rowcount or 0)
+    log.info(
+        "library enricher: requeued %d tracks marked disagreed between %s and %s", n, since, until,
+    )
+    return {"requeued": n, "skipped": ""}

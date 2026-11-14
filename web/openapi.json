@@ -2070,14 +2070,41 @@
           "music"
         ],
         "summary": "Enrich Repair",
-        "description": "Put the file's own names back on tracks song recognition renamed\nto a song that isn't theirs. Admin tier at both hops, like the\nenrich it repairs after; hand-edited tracks are never touched.",
+        "description": "Put the file's own names back on tracks song recognition renamed\nto a song that isn't theirs. Admin tier at both hops, like the\nenrich it repairs after; hand-edited tracks are never touched. With\n``requeue_disagreed: {since, until}``: instead put the tracks marked\n``disagreed`` in that window back in the enrichment queue (the undo\nfor a repair that marked tracks wrongly).",
         "operationId": "enrich_repair_api_music_library_enrich_repair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EnrichRepairBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -22353,6 +22380,45 @@
           "base_version"
         ],
         "title": "EditBody"
+      },
+      "EnrichRepairBody": {
+        "properties": {
+          "requeue_disagreed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnrichRequeueWindow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EnrichRepairBody"
+      },
+      "EnrichRequeueWindow": {
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Until"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "since",
+          "until"
+        ],
+        "title": "EnrichRequeueWindow",
+        "description": "``since <= enriched_at < until``, ISO 8601 with a timezone (the\ncore checks the order)."
       },
       "Favorite": {
         "properties": {

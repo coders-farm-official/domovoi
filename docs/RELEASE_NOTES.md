@@ -4,6 +4,34 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — Song recognition understands upload names; the repair can be undone
+
+The name check from 2026-11-13 refused right answers for files that carry
+a video upload's names: tags like "Bruno Mars - That's what I like
+(Lyrics)" by "Pizza Music" (a channel), or an untagged "Longview - Green
+Day Lyrics.mp3" read as the artist "Longview". Run on such a library, the
+repair put those upload names back over correct ones and dropped their
+MusicBrainz id, year and genre. Now an answer also agrees when its title
+and its artist both appear in the track's names taken together, with
+upload noise ("(Lyrics)", "Lyric Video", "Official", "HD", "Remaster",
+a video id) ignored; the five wrong answers the check was written for are
+still refused. The repair acts only when the track's names and the file's
+fit neither way round, and never puts back names that look like an
+upload's (those tracks are counted `unsure` and left as they are).
+
+**If you ran the repair on 2026-11-13 or 2026-11-14**, put the tracks it
+marked back in the queue with the same call and a time window around the
+run (the core log's "library enricher repair" lines give the times), for
+example `POST /api/music/library/enrich/repair` with
+`{"requeue_disagreed": {"since": "2026-11-14T05:26:00Z", "until":
+"2026-11-14T05:30:00Z"}}` and the admin Bearer (core: `POST
+/v1/admin/library/enrich/repair`). Every track marked `disagreed` in that
+window is looked up again by the next sweep (one starts at once when song
+recognition can run), so the right names and MusicBrainz ids come back,
+and with them the years and genres. Tracks you edited by hand are never
+touched. The answer is `{"requeued": n, "sweep": "queued"}`, or the reason
+no sweep could start yet.
+
 ## 2026-11-13 — 1.2.0
 
 Version 1.2.0 (the app 1.2.0, versionCode 26111301; the Windows Setup

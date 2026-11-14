@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Literal
 from urllib.parse import quote
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 # Bootstrap NVIDIA DLLs BEFORE any import that transitively loads ctranslate2 /
 # faster-whisper. Safe no-op on non-Windows / when USE_STUBS=true.
@@ -7636,23 +7636,67 @@ async def admin_library_enrich() -> dict[str, Any]:
     return {"queued": True, "worker": "library_enricher"}
 
 
+class EnrichRequeueWindow(BaseModel):
+    """When the tracks to put back were marked ``disagreed``:
+    ``since <= enriched_at < until``, ISO 8601 with a timezone."""
+
+    model_config = ConfigDict(extra="forbid")
+    since: AwareDatetime
+    until: AwareDatetime
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "EnrichRequeueWindow":
+        if self.until <= self.since:
+            raise ValueError("until must be after since")
+        return self
+
+
+class EnrichRepairRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requeue_disagreed: EnrichRequeueWindow | None = None
+
+
 @app.post(
     "/v1/admin/library/enrich/repair",
     # Admin tier, like the sweep it repairs after: it rewrites names
     # library-wide and reads every matched file's tags.
     dependencies=[Depends(require_admin_mutation)],
 )
-async def admin_library_enrich_repair() -> dict[str, Any]:
+async def admin_library_enrich_repair(
+    body: EnrichRepairRequest | None = None,
+) -> dict[str, Any]:
     """Put the file's own names back on tracks song recognition renamed
     to a song that isn't theirs (``library_enricher.repair_disagreeing``),
     in the background. Only rows the enricher matched are looked at; a
     track a person edited is never touched. No network, so it runs with
     internet access off too. ``{"queued": false, "reason": "running"}``
-    while a sweep (or another repair) is in progress."""
+    while a sweep (or another repair) is in progress.
+
+    With ``{"requeue_disagreed": {"since": ..., "until": ...}}`` it runs
+    no repair: instead every track marked ``disagreed`` with
+    ``since <= enriched_at < until`` goes back in the enrichment queue
+    (``library_enricher.requeue_disagreed``; the undo for a repair that
+    marked tracks wrongly), and a sweep is started when one can run.
+    ``{"requeued": n, "sweep": "queued" | <reason it isn't>}``."""
     from domovoi.workers import library_enricher
 
     if library_enricher.enrich_running():
         return {"queued": False, "reason": "running"}
+    if body is not None and body.requeue_disagreed is not None:
+        window = body.requeue_disagreed
+        out = await library_enricher.requeue_disagreed(window.since, window.until)
+        if out["skipped"]:
+            return {"queued": False, "reason": out["skipped"]}
+        # The tracks are queued either way; a sweep that can't start now
+        # (internet off, offline, no provider) picks them up later.
+        try:
+            sweep = await admin_library_enrich()
+        except HTTPException:
+            sweep = {"queued": False, "reason": "internet_off"}
+        return {
+            "requeued": out["requeued"],
+            "sweep": "queued" if sweep.get("queued") else sweep.get("reason", "not_queued"),
+        }
     asyncio.create_task(
         library_enricher.repair_disagreeing(), name="admin-library-enrich-repair",
     )
