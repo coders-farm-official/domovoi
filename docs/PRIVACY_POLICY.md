@@ -316,7 +316,8 @@ differs from the Android app:
   downloaded, and there are no lookups from the phone. Chat is with your
   Domovoi server only, so the sections "What phone chats read on the
   phone", "Lookups you allow" and "Documents, letters and drafts" do not
-  apply, and the app asks for no location, contacts or calendar access.
+  apply, and the app asks for no location or contacts access. (It asks
+  for calendar access only for Phone calendars, below.)
 - **What stays on the phone.** Settings (your server's address, this
   phone's name, the person it is "listening as", the phone bar, and the
   servers you trusted with their identity keys) are kept in the app's own
@@ -351,6 +352,29 @@ differs from the Android app:
   on your Wi-Fi; it asks the addresses there whether they are a Domovoi
   server. Plain HTTP is allowed only to addresses on your home network, as
   on Android.
+- **Phone calendars, only if you choose to share them.** Off unless you
+  turn on "Share this phone's calendars with the house" (Settings →
+  Household → Phone calendars); only then does iOS ask for calendar access,
+  and the app only reads, never changes, your calendars. It reads the
+  calendars you tick (Apple's Calendar and any accounts on the phone) and
+  sends their events to **your Domovoi server only**, never to Coders Farm
+  or anyone else: each event's title, time and place, and the calendar's
+  name and colour, for the last 30 days and the next 180. Never
+  descriptions, guests, alarms, web links in a place (an online meeting
+  says "online meeting"), events you declined, or the account a calendar
+  belongs to (a calendar named after an email address is sent as "Main
+  calendar"). iOS doesn't tell apps which events are marked private, so
+  pick only calendars you're happy to share. Everyone in your household
+  can see them, and Domovoi can read them out in any room. The copy is
+  sent again when you open the app and when a calendar changes while it is
+  open; iOS doesn't let the app update it on a schedule in the background,
+  and the server removes a phone's calendars after a week without one.
+  So that only this phone can change them, the server gives it a key,
+  kept in the iPhone's Keychain for this device only.
+  Turn sharing off, take away calendar access in iOS Settings, or forget
+  the server in the app, and the app deletes the server's copy (if the
+  server no longer accepts the phone, ask whoever runs it). Uninstalling
+  the app does not reach the server: turn sharing off first.
 - **Notifications** for timers and reminders are made on the phone; no
   push service is used.
 - **What goes to the internet:** internet radio and other streams your

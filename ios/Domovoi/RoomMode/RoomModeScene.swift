@@ -14,6 +14,9 @@ final class HouseholdRoot {
     let model: ShellModel
     let container: AppContainer
     let alerts: AlertsAppWiring
+    /// "Share this phone's calendars with the house" (1.3.0): off until the
+    /// person turns it on in Settings, and asking for nothing until then.
+    let calendars: PhoneCalendarsBridge
 
     init() {
         // **One vault, handed to both.** Two `TokenVault()`s would reach the
@@ -69,6 +72,14 @@ final class HouseholdRoot {
         // starts them beside the socket in the same order
         // (`TimerAlerts.kt:97`).
         alerts = AlertsAppWiring(container: container)
+        // After the container is started: its first act (on an app that is
+        // sharing) is a call through the container's client. Builds no
+        // EventKit store and asks for no permission by itself.
+        calendars = PhoneCalendarsBridge(
+            model: model,
+            container: container,
+            phoneName: DeviceRegistry.suggestedDeviceName(model: deviceModel)
+        )
     }
 
     /// The household side goes quiet as the phone becomes a room

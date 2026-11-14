@@ -685,18 +685,38 @@ public struct HomeEvent: Equatable, Sendable, Decodable {
     public let endsAt: String?
     public let location: String?
 
+    /// 1.3.0 (`HomeModels.kt:212`): an all-day event, read by its **written
+    /// date** — the server writes its local midnights with the house's own
+    /// offset, so the first ten characters are the date.
+    public let allDay: Bool
+
+    /// The calendar it comes from (a linked or a phone one); nil for the
+    /// household's own. The colour is for the row's dot only, never a second
+    /// accent (`HomeModels.kt:214-218`).
+    public let calendarName: String?
+    public let calendarColor: String?
+    public let calendarKind: String?
+
     public init(
         id: Int64 = 0,
         title: String = "",
         startsAt: String = "",
         endsAt: String? = nil,
-        location: String? = nil
+        location: String? = nil,
+        allDay: Bool = false,
+        calendarName: String? = nil,
+        calendarColor: String? = nil,
+        calendarKind: String? = nil
     ) {
         self.id = id
         self.title = title
         self.startsAt = startsAt
         self.endsAt = endsAt
         self.location = location
+        self.allDay = allDay
+        self.calendarName = calendarName
+        self.calendarColor = calendarColor
+        self.calendarKind = calendarKind
     }
 
     enum CodingKeys: String, CodingKey {
@@ -704,6 +724,10 @@ public struct HomeEvent: Equatable, Sendable, Decodable {
         case startsAt = "starts_at"
         case endsAt = "ends_at"
         case location
+        case allDay = "all_day"
+        case calendarName = "calendar_name"
+        case calendarColor = "calendar_color"
+        case calendarKind = "calendar_kind"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -713,5 +737,9 @@ public struct HomeEvent: Equatable, Sendable, Decodable {
         startsAt = try c.decodeIfPresent(String.self, forKey: .startsAt) ?? ""
         endsAt = try c.decodeIfPresent(String.self, forKey: .endsAt)
         location = try c.decodeIfPresent(String.self, forKey: .location)
+        allDay = try c.decodeIfPresent(Bool.self, forKey: .allDay) ?? false
+        calendarName = try c.decodeIfPresent(String.self, forKey: .calendarName)
+        calendarColor = try c.decodeIfPresent(String.self, forKey: .calendarColor)
+        calendarKind = try c.decodeIfPresent(String.self, forKey: .calendarKind)
     }
 }

@@ -83,7 +83,7 @@ final class SettingsPlaceTests: XCTestCase {
         XCTAssertEqual(SettingsSection.all.count, counted)
         // The table's own order survives the filter.
         XCTAssertEqual(
-            ["rooms", "people", "phones-and-browsers", "printers"],
+            ["rooms", "people", "phones-and-browsers", "printers", "phone-calendars"],
             sections(of: .household).map(\.key)
         )
     }
@@ -98,7 +98,7 @@ final class SettingsPlaceTests: XCTestCase {
         )
         XCTAssertEqual(
             [
-                ["Rooms", "People", "Phones & browsers", "Printers & scanners"],
+                ["Rooms", "People", "Phones & browsers", "Printers & scanners", "Phone calendars"],
                 ["Wake words", "Voices", "Greetings"],
                 ["Models", "Chat"],
                 ["Internet", "Voice history"],
@@ -108,12 +108,15 @@ final class SettingsPlaceTests: XCTestCase {
         )
     }
 
-    /// `aSharedScreenLeavesPeopleOutOfSettingsToo`
+    /// `aSharedScreenLeavesPeopleOutOfSettingsToo` — and Phone calendars
+    /// (1.3.0, `SettingsScreen.kt:182`): a kitchen tablet shares no one's
+    /// calendars.
     func testASharedScreenLeavesPeopleOutOfSettingsToo() {
         XCTAssertEqual(
             ["Rooms", "Phones & browsers", "Printers & scanners"],
             sections(of: .household, sharedScreen: true).map(\.label)
         )
+        XCTAssertEqual(.group(.household), settingsPlace(of: "phone-calendars", sharedScreen: true))
         guard let people = SettingsSection.named("people") else { return XCTFail("no People section") }
         XCTAssertEqual(.section(people), settingsPlace(of: "people"))
         // A link to People on the kitchen tablet opens Household, without it.
@@ -123,7 +126,7 @@ final class SettingsPlaceTests: XCTestCase {
             XCTAssertEqual(sections(of: group), sections(of: group, sharedScreen: true))
         }
         // And every other section still lands on itself there.
-        for section in SettingsSection.all where section.key != "people" {
+        for section in SettingsSection.all where section.key != "people" && section.key != "phone-calendars" {
             XCTAssertEqual(.section(section), settingsPlace(of: section.key, sharedScreen: true))
         }
     }

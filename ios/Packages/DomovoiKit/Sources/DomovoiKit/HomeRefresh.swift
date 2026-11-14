@@ -33,7 +33,7 @@ public let homeFreshMs: Int64 = 5_000
 /// `HOME_PHONE_ROWS` (`HomeModels.kt:35`) — **attention rows and today
 /// rows** a phone shows before `+N more`. One constant for both, as the
 /// Kotlin has one: "chosen so the rooms start above the fold" (map §10.10).
-/// A wider screen shows ``homeTodayRows`` of today instead.
+/// A wider screen shows ``homeNextRows`` of today / next instead.
 public let homePhoneRows = 3
 
 // MARK: - what can ask for a re-read

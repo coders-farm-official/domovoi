@@ -139,7 +139,7 @@ final class ManualDocumentTests: XCTestCase {
         }
         // The counts are here so that a parser that found no links at all
         // cannot pass this test by asserting nothing.
-        XCTAssertEqual(100, counted["route"])
+        XCTAssertEqual(101, counted["route"])
         XCTAssertEqual(54, counted["node"])
         XCTAssertEqual(5, counted["doc"])
         XCTAssertEqual(

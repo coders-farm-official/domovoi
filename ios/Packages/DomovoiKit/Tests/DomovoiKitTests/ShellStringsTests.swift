@@ -900,7 +900,7 @@ final class ShellStringsTests: XCTestCase {
     /// Every section's label and `sub`, and the five group labels, read from
     /// the table they were ported from.
     func testEverySettingsSectionMatchesTheKotlin() throws {
-        XCTAssertEqual(15, SettingsSection.all.count)
+        XCTAssertEqual(16, SettingsSection.all.count)
         XCTAssertEqual(5, SettingsGroup.allCases.count)
         // Before the merge brings the regroup's Kotlin, the fields it added
         // are pinned one by one against adb2ad06's own literals
@@ -940,7 +940,7 @@ final class ShellStringsTests: XCTestCase {
             if let dashboard = section.dashboard { assertKotlinSaysWhole(dashboard) }
         }
         // The keys are unique, and every alias resolves.
-        XCTAssertEqual(15, Set(SettingsSection.all.map(\.key)).count)
+        XCTAssertEqual(16, Set(SettingsSection.all.map(\.key)).count)
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)
@@ -1373,8 +1373,11 @@ final class ShellStringsTests: XCTestCase {
         assertKotlinSaysWhole(HomeTodayStrings.busy)
         assertKotlinSaysWhole(HomeTodayStrings.now)
         assertKotlinSaysWhole(HomeTodayStrings.calendarUnavailable)
-        assertKotlinSaysWhole(HomeTodayStrings.nothingOnToday)
-        assertKotlinSaysWhole(HomeTodayStrings.nothingMoreToday)
+        // 1.3.0's today / next card (`HomeSections.kt`, `HomeModels.kt`).
+        assertKotlinSaysWhole(HomeTodayStrings.title)
+        assertKotlinSaysWhole(HomeTodayStrings.calendarEmpty)
+        assertKotlinSaysWhole(HomeTodayStrings.allDay)
+        assertKotlinSaysWhole(HomeTodayStrings.noTitle)
         assertKotlinSaysWhole(HomeFirstRunStrings.trySaying)
         assertKotlinSaysWhole(HomeFirstRunStrings.startHere)
         assertKotlinSaysWhole(homeHintFallback)
@@ -1394,7 +1397,6 @@ final class ShellStringsTests: XCTestCase {
         assertKotlinSays(HomeStatusStrings.offlineSuffix)
         assertKotlinSays(HomeStatusStrings.waitingSuffix)
         assertKotlinSays(HomeStatusStrings.playingSuffix)
-        assertKotlinSays(HomeTodayStrings.middot + HomeTodayStrings.nextPrefix, "U+00B7, then `next: `")
         for tail in [
             HomeStatusStrings.onlineSuffix, HomeStatusStrings.offlineSuffix,
             HomeStatusStrings.waitingSuffix, HomeStatusStrings.playingSuffix,

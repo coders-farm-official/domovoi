@@ -31,7 +31,7 @@ final class HomeClockTests: XCTestCase {
         let day = dayStartMs(ms: ms("2026-09-28T19:00:00Z"), timeZone: zone)
         XCTAssertEqual(ms("2026-09-28T05:00:00Z"), day, "local midnight in Chicago, in September")
         XCTAssertEqual(
-            "/api/calendar/events?start=2026-09-28T05%3A00%3A00Z&end=2026-10-05T05%3A00%3A00Z&limit=20",
+            "/api/calendar/events?start=2026-09-28T05%3A00%3A00Z&end=2026-10-05T05%3A00%3A00Z&limit=50",
             calendarPath(dayStartMs: day, timeZone: zone)
         )
     }
