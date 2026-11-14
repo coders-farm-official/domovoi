@@ -240,7 +240,11 @@ public enum QueueStrings {
     public static let playlistNameLabel = "playlist name"
     public static let save = "save"
     public static let cancel = "cancel"
-    public static func savedAs(_ name: String) -> String { "Saved as \"\(name)\"." }
+    /// `savedAsNote` (`QueueAsk.kt`): the web's line, with the count of songs
+    /// that went in.
+    public static func savedAs(_ name: String, songs: Int) -> String {
+        "Saved as \"\(name)\" (\(songs) song\(songs == 1 ? "" : "s"))."
+    }
     public static func saveFailed(_ why: String) -> String { "Couldn't save the playlist: \(why)" }
 
     /// The name of a room queue's save button.

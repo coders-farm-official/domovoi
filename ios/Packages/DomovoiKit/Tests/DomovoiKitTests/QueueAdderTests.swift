@@ -55,6 +55,10 @@ final class QueueAdderTests: XCTestCase {
                     guard self.genresStatus.current == 200 else { return .json(#"{"detail":"no"}"#, status: 500) }
                     return .json(#"{"items":[{"key":"rock","name":"Rock","track_count":40}],"total":1,"limit":2}"#)
                 }
+                if path == "/api/playlists" {
+                    return .json(#"{"id":21,"name":"Road trip","track_count":0}"#, status: 201)
+                }
+                if path == "/api/playlists/21/tracks" { return .json("", status: 204) }
                 if path.hasSuffix("/add") {
                     guard self.addStatus.current == 200 else {
                         return .json(#"{"detail":"this room is not taking requests"}"#, status: 403)
@@ -126,6 +130,22 @@ final class QueueAdderTests: XCTestCase {
         phone.castsTo = "den"
         _ = await adder.song(.room("den"), track: song, next: true)
         XCTAssertEqual([[4]], phone.nexted)
+    }
+
+    /// "Save as playlist" says the web's line with the count of songs that
+    /// went in (`savedAsNote`).
+    func testQueues_SavingAsAPlaylistSaysHowManySongsWentIn() async {
+        let client = rig().client
+        let flow = SaveAsPlaylistFlow()
+        flow.ask()
+        flow.name = " Road trip "
+        let saved = await flow.save(client: client, trackIDs: [4, 5, 6])
+        XCTAssertTrue(saved)
+        XCTAssertEqual(#"Saved as "Road trip" (3 songs)."#, flow.note)
+        flow.ask()
+        flow.name = "One"
+        _ = await flow.save(client: client, trackIDs: [4])
+        XCTAssertEqual(#"Saved as "One" (1 song)."#, flow.note)
     }
 
     func testQueues_ThePhonesOwnQueueIsAskedNothingOfTheServer() async {

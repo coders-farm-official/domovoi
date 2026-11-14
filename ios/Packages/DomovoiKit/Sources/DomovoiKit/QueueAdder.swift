@@ -231,7 +231,7 @@ public final class SaveAsPlaylistFlow {
         defer { saving = false }
         do throws(DomovoiError) {
             try await saveQueueAsPlaylist(client: client, name: clean, trackIDs: trackIDs)
-            note = QueueStrings.savedAs(clean)
+            note = QueueStrings.savedAs(clean, songs: trackIDs.count)
             failed = false
             name = ""
             open = false

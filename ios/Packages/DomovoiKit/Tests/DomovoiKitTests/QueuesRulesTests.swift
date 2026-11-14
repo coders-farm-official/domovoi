@@ -144,6 +144,14 @@ final class QueuesRulesTests: XCTestCase {
         XCTAssertEqual(2, RoomUpNextRules.moveTarget(shown: unpositioned, all: unpositioned, to: 2))
     }
 
+    /// `QueueAddSearchTest`'s pin of `savedAsNote`: the web's line as written,
+    /// with the plural for 0, 1 and many.
+    func testQueues_TheSavedAsNoteCountsTheSongs() {
+        XCTAssertEqual(#"Saved as "Road trip" (0 songs)."#, QueueStrings.savedAs("Road trip", songs: 0))
+        XCTAssertEqual(#"Saved as "Road trip" (1 song)."#, QueueStrings.savedAs("Road trip", songs: 1))
+        XCTAssertEqual(#"Saved as "Road trip" (2 songs)."#, QueueStrings.savedAs("Road trip", songs: 2))
+    }
+
     func testQueues_TheSaveAndLessLikeSentencesAreTheWebs() {
         XCTAssertEqual(#"Saved as "Road" (1 song)."#,
                        RoomUpNextStrings.saveNote(RoomSaveResult(name: "Road", saved: 1), fallbackName: "x"))

@@ -45,7 +45,8 @@ final class CalendarShareTests: XCTestCase {
     func testTheBodyHasTheServersShapeAndOnlyTheMinimumFields() throws {
         let built = build([cal("a")], [row("e1", location: "Market Street")])
         let body = try json(built.body)
-        XCTAssertEqual(Set(["phone_name", "window_start_ms", "window_end_ms", "calendars"]), Set(body.keys))
+        XCTAssertEqual(Set(["platform", "phone_name", "window_start_ms", "window_end_ms", "calendars"]), Set(body.keys))
+        XCTAssertEqual("ios", body["platform"] as? String)
         let calendars = try XCTUnwrap(body["calendars"] as? [[String: Any]])
         let first = try XCTUnwrap(calendars.first)
         XCTAssertEqual(Set(["calendar_id", "name", "color", "events"]), Set(first.keys))
@@ -554,8 +555,36 @@ final class CalendarShareSyncTests: XCTestCase {
         XCTAssertEqual(.done, out, "not retried")
         XCTAssertNil(rig.keys.key(for: house))
         XCTAssertEqual(false, rig.store.get(house)?.enabled)
+        XCTAssertEqual(false, rig.store.get(house)?.pendingDelete, "a DELETE would be refused the same way")
         XCTAssertEqual(CalendarShareStrings.keyRefusedNotice, rig.store.get(house)?.notice)
-        XCTAssertTrue(CalendarShareStrings.keyRefusedNotice.contains("Turn sharing off and on again"))
+        // Android's words (ShareRules.KEY_REFUSED), as written.
+        XCTAssertEqual(
+            "The house no longer accepts this phone's calendars. Ask whoever runs Domovoi to remove this phone's "
+                + "calendars on the dashboard (Settings \u{2192} Household \u{2192} Calendars, \"remove all from this "
+                + "phone\"), then turn sharing on again.",
+            CalendarShareStrings.keyRefusedNotice)
+        XCTAssertFalse(CalendarShareStrings.keyRefusedNotice.contains("off and on"))
+    }
+
+    /// A DELETE refused with 403 is the house's to remove now: nothing stays
+    /// pending, the key is kept (as Android does), and the notice says so.
+    func testV057_A403OnTheDeleteLeavesTheCopyToAnAdmin() async {
+        let rig = Rig()
+        rig.keys.save("stale-key", for: house)
+        rig.store.update(house) { CalendarShareRules.turnOff($0) }
+        rig.deleteError.set(.refused(Rig.failure(403)))
+        let out = await rig.sync().run(server: house)
+        XCTAssertEqual(.done, out, "not retried")
+        let e = rig.store.get(house)
+        XCTAssertEqual(false, e?.pendingDelete)
+        XCTAssertEqual(false, e?.enabled)
+        XCTAssertEqual("stale-key", rig.keys.key(for: house))
+        XCTAssertEqual(CalendarShareStrings.keyRefusedOffNotice, e?.notice)
+        XCTAssertEqual(
+            "The house no longer accepts this phone's calendars, so it may still show them. Ask whoever runs "
+                + "Domovoi to remove this phone's calendars on the dashboard (Settings \u{2192} Household \u{2192} "
+                + "Calendars, \"remove all from this phone\").",
+            CalendarShareStrings.keyRefusedOffNotice)
     }
 
     /// V057 generation: every call carries one, they only grow (even with the
