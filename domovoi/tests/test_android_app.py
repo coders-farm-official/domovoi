@@ -124,7 +124,11 @@ def test_a_manifest_names_its_files_exactly(tmp_path):
     lambda d: d["release"].update(version_code=0),
     lambda d: d["release"].update(version_code=True),
     lambda d: d["release"].update(tag="android-v9.9.9"),   # the tag scheme before v<versionName>
-    lambda d: d["release"].update(tag="v9.9.8"),
+    lambda d: d["release"].update(tag="v9.9.8"),   # the URLs name another release
+    lambda d: d["release"].update(tag="latest"),
+    lambda d: d["release"].update(tag="v9.9.9/../v1.0.0"),
+    lambda d: d["release"].update(tag=""),
+    lambda d: d["release"].update(tag=None),
     lambda d: d["release"].update(cert_sha256="AB" * 32),
     lambda d: d["release"].update(apks=[]),
     lambda d: d["release"]["apks"][0].update(abi="x86_64"),
@@ -145,6 +149,71 @@ def test_a_malformed_manifest_is_refused(tmp_path, mutate):
 
 
 # ─── fetching from the release ────────────────────────────────────────────
+
+def test_the_app_s_release_tag_need_not_be_its_version_name(tmp_path):
+    """Owner decision 2026-11-14: the release number is Domovoi's own; the
+    app is released (under the Domovoi release cut then) only when it
+    changes. A manifest whose app 9.9.9 sits on release v10.0.0 loads."""
+    doc = manifest_doc(GOOD, tag="v10.0.0")
+    for e in doc["release"]["apks"]:
+        e["url"] = aa.RELEASE_DOWNLOAD + "v10.0.0/" + e["file"]
+    m = load(tmp_path, doc)
+    assert m["release"]["tag"] == "v10.0.0" and m["release"]["version_name"] == VERSION
+
+
+def test_a_server_newer_than_its_app_fetches_from_the_release_the_manifest_names(tmp_path, cache, monkeypatch):
+    """The 1.2.1 case: a server-only release (pyproject 1.2.1) keeps the
+    android/release.json of 1.2.0, whose APKs are on v1.2.0. The server
+    loads it and fetches from v1.2.0, every check as before."""
+    py = tmp_path / "pyproject.toml"
+    py.write_text('[project]\nname = "domovoi"\nversion = "1.2.1"\n', encoding="utf-8")
+    assert aa.release_tag(py) == "v1.2.1"
+    app_path = "/coders-farm-official/domovoi/releases/download/v1.2.0/"
+    doc = manifest_doc(GOOD, version_name="1.2.0", tag="v1.2.0")
+    files = {}
+    for e, (abi, body) in zip(doc["release"]["apks"], GOOD.items()):
+        e["file"] = aa.file_name("1.2.0", abi)
+        e["url"] = aa.RELEASE_DOWNLOAD + "v1.2.0/" + e["file"]
+        files[e["file"]] = body
+    m = load(tmp_path, doc)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.headers.get("host")
+        seen.append(f"{host}{request.url.path}")
+        if host == "github.com" and request.url.path.startswith(app_path):
+            name = request.url.path[len(app_path):]
+            return httpx.Response(302, headers={"location": f"https://release-assets.githubusercontent.com/x/{name}"})
+        if host == "release-assets.githubusercontent.com":
+            name = request.url.path.rsplit("/", 1)[-1]
+            if name in files:
+                return httpx.Response(200, content=files[name])
+        return httpx.Response(404)
+
+    from domovoi.satellite_media import fetchers
+
+    monkeypatch.setattr(net_safety, "resolve_host", lambda host: [ipaddress.ip_address("140.82.112.3")])
+    monkeypatch.setattr(fetchers, "_oww_http_client",
+                        lambda: egress.sync_client(transport=httpx.MockTransport(handler)))
+    with egress.override_policy("always"):
+        ok, message = aa.fetch(m)
+    assert ok, message
+    assert sorted(p.name for p in cache.iterdir()) == ["domovoi-1.2.0-arm64-v8a.apk", "domovoi-1.2.0-armeabi-v7a.apk"]
+    assert [s for s in seen if s.startswith("github.com")] == [
+        f"github.com{app_path}domovoi-1.2.0-{abi}.apk" for abi in aa.ABIS]
+    assert aa.public_status(m)["release"]["version_name"] == "1.2.0"
+
+
+def test_the_release_tag_is_pyproject_s_version_in_semver(tmp_path):
+    py = tmp_path / "pyproject.toml"
+    for version, tag in (("1.2.1", "v1.2.1"), ("1.0.0rc2", "v1.0.0-rc2"), ("2.0.0a1", "v2.0.0-alpha1"),
+                         ("2.0.0b3", "v2.0.0-beta3"), ("1.2", None), ("1.2.1.post1", None)):
+        py.write_text(f'[project]\nversion = "{version}"\n', encoding="utf-8")
+        assert aa.release_tag(py) == tag, version
+    assert aa.release_tag(tmp_path / "missing.toml") is None
+    assert aa._main(["tag", str(tmp_path / "missing.toml")]) == 2
+    assert aa.release_tag() and aa.TAG_RE.match(aa.release_tag()), "the tree's own"
+
 
 def test_the_fetch_keeps_the_signed_pinned_apks_and_serves_them(tmp_path, cache, github):
     m = load(tmp_path, manifest_doc(GOOD))
@@ -444,7 +513,7 @@ def test_write_then_check_is_what_the_release_script_runs(tmp_path):
         (signed / aa.file_name(VERSION, abi)).write_bytes(body)
     out = tmp_path / "release.json"
     args = ["write", str(out), str(signed), "--version-name", VERSION, "--version-code", "99",
-            "--cert", RELEASE_CERT.upper(), "--commit", "b" * 40, "--published", "2026-10-15"]
+            "--cert", RELEASE_CERT.upper(), "--commit", "b" * 40, "--published", "2026-10-15", "--tag", TAG]
     assert aa._main(args) == 0
     m = aa.load_manifest(out)
     assert m["release"]["cert_sha256"] == RELEASE_CERT and m["release"]["commit"] == "b" * 40
@@ -458,11 +527,11 @@ def test_write_then_check_is_what_the_release_script_runs(tmp_path):
     other = fixture("other-arm64-v8a.apk")
     (signed / aa.file_name(VERSION, "arm64-v8a")).write_bytes(other)
     assert aa._main(["write", str(out), str(signed), "--version-name", VERSION, "--version-code", "99",
-                     "--cert", RELEASE_CERT]) == 0
+                     "--cert", RELEASE_CERT, "--tag", TAG]) == 0
     assert aa._main(["check", str(out), str(signed)]) == 1
     # A version the manifest can't carry is never written.
     assert aa._main(["write", str(tmp_path / "bad.json"), str(signed), "--version-name", "1.0; x",
-                     "--version-code", "99", "--cert", RELEASE_CERT]) == 2
+                     "--version-code", "99", "--cert", RELEASE_CERT, "--tag", TAG]) == 2
     assert not (tmp_path / "bad.json").exists()
 
 

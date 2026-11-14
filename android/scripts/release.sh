@@ -3,9 +3,13 @@
 # APKs, sign them with YOUR release key, check them the way a Domovoi
 # server will, write android/release.json, commit it ("android: release
 # <v> [skip ci]") and push it to the branch's upstream, then publish the
-# GitHub release v<versionName> on coders-farm-official/domovoi with gh,
-# tagged at THAT commit (so the tag holds the manifest naming its own
-# APKs), and download each file back by the manifest's URL. A run that
+# GitHub release v<Domovoi's version> (pyproject.toml's, NOT the app's
+# versionName: owner decision 2026-11-14) on coders-farm-official/domovoi
+# with gh, tagged at THAT commit (so the tag holds the manifest naming its
+# own APKs), and download each file back by the manifest's URL. Run it
+# only for a release that changes the app; a release that doesn't is
+# scripts/release/finish-release.sh alone (android/README.md, "Publishing
+# a release"). A run that
 # stops after the commit (a failed push, gh or download) carries on from
 # the release commit when run again; nothing is built or signed again.
 # Then scripts/release/finish-release.sh adds the Windows Setup, one
@@ -138,7 +142,7 @@ release_fields() { "$python" -c "$read_release" "$@" | tr -d '\r'; }
 # commit its APKs were built from (and nothing else changed), by an earlier
 # run that stopped before it finished. Then this run carries on from there.
 resume=0
-read -r built_from head_version head_code head_cert <<<"$(release_fields android/release.json commit version_name version_code cert_sha256)"
+read -r built_from head_version head_code head_cert head_tag <<<"$(release_fields android/release.json commit version_name version_code cert_sha256 tag)"
 if printf '%s\n' "$built_from" | grep -Eq '^[0-9a-f]{40}$' && [ "$built_from" != "$commit" ] \
     && git merge-base --is-ancestor "$built_from" "$commit" 2>/dev/null \
     && [ "$(git diff --name-only "$built_from" "$commit")" = "android/release.json" ]; then
@@ -220,7 +224,7 @@ for e in json.load(sys.stdin)["release"]["apks"]:
     read -r m_commit m_cert <<<"$(git show "$release_commit:android/release.json" | release_fields - commit cert_sha256)"
     notes="$signed/NOTES.md"
     {
-      echo "Domovoi $version_name. The Android app (versionCode $version_code), built from $m_commit; the release is tagged at $release_commit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes."
+      echo "Domovoi $tag. The Android app $version_name (versionCode $version_code), built from $m_commit; the release is tagged at $release_commit, which adds android/release.json naming these files. scripts/release/finish-release adds the Windows Setup, SHA256SUMS for every file and the release notes."
       echo
       echo "Install the app from your own Domovoi server: on the dashboard, Settings → Rooms → add a spare device (for a room) or Settings → Phones & browsers → get the Domovoi app. The server checks these files against android/release.json before it hands them out."
       echo
@@ -243,7 +247,7 @@ for e in json.load(sys.stdin)["release"]["apks"]:
     if [ "$is_prerelease" = 1 ]; then flag=--prerelease; kind="a pre-release"; fi
     say "publishing $tag on $REPO_SLUG at ${release_commit:0:12}, $kind…"
     gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG" --target "$release_commit" --verify-tag \
-      --title "Domovoi v$version_name" --notes-file "$notes" "$flag" \
+      --title "Domovoi $tag" --notes-file "$notes" "$flag" \
       || die "gh release create failed: run this script again; it carries on from the release commit"
   else
     say "$tag is already on $REPO_SLUG, so checking it"
@@ -270,9 +274,10 @@ for e in json.load(sys.stdin)["release"]["apks"]:
 # ─── carry on from a release commit ──────────────────────────────────────
 if [ "$resume" = 1 ]; then
   version_name="$head_version"; version_code="$head_code"
-  tag="v$version_name"
+  # The release the manifest at HEAD names (Domovoi's version when it was made).
+  tag="$head_tag"
   is_prerelease="$prerelease"
-  say "Domovoi $version_name (versionCode $version_code): HEAD ${commit:0:12} is its release commit (android/release.json on top of ${built_from:0:12}, which the APKs were built from), so this run carries on from there; nothing is built or signed again"
+  say "the Android app $version_name (versionCode $version_code), release $tag: HEAD ${commit:0:12} is its release commit (android/release.json on top of ${built_from:0:12}, which the APKs were built from), so this run carries on from there; nothing is built or signed again"
   # The first run's checks against the release before it, on what is committed.
   read -r prev_code prev_cert <<<"$(git show "$built_from:android/release.json" 2>/dev/null | release_fields - version_code cert_sha256 || true)"
   [ "${prev_code:--}" != "-" ] || prev_code=0
@@ -316,13 +321,15 @@ for abi in "${ABIS[@]}"; do
   if [ -z "$version_name" ]; then version_name="$vn"; version_code="$vc"; fi
   [ "$vn" = "$version_name" ] && [ "$vc" = "$version_code" ] || die "the APKs disagree on their version"
 done
-# The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
-# tag_for, which the manifest's URLs are checked against.
-tag="v$version_name"
+# The release is Domovoi's: v + pyproject.toml's version in SemVer spelling
+# (v1.2.1, v1.0.0-rc1; domovoi.android_app's release_tag), not the app's
+# versionName (owner decision 2026-11-14). The manifest's tag and URLs name it.
+tag="$("$python" -m domovoi.android_app tag pyproject.toml | tr -d '\r')" \
+  || die "pyproject.toml names no X.Y.Z or X.Y.Z(a|b|rc)N version"
 # A full release, marked Latest, unless --prerelease (a release candidate too:
 # the suffix says what it is, owner decision 2026-10-15).
 is_prerelease="$prerelease"
-say "Domovoi $version_name (versionCode $version_code), commit ${commit:0:12}"
+say "the Android app $version_name (versionCode $version_code), commit ${commit:0:12}, published as Domovoi's release $tag"
 
 # versionCode is YYMMDDNN (android/app/build.gradle.kts): the build's date
 # and that day's number, one sequence for these APKs and the Play bundle
@@ -434,7 +441,7 @@ say "kept the R8 mapping as $signed/domovoi-$version_name-mapping.txt"
 
 staged="$signed/release.json"
 "$python" -m domovoi.android_app write "$staged" "$signed" --version-name "$version_name" \
-  --version-code "$version_code" --cert "$cert" --commit "$commit" --published "$(date -u +%Y-%m-%d)" >/dev/null \
+  --version-code "$version_code" --cert "$cert" --commit "$commit" --published "$(date -u +%Y-%m-%d)" --tag "$tag" >/dev/null \
   || die "writing the manifest failed"
 "$python" -m domovoi.android_app check "$staged" "$signed" || die "the server's own check refuses these APKs"
 

@@ -155,6 +155,20 @@ def _sums(body: bytes) -> bytes:
     return f"{hashlib.sha256(body).hexdigest()}  DomovoiSatelliteSetup.exe\n".encode()
 
 
+def test_the_release_is_the_server_s_own_version_not_the_app_s(monkeypatch):
+    """Owner decision 2026-11-14: android/release.json names the release
+    holding the app's APKs, which a server-only release leaves at an older
+    one; the Setup comes from this checkout's own release, v + pyproject."""
+    from domovoi import android_app
+
+    monkeypatch.setattr(android_app, "release_tag", lambda pyproject=None: "v1.2.1")
+    monkeypatch.setattr(android_app, "load_manifest", lambda path=None: {"release": {"tag": "v1.2.0"}})
+    assert ss.release_tag() == "v1.2.1"
+    assert ss.sources(ss.release_tag())[0] == ("v1.2.1", ss.RELEASE_DOWNLOAD + "v1.2.1/")
+    monkeypatch.setattr(android_app, "release_tag", lambda pyproject=None: None)
+    assert ss.sources(ss.release_tag()) == [("latest", ss.LATEST_DOWNLOAD)]
+
+
 def test_the_fetch_keeps_the_setup_its_release_vouches_for(monkeypatch):
     base = ss.RELEASE_DOWNLOAD + "v9.9.9/"
     rel = FakeRelease({base + "SHA256SUMS": _sums(EXE), base + "DomovoiSatelliteSetup.exe": EXE})

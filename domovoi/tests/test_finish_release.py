@@ -64,6 +64,17 @@ FAKE_GH = textwrap.dedent('''\
         if rel is None:
             print("release not found", file=sys.stderr); sys.exit(1)
         print(json.dumps({k: rel[k] for k in opt("--json").split(",") if k in rel})); sys.exit(0)
+    if args[:2] == ["release", "create"]:
+        if rel is not None:
+            save(); print("release exists", file=sys.stderr); sys.exit(1)
+        on_origin = subprocess.run(["git", "--git-dir", state["origin"], "rev-parse", "--verify", "--quiet",
+                                    f"refs/tags/{tag}"], capture_output=True, text=True).returncode == 0
+        if "--verify-tag" not in args or not on_origin:
+            save(); print("tag not on the remote", file=sys.stderr); sys.exit(1)
+        rel = state["releases"][tag] = {"tagName": tag, "name": opt("--title"), "isDraft": False,
+                                        "isPrerelease": "--prerelease" in args, "url": "https://example.invalid/n",
+                                        "assets": [], "body": open(opt("--notes-file"), encoding="utf-8").read()}
+        args = ["release", "upload", tag] + args[3:args.index("--repo")] + ["--clobber"]
     if rel is None:
         save(); print("release not found", file=sys.stderr); sys.exit(1)
     if args[:2] == ["release", "upload"]:
@@ -863,7 +874,7 @@ def test_the_wrappers_run_the_python_and_are_lf_ascii():
         text = (folder / name).read_text(encoding="ascii")
         assert "finish_release.py" in text, name
     ps1 = (folder / "finish-release.ps1").read_text(encoding="ascii")
-    for flag in ("--tag", "--no-publish", "--setup", "--since"):
+    for flag in ("--tag", "--no-publish", "--prerelease", "--setup", "--since"):
         assert f"'{flag}'" in ps1, flag
 
 
@@ -978,7 +989,12 @@ def test_a_tag_that_pins_the_key_is_refused_without_it_or_with_another(tmp_path,
     w = World(tmp_path, monkeypatch, version="1.0.0", release_key=public)
     monkeypatch.delenv("DOMOVOI_RELEASE_SIGNING_KEY", raising=False)
     with pytest.raises(fr.Refused, match="must be signed: pass --signing-key"):
-        w.run("--no-publish")
+        w.run()
+    assert w.calls("upload") == [] and w.calls("edit") == [] and w.stable() == "", "refused before GitHub"
+    # A dry run without the key goes on, says so, and signs nothing.
+    assert w.run("--no-publish") == 0
+    assert not (w.stage / "DomovoiSetup.exe.sig").exists()
+    assert any("no signing key" in m for m in w.said)
     with pytest.raises(fr.Refused, match="doesn't verify against the tag's windows/installer/release-signing.pub"):
         w.run("--no-publish", "--signing-key", str(other))
     with pytest.raises(fr.Refused, match="no release key at"):
@@ -1010,3 +1026,149 @@ def test_the_signature_files_are_known_to_the_release_check():
                                              "DomovoiSetup.manifest.json.sig")]}
     with pytest.raises(fr.Refused, match="has no a.apk"):
         fr._check_published_apks(rel, [{"file": "a.apk", "size": 1, "sha256": "1" * 64}])
+
+
+# ─── a release that doesn't change the app (path b) ──────────────────────
+
+def _server_only(w: World, version: str = "1.0.1", *, gradle: str | None = None, manifest: str | None = None,
+                 push: bool = True) -> str:
+    """On top of World's app release (v1.0.0, its APKs on GitHub): the
+    server-only release commit, pyproject at ``version``, the app and
+    android/release.json as v1.0.0 left them. Pushed to main unless not."""
+    _write(w.work, "pyproject.toml", _pyproject(version))
+    _write(w.work, "android/app/build.gradle.kts",
+           gradle if gradle is not None else '        versionCode = 26101602\n        versionName = "1.0.0"\n')
+    if manifest is not None:
+        _write(w.work, "android/release.json", manifest)
+    _git(w.work, "commit", "--quiet", "-am", f"Release {version}")
+    head = _git(w.work, "rev-parse", "HEAD")
+    if push:
+        _git(w.work, "push", "--quiet", "origin", "main")
+        _git(w.work, "fetch", "--quiet", "origin")
+    w.tag = f"v{version}"
+    return head
+
+
+def _local_tag(w: World, tag: str) -> str:
+    return subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"], cwd=w.work,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _origin_has_tag(w: World, tag: str) -> bool:
+    return subprocess.run(["git", "--git-dir", str(w.origin), "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"],
+                          capture_output=True).returncode == 0
+
+
+@requires_git
+def test_a_server_only_dry_run_tags_nothing_and_ships_no_apks(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    head = _server_only(w)
+    before = (w.work / "android" / "release.json").read_bytes()
+    assert w.run("--no-publish") == 0, "the tag is v + pyproject's version"
+    assert _local_tag(w, "v1.0.1") == "", "the tag made for the build is gone again"
+    assert not _origin_has_tag(w, "v1.0.1")
+    assert w.calls("create") == [] and w.calls("upload") == [] and w.calls("edit") == []
+    sums = (w.stage / "SHA256SUMS").read_text(encoding="ascii")
+    assert ".apk" not in sums and "DomovoiSetup.exe" in sums
+    notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
+    assert head in notes and "still 1.0.0 (versionCode 26101602)" in notes and "releases/tag/v1.0.0" in notes
+    assert ".apk |" not in notes
+    assert (w.work / "android" / "release.json").read_bytes() == before
+    assert any("the app is unchanged" in m for m in w.said)
+
+
+@requires_git
+def test_a_server_only_release_tags_head_creates_the_release_and_moves_stable(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    head = _server_only(w)
+    assert w.run() == 0
+    origin_tag = subprocess.run(["git", "--git-dir", str(w.origin), "rev-parse", "refs/tags/v1.0.1^{commit}"],
+                                capture_output=True, text=True).stdout.strip()
+    assert origin_tag == head and _local_tag(w, "v1.0.1") == head
+    rel = w.load()["releases"]["v1.0.1"]
+    assert sorted(a["name"] for a in rel["assets"]) == ["DomovoiSetup.exe", "SHA256SUMS"]
+    assert rel["name"] == "Domovoi v1.0.1" and rel["isPrerelease"] is False
+    assert w.stable() == head
+    assert w.load()["releases"]["v1.0.0"]["assets"][0]["name"].endswith(".apk"), "the app's release untouched"
+    # The manifest the server reads still fetches from v1.0.0.
+    shown = json.loads(_git(w.work, "show", "v1.0.1:android/release.json"))
+    assert {e["url"].split("/download/")[1].split("/")[0] for e in shown["release"]["apks"]} == {"v1.0.0"}
+    # A second run finds the tag and the release, and replaces the files.
+    assert w.run() == 0
+    assert len(w.calls("create")) == 1 and w.calls("upload")
+
+
+@requires_git
+def test_a_server_only_pre_release_is_marked_and_leaves_stable(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0", stable="v1.0.0")
+    _server_only(w)
+    assert w.run("--prerelease") == 0
+    assert w.load()["releases"]["v1.0.1"]["isPrerelease"] is True
+    assert w.stable() == w.tag_commit
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"gradle": '        versionCode = 26101701\n        versionName = "1.0.1"\n'}, "the app changed"),
+    ({"manifest": '{"manifest_version": 1, "release": null}\n'}, "names no release"),
+    ({"push": False}, "not on origin/main"),
+])
+@requires_git
+def test_a_server_only_release_that_is_not_one_is_refused_before_github(tmp_path, monkeypatch, change, why):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _server_only(w, **change)
+    with pytest.raises(fr.Refused, match=why):
+        w.run()
+    assert _local_tag(w, "v1.0.1") == "", "no tag left behind"
+    assert w.calls("create") == [] and w.calls("upload") == [] and w.stable() == ""
+    assert not _origin_has_tag(w, "v1.0.1")
+
+
+@requires_git
+def test_a_manifest_that_differs_from_the_app_release_s_is_refused(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    doc = json.loads((w.work / "android" / "release.json").read_text(encoding="utf-8"))
+    doc["release"]["published"] = "2026-11-14"
+    _server_only(w, manifest=json.dumps(doc, indent=2) + "\n")
+    with pytest.raises(fr.Refused, match="is not the one v1.0.0 released"):
+        w.run("--no-publish")
+
+
+@requires_git
+def test_a_server_only_release_whose_app_release_lacks_its_apks_is_refused(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _server_only(w)
+    w.state["releases"]["v1.0.0"]["assets"] = [a for a in w.state["releases"]["v1.0.0"]["assets"]
+                                              if "arm64" not in a["name"]]
+    w.save()
+    with pytest.raises(fr.Refused, match="has no domovoi-1.0.0-arm64-v8a.apk"):
+        w.run()
+    assert _local_tag(w, "v1.0.1") == ""
+
+
+@requires_git
+def test_a_tag_already_on_github_elsewhere_never_moves(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _server_only(w)
+    _git(w.work, "push", "--quiet", "origin", f"{w.tag_commit}:refs/tags/v1.0.1")
+    with pytest.raises(fr.Refused):
+        w.run()
+    assert w.calls("create") == []
+
+
+@requires_git
+def test_path_a_still_needs_release_ps1_s_tag(tmp_path, monkeypatch):
+    """A HEAD whose manifest names the tag being cut: release.ps1 makes it."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _git(w.work, "tag", "-d", "v1.0.0")
+    _git(w.work, "push", "--quiet", "origin", ":refs/tags/v1.0.0")
+    with pytest.raises(fr.Refused, match="android/scripts/release.ps1 publishes the release and makes the tag"):
+        w.run("--no-publish")
+
+
+def test_the_default_tag_is_pyproject_s(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.2.1"\n', encoding="utf-8")
+    assert fr._default_tag(tmp_path) == "v1.2.1"
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.0.0rc2"\n', encoding="utf-8")
+    assert fr._default_tag(tmp_path) == "v1.0.0-rc2"
+    for v in ("1.0.0", "1.0.0-rc2", "2.0.0-alpha1", "2.0.0-beta3"):
+        assert fr.semver(fr.pep440(v)) == v
