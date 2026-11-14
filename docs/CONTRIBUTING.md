@@ -567,13 +567,77 @@ version without a suffix does. A published tag never moves
 and is never deleted, and `stable` is never rewound or force-pushed: a bad
 release gets a warning in its notes and a patch release.
 
-Every release artifact is built and signed on the owner's PC; CI ("CI",
-above) tests each push to `main`, and pushing a tag starts no workflow.
-Release from a `main` whose CI run is green. The manifest commit
-`android/scripts/release.ps1` makes carries `[skip ci]`: it changes only
-`android/release.json`, on a commit CI has already tested. There are two
-paths, by whether the Android app changed: **app changed**, steps 1, 2 and
-3; **server and Windows only**, steps 1 and 3. In order:
+There are two paths, by whether the Android app changed: **app changed**
+(the APKs are built and signed, then the rest), and **server and Windows
+only** (no APKs). Either is made by the release workflow, behind the
+owner's approval, or, as the fallback, by the same scripts on the owner's
+PC. Release from a `main` whose CI run is green ("CI", above); pushing a
+tag starts no workflow. The `android/release.json` commit the app path
+makes carries `[skip ci]`: it changes only that file, on a commit CI has
+already tested.
+
+### With GitHub Actions (the usual way)
+
+`.github/workflows/release.yml` runs only when started by hand, on `main`,
+and only from `main`'s tip. Its signing secrets live in the repository's
+`release` environment, which waits for the owner's approval; the one-time
+setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
+
+1. **The release commit** on `main`, pushed, exactly as in step 1 below. It
+   must be `main`'s tip when the run starts: the workflow checks that the
+   commit raises `pyproject.toml`'s version and leaves
+   `android/release.json` alone, and that GitHub has no tag
+   `v<version>` yet.
+2. Wait for CI to go green on that commit.
+3. **Actions → release → Run workflow**, branch `main` (leave *tag* empty:
+   it is `v` + `pyproject.toml`'s version).
+4. The **plan** job (no secrets) checks the commit and says which path it
+   is: the app changed when its `versionName`/`versionCode` differ from the
+   ones `android/release.json` names. Its summary shows the plan.
+5. GitHub then asks for the `release` environment's approval: **Review
+   deployments → release → Approve and deploy**. Nothing is signed or
+   published before that.
+6. The **release** job (Windows): when the app changed, it builds the
+   APKs, then `android/scripts/release.ps1 -SkipBuild` signs them with the
+   keystore from the environment's secrets, commits `android/release.json`
+   on `main`, pushes it with its tag and publishes the release with the
+   APKs (step 2 below). Then, always, `finish_release.py --signing-agent` (what
+   `finish-release.sh` runs) builds the Windows Setup from the tag, signs it with the release key
+   (loaded into an `ssh-agent` for that one step: no key file, no prompt),
+   publishes the files, checks them and moves `stable` (step 3 below). The
+   job's summary links the release.
+
+Every check the scripts make still runs; the workflow adds the plan, and a
+check that the release key's secrets load and are the key the commit pins
+(before anything is pushed). It publishes full releases only (no pre-release switch: a
+pre-release goes the local way, `-Prerelease`).
+
+**When a run fails.** Read the failed step; the scripts say what they
+refused. Nothing was published before the failure unless the log shows a
+push. Then:
+
+- **Before anything was pushed** (the plan, the build, signing, a check):
+  fix the cause on `main` (a new release commit if the commit itself was
+  wrong) and run the workflow again.
+- **After a push** (the tag, or the app's `android/release.json` commit
+  and its tag, are on GitHub): **Re-run failed jobs**, or run the workflow
+  again on `main`. The plan sees the tag and finishes the release from it:
+  finish-release replaces its files (`--clobber`) and moves `stable` only
+  forward; nothing is signed with the app key again.
+- **The app path, pushed but its APKs not published** (`release.ps1`
+  stopped between its push and the GitHub release holding the APKs): the
+  job already carried on twice from the release commit with the signed
+  APKs it had; those APKs existed on that runner only. finish-release then
+  refuses ("no GitHub release …" or "… has no …apk"), and no later run can
+  publish them. Leave the tag as it is, raise `versionCode` (and
+  `versionName`) and the version in a new release commit, and release
+  that.
+- Never delete or move a tag, or the release, to "start over".
+
+### On the owner's PC (the fallback)
+
+Everything below also runs locally, with the keys on the owner's PC; the
+workflow runs the same scripts. In order:
 
 1. **The release commit** on `main`, pushed: the version in every copy
    (the test above), the release notes, and `docs/release/v<version>.md`
@@ -655,7 +719,9 @@ The finished release holds the two APKs (only when the app changed),
 `DomovoiSetup.exe` (not code-signed), `DomovoiTray.exe`, `DomovoiSatelliteSetup.exe`, `SHA256SUMS`,
 and notes naming the tag's commit, how the Setup was built and the app's
 signing certificate. Neither script
-touches a keystore or a password outside `release.ps1`'s own prompts.
+touches a keystore or a password outside `release.ps1`'s own prompts (or,
+in the workflow, its `-KeystoreCredential`); finish-release never reads the
+release key (ssh-keygen does, or asks the agent for it).
 
 ---
 
