@@ -9,6 +9,7 @@ import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.decode
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayKind
+import com.domovoi.app.player.PlayTarget
 import com.domovoi.app.player.PlayerController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -29,12 +30,15 @@ import kotlinx.serialization.json.put
 internal interface PhoneQueue {
     /** Something is queued here already. */
     val hasQueue: Boolean
+    /** The room this phone casts to now, or null while it plays here. */
+    val castsTo: String?
     fun enqueue(items: List<PlayItem>)
     fun playNext(items: List<PlayItem>)
 }
 
 internal fun PlayerController.asPhoneQueue(): PhoneQueue = object : PhoneQueue {
     override val hasQueue get() = queue.value.isNotEmpty()
+    override val castsTo get() = (target.value as? PlayTarget.Room)?.roomId
     override fun enqueue(items: List<PlayItem>) = this@asPhoneQueue.enqueue(items)
     override fun playNext(items: List<PlayItem>) = this@asPhoneQueue.playNext(items)
 }
@@ -49,9 +53,11 @@ internal class QueueAdder(
     /**
      * [tracks] to [target]: after what plays now ([next]) or at the end.
      * A room gets them through its queue routes; the phone queues them here.
-     * While this phone casts to the room and keeps a queue of its own for it
+     * While this phone casts to THAT room and keeps a queue of its own for it
      * (what a re-cast starts from), that queue gets them too, as the web's
-     * does — never an empty one, which would start the phone playing.
+     * does — never an empty one, which would start the phone playing, and
+     * never while it plays here or casts elsewhere (an add from another
+     * room's queue is that room's alone, as on the web's Room queue tab).
      * Returns how many the target took; a room's refusal throws.
      */
     suspend fun add(target: QueueTarget, tracks: List<LibraryTrack>, next: Boolean): Int {
@@ -65,7 +71,7 @@ internal class QueueAdder(
             is QueueTarget.Room -> {
                 val ids = tracks.map { it.id }
                 val took = if (next) room.playNext(target.roomId, ids) else room.add(target.roomId, ids).size
-                if (phone.hasQueue) {
+                if (phone.hasQueue && phone.castsTo == target.roomId) {
                     if (next) phone.playNext(items) else phone.enqueue(items)
                 }
                 took
@@ -86,7 +92,7 @@ internal class QueueAdder(
             val tracks = tracksOf(row)
             if (tracks.isEmpty()) return queueNothingToAdd(label)
             val n = add(target, tracks, next)
-            queueAddedNote(label, if (target is QueueTarget.Room) n else tracks.size, next)
+            queueAddedNote(label, if (target is QueueTarget.Room) n else tracks.size, next, (target as? QueueTarget.Room)?.roomId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -99,6 +105,7 @@ internal class QueueAdder(
         fun forApp(app: AppContainer) = QueueAdder(
             phone = object : PhoneQueue {
                 override val hasQueue get() = app.player.queue.value.isNotEmpty()
+                override val castsTo get() = (app.player.target.value as? PlayTarget.Room)?.roomId
                 override fun enqueue(items: List<PlayItem>) = app.player.enqueue(items)
                 override fun playNext(items: List<PlayItem>) = app.player.playNext(items)
             },

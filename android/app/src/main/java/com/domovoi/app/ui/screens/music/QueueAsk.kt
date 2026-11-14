@@ -140,9 +140,11 @@ internal fun queueSearchFailed(err: String) = "Couldn't search the library: $err
 internal fun queueNothingToAdd(label: String) = "Nothing to add from $label."
 internal fun queueAddFailed(label: String, err: String) = "Couldn't add $label: $err"
 
-/** "Playing next: X" / "Added: X", with "(n songs)" for more than one. */
-internal fun queueAddedNote(label: String, count: Int, next: Boolean): String =
-    (if (next) "Playing next" else "Added") + ": $label" + (if (count > 1) " ($count songs)" else "")
+/** "Playing next: X" / "Added: X", with "(n songs)" for more than one;
+ *  "… in <room>: X" for a room's queue (the web's Room queue tab and cast add). */
+internal fun queueAddedNote(label: String, count: Int, next: Boolean, room: String? = null): String =
+    (if (next) "Playing next" else "Added") + (room?.let { " in $it" } ?: "") + ": $label" +
+        (if (count > 1) " ($count songs)" else "")
 
 /** TalkBack names of a row's two buttons (the web's aria-labels). */
 internal fun playNextLabel(label: String) = "play $label next"

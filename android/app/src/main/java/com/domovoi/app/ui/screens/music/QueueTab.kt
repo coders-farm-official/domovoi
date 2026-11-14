@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -59,6 +60,7 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.runAction
+import com.domovoi.app.net.OnStateEvents
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
@@ -89,11 +91,40 @@ import kotlinx.coroutines.launch
  * this", no saving, no clear. Nothing of Up next shows without a session.
  */
 
+/** What re-reads a room's queue (only when that room's own changed: [RoomPlayWatch]). */
+private val NOW_PLAYING_EVENTS = setOf("music.now_playing.changed")
+
 /** The tab's own state, hoisted out of the lazy items so it survives the
  *  header scrolling out of composition. Remembered by [rememberRoomQueue]. */
 @Stable
 internal class RoomQueueSelection(initialRoom: String?) {
-    var room by mutableStateOf(initialRoom)
+    private var picked by mutableStateOf(initialRoom)
+
+    /** The room on show. Picking another starts its list at the top again
+     *  ([shown], [earlier]) and forgets what its now-playing was ([watch]). */
+    var room: String?
+        get() = picked
+        set(value) {
+            if (value != picked) {
+                shown = ROOM_QUEUE_ROWS_STEP
+                earlier = false
+                watch.reset()
+            }
+            picked = value
+        }
+
+    /** Rows drawn from the window's start ([roomQueueWindow]): more as the list scrolls. */
+    var shown by mutableStateOf(ROOM_QUEUE_ROWS_STEP)
+
+    /** The played songs folded away above the playing one were asked for. */
+    var earlier by mutableStateOf(false)
+
+    /** Which now-playing events re-read this room's queue. */
+    val watch = RoomPlayWatch()
+
+    /** The next [ROOM_QUEUE_ROWS_STEP] rows, once the drawn ones' end is reached. */
+    fun showMore() { shown += ROOM_QUEUE_ROWS_STEP }
+
     var busy by mutableStateOf(false)
     var confirmClear by mutableStateOf(false)
     /** Picks a "less like this" took back, gone from the view at once. */
@@ -119,6 +150,9 @@ internal class RoomQueueModel(
     val saveQueue: () -> Unit = {},
     val setAutoplay: (Boolean) -> Unit = {},
     val lessLike: (QueueItem) -> Unit = {},
+    /** [queue] is the server's answer for this room (not a placeholder while
+     *  the read is out): adding waits for it ([roomCanAdd]). */
+    val answered: Boolean = true,
 )
 
 /** The secondary line of a room-queue row: artist · length · added by. */
@@ -156,13 +190,21 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
 
     val rq = remember(app) { RoomQueueApi(app.api) { app.prefs.deviceId } }
     val room = sel.room
-    val queueState = rememberApi(room, eventTypes = setOf("music.now_playing.changed")) {
-        val r = room ?: return@rememberApi RoomQueue()
-        rq.read(r)
+    // Each read carries the server and room it was asked of: the answer is
+    // shown only while they are still the ones on screen ([roomQueueFor]).
+    val queueState = rememberApi(room) { a ->
+        val r = room ?: return@rememberApi null
+        val at = a.prefs.serverUrl.value
+        RoomQueueRead(at, r, rq.read(r))
+    }
+    val refreshNow by rememberUpdatedState(queueState.refresh)
+    // Re-read on now-playing only when THIS room's state or song changed
+    // ([RoomPlayWatch]): the event carries every room's.
+    OnStateEvents(NOW_PLAYING_EVENTS) { ev ->
+        if (sel.watch.shouldReread(app.prefs.serverUrl.value, sel.room, ev.payload)) refreshNow()
     }
     // The rest of a long playlist arrives after the play's answer: read
     // again when asked ([RoomQueueNudges], a few times at most).
-    val refreshNow by rememberUpdatedState(queueState.refresh)
     LaunchedEffect(room, server) {
         RoomQueueNudges.nudges.collect { (s, r) -> if (s == server && r == room) refreshNow() }
     }
@@ -202,14 +244,17 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
         }
     }
 
-    val queue = queueState.data ?: RoomQueue()
+    val answer = roomQueueFor(queueState.data, server, room)
+    val queue = answer ?: RoomQueue()
     val items = visibleRoomItems(queue, sel.dropped, server, room)
     val controls = roomQueueControls(queue)
     val sessionId = queue.sessionId
     return RoomQueueModel(
         sel = sel,
         queue = queue,
-        loading = queueState.loading,
+        // Another room's answer held while this room's read is out is still loading.
+        loading = queueState.loading || (answer == null && room != null && queueState.error == null),
+        answered = answer != null,
         remove = { item -> edit("remove", { rq.remove(it, listOf(item.songId)) }) { "removed \"${item.title ?: "track"}\"" } },
         move = { item, to -> edit("move", { rq.move(it, item.songId, roomMoveTarget(items, to)) }) },
         clear = { edit("clear", { rq.clear(it) }) { "cleared ${sel.room}'s queue" } },
@@ -265,9 +310,12 @@ internal fun LazyListScope.queueTab(rooms: List<String>, rq: RoomQueueModel, pic
     item(key = "room-queue-head") { RoomQueueHeader(rooms, rq, picker) }
     if (rooms.isEmpty()) return
 
+    // Search to add, at the top: only where adding works ([roomCanAdd]);
+    // otherwise the header says the queue's blocked_reason. Keyed by the
+    // room: what was typed for one room's queue is not offered to another.
     val room = rq.sel.room
-    if (room != null && rq.queue.editable) {
-        item(key = "room-queue-add") { QueueAddBox(QueueTarget.Room(room), modifier = Modifier.padding(top = 4.dp)) }
+    if (room != null && roomCanAdd(rq.answered, rq.queue)) {
+        item(key = "room-queue-add-$room") { QueueAddBox(QueueTarget.Room(room), modifier = Modifier.padding(top = 4.dp)) }
     }
 
     val items = rq.items
@@ -280,24 +328,47 @@ internal fun LazyListScope.queueTab(rooms: List<String>, rq: RoomQueueModel, pic
             )
         }
         else -> {
-            val lines = roomQueueLines(rq.queue, items)
+            // A whole playlist can be the room's queue (~1,500 songs): the
+            // rows are drawn ROOM_QUEUE_ROWS_STEP at a time, more as the list
+            // scrolls to the end of them ([roomQueueWindow]). Entries keep
+            // their index in the whole queue.
+            val lines = roomQueueWindow(rq.queue, items, rq.sel.shown, rq.sel.earlier)
+            val picks = roomUpNextRows(items).toHashSet()
             items(
                 count = lines.size,
                 key = { i ->
                     when (val line = lines[i]) {
                         RoomQueueLine.UpNextHead -> "room-queue-up-next"
                         is RoomQueueLine.Entry -> "room-queue-${items[line.index].songId}-${line.index}"
+                        is RoomQueueLine.ShowEarlier -> "room-queue-earlier"
+                        is RoomQueueLine.ShowMore -> "room-queue-more"
                     }
                 },
-                contentType = { i -> if (lines[i] is RoomQueueLine.UpNextHead) "room-queue-up-next" else "room-queue-row" },
+                contentType = { i ->
+                    when (lines[i]) {
+                        RoomQueueLine.UpNextHead -> "room-queue-up-next"
+                        is RoomQueueLine.Entry -> "room-queue-row"
+                        is RoomQueueLine.ShowEarlier, is RoomQueueLine.ShowMore -> "room-queue-more"
+                    }
+                },
             ) { i ->
                 when (val line = lines[i]) {
                     RoomQueueLine.UpNextHead -> RoomUpNextHead(rq, room.orEmpty())
+                    is RoomQueueLine.ShowEarlier -> RoomQueueMoreButton(showEarlierLabel(line.count)) { rq.sel.earlier = true }
+                    is RoomQueueLine.ShowMore -> {
+                        // Reached by scrolling: the next rows come in on their
+                        // own (keyed by how many are drawn, so a screen the new
+                        // rows don't fill asks again); the button is for
+                        // whoever doesn't scroll (TalkBack, a keyboard).
+                        val drawn = rq.sel.shown
+                        LaunchedEffect(room, drawn) { if (rq.sel.shown == drawn) rq.sel.showMore() }
+                        RoomQueueMoreButton(showMoreLabel(line.count)) { rq.sel.showMore() }
+                    }
                     is RoomQueueLine.Entry -> {
                         val idx = line.index
                         val item = items[idx]
                         val editable = rq.queue.editable && !rq.sel.busy
-                        val pick = item.isPick && idx in roomUpNextRows(items)
+                        val pick = item.isPick && idx in picks
                         RoomQueueRow(
                             item = item,
                             index = idx,
@@ -317,6 +388,14 @@ internal fun LazyListScope.queueTab(rooms: List<String>, rq: RoomQueueModel, pic
                 }
             }
         }
+    }
+}
+
+/** "show more (N more)" / "show N played songs": a quiet full-width button. */
+@Composable
+private fun RoomQueueMoreButton(label: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted)
     }
 }
 

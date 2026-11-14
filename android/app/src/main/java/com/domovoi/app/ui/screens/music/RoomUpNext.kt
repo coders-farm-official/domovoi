@@ -106,6 +106,10 @@ internal fun roomUpNextLine(q: RoomQueue, waiting: Int): String? {
 internal sealed interface RoomQueueLine {
     data object UpNextHead : RoomQueueLine
     data class Entry(val index: Int) : RoomQueueLine
+    /** The [count] played songs folded away above the drawn rows ([roomQueueWindow]). */
+    data class ShowEarlier(val count: Int) : RoomQueueLine
+    /** The [count] rows past the drawn ones ([roomQueueWindow]). */
+    data class ShowMore(val count: Int) : RoomQueueLine
 }
 
 /**

@@ -101,6 +101,11 @@ class QueueAddSearchTest {
 
         assertEquals("Added: Lantern", queueAddedNote("Lantern", 1, next = false))
         assertEquals("Playing next: Jazz songs (25 songs)", queueAddedNote("Jazz songs", 25, next = true))
+        // A room's: the web's Room queue tab (music.jsx addToRoom) says the room.
+        assertEquals("Added in office: Lantern", queueAddedNote("Lantern", 1, next = false, room = "office"))
+        assertEquals("Playing next in office: Jazz songs (25 songs)", queueAddedNote("Jazz songs", 25, next = true, room = "office"))
+        val musicJsx = listOf("../../web/static/music.jsx", "../web/static/music.jsx").map(::File).first { it.isFile }.readText()
+        assertTrue("\${next ? 'Playing next' : 'Added'} in \${room}: \${label}" in musicJsx)
         assertEquals("Jazz songs", queueFindLabel(QueueFind.Genre(GenreRow("jazz", "Jazz", 1))))
         assertEquals("that song", queueFindLabel(QueueFind.Song(LibraryTrack(id = 1))))
         assertEquals("genre · 1 song, shuffled", queueFindSub(QueueFind.Genre(GenreRow("jazz", "Jazz", 1))))
@@ -199,9 +204,54 @@ class QueueAddSearchTest {
     @Test fun whileCastingThePhonesOwnQueueForTheRoomGetsItToo() = runBlocking {
         val r = CastRig().also { rig = it }
         r.player.playItems(libraryQueue("one", "two"))
+        r.room("office", "play", "one", 0.0)
+        r.player.castTo("office")
+        assertEquals(PlayTarget.Room("office"), r.player.target.value)
         answers["/api/music/queue/office/add"] = json("""{"queued":[{"song_id":91}]}""")
         adder(r).add(QueueTarget.Room("office"), listOf(lantern), next = false)
         assertEquals(listOf(101L, 102L, 12L), r.player.queue.value.map { it.id })
+    }
+
+    @Test fun anAddFromARoomsQueueIsThatRoomsAloneWhileThePhonePlaysHere() = runBlocking {
+        // The room queue's search (2026-11-12): kitchen's queue gets the song,
+        // the phone's own queue (playing here, not cast) never does.
+        val r = CastRig().also { rig = it }
+        r.player.playItems(libraryQueue("one", "two"))
+        answers["/api/music/queue/kitchen/add"] = json("""{"queued":[{"song_id":91}]}""")
+        val said = adder(r).addFind(QueueTarget.Room("kitchen"), QueueFind.Song(lantern), next = true)
+        assertEquals("Playing next in kitchen: Lantern", said)
+        assertEquals(listOf(101L, 102L), r.player.queue.value.map { it.id })
+        assertEquals(
+            listOf("""POST /api/music/queue/kitchen/add {"track_ids":[12],"device_id":"phone-7","where":"next"}"""),
+            posts(),
+        )
+    }
+
+    @Test fun anAddToAnotherRoomThanTheCastIsThatRoomsAlone() = runBlocking {
+        val r = CastRig().also { rig = it }
+        r.player.playItems(libraryQueue("one", "two"))
+        r.room("office", "play", "one", 0.0)
+        r.player.castTo("office")
+        answers["/api/music/queue/kitchen/add"] = json("""{"queued":[{"song_id":91}]}""")
+        adder(r).add(QueueTarget.Room("kitchen"), listOf(lantern), next = false)
+        assertEquals(listOf(101L, 102L), r.player.queue.value.map { it.id })
+    }
+
+    @Test fun aGenreFromARoomsQueueAddsAShuffledTwentyFiveThere() = runBlocking {
+        val r = CastRig().also { rig = it }
+        val many = (1..60).joinToString(",") { """{"id":$it,"title":"t$it"}""" }
+        answers["/api/music/library?genre=jazz&limit=200"] = json("""{"items":[$many]}""")
+        answers["/api/music/queue/kitchen/add"] = json(
+            """{"queued":[${(1..25).joinToString(",") { """{"song_id":${900 + it}}""" }}]}""",
+        )
+        val said = adder(r, shuffler = { it.reversed() })
+            .addFind(QueueTarget.Room("kitchen"), QueueFind.Genre(GenreRow("jazz", "Jazz", 60)), next = false)
+        assertEquals("Added in kitchen: Jazz songs (25 songs)", said)
+        val ids = (60 downTo 36).joinToString(",")
+        assertEquals(
+            listOf("""POST /api/music/queue/kitchen/add {"track_ids":[$ids],"device_id":"phone-7","where":"end"}"""),
+            posts(),
+        )
     }
 
     @Test fun playNextInARoomIsOneAddThatSaysNext() = runBlocking {
