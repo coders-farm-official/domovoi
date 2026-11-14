@@ -183,9 +183,14 @@ or in the cloud; they override your tool's defaults.
   pushed. It fails on NEW test failures only; one listed in
   `domovoi/tests/known_failures.toml` is reported, not fatal.
   docs/CONTRIBUTING.md, "CI", says how to read and re-run a failure.
-- **No secrets in Actions.** Release signing and publishing stay local,
-  with the owner's keys; never add a signing key, keystore or token to a
-  workflow or to the repository's secrets.
+- **Signing secrets live only in the `release` environment.** Releases
+  are signed and published by `.github/workflows/release.yml`, whose
+  signing job runs in the GitHub environment `release`: the owner must
+  approve each run, and only `main` may use it (owner decision
+  2026-11-14). Never add a signing key, keystore, passphrase or token to
+  any other workflow, job or environment, or to the repository-level
+  secrets; never print or echo one. The local release scripts stay the
+  fallback.
 - **Android changes: an APK the owner can install.** CI uploads a debug
   APK (artifact `domovoi-debug-apk`) for every push that touches the app.
   To hand one over without waiting for CI, build the debug APK in the
