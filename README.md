@@ -97,239 +97,46 @@ We build Domovoi in public. Here's where it stands.
 
 **Works today**
 
-- **The server** listens, thinks and speaks on your own machine: Whisper for
-  speech, two local Ollama models (and a small vision model for pictures in
-  chat), and Piper for the voice. It runs on Linux or Windows, with an NVIDIA
-  GPU or on CPU alone, and on Ubuntu 26.04 one script installs all of it
-  ([Linux host](docs/LINUX_HOST.md) · [CPU host](docs/CPU_HOST.md)). If its
-  core ever freezes, it ends itself and systemd starts it again, and an
-  admin can restart a core that has stopped answering from the dashboard;
-  the Rooms page (Settings → Household → Rooms) then says the core is
-  down instead of showing every room offline ([the loop watchdog](docs/LINUX_HOST.md#the-loop-watchdog)).
-  Its journal never holds the household token, and what people say shows
-  up there only as a word count unless you turn on debug logging
-  ([data at rest](docs/SECURITY_PRIVACY.md#data-at-rest)). A new
-  install's database gets up to ten minutes for its first start (a slow
-  disk once made that fail), and when Postgres can't start, its own last
-  lines go to the journal and the install log, passwords blanked.
-- **Voice history is kept 90 days** by default, not for ever: what people
-  say to Domovoi and what it answered. Settings → Household → People →
-  Voice history sets 30 days, 90 days, a year or forever, and an admin can
-  delete all of it. "Forget me" (after a yes) and forgetting a person in
-  Settings → Household → People
-  delete what that person said too
-  ([voice history](docs/SECURITY_PRIVACY.md#voice-history-whats-kept-for-how-long)).
-- **AI chat and questions are optional.** Settings → Chat & AI → Models
-  has a household switch: off, nothing asks a language model, voice
-  commands keep working on their usual phrases, and speech recognition, the
-  voices and the wake word stay (chat is hidden on the dashboard, and the
-  app keeps only the chats on the phone itself). Both installers ask once
-  whether to include it, with the download size. A server installed
-  before stays as it was, with AI on.
-- **A shorter sidebar.** Chat, then **Media** (Music, Podcasts,
-  Audiobooks, Videos and plugin pages such as Stations) and **Tools**
-  (News, Calendar, Lists, Files), each opening in place, then Plugins. People
-  moved into Settings → Household; `#people` still opens it.
-- **Settings in groups, with search and one Health page.** Household
-  (Rooms, People, Phones & browsers, Media folders, Printers & scanners),
-  Voice, Chat & AI, Privacy, Documents and System (App layout lives here),
-  with a search box ("wake", "token"); the app's Settings uses the same
-  groups and names, and old bookmarks still land. Saving a setting that
-  needs a restart asks **Restart now** or **Later**. System → Health lists every check, green or
-  not (server, updates, rooms, plugins, internet, containers), and Home's
-  "needs attention" rows open their part of it.
-- **Printing and scanning on network printers,** with no drivers: any
-  printer or scanner that works with AirPrint, IPP Everywhere or Mopria
-  (eSCL, "AirScan", for scanning). Settings → Household → Printers &
-  scanners finds them, adds one by name or address and prints a test page;
-  Print sits on PDFs, pictures, text, markdown and spreadsheets in Files
-  and Documents, Scan (several pages into one PDF) in Documents → Scans,
-  and you can say "print my cover letter", "how much ink is left" or
-  "scan this to Documents". USB printers and printers that need a maker's
-  driver are not supported ([security](docs/SECURITY_PRIVACY.md#printers-and-scanners)).
-- **Chats keep a history.** Each chat names itself (its first five words
-  at once, then a short title the model writes), and can be renamed,
-  archived and searched on the dashboard and in the app; in the app Chat
-  opens on that history (pin, share, swipe to archive, "try again" on the
-  last reply), covering the chats on the phone and on the home server.
-- **Domovoi is its own help desk.** Ask in chat or by voice how to do
-  something ("how do I add a room?") and it answers from its own manual,
-  FAQ, troubleshooting guide and installed plugins' help, naming the
-  section, or says the manual doesn't cover it. The dashboard has a **?** on
-  every page, "ask Domovoi about this" on an error, and **Report a problem**,
-  which builds a redacted summary for you to post yourself (nothing is
-  sent); the app has "Ask Domovoi for help" in Settings → System → About &
-  updates.
-  By voice it can send the steps to the asker's own phone. With AI features
-  off, help is a plain search of the manual.
-- **Ask a chat about a document.** The paperclip in chat takes a PDF, Word,
-  OpenDocument, Excel, CSV, text or markdown file, in a home-server chat and
-  in a chat on the phone (read on the phone, which keeps it there); the
-  answer names the pages or sections it came from, a press shows the
-  passage, and when the document doesn't say, the answer is "I couldn't
-  find that". Files → Documents has "Ask about this document". Scanned
-  pages (pictures of text) are not read yet. **"Summarize" works on long
-  documents** too: Domovoi reads them in parts and combines the notes, with
-  "reading part 3 of 8 · about 1 min left" and a **stop** that keeps what
-  was read (**carry on** reads the rest). On the home server the job goes on
-  if you leave the page, and after a restart it asks before reading more;
-  on a phone it runs while Chat is open and picks up where it left off.
-  Every point in the summary cites a page the parts' notes cited.
-- **Chat says so before a shaky result.** Where Domovoi is measured to be
-  weak (an exact sum, a whole-document rewrite, scanned pages, a blurry
-  photo, a language it isn't tested in), a heads-up card says so first and
-  offers what works; **calculate exactly** pulls the numbers out of the
-  document and lets the app do the arithmetic, and refuses anything
-  ambiguous rather than guess. Each card has "don't warn me about this
-  again", and Settings → Chat & AI → Chat has a master switch.
-- **Chat writes resumes, cover letters and letters.** "Write a cover letter
-  for the warehouse job" gives a draft card; "shorter" or "more formal"
-  makes a new version (every version is kept and can be reopened, compared
-  or edited by hand). Saving makes a .docx or PDF that a job site's
-  applicant-tracking system can read back, into Documents → From Chat on the
-  home server or the phone's Chat documents, and "print it" prints on a
-  network printer. Writing runs on the home server or on the phone itself.
-- **Photograph a letter and ask what it says.** In a home-server chat, and
-  in a phone chat (read on the phone where its GPU can run the picture
-  model, otherwise by the home server through "+" → "a letter for the home
-  server"), a photo of a letter or a bill gets a plain-words explanation of
-  who it is from, what it is about and what to do. Every date and amount is
-  shown inside the letter's own sentence, quoted as the picture model read
-  it; the model's own sentences carry no figures. A blurry or handwritten
-  photo gets its heads-up card first. The phone never keeps the photo; the
-  text read from it stays with that chat only, so you can ask about it
-  afterwards.
-- **Read documents aloud, and take a letter, by voice.** "Read me the
-  lease" reads a PDF, Word, OpenDocument, text or markdown file from the
-  household's Documents folder aloud in any room, a page or so at a time
-  (stop, pause, start again, read that again); it uses no language model.
-  "Take a letter to the landlord" keeps the room listening until "end of
-  letter" or the room goes quiet, writes it up, and saves it as a Word file
-  in Documents → From Chat ("Saved as ..."); it is never sent anywhere.
-- **Write documents and spreadsheets, together.** Documents → New →
-  Document opens a word processor in the page (headings, lists, tables,
-  colours, fonts and sizes) that saves by itself; photos paste or drop in
-  and can be resized, captioned, cropped and rotated. 73 open-licence
-  fonts come with it and work offline, and an admin can add more for the
-  house when the internet setting allows. Several household devices can
-  edit one document at once, with each other's names and cursors, and
-  History brings back an earlier version. Download gives PDF, Word or
-  Markdown; Markdown and Word files open in the same editor. Spreadsheets
-  open in a sheet editor that keeps formulas, formatting and several
-  sheets in the same `.xlsx`; sheets aren't edited together (it says who
-  else has one open, and a second save asks which copy to keep), a
-  workbook with charts or pictures opens read-only, and a sheet shows its
-  first 5,000 rows and 100 columns. The app opens both in the same
-  editors. In Files, Documents lists only documents, spreadsheets, PDFs,
-  drawings and text; everything else saved in that shared folder (installers,
-  archives, pictures) sits under **Other**, download-only, in the web and the
-  app.
-- **Chat can look things up, with your permission.** Say "look up …",
-  "what does this page say: https://…", or ask something Domovoi doesn't
-  know. It searches its own manual and an offline library (Kiwix) first;
-  before anything goes online a card shows the exact words and where they
-  go: **Allow once**, **Allow in this chat** or **Not now**. Wikipedia and
-  Wikidata come first (through the local search helper, or directly), or
-  your own SearXNG or Brave Search key (Settings → Chat & AI → Search). The
-  sources under an answer are listed by Domovoi, not the model, and a page's
-  text can't make it do anything. A home that answered "No" to the internet
-  question refuses every lookup that would leave the house, and "Always
-  allow internet" starts off. A phone away from home looks up Wikipedia
-  directly.
-- **Everyday voice answers locally:** an alarm or reminder at a clock time
-  ("wake me up at 7" is the next 7 o'clock), "what can you do", and
-  what's on your calendar each have their own handler.
-- **Updates from the dashboard,** on a release channel. Settings → System →
-  About & updates names the release the server runs (`1.2.1`, or `1.2.1 +
-  14 (abc1234)` between releases) and pulls and applies updates, rolling
-  back by itself when the new code doesn't come up healthy. Root only
-  ever runs a verified copy of the commit, never the files in the checkout
-  ([the update verifier](docs/LINUX_HOST.md#the-update-verifier)). New
-  installs follow `stable`, releases only; servers installed before stay on `main`, every change as
-  it lands; an admin switches in the same card
-  ([release channels](docs/LINUX_HOST.md#release-channels)).
-- **Raspberry Pi satellites** put a voice in every room, with wake word,
-  barge-in, and intercom and drop-in between rooms. The dashboard prepares
-  a Pi's SD card, and you finish its setup from your phone over the Pi's
-  own setup Wi-Fi (plain WPA2, so phones that refused it, some Samsungs
-  among them, join). Any room can start music, a podcast or an audiobook in
-  another ("play some jazz in the garage"), and two people with the same
-  name are never guessed between: a satellite asks "Is that you?" instead.
-  A satellite whose Wi-Fi drops tries to rejoin after 2 minutes, and
-  restarts itself at about 10 if that keeps failing; one missing a system
-  package it needs installs it again at its next boot (from its own SD card
-  when your server stays off the internet), and the Health card says so
-  until it is back
-  ([self-healing](satellite/PROVISIONING.md#83-reboot-helper-and-hardware-watchdog-self-healing-while-nobody-is-home)).
-  The setup page joins WPA2/WPA3 mixed routers, open networks and hidden
-  ones (type the name under "Not in the list?"), says why a join failed
-  (password, network not found, timeout, no address, WPA3-only,
-  enterprise, WEP), and a satellite follows its router if the router's
-  security changes later.
-- **No GPL or LGPL libraries in the server's Python code:** tag reading
-  and the music player's client are Domovoi's own, and audio is encoded by
-  the system's `ffmpeg`, run as a program. Every model, voice and dataset
-  a server, the app or the wake-word trainer downloads is listed with its
-  licence in [docs/LICENSES.md](docs/LICENSES.md); two defaults aren't
-  permissive, the `hey_jarvis` wake word (non-commercial) and the answer
-  model `llama3.2:3b` (the Llama 3.2 Community License). Settings → System →
-  About & updates links to it, on the dashboard and in the app.
-- **The web dashboard** manages all of it, from plugins to training your own
-  wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
-  CPU). After you sign in as admin, reloading the page keeps you signed in
-  for an hour. Its **user manual** (in the app too, in nine topics with a
-  search box) has a map of everything Domovoi does, what to say for each,
-  and a getting-set-up checklist that ticks itself; a new house's Home page points into it. Song recognition
-  takes its AcoustID key in Settings → System → Advanced, with a button to
-  test it. When a server no longer accepts the household token a browser
-  or phone holds (a reinstall, a new token), the dashboard and the app say
-  so and how to pair again, instead of failing page by page, and a page
-  opened before you sign in fills in once you do, without a reload. Its
-  dark theme is readable throughout (text and icons are checked for
-  contrast in both themes, plugin pages included), and a plugin's pages
-  sit in a frame with the plugin's name, publisher and colour and a link
-  to its row on the Plugins page. Videos and Files show a file uploaded
-  from another device without leaving the page, and each has a Rescan
-  button. Audiobooks show their covers (read from the book's own files,
-  never looked up online), a book made of one file per chapter plays
-  chapter after chapter in the browser and in a room, a room saves its
-  place in a book as it plays, and a book deleted from the folder leaves
-  the list.
-- **The Android app** brings the dashboard, a music player, chat and drop-in
-  to your phone, on Android 8.0 or later, 32-bit phones included
-  ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
-  still plays your phone's own music, videos and files. It is on
-  [Google Play](https://play.google.com/store/apps/details?id=com.domovoi.app),
-  and a signed release
-  ([v1.2.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0))
-  on GitHub; your server can hand it to phones: press **Download the
-  app to this server** once on the dashboard, and a phone installs it from
-  your server's own page by scanning a QR code
-  ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
-  From 1.0.0-rc2 on, the app says when your server holds a newer release
-  than the phone has, and opens the server's page for the update (never
-  for a Google Play install, which updates itself). Phone photos in HEIC
-  (or AVIF) send fine in chat: the app turns them into a JPEG on the phone
-  first (HEIC from Android 9, AVIF from Android 12), and that copy leaves
-  the photo's location and camera details on the phone. Its library
-  screens (Videos, Files, Podcasts, Audiobooks) refresh when you pull
-  them down, a video uploaded from the phone shows on the server's side
-  straight away, and screens a plugin provides (Stations, Images) carry
-  the plugin's frame and colour, as on the dashboard. **Chat is one list**:
-  the home server's chats (shared with the household) and the ones on the
-  phone itself, each marked with where it runs; away from home it lists the
-  phone's own and says the server's show when you're home. The side menu
-  and top bar clear the clock, a camera cutout and the navigation bars on
-  tablets and phones turned sideways.
-  **Audiobooks on the phone** (since 1.0.0-rc3):
-  save a book to the phone, its size shown first, into the app's own
-  storage; the download pauses when you leave home and finishes by itself
-  when the server is back in reach. Saved books play with no server, in
-  airplane mode too, chapters included, and with no server at all the app
-  shows them in an Audiobooks tab once a book is saved. The phone keeps one place per book and sends it
-  to the server when it connects, and offers to continue from a room that
-  got further ("Continue from the kitchen"). From the phone you can also
-  add books to the server, and an admin can remove one.
+What a household gets. Each line links to the page that covers it; what
+changed when is in the [release notes](docs/RELEASE_NOTES.md).
+
+- **Music in every room:** your library, podcasts, audiobooks and videos,
+  a shared queue per room, and [Up next](scripts/manual/manual.md#up-next)
+  to keep it playing ([music and media](scripts/manual/manual.md#music-and-media)).
+- **Voice in every room:** Raspberry Pi rooms with a wake word, barge-in,
+  intercom and drop-in, and wake words you train yourself
+  ([rooms and devices](scripts/manual/manual.md#rooms-and-devices) ·
+  [satellite hardware](docs/SATELLITE_HARDWARE.md)).
+- **Everyday answers by voice:** alarms, reminders, the calendar, lists and
+  the news, without a language model ([things to say](scripts/manual/manual.md#things-to-say)).
+- **Files, photos and documents:** a shared Files page, a word processor and
+  spreadsheets, and network printing and scanning with no drivers
+  ([files, printing and calendar](scripts/manual/manual.md#files-printing-and-calendar)).
+- **Plugins for more media:** radio stations and other extras, installed
+  from the dashboard ([plugins](#plugins)).
+- **Your phone:** the Android app (8.0 or later) brings the dashboard, music,
+  chat and drop-in, and plays the phone's own media with no server
+  ([your phone](scripts/manual/manual.md#your-phone) ·
+  [Google Play](https://play.google.com/store/apps/details?id=com.domovoi.app)).
+- **Linux or Windows, with updates from the dashboard:** NVIDIA or CPU
+  only, a one-script Ubuntu install, release channels and automatic
+  rollback ([Linux host](docs/LINUX_HOST.md) · [CPU host](docs/CPU_HOST.md)).
+- **Keeps itself running:** a frozen core restarts itself, and one Health
+  page lists every check ([keeping it running](scripts/manual/manual.md#keeping-it-running)).
+- **Private and local-first:** speech, voices and models run on your
+  server, the internet is a yes / sometimes / no question, and voice
+  history is kept 90 days by default ([internet](docs/INTERNET.md) ·
+  [security and privacy](docs/SECURITY_PRIVACY.md)).
+- **Optional AI:** a chat that reads documents and photographed letters,
+  writes letters and looks things up only with your permission; one switch
+  turns it off and voice commands keep working
+  ([chat and help](scripts/manual/manual.md#chat-and-help) ·
+  [documents and letters](scripts/manual/manual.md#documents-and-letters)).
+- **Its own help desk:** ask how to do something, by voice or in chat, and
+  it answers from its manual ([asking for help](scripts/manual/manual.md#asking-domovoi-for-help)).
+- **Licences in the open:** no GPL or LGPL libraries in the server's Python
+  code, and every model and voice it downloads is listed with its licence
+  in [docs/LICENSES.md](docs/LICENSES.md).
 
 **Previews**
 

@@ -492,7 +492,7 @@
   {
    "id": "music-and-media",
    "title": "Music and media",
-   "subtitle": "music, podcasts, books, videos, news",
+   "subtitle": "music, podcasts, books, videos",
    "keywords": [
     "listen",
     "watch",
@@ -501,11 +501,11 @@
    ],
    "pieces": [
     "music",
+    "up-next",
     "lyrics",
     "podcasts",
     "audiobooks",
     "videos",
-    "news",
     "radio"
    ]
   },
@@ -562,7 +562,7 @@
   {
    "id": "chat-files-calendar",
    "title": "Files, printing and calendar",
-   "subtitle": "your household's files",
+   "subtitle": "your household's files, lists and news",
    "keywords": [
     "files",
     "photos",
@@ -572,14 +572,16 @@
     "scan",
     "lists",
     "to-do",
-    "shopping"
+    "shopping",
+    "news"
    ],
    "pieces": [
     "files",
     "documents",
     "printers",
     "calendar",
-    "lists"
+    "lists",
+    "news"
    ]
   },
   {
@@ -1626,6 +1628,9 @@
        "text": "Each queued song says which device added it."
       },
       {
+       "text": "When the songs you asked for run out, [Up next](node:up-next) keeps the music going with songs like them, in the browser and in a room."
+      },
+      {
        "text": "The [player](route:music/player) opens from the player bar at the bottom of any page: click the song's cover or title, the up chevron, or **open player** on a phone. The down chevron, Esc, Back or a swipe down on its header closes it. Under the controls, a panel shows **Lyrics**, the **Equalizer** or the **Queue**, or nothing (**Hide**); it starts on Lyrics when the song has words, and a tab you pick stays picked for the visit.",
        "only": "dashboard"
       },
@@ -1634,22 +1639,7 @@
        "only": "dashboard"
       },
       {
-       "text": "**Up next** keeps the music going in this browser. Play a song from a list (a playlist, an artist, an album, a genre, search results) and the rest of that list follows it, shuffled toward songs like the ones you let play, then round again. Play a song on its own and similar songs from your library follow it. Play or shuffle a whole list and it plays as it is; similar songs join when it is nearly over. They show in the **Queue** panel under **up next**, below the songs you asked for, each with why it was picked (\"same artist\", \"90s\", \"from road trip\", \"wildcard\"). Tap one to play it now, the thumbs-down for **less like this** (no more of that artist for this mix), or the x to remove it. Songs you add always go before them. Skipping a song in its first 30 seconds plays that artist less.",
-       "only": "dashboard"
-      },
-      {
-       "text": "The **autoplay** switch at the top of **up next** turns it off: the queue then stops at its end (a song played from a list still plays the rest of that list). This browser remembers it. With two people or more in the household, **for** picks whose taste the mix follows (**household** for everyone); it starts at the person this browser is (\"this is me\" on People) and is **household** on a shared screen.",
-       "only": "dashboard"
-      },
-      {
-       "text": "**Up next in a room.** A song played in a room — **play in** a room from a song's details, an artist's or a genre's room **play**, a cast from the browser or the app, or saying \"play\" a song or \"play something\" there — is followed by songs like it; the server adds them to the room's queue as it plays. A whole list played in a room plays as it is, and similar songs join when it is nearly over. Casting from the browser takes its up next along, and casting back brings it home. A radio stream, a podcast or a book ends it, and so does stopping or clearing the room, or two hours paused."
-      },
-      {
        "text": "**A playlist in a room.** Play or shuffle a playlist (or your favorites) in a room, or say \"play the road trip playlist\" there, and the whole playlist goes into the room's queue, from its first song. Edit it like any room queue: jump to a song, move, remove, add, play next. Songs like it join when it is nearly over (none with **autoplay** off). The queue is a copy: changing it never changes the playlist; **save as playlist** keeps it as a new one. Songs the music player can't find are skipped. \"Add <song> after this\" puts a song right after the one playing."
-      },
-      {
-       "text": "The room's picks show in [Music → Room queue](route:music/queue) under **up next**, each with why it was picked, with the room's **autoplay** switch and **less like this**; while you play in a room the player's **Queue** shows the room's up next; and a room's page in [Settings → Household → Rooms](route:settings/rooms) shows its next three under now playing, with **open queue**. Guests can play a song now, move and remove, but not switch autoplay or use less like this.",
-       "only": "dashboard"
       },
       {
        "text": "A MilkDrop visualizer: in the player, switch on **milkdrop visualizer**. It draws what this browser is playing (not a room), behind the panel. Its bar has previous and next preset, random, lock, the preset list, **panel** (how much the panel covers the picture, 30 to 100 %) and full screen (the picture alone; Esc leaves). The arrow keys change preset while the picture has the focus. Full screen and playing, the screen stays on.",
@@ -1695,6 +1685,62 @@
     "text": "More detail",
     "target": "doc:docs/FAQ.md#who-added-that-song-and-can-i-stop-someone-adding-more"
    }
+  },
+  {
+   "id": "up-next",
+   "topic": "music-and-media",
+   "title": "Up next",
+   "subtitle": "keeps the music going",
+   "keywords": [
+    "up next",
+    "autoplay",
+    "smart mix",
+    "mix",
+    "similar songs",
+    "less like this",
+    "listening history",
+    "keep playing",
+    "what plays next"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "When the songs you asked for run out, Up next keeps the music going with songs from your library like the ones you've been playing: in this browser, and in a room."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "**Up next** keeps the music going in this browser. Play a song from a list (a playlist, an artist, an album, a genre, search results) and the rest of that list follows it, shuffled toward songs like the ones you let play, then round again. Play a song on its own and similar songs from your library follow it. Play or shuffle a whole list and it plays as it is; similar songs join when it is nearly over. They show in the **Queue** panel under **up next**, below the songs you asked for, each with why it was picked (\"same artist\", \"90s\", \"from road trip\", \"wildcard\"). Tap one to play it now, the thumbs-down for **less like this** (no more of that artist for this mix), or the x to remove it. Songs you add always go before them. Skipping a song in its first 30 seconds plays that artist less.",
+       "only": "dashboard"
+      },
+      {
+       "text": "The **autoplay** switch at the top of **up next** turns it off: the queue then stops at its end (a song played from a list still plays the rest of that list). This browser remembers it. With two people or more in the household, **for** picks whose taste the mix follows (**household** for everyone); it starts at the person this browser is (\"this is me\" on People) and is **household** on a shared screen.",
+       "only": "dashboard"
+      },
+      {
+       "text": "**Up next in a room.** A song played in a room — **play in** a room from a song's details, an artist's or a genre's room **play**, a cast from the browser or the app, or saying \"play\" a song or \"play something\" there — is followed by songs like it; the server adds them to the room's queue as it plays. A whole list played in a room plays as it is, and similar songs join when it is nearly over. Casting from the browser takes its up next along, and casting back brings it home. A radio stream, a podcast or a book ends it, and so does stopping or clearing the room, or two hours paused."
+      },
+      {
+       "text": "The room's picks show in [Music → Room queue](route:music/queue) under **up next**, each with why it was picked, with the room's **autoplay** switch and **less like this**; while you play in a room the player's **Queue** shows the room's up next; and a room's page in [Settings → Household → Rooms](route:settings/rooms) shows its next three under now playing, with **open queue**. Guests can play a song now, move and remove, but not switch autoplay or use less like this.",
+       "only": "dashboard"
+      },
+      {
+       "text": "**Listening history** is what Up next learns from: a song heard to its end counts toward more like it, one skipped early counts against it (only time actually heard counts, not pauses or skipping ahead). Each person's listening is kept apart once their phone or browser says **this is me**; clearing it, or not keeping it at all, is under [What's kept, and forgetting](node:kept)."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "[Music and room queues](node:music) has the queue itself: adding, moving and saving songs."
+    }
+   ]
   },
   {
    "id": "lyrics",
@@ -1861,59 +1907,6 @@
     {
      "type": "p",
      "text": "Every video in your libraries, played in the browser or the app, resuming where you stopped. [Videos](route:videos)"
-    }
-   ]
-  },
-  {
-   "id": "news",
-   "topic": "music-and-media",
-   "title": "News",
-   "subtitle": "briefings and topics",
-   "keywords": [
-    "news",
-    "headlines",
-    "briefing",
-    "topics",
-    "feeds"
-   ],
-   "blocks": [
-    {
-     "type": "p",
-     "text": "A spoken briefing from the feeds your household picks, plus each person's own topics."
-    },
-    {
-     "type": "label",
-     "role": "how",
-     "text": "How to"
-    },
-    {
-     "type": "p",
-     "text": "[News](route:news) → **add topic**, or add a feed."
-    },
-    {
-     "type": "label",
-     "role": "say",
-     "text": "Try saying"
-    },
-    {
-     "type": "say",
-     "phrases": [
-      {
-       "text": "what's the news",
-       "handler": "news",
-       "path": "fast"
-      },
-      {
-       "text": "read me the headlines",
-       "handler": "news",
-       "path": "fast"
-      },
-      {
-       "text": "any news about the city council",
-       "handler": "news",
-       "path": "fast"
-      }
-     ]
     }
    ]
   },
@@ -3448,6 +3441,59 @@
       {
        "text": "what lists do I have",
        "handler": "lists",
+       "path": "fast"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "news",
+   "topic": "chat-files-calendar",
+   "title": "News",
+   "subtitle": "briefings and topics",
+   "keywords": [
+    "news",
+    "headlines",
+    "briefing",
+    "topics",
+    "feeds"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "A spoken briefing from the feeds your household picks, plus each person's own topics."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "p",
+     "text": "[News](route:news) → **add topic**, or add a feed."
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "what's the news",
+       "handler": "news",
+       "path": "fast"
+      },
+      {
+       "text": "read me the headlines",
+       "handler": "news",
+       "path": "fast"
+      },
+      {
+       "text": "any news about the city council",
+       "handler": "news",
        "path": "fast"
       }
      ]
