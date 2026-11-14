@@ -65,8 +65,13 @@ struct RoomModeDeviceFacts: RoomDeviceFacts {
         return seconds(usage.ru_utime) + seconds(usage.ru_stime)
     }
 
+    /// The health frame's `uptime_s`: this APP's running time, not the
+    /// phone's. The phone's own uptime is system boot time, and Apple's only
+    /// fitting reason for reading it (35F9.1, PrivacyInfo.xcprivacy) forbids
+    /// sending it off the phone; the time the room has been running is time
+    /// between the app's own events, which may leave it.
     func uptimeSeconds() -> Int64 {
-        Int64(ProcessInfo.processInfo.systemUptime)
+        processUptimeSeconds()
     }
 
     func processUptimeSeconds() -> Int64 {

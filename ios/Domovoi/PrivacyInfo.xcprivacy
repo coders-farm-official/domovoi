@@ -88,6 +88,25 @@
 				<string>3B52.1</string>
 			</array>
 		</dict>
+		<!--
+		  System boot time (ProcessInfo.systemUptime), room mode only, and only
+		  as a monotonic clock for time elapsed between the app's own events:
+		  RoomAudio.swift (the speaker's played-out clock) and
+		  RoomModeRuntime.swift (the kiosk's idle-dim timer). 35F9.1: "to
+		  measure the amount of time that has elapsed between events that
+		  occurred within the app or to perform calculations to enable
+		  timers". Nothing derived from it leaves the phone: the room's health
+		  frame reports the APP's running time as uptime_s
+		  (RoomModeDeviceFacts.uptimeSeconds), never the phone's uptime.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>
