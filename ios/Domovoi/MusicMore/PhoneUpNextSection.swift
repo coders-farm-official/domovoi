@@ -28,7 +28,12 @@ struct PhoneUpNextSection: View {
         let rows = player.pickRows
         VStack(alignment: .leading, spacing: 4) {
             head
-            LazyVStack(alignment: .leading, spacing: 4) {
+            // **Eager, not lazy.** The picks waiting are a batch or two (the
+            // phone asks for more only at five left), and they sit at the foot
+            // of the page: a `LazyVStack` there builds nothing until it is
+            // scrolled onto the screen, so VoiceOver and the UI cases found a
+            // head with no picks under it (train I041).
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(rows, id: \.self) { index in
                     if player.queue.indices.contains(index) {
                         PhoneUpNextRow(player: player, item: player.queue[index], index: index)
