@@ -286,6 +286,23 @@ async def post_admin_bytes(
     return r.status_code, r.content, dict(r.headers)
 
 
+async def get_admin_bytes(
+    path: str,
+    timeout: float = 30.0,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, bytes, dict[str, str]]:
+    """GET an admin endpoint that returns binary (a download). Same shape
+    and failure value as :func:`post_admin_bytes`."""
+    url = f"{domovoi_url().rstrip('/')}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(url, headers=headers)
+    except Exception as e:
+        log.warning("admin GET(bytes) %s failed: %s", path, e)
+        return 0, b"", {}
+    return r.status_code, r.content, dict(r.headers)
+
+
 def core_audio_refusal(status: int, body: bytes, what: str):
     """The HTTPException for a core audio call (``post_admin_bytes``) that
     gave no audio, carrying the core's own sentence so the page can show

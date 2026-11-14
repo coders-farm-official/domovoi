@@ -11418,6 +11418,45 @@
         }
       }
     },
+    "/api/wake-words/{wake_word_id}/export": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Export Wake Word",
+        "description": "Download a READY wake word to share: a zip of ``<slug>.onnx`` (plus\n``.onnx.json`` when there is one), ``SHA256SUMS``, ``MODEL_CARD.md``\nand ``LICENSE-NOTICE.md``, built by the core (which owns the trainer's\nrecords). No recordings, room or person's name go in. Pass-through 404\n(no such word) and 409 (not ready / its model file is gone); 502 when\nthe core is unreachable.",
+        "operationId": "export_wake_word_api_wake_words__wake_word_id__export_get",
+        "parameters": [
+          {
+            "name": "wake_word_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Wake Word Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "the zip: model, SHA256SUMS, MODEL_CARD.md, LICENSE-NOTICE.md",
+            "content": {
+              "application/zip": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/push": {
       "post": {
         "tags": [

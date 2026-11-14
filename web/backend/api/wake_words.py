@@ -46,7 +46,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi import Path as PathParam
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -66,7 +66,9 @@ from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
     bridge_response,
+    core_audio_refusal,
     get_admin,
+    get_admin_bytes,
     post_admin,
 )
 
@@ -885,6 +887,35 @@ async def score_wake_word(wake_word_id: int, request: Request):
     return bridge_response(status, payload)
 
 
+@router.get(
+    "/{wake_word_id}/export",
+    # Admin READ: the dashboard cookie or the Bearer (a download).
+    dependencies=[Depends(require_admin_read)],
+    response_class=Response,
+    responses={200: {"content": {"application/zip": {}},
+                     "description": "the zip: model, SHA256SUMS, MODEL_CARD.md, LICENSE-NOTICE.md"}},
+)
+async def export_wake_word(wake_word_id: int, request: Request) -> Response:
+    """Download a READY wake word to share: a zip of ``<slug>.onnx`` (plus
+    ``.onnx.json`` when there is one), ``SHA256SUMS``, ``MODEL_CARD.md``
+    and ``LICENSE-NOTICE.md``, built by the core (which owns the trainer's
+    records). No recordings, room or person's name go in. Pass-through 404
+    (no such word) and 409 (not ready / its model file is gone); 502 when
+    the core is unreachable."""
+    status, body, headers = await get_admin_bytes(
+        f"/v1/admin/wake/export/{wake_word_id}", timeout=60.0,
+        headers=auth_forward_headers(request),
+    )
+    if status != 200:
+        raise core_audio_refusal(status, body, "the wake word's download")
+    return Response(
+        content=body, media_type="application/zip",
+        headers={"Content-Disposition": headers.get("content-disposition")
+                 or f'attachment; filename="wake-word-{wake_word_id}.zip"',
+                 "Cache-Control": "no-store"},
+    )
+
+
 @router.post("/{wake_word_id}/push", dependencies=[Depends(require_admin_mutation)])
 async def push_wake_word(wake_word_id: int, body: RoomBody, request: Request):
     """Push a trained wake model to a connected satellite. Proxies the
@@ -933,7 +964,8 @@ async def delete_wake_word(wake_word_id: int, request: Request) -> None:
 
         shutil.rmtree(cdir, ignore_errors=True)
     # Its training files in the trainer's cache volume (features, synthetic
-    # clips, any copies of the recordings) go too; the core owns Docker.
+    # clips, any copies of the recordings) go too, and the model card's
+    # record of its training; the core owns both.
     # Best effort: the worker's sweep after its next start catches a miss.
     await post_admin("/v1/admin/wake/forget", {"slug": slug}, timeout=10.0,
                      headers=auth_forward_headers(request))

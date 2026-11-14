@@ -240,6 +240,14 @@ def recorded_gpu() -> bool | None:
         return _load().get("gpu")
 
 
+def recorded_image_src() -> str | None:
+    """The git tree id of scripts/wake_word/docker the trainer image was
+    built from (the model card's "trainer build"), or None."""
+    with _LOCK:
+        src = _load().get("image_src")
+    return src if isinstance(src, str) and src else None
+
+
 # ── docker, the host ─────────────────────────────────────────────────────
 
 def _run(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:

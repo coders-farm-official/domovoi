@@ -2476,6 +2476,7 @@ const InternetPanel = () => {
  *   POST   /api/wake-words/{id}/score              · offline max-over-clip scores (needs a ready model)
  *   PATCH  /api/wake-words/{id}                    · rename / threshold / set_default
  *   POST   /api/wake-words/{id}/push               · push the ready model to a room {room_id}
+ *   GET    /api/wake-words/{id}/export             · Download: zip of the model, SHA256SUMS, MODEL_CARD.md, LICENSE-NOTICE.md (ready only)
  *   DELETE /api/wake-words/{id}                    · remove (refuses the default)
  *   PATCH  /api/wake-words/{id} {phrase}           · respell how the training voices say it
  *   POST   /api/wake-words/{id}/synthetic-copy     · a synthetic-voices-only twin, queued to train
@@ -2740,7 +2741,7 @@ const wakePushLabel = (w) => {
 const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onRecordStop, onTrain,
                    onRename, onThreshold, onSetDefault, onPush, onDelete, internetOff = false,
                    trainerOn = true, onTrainStop, preview, onPhrase, onSyntheticCopy,
-                   syntheticCopy = null }) => {
+                   syntheticCopy = null, onDownload }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(w.name);
   // "How the voices say it": the phrase the trainer's synthetic voices
@@ -2752,6 +2753,7 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   const [room, setRoom] = React.useState('');
   const [thr, setThr] = React.useState(w.threshold);
   const [showClips, setShowClips] = React.useState(false);
+  const [downloading, setDownloading] = React.useState(false);
 
   // Live-recording UX. `recActive` flips the moment the operator clicks Record
   // (so the banner shows before the first clip lands) and clears on Stop or when
@@ -2997,6 +2999,19 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                 onClick={() => onPush(w, roomFor)}>{wakePushLabel(w)}</Button>
         {canPush && !w.is_default &&
           <Button variant="ghost" onClick={() => onSetDefault(w)}>make default</Button>}
+        {/* Download: the trained model packed to share (a ready word only). */}
+        {canPush && onDownload && (
+          <React.Fragment>
+            <Button variant="secondary" icon="download" disabled={downloading}
+                    title="the model and a model card, ready to share"
+                    onClick={async () => {
+                      setDownloading(true);
+                      try { await onDownload(w); } finally { setDownloading(false); }
+                    }}>{downloading ? 'Downloading…' : 'Download'}</Button>
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+              the model and a model card, ready to share</span>
+          </React.Fragment>
+        )}
         {!synthetic && (
           <Button variant="ghost" icon={showClips ? 'chevron-down' : 'chevron-right'}
                   onClick={() => setShowClips((s) => !s)}>
@@ -3545,6 +3560,27 @@ const WakeWordsPanel = () => {
     return guard(() => apiPost(`/api/wake-words/${w.id}/push`, { room_id: room }),
       sens ? `pushed “${w.name}” to ${room} (wake sensitivity ${sens})` : `pushed “${w.name}” to ${room}`);
   };
+  // Download: the core packs the model, SHA256SUMS, a model card and the
+  // licence notice into one zip; saved from memory like the documents zip.
+  const download = async (w) => {
+    try {
+      const r = await apiFetchRaw(`/api/wake-words/${w.id}/export`);
+      const blob = await r.blob();
+      const cd = r.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename="([^"]+)"/);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = m ? m[1] : `${w.slug}-wake-word.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      fire(`downloaded “${w.name}”: read MODEL_CARD.md before sharing it`);
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(`download failed: ${apiErrorText(e)}`);
+    }
+  };
   // Deletes confirm first (F-009): a wake word is recorded clips plus a
   // trained model — the most expensive thing on this page to lose.
   const del = useDeleteConfirm((w) =>
@@ -3567,8 +3603,9 @@ const WakeWordsPanel = () => {
         ⚠ Record clips on the <strong>same mic board</strong> the room uses at runtime — the
         XVF3800's on-chip beamforming/AGC reshapes the signal, so a model trained from HAT-recorded
         clips can detect poorly on an XVF array. Training runs on this server once it is turned on
-        above. A model trained here is for this household only: its training data's licences
-        don't allow sharing it (see <code>scripts/wake_word/README.md</code>).
+        above. A model trained here is for this household: its training data's licences restrict
+        sharing it (non-commercial at best, see <code>scripts/wake_word/README.md</code>). Download
+        packs a ready model with a model card and the licence notice it needs if you share it.
       </div>
 
       {loading ? null : items.length === 0 ? (
@@ -3583,7 +3620,7 @@ const WakeWordsPanel = () => {
                      onPush={push} onDelete={remove} internetOff={internetOff}
                      trainerOn={trainerOn || !trainer} onTrainStop={trainStop}
                      preview={preview} onPhrase={sayAs} onSyntheticCopy={syntheticCopy}
-                     syntheticCopy={copyOf(w)}/>
+                     syntheticCopy={copyOf(w)} onDownload={download}/>
           ))}
         </Card>
       )}
