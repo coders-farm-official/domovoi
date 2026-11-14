@@ -9,7 +9,12 @@ domovoi/windows_side.py; web/static/settings.jsx VersionSection).
 * with only the Windows side behind, "Update Domovoi" asks the tray on the
   PC for the Windows step; behind on Linux too, it is one press: one
   question, the pull, then the restart (not asked again);
-* the card says "Finish on your PC", "sign in on the PC to finish", the
+* while a request waits, the card says what is really happening: when it
+  was asked, and whether the PC's icon has seen it (``seen_at``), runs
+  without saying so, or isn't running; once someone there started it, that;
+  "Cancel request" withdraws it until then (2026-11-14: a phone's press
+  said "finish on your PC" while the PC's one notification went unseen);
+* the card says the
   half-done update after a declined prompt (with "Try again"), the
   tray's failure with its log, why there is no step (internet "never", no
   signed Setup), and on main that the Windows side follows releases;
@@ -27,6 +32,7 @@ Driven through domovoi/tests/jsx_interact_harness.js. No DB; needs node.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -134,6 +140,12 @@ SCENARIOS = {
     "both_behind_declined": _scenario(_version(_win()), "w.__answer = false; " + UPDATE,
                                       _check(behind=3, upstream_version="1.0.2")),
     "finish_on_pc": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": False, "at": "x"}))),
+    "seen_on_pc": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": False, "claimed": False,
+                                                   "at": "2026-11-14T15:02:00Z", "seen_at": "2026-11-14T15:02:20Z"})),
+                            "await h.click({ type: 'button', text: 'Cancel request' });",
+                            extra={"POST /api/config/version/windows-request/cancel": {"ok": True}}),
+    "claimed_on_pc": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": False, "claimed": True,
+                                                      "at": "2026-11-14T15:02:00Z", "seen_at": "2026-11-14T15:02:20Z"}))),
     "on_this_pc": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": True, "at": "x"}))),
     "no_tray": _scenario(_version(_win(request={"id": "a" * 16, "on_this_pc": False, "at": "x"},
                                        tray={"running": False, "seen_at": None, "version": None}))),
@@ -242,14 +254,34 @@ def test_a_declined_question_does_nothing(driven) -> None:
 
 def test_finish_on_your_pc(driven) -> None:
     b = driven["finish_on_pc"]["before"]
-    assert b["request"].startswith("Finish on your PC: click the Domovoi notification there")
+    assert b["request"].startswith("Waiting for someone at the PC.")
+    assert "The Domovoi icon on the PC is running but hasn’t said it saw the request" in b["request"], "an older icon"
     assert "Update Domovoi" not in b["buttons"], "asked already"
     assert "Check for updates" not in b["buttons"], "the PC finishes it: nothing to press here"
+    assert "Cancel request" in b["buttons"]
     assert driven["on_this_pc"]["before"]["request"].startswith("Windows asks for an administrator’s permission on this PC")
 
 
+def test_the_card_says_the_pc_has_seen_the_request_and_can_cancel_it(driven) -> None:
+    o = driven["seen_on_pc"]
+    req = o["before"]["request"]
+    # The clock time and how long ago ("just now", "5m ago": the real clock).
+    assert re.match(r"^Waiting for someone at the PC \(asked .*\d:\d\d.* \((just now|\d+[mhd] ago)\)\)\. ", req), req
+    assert "The Domovoi icon on the PC has seen it (" in req and "keeps showing it there until someone clicks it" in req
+    assert _updates(o["before"]["buttons"]) == ["Cancel request"], "the one thing to press here"
+    assert o["calls"] == ["POST /api/config/version/windows-request/cancel"]
+
+
+def test_a_request_someone_at_the_pc_started_has_no_cancel(driven) -> None:
+    b = driven["claimed_on_pc"]["before"]
+    assert b["request"].startswith("Someone at the PC started the Windows part")
+    assert "Cancel request" not in b["buttons"], "a started step carries on: no button that says it stops it"
+
+
 def test_sign_in_on_the_pc_to_finish(driven) -> None:
-    assert driven["no_tray"]["before"]["request"].startswith("Sign in on the PC to finish")
+    req = driven["no_tray"]["before"]["request"]
+    assert req.startswith("Waiting for someone at the PC.")
+    assert "The Domovoi icon on the PC isn’t running" in req and "sign in on the PC" in req
 
 
 def test_a_declined_prompt_is_half_done_with_try_again(driven) -> None:

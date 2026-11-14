@@ -1,6 +1,8 @@
 // The notification-area icon: Domovoi's cat (installer\art\domovoi.ico,
 // embedded) with a status dot in its corner. Green running, amber starting
 // or updating, grey stopped, red a problem: the dashboard's status colours.
+// A blue "!" in its place while a request for the Windows step waits for a
+// click here (Reminder.cs).
 
 using System;
 using System.Drawing;
@@ -38,8 +40,17 @@ namespace Domovoi.Windows.Tray
             }
         }
 
-        public static Bitmap Picture(TrayState state, int size)
+        // The attention badge (a request for the Windows step waits for a
+        // click here, Reminder.cs): blue, the dashboard's info colour.
+        public static readonly Color AttentionColor = Color.FromArgb(37, 99, 235);
+
+        public static Bitmap Picture(TrayState state, int size) { return Picture(state, size, false); }
+
+        // attention: a larger blue badge with a white "!" in place of the
+        // status dot.
+        public static Bitmap Picture(TrayState state, int size, bool attention)
         {
+            if (attention) return AttentionPicture(size);
             var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(bmp))
             using (Icon app = App(size))
@@ -61,10 +72,41 @@ namespace Domovoi.Windows.Tray
             return bmp;
         }
 
-        // An Icon the caller owns; Release it when it is replaced.
-        public static Icon Make(TrayState state, int size)
+        static Bitmap AttentionPicture(int size)
         {
-            using (Bitmap b = Picture(state, size))
+            var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(bmp))
+            using (Icon app = App(size))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawIcon(app, new Rectangle(0, 0, size, size));
+                float d = Math.Max(8f, size * 0.62f);
+                float x = size - d, y = size - d;
+                float ring = Math.Max(1f, size / 16f);
+                using (var white = new SolidBrush(Color.White))
+                    g.FillEllipse(white, x - ring, y - ring, d + ring, d + ring);
+                using (var dot = new SolidBrush(AttentionColor))
+                    g.FillEllipse(dot, x, y, d - ring, d - ring);
+                // The "!": a bar and a dot, drawn (no font at 16 px).
+                float inner = d - ring;
+                float w = Math.Max(1.5f, inner * 0.18f);
+                float cx = x + inner / 2f;
+                using (var mark = new SolidBrush(Color.White))
+                {
+                    g.FillRectangle(mark, cx - w / 2f, y + inner * 0.18f, w, inner * 0.44f);
+                    g.FillRectangle(mark, cx - w / 2f, y + inner * 0.70f, w, w);
+                }
+            }
+            return bmp;
+        }
+
+        // An Icon the caller owns; Release it when it is replaced.
+        public static Icon Make(TrayState state, int size) { return Make(state, size, false); }
+
+        public static Icon Make(TrayState state, int size, bool attention)
+        {
+            using (Bitmap b = Picture(state, size, attention))
             {
                 IntPtr h = b.GetHicon();
                 using (Icon tmp = Icon.FromHandle(h))

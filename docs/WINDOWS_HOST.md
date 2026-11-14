@@ -330,7 +330,8 @@ restarts for an update). It reads only what needs no password: the
 `DomovoiHost` service's state, the dashboard's `/api/health` and the
 core's `/v1/alive`; nothing new is opened on the server for it.
 
-Right-click it for the menu; double-click opens Domovoi.
+Right-click it for the menu; double-click opens Domovoi. While an update
+asked for from another device waits, a single click finishes it.
 
 | Item | What it does |
 |---|---|
@@ -342,7 +343,7 @@ Right-click it for the menu; double-click opens Domovoi.
 | **Prepare a room's SD card...** | The card helper, below. |
 | **Keep this PC awake** | On by default: Windows doesn't put the PC to sleep while the icon runs (the screen may still turn off). The line under it says, from the power plan (never changed), whether Windows would still sleep it when nobody is signed in. |
 | **Start with Windows** | This account's sign-in start, on by default. |
-| **Update Domovoi...** | The whole update, both halves, behind one administrator's permission prompt ([Updates and the release channel](#updates-and-the-release-channel)). It reads **Finish updating Domovoi...** while the dashboard has asked for the Windows part. |
+| **Update Domovoi...** | The whole update, both halves, behind one administrator's permission prompt ([Updates and the release channel](#updates-and-the-release-channel)). It reads **Finish updating Domovoi...** while the dashboard has asked for the Windows part; the icon then wears a blue **!** and a click on it does the same ([A request from another device](#a-request-from-another-device)). |
 | **Save logs for support...** | Domovoi's logs are administrators-only: Windows asks for permission, then Setup's helper copies them to `Documents\Domovoi logs`, blanked as **Copy logs** does, with the icon's own log beside them. Without Setup's helper on the PC only the icon's log is copied, and it says so. |
 | **Restart Domovoi...** | Asks first, then Windows asks for an administrator, then `Restart-Service DomovoiHost`: for when the dashboard itself can't be reached. |
 | **Hide this icon** | Hides it until the next sign-in; Domovoi keeps running, and so does **Keep this PC awake**. **Domovoi** in the Start menu brings it back. |
@@ -932,12 +933,19 @@ install, which keeps your data. **Update Domovoi** does both:
   roll back on failure). Then, when the release the Linux side now
   includes has a newer Windows side, it asks the tray on the PC for the
   Windows part. With the dashboard open **on the PC itself**, Windows'
-  administrator prompt appears next. From **another device**, the card
-  says **Finish on your PC**, and the tray on the PC shows a notification:
-  click it, and Windows asks for permission there. If no tray has been
-  heard from for two minutes (nobody is signed in on the PC; a core
-  restart doesn't forget it), the card says **sign in on the PC to
-  finish**. When only the Windows side is behind, the card says **Windows
+  administrator prompt appears next. From **another device** (a phone, a
+  laptop), the request waits for someone at the PC, and the tray keeps it
+  in sight until it is handled ([A request from another device](#a-request-from-another-device)):
+  click the icon or its notification, and Windows asks for permission
+  there. Meanwhile the card says **Waiting for someone at the PC**, with
+  when it was asked, and either that the Domovoi icon on the PC **has seen
+  it** (and when), that it is running but hasn't said so (a tray before
+  1.2.1), or that it **isn't running** (nobody is signed in on the PC, or
+  the icon was closed; no tray heard from for two minutes, which a core
+  restart doesn't forget): sign in on the PC to finish. **Cancel request**
+  withdraws it until someone at the PC starts it (a started step carries
+  on, so there is no button for that); once someone has, the card says so
+  and shows how it went. When only the Windows side is behind, the card says **Windows
   side is behind** and **Update Domovoi** is the only button (no **Check
   for updates** beside it): it checks first, and takes the Linux side along
   when that is behind too, else asks the PC for the Windows part alone.
@@ -962,6 +970,34 @@ install, which keeps your data. **Update Domovoi** does both:
   leaves a one-off request in `C:\ProgramData\Domovoi\host\in`, which only
   administrators can write, and DomovoiHost runs the dashboard's own update
   in the distro (the same checks, the same order).
+
+#### A request from another device
+
+Windows shows a tray notification for a few seconds and then files it
+away, and not at all while nobody is at the PC or Do not disturb is on
+(on 2026-11-14 a press from a phone got one notification nobody saw, and
+the update looked failed). So while a request from another device waits
+(nobody has claimed it, it still has something to do, and nothing is
+updating), the tray (1.2.1 and later):
+
+- **Changes its icon**: a blue **!** badge in place of the status dot,
+  and the tooltip **Domovoi update waiting: click to finish**. A single
+  click on the icon starts the Windows part, as a click on the
+  notification does; a double-click still opens Domovoi. **Finish updating
+  Domovoi...** in the menu does the same. An icon hidden with **Hide this
+  icon** comes back.
+- **Shows the notification again**: at once, then after 5, 15, 30 and 60
+  minutes, then every hour; only while someone is at the PC (keyboard or
+  mouse input in the last 5 minutes; a locked screen counts as away), and
+  at once when someone comes back (input after 5 minutes away, or the
+  screen unlocked), never two within 2 minutes.
+- **Tells the core it has seen the request** (`?seen=` on its next poll),
+  so the card can say so.
+- **Stops** when the request is started (here or by another signed-in
+  account's icon), withdrawn from the dashboard, answered, or no longer
+  needed, and goes back to its usual icon. Each step goes into its log
+  (`%LOCALAPPDATA%\Domovoi\tray.log`): the request noticed, each
+  notification and why, and how many were shown when it stopped.
 
 The **Version card** shows both halves: the Linux side's release label and
 commit, and the Windows side's version and the commit it was built from,

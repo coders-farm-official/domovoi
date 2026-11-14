@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — An update asked for from a phone stays in sight on the PC
+
+"Update Domovoi" pressed on another device asks the Domovoi icon on the
+Windows PC for the Windows part. The icon used to show one notification
+for 30 seconds, which Windows hides while nobody is at the PC, so the
+update could sit there unseen and look failed. From 1.2.1 the icon wears
+a blue "!" while such a request waits, a click on the icon finishes it,
+and it shows the notification again (after 5, 15, 30 and 60 minutes,
+then hourly, and when someone comes back to the PC) until the request is
+started, withdrawn or no longer needed. The Version card now says the
+request is waiting for someone at the PC, when it was asked, and whether
+the PC's icon has seen it or isn't running, with **Cancel request**.
+
+A PC whose icon is still 1.1.0 or 1.2.0 shows the old single
+notification: on that PC, use **Finish updating Domovoi...** in the
+icon's menu. The new icon arrives with the Windows part itself.
+`windows_side.request` gains `seen_at`, and the tray's poll takes
+`?seen=` (docs/API_REFERENCE.md).
+
 ## 2026-11-14 — Song recognition no longer takes covers and remixes
 
 A matching title was enough for an answer to be used, so a requeue renamed

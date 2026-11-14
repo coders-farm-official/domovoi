@@ -454,6 +454,46 @@ def _gates(method: str, path: str) -> list:
     raise AssertionError(f"{method} {path} is not a core route")
 
 
+def test_the_tray_says_it_has_seen_a_request(server, monkeypatch) -> None:
+    """2026-11-14: a request from a phone reached the tray, whose only sign
+    was a 30-second notification; the card couldn't tell "the PC has it"
+    from "nothing happened". The tray's poll now says it noticed the
+    request (``seen``), once, and the card shows when."""
+    t = [1000.0]
+    monkeypatch.setattr(windows_side, "_now", lambda: t[0])
+    req, _ = windows_side.make_request(False)
+    assert req["seen_at"] is None and windows_side.read_request()["seen_at"] is None
+    r = _core().get("/v1/windows/update", params={"tray": "1.2.1", "seen": "f" * 16})
+    assert r.status_code == 200 and r.json()["request"]["seen_at"] is None, "not this request: nothing"
+    t[0] = 1060.0
+    r = _core().get("/v1/windows/update", params={"tray": "1.2.1", "seen": req["id"]})
+    assert r.json()["request"]["seen_at"] == "1970-01-01T00:17:40Z"
+    t[0] = 2000.0
+    assert windows_side.note_seen(req["id"]) is False, "kept once: the first time"
+    assert windows_side.read_request()["seen_at"] == "1970-01-01T00:17:40Z"
+    assert _core(LAN).get("/v1/windows/update", params={"seen": req["id"]}).status_code == 403
+    for bad in (None, 5, "../x", "F" * 16, "a" * 17):
+        assert windows_side.note_seen(bad) is False
+    # A new request starts unseen; a withdrawn one takes its mark along.
+    windows_side.clear_request()
+    assert not (windows_side.state_dir() / "seen.json").exists()
+    req2, _ = windows_side.make_request(False)
+    assert req2["seen_at"] is None
+    assert windows_side.note_seen(req2["id"]) is True
+    token = windows_side.claim_request(req2["id"])
+    windows_side.record_result({"outcome": "declined", "request_id": req2["id"], "claim": token}, "v1.0.1")
+    req3, _ = windows_side.make_request(False)
+    assert windows_side.read_request()["seen_at"] is None and req3["id"] != req2["id"]
+
+
+@pytest.mark.asyncio
+async def test_the_card_gets_the_requests_seen_time(server) -> None:
+    req, _ = windows_side.make_request(False)
+    windows_side.note_seen(req["id"])
+    card = await windows_side.card_state()
+    assert card["request"]["seen_at"] and card["request"]["claimed"] is False
+
+
 def test_the_admin_request_is_the_security_tier() -> None:
     assert admin_auth.require_admin_security in _gates("POST", "/v1/admin/windows/request")
     assert admin_auth.require_admin_security in _gates("POST", "/v1/admin/windows/request/cancel")

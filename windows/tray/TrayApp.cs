@@ -32,14 +32,25 @@ namespace Domovoi.Windows.Tray
         string wslVersionWhenUp;
         Verdict verdict = new Verdict { State = TrayState.Starting, Line = "Domovoi: checking..." };
         TrayState? shownState;
+        bool shownAttention;
         Icon current;
         int probing;
         CardWizard wizard;
 
         // The Windows update (Updater.cs).
         readonly System.Windows.Forms.Timer updatePoll = new System.Windows.Forms.Timer();
-        readonly IUpdateServer updates;
+        readonly HttpUpdateServer updates;
         readonly string updatesRoot;
+        // A request from another device stays in sight until it is handled
+        // (Reminder.cs): the icon's attention state, the notification again
+        // with a back-off, a click on the icon itself.
+        readonly RequestReminder reminder = new RequestReminder();
+        readonly System.Windows.Forms.Timer remindTick = new System.Windows.Forms.Timer();
+        readonly System.Windows.Forms.Timer clickWait = new System.Windows.Forms.Timer();
+        bool attention;
+        // The state that showed the waiting request (a poll that got no
+        // answer leaves updateState null; a click still has this).
+        UpdateState waitingState;
         UpdateState updateState;
         string seenRequest;
         bool stepRunning;
@@ -58,7 +69,28 @@ namespace Domovoi.Windows.Tray
             menu.Opening += delegate { Build(menu.Items, verdict, Addresses.Pick(Addresses.FromWindows()), Awake.CurrentSignedOutLine()); };
             menu.Items.Add("...");
             icon.ContextMenuStrip = menu;
-            icon.MouseDoubleClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) OpenUrl(opt.WebUrl + "/"); };
+            icon.MouseDoubleClick += delegate (object s, MouseEventArgs e)
+            {
+                if (e.Button != MouseButtons.Left) return;
+                clickWait.Stop();
+                OpenUrl(opt.WebUrl + "/");
+            };
+            // While a request waits, a single click on the icon starts the
+            // step; it waits out the double-click time first, so a
+            // double-click still only opens Domovoi.
+            icon.MouseClick += delegate (object s, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left && attention && !stepRunning) { clickWait.Stop(); clickWait.Start(); }
+            };
+            clickWait.Interval = Math.Max(200, SystemInformation.DoubleClickTime);
+            clickWait.Tick += delegate
+            {
+                clickWait.Stop();
+                UpdateState st = updateState ?? waitingState;
+                if (!attention || stepRunning || st == null || st.RequestId == null) return;
+                log.Write("update: the icon was clicked; starting the Windows step");
+                StartWindowsStep(st, false, true);
+            };
             ShowState();
             icon.Visible = true;
             if (Startup.KeepAwake(store)) Awake.Hold(true);
@@ -80,6 +112,10 @@ namespace Domovoi.Windows.Tray
                 UpdateRun.Prune(updatesRoot, DateTime.UtcNow, keep != null ? keep.Run : null);
                 updatePoll.Start();
                 PollUpdates();
+                remindTick.Interval = 15000;
+                remindTick.Tick += delegate { reminder.Observe(IdleTime()); Remind(); };
+                remindTick.Start();
+                Microsoft.Win32.SystemEvents.SessionSwitch += OnSessionSwitch;
             }
             log.Write("tray started (" + (opt.Dev ? "developer profile " + opt.Profile + ", " + opt.WebUrl : "installed Domovoi") + ")");
         }
@@ -121,15 +157,16 @@ namespace Domovoi.Windows.Tray
 
         void ShowState()
         {
-            if (shownState != verdict.State)
+            if (shownState != verdict.State || shownAttention != attention)
             {
                 Icon old = current;
-                current = Icons.Make(verdict.State, SystemInformation.SmallIconSize.Width);
+                current = Icons.Make(verdict.State, SystemInformation.SmallIconSize.Width, attention);
                 icon.Icon = current;
                 if (old != null) old.Dispose();
                 shownState = verdict.State;
+                shownAttention = attention;
             }
-            string tip = verdict.Line;
+            string tip = attention ? ReminderWords.Tip : verdict.Line;
             icon.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
         }
 
@@ -337,6 +374,14 @@ namespace Domovoi.Windows.Tray
         void OnUpdateState(UpdateState st, UpdateAction act, PendingDone done)
         {
             updateState = st;
+            // No answer (the core restarting, say) changes nothing: the
+            // reminder keeps what it knew until the core says otherwise.
+            if (st != null)
+            {
+                string waiting = RequestReminder.Waiting(st, stepRunning, PendingRun.Load(updatesRoot) != null);
+                if (waiting != null) waitingState = st;
+                TrackRequest(waiting);
+            }
             if (done != null && done.Show)
             {
                 log.Write("update (finished while the icon was away): " + done.Result.Outcome + (done.Result.Detail != null ? " (" + done.Result.Detail + ")" : ""));
@@ -348,10 +393,74 @@ namespace Domovoi.Windows.Tray
             seenRequest = st.RequestId;
             log.Write("the dashboard asked for the Windows step (" + (st.RequestOnThisPc ? "on this PC" : "from another device") + ", " + st.TargetTag + ")");
             if (act == UpdateAction.StartNow) { StartWindowsStep(st, false, false); return; }
-            if (!icon.Visible) icon.Visible = true;
-            balloonAction = delegate { StartWindowsStep(updateState ?? st, false, true); };
-            icon.ShowBalloonTip(30000, "Finish updating Domovoi",
-                (st.RequestAfterLinux ? "The Linux part is updated. " : "") + "Click here to update the Windows part (Domovoi " + st.TargetVersion + "); Windows asks for an administrator's permission.", ToolTipIcon.Info);
+            // UpdateAction.Notify: the reminder (TrackRequest, Remind) shows it.
+            Remind();
+        }
+
+        // What waits for a click here now (RequestReminder.Waiting), or null.
+        void TrackRequest(string waiting)
+        {
+            int shown = reminder.Shown;
+            string change = reminder.Track(waiting);
+            if (change == null) return;
+            if (change == "started")
+            {
+                log.Write("update: request " + waiting + " waits for someone at this PC; the icon shows it until it is handled");
+                attention = true;
+                // Tell the core at once (the next poll carries it too): the
+                // card says the icon on the PC has seen it.
+                updates.Noticed = waiting;
+                ShowState();
+                PollUpdates();
+            }
+            else
+            {
+                log.Write("update: the request no longer waits here (started, claimed, withdrawn, answered or not needed); "
+                    + shown + " notification" + (shown == 1 ? "" : "s") + " shown");
+                attention = false;
+                waitingState = null;
+                updates.Noticed = null;
+                balloonAction = null;
+                clickWait.Stop();
+                ShowState();
+            }
+        }
+
+        // The notification, when the reminder says one is due.
+        void Remind()
+        {
+            if (!attention || stepRunning) return;
+            string why = reminder.Due(DateTime.UtcNow, IdleTime());
+            if (why == null) return;
+            UpdateState st = updateState ?? waitingState;
+            if (!icon.Visible) { icon.Visible = true; log.Write("update: the hidden icon is back while a request waits"); }
+            balloonAction = delegate { StartWindowsStep(updateState ?? waitingState ?? st, false, true); };
+            icon.ShowBalloonTip(30000, ReminderWords.Title, ReminderWords.Text(st), ToolTipIcon.Info);
+            reminder.Mark(DateTime.UtcNow);
+            log.Write("update: notification " + reminder.Shown + " for request " + reminder.RequestId + " ("
+                + (why == "first" ? "first" : why == "back" ? "someone is back at the PC" : "still waiting") + ")");
+        }
+
+        void OnSessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
+        {
+            if (e.Reason != Microsoft.Win32.SessionSwitchReason.SessionUnlock) return;
+            Invoke(delegate { reminder.Unlocked(); Remind(); });
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+
+        [DllImport("user32.dll")]
+        static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+        // Since this session's last keyboard or mouse input (zero when
+        // Windows can't say: then someone counts as here).
+        static TimeSpan IdleTime()
+        {
+            var i = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO)) };
+            if (!GetLastInputInfo(ref i)) return TimeSpan.Zero;
+            uint ms = unchecked((uint)Environment.TickCount - i.dwTime);
+            return TimeSpan.FromMilliseconds(ms);
         }
 
         void UpdateFromMenu()
@@ -386,6 +495,8 @@ namespace Domovoi.Windows.Tray
         {
             if (stepRunning) return;
             stepRunning = true;
+            // Started: the request no longer waits for a click here.
+            if (attention) TrackRequest(null);
             string requestId = linuxFirst ? null : (known != null ? known.RequestId : null);
             bool afterLinux = afterLinuxPart || (!linuxFirst && known != null && known.RequestAfterLinux);
             log.Write("update: " + (linuxFirst ? "both halves, from the menu" : afterLinuxPart ? "the Windows step, after the Linux part" : "the Windows step"));
@@ -579,6 +690,9 @@ namespace Domovoi.Windows.Tray
             {
                 poll.Dispose();
                 updatePoll.Dispose();
+                remindTick.Dispose();
+                clickWait.Dispose();
+                Microsoft.Win32.SystemEvents.SessionSwitch -= OnSessionSwitch;
                 icon.Visible = false;
                 icon.Dispose();
                 menu.Dispose();
