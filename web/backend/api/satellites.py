@@ -163,7 +163,7 @@ async def list_satellites() -> list[Satellite]:
 async def list_battery_warnings() -> RoomBatteryWarnings:
     """The open low-battery warnings of the phone rooms whose "Notify when
     the battery is low" is on, oldest first: what the phones' notification
-    and the dashboard's notice say ("Pako is at 15%. Plug it in."). A
+    and the dashboard's notice say ("Den is at 15%. Plug it in."). A
     warning closes when its room goes on its charger. Household tier, like
     the room list it summarises. Empty when V040 is missing."""
     try:

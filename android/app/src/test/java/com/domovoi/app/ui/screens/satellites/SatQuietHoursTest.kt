@@ -14,7 +14,7 @@ class SatQuietHoursTest {
         assertNull(quietBody("custom", "25:00", "06:00"))
         assertNull(quietBody("custom", "21:30", ""))
         assertNull(quietBody("loud", "21:30", "06:00"))
-        assertEquals("/api/satellites/pako/quiet-hours", quietPath("pako"))
-        assertEquals("pako keeps quiet 21:30–06:05", quietToast("pako", "custom", "21:30", "6:05"))
+        assertEquals("/api/satellites/den/quiet-hours", quietPath("den"))
+        assertEquals("den keeps quiet 21:30–06:05", quietToast("den", "custom", "21:30", "6:05"))
     }
 }

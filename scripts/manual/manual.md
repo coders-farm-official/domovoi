@@ -1671,9 +1671,9 @@ Keep the phone on its charger: rooms are always on. The room's card shows
 its battery and whether it's charging. Off its charger, at 20% and again
 at 10%:
 
-- Home shows a notice, and the Domovoi app on your phones says "Pako is
+- Home shows a notice, and the Domovoi app on your phones says "Den is
   at 15%. Plug it in."
-- The room itself says "This is Pako. My battery is low. Please plug me
+- The room itself says "This is Den. My battery is low. Please plug me
   in." Not during the room's quiet hours.
 
 Each warning comes once per charge. A room that went offline nearly empty

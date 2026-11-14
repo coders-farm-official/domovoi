@@ -1274,11 +1274,11 @@ minute late at most. Off its charger, at 20 % and again at 10 %, once per
 charge:
 
 * Home's "needs attention" and Settings → System → Health → Rooms show
-  "Pako's battery is low (15%) · plug it in".
-* The Domovoi app on the household's phones notifies: "Pako is at 15%.
+  "Den's battery is low (15%) · plug it in".
+* The Domovoi app on the household's phones notifies: "Den is at 15%.
   Plug it in." (a new **Room batteries** notification channel; the 10 %
   one replaces the 20 % one, and it goes away once the room charges).
-* The room itself says "This is Pako. My battery is low. Please plug me
+* The room itself says "This is Den. My battery is low. Please plug me
   in.", except during its quiet hours (below); the notice and the
   notification still go, and it is not said later.
 

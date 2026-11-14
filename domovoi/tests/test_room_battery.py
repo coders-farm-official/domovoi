@@ -70,11 +70,11 @@ def test_charging_or_a_level_back_up_ends_the_cycle():
 
 
 def test_the_words():
-    assert rb.display_name("pako") == "Pako"
+    assert rb.display_name("den") == "Den"
     assert rb.display_name("living_room") == "Living room"
-    assert rb.display_name("pako", "Dog speaker") == "Dog speaker"
-    assert rb.notice_text("Pako", 15) == "Pako is at 15%. Plug it in."
-    assert rb.spoken_text("Pako") == "This is Pako. My battery is low. Please plug me in."
+    assert rb.display_name("den", "Dog speaker") == "Dog speaker"
+    assert rb.notice_text("Den", 15) == "Den is at 15%. Plug it in."
+    assert rb.spoken_text("Den") == "This is Den. My battery is low. Please plug me in."
     assert rb.spoken_text("The very long name of the upstairs") == "My battery is low. Please plug me in."
 
 
@@ -383,17 +383,17 @@ async def test_the_speaker_uses_the_rooms_own_session():
             if self.exc:
                 raise self.exc
 
-    app = SimpleNamespace(state=SimpleNamespace(active_sessions={"pako": Sess()}))
+    app = SimpleNamespace(state=SimpleNamespace(active_sessions={"den": Sess()}))
     speak = rb.session_speaker(app)
-    assert await speak("pako", "hi") is True
+    assert await speak("den", "hi") is True
     assert seen == [("hi", True, "notice")]
     assert await speak("gone", "hi") is False
-    app.state.active_sessions["pako"] = Sess(AnnounceNotStarted("busy", reason="responding"))
-    assert await speak("pako", "hi") is False
-    app.state.active_sessions["pako"] = Sess(AnnounceNotStarted("no", reason="unsupported"))
-    assert await speak("pako", "hi") is None
-    app.state.active_sessions["pako"] = Sess(AnnounceNotStarted("shh", reason="quiet_hours"))
-    assert await speak("pako", "hi") is None   # not retried: never said later
+    app.state.active_sessions["den"] = Sess(AnnounceNotStarted("busy", reason="responding"))
+    assert await speak("den", "hi") is False
+    app.state.active_sessions["den"] = Sess(AnnounceNotStarted("no", reason="unsupported"))
+    assert await speak("den", "hi") is None
+    app.state.active_sessions["den"] = Sess(AnnounceNotStarted("shh", reason="quiet_hours"))
+    assert await speak("den", "hi") is None   # not retried: never said later
 
 
 @pytest.mark.asyncio
@@ -406,8 +406,8 @@ async def test_a_missing_table_costs_a_log_line_not_the_session(caplog):
             return False
 
     w = rb.BatteryWatch(scope=Boom, clock=Clock(), speaker=None, monotonic=Mono())
-    assert await w.observe("pako", "android_room", _bat(10)) is None
-    assert await w.observe("pako", "android_room", _bat(9)) is None
+    assert await w.observe("den", "android_room", _bat(10)) is None
+    assert await w.observe("den", "android_room", _bat(9)) is None
     assert sum("V040" in r.message for r in caplog.records) == 1
 
 
@@ -440,10 +440,10 @@ async def test_the_health_frame_reaches_the_watch(monkeypatch):
         async def send_text(self, t):  # pragma: no cover - never answered
             raise AssertionError(t)
 
-    session = StreamSession(WS(), "pako")
+    session = StreamSession(WS(), "den")
     session.token_authenticated = True
     session.board = "android_room"
     await session._on_control({"type": "health", "seq": 1, "rss_kb": 1,
                                "battery": {"percent": 15, "charging": False, "on_power": False}})
     await session._on_control({"type": "health", "seq": 2, "rss_kb": 1})   # no battery: not asked
-    assert seen == [("pako", "android_room", {"percent": 15, "charging": False, "on_power": False})]
+    assert seen == [("den", "android_room", {"percent": 15, "charging": False, "on_power": False})]

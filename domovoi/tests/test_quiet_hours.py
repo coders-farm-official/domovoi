@@ -158,8 +158,8 @@ async def test_alarms_and_asked_for_speech_ring_in_quiet_hours(monkeypatch, kind
 @pytest.mark.asyncio
 async def test_outside_quiet_hours_a_notice_is_spoken(monkeypatch):
     sess, spoken = _session(monkeypatch, quiet=False)
-    await _say(sess, "Pako's battery is low.")
-    assert spoken == ["Pako's battery is low."]
+    await _say(sess, "Den's battery is low.")
+    assert spoken == ["Den's battery is low."]
 
 
 @pytest.mark.asyncio

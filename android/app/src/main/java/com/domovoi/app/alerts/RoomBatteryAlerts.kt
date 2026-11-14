@@ -43,7 +43,7 @@ import kotlinx.serialization.json.longOrNull
 // the core warns at 20 % and again at 10 % while a phone room is off its
 // charger, once per discharge; the web serves the open warnings of the rooms
 // whose "Notify when the battery is low" is on. Every household phone posts
-// one notification per room ("Pako is at 15%. Plug it in."), the 10 % one
+// one notification per room ("Den is at 15%. Plug it in."), the 10 % one
 // replacing the 20 % one, and takes it back once the room is charging (or
 // its switch goes off). A shared screen posts it too: it is the house's
 // news, not anybody's own.

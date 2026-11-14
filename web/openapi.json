@@ -6009,7 +6009,7 @@
           "satellites"
         ],
         "summary": "List Battery Warnings",
-        "description": "The open low-battery warnings of the phone rooms whose \"Notify when\nthe battery is low\" is on, oldest first: what the phones' notification\nand the dashboard's notice say (\"Pako is at 15%. Plug it in.\"). A\nwarning closes when its room goes on its charger. Household tier, like\nthe room list it summarises. Empty when V040 is missing.",
+        "description": "The open low-battery warnings of the phone rooms whose \"Notify when\nthe battery is low\" is on, oldest first: what the phones' notification\nand the dashboard's notice say (\"Den is at 15%. Plug it in.\"). A\nwarning closes when its room goes on its charger. Household tier, like\nthe room list it summarises. Empty when V040 is missing.",
         "operationId": "list_battery_warnings_api_satellites_battery_warnings_get",
         "responses": {
           "200": {
