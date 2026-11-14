@@ -145,7 +145,7 @@ final class ListenClaimTests: XCTestCase {
         let b = book()
         let said = "Alex is already claimed by another phone or browser. An admin can add this one too."
         StubURLProtocol.enqueue(.json(#"{"detail":"\#(said)"}"#, status: 403))
-        do {
+        do throws(DomovoiError) {
             _ = try await claimThisPhone(client: client(), book: b, server: base, deviceID: "ios-1a2b", personID: 3)
             XCTFail("a refusal throws")
         } catch {
@@ -159,7 +159,7 @@ final class ListenClaimTests: XCTestCase {
     func testASharedScreenRefusalIsShown() async {
         let b = book()
         StubURLProtocol.enqueue(.json(#"{"detail":"this is a shared screen, so it is the whole household's"}"#, status: 409))
-        do {
+        do throws(DomovoiError) {
             _ = try await claimThisPhone(client: client(), book: b, server: base, deviceID: "ios-1a2b", personID: 3)
             XCTFail("a refusal throws")
         } catch {
@@ -199,7 +199,7 @@ final class ListenClaimTests: XCTestCase {
     func testAClaimForAServerTheAppLeftIsNotSent() async {
         let b = book()
         b.rememberDeviceOwner(DeviceOwner(id: 3, name: "Alex"), claimKey: "held-key-1234", for: other)
-        do {
+        do throws(DomovoiError) {
             _ = try await claimThisPhone(client: client(), book: b, server: other, deviceID: "ios-1a2b", personID: nil)
             XCTFail("not sent")
         } catch {

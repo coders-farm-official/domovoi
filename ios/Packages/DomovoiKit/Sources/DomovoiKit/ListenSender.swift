@@ -82,7 +82,7 @@ public actor ListenSender {
                 continue
             }
             let answer: Data
-            do {
+            do throws(DomovoiError) {
                 answer = try await client.raw(method: "POST", path: Self.path, body: body, onlyTo: to)
             } catch {
                 guard let status = error.failure?.status else { return .kept }

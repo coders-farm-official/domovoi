@@ -37,7 +37,7 @@ public func claimHere(_ shell: ShellModel, personID: Int?) async -> ClaimOutcome
     guard let deviceID = shell.deviceID, !server.isEmpty else {
         return ClaimOutcome(ok: false, message: failureText("claim", .noServer))
     }
-    do {
+    do throws(DomovoiError) {
         let owner = try await claimThisPhone(
             client: shell.container.client, book: shell.owners, server: server,
             deviceID: deviceID, personID: personID
@@ -218,7 +218,7 @@ public final class PeopleThisPhoneModel {
         let client = shell.container.client
         let book = shell.owners
         Task { @MainActor [weak self] in
-            do {
+            do throws(DomovoiError) {
                 let n = try await clearListeningHistory(
                     client: client, book: book, server: at, deviceID: deviceID, personID: person.id
                 )

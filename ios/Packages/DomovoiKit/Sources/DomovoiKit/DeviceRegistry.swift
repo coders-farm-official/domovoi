@@ -725,7 +725,7 @@ public func claimThisPhone(
         body = Data("{\"person_id\":null}".utf8)
     }
     let data: Data
-    do {
+    do throws(DomovoiError) {
         data = try await client.raw(
             method: "PUT", path: path, body: body,
             headers: claimHeaders(deviceID: deviceID, claimKey: book.claimKey(for: server)),
