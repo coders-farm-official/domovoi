@@ -73,7 +73,18 @@ class ListenLog(
      *  player's AUTO / REPEAT transition). */
     fun transition(item: PlayItem?, natural: Boolean, local: Boolean, playing: Boolean) {
         close(natural)
-        if (eligible(item, local)) tracker.begin(item!!.id, server(), item.durationSec, playing)
+        if (eligible(item, local)) begin(item!!, playing)
+    }
+
+    private fun begin(item: PlayItem, playing: Boolean) {
+        tracker.begin(item.id, server(), item.durationSec, playing, item.sessionId, item.queueOrigin.wire)
+    }
+
+    /** The Up next session's id was just put on [item] (the start's answer
+     *  came after the song began): the listen open for it carries it. */
+    fun sessionArrived(item: PlayItem?) {
+        val id = item?.sessionId ?: return
+        if (tracker.openTrack == item.id) tracker.session(id)
     }
 
     /** The player started or stopped producing sound. A library song that
@@ -81,7 +92,7 @@ class ListenLog(
      *  stop) begins now. [durationSec]: the player's own length, when known. */
     fun playing(isPlaying: Boolean, item: PlayItem?, local: Boolean, durationSec: Double? = null) {
         if (isPlaying && tracker.openTrack == null && eligible(item, local)) {
-            tracker.begin(item!!.id, server(), item.durationSec, playing = false)
+            begin(item!!, playing = false)
         }
         if (durationSec != null && tracker.openTrack == item?.id) tracker.duration(durationSec)
         tracker.playing(isPlaying)
@@ -120,6 +131,8 @@ class ListenLog(
             outcome = row.outcome,
             listenerPersonId = pick?.takeIf { it != ListenerPicks.HOUSEHOLD }?.toLongOrNull(),
             asHousehold = pick == ListenerPicks.HOUSEHOLD,
+            sessionId = row.sessionId,
+            origin = row.origin,
         )
     }
 

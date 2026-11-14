@@ -33,6 +33,10 @@ data class OutboxRow(
     val outcome: String,
     @SerialName("listener_person_id") val listenerPersonId: Long? = null,
     @SerialName("as_household") val asHousehold: Boolean = false,
+    /** The Up next session the song belonged to (rows from before Up next: none). */
+    @SerialName("session_id") val sessionId: String? = null,
+    /** `explicit` | `list` | `auto`. */
+    val origin: String = "explicit",
 ) {
     /** The row as the server takes it (API_REFERENCE §3.5e). */
     fun toWire(): JsonObject = buildJsonObject {
@@ -45,7 +49,8 @@ data class OutboxRow(
         listenerPersonId?.let { put("listener_person_id", it) }
         if (asHousehold) put("as_household", true)
         put("player", "android")
-        put("origin", "explicit")
+        sessionId?.let { put("session_id", it) }
+        put("origin", origin.takeIf { it == "list" || it == "auto" } ?: "explicit")
     }
 
     companion object {

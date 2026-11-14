@@ -164,6 +164,12 @@ fun MusicScreen() {
     val onBrowserPlay: (LibraryTrack) -> Unit = { t ->
         playHereAndSay(app.player, toItem(t), t.title ?: "track", toast) { scope.launch { it() } }
     }
+    // A library row's play: a searched or filtered library goes on with the
+    // rest of what is shown (Up next), the whole library with songs like it.
+    val onLibraryRowPlay: (LibraryTrack) -> Unit = { t ->
+        val context = libraryRowContext(qDebounced, ui.source, ui.favoritedOnly)
+        playFromListAndSay(app.player, if (context != null) lib.items else emptyList(), t, context, toast) { scope.launch { it() } }
+    }
     // Play next / Add to queue: this phone's queue, or the room it casts to.
     val queueSong = rememberSongQueue()
     val queueSongTo = rememberSongQueueTo()
@@ -471,7 +477,7 @@ fun MusicScreen() {
                     onToggleFavorite = onToggleFavorite,
                     onAddToPlaylist = { ui.addTrack = it },
                     onBulkAdd = onBulkAdd,
-                    onBrowserPlay = onBrowserPlay,
+                    onBrowserPlay = onLibraryRowPlay,
                     onQueueTrack = onQueueTrack,
                     onPlayNext = onPlayNext,
                     onSaveToDevice = onSaveToDevice,
@@ -608,7 +614,9 @@ internal fun playHereAndSay(
     onMain: (() -> Unit) -> Unit,
 ) {
     val playing = "playing \"$title\" on this device"
-    val left = player.playItems(listOf(item)) { room, paused ->
+    // A song on its own: Up next follows it with songs like it from the
+    // whole library (library mode; PlayerController.playFromList).
+    val left = player.playFromList(listOf(item), 0, null) { room, paused ->
         onMain { toast(CastPlanner.playHereNote(playing, room, paused)) }
     }
     if (left == null) toast(playing)

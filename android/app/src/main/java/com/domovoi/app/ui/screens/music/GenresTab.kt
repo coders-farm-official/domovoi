@@ -467,7 +467,7 @@ internal fun GenreDrawer(
                         ) {
                             val can = loaded.isNotEmpty()
                             OutlinedButton(onClick = {
-                                playTracksHereAndSay(app.player, loaded, genre.name, false, toast, onMain = { scope.launch { it() } })
+                                playTracksHereAndSay(app.player, loaded, genre.name, false, toast, onMain = { scope.launch { it() } }, context = genreContext(genre))
                                 onClose()
                             }, enabled = can) {
                                 Icon(Icons.Filled.Headphones, null, Modifier.size(16.dp), tint = Domovoi.colors.fg)
@@ -475,7 +475,7 @@ internal fun GenreDrawer(
                                 Text("play here", color = Domovoi.colors.fg)
                             }
                             OutlinedButton(onClick = {
-                                playTracksHereAndSay(app.player, loaded, genre.name, true, toast, onMain = { scope.launch { it() } })
+                                playTracksHereAndSay(app.player, loaded, genre.name, true, toast, onMain = { scope.launch { it() } }, context = genreContext(genre))
                                 onClose()
                             }, enabled = can) {
                                 Icon(Icons.Filled.Shuffle, null, Modifier.size(16.dp), tint = Domovoi.colors.fg)
@@ -515,7 +515,8 @@ internal fun GenreDrawer(
                     GenreSongRow(
                         t,
                         onClick = { onSelectTrack(t) },
-                        onPlay = { playHereAndSay(app.player, libraryPlayItem(t), t.title ?: "track", toast) { scope.launch { it() } } },
+                        // Up next goes on with the rest of this genre.
+                        onPlay = { playFromListAndSay(app.player, loaded, t, genreContext(genre), toast) { scope.launch { it() } } },
                         // This phone's queue, or the room it casts to (batch 2 §2).
                         onPlayNext = { queueSong(t, true) },
                         onQueue = { queueSong(t, false) },

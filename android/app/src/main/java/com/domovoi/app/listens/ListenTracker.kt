@@ -33,6 +33,8 @@ class ListenTracker(
         var playedMs: Long = 0,
         var sinceMono: Long? = null,
         var skipped: Boolean = false,
+        var sessionId: String? = null,
+        val origin: String = "explicit",
     )
 
     private var cur: Open? = null
@@ -43,9 +45,16 @@ class ListenTracker(
     /** A library song [trackId] from [server] starts now. Whatever was open
      *  is closed first, as stopped (the caller closes it with the right
      *  word before, when it knows one). */
-    fun begin(trackId: Long, server: String, durationSec: Double?, playing: Boolean): ListenRow? {
+    fun begin(
+        trackId: Long,
+        server: String,
+        durationSec: Double?,
+        playing: Boolean,
+        sessionId: String? = null,
+        origin: String = "explicit",
+    ): ListenRow? {
         val closed = close(natural = false)
-        cur = Open(trackId, server, wallMs(), durationSec?.takeIf { it > 0 })
+        cur = Open(trackId, server, wallMs(), durationSec?.takeIf { it > 0 }, sessionId = sessionId, origin = origin)
         if (playing) cur!!.sinceMono = monoMs()
         return closed
     }
@@ -58,6 +67,13 @@ class ListenTracker(
             c.playedMs += monoMs() - c.sinceMono!!
             c.sinceMono = null
         }
+    }
+
+    /** The Up next session of the song playing came back after it began
+     *  (the start's answer): its listen carries it. Never replaces one. */
+    fun session(sessionId: String) {
+        val c = cur ?: return
+        if (c.sessionId == null) c.sessionId = sessionId
     }
 
     /** The player learnt the song's real length. */
@@ -89,6 +105,8 @@ class ListenTracker(
             playedSec = Math.round(played).toInt(),
             durationSec = duration?.let { Math.round(it).toInt() },
             outcome = outcomeFor(played, duration, c.skipped && !natural, ended = natural),
+            sessionId = c.sessionId,
+            origin = c.origin,
         )
     }
 
@@ -115,4 +133,9 @@ data class ListenRow(
     val playedSec: Int,
     val durationSec: Int?,
     val outcome: String,
+    /** The Up next session the song belonged to (§3.5f): how its skip or
+     *  finish feeds that session. */
+    val sessionId: String? = null,
+    /** `explicit`, `list` or `auto` ([com.domovoi.app.player.QueueOrigin]). */
+    val origin: String = "explicit",
 )

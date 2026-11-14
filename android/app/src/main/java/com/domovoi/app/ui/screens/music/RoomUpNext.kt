@@ -287,8 +287,8 @@ internal fun roomPlayTrackBody(
 /**
  * `POST /api/music/play-playlist`'s body: the room loads the whole playlist
  * as its queue and arms a `continue` Up next with it as the source. The
- * listener fields as for "play in <room>" ([listenerFields]); autoplay is
- * left at the server's default (on) until the phone has its own switch.
+ * listener fields as for "play in <room>" ([listenerFields]); [autoplay]
+ * off (this phone's switch) is said, on is the server's default.
  */
 internal fun roomPlayPlaylistBody(
     room: String,
@@ -297,12 +297,14 @@ internal fun roomPlayPlaylistBody(
     deviceId: String,
     pick: String?,
     shared: Boolean,
+    autoplay: Boolean = true,
 ): JsonObject = buildJsonObject {
     put("room_id", room)
     put("playlist_id", playlistId)
     put("shuffle", shuffle)
     put("device_id", deviceId)
     listenerFields(pick, shared)
+    if (!autoplay) put("autoplay", false)
 }
 
 /**
@@ -388,6 +390,7 @@ internal suspend fun playPlaylistInRoom(
         deviceId = app.prefs.deviceId,
         pick = app.prefs.listenerPickFor(server),
         shared = app.prefs.sharedHere(server),
+        autoplay = app.prefs.upNextAutoplay.value,
     )
     val answer = playPlaylistAnswer(app.api.post("/api/music/play-playlist", body, onlyTo = server))
     if (answer?.loading == true) {

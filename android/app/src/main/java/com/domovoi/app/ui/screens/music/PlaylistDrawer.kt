@@ -112,7 +112,11 @@ internal fun PlaylistDrawer(
 
     // The list as shown (a reorder in flight included), every track of it.
     fun playHere(shuffle: Boolean) {
-        if (playTracksHereAndSay(app.player, items, playlist.name, shuffle, toast, onMain = { scope.launch { it() } })) {
+        if (playTracksHereAndSay(
+                app.player, items, playlist.name, shuffle, toast, onMain = { scope.launch { it() } },
+                context = playlistContext(playlist),
+            )
+        ) {
             onClose()
         }
     }

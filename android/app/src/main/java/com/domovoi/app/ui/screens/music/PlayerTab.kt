@@ -104,6 +104,9 @@ internal class PlayerTabModel(
      *  library item, or the track the room plays while casting. Null for
      *  radio, podcasts, audiobooks, songs on the phone and streams. */
     val lyricsTrackId: Long? = null,
+    /** The phone's own Up next (PhoneUpNextUi.kt): which rows are picks
+     *  still to come, and whether the section shows. */
+    val upNext: PhoneUpNextView = PhoneUpNextView.NONE,
 ) {
     val current: PlayItem? get() = queue.getOrNull(index)
     val isRemote: Boolean get() = roomTarget != null
@@ -138,8 +141,9 @@ internal fun rememberPlayerTabModel(): PlayerTabModel {
         derivedStateOf { remote.value?.takeIf { it.roomId == roomTarget?.roomId }?.trackId }
     }
     val lyricsTrackId = if (roomTarget != null) roomTrackId.value else lyricsTrackIdOf(queue.getOrNull(index))
-    return remember(queue, index, roomTarget, chapters, currentChapter, hasLibrary, lyricsTrackId) {
-        PlayerTabModel(queue, index, roomTarget, chapters, currentChapter, hasLibrary, lyricsTrackId)
+    val upNext = rememberPhoneUpNextView(queue, casting = roomTarget != null)
+    return remember(queue, index, roomTarget, chapters, currentChapter, hasLibrary, lyricsTrackId, upNext) {
+        PlayerTabModel(queue, index, roomTarget, chapters, currentChapter, hasLibrary, lyricsTrackId, upNext)
     }
 }
 
@@ -200,10 +204,12 @@ internal fun LazyListScope.playerTab(
         }
     }
 
-    // Queue
+    // Queue: the songs that play and were asked for; Up next's picks still
+    // to come have their own section under them (not counted).
     val queue = model.queue
+    val rows = model.upNext.explicitRows(queue, model.index)
     item(key = "player-queue-label") {
-        PlayerQueueHeader(queue.size, canSave = model.hasLibraryItems, onSaveQueue = onSaveQueue)
+        PlayerQueueHeader(rows.size, canSave = model.hasLibraryItems, onSaveQueue = onSaveQueue)
     }
     // The queue's search box (batch 2 §2): adds where the player plays.
     val addTarget = model.roomTarget?.let { QueueTarget.Room(it.roomId) } ?: QueueTarget.Phone
@@ -219,15 +225,18 @@ internal fun LazyListScope.playerTab(
     } else {
         val index = model.index
         items(
-            count = queue.size,
-            key = { playerQueueKey(it, queue[it]) },
+            count = rows.size,
+            key = { playerQueueKey(rows[it], queue[rows[it]]) },
             contentType = { "player-queue-row" },
-        ) { i ->
+        ) { k ->
+            val i = rows[k]
             PlayerQueueRow(
                 i, queue[i],
-                isCurrent = i == index, last = i == queue.lastIndex, room = model.roomTarget?.roomId,
+                isCurrent = i == index, room = model.roomTarget?.roomId,
+                up = rows.getOrNull(k - 1), down = rows.getOrNull(k + 1),
             )
         }
+        phoneUpNext(model.upNext, queue, index, keyPrefix = "player")
     }
 }
 
@@ -585,7 +594,7 @@ private fun PlayerQueueHeader(size: Int, canSave: Boolean, onSaveQueue: () -> Un
 internal fun castFailure(e: Throwable, room: String?): String = CastPlanner.failureNote(e, room)
 
 @Composable
-private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boolean, room: String?) {
+private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, room: String?, up: Int?, down: Int?) {
     val app = LocalApp.current
     val toast = LocalToast.current
     // The app's scope: a queue row scrolls away, or is redrawn under a new
@@ -640,14 +649,15 @@ private fun PlayerQueueRow(i: Int, item: PlayItem, isCurrent: Boolean, last: Boo
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        // Within the rows shown: never into Up next's picks below.
         SmallIconButton(
             Icons.Filled.KeyboardArrowUp, "move up",
-            enabled = i > 0,
-        ) { app.player.moveItem(i, i - 1) }
+            enabled = up != null,
+        ) { up?.let { app.player.moveItem(i, it) } }
         SmallIconButton(
             Icons.Filled.KeyboardArrowDown, "move down",
-            enabled = !last,
-        ) { app.player.moveItem(i, i + 1) }
+            enabled = down != null,
+        ) { down?.let { app.player.moveItem(i, it) } }
         SmallIconButton(Icons.Filled.Close, "remove from queue") {
             app.player.removeAt(i)
         }

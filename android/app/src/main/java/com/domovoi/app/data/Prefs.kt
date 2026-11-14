@@ -91,6 +91,7 @@ class Prefs(
     private val kLyricsSheetOpen = booleanPreferencesKey("lyrics_sheet_open")
     private val kLyricsRoomNudge = stringPreferencesKey("lyrics_room_nudge")
     private val kPreferLocal = booleanPreferencesKey("prefer_local")
+    private val kUpNextAutoplay = booleanPreferencesKey("up_next_autoplay")
     private val kPhoneFolders = stringPreferencesKey("phone_folders")
     private val kPhoneBar = stringPreferencesKey("phone_bar")
     private val kNavGroupsOpen = stringPreferencesKey("nav_groups_open")
@@ -196,6 +197,12 @@ class Prefs(
      *  again (ui/shell/ShellMode.kt). */
     private val _preferLocal = MutableStateFlow(false)
     val preferLocal: StateFlow<Boolean> = _preferLocal
+
+    /** Up next's Autoplay (per device, on until switched off; the web's
+     *  localStorage `domovoi-upnext-autoplay`): keep playing similar songs
+     *  when the queue ends. Sent with every start and cast. */
+    private val _upNextAutoplay = MutableStateFlow(true)
+    val upNextAutoplay: StateFlow<Boolean> = _upNextAutoplay
 
     /** Folders added to the phone's Files tab (data/PhoneFolders.kt). */
     private val _phoneFolders = MutableStateFlow<List<PhoneFolder>>(emptyList())
@@ -314,6 +321,7 @@ class Prefs(
             _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
             _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
             _preferLocal.value = p[kPreferLocal] ?: false
+            _upNextAutoplay.value = p[kUpNextAutoplay] ?: true
             _phoneFolders.value = PhoneFolders.decode(p[kPhoneFolders])
             // The retired Assistant tab moves to Chat, written back once
             // (PhoneBar.migrate).
@@ -585,6 +593,12 @@ class Prefs(
         if (_preferLocal.value == local) return
         _preferLocal.value = local
         scope.launch { context.dataStore.edit { it[kPreferLocal] = local } }
+    }
+
+    fun setUpNextAutoplay(on: Boolean) {
+        if (_upNextAutoplay.value == on) return
+        _upNextAutoplay.value = on
+        scope.launch { context.dataStore.edit { it[kUpNextAutoplay] = on } }
     }
 
     fun setPhoneFolders(list: List<PhoneFolder>) {
