@@ -4,6 +4,31 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — The queue, easier to find and to use
+
+Nothing to do; what changed on the dashboard and in the API:
+
+- **Every song row has a ⋯ menu** with **play next** and **add to
+  queue** (Library, an artist's, album's or genre's songs, playlists, a
+  room's Recently played). It goes where the music plays and says so:
+  "play next here", "play next in kitchen". The Library's two queue
+  buttons became this one menu.
+- **The Queue panel picks whose queue it shows**: this browser, or any
+  room (the room's real queue, with everything Music → Room queue does).
+  A browser playing in a room still keeps its own copy of what it sent;
+  the room's own queue is one pick away. Songs are grouped under **now
+  playing**, **next** and **up next**; the grip drags or moves a song with
+  the arrow keys, and an arrow button plays a song next.
+- **Home's room cards** (playing or paused) have a **queue** button, and
+  a room's page in Settings → Rooms has **open queue**: the queue panel
+  aimed at that room, or Music → Room queue when nothing plays in this
+  browser.
+- **API:** `POST /api/playlists/{id}/tracks` also takes
+  `{track_ids: [...]}` (up to 500) and answers 200
+  `{added, duplicates, missing}`; the one-song body is unchanged. "Save as
+  playlist" now sends one request instead of one per song.
+  `GET /api/satellites/{room}/recently-played` rows gain `track_id`.
+
 ## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
 
 A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm
