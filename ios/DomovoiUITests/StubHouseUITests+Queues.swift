@@ -104,7 +104,7 @@ extension StubHouseUITests {
             waitUntilGone(pill, timeout: 20),
             "the pick is still drawn after `less like this` — tree follows\n" + app.debugDescription
         )
-        XCTAssertFalse(app.buttons[QueuesUnderTest.lessLikeNidra].exists, "the artist's other pick is still offered")
+        XCTAssertFalse(app.buttons[QueuesUnderTest.lessLikeNidra].exists, "the artist's other pick is still offered — tree follows\n" + app.debugDescription)
         evidence(app, "queues-11-less-like-this")
     }
 
@@ -148,7 +148,7 @@ extension StubHouseUITests {
             containing(app, QueuesUnderTest.addedByPriya).waitForExistence(timeout: 20),
             "the sheet does not list the room's queue — tree follows\n" + app.debugDescription
         )
-        XCTAssertTrue(app.textFields[QueuesUnderTest.searchLabel].exists, "the sheet has no search box")
+        XCTAssertTrue(app.textFields[QueuesUnderTest.searchLabel].exists, "the sheet has no search box — tree follows\n" + app.debugDescription)
         evidence(app, "queues-20-sheet")
         app.buttons[MusicMoreUnderTest.close].tap()
     }
@@ -162,12 +162,12 @@ extension StubHouseUITests {
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no search box — tree follows\n" + app.debugDescription)
         field.tap()
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the keyboard never came up")
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the keyboard never came up — tree follows\n" + app.debugDescription)
         field.typeText("Qu")
         evidence(app, "queues-21-keyboard")
         XCTAssertLessThanOrEqual(
             field.frame.maxY, keyboard.frame.minY + 0.5,
-            "the keyboard covers the search box: field \(field.frame), keyboard \(keyboard.frame)"
+            "the keyboard covers the search box: field \(field.frame), keyboard \(keyboard.frame) — tree follows\n" + app.debugDescription
         )
     }
 
@@ -224,7 +224,7 @@ extension StubHouseUITests {
         )
         XCTAssertFalse(
             app.buttons[QueuesUnderTest.queueOf("study")].exists,
-            "an offline room offers a queue"
+            "an offline room offers a queue — tree follows\n" + app.debugDescription
         )
         button.tap()
         XCTAssertTrue(
@@ -242,7 +242,7 @@ extension StubHouseUITests {
     func testQueues_TheTrackSheetPlaysASongNextInARoom() throws {
         musicMoreReset()
         let (app, landed) = openMusicMore()
-        XCTAssertTrue(landed, "Music never drew")
+        XCTAssertTrue(landed, "Music never drew — tree follows\n" + app.debugDescription)
         XCTAssertTrue(openTrackSheet(app, MusicMoreUnderTest.sablewind), "the track sheet never opened")
         let next = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", QueuesUnderTest.playNextIn)).firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 20), "no `play next in <room>` — tree follows\n" + app.debugDescription)
@@ -254,7 +254,7 @@ extension StubHouseUITests {
             )).firstMatch.waitForExistence(timeout: 20),
             "the sheet did not say where the song went — tree follows\n" + app.debugDescription
         )
-        XCTAssertTrue(app.buttons[QueuesUnderTest.addToQueue].exists, "this device's `add to queue` is missing")
+        XCTAssertTrue(app.buttons[QueuesUnderTest.addToQueue].exists, "this device's `add to queue` is missing — tree follows\n" + app.debugDescription)
         evidence(app, "queues-40-track-sheet")
         closeSheet(app)
     }
