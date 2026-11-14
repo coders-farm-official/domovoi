@@ -906,7 +906,8 @@ def test_the_sheet_does_what_the_bar_and_its_panels_did(driven) -> None:
     assert a["openAfterCast"] is True
     posts = [(c["method"], c["path"], c["body"]) for c in a["calls"] if c["method"] == "POST"]
     assert posts[0] == ("POST", "/api/playlists", {"name": "road trip"})
-    assert [p[1] for p in posts[1:]] == ["/api/playlists/7/tracks"] * 3
+    # The whole queue in one request (track_ids[], P5).
+    assert [p[1] for p in posts[1:]] == ["/api/playlists/7/tracks"]
 
 
 def test_a_room_cast_in_the_sheet(driven) -> None:

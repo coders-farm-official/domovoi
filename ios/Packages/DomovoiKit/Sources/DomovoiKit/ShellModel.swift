@@ -319,24 +319,29 @@ public final class ShellModel {
         // (`Prefs.forgetServer`; security review of the claim unit).
         container.store.notifyServerForgotten { [weak self] url in
             let normalized = ServerCredentials.normalize(url)
+            // A `let` copy of the weak capture: Swift 6.2 (the CI runner's)
+            // calls handing the `weak var` itself to `assumeIsolated` / a
+            // `Task` "sending 'self'"; a constant of this @MainActor (so
+            // Sendable) class is fine on 6.2 and 6.3 alike.
+            let shell = self
             // The song open for that server goes first, and in the same turn
             // when the forget came from the main actor (every forget the app
             // makes does): the forget-active path refreshes the shell right
             // after, and a song closed then must not add a row for the
             // server just forgotten (integration fix B1).
             if Thread.isMainThread {
-                MainActor.assumeIsolated { self?.listens?.forget(server: normalized) }
+                MainActor.assumeIsolated { shell?.listens?.forget(server: normalized) }
             } else {
-                Task { @MainActor in self?.listens?.forget(server: normalized) }
+                Task { @MainActor in shell?.listens?.forget(server: normalized) }
             }
             owners.forget(server: url)
             listenerStore.forgetPick(for: url)
             listenOutbox?.forget(server: normalized)
             Task { @MainActor in
-                self?.ownersChanged()
+                shell?.ownersChanged()
                 // Whatever else the app keeps per server (calendar sharing's
-                // entry, 1.3.0) goes at the same signal.
-                self?.onServerForgotten?(normalized)
+                // entry and its key, 1.3.0) goes at the same signal.
+                shell?.onServerForgotten?(normalized)
             }
         }
         // A launch straight onto a waiting card has to count down too, and

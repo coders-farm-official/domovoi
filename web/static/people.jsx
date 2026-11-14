@@ -642,6 +642,8 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceMatches, on
 
       <PersonListening person={person} listens={listens} fire={fire} onChanged={onDeviceChanged}/>
 
+      {typeof window.PersonMusicMix === 'function' && <window.PersonMusicMix person={person} fire={fire}/>}
+
       <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>notes</div>
         <div style={{ fontSize: 13, color: person.notes ? 'var(--fg)' : 'var(--fg-faint)' }}>

@@ -354,9 +354,9 @@ def test_save_as_playlist_is_a_secondary_button_below_the_search(driven) -> None
 def test_the_save_button_opens_a_name_prompt_and_saves(driven) -> None:
     f = driven["save_flow"]
     assert f["open"] and f["closed"]
+    # One request for the whole queue (track_ids[], P5), not one per song.
     assert f["posts"] == [["/api/playlists", {"name": "Friday"}],
-                          ["/api/playlists/7/tracks", {"track_id": 1}],
-                          ["/api/playlists/7/tracks", {"track_id": 2}]]
+                          ["/api/playlists/7/tracks", {"track_ids": [1, 2]}]]
     assert 'Saved as "Friday"' in f["status"]
 
 
@@ -377,7 +377,10 @@ def test_a_failed_save_is_said_a_refused_sign_in_is_not(driven) -> None:
 
 def test_both_queue_panels_draw_the_search_not_the_old_save_box() -> None:
     src = _src()
-    assert src.count("<PlayerQueueAdd p={p}/>") == 2          # the player's Queue tab and the bar's panel
+    # One queue view (PlayerQueueView, P5) draws both: the player's Queue
+    # tab (sheet) and the bar's floating panel.
+    assert src.count("<PlayerQueueAdd p={p}/>") == 1
+    assert src.count("<PlayerQueueView p={p}") == 2
     assert src.count("<PlayerQueueSave queue=") == 1          # only inside the search block
     assert "save queue as playlist…" not in src
 

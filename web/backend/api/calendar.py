@@ -16,17 +16,22 @@ it answers 409 ("change it there").
   its owner chose to share (device tier, at most once a minute per phone,
   8 MB; web/backend/middleware.py BODY_LIMITS). One row per (phone,
   calendar), so one phone never overwrites another's. A device id is
-  self-asserted, as everywhere in the household tier.
+  self-asserted, so the phone's first snapshot is handed a calendar key
+  and every later PUT or DELETE must carry it (``X-Domovoi-Calendar-Key``,
+  V057; calendar_feeds.admit_phone): only that phone, or an admin (DELETE),
+  touches its calendars. A late upload is refused by its ``generation``.
+  A phone not heard from for a day shows ``stale``; after 7 days its
+  calendars are deleted (the refresher worker).
 """
 
 from __future__ import annotations
 
 import re
 import time
-from datetime import date, datetime, time as dtime, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import text
 
 from domovoi import calendar_feeds, household_time
@@ -69,8 +74,32 @@ _EVENT_COLUMNS = """
     e.id, e.title, e.starts_at, e.ends_at, e.location, e.description,
     e.source, e.external_id, e.last_synced_at, e.all_day, e.calendar_source_id,
     s.name, s.color, s.kind,
-    COALESCE(sp.name, dp.name, d.name)
+    COALESCE(sp.name, dp.name, d.name),
+    e.busy,
+    (SELECT array_agg(DISTINCT o_s.name || COALESCE(' · ' || COALESCE(o_sp.name, o_dp.name, o_d.name), ''))
+       FROM calendar_events o
+       JOIN calendar_sources o_s ON o_s.id = o.calendar_source_id
+       LEFT JOIN people o_sp ON o_sp.id = o_s.person_id
+       LEFT JOIN devices o_d ON o_s.kind = 'phone' AND o_d.device_id = o_s.device_id
+       LEFT JOIN people o_dp ON o_dp.id = o_d.owner_person_id
+      WHERE e.ical_uid IS NOT NULL AND o.ical_uid = e.ical_uid
+        AND o.starts_at = e.starts_at AND o.id <> e.id)
 """
+# The same event in two calendars (two phones sharing one family calendar,
+# or a phone and a link to it): same iCalendar UID and start. Listed once,
+# as the row with the lowest id; ``also_in`` names the others.
+_NOT_A_DUPLICATE = """
+    NOT EXISTS (SELECT 1 FROM calendar_events o
+                WHERE e.ical_uid IS NOT NULL AND o.ical_uid = e.ical_uid
+                  AND o.starts_at = e.starts_at AND o.id < e.id)
+"""
+# GET /events with neither bound: from a day ago to 60 days ahead.
+DEFAULT_BACK = timedelta(days=1)
+DEFAULT_AHEAD = timedelta(days=60)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 _EVENT_FROM = """
     FROM calendar_events e
     LEFT JOIN calendar_sources s ON s.id = e.calendar_source_id
@@ -87,13 +116,19 @@ async def list_events(
     limit: int = Query(default=500, ge=1, le=2000),
 ) -> list[CalendarEvent]:
     """Events in ``[start, end)``: starting in it, or (from 1.3.0) begun
-    before ``start`` and still under way at it (a multi-day event).
+    before ``start`` and still under way at it (a multi-day event), in
+    start order, at most ``limit``.
 
-    Both bounds optional: omit ``start`` for a "since the dawn of time"
-    sweep, omit ``end`` for everything from ``start`` onwards. Default
-    cap at 500 keeps the JSON response sane on a year-spanning query.
+    With NEITHER bound the window is a day ago to 60 days ahead (until
+    1.3.0 it was every event ever, oldest first, so the cap cut off what
+    was coming). One bound alone is open on the other side, as before.
+    The same event in two calendars (same iCalendar UID and start) is
+    listed once, with ``also_in`` naming the others.
     """
-    where_clauses: list[str] = []
+    if start is None and end is None:
+        now = _now()
+        start, end = now - DEFAULT_BACK, now + DEFAULT_AHEAD
+    where_clauses: list[str] = [_NOT_A_DUPLICATE]
     params: dict[str, Any] = {"limit": limit}
     if start is not None:
         where_clauses.append(
@@ -223,18 +258,27 @@ async def delete_event(event_id: int) -> None:
 # ─── Calendars from elsewhere (V055) ───────────────────────────────────────
 
 
+async def _is_admin(request: Request) -> bool:
+    from web.backend.api.devices import caller_is_admin
+
+    return await caller_is_admin(request)
+
+
 @router.get("/sources", response_model=list[CalendarSource], dependencies=READ)
-async def list_sources() -> list[CalendarSource]:
+async def list_sources(request: Request) -> list[CalendarSource]:
     """Every calendar the house reads besides its own: links (address
     shown as ``host/…`` only) and phones' shared calendars, with when each
-    was last read and, for a link, what went wrong in plain words."""
+    was last read and, for a link, what went wrong in plain words; a phone
+    not heard from for a day is ``stale`` ("last heard from …"). A phone's
+    ``device_id`` is in it for an admin only; ``account_name`` never."""
+    admin = await _is_admin(request)
     async with session_scope() as s:
-        rows = await calendar_feeds.list_sources(s)
+        rows = await calendar_feeds.list_sources(s, admin=admin)
     return [CalendarSource(**r) for r in rows]
 
 
 async def _source_row(s: Any, source_id: int) -> dict[str, Any]:
-    for r in await calendar_feeds.list_sources(s):
+    for r in await calendar_feeds.list_sources(s, admin=True):
         if r["id"] == source_id:
             return r
     raise HTTPException(status_code=404, detail=f"calendar {source_id} not found")
@@ -340,21 +384,16 @@ async def patch_source(source_id: int, payload: CalendarSourcePatch) -> Calendar
 
 @router.delete("/sources/{source_id}", status_code=204, dependencies=ADMIN)
 async def delete_source(source_id: int) -> None:
-    """Remove a linked calendar and its events from the house (the
-    calendar itself, wherever it lives, is untouched). A phone's calendar
-    is stopped on the phone: removing it here would only last until the
-    phone's next update, so it is refused with that sentence."""
+    """Remove a calendar and its events from the house (the calendar
+    itself, wherever it lives, is untouched). For a phone's calendar this
+    is how one left behind goes (the app uninstalled, the phone lost); a
+    phone still sharing it sends it again with its next update."""
     async with session_scope() as s:
         kind = (
             await s.execute(text("SELECT kind FROM calendar_sources WHERE id = :id"), {"id": source_id})
         ).scalar()
         if kind is None:
             raise HTTPException(status_code=404, detail=f"calendar {source_id} not found")
-        if kind == "phone":
-            raise HTTPException(
-                status_code=409,
-                detail="stop sharing this calendar in the Domovoi app on that phone",
-            )
         await s.execute(text("DELETE FROM calendar_sources WHERE id = :id"), {"id": source_id})
         await calendar_feeds.notify_changed(s, "source")
 
@@ -407,14 +446,24 @@ def _all_day_bound(ms: int) -> datetime:
     return household_time.to_utc(datetime.combine(d, dtime()))
 
 
+def _calendar_key(request: Request) -> str | None:
+    raw = (request.headers.get(calendar_feeds.CALENDAR_KEY_HEADER) or "").strip()
+    return raw[:200] or None
+
+
 @router.put("/phones/{device_id}", response_model=PhoneCalendarStored, dependencies=DEVICE)
 async def put_phone_snapshot(
-    device_id: str, payload: PhoneCalendarSnapshot, response: Response
+    device_id: str, payload: PhoneCalendarSnapshot, request: Request, response: Response
 ) -> PhoneCalendarStored:
     """The complete set of calendars this phone shares, with their events
     in a rolling window. Each listed calendar's events are replaced;
     a calendar of this phone that is not listed is deleted (unpicked), and
-    ``calendars: []`` deletes them all."""
+    ``calendars: []`` deletes them all.
+
+    The first snapshot from a phone answers ``calendar_key`` (once); every
+    later one must send it in ``X-Domovoi-Calendar-Key`` (403 without).
+    410: sharing was turned off after this snapshot's ``generation``; 409:
+    an update with a higher ``generation`` is already stored."""
     ident = _device_id(device_id)
     now = time.monotonic()
     last = _last_snapshot.get(ident)
@@ -460,12 +509,18 @@ async def put_phone_snapshot(
                 external_id=ev.uid, title=(ev.title or "").strip() or "(no title)",
                 starts_at=starts, ends_at=ends, all_day=ev.all_day,
                 location=(ev.location or "").strip() or None,
+                ical_uid=(ev.ical_uid or "").strip() or None, busy=ev.busy,
             ))
         calendars.append(calendar_feeds.PhoneCalendar(
-            calendar_id=c.calendar_id, name=c.name.strip(), account_name=c.account_name,
-            color=c.color, events=events,
+            calendar_id=c.calendar_id, name=c.name.strip(), color=c.color, events=events,
         ))
     async with session_scope() as s:
+        try:
+            minted = await calendar_feeds.admit_phone(
+                s, ident, key=_calendar_key(request), generation=payload.generation,
+            )
+        except calendar_feeds.PhoneRefused as e:
+            raise HTTPException(status_code=e.status, detail=e.detail) from None
         if payload.phone_name:
             # The name it registers with, for a phone this server hasn't
             # met under that id yet (never renames a known one).
@@ -476,18 +531,34 @@ async def put_phone_snapshot(
                 ),
                 {"id": ident, "name": payload.phone_name.strip()[:80] or "phone"},
             )
-        n_cal, n_ev = await calendar_feeds.store_phone_snapshot(s, ident, calendars)
+        n_cal, n_ev = await calendar_feeds.store_phone_snapshot(
+            s, ident, calendars, generation=payload.generation,
+        )
     _last_snapshot[ident] = now
-    return PhoneCalendarStored(calendars=n_cal, events=n_ev)
+    return PhoneCalendarStored(calendars=n_cal, events=n_ev, calendar_key=minted)
 
 
 @router.delete("/phones/{device_id}", status_code=204, dependencies=DEVICE)
-async def delete_phone_calendars(device_id: str) -> None:
-    """Sharing turned off on the phone: every calendar it shared, and
-    their events, leave the house."""
+async def delete_phone_calendars(
+    device_id: str, request: Request,
+    generation: int | None = Query(default=None, ge=0),
+) -> None:
+    """Every calendar a phone shared, and their events, leave the house.
+
+    From the phone (sharing turned off): with its calendar key (403
+    without, once it has one) and, optionally, the ``generation`` it was
+    at, so an upload made before this and arriving after it is refused
+    (410). From an admin (Settings → Household → Calendars, "remove all of
+    this phone's"): no key needed, and the phone's key is forgotten."""
     ident = _device_id(device_id)
+    admin = await _is_admin(request)
     async with session_scope() as s:
-        await calendar_feeds.delete_phone(s, ident)
+        try:
+            await calendar_feeds.delete_phone(
+                s, ident, key=_calendar_key(request), generation=generation, admin=admin,
+            )
+        except calendar_feeds.PhoneRefused as e:
+            raise HTTPException(status_code=e.status, detail=e.detail) from None
     _last_snapshot.pop(ident, None)
 
 
@@ -554,4 +625,6 @@ def _row_to_event(r: Any) -> CalendarEvent:
         calendar_kind=r[13],
         owner_name=r[14] if imported else None,
         read_only=imported,
+        busy=bool(r[15]),
+        also_in=sorted(r[16] or []),
     )

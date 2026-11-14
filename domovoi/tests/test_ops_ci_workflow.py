@@ -50,11 +50,23 @@ def test_every_action_is_pinned_by_commit_sha_with_its_release(path: Path) -> No
 def test_permissions_are_declared_and_read_only(path: Path) -> None:
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     perms = doc.get("permissions")
-    assert isinstance(perms, dict) and perms, f"{path.name} has no top-level permissions block"
+    # release.yml starts from nothing at all (`permissions: {}`) and grants
+    # per job; every other workflow declares a read-only block at the top.
+    if path.name == "release.yml":
+        assert perms == {}, "release.yml must grant nothing at the top level"
+    else:
+        assert isinstance(perms, dict) and perms, f"{path.name} has no top-level permissions block"
     for job_name, job in doc.get("jobs", {}).items():
         perms_job = job.get("permissions", perms)
         assert isinstance(perms_job, dict), f"{path.name}:{job_name} permissions must be a mapping"
         for scope, level in {**perms, **perms_job}.items():
+            # The one write anywhere: release.yml's `release` job, which runs
+            # in the approval-gated `release` environment, may write contents
+            # (tag, release, stable). Nothing else, and nowhere else.
+            if (path.name, job_name, scope, level) == ("release.yml", "release", "contents", "write"):
+                assert job.get("environment") in ("release", {"name": "release"}), \
+                    "release.yml's writing job must run in the release environment"
+                continue
             assert level in ("read", "none"), f"{path.name}:{job_name} grants {scope}: {level}"
 
 

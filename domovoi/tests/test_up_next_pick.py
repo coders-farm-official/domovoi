@@ -245,7 +245,17 @@ def test_affinity():
 def test_score_combines_favourite_affinity_and_demotion():
     t = Track(9, "x", 1990, ("soul",), favorite=True)
     taste = Taste(artist_factor={"x": 0.3}, genre_factor={"soul": 0.6})
-    assert P.score(t, {9: TrackStats(2, 2)}, taste) == pytest.approx(1.5 * 1.2 * 0.3 * 0.6)
+    from domovoi.up_next.model import EngineConfig
+
+    no_fresh = EngineConfig(freshness=False)
+    assert P.score(t, {9: TrackStats(2, 2)}, taste, config=no_fresh) == pytest.approx(1.5 * 1.2 * 0.3 * 0.6)
+    # Freshness on (the default): heard a day ago, twice in 90 days.
+    heard = TrackStats(2, 2, 0, 1.0)
+    assert P.score(t, {9: heard}, taste) == pytest.approx(
+        1.5 * 1.2 * P.freshness(heard) * 0.3 * 0.6)
+    # and popularity: an artist's best-known song, x1.2
+    assert P.score(t, {9: TrackStats(2, 2)}, taste, {9: 1.0}, config=no_fresh) == pytest.approx(
+        1.5 * 1.2 * 1.2 * 0.3 * 0.6)
 
 
 def _session(**kw):

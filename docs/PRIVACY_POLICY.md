@@ -234,7 +234,10 @@ pick. The server shows them on the household calendar, read-only, to the
 people and devices of your household. Unpick a calendar or turn sharing
 off and the app deletes the server's copy (it keeps trying until the
 server answers). Uninstalling the app does not reach the server: turn
-sharing off first, or ask whoever runs the server.
+sharing off first, or ask whoever runs the server, who can remove a
+phone's calendars in its dashboard. Either way the server deletes a
+phone's calendars by itself after 7 days without an update from that
+phone, and when its household token is replaced.
 
 Your server is run by you or your household, on your own hardware; what it
 keeps is described in its own documentation

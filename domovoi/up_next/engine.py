@@ -87,8 +87,10 @@ async def next_batch(
             known.update(await library.tracks(missing))
         seeds = [(known[tid], w) for tid, w in weights if tid in known]
         stats = await listens.stats(scope, [t.id for t in members], now=now)
+        popularity = await library.popularity([t.id for t in members])
         picks, cycle, ended = list_batch(
             n=n, rng=rng, members=members, state=sess.list_cycle, seeds=seeds, stats=stats,
+            popularity=popularity,
             taste=sess.taste(), autoplay=sess.autoplay, seed_track_id=sess.seed.track_id,
             prev_keys=prev_keys, config=config,
         )
@@ -117,7 +119,7 @@ async def next_batch(
     wild = await library.wildcards(salt=salt, rng=rng)
     pl_hits, pl_tracks = await library.playlist_together(seed_ids, salt=salt)
     ls_hits = await listens.together(scope, seed_ids, now=now)
-    similar = await library.similar(seed_tracks)
+    similar = await library.similar(seed_tracks, salt=salt)
 
     context_ids = {t.id for t in context}
     together: dict[int, dict[int, str]] = {}
@@ -135,13 +137,19 @@ async def next_batch(
     if need:
         cands.update(await library.tracks(need))
     stats = await listens.stats(scope, cands.keys(), now=now)
+    popularity = await library.popularity(cands.keys())
     heard = await listens.last_heard(scope, now=now, hours=config.up_next_hold_hours)
 
+    roles: dict[int, str] = {t.id: "list" for t in context}
+    for i, tid in enumerate(sess.recent_listened[:5]):
+        roles.setdefault(tid, "last" if i == 0 else "recent")
+    if original is not None:
+        roles.setdefault(original, "start")
     picks = library_batch(
         n=n, rng=rng, now=now, seeds=seeds, candidates=cands.values(),
         wildcard_ids={t.id for t in wild}, together=together, prefer_together_seeds=context_ids,
-        similar=similar, stats=stats, last_heard=heard, session_picked=sess.picked,
-        taste=sess.taste(), prev_keys=prev_keys, config=config,
+        similar=similar, stats=stats, popularity=popularity, last_heard=heard, session_picked=sess.picked,
+        taste=sess.taste(), prev_keys=prev_keys, seed_roles=roles, config=config,
     )
     sess.record_batch(picks, config=config)
     return Batch(batch_no, tuple(picks), not picks)

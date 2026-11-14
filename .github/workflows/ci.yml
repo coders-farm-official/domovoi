@@ -37,9 +37,12 @@ on:
   workflow_dispatch:
 
 # A newer push to the same ref makes the older run moot.
+# On main every push gets its own complete run (two sessions push there, and
+# a cancelled run leaves a commit with no result); elsewhere a newer push
+# replaces the older run.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'latest' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Every job only reads the repository; artifact uploads use the runner's own
 # token, not GITHUB_TOKEN scopes.

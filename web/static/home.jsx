@@ -672,6 +672,8 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
         <>
           <IconButton name="pause" title={`pause ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'pause'); }}/>
           <IconButton name="square" title={`stop ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
+          <IconButton name="list-music" title={`${s.room_id}'s queue`} aria-label={`open ${s.room_id}'s queue`}
+                      onClick={() => { HomeOpenQueue(s.room_id); }}/>
         </>
       );
     } else if (paused) {
@@ -679,6 +681,8 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
         <>
           <IconButton name="play" title={`resume ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'resume'); }}/>
           <IconButton name="square" title={`stop ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
+          <IconButton name="list-music" title={`${s.room_id}'s queue`} aria-label={`open ${s.room_id}'s queue`}
+                      onClick={() => { HomeOpenQueue(s.room_id); }}/>
         </>
       );
     }
@@ -806,9 +810,12 @@ const HomeGuestRefusal = (verb, e) => {
   return `${verb}: ${said || apiErrorText(e)}`;
 };
 
-// data.js's openRoomQueue: Music, on that room's queue tab.
+// The queue panel aimed at that room (player.jsx openQueueFor, P5); with
+// nothing in this browser's player, data.js's openRoomQueue: Music, on
+// that room's queue tab.
 const HomeOpenQueue = (room) => {
-  if (typeof openRoomQueue === 'function') openRoomQueue(room);
+  if (typeof openQueueFor === 'function') openQueueFor(room);
+  else if (typeof openRoomQueue === 'function') openRoomQueue(room);
   else window.location.hash = 'music';
 };
 
