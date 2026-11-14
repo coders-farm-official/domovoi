@@ -2,12 +2,13 @@ import Foundation
 
 /// The tabs Music actually has.
 ///
-/// `MusicScreen.kt:353` lists five — `library`, `player`, `room queue`,
-/// `playlists`, `stats` — and this is all five **cases**, of which four are
-/// always offered: the phone's own `player` needs an audio engine.
+/// `MusicScreen.kt:353` lists six since 3cdd261b — `library`, `genres`,
+/// `player`, `room queue`, `playlists`, `stats` — and this is all six
+/// **cases**, of which five are always offered: the phone's own `player`
+/// needs an audio engine.
 /// ``PlayerModelMusicEngine`` is one since D46 and `MusicView`'s `.task`
 /// registers it, so on this app `player` ships — but a build without an audio
-/// engine still has four, and that is the question
+/// engine still has five, and that is the question
 /// ``shown(hasPlayer:)`` answers. A tab bar is a promise that each tab has
 /// something behind it, so the bar iterates that rather than ``allCases``, and
 /// the enum is where it is recorded rather than an `if tab == 1` somewhere in
@@ -22,6 +23,8 @@ import Foundation
 /// step.
 public enum MusicTab: String, CaseIterable, Sendable, Identifiable {
     case library
+    /// The library by genre (`GenresTab.kt`, 3cdd261b) — ``MusicGenresModel``.
+    case genres
     /// This phone's own playback. Offered only with an engine registered.
     case player
     case queue
@@ -76,6 +79,10 @@ public enum MusicTab: String, CaseIterable, Sendable, Identifiable {
             return "\(MusicStrings.tabQueue) · \(queueCount)"
         case .stats:
             return MusicStrings.tabStats
+        case .genres:
+            // Bare, as Android's is: a count here would be a second read of
+            // the genre list for a tab nobody has opened.
+            return MusicGenresStrings.tab
         case .player:
             return MusicMoreStrings.tabPlayer
         }
