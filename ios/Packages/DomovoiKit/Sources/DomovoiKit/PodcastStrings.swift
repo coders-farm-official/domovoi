@@ -143,6 +143,35 @@ public enum PodcastStrings {
         "Polled — \(downloaded) downloaded, \(fresh) new"
     }
 
+    /// The whole `poll now` toast: the counts, then any show whose feed
+    /// couldn't be read, by name, with the server's plain-words reason —
+    /// three named and the rest counted (`PodFormat.pollText`,
+    /// `PodcastsFormat.kt:161-181`).
+    ///
+    /// `Polled — 0 downloaded, 3 new. 1 show couldn't be read: The Big Show —
+    /// feed too large`. An older server sends no `failures`, and then this is
+    /// ``polled(downloaded:fresh:)`` alone. A blank title is `a show` and a
+    /// missing reason is `couldn't read the feed`, Android's two fallbacks.
+    public static func polled(_ poll: PodcastPoll) -> String {
+        let head = polled(downloaded: poll.downloaded, fresh: poll.fresh)
+        let failures = poll.failures
+        guard !failures.isEmpty else { return head }
+        func said(_ value: String?) -> String? {
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }
+        let named = failures.prefix(3).map { failure in
+            "\(said(failure.title) ?? aShow) — \(said(failure.message) ?? couldNotReadTheFeed)"
+        }.joined(separator: "; ")
+        let more = failures.count > 3 ? "; and \(failures.count - 3) more" : ""
+        return "\(head). \(plural(failures.count, "show")) couldn't be read: \(named)\(more)"
+    }
+
+    /// A failed feed the house never titled (`PodcastsFormat.kt:177`).
+    public static let aShow = "a show"
+    /// A failure the server gave no words for (`PodcastsFormat.kt:177`).
+    public static let couldNotReadTheFeed = "couldn't read the feed"
+
     /// The verbs ``failureText(_:_:)`` is given, so a failed write reads the
     /// way Android's toast does (`PodcastsScreen.kt:122`,
     /// `PodcastsSubscribe.kt:82, 101`).
@@ -190,6 +219,39 @@ public enum PodcastStrings {
     public static func chapterCount(_ count: Int) -> String {
         "\(count) \(count == 1 ? "chapter" : chapters)"
     }
+
+    // MARK: - an episode's details (Android `bd84d970`, the web's words)
+
+    /// The download word on every row (`PodcastsFormat.kt:85-90`). The same
+    /// word as ``downloadedSuffix``, kept apart because the two sit on
+    /// different lines and could change apart.
+    public static let downloaded = "downloaded"
+    public static let downloading = "downloading"
+    public static let downloadFailed = "download failed"
+    public static let notDownloaded = "not downloaded"
+
+    /// The place, when the listener finished it (`PodcastsFormat.kt:79`).
+    public static let played = "played"
+
+    /// `24 min left` (`PodcastsFormat.kt:75`).
+    public static func left(_ length: String) -> String { "\(length) left" }
+
+    /// `at 24 min` — a place in an episode of no known length
+    /// (`PodcastsFormat.kt:72`).
+    public static func at(_ length: String) -> String { "at \(length)" }
+
+    /// The unplayed dot's spoken words (`PodcastsEpisodes.kt:277`).
+    public static let notPlayedYet = "not played yet"
+
+    /// A description's tap, said as Android's `onClickLabel` says it
+    /// (`PodcastsEpisodes.kt:343`).
+    public static let showMore = "show more"
+    public static let showLess = "show less"
+
+    /// The show's info line: `updated 2h ago`, or `not checked yet` for a
+    /// feed the house has never read (`PodcastsFormat.kt:156-157`).
+    public static func updated(_ ago: String) -> String { "updated \(ago)" }
+    public static let notCheckedYet = "not checked yet"
 
     /// `Unsubscribe from "<title or feed>"? Downloaded episodes are removed.`
     /// (`PodcastsEpisodes.kt:198`).

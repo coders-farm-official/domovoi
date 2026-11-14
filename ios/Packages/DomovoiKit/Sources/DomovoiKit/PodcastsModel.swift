@@ -105,6 +105,12 @@ public final class PodcastsModel {
     public private(set) var episodeFilter = ""
     public private(set) var episodeNeedle = ""
 
+    /// Who the episodes read asks for: this install's device id and the
+    /// listening-as person, the same slot the player saves positions under,
+    /// so each row carries that listener's place
+    /// (`PodcastsEpisodes.kt:121-127`). Set by ``listen(deviceID:personID:)``.
+    public private(set) var listener = PodcastListener()
+
     // MARK: - the writes
 
     public private(set) var polling = false
@@ -339,12 +345,30 @@ public final class PodcastsModel {
     private static func episodesPager(
         showID: Int64,
         search: String,
+        listener: PodcastListener,
         in container: AppContainer
     ) -> Pager<PodcastEpisode, Int64> {
         let client = container.client
-        let base = PodcastPath.episodes(showID: showID, search: search)
+        let base = PodcastPath.episodes(
+            showID: showID, search: search,
+            deviceID: listener.deviceID, personID: listener.personID
+        )
+        let asked = !(listener.deviceID ?? "").isEmpty
         return Pager(in: container, eventTypes: Self.episodeEvents, keyOf: { $0.id }) { request in
-            try await client.get(Paging.path(base, request), as: Page<PodcastEpisode>.self)
+            let page = try await client.get(Paging.path(base, request), as: Page<PodcastEpisode>.self)
+            guard !asked else { return page }
+            // No device was sent, so the server's `position_sec: null` on
+            // every row means "not asked", not "not started"
+            // (`podcasts.py:356`). Read as unknown, so no row draws an
+            // unplayed dot it has no grounds for. Unreachable in the
+            // shipping app — the device id is minted on first launch — and
+            // reached by a model built in a test.
+            return Page(
+                items: page.items.map { $0.placeUnknown },
+                total: page.total,
+                serverHasMore: page.serverHasMore,
+                nextCursor: page.nextCursor
+            )
         }
     }
 
@@ -395,7 +419,7 @@ public final class PodcastsModel {
         episodeNeedle = ""
         episodeDebounce?.cancel()
         episodes?.stop()
-        let pager = Self.episodesPager(showID: show.id, search: "", in: container)
+        let pager = Self.episodesPager(showID: show.id, search: "", listener: listener, in: container)
         episodes = pager
         pager.reset()
     }
@@ -432,7 +456,29 @@ public final class PodcastsModel {
         guard let show = selected else { return }
         episodeNeedle = settled
         episodes?.stop()
-        let pager = Self.episodesPager(showID: show.id, search: settled, in: container)
+        let pager = Self.episodesPager(showID: show.id, search: settled, listener: listener, in: container)
+        episodes = pager
+        pager.reset()
+    }
+
+    // MARK: - who is listening
+
+    /// The device and the listening-as person the episodes read asks for.
+    ///
+    /// Android's path has the person in it, so changing the person re-reads
+    /// the rows (`PodcastsEpisodes.kt:121-124`). Here the person is picked in
+    /// Settings, so the screen hands it over on every appearance; a **changed**
+    /// slot rebuilds an open sheet's pager (a new path, as a new needle is),
+    /// and an unchanged one does nothing, so coming back to the screen does
+    /// not re-read a loaded list. The old pager is stopped first, so a page
+    /// it had in flight for the old listener is not drawn under the new one.
+    public func listen(deviceID: String?, personID: String?) {
+        let next = PodcastListener(deviceID: deviceID, personID: personID)
+        guard next != listener else { return }
+        listener = next
+        guard let show = selected else { return }
+        episodes?.stop()
+        let pager = Self.episodesPager(showID: show.id, search: episodeNeedle, listener: next, in: container)
         episodes = pager
         pager.reset()
     }
@@ -469,7 +515,9 @@ public final class PodcastsModel {
             guard let self, self.stillHome(epoch) else { return }
             self.polling = false
             if let landed {
-                self.toast = PodcastStrings.polled(downloaded: landed.downloaded, fresh: landed.fresh)
+                // The counts, then any show whose feed couldn't be read
+                // (`PodcastsScreen.kt:115`, `PodFormat.pollText`).
+                self.toast = PodcastStrings.polled(landed)
                 self.shows.reload()
             } else {
                 self.toast = said
@@ -857,5 +905,19 @@ public final class PodcastsModel {
         }
         shows.stop()
         episodes?.stop()
+    }
+}
+
+/// The listener slot the episodes read is asked for: this install's device
+/// id and the listening-as person (``PlayerListenerStore``), or nil for
+/// either. With no device the server answers `position_sec: null` on every
+/// row, which the pager reads as "unknown" (``PodcastEpisode/placeUnknown``).
+public struct PodcastListener: Equatable, Sendable {
+    public let deviceID: String?
+    public let personID: String?
+
+    public init(deviceID: String? = nil, personID: String? = nil) {
+        self.deviceID = deviceID
+        self.personID = personID
     }
 }

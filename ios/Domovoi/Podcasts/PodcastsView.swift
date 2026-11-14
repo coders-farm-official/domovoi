@@ -119,6 +119,11 @@ struct PodcastsView: View {
             // already listening to. So it is read here, in a `.task`, and
             // never in a `body`.
             podcasts?.player = model.player
+            // The slot the episodes read asks for, so each row carries this
+            // listener's place (`PodcastsEpisodes.kt:121-127`). Handed over
+            // on every appearance because the person is picked in Settings;
+            // an unchanged slot is a no-op in the model.
+            podcasts?.listen(deviceID: model.deviceID, personID: model.listeners.personID)
             podcasts?.start()
             listeners?.start()
         }
