@@ -467,6 +467,13 @@ async def test_listens_feed_the_session(_db, clean, monkeypatch, keep) -> None:
         # Two early skips of one artist: out for the session.
         art = picks[1]["artist"]
         two = [p for p in picks if p["artist"] == art][:2]
+        # The mix may pick only one song by that artist (its picks are
+        # drawn by weight); any song of theirs in the library counts as a
+        # skip of the artist, so make up the second from the seed.
+        picked = {p["track_id"] for p in picks}
+        spare = [{"track_id": tid, "seq": None} for i, tid in enumerate(d["ids"])
+                 if ARTISTS[i % len(ARTISTS)] == art and tid not in picked]
+        two = (two + spare)[:2]
         assert len(two) == 2
         now = datetime.now(timezone.utc)
         await c.post("/api/music/listens", json={"listens": [
