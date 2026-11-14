@@ -95,9 +95,13 @@ class QueueAddSearchTest {
             addToQueueLabel("\${label(row)}"),
             QUEUE_SEARCH_LABEL, QUEUE_SEARCHING,
             SAVE_AS_PLAYLIST, SAVE_AS_PLAYLIST_HINT, SAVE_AS_PLAYLIST_NONE, PLAYLIST_NAME_PROMPT,
-            savedAsNote("\${name.trim()}"),
             saveFailedNote("\${apiErrorText(e)}"),
         )) assertTrue("not on the web: $line", line in web)
+
+        // The saved note carries the count (Up next P5): the web's line, then ours.
+        assertTrue("Saved as \"\${name.trim()}\" (\${n} song\${n === 1 ? '' : 's'})." in web)
+        assertEquals("Saved as \"Road trip\" (1 song).", savedAsNote("Road trip", 1))
+        assertEquals("Saved as \"Road trip\" (2 songs).", savedAsNote("Road trip", 2))
 
         assertEquals("Added: Lantern", queueAddedNote("Lantern", 1, next = false))
         assertEquals("Playing next: Jazz songs (25 songs)", queueAddedNote("Jazz songs", 25, next = true))
@@ -400,7 +404,7 @@ class QueueAddSearchTest {
             ),
             calls.toList(),
         )
-        assertEquals("Saved as \"Road trip\".", flow.note)
+        assertEquals("Saved as \"Road trip\" (2 songs).", flow.note)
         assertFalse(flow.open)
     }
 

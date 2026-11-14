@@ -161,7 +161,7 @@ internal class SaveAsPlaylistFlow {
         saving = true; note = ""
         try {
             saveQueueAsPlaylist(api, clean, trackIds)
-            note = savedAsNote(clean); name = ""; open = false
+            note = savedAsNote(clean, trackIds.size); name = ""; open = false
             return true
         } catch (e: CancellationException) {
             throw e
