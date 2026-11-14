@@ -65,31 +65,42 @@ internal fun calendarShareDisclosure(server: String): String =
     "Show events from the calendars you pick on this phone on your household calendar. " +
         "When this is on, Domovoi reads those calendars and sends a copy of each event's title, time and " +
         "place, and the calendar's name and colour, to your Domovoi server ($server). Only there: nothing " +
-        "goes to Coders Farm or anyone else. Descriptions and guests stay on this phone. The copy is " +
-        "read-only, updates every few hours and soon after a change, and is deleted from the server when " +
-        "you turn this off."
+        "goes to Coders Farm or anyone else. Everyone in your household can see them, and Domovoi can read " +
+        "them out in any room. Private events go as \"busy\", with no title or place, and a meeting link " +
+        "as \"online meeting\". Descriptions and guests stay on this phone. The copy is read-only, updates " +
+        "every few hours and soon after a change, and is deleted from the server when you turn this off."
 
+/** Said under the switch (off) after the permission prompt was refused. */
 internal const val CALENDAR_PERMISSION_DENIED =
     "Domovoi can't read this phone's calendars, so nothing is shared. To share them, allow Calendars " +
         "for Domovoi in the phone's settings, then turn this on again."
 
+/** Said in the calendar list while the switch is on but the permission is
+ *  not held (the next pass turns sharing off and says so). */
+internal const val CALENDAR_PERMISSION_MISSING =
+    "Domovoi can't read this phone's calendars. Allow Calendars for Domovoi in the phone's settings."
+
 /** The settings line under the switch: when it last went, or why not. */
 internal fun shareStatusLine(e: ShareEntry?, nowIso: (Long) -> String = { Instant.ofEpochMilli(it).toString() }): String? {
     if (e == null) return null
+    // A notice (a ticked calendar gone, the permission taken back) comes
+    // first, so "last sent" never reads as if all were well.
+    fun withNotice(line: String?): String? = listOfNotNull(e.notice, line).joinToString(" · ").ifEmpty { null }
     if (!e.enabled) {
-        if (!e.pendingDelete) return null
-        return e.lastError?.let { "the house's copy isn't deleted yet: $it" } ?: "deleting the house's copy…"
+        if (!e.pendingDelete) return withNotice(null)
+        return withNotice(e.lastError?.let { "the house's copy isn't deleted yet: $it" } ?: "deleting the house's copy…")
     }
-    e.lastError?.let { return it }
+    e.lastError?.let { return withNotice(it) }
     if (e.calendarIds.isEmpty()) {
-        return if (e.lastSentAtMs == null) "tick the calendars to share" else "no calendars ticked: the house shows none of them"
+        return withNotice(if (e.lastSentAtMs == null) "tick the calendars to share" else "no calendars ticked: the house shows none of them")
     }
-    val sent = e.lastSentAtMs ?: return "sending soon…"
+    val sent = e.lastSentAtMs ?: return withNotice("sending soon…")
     val left = if (e.lastDropped > 0) " · ${e.lastDropped} events left out (too many to send)" else ""
-    return "last sent ${relTime(nowIso(sent))}$left"
+    return withNotice("last sent ${relTime(nowIso(sent))}$left")
 }
 
-/** "Work · alex@example.com". */
+/** "Work · alex@example.com": the account is shown on this phone only,
+ *  never sent. */
 internal fun phoneCalendarLabel(c: PhoneCalendar): Pair<String, String?> =
     c.name to c.accountName?.takeIf { it.isNotBlank() && it != c.name }
 
@@ -176,8 +187,8 @@ internal fun PhoneCalendarsPanel() {
                             Text(if (on) "on" else "off", style = MaterialTheme.typography.labelLarge,
                                 color = Domovoi.colors.fg, modifier = Modifier.padding(start = 10.dp))
                         }
-                        if (denied && !on) {
-                            Text(CALENDAR_PERMISSION_DENIED, style = MaterialTheme.typography.bodySmall,
+                        if ((denied || entry?.notice == ShareRules.PERMISSION_LOST) && !on) {
+                            if (denied) Text(CALENDAR_PERMISSION_DENIED, style = MaterialTheme.typography.bodySmall,
                                 color = Domovoi.colors.warn)
                             TextButton(onClick = {
                                 runCatching {
@@ -189,9 +200,10 @@ internal fun PhoneCalendarsPanel() {
                             }) { Text("open the phone's settings", color = Domovoi.colors.brand) }
                         }
                         shareStatusLine(entry)?.let { line ->
-                            val bad = entry?.lastError != null
+                            // A 429 while it is being set up is no fault:
+                            // not in the warning colour (ShareRules.warns).
                             Text(line, style = MaterialTheme.typography.labelMedium,
-                                color = if (bad) Domovoi.colors.warn else Domovoi.colors.fgMuted)
+                                color = if (ShareRules.warns(entry)) Domovoi.colors.warn else Domovoi.colors.fgMuted)
                         }
                     }
                 }
@@ -203,7 +215,7 @@ internal fun PhoneCalendarsPanel() {
                 PanelCard("calendars to share", "Only the ticked ones go to the house.") {
                     when {
                         list == null -> Text(
-                            if (reader.allowed()) "reading the phone's calendars…" else CALENDAR_PERMISSION_DENIED,
+                            if (reader.allowed()) "reading the phone's calendars…" else CALENDAR_PERMISSION_MISSING,
                             style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
                         )
                         list.isEmpty() -> Text(
@@ -213,7 +225,7 @@ internal fun PhoneCalendarsPanel() {
                         else -> Column {
                             val ticked = entry.calendarIds.toSet()
                             list.forEach { c -> CalendarRow(c, c.id in ticked) { want ->
-                                store.update(server) { ShareRules.toggle(it, c.id, want) }
+                                store.update(server) { ShareRules.toggle(it, c.id, want, c.name) }
                                 CalendarShare.sendSoon(context)
                             } }
                         }

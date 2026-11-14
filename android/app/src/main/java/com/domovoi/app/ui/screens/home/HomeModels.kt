@@ -649,6 +649,10 @@ internal data class TodayRow(
     /** The calendar's own colour (0xAARRGGBB) for the row's dot; null for
      *  the household's own events, which get none. */
     val dot: Long? = null,
+    /** The calendar's name beside the dot ("Work"), so the source is not
+     *  told by colour alone; never on a shared screen, and null for the
+     *  household's own events. */
+    val calendar: String? = null,
 )
 
 internal data class TodayDay(val label: String, val rows: List<TodayRow>)
@@ -694,6 +698,7 @@ internal fun todayDays(
             running = !e.all_day && start <= nowMs && nowMs < eventEndMs(e, zone),
             allDay = e.all_day,
             dot = homeHexColor(e.calendar_color),
+            calendar = if (shared) null else e.calendar_name?.trim()?.takeIf { it.isNotEmpty() },
         )
     }
     // An event under way since before today sits under today.

@@ -289,8 +289,20 @@ class HomeModelsTest {
         val rows = todayDays(events, now, zone, shared = true).single().rows
         assertEquals(0xFF33B679L, rows[0].dot)
         assertNull(rows[1].dot)
-        // A shared screen still says "busy" for every calendar.
+        // A shared screen still says "busy" for every calendar, and names none.
         assertEquals(listOf("busy", "busy"), rows.map { it.title })
+        assertEquals(listOf<String?>(null, null), rows.map { it.calendar })
+        // Elsewhere the source is said in words, not by the dot's colour alone.
+        val own = todayDays(events, now, zone, shared = false).single().rows
+        assertEquals(listOf("Work", null), own.map { it.calendar })
+    }
+
+    /** The server's real shape: midnight in the household's offset. */
+    @Test fun anAllDayEventInTheHouseholdsOffsetSitsOnItsWrittenDate() {
+        val now = ms("2026-09-28T00:00:00Z")           // 7pm Sunday in Chicago
+        val e = HomeEvent(1, "Holiday", "2026-09-28T00:00:00-04:00", "2026-09-29T00:00:00-04:00", all_day = true)
+        val row = todayDays(listOf(e), now, zone, shared = false).single().rows.single()
+        assertEquals(ms("2026-09-28T05:00:00Z"), row.startMs)  // Monday's local midnight in Chicago
     }
 
     @Test fun anAllDayEventSitsOnItsWrittenDateInAnyZone() {

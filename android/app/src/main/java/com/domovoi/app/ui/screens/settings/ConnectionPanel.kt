@@ -28,6 +28,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import com.domovoi.app.calendarshare.CalendarShare
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +71,7 @@ import kotlinx.coroutines.launch
 internal fun ConnectionPanel() {
     val app = LocalApp.current
     val toast = LocalToast.current
+    val context = LocalContext.current
 
     val serverUrl by app.prefs.serverUrl.collectAsState()
     val themeMode by app.prefs.themeMode.collectAsState()
@@ -232,8 +235,16 @@ internal fun ConnectionPanel() {
                     if (deviceToken != null) {
                         Button(
                             onClick = {
-                                app.prefs.setDeviceToken(null)
-                                toast("this phone is no longer paired")
+                                // The house's copy of this phone's calendars
+                                // goes first, while the token still works.
+                                val pairedWith = app.prefs.serverUrl.value
+                                app.scope.launch {
+                                    val gone = runCatching { CalendarShare.withdraw(context.applicationContext, app) }
+                                        .getOrDefault(false)
+                                    // That server's token, even if the app moved meanwhile.
+                                    app.prefs.setDeviceTokenFor(pairedWith, null)
+                                    toast(unpairedToast(gone))
+                                }
                             },
                         ) { Text("forget the token") }
                     }
@@ -248,7 +259,12 @@ internal fun ConnectionPanel() {
                 active = serverUrl,
                 fingerprintOf = { app.prefs.pinForServer(it)?.fingerprint },
                 paired = { app.prefs.isPaired() && ServerCredentials.normalize(it) == serverUrl },
-                onForget = { app.prefs.removeKnownServer(it); toast("forgot ${ServerCredentials.address(it)}") },
+                onForget = {
+                    val gone = CalendarShare.forgetInactive(context, it)
+                    app.prefs.removeKnownServer(it)
+                    val address = ServerCredentials.address(it)
+                    toast(if (gone) "forgot $address" else "forgot $address — ${CalendarShare.LEFT_ON_HOUSE}")
+                },
                 onForgetActive = { confirmForgetActive = true },
             )
         }
@@ -407,7 +423,7 @@ internal fun ConnectionPanel() {
             onDismiss = { confirmForgetActive = false },
             onConfirm = {
                 confirmForgetActive = false
-                forgetActiveServer(app, toast)
+                forgetActiveServer(app, context, toast)
             },
         )
     }
@@ -572,3 +588,9 @@ internal fun trustedServersRows(
     return urls.map { TrustedServerRow(it, known[it], it == activeClean) }
         .sortedWith(compareByDescending<TrustedServerRow> { it.active }.thenBy { ServerCredentials.address(it.url) })
 }
+
+/** The toast after "forget the token": and, when the house's copy of this
+ *  phone's calendars could not be deleted first, that it is still there. */
+internal fun unpairedToast(calendarsGone: Boolean): String =
+    if (calendarsGone) "this phone is no longer paired"
+    else "this phone is no longer paired — ${CalendarShare.LEFT_ON_HOUSE}"

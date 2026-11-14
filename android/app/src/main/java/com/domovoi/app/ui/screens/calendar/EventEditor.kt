@@ -168,18 +168,18 @@ internal fun EventDetailContent(
         // An event from a linked or phone calendar is the house's copy: no
         // edit or delete here (they could only fail), and the note says
         // where it is changed instead.
-        val note = event.readOnlyNote()
-        if (note != null) {
+        // Which controls show is decided by canEdit / canDelete
+        // (CalendarModels.kt), pure and tested.
+        event.readOnlyNote()?.let { note ->
             Text(note, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
-        } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // No `edit` for a row whose `starts_at` we cannot read (D18):
-            // the editor has no honest time to put in its start field, so
-            // the control is left out rather than quietly doing nothing
-            // (`editDraftOf` is null for it). Delete still works.
-            if (editDraftOf(event) != null) {
+        }
+        if (canEdit(event) || canDelete(event)) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (canEdit(event)) {
                 OutlinedButton(onClick = onEdit) { Text("edit", color = Domovoi.colors.fg) }
             }
-            TextButton(onClick = onDelete) { Text("delete", color = Domovoi.colors.err) }
+            if (canDelete(event)) {
+                TextButton(onClick = onDelete) { Text("delete", color = Domovoi.colors.err) }
+            }
         }
     }
 }

@@ -174,14 +174,30 @@ occurrences, 30 days back to 180 days ahead
 (`CalendarContract.Instances`), and sends `PUT
 /api/calendar/phones/{device_id}` to the **active, paired** Domovoi server:
 a few seconds after a tick, about 90 seconds after the phone's calendar
-changes, and every 6 hours (WorkManager, `calendarshare/CalendarShareWork.kt`).
+changes, and every 6 hours (WorkManager, `calendarshare/CalendarShareWork.kt`);
+a snapshot the server already has is skipped, except once a day.
 Per event: an id ("event id:start"), title, start, end, all-day, location;
-per calendar: its name, account name and colour. **Never** descriptions,
-guests, reminders or attachments (`calendarshare/SharePayload.kt`;
-`SharePayloadTest.anEventAsTheServerTakesIt` pins the exact keys).
+per calendar: its name and colour; at the top: the phone's name (80
+characters at most) and the window. **Never** descriptions, guests,
+reminders, attachments or the calendar's account name
+(`calendarshare/SharePayload.kt`; `SharePayloadTest.anEventAsTheServerTakesIt`
+pins the exact keys at every level). A private or confidential event
+(`Instances.ACCESS_LEVEL` 2 or 1) goes as title "busy" with no location; a
+link in a location goes as "online meeting"; an event the person declined
+is not sent; a calendar whose name is an email address goes as "Main
+calendar".
 Turning it off sends `DELETE`, which removes the server's copy; if the
-server can't be reached the delete is kept and retried until it goes
+server can't be reached the delete is kept and retried **while that server
+is the active, paired one** (switched to another server, it waits until
+this one is active again)
 (`ShareSyncTest.aDeleteThatCantReachTheServerIsRememberedAndTriedAgain`).
+Forgetting the active server or unpairing from it sends the `DELETE` first,
+while the token still works, and says so if it fails ("this phone's
+calendars stay on the house until removed there"); forgetting a server that
+is not the active one cannot reach it, and says the same
+(`ShareSyncTest.withdrawDeletesTheCopyThenForgetsTheEntry`). Taking back
+the calendar permission turns sharing off and sends the `DELETE`
+(`ShareSyncTest.aWithdrawnPermissionTurnsSharingOffAndDeletesTheCopy`).
 
 **The disclosure, shown above the switch before the permission prompt**
 (`calendarShareDisclosure`, `ui/screens/settings/PhoneCalendarsPanel.kt`):
@@ -190,9 +206,12 @@ server can't be reached the delete is kept and retried until it goes
 > calendar. When this is on, Domovoi reads those calendars and sends a copy
 > of each event's title, time and place, and the calendar's name and
 > colour, to your Domovoi server (*server name*). Only there: nothing goes
-> to Coders Farm or anyone else. Descriptions and guests stay on this phone.
-> The copy is read-only, updates every few hours and soon after a change,
-> and is deleted from the server when you turn this off.
+> to Coders Farm or anyone else. Everyone in your household can see them,
+> and Domovoi can read them out in any room. Private events go as "busy",
+> with no title or place, and a meeting link as "online meeting".
+> Descriptions and guests stay on this phone. The copy is read-only,
+> updates every few hours and soon after a change, and is deleted from the
+> server when you turn this off.
 
 Play's User Data policy asks for an in-app **prominent disclosure** when an
 app accesses personal or sensitive data that leaves the device in a way the
@@ -222,12 +241,13 @@ differently from the others would be inconsistent.
   policy must say it (owner: add to `docs/PRIVACY_POLICY.md`, "What goes
   to your Domovoi server": the ticked calendars' event titles, times,
   places and calendar names and colours, while Phone calendars is on;
-  deleted from the server when it is turned off).
+  deleted from the server when it is turned off). Done: see "Your phone's
+  calendars" there.
 * If the owner prefers to declare it (cautious), the row is:
 
   | Data type | Collected | Shared | Optional? | Processed ephemerally? | Purposes | Deletion |
   |---|---|---|---|---|---|---|
-  | **Calendar → Calendar events** | **Yes** | **No** (the user's own server, not a third party) | **Optional** (off by default; the person turns it on and ticks calendars) | **No** (the server keeps a copy until it is turned off) | **App functionality** | Turning Phone calendars off deletes the server's copy |
+  | **Calendar → Calendar events** | **Yes** | **No** (the user's own server, not a third party) | **Optional** (off by default; the person turns it on and ticks calendars) | **No** (the server keeps a copy until it is turned off) | **App functionality** | Turning Phone calendars off, or forgetting or unpairing the server, deletes the server's copy |
 
   Declaring it changes the form-wide **"encrypted in transit"** answer: the
   household server is usually plain `http://` on the LAN
@@ -237,11 +257,13 @@ differently from the others would be inconsistent.
   reason Option A stays the recommendation; under Option A the existing
   "Yes" (about what reaches Coders Farm and third parties) stands.
 * "Users can request deletion": already **Yes**; for this data the way is
-  in the app (turn it off). Note: **uninstalling the app does not delete
-  the server's copy** (the app is gone before it could send the delete);
-  the household's dashboard is where it would be removed then *(check with
-  the server half that the dashboard offers removing a phone's calendars
-  before the policy says so)*.
+  in the app (turn it off, or forget or unpair the server). Note:
+  **uninstalling the app does not delete the server's copy** (the app is
+  gone before it could send the delete), and neither does a delete that
+  never reached a server the phone has since switched away from or
+  forgotten. Whether the household's dashboard can remove a phone's
+  calendars then is for the server half to say *(unverified: the policy
+  says "ask whoever runs the server", nothing more, until it ships)*.
 
 **Owner checklist for the Play Console (1.3.0):**
 

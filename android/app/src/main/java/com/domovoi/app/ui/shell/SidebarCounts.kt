@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.ui.screens.calendar.calendarRangePath
 import kotlinx.serialization.json.JsonArray
 
 /** No satellites count since 2026-10-11: Satellites is a Settings tab, and
@@ -35,7 +36,9 @@ fun rememberSidebarCounts(): SidebarCounts {
         }.getOrNull()
         SidebarCounts(
             people = lenOf("/api/people"),
-            calendar = lenOf("/api/calendar/events"),
+            // The six weeks around this month, as the Calendar page asks
+            // for them: the whole list stopped at the server's 500 oldest.
+            calendar = lenOf(calendarRangePath(java.time.LocalDate.now())),
             stations = if (hasStations) {
                 lenOf("/api/plugins/radio/stations?favorited_only=true&limit=1000")
             } else {

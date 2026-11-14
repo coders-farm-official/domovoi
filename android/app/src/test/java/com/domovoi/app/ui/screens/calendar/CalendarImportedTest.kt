@@ -8,6 +8,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import java.time.ZoneId
+import java.util.TimeZone
 
 /** 1.3.0: events from linked and phone calendars, read-only. */
 class CalendarImportedTest {
@@ -50,11 +52,61 @@ class CalendarImportedTest {
         assertNull(parseHexColor(null))
     }
 
+    /** The server's real shape: midnight in the HOUSEHOLD's offset
+     *  (-05:00), read on a phone in another zone (Honolulu, -10:00), where
+     *  that instant is 7pm the day BEFORE. Read by its written date. */
     @Test fun anAllDayEventIsOnItsWrittenDate() {
-        val e = CalendarEvent(1, "Holiday", "2026-11-26T00:00:00Z", "2026-11-27T00:00:00Z", all_day = true)
-        assertEquals(LocalDate.of(2026, 11, 26), e.startLocal().toLocalDate())
-        assertEquals(LocalDate.of(2026, 11, 27).atStartOfDay(), e.endLocal())
-        assertEquals("all day", fmtRange(e))
-        assertEquals(listOf(e), visibleEvents(CalView.Day, LocalDate.of(2026, 11, 26), listOf(e)))
+        val saved = TimeZone.getDefault()
+        TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Honolulu"))
+        try {
+            assertEquals(ZoneId.of("Pacific/Honolulu"), ZoneId.systemDefault())
+            val e = DomovoiJson.parseToJsonElement(
+                """{"id":1,"title":"Holiday","starts_at":"2026-11-26T00:00:00-05:00",
+                   "ends_at":"2026-11-27T00:00:00-05:00","all_day":true,"calendar_kind":"phone","read_only":true}""",
+            ).decode<CalendarEvent>()
+            // The instant itself is the 25th here: the reading must not use it.
+            assertEquals(LocalDate.of(2026, 11, 25), parseLocal(e.starts_at)!!.toLocalDate())
+            assertEquals(LocalDate.of(2026, 11, 26), e.startLocal().toLocalDate())
+            assertEquals(LocalDate.of(2026, 11, 27).atStartOfDay(), e.endLocal())
+            assertEquals("all day", fmtRange(e))
+            assertEquals(listOf(e), visibleEvents(CalView.Day, LocalDate.of(2026, 11, 26), listOf(e)))
+            assertEquals(emptyList<CalendarEvent>(), visibleEvents(CalView.Day, LocalDate.of(2026, 11, 25), listOf(e)))
+        } finally {
+            TimeZone.setDefault(saved)
+        }
+    }
+
+    /** Review: the edit/delete hiding, pure. */
+    @Test fun editAndDeleteAreOfferedOnlyWhereTheyCanWork() {
+        val own = CalendarEvent(1, "Dinner", "2026-11-20T23:00:00Z")
+        assertTrue(canEdit(own))
+        assertTrue(canDelete(own))
+        val phone = own.copy(calendar_kind = "phone", source = "phone", read_only = true)
+        assertFalse("a phone calendar's copy is changed on that phone", canEdit(phone))
+        assertFalse(canDelete(phone))
+        val link = own.copy(calendar_kind = "link", source = "link", read_only = true)
+        assertFalse(canEdit(link))
+        assertFalse(canDelete(link))
+        val unreadable = own.copy(starts_at = "not a time")
+        assertFalse("no honest start to edit from (D18)", canEdit(unreadable))
+        assertTrue("but it can still be deleted", canDelete(unreadable))
+    }
+
+    /** Review HIGH 1: the six weeks of the month grid, never the whole
+     *  list (the server's default is its 500 OLDEST). */
+    @Test fun theCalendarAsksForTheSixWeeksAroundTheMonth() {
+        val chicago = ZoneId.of("America/Chicago")
+        // November 2026: the grid starts Sunday 1 Nov, ends before Sunday 13 Dec.
+        assertEquals(
+            "/api/calendar/events?start=2026-11-01T05%3A00%3A00Z&end=2026-12-13T06%3A00%3A00Z&limit=2000",
+            calendarRangePath(LocalDate.of(2026, 11, 14), chicago),
+        )
+        // Any day of the month asks the same; the next month asks again.
+        assertEquals(calendarRangePath(LocalDate.of(2026, 11, 30), chicago), calendarRangePath(LocalDate.of(2026, 11, 1), chicago))
+        assertTrue(calendarRangePath(LocalDate.of(2026, 12, 1), chicago).startsWith("/api/calendar/events?start=2026-11-29T06"))
+        // Every view's window falls inside what was read.
+        val anchor = LocalDate.of(2026, 11, 14)
+        val gs = monthGridStart(anchor)
+        assertTrue(!startOfWeekSun(anchor).isBefore(gs) && startOfWeekSun(anchor).plusDays(7) <= gs.plusDays(42))
     }
 }

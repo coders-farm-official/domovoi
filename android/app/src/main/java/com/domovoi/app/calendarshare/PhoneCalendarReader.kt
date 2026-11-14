@@ -6,11 +6,14 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
+import java.io.IOException
 
 /**
  * Reads the phone's own calendars (every account on it: Google, Microsoft,
  * Samsung, a local one) through CalendarContract, with READ_CALENDAR. Only
- * the columns the house needs; never a description, a guest or a reminder.
+ * the columns the house needs; never a description, a guest or a reminder
+ * (the access level and the person's own answer are read only to leave
+ * things out: a private event goes as "busy", a declined one not at all).
  * The rows go to [SharePayload], which is where every rule lives.
  */
 class PhoneCalendarReader(private val context: Context) {
@@ -19,7 +22,8 @@ class PhoneCalendarReader(private val context: Context) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
 
     /** The calendars on the phone the calendar app shows; null without the
-     *  permission. */
+     *  permission. A provider that fails is an [IOException] (tried again
+     *  later), never an empty list, which would untick every calendar. */
     fun calendars(): List<PhoneCalendar>? {
         if (!allowed()) return null
         val proj = arrayOf(
@@ -45,7 +49,7 @@ class PhoneCalendarReader(private val context: Context) {
                 }
             }
             out.toList()
-        }.getOrNull()
+        }.getOrElse { if (it is SecurityException) null else throw IOException("calendar provider", it) }
     }
 
     /** Every occurrence in [window] for the calendars [ids] (repeating
@@ -66,6 +70,8 @@ class PhoneCalendarReader(private val context: Context) {
             CalendarContract.Instances.TITLE,
             CalendarContract.Instances.EVENT_LOCATION,
             CalendarContract.Instances.STATUS,
+            CalendarContract.Instances.ACCESS_LEVEL,
+            CalendarContract.Instances.SELF_ATTENDEE_STATUS,
         )
         val idList = ids.joinToString(",")
         val out = mutableListOf<InstanceRow>()
@@ -85,10 +91,12 @@ class PhoneCalendarReader(private val context: Context) {
                         title = c.getString(5),
                         location = c.getString(6),
                         status = if (c.isNull(7)) null else c.getInt(7),
+                        accessLevel = if (c.isNull(8)) null else c.getInt(8),
+                        selfStatus = if (c.isNull(9)) null else c.getInt(9),
                     )
                 }
             }
             out.toList()
-        }.getOrNull()
+        }.getOrElse { if (it is SecurityException) null else throw IOException("calendar provider", it) }
     }
 }

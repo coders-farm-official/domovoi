@@ -21,12 +21,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import android.content.Context
 import com.domovoi.app.AppContainer
+import com.domovoi.app.calendarshare.CalendarShare
+import com.domovoi.app.calendarshare.ShareRules
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.IdentityVerdict
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.launch
 
 /**
  * Forgetting the server the app is connected to — from the server list
@@ -64,15 +68,39 @@ internal fun provenFingerprint(status: IdentityGate.Status?, serverUrl: String):
     }
 }
 
-/** What both places do once the person confirmed: Prefs drops everything
- *  about the server, the pairing flag clears, and the shell lands on the
- *  server list. */
-internal fun forgetActiveServer(app: AppContainer, toast: (String) -> Unit) {
-    val url = app.prefs.forgetActiveServer() ?: return
-    app.api.clearPairingRequired()
-    app.pendingRoute.value = "picker"
-    toast("forgot ${ServerCredentials.address(url)} — pick a server")
+/** What both places do once the person confirmed: the house's copy of
+ *  this phone's calendars is deleted while the token still works
+ *  ([CalendarShare.withdraw], at most a few seconds), then Prefs drops
+ *  everything about the server, the pairing flag clears, and the shell
+ *  lands on the server list. Run in the app's scope, so leaving the screen
+ *  doesn't stop it half-way. */
+internal fun forgetActiveServer(app: AppContainer, context: Context, toast: (String) -> Unit) {
+    val confirmed = app.prefs.serverUrl.value
+    val server = ServerCredentials.normalize(confirmed)
+    if (server.isBlank()) return
+    // Up to a few seconds against an unreachable house: said, not silent.
+    if (ShareRules.mayHoldCopy(CalendarShare.store(context).get(server))) toast("removing this phone's calendars from the house…")
+    app.scope.launch {
+        val calendarsGone = runCatching { CalendarShare.withdraw(context.applicationContext, app) }.getOrDefault(false)
+        // The server the person confirmed, even if the app moved meanwhile.
+        if (ServerCredentials.normalize(app.prefs.serverUrl.value) != server) {
+            app.prefs.removeKnownServer(confirmed)
+            toast("forgot ${ServerCredentials.address(confirmed)}" +
+                if (calendarsGone) "" else " — ${CalendarShare.LEFT_ON_HOUSE}")
+            return@launch
+        }
+        val url = app.prefs.forgetActiveServer() ?: return@launch
+        app.api.clearPairingRequired()
+        app.pendingRoute.value = "picker"
+        toast(forgotServerToast(ServerCredentials.address(url), calendarsGone))
+    }
 }
+
+/** The toast after forgetting a server: and, when its copy of this phone's
+ *  calendars could not be deleted, that it is still there. Pure. */
+internal fun forgotServerToast(address: String, calendarsGone: Boolean): String =
+    if (calendarsGone) "forgot $address — pick a server"
+    else "forgot $address — ${CalendarShare.LEFT_ON_HOUSE}"
 
 @Composable
 internal fun ForgetActiveServerDialog(
