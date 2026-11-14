@@ -290,11 +290,18 @@ def test_the_dashboards_broadcast_and_a_picked_voice_are_never_held_back():
 def test_answers_never_pass_the_gate():
     """A reply is streamed by the turn, not announced: only announce()
     consults quiet hours."""
-    from domovoi import streaming
+    import ast
 
     src = (REPO / "domovoi/streaming.py").read_text(encoding="utf-8")
     assert src.count("quiet_hours.holds_back(") == 1
-    assert "quiet_hours.holds_back(" in inspect.getsource(streaming.StreamSession._announce)
+    # Read from the file, not the live class: another test in the same
+    # worker may have swapped StreamSession._announce for a stand-in, and
+    # inspect.getsource then answers with the stand-in's source.
+    cls = next(n for n in ast.parse(src).body
+               if isinstance(n, ast.ClassDef) and n.name == "StreamSession")
+    fn = next(n for n in cls.body
+              if isinstance(n, ast.AsyncFunctionDef | ast.FunctionDef) and n.name == "_announce")
+    assert "quiet_hours.holds_back(" in ast.get_source_segment(src, fn)
 
 
 def test_the_unprompted_ones_are_notices():

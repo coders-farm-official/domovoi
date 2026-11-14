@@ -99,8 +99,10 @@ def test_a_preload_and_a_racing_turn_load_the_encoder_once(fake_resemblyzer) -> 
     ready, a, b = asyncio.run(_race())
     assert ready is True and a is not None and b is not None
     assert len(fake_resemblyzer["built_on"]) == 1
-    # The preload ran one forward pass of its own (the warm-up).
-    assert fake_resemblyzer["embedded"] == 3
+    # The preload ran one forward pass of its own (the warm-up); each embed
+    # runs two (1.3.0: the speech alone, and the whole recording for voices
+    # enrolled before it; domovoi/clients/voice_embedder.py, VoicePrint).
+    assert fake_resemblyzer["embedded"] == 5
 
 
 def test_a_missing_resemblyzer_degrades_to_no_embedding(monkeypatch) -> None:

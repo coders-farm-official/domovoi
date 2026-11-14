@@ -50,18 +50,31 @@ _VOICE = None
 
 
 def _speak(job: tuple[str, int, int, str, float, float]) -> tuple[int, int, int, np.ndarray]:
+    """One line in one speaker's voice, through Domovoi's own Piper on ONNX
+    Runtime and its own phonemizer (never piper-tts: GPL-3.0, espeak-ng
+    inside; domovoi/tests/test_tts_piper_onnx.py keeps it out)."""
     model, speaker, n, text, length_scale, noise_scale = job
     global _VOICE
-    from piper import PiperVoice, SynthesisConfig
+    from domovoi.clients.tts import PiperVoice
+    from domovoi.phonemizer import get_phonemizer
 
     if _VOICE is None:
-        _VOICE = PiperVoice.load(model)
-    chunks = list(_VOICE.synthesize(text, syn_config=SynthesisConfig(
-        speaker_id=speaker, length_scale=length_scale, noise_scale=noise_scale,
-    )))
-    audio = np.concatenate([c.audio_int16_array for c in chunks]).astype(np.float32)
-    rate = chunks[0].sample_rate
-    return speaker, n, rate, audio
+        _VOICE = PiperVoice(Path(model), threads=1)
+    voice = _VOICE
+    parts = []
+    for sentence in get_phonemizer().phonemize(text, dialect=voice.dialect):
+        ids = voice.sentence_ids(sentence)
+        if ids is None:
+            continue
+        args = {
+            "input": np.array([ids], dtype=np.int64),
+            "input_lengths": np.array([len(ids)], dtype=np.int64),
+            "scales": np.array([noise_scale, length_scale, voice.noise_w], dtype=np.float32),
+            "sid": np.array([speaker], dtype=np.int64),
+        }
+        parts.append(voice.session.run(None, args)[0].squeeze().astype(np.float32))
+    audio = np.clip(np.concatenate(parts) * 32767.0, -32768, 32767).astype(np.float32)
+    return speaker, n, voice.sample_rate, audio
 
 
 def resample(audio: np.ndarray, rate: int, to: int = 16_000) -> np.ndarray:
