@@ -107,7 +107,9 @@ with the reason, and always optional:
   read the Wi-Fi network's name, which Android shows to no other app.
 - **Contacts**, to call or text someone by name. Without it, you choose the
   person in your contacts app each time.
-- **Calendar**, to read what is on this phone's calendar.
+- **Calendar**, to read what is on this phone's calendar (and, only if
+  you turn on calendar sharing, below, to send the calendars you pick to
+  your Domovoi server).
 
 Say no and the phone chat says it can't do that, and doesn't ask again;
 you can change it in Android's settings for the app. Calls, texts, emails,
@@ -220,6 +222,19 @@ from the server only). In room
 mode the phone also sends the room's health to the server: battery level,
 whether it is charging, Wi-Fi signal and speed, memory, temperature and
 whether the microphone is working.
+
+**Your phone's calendars, only if you choose to share them.** Off unless you
+turn on "Share this phone's calendars with the house" (Settings →
+Household → Phone calendars) and pick calendars. Then the app sends those
+calendars' events to your Domovoi server: each event's title, time and
+place, and the calendar's name and colour, for the last 30 days and the
+next 180, again every few hours and soon after a change. Never the
+descriptions, guests or reminders, and never any calendar you didn't
+pick. The server shows them on the household calendar, read-only, to the
+people and devices of your household. Unpick a calendar or turn sharing
+off and the app deletes the server's copy (it keeps trying until the
+server answers). Uninstalling the app does not reach the server: turn
+sharing off first, or ask whoever runs the server.
 
 Your server is run by you or your household, on your own hardware; what it
 keeps is described in its own documentation

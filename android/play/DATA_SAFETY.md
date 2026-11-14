@@ -74,7 +74,7 @@ Not declared, and why:
 | Device or other IDs | The app's own random device id goes only to the user's server (`data/Prefs.kt`). No advertising ID, no Android ID use for tracking. |
 | Location | Since 2026-10-21 the app may ask for **approximate** location only when a phone chat is asked "where am I", and for **precise** location only when it is asked the Wi-Fi network's name (which Android shows only with it), each with its reason first, always optional. The last fix Android already has is read on the phone and shown as coordinates; it is never looked up online, never read in the background, never sent anywhere (`assistant/AndroidPhoneReader.kt`; `NoNetworkTest` pins that the phone chat's code names no network or server client). Processed on the device only, so not collected. |
 | Contacts | Asked for (optional) only to call or text someone by name from a phone chat; the name and number are read on the phone to fill in the dialer or Messages, which the person then uses themselves. Without it the system contact picker hands over only the row picked. Never sent anywhere: not collected. |
-| Calendar events | Asked for (optional) only when a phone chat is asked what's on the calendar; read on the phone into that conversation (app-private, outside backups), never sent anywhere: not collected. New events go through the calendar app's own editor (`ACTION_INSERT`), which the person saves themselves. |
+| Calendar events | Asked for (optional) when a phone chat is asked what's on the calendar (read on the phone into that conversation, app-private, outside backups, never sent), or when the person turns on **Settings → Phone calendars** (1.3.0). Only then, the calendars the person ticks are copied to the user's own Domovoi server, never to Coders Farm or a third party: the "judgement call" again, so **not collected, not shared** (see "Note for 1.3.0" below for the cautious alternative). New events go through the calendar app's own editor (`ACTION_INSERT`), which the person saves themselves. |
 | Phone facts in a phone chat (battery, storage, network type, next alarm, Do Not Disturb, now playing, device model, connected headphones, the phone's music/video/book titles) | Read on the phone when asked and put only in the conversation on the phone (`assistant/PhoneQuestions.kt`, `PhoneTools.kt`). Not collected. **Such replies can't be reported** ("report this reply" is not offered on them, and `ReplyReport.draft` refuses them), so none of this, the location, contacts or calendar included, can leave the phone in a report; the model's own prompt facts never include location, contacts or calendar. |
 | Timers and alarms | A phone chat hands a timer's length and name, or an alarm's time and days, to the phone's own Clock app (`AlarmClock` intents, after the person says yes); nothing leaves the phone. Not collected. |
 | Crash logs, diagnostics | Kept on the phone (`diagnostics/ProblemStore.kt`); the user may copy one. No crash-reporting SDK (`OpenSourceLicencesTest` fails the build if one appears). |
@@ -162,6 +162,100 @@ bundle's permissions.
   file read-only to an app the person picks (DECLARATIONS.md §1).
 * **Printing and scanning** are done by the server; the app only shows
   them.
+
+## Note for 1.3.0: Phone calendars (sharing the phone's calendars with the house)
+
+**What it does.** Settings → Household → Phone calendars, **off by
+default**, not offered on a shared screen or before the phone is paired.
+Turning it on asks for `READ_CALENDAR` (only if not already held), with the
+disclosure below shown above the switch first. Nothing is sent until the
+person ticks a calendar. Then the app reads the ticked calendars'
+occurrences, 30 days back to 180 days ahead
+(`CalendarContract.Instances`), and sends `PUT
+/api/calendar/phones/{device_id}` to the **active, paired** Domovoi server:
+a few seconds after a tick, about 90 seconds after the phone's calendar
+changes, and every 6 hours (WorkManager, `calendarshare/CalendarShareWork.kt`).
+Per event: an id ("event id:start"), title, start, end, all-day, location;
+per calendar: its name, account name and colour. **Never** descriptions,
+guests, reminders or attachments (`calendarshare/SharePayload.kt`;
+`SharePayloadTest.anEventAsTheServerTakesIt` pins the exact keys).
+Turning it off sends `DELETE`, which removes the server's copy; if the
+server can't be reached the delete is kept and retried until it goes
+(`ShareSyncTest.aDeleteThatCantReachTheServerIsRememberedAndTriedAgain`).
+
+**The disclosure, shown above the switch before the permission prompt**
+(`calendarShareDisclosure`, `ui/screens/settings/PhoneCalendarsPanel.kt`):
+
+> Show events from the calendars you pick on this phone on your household
+> calendar. When this is on, Domovoi reads those calendars and sends a copy
+> of each event's title, time and place, and the calendar's name and
+> colour, to your Domovoi server (*server name*). Only there: nothing goes
+> to Coders Farm or anyone else. Descriptions and guests stay on this phone.
+> The copy is read-only, updates every few hours and soon after a change,
+> and is deleted from the server when you turn this off.
+
+Play's User Data policy asks for an in-app **prominent disclosure** when an
+app accesses personal or sensitive data that leaves the device in a way the
+user may not expect: in the normal flow, before the runtime permission,
+saying what, where and why *(unverified that a transfer to the user's own
+server triggers it; we show it anyway, which costs nothing)*. The text above
+is that disclosure: in the normal flow (not a menu or the policy), above the
+switch, and the permission is asked only after the person turns it on.
+
+**Is it "collected"?** Google's definition: data transmitted off the device
+by the app, "irrespective of whether data is transmitted to you or a
+third-party server" ([help](https://support.google.com/googleplay/android-developer/answer/10787469)).
+Its own exemption example is the user sending data to their own storage
+*(unverified that a self-hosted server counts as that; Google has no rule
+for self-hosted servers)*. The honest reading, consistent with every other
+household-server path in this file (voice in room mode, uploads, documents,
+listening history), is **Option A: not collected, not shared**: the
+destination is a server the user runs and chose, on their own network, and
+Coders Farm has no access to it. Keep it that way unless the owner moves
+the whole file to Option B; answering one household-server path
+differently from the others would be inconsistent.
+
+**Recommended Data safety entries.**
+
+* Option A (recommended, matches the rest of the form): **Calendar →
+  Calendar events: not declared** (not collected, not shared). The privacy
+  policy must say it (owner: add to `docs/PRIVACY_POLICY.md`, "What goes
+  to your Domovoi server": the ticked calendars' event titles, times,
+  places and calendar names and colours, while Phone calendars is on;
+  deleted from the server when it is turned off).
+* If the owner prefers to declare it (cautious), the row is:
+
+  | Data type | Collected | Shared | Optional? | Processed ephemerally? | Purposes | Deletion |
+  |---|---|---|---|---|---|---|
+  | **Calendar → Calendar events** | **Yes** | **No** (the user's own server, not a third party) | **Optional** (off by default; the person turns it on and ticks calendars) | **No** (the server keeps a copy until it is turned off) | **App functionality** | Turning Phone calendars off deletes the server's copy |
+
+  Declaring it changes the form-wide **"encrypted in transit"** answer: the
+  household server is usually plain `http://` on the LAN
+  (`net/CleartextPolicy.kt` allows cleartext only to private addresses), so
+  a declared calendar row could not honestly sit under "encrypted in
+  transit: Yes", and that answer would have to become **No**. Another
+  reason Option A stays the recommendation; under Option A the existing
+  "Yes" (about what reaches Coders Farm and third parties) stands.
+* "Users can request deletion": already **Yes**; for this data the way is
+  in the app (turn it off). Note: **uninstalling the app does not delete
+  the server's copy** (the app is gone before it could send the delete);
+  the household's dashboard is where it would be removed then *(check with
+  the server half that the dashboard offers removing a phone's calendars
+  before the policy says so)*.
+
+**Owner checklist for the Play Console (1.3.0):**
+
+- [ ] Re-open **Data safety**; confirm the "Calendar events" answer matches
+      the option chosen above (A: not declared) and the encryption answer
+      is unchanged.
+- [ ] Add the Phone calendars paragraph to `docs/PRIVACY_POLICY.md` before
+      the release goes live (the in-app privacy card already says it:
+      `PRIVACY_CALENDAR_POINT`).
+- [ ] Check **App content → Sensitive app permissions** still lists no form
+      for `READ_CALENDAR` *(unverified that none exists)*.
+- [ ] On a real phone, record the flow once (Settings → Phone calendars →
+      disclosure → switch → permission prompt) in case a reviewer asks for
+      the prominent disclosure.
 
 ## Security practices (shown on the listing)
 

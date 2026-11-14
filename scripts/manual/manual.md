@@ -1229,6 +1229,33 @@ change events here: by voice it only reads.
 - "what's next on my calendar"
 - "do I have anything on Friday"
 
+**Other calendars on it**
+
+The calendar can also show a Google, Outlook or iCloud calendar, and the
+calendars on people's phones. They show in their own colour with their
+name, read-only: Domovoi never changes them and never signs in to them.
+Change an event where it lives (the event says where).
+
+- **By link** (an admin): [Settings → Household →
+  Calendars](#settings/calendars) → **add a calendar**, and paste the calendar's private link. Google Calendar: on
+  a computer, the calendar's settings → **Secret address in iCal format**.
+  Outlook: its calendar settings, **Shared calendars**, **Publish a
+  calendar**, then the ICS link. iCloud: share the calendar as a **Public Calendar** and
+  copy its link. Keep the link private: anyone with it can see that
+  calendar. Domovoi reads it every half hour (every two hours when
+  [Settings → Privacy → Internet](#settings/internet) says
+  **Sometimes**); with the internet answer **No**
+  it keeps the last copy and says how old it is. **refresh now** reads it
+  at once.
+- **From a phone**: in the Domovoi app on Android, [Settings → Phone
+  calendars](#app/phone-calendars) (under Household), turn on **Share this phone's calendars with the
+  house** and pick the calendars. The phone sends them to your Domovoi
+  over your home network (no internet needed) and keeps them up to date;
+  turn it off and they leave the house.
+
+Home's **today / next** card shows what's still on today and the next few
+events of the week, from every calendar.
+
 ### Lists
 
 The household's lists: **To-do** and **Shopping** are there from the

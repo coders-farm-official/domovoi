@@ -4,6 +4,40 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — Other calendars on the household calendar, read-only (V055)
+
+The Calendar page, Home and voice ("what's on my calendar today") can now
+show calendars from elsewhere beside the household's own. **Read-only**:
+Domovoi never changes them, and never signs in to Google, Microsoft, Apple
+or Samsung.
+
+- **By link.** An admin adds a Google, Outlook or iCloud calendar by its
+  private ICS link in **Settings → Household → Calendars** (name, colour,
+  whose). The core reads it every 30 minutes (every 2 hours when the
+  internet answer is **Sometimes**; never under **No**, where the last
+  copy stays and the page says how old it is), backing off after
+  failures; **refresh now** reads it at once. The link is a secret:
+  stored on the server only, never shown again (only its host), never
+  logged. `INTERNET.md`'s egress inventory lists the new destination.
+- **From a phone.** The Android app's new **Phone calendars** section
+  ("Share this phone's calendars with the house", off by default) sends
+  the calendars a person picks to the server over the house's network,
+  and deletes them when sharing is turned off. Works with no internet.
+- Events from elsewhere carry their calendar's name and colour and can't
+  be edited or deleted here (`PATCH`/`DELETE` answer `409`). Home's card
+  is now **today / next**: what's still on today, then the week's next
+  events, from every calendar.
+
+**What an update needs:** the migration (V055, a new `calendar_sources`
+table and a `calendar_source_id` column on `calendar_events`; the
+`source` check now also allows `link` and `phone`). Nothing to configure.
+Answer changes a client may notice: `GET /api/calendar/events` now also
+returns an event that began before `start` and is still on, every event
+carries `all_day` and the calendar fields, and an all-day event's times
+are written with the server's own offset (`…T00:00:00-05:00`) so they
+carry their date. Clients that read `limit` events with no window should
+pass `start`/`end`: a linked calendar can hold thousands of events.
+
 ## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
 
 A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm

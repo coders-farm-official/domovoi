@@ -629,6 +629,19 @@ SCENARIOS["today_next"] = scenario(
          "location": None, "description": None, "source": "local"}]}),
     SNAP, ls=PAIRED_LS,
 )
+# Today / next across calendars (1.3.0): an all-day event from a phone and a
+# timed one from a linked calendar, each with its calendar's colour and name.
+_EXT_EVENTS = [
+    {"id": 21, "title": "Holiday", "starts_at": iso(NOW - 60 * MIN), "ends_at": iso(NOW + 20 * 60 * MIN),
+     "all_day": True, "location": None, "description": None, "source": "phone", "read_only": True,
+     "calendar_name": "Family", "calendar_color": "#3f8f6b", "calendar_kind": "phone"},
+    {"id": 22, "title": "Standup", "starts_at": iso(NOW + 3 * 24 * 60 * MIN), "ends_at": None,
+     "all_day": False, "location": "Room 4", "description": None, "source": "link", "read_only": True,
+     "calendar_name": "Alex work", "calendar_color": "#7a5fb0", "calendar_kind": "link"},
+]
+SCENARIOS["today_ext"] = scenario(house(**{"GET /api/calendar/events": _EXT_EVENTS}), SNAP, ls=PAIRED_LS)
+SCENARIOS["today_ext_shared"] = scenario(house(**{"GET /api/calendar/events": _EXT_EVENTS}), SNAP,
+                                         ls=SHARED_LS)
 SCENARIOS["today_many"] = scenario(
     house(**{"GET /api/calendar/events": [
         {"id": i, "title": f"Event {i}", "starts_at": iso(NOW + i * 30 * MIN),
@@ -1360,7 +1373,7 @@ def test_an_empty_house_gets_the_first_run_hint(driven) -> None:
     assert "start here" in snap["text"] and "#manual" in snap["links"]
     assert "no rooms yet" in snap["text"]
     assert "set up a room" in snap["text"] and "#settings/rooms" in snap["links"]
-    assert "nothing on today" in snap["quiet"]
+    assert "nothing on the calendar this week" in snap["quiet"]
     assert snap["timers"] == [] and "timers" not in snap["text"]
     assert "“set a timer for 10 minutes”" in driven["first_run_manual_down"]["text"]
 
@@ -1372,8 +1385,21 @@ def test_the_manual_is_read_only_for_an_empty_house(driven) -> None:
 
 
 def test_today_says_what_is_next_when_nothing_is_on(driven) -> None:
-    (line,) = [q for q in driven["today_next"]["quiet"] if "nothing" in q]
-    assert line.startswith("nothing on today · next: ") and line.endswith("Dentist")
+    # Today / next (1.3.0): nothing today, then the week's next events as rows.
+    snap = driven["today_next"]
+    assert [q for q in snap["quiet"] if "nothing" in q] == ["nothing on today"]
+    (row,) = snap["events"]
+    assert row["text"].endswith("Dentist") and not row["extra"]
+
+
+def test_today_next_shows_every_calendar_with_its_name(driven) -> None:
+    rows = [r["text"] for r in driven["today_ext"]["events"]]
+    assert len(rows) == 2
+    assert rows[0].startswith("all day") and "Holiday" in rows[0] and "Family" in rows[0]
+    assert "Standup" in rows[1] and "Alex work" in rows[1] and "Room 4" in rows[1]
+    shared = [r["text"] for r in driven["today_ext_shared"]["events"]]
+    assert all("busy" in r for r in shared)
+    assert not any(w in r for r in shared for w in ("Family", "Alex work", "Holiday", "Room 4"))
 
 
 def test_today_shows_six_and_a_phone_three(driven) -> None:

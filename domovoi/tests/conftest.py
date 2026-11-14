@@ -181,6 +181,8 @@ TABLES_TO_TRUNCATE = [
     "intents_log",
     "conversation_log",
     "calendar_events",
+    # Calendars by link and phones' shared calendars (V055).
+    "calendar_sources",
     "voice_notes",
     "connectivity_events",
     "voice_profiles",

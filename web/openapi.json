@@ -8130,7 +8130,7 @@
           "calendar"
         ],
         "summary": "List Events",
-        "description": "Events whose ``starts_at`` falls in ``[start, end)``.\n\nBoth bounds optional: omit ``start`` for a \"since the dawn of time\"\nsweep, omit ``end`` for everything from ``start`` onwards. Default\ncap at 500 keeps the JSON response sane on a year-spanning query.",
+        "description": "Events in ``[start, end)``: starting in it, or (from 1.3.0) begun\nbefore ``start`` and still under way at it (a multi-day event).\n\nBoth bounds optional: omit ``start`` for a \"since the dawn of time\"\nsweep, omit ``end`` for everything from ``start`` onwards. Default\ncap at 500 keeps the JSON response sane on a year-spanning query.",
         "operationId": "list_events_api_calendar_events_get",
         "parameters": [
           {
@@ -8293,7 +8293,7 @@
           "calendar"
         ],
         "summary": "Patch Event",
-        "description": "Partial update. Only fields explicitly set on the request body\nare written; anything left unset stays as-is.",
+        "description": "Partial update. Only fields explicitly set on the request body\nare written; anything left unset stays as-is. An event from a linked\nor phone calendar is 409: it is changed where it lives.",
         "operationId": "patch_event_api_calendar_events__event_id__patch",
         "parameters": [
           {
@@ -8353,6 +8353,289 @@
             "schema": {
               "type": "integer",
               "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/sources": {
+      "get": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "List Sources",
+        "description": "Every calendar the house reads besides its own: links (address\nshown as ``host/\u2026`` only) and phones' shared calendars, with when each\nwas last read and, for a link, what went wrong in plain words.",
+        "operationId": "list_sources_api_calendar_sources_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CalendarSource"
+                  },
+                  "type": "array",
+                  "title": "Response List Sources Api Calendar Sources Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Add Source",
+        "description": "Add a calendar by its private ICS / webcal link, then read it once\n(when the internet answer allows). The calendar is kept even when that\nfirst read fails: the answer says why, in plain words, and the\nrefresher keeps trying.",
+        "operationId": "add_source_api_calendar_sources_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarSourceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSourceRefresh"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/sources/{source_id}": {
+      "patch": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Patch Source",
+        "description": "Rename, recolour or re-own a calendar; for a link, also replace its\naddress (after the calendar company reset it). A phone's calendar takes\nits name and colour from the phone, so only its owner label changes.",
+        "operationId": "patch_source_api_calendar_sources__source_id__patch",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarSourcePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSource"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Delete Source",
+        "description": "Remove a linked calendar and its events from the house (the\ncalendar itself, wherever it lives, is untouched). A phone's calendar\nis stopped on the phone: removing it here would only last until the\nphone's next update, so it is refused with that sentence.",
+        "operationId": "delete_source_api_calendar_sources__source_id__delete",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/sources/{source_id}/refresh": {
+      "post": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Refresh Source",
+        "description": "Read a linked calendar now (\"refresh now\"). Under internet access\n\"never\" nothing is fetched and the answer says so.",
+        "operationId": "refresh_source_api_calendar_sources__source_id__refresh_post",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarSourceRefresh"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/calendar/phones/{device_id}": {
+      "put": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Put Phone Snapshot",
+        "description": "The complete set of calendars this phone shares, with their events\nin a rolling window. Each listed calendar's events are replaced;\na calendar of this phone that is not listed is deleted (unpicked), and\n``calendars: []`` deletes them all.",
+        "operationId": "put_phone_snapshot_api_calendar_phones__device_id__put",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhoneCalendarSnapshot"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhoneCalendarStored"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "calendar"
+        ],
+        "summary": "Delete Phone Calendars",
+        "description": "Sharing turned off on the phone: every calendar it shared, and\ntheir events, leave the house.",
+        "operationId": "delete_phone_calendars_api_calendar_phones__device_id__delete",
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
             }
           }
         ],
@@ -21133,6 +21416,71 @@
               }
             ],
             "title": "Last Synced At"
+          },
+          "all_day": {
+            "type": "boolean",
+            "title": "All Day",
+            "default": false
+          },
+          "calendar_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Id"
+          },
+          "calendar_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Name"
+          },
+          "calendar_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Color"
+          },
+          "calendar_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Kind"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Name"
+          },
+          "read_only": {
+            "type": "boolean",
+            "title": "Read Only",
+            "default": false
           }
         },
         "type": "object",
@@ -21262,6 +21610,309 @@
         },
         "type": "object",
         "title": "CalendarEventPatch"
+      },
+      "CalendarSource": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "link",
+              "phone"
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "owner_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Name"
+          },
+          "url_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url Display"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "device_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Name"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count",
+            "default": 0
+          },
+          "last_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Refreshed At"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "next_refresh_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Refresh At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_error_words": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Words"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "error",
+              "waiting",
+              "internet_off"
+            ],
+            "title": "Status",
+            "default": "ok"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "color"
+        ],
+        "title": "CalendarSource",
+        "description": "A calendar the house reads from elsewhere (``GET /api/calendar/sources``).\nA link's address is never here: ``url_display`` is its host and \"\u2026\"."
+      },
+      "CalendarSourceCreate": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url",
+          "name"
+        ],
+        "title": "CalendarSourceCreate"
+      },
+      "CalendarSourcePatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 7
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Id"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CalendarSourcePatch"
+      },
+      "CalendarSourceRefresh": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/CalendarSource"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "events": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "ok"
+        ],
+        "title": "CalendarSourceRefresh"
       },
       "CaptureList": {
         "properties": {
@@ -25990,6 +26641,185 @@
           "name"
         ],
         "title": "PersonRename"
+      },
+      "PhoneCalendar": {
+        "properties": {
+          "calendar_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Calendar Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 9
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/PhoneCalendarEvent"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calendar_id",
+          "name"
+        ],
+        "title": "PhoneCalendar"
+      },
+      "PhoneCalendarEvent": {
+        "properties": {
+          "uid": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Uid"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "starts_at_ms": {
+            "type": "integer",
+            "title": "Starts At Ms"
+          },
+          "ends_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ends At Ms"
+          },
+          "all_day": {
+            "type": "boolean",
+            "title": "All Day",
+            "default": false
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          }
+        },
+        "type": "object",
+        "required": [
+          "uid",
+          "starts_at_ms"
+        ],
+        "title": "PhoneCalendarEvent"
+      },
+      "PhoneCalendarSnapshot": {
+        "properties": {
+          "phone_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone Name"
+          },
+          "window_start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start Ms"
+          },
+          "window_end_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End Ms"
+          },
+          "calendars": {
+            "items": {
+              "$ref": "#/components/schemas/PhoneCalendar"
+            },
+            "type": "array",
+            "title": "Calendars"
+          }
+        },
+        "type": "object",
+        "title": "PhoneCalendarSnapshot",
+        "description": "``PUT /api/calendar/phones/{device_id}``: everything a phone shares."
+      },
+      "PhoneCalendarStored": {
+        "properties": {
+          "calendars": {
+            "type": "integer",
+            "title": "Calendars"
+          },
+          "events": {
+            "type": "integer",
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "calendars",
+          "events"
+        ],
+        "title": "PhoneCalendarStored"
       },
       "PhoneLookupBody": {
         "properties": {

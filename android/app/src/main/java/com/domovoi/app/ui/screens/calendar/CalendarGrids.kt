@@ -164,8 +164,8 @@ private fun MonthChip(
     compact: Boolean,
     onSelect: (Long) -> Unit,
 ) {
-    val main = if (e.isGoogle()) Domovoi.colors.idle else Domovoi.colors.brand
-    val soft = if (e.isGoogle()) Domovoi.colors.idleSoft else Domovoi.colors.brandSoft
+    val main = if (e.isImported()) Domovoi.colors.idle else Domovoi.colors.brand
+    val soft = if (e.isImported()) Domovoi.colors.idleSoft else Domovoi.colors.brandSoft
     val shape = RoundedCornerShape(4.dp)
     Row(
         Modifier
@@ -179,7 +179,7 @@ private fun MonthChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Box(Modifier.size(5.dp).background(main, CircleShape))
+        Box(Modifier.size(5.dp).background(e.dotColor() ?: main, CircleShape))
         if (!compact) {
             Text(
                 fmtClock(e.startLocal()),
@@ -314,8 +314,8 @@ private fun DayColumn(
             val durMin = Duration.between(s, en).toMinutes().toInt()
                 .coerceAtLeast(20)
                 .coerceAtMost(GRID_HOURS * 60 - top)
-            val main = if (e.isGoogle()) Domovoi.colors.idle else Domovoi.colors.brand
-            val soft = if (e.isGoogle()) Domovoi.colors.idleSoft else Domovoi.colors.brandSoft
+            val main = if (e.isImported()) Domovoi.colors.idle else Domovoi.colors.brand
+            val soft = if (e.isImported()) Domovoi.colors.idleSoft else Domovoi.colors.brandSoft
             val sel = selectedId == e.id
             val shape = RoundedCornerShape(6.dp)
             Column(

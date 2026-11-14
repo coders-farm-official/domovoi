@@ -209,6 +209,13 @@ internal data class HomeEvent(
     val starts_at: String = "",
     val ends_at: String? = null,
     val location: String? = null,
+    /** 1.3.0: an all-day event, read by its written date. */
+    val all_day: Boolean = false,
+    /** The calendar it comes from (a linked or phone one); null for the
+     *  household's own. Its colour is for the row's dot only. */
+    val calendar_name: String? = null,
+    val calendar_color: String? = null,
+    val calendar_kind: String? = null,
 )
 
 @Serializable
@@ -601,13 +608,33 @@ internal fun attentionView(
     }
 }
 
-// ─── Today ────────────────────────────────────────────────────────────────
+// ─── Today / next ─────────────────────────────────────────────────────────
 
-internal fun eventStartMs(e: HomeEvent): Long = isoMs(e.starts_at) ?: Long.MAX_VALUE
+/** The date an all-day event's ISO string names, as written ("2026-10-01"
+ *  of "2026-10-01T00:00:00Z"): never moved into another zone. */
+private fun writtenDay(iso: String?): java.time.LocalDate? =
+    iso?.trim()?.takeIf { it.length >= 10 }?.let { runCatching { java.time.LocalDate.parse(it.take(10)) }.getOrNull() }
 
-/** An event with no end runs an hour. */
-internal fun eventEndMs(e: HomeEvent): Long =
-    isoMs(e.ends_at) ?: (eventStartMs(e).takeIf { it != Long.MAX_VALUE }?.plus(3_600_000) ?: Long.MAX_VALUE)
+internal fun eventStartMs(e: HomeEvent, zone: ZoneId = ZoneId.systemDefault()): Long =
+    (if (e.all_day) writtenDay(e.starts_at)?.atStartOfDay(zone)?.toInstant()?.toEpochMilli() else null)
+        ?: isoMs(e.starts_at) ?: Long.MAX_VALUE
+
+/** An event with no end runs an hour; an all-day one to the end of its
+ *  last day. */
+internal fun eventEndMs(e: HomeEvent, zone: ZoneId = ZoneId.systemDefault()): Long {
+    if (e.all_day) {
+        writtenDay(e.ends_at)?.let { return it.atStartOfDay(zone).toInstant().toEpochMilli() }
+        writtenDay(e.starts_at)?.let { return it.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() }
+    }
+    return isoMs(e.ends_at) ?: (eventStartMs(e, zone).takeIf { it != Long.MAX_VALUE }?.plus(3_600_000) ?: Long.MAX_VALUE)
+}
+
+/** How many rows "today / next" shows on a wider screen (a phone shows
+ *  [HOME_PHONE_ROWS]). */
+internal const val HOME_NEXT_ROWS = 5
+
+/** What it says when the coming week is empty. */
+internal const val HOME_CAL_EMPTY = "nothing on the calendar this week"
 
 internal data class TodayRow(
     val event: HomeEvent,
@@ -618,67 +645,74 @@ internal data class TodayRow(
     /** Never on a shared screen. */
     val location: String?,
     val running: Boolean,
+    val allDay: Boolean = false,
+    /** The calendar's own colour (0xAARRGGBB) for the row's dot; null for
+     *  the household's own events, which get none. */
+    val dot: Long? = null,
 )
 
 internal data class TodayDay(val label: String, val rows: List<TodayRow>)
 
+/** "#33b679" → 0xFF33B679; anything else null. */
+internal fun homeHexColor(hex: String?): Long? {
+    val h = hex?.trim()?.removePrefix("#") ?: return null
+    if (h.length != 6 || !h.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }) return null
+    return 0xFF000000L or h.toLong(16)
+}
+
 /**
- * Today's and tomorrow's events still to come or under way (at most
- * [limit]: [HOME_TODAY_ROWS], or [HOME_PHONE_ROWS] on a phone), under
- * "today" / "tomorrow". The cap is applied before the grouping, so a day
- * whose every row was cut leaves no bare label behind. Never the
- * description; a shared screen gets the times and "busy" only. Empty when
- * there is none — then [todayEmptyText] says so.
+ * Today / next: the events still to come or under way in the coming week
+ * (from now to local midnight 7 days on), across the household's calendar
+ * and every linked and phone calendar, soonest first, at most [limit]
+ * ([HOME_NEXT_ROWS], or [HOME_PHONE_ROWS] on a phone), under "today",
+ * "tomorrow" or the day ("thu 1 oct"). The cap is applied before the
+ * grouping, so a day whose every row was cut leaves no bare label behind.
+ * Never the description; a shared screen gets the times and "busy" only.
+ * Empty when there is none — then it says [HOME_CAL_EMPTY].
  */
 internal fun todayDays(
     events: List<HomeEvent>,
     nowMs: Long,
     zone: ZoneId,
     shared: Boolean,
-    limit: Int = HOME_TODAY_ROWS,
+    limit: Int = HOME_NEXT_ROWS,
 ): List<TodayDay> {
     val d1 = dayStartMs(nowMs, zone, 1)
     val d2 = dayStartMs(nowMs, zone, 2)
-    val shown = events.sortedBy { eventStartMs(it) }
-        .filter { eventStartMs(it) < d2 && eventEndMs(it) >= nowMs }
+    val d7 = dayStartMs(nowMs, zone, 7)
+    val shown = events.sortedBy { eventStartMs(it, zone) }
+        .filter { eventStartMs(it, zone) < d7 && eventEndMs(it, zone) > nowMs }
         .take(limit)
     fun row(e: HomeEvent): TodayRow {
-        val start = eventStartMs(e)
+        val start = eventStartMs(e, zone)
         return TodayRow(
             event = e,
             startMs = start,
-            endMs = isoMs(e.ends_at),
-            title = if (shared) "busy" else e.title,
+            endMs = if (e.all_day) null else isoMs(e.ends_at),
+            title = if (shared) "busy" else e.title.ifBlank { "(no title)" },
             location = if (shared) null else e.location?.takeIf { it.isNotEmpty() },
-            running = start <= nowMs && nowMs < eventEndMs(e),
+            running = !e.all_day && start <= nowMs && nowMs < eventEndMs(e, zone),
+            allDay = e.all_day,
+            dot = homeHexColor(e.calendar_color),
         )
     }
-    return listOf(
-        TodayDay("today", shown.filter { eventStartMs(it) < d1 }.map(::row)),
-        TodayDay("tomorrow", shown.filter { eventStartMs(it) >= d1 }.map(::row)),
-    ).filter { it.rows.isNotEmpty() }
-}
-
-/** "nothing on today", "nothing more today · next: thu 1 oct 9:00am Dentist". */
-internal fun todayEmptyText(events: List<HomeEvent>, nowMs: Long, zone: ZoneId, shared: Boolean): String {
-    val d1 = dayStartMs(nowMs, zone, 1)
-    val d2 = dayStartMs(nowMs, zone, 2)
-    val sorted = events.sortedBy { eventStartMs(it) }
-    val next = sorted.firstOrNull { eventStartMs(it) >= d2 && eventStartMs(it) != Long.MAX_VALUE }
-    val earlier = sorted.any { eventStartMs(it) < d1 && eventEndMs(it) < nowMs }
-    val lead = if (earlier) "nothing more today" else "nothing on today"
-    if (next == null) return lead
-    val at = eventStartMs(next)
-    return "$lead · next: ${homeDate(at, zone)} ${homeClock(at, zone)} ${if (shared) "busy" else next.title}"
+    // An event under way since before today sits under today.
+    fun label(start: Long): String = when {
+        start < d1 -> "today"
+        start < d2 -> "tomorrow"
+        else -> homeDate(start, zone)
+    }
+    return shown.groupBy { label(eventStartMs(it, zone)) }
+        .map { (l, list) -> TodayDay(l, list.map(::row)) }
 }
 
 /** GET path for the events Home needs: from local midnight (an event
  *  already under way must still show — the server filters on starts_at)
- *  through the week, so an empty today can still name the next one. */
+ *  through the week. */
 internal fun calendarPath(dayStartMs: Long, zone: ZoneId): String {
     val end = dayStartMs(dayStartMs, zone, 7)
     fun enc(ms: Long) = java.net.URLEncoder.encode(Instant.ofEpochMilli(ms).toString(), "UTF-8")
-    return "/api/calendar/events?start=${enc(dayStartMs)}&end=${enc(end)}&limit=20"
+    return "/api/calendar/events?start=${enc(dayStartMs)}&end=${enc(end)}&limit=50"
 }
 
 // ─── First run ────────────────────────────────────────────────────────────

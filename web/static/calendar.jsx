@@ -1,14 +1,20 @@
 /* Calendar page — month / week / day views, full CRUD, event-detail rail.
  *
  * Data sources:
- *   * GET    /api/calendar/events            — list (no date filter; the
- *                                              backend caps at 500 and
- *                                              the UI re-windows client-
- *                                              side per view)
+ *   * GET    /api/calendar/events            — the six weeks around the
+ *                                              month on screen (the UI
+ *                                              re-windows per view)
  *   * POST   /api/calendar/events            — create (always source='local')
  *   * PATCH  /api/calendar/events/{id}       — partial update
  *   * DELETE /api/calendar/events/{id}       — delete
+ *   * GET    /api/calendar/sources           — the calendars shown from
+ *                                              links and phones (1.3.0)
  *   * /ws/state · `calendar.event.changed`   — refresh on remote change
+ *
+ * An event from a linked calendar or a phone (read_only) wears its
+ * calendar's colour and name and can't be edited or deleted here: the
+ * house only shows it ("from Work. change it there"). A link that can't
+ * refresh says so above the grid, with the age of the copy shown.
  */
 
 /* ---- Date helpers ----------------------------------------------- */
@@ -34,6 +40,33 @@ const fmtIsoLocal  = (iso) => {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 const localToIso   = (s) => new Date(s).toISOString();
+
+/* ---- Where an event comes from ---------------------------------- */
+// Household events are amber; anything from outside (a link, a phone, the
+// old synced kind) is the slate "from elsewhere" style, its stripe and dot
+// in the calendar's own colour.
+const calIsExt   = (e) => !!(e && (e.read_only || e.source === 'google'));
+const calSrcCls  = (e) => (calIsExt(e) ? 'src-ext' : 'src-local');
+const calStyle   = (e) => (e && e.calendar_color ? { '--cal-c': e.calendar_color } : undefined);
+const calWhen    = (e) => (e.all_day ? 'all day' : fmtClock(e.starts_at));
+const calFromNote = (e) => {
+  if (!e || !e.read_only) return null;
+  const name = e.calendar_name || 'another calendar';
+  if (e.calendar_kind === 'phone') {
+    return `from ${name}${e.owner_name ? ` on ${e.owner_name}'s phone` : ''}. change it on that phone`;
+  }
+  return `from ${name}. change it there; Domovoi only shows it`;
+};
+// The days an event covers: an all-day one every day to its end (at most a
+// month), a timed one the day it starts.
+const calDaysOf  = (e) => {
+  const s = startOfDay(new Date(e.starts_at));
+  if (!e.all_day || !e.ends_at) return [s];
+  const out = [];
+  const end = new Date(e.ends_at);
+  for (let d = s; d < end && out.length < 31; d = addDays(d, 1)) out.push(d);
+  return out.length ? out : [s];
+};
 
 /* ---- Top bar (view toggle + nav + new event) -------------------- */
 const ViewToggle = ({ value, onChange }) => (
@@ -78,21 +111,19 @@ const CalTopBar = ({ view, setView, anchor, setAnchor, onNew }) => {
 };
 
 /* ---- Event chip (used in month grid) ---------------------------- */
-const EventChip = ({ event, selected, onClick }) => {
-  const isGoogle = event.source === 'google';
-  return (
-    <button
-      type="button"
-      className={`cal-chip ${isGoogle ? 'src-google' : 'src-local'} ${selected ? 'sel' : ''}`}
-      onClick={(e) => { e.stopPropagation(); onClick(event.id); }}
-      title={`${event.title} · ${fmtRange(event.starts_at, event.ends_at)}`}
-    >
-      <span className="dot"/>
-      <span className="t mono">{fmtClock(event.starts_at)}</span>
-      <span className="ti">{event.title}</span>
-    </button>
-  );
-};
+const EventChip = ({ event, selected, onClick }) => (
+  <button
+    type="button"
+    className={`cal-chip ${calSrcCls(event)} ${selected ? 'sel' : ''}`}
+    style={calStyle(event)}
+    onClick={(e) => { e.stopPropagation(); onClick(event.id); }}
+    title={`${event.title} · ${event.all_day ? 'all day' : fmtRange(event.starts_at, event.ends_at)}${event.calendar_name ? ` · ${event.calendar_name}` : ''}`}
+  >
+    <span className="dot"/>
+    <span className="t mono">{calWhen(event)}</span>
+    <span className="ti">{event.title}</span>
+  </button>
+);
 
 /* ---- Month grid ------------------------------------------------- */
 const MonthGrid = ({ anchor, events, selectedId, onSelect, onPickDay }) => {
@@ -103,10 +134,15 @@ const MonthGrid = ({ anchor, events, selectedId, onSelect, onPickDay }) => {
   const eventsByDay = React.useMemo(() => {
     const m = {};
     for (const e of events) {
-      const k = dateKey(new Date(e.starts_at));
-      (m[k] = m[k] || []).push(e);
+      for (const d of calDaysOf(e)) {
+        const k = dateKey(d);
+        (m[k] = m[k] || []).push(e);
+      }
     }
-    for (const k of Object.keys(m)) m[k].sort((a,b) => a.starts_at.localeCompare(b.starts_at));
+    // All-day first, then by start.
+    for (const k of Object.keys(m)) {
+      m[k].sort((a, b) => (b.all_day - a.all_day) || (Date.parse(a.starts_at) - Date.parse(b.starts_at)));
+    }
     return m;
   }, [events]);
 
@@ -161,12 +197,11 @@ const eventLayout = (e) => {
 
 const TimeGridEvent = ({ event, selected, onClick }) => {
   const { top, height } = eventLayout(event);
-  const isGoogle = event.source === 'google';
   return (
     <button
       type="button"
-      className={`cal-tg-event ${isGoogle ? 'src-google' : 'src-local'} ${selected ? 'sel' : ''}`}
-      style={{ top, height }}
+      className={`cal-tg-event ${calSrcCls(event)} ${selected ? 'sel' : ''}`}
+      style={{ top, height, ...(calStyle(event) || {}) }}
       onClick={(e) => { e.stopPropagation(); onClick(event.id); }}
     >
       <div className="ti">{event.title}</div>
@@ -177,7 +212,8 @@ const TimeGridEvent = ({ event, selected, onClick }) => {
 };
 
 const TimeColumn = ({ day, events, selectedId, onSelect }) => {
-  const dayEvents = events.filter(e => sameDay(new Date(e.starts_at), day));
+  // All-day events sit in the header row (CalAllDay), not on the hours.
+  const dayEvents = events.filter(e => !e.all_day && sameDay(new Date(e.starts_at), day));
   const today = new Date();
   const isToday = sameDay(day, today);
   return (
@@ -205,6 +241,17 @@ const HourLabels = () => (
   </div>
 );
 
+/* All-day events of one day, under its date in the week and day headers. */
+const CalAllDay = ({ day, events, selectedId, onSelect }) => {
+  const list = events.filter(e => e.all_day && calDaysOf(e).some(d => sameDay(d, day)));
+  if (!list.length) return null;
+  return (
+    <div className="cal-tg-allday">
+      {list.map(e => <EventChip key={e.id} event={e} selected={selectedId === e.id} onClick={onSelect}/>)}
+    </div>
+  );
+};
+
 /* ---- Week view -------------------------------------------------- */
 const WeekGrid = ({ anchor, events, selectedId, onSelect }) => {
   const ws = startOfWeek(anchor);
@@ -220,6 +267,7 @@ const WeekGrid = ({ anchor, events, selectedId, onSelect }) => {
             <div key={i} className={`cal-tg-headcell ${isToday ? 'today' : ''}`}>
               <div className="d">{d.toLocaleDateString('en-US',{ weekday:'short' }).toLowerCase()}</div>
               <div className={`n ${isToday ? 'today-pill' : ''}`}>{d.getDate()}</div>
+              <CalAllDay day={d} events={events} selectedId={selectedId} onSelect={onSelect}/>
             </div>
           );
         })}
@@ -246,6 +294,7 @@ const DayGrid = ({ anchor, events, selectedId, onSelect }) => {
         <div className={`cal-tg-headcell big ${sameDay(anchor, today) ? 'today' : ''}`}>
           <div className="d">{anchor.toLocaleDateString('en-US',{ weekday:'long' }).toLowerCase()}</div>
           <div className={`n ${sameDay(anchor, today) ? 'today-pill' : ''}`}>{anchor.getDate()}</div>
+          <CalAllDay day={anchor} events={events} selectedId={selectedId} onSelect={onSelect}/>
         </div>
       </div>
       <div className="cal-tg-body">
@@ -286,8 +335,8 @@ const MobileList = ({ events, selectedId, onSelect, anchor }) => {
               <button key={e.id} className={`cal-mlist-row ${selectedId === e.id ? 'sel' : ''}`}
                       onClick={() => onSelect(e.id)}>
                 <div className="time mono">
-                  <div>{fmtClock(e.starts_at)}</div>
-                  {e.ends_at && <div className="end">{fmtClock(e.ends_at)}</div>}
+                  <div>{calWhen(e)}</div>
+                  {e.ends_at && !e.all_day && <div className="end">{fmtClock(e.ends_at)}</div>}
                 </div>
                 <div className="body">
                   <div className="ti">{e.title}</div>
@@ -295,7 +344,7 @@ const MobileList = ({ events, selectedId, onSelect, anchor }) => {
                     {e.location && <span><Icon name="map-pin" size={11}/> {e.location}</span>}
                   </div>
                 </div>
-                <Pill tone={e.source === 'google' ? 'idle' : 'live'}>{e.source}</Pill>
+                <CalSourceTag event={e}/>
               </button>
             ))}
           </div>
@@ -304,6 +353,14 @@ const MobileList = ({ events, selectedId, onSelect, anchor }) => {
     </div>
   );
 };
+
+/* The calendar an event comes from: a dot in its colour and its name;
+ * "household" for the house's own. */
+const CalSourceTag = ({ event }) => (
+  <span className={`cal-src-tag ${calSrcCls(event)}`} style={calStyle(event)}>
+    <span className="dot"/>{calIsExt(event) ? (event.calendar_name || 'synced') : 'household'}
+  </span>
+);
 
 /* ---- Empty state ------------------------------------------------ */
 const CalEmpty = ({ title, sub }) => (
@@ -317,15 +374,18 @@ const CalEmpty = ({ title, sub }) => (
 /* ---- Event detail rail ------------------------------------------ */
 const EventDetail = ({ event, onClose, onEdit, onDelete }) => {
   if (!event) return null;
-  const isGoogle = event.source === 'google';
+  const ext = calIsExt(event);
+  const note = calFromNote(event);
   return (
     <aside className="cal-detail">
       <div className="cal-detail-head">
-        <div className={`src-stripe ${isGoogle ? 'src-google' : 'src-local'}`}/>
+        <div className={`src-stripe ${calSrcCls(event)}`} style={calStyle(event)}/>
         <div style={{ flex: 1 }}>
           <div className="ttl">{event.title}</div>
           <div className="when mono">{fmtDateLong(new Date(event.starts_at)).toLowerCase()}</div>
-          {event.ends_at && <div className="when mono">{fmtRange(event.starts_at, event.ends_at)}</div>}
+          {event.all_day
+            ? <div className="when mono">all day</div>
+            : event.ends_at && <div className="when mono">{fmtRange(event.starts_at, event.ends_at)}</div>}
         </div>
         <IconButton name="x" onClick={onClose} aria-label="close"/>
       </div>
@@ -343,9 +403,9 @@ const EventDetail = ({ event, onClose, onEdit, onDelete }) => {
           </div>
         )}
         <div className="row">
-          <Icon name={isGoogle ? 'cloud' : 'pencil'} size={14}/>
+          <Icon name={event.calendar_kind === 'phone' ? 'smartphone' : ext ? 'link' : 'pencil'} size={14}/>
           <div>
-            <Pill tone={isGoogle ? 'idle' : 'live'}>{event.source}</Pill>
+            <CalSourceTag event={event}/>
             {event.last_synced_at && (
               <span className="mono" style={{ marginLeft: 8, fontSize: 11, color: 'var(--fg-faint)' }}>
                 synced {relTime(event.last_synced_at)}
@@ -360,10 +420,14 @@ const EventDetail = ({ event, onClose, onEdit, onDelete }) => {
           </div>
         </div>
       </div>
-      <div className="cal-detail-foot">
-        <Button icon="pencil" onClick={() => onEdit(event)}>edit</Button>
-        <Button icon="trash-2" onClick={() => onDelete(event)} style={{ color: 'var(--err-ink)' }}>delete</Button>
-      </div>
+      {note ? (
+        <div className="cal-detail-foot cal-detail-ro">{note}</div>
+      ) : (
+        <div className="cal-detail-foot">
+          <Button icon="pencil" onClick={() => onEdit(event)}>edit</Button>
+          <Button icon="trash-2" onClick={() => onDelete(event)} style={{ color: 'var(--err-ink)' }}>delete</Button>
+        </div>
+      )}
     </aside>
   );
 };
@@ -473,22 +537,35 @@ const CalendarPage = () => {
   const [draft, setDraft]       = React.useState(() => blankDraft(new Date()));
   const [fire, toastNode]       = useToast();
 
+  // The six weeks of the month grid around the anchor: every view (and the
+  // phone list, from the anchor on) falls inside it. Linked calendars can
+  // hold thousands of events, so the page asks for its window, not all.
+  const calYear = anchor.getFullYear();
+  const calMonth = anchor.getMonth();
+  const calPath = React.useMemo(() => {
+    const gs = startOfWeek(new Date(calYear, calMonth, 1));
+    const ge = addDays(gs, 42);
+    return `/api/calendar/events?start=${encodeURIComponent(gs.toISOString())}`
+      + `&end=${encodeURIComponent(ge.toISOString())}&limit=2000`;
+  }, [calYear, calMonth]);
   const { items: events, refresh: refreshEvents } =
-    useApiList('/api/calendar/events', { eventTypes: ['calendar.events.changed'] });
+    useApiList(calPath, { eventTypes: ['calendar.events.changed'] });
+  const { items: sources } =
+    useApiList('/api/calendar/sources', { eventTypes: ['calendar.events.changed'], quiet: true });
 
   const visible = React.useMemo(() => {
     if (view === 'month') {
       const ms = startOfMonth(anchor);
       const gs = startOfWeek(ms);
       const ge = addDays(gs, 42);
-      return events.filter(e => { const t = new Date(e.starts_at); return t >= gs && t < ge; });
+      return events.filter(e => calDaysOf(e).some(d => d >= gs && d < ge));
     }
     if (view === 'week') {
       const ws = startOfWeek(anchor);
       const we = addDays(ws, 7);
-      return events.filter(e => { const t = new Date(e.starts_at); return t >= ws && t < we; });
+      return events.filter(e => calDaysOf(e).some(d => d >= ws && d < we));
     }
-    return events.filter(e => sameDay(new Date(e.starts_at), anchor));
+    return events.filter(e => calDaysOf(e).some(d => sameDay(d, anchor)));
   }, [view, anchor, events]);
 
   const selected = events.find(e => e.id === selectedId);
@@ -498,7 +575,7 @@ const CalendarPage = () => {
     setSelId(null);
     setModalOp(true);
   };
-  const openEdit = (e) => { setDraft({ ...e }); setModalOp(true); };
+  const openEdit = (e) => { if (e.read_only) return; setDraft({ ...e }); setModalOp(true); };
 
   const save = async (e) => {
     try {
@@ -553,10 +630,18 @@ const CalendarPage = () => {
     <div className="page cal-page">
       <PageHeader
         title="Calendar"
-        sub={`${events.length} events · source of truth until calendarhandler ships`}
+        sub={<>
+          {`${visible.length} ${visible.length === 1 ? 'event' : 'events'}`}
+          {' · '}<a href="#settings/calendars" className="home-link">
+            {sources && sources.length
+              ? `${sources.length} other ${sources.length === 1 ? 'calendar' : 'calendars'}`
+              : 'show another calendar here'}
+          </a>
+        </>}
       />
 
       <CalTopBar view={view} setView={setView} anchor={anchor} setAnchor={setAnchor} onNew={openNew}/>
+      <CalSourceNotices sources={sources}/>
 
       {/* Mobile list (only visible at narrow widths via CSS) */}
       <div className="cal-mobile">
@@ -581,6 +666,273 @@ const CalendarPage = () => {
       <EventModal open={modalOpen} draft={draft}
                   onClose={() => setModalOp(false)} onSave={save}/>
       {toastNode}
+    </div>
+  );
+};
+
+/* ---- Settings → Household → Calendars (1.3.0) ------------------------
+ * The calendars the house shows besides its own: private ICS links an
+ * admin pasted (Google, Outlook, iCloud), and the calendars household
+ * phones share from the Domovoi app. Read-only, both: nothing is ever
+ * written back, and nobody signs in to any calendar company.
+ *
+ *   GET    /api/calendar/sources               (household)
+ *   POST   /api/calendar/sources               (admin) add a link
+ *   PATCH  /api/calendar/sources/{id}          (admin) name, colour, whose, new link
+ *   DELETE /api/calendar/sources/{id}          (admin) a link only
+ *   POST   /api/calendar/sources/{id}/refresh  (admin) "refresh now"
+ *
+ * The link is a secret (anyone holding it can read the calendar): the
+ * server keeps it and only ever answers with its host. */
+const CAL_COLORS = ['#5b7a99', '#3f8f6b', '#7a5fb0', '#b0566b', '#2f86a6', '#8a7a3a', '#5f6b7a'];
+
+const calSourceLine = (s) => {
+  const bits = [];
+  if (s.kind === 'link') {
+    bits.push(s.url_display || 'link');
+    if (s.owner_name) bits.push(s.owner_name);
+  } else {
+    bits.push(`on ${s.owner_name || s.device_name || 'a phone'}`);
+    if (s.account_name) bits.push(s.account_name);
+  }
+  bits.push(`${s.event_count} ${s.event_count === 1 ? 'event' : 'events'}`);
+  if (s.last_refreshed_at) bits.push(`${s.kind === 'phone' ? 'updated' : 'read'} ${relTime(s.last_refreshed_at)}`);
+  else if (s.kind === 'link') bits.push('not read yet');
+  return bits.join(' · ');
+};
+
+const CalColorPicker = ({ value, onChange }) => (
+  <div className="calsrc-colors" role="group" aria-label="colour">
+    {CAL_COLORS.map((c) => (
+      <button key={c} type="button" className="calsrc-color" aria-pressed={value === c}
+              aria-label={`colour ${c}`} style={{ '--cal-c': c }} onClick={() => onChange(c)}/>
+    ))}
+  </div>
+);
+
+const CalPersonSelect = ({ people, value, onChange }) => (
+  <select className="cal-inp" value={value == null ? '' : String(value)}
+          onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
+    <option value="">the household</option>
+    {(people || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+  </select>
+);
+
+const CalLinkForm = ({ people, initial, onDone, onCancel, fire }) => {
+  const editing = !!initial;
+  const [url, setUrl] = React.useState('');
+  const [name, setName] = React.useState(initial ? initial.name : '');
+  const [color, setColor] = React.useState(initial ? initial.color : CAL_COLORS[0]);
+  const [person, setPerson] = React.useState(initial ? initial.person_id : null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const submit = async (ev) => {
+    ev.preventDefault();
+    if (!editing && !url.trim()) { setErr('paste the calendar’s link'); return; }
+    if (!name.trim()) { setErr('give it a name'); return; }
+    setBusy(true); setErr(null);
+    try {
+      let res;
+      if (editing) {
+        const body = { name: name.trim(), color, person_id: person };
+        if (url.trim()) body.url = url.trim();
+        res = await apiPatch(`/api/calendar/sources/${initial.id}`, body);
+        fire(`${name.trim()} saved`);
+      } else {
+        res = await apiPost('/api/calendar/sources',
+                            { url: url.trim(), name: name.trim(), color, person_id: person });
+        const s = res && res.source;
+        if (res && res.ok) fire(`${name.trim()} added: ${s ? s.event_count : 0} events`, { tone: 'ok' });
+        else fire(`${name.trim()} added, but it can’t be read yet: ${(s && s.last_error_words) || 'see below'}`,
+                  { tone: 'warn' });
+      }
+      onDone(res);
+    } catch (e) {
+      const status = e && e.status;
+      const detail = (status === 409 || status === 422) && e.detail && typeof e.detail.detail === 'string'
+        ? e.detail.detail : null;
+      if (detail) setErr(detail);
+      else reportMutationFailure(fire, editing ? 'save' : 'add', e, { kept: true });
+    } finally { setBusy(false); }
+  };
+  return (
+    <form className="calsrc-form" onSubmit={submit}>
+      <div>
+        <label htmlFor="calsrc-url">{editing ? 'new link (only if the old one stopped working)' : 'calendar link'}</label>
+        <input id="calsrc-url" className="cal-inp" inputMode="url" autoComplete="off" spellCheck={false}
+               value={url} onChange={(e) => setUrl(e.target.value)}
+               placeholder={editing ? 'leave empty to keep the link' : 'https://… or webcal://…'}/>
+      </div>
+      {!editing && (
+        <div className="hint">
+          Google Calendar: on a computer, Settings → the calendar → “Secret address in iCal format”.
+          Outlook: its calendar settings → Shared calendars → Publish a calendar → the ICS link.
+          iPhone or iCloud: the calendar’s share button → Public Calendar → copy the link.
+          The link is private: anyone with it can see the calendar. Domovoi keeps it on this
+          server, never shows it again, and only reads the calendar: it can’t change anything there.
+        </div>
+      )}
+      <div className="row2">
+        <div style={{ flex: '1 1 200px' }}>
+          <label htmlFor="calsrc-name">name</label>
+          <input id="calsrc-name" className="cal-inp" value={name} maxLength={80}
+                 placeholder="e.g. Alex’s work" onChange={(e) => setName(e.target.value)}/>
+        </div>
+        <div style={{ flex: '1 1 160px' }}>
+          <label>whose</label>
+          <CalPersonSelect people={people} value={person} onChange={setPerson}/>
+        </div>
+      </div>
+      <div>
+        <label>colour</label>
+        <CalColorPicker value={color} onChange={setColor}/>
+      </div>
+      {err && <div className="err" style={{ color: 'var(--err-ink)', fontSize: 12 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <Button type="button" onClick={onCancel} disabled={busy}>cancel</Button>
+        <Button variant="primary" type="submit" disabled={busy}>
+          {busy ? (editing ? 'saving…' : 'reading the calendar…') : (editing ? 'save' : 'add calendar')}
+        </Button>
+      </div>
+    </form>
+  );
+};
+
+const CalendarsPanel = () => {
+  const admin = useAdminSignedIn();
+  const [fire, toastNode] = useToast();
+  const { items: sources, loading, error, refresh } =
+    useApiList('/api/calendar/sources', { eventTypes: ['calendar.events.changed'], refetchOnAuth: true });
+  const { items: people } = useApiList('/api/people', { quiet: true });
+  const [adding, setAdding] = React.useState(false);
+  const [editing, setEditing] = React.useState(null);
+  const [busyId, setBusyId] = React.useState(null);
+  const del = useDeleteConfirm(async (s) => {
+    try {
+      await apiDelete(`/api/calendar/sources/${s.id}`);
+      fire(`removed ${s.name}`);
+      refresh();
+    } catch (e) { reportMutationFailure(fire, 'remove', e); }
+  });
+  const refreshNow = async (s) => {
+    setBusyId(s.id);
+    try {
+      const r = await apiPost(`/api/calendar/sources/${s.id}/refresh`, {});
+      const src = r && r.source;
+      if (r && r.ok) fire(`${s.name} is up to date`, { tone: 'ok' });
+      else fire(`${s.name}: ${(src && src.last_error_words) || 'couldn’t refresh'}`, { tone: 'warn' });
+      refresh();
+    } catch (e) { reportMutationFailure(fire, 'refresh', e); }
+    finally { setBusyId(null); }
+  };
+
+  const list = Array.isArray(sources) ? sources : [];
+  const links = list.filter((s) => s.kind === 'link');
+  const phones = list.filter((s) => s.kind === 'phone');
+  const refused = error && (error.status === 401 || error.status === 403);
+  const offline = links.some((s) => s.status === 'internet_off');
+
+  const row = (s) => (
+    <div key={s.id} className="calsrc-row">
+      <span className="sw" style={{ '--cal-c': s.color }}/>
+      <div style={{ minWidth: 0 }}>
+        <div className="nm">{s.name}</div>
+        <div className="sub mono">{calSourceLine(s)}</div>
+        {(s.status === 'error' || (s.last_error === 'truncated')) && s.last_error_words && (
+          <div className="err">{s.last_error_words}</div>
+        )}
+        {editing === s.id && (
+          <CalLinkForm people={people} initial={s} fire={fire}
+                       onDone={() => { setEditing(null); refresh(); }} onCancel={() => setEditing(null)}/>
+        )}
+      </div>
+      <div className="acts">
+        {s.kind === 'link' && admin && editing !== s.id && <>
+          <Button icon="refresh-cw" disabled={busyId === s.id || s.status === 'internet_off'}
+                  title={s.status === 'internet_off' ? 'internet access is turned off for this server' : undefined}
+                  onClick={() => refreshNow(s)}>{busyId === s.id ? 'reading…' : 'refresh now'}</Button>
+          <Button icon="pencil" onClick={() => setEditing(s.id)}>edit</Button>
+          <Button icon="trash-2" style={{ color: 'var(--err-ink)' }}
+                  onClick={() => del.request(s, {
+                    title: `Remove ${s.name}?`, confirmLabel: 'Remove calendar',
+                    body: <div>Its events leave this Domovoi. The calendar itself isn’t touched.</div>,
+                  })}>remove</Button>
+        </>}
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <Card title="Calendars by link"
+            sub="Show a Google, Outlook or iCloud calendar on the household calendar, read-only."
+            action={admin && !adding ? <Button icon="plus" onClick={() => setAdding(true)}>add a calendar</Button> : null}
+            padded>
+        {offline && (
+          <div className="cal-notice" style={{ marginBottom: 12 }}>
+            <StatusDot tone="idle"/>
+            <span className="why">
+              Internet access is turned off for this server (Settings → Internet), so these calendars
+              can’t refresh. The last copy of each stays on the calendar.
+            </span>
+          </div>
+        )}
+        {adding && (
+          <CalLinkForm people={people} fire={fire}
+                       onDone={() => { setAdding(false); refresh(); }} onCancel={() => setAdding(false)}/>
+        )}
+        {refused && !list.length ? <PairedOnlyEmpty what="the household's calendars"/>
+          : loading && !list.length ? <div className="cal-notice">loading…</div>
+          : links.length ? <div className="calsrc-list">{links.map(row)}</div>
+          : !adding && <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>no calendars added by link</div>}
+        {!admin && (
+          <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 12 }}>
+            an admin can add, change or remove calendars
+          </div>
+        )}
+      </Card>
+      <Card title="Phones’ calendars"
+            sub="Calendars people share from their phone with the Domovoi app, over your home network."
+            padded>
+        {phones.length
+          ? <div className="calsrc-list">{phones.map(row)}</div>
+          : <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>no phone is sharing its calendars</div>}
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 12, lineHeight: 1.45 }}>
+          On an Android phone: the Domovoi app → Settings → Household → Phone calendars, then pick the
+          calendars to share. They stay read-only here, update on their own, and leave this Domovoi
+          when that phone stops sharing them.
+        </div>
+      </Card>
+      {del.node}
+      {toastNode}
+    </>
+  );
+};
+
+window.DomovoiSettingsSections = window.DomovoiSettingsSections || {};
+window.DomovoiSettingsSections.calendars = { Panel: CalendarsPanel };
+
+/* A linked calendar that can't refresh says so, plainly, with the age of
+ * the copy still shown. Phones' calendars never appear here (they send
+ * their own, over the house's network). */
+const CalSourceNotices = ({ sources }) => {
+  const stuck = (Array.isArray(sources) ? sources : []).filter(
+    (s) => s.kind === 'link' && (s.status === 'error' || s.status === 'internet_off'));
+  if (!stuck.length) return null;
+  return (
+    <div className="cal-notices">
+      {stuck.map((s) => (
+        <div key={s.id} className="cal-notice">
+          <StatusDot tone={s.status === 'internet_off' ? 'idle' : 'warn'}/>
+          <span className="nm">{s.name}</span>
+          <span className="why">
+            {s.status === 'internet_off'
+              ? "can't refresh: internet access is turned off"
+              : (s.last_error_words || "can't refresh")}
+            {s.last_refreshed_at ? ` · showing the copy from ${relTime(s.last_refreshed_at)}` : ' · no copy yet'}
+          </span>
+        </div>
+      ))}
     </div>
   );
 };

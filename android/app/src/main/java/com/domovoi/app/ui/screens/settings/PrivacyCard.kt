@@ -66,8 +66,14 @@ internal fun privacyPoints(assistant: Boolean): List<String> = listOfNotNull(
         "before it starts.",
     (if (assistant) "Phone chats, reply reports and problem reports stay" else "Problem reports stay") +
         " on this phone until you delete them; the app sends none of them anywhere unless you share one yourself.",
+    PRIVACY_CALENDAR_POINT,
     "There is no analytics, advertising or crash-reporting service in the app.",
 )
+
+/** Settings → Phone calendars (1.3.0), off until turned on. */
+internal const val PRIVACY_CALENDAR_POINT =
+    "If you turn on Phone calendars, the calendars you tick are copied to your Domovoi server, and nowhere " +
+        "else: their events' titles, times and places, never descriptions or guests. Turning it off deletes that copy."
 
 /** This install's points: the phone chats' only where they are in the app
  *  (64-bit installs, [AssistantSupport]). */

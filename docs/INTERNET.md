@@ -235,6 +235,13 @@ stays yours to do:
   download.
 - **The news worker** fetches the general briefing every morning at 05:00
   (`NEWS_FETCH_HOUR`), so "what's the news" answers at once.
+- **Calendars added by link** (Settings → Household → Calendars: a Google,
+  Outlook or iCloud calendar's private ICS address) are read every 30
+  minutes under **Yes** (and not answered), every 2 hours under
+  **Sometimes**, and never under **No**, where each one keeps its last copy
+  and says how old it is. A failure waits longer each time (15 minutes,
+  doubling, up to 12 hours). An admin's **refresh now** reads one at once,
+  except under **No**.
 
 **Worth knowing, but not turned on by any answer:**
 
@@ -366,6 +373,10 @@ your router, it would tell Domovoi the internet is up when it isn't.
 - Timers, reminders, the clock and the calculator.
 - Intercom announcements and drop-in between rooms.
 - Voice profiles, memories and voice notes; the calendar and documents.
+- The calendars household phones share from the Domovoi app: the phone
+  sends them over your own network, so they keep updating. A calendar
+  added by link keeps showing its last copy, and the Calendar page and
+  Settings say it can't refresh and how old that copy is.
 - The dashboard and the Android app on your network.
 - FM radio through an RTL-SDR dongle (radio plugin, `RADIO_SDR_ENABLED`),
   including song detection against your own library.
@@ -385,6 +396,7 @@ your router, it would tell Domovoi the internet is up when it isn't.
 - Fresh news. The briefing reads whatever was fetched last.
 - Internet radio and station search.
 - Podcast search, and new episodes.
+- New events from calendars added by link (Google, Outlook, iCloud).
 - Song recognition: the library enricher and the radio plugin's Shazam
   step.
 - Synced lyrics from LRCLIB. Lyrics in `.lrc` files and in the songs' own
@@ -578,6 +590,10 @@ allowed, they send short text:
 - audio fingerprints of your music files (AcoustID; with the Shazam
   add-on, Shazam's own audio signature when AcoustID has no answer),
   never the files;
+- the private address of each calendar an admin adds by link, to that
+  calendar's own server (Google, Microsoft or Apple), as a plain request
+  for the calendar file: nothing about the house goes with it, and nothing
+  is ever written back;
 - station searches, an FM station's call sign when you favorite it, and
   the FCC import (radio plugin); short clips of a favorited internet
   station's audio to Shazam to name the song.
@@ -613,6 +629,7 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | MusicBrainz alias lookup — **off unless your internet answer is Yes or Sometimes** | Artist names from your library — tagged artists, and the "Artist" of an untagged file whose name reads "Artist - Title" (so a home recording named "Grandma Edith - Happy Birthday" would send "Grandma Edith"): one search per artist, once, then only for artists added later (about an hour and a half the first time for ~2,000 artists); the spoken stage names that come back are kept, legal names and a person's names sharing a word with one are filtered out and never stored. A band's other names (members, "The Farriss Brothers" for INXS) can be kept | musicbrainz.org, one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → System → Advanced → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`) overrides the answer; switching it off stops it before its next request |
 | Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → System → Advanced → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
 | Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover; each show's artwork, once | Feeds you subscribe to; Apple's iTunes search | Automatic downloads follow the internet answer: on for **Yes**, off for **Sometimes**, **No** and not answered (`PODCAST_FEED_POLLER_ENABLED`). Search runs only when you ask. Show artwork is downloaded **by the server** and served to your browser and phone, which never contact the publisher |
+| Calendars by link — **only the ones an admin adds** | A request for each calendar's ICS file at its private address (with the last answer's ETag / date, so an unchanged calendar costs almost nothing), at most 10 MB | The calendar's own server: Google (`calendar.google.com`), Microsoft (`outlook.office365.com`, `outlook.live.com`), Apple (`p*-caldav.icloud.com`), or wherever the link points | Remove the calendar (Settings → Household → Calendars). Every 30 minutes under **Yes**, every 2 hours under **Sometimes**, never under **No**. Phones' shared calendars never use the internet: the phone sends them to the server over your network |
 | Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Privacy → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
 | Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Voice → Wake words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
 | A USB stick for an old computer — **only when an admin prepares one** | Debian's installer image (793 MB), once, kept for the next stick; on a server installed before October 2026, the `xorriso` package at the next update or restart | cdimage.debian.org (held to a pinned SHA-256); Ubuntu's archive | Don't press **Prepare the stick**. Under **No** it is refused unless the image is already on the server, and the update unit installs nothing. The old computer itself downloads Debian's packages and the satellite's libraries while it sets up ([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)) |
@@ -674,6 +691,7 @@ the download on to their own storage hosts, listed in the same row; under
 | `itunes.apple.com` | core, dashboard | Podcast search (by voice, and Discover) | asked | asked | refused |
 | `feeds.bbci.co.uk` · `feeds.npr.org` · `feeds.arstechnica.com` · `www.theverge.com` · `www.sciencedaily.com` · `www.espn.com`, and the feeds you add | core | The news briefing's default feeds, and your own | on | on | off |
 | The host of each podcast feed you subscribe to, and wherever its episodes and artwork live | core | Feed checks, episode downloads, each show's artwork once | on | asked (downloads off) | refused |
+| The host of each calendar an admin adds by link (Google's `calendar.google.com`, Microsoft's `outlook.office365.com` · `outlook.live.com`, Apple's iCloud calendar hosts) | core (every 30 min), dashboard (adding one, **refresh now**) | Reading the calendar's ICS file, read-only | on | on (every 2 h) | refused: the last copy stays |
 | `en.wikipedia.org` · `api.search.brave.com`, your own SearXNG, a page you name | core | Chat lookups, each after you allow it on its card | asked | asked | refused |
 | The public search engines in SearXNG's default settings, `en.wikipedia.org`, `query.wikidata.org`, `clearurls.xyz`, `raw.githubusercontent.com`, the radio-browser server list | the search helper (SearXNG, a local container) | Web answers, "double-check that", news feed discovery; its own rule lists at every start | on | on | the container is stopped |
 | `cdimage.debian.org` | core | The Debian installer image for a USB stick for an old computer | asked | asked | refused unless the image is already on the server |

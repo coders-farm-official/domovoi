@@ -752,7 +752,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   up_next_extender → music_listens_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
-    #   podcast_feed_poller → audiobook_indexer → room_book_positions →
+    #   podcast_feed_poller → calendar_feed_refresher → audiobook_indexer →
+    #   room_book_positions →
     #   command_capture_pruner → guests_seen_pruner → printer_status → print_jobs →
     #   print_history → voice_history_pruner → container_guard →
     #   library_alias_fetch → lyrics_scan → lyrics_fetch →
@@ -798,6 +799,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(NewsFetcher(app=app), owner="core")
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
+    # Calendars added by link (V055): read on schedule through the outbound
+    # gate, never under INTERNET_ACCESS=never (domovoi/calendar_feeds.py).
+    from domovoi.workers.calendar_feed_refresher import CalendarFeedRefresher
+
+    WORKERS.add_worker(CalendarFeedRefresher(), owner="core")
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
     # The place in the book of a room playing one, every 30 s
     # (domovoi/workers/room_book_positions.py).
