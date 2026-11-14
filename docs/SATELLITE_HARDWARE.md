@@ -342,7 +342,7 @@ it's the real reference. The map:
 |---|---|
 | `[device]` | The mic-board **profile** (`respeaker_2mic_hat` / `xvf3800_usb`). The profile sets sane per-board defaults for audio, gain, noise gate, barge-in, LEDs, and music below; anything you set explicitly still wins. |
 | `[satellite]` | `room_id` and the server WebSocket URL (`ws://…:6370`). |
-| `[wake]` | Wake word + detection threshold (overridden at runtime by the `~/.domovoi/wake` sidecar once you push a custom model, below), and `ack_mode`: how the satellite acknowledges the wake word before it listens — `greeting`, `chime` or `none` ([below](#the-wake-acknowledgement)). |
+| `[wake]` | Wake word, detection `threshold` (the dashboard's Wake sensitivity, default 0.7) and `patience_frames` (Wake confirmation, default 2: the score stays up for two 80 ms steps); the `~/.domovoi/wake` sidecar overrides the word once you push a custom model (below); and `ack_mode`: how the satellite acknowledges the wake word before it listens — `greeting`, `chime` or `none` ([below](#the-wake-acknowledgement)). |
 | `[greeting]` | The spoken greeting's funny-line chance. Its `enabled` switch is read only while `[wake] ack_mode` is unset (older configs). |
 | `[chat]` | Documentation-only: chat mode is entirely server-gated, and the satellite refuses it on a non-AEC board. |
 | `[sounds]` | Auto-sync of rendered sound clips (greetings, the offline apology) from the server. |
@@ -446,7 +446,8 @@ documented destination**, and you train it in-product:
    runtime and survives restarts. Delete the sidecar to revert. The word's
    own threshold goes into `[wake] threshold`, the room's **Wake
    sensitivity** (the push button names it), so the room's ⚙ tab shows the
-   value in use; change it there afterwards as usual.
+   value in use; change it there afterwards as usual. A newly trained word
+   starts at 0.7, the rooms' own default.
 
 **Model sync is automatic and verified.** Satellites mirror the server's
 wake-model set over HTTP (`/v1/wake-models/manifest` +

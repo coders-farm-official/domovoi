@@ -449,7 +449,10 @@ Domovoi, which finds your server on the Wi-Fi.
 
 The wake word is the server's default, `hey_jarvis`; a wake word you train
 and push from the dashboard (Settings → Voice → Wake words) reaches the phone the
-same way it reaches a Pi.
+same way it reaches a Pi. Phone and PC rooms start at the same wake defaults
+as a Pi: **Wake sensitivity** 0.7 and **Wake confirmation** 2, both in the
+room's Settings tab (set confirmation to 1 if the room misses you from
+across it).
 
 ### The room screen
 
@@ -652,12 +655,12 @@ both).
 Windows Setup has it already: `DomovoiSetup.exe` carries the satellite
 Setup of the same version and puts it where the dashboard finds it, so it
 works with no internet at all. A **Linux** server downloads it once from
-Domovoi's release on GitHub: when a release carries it, the card offers
-**get the Windows Setup** (a few MB, checked against that release's
-`SHA256SUMS`), and every Windows PC in the house then gets it from your
-server. Until a release carries it (the first is the release after
-1.0.0-rc3), or under `INTERNET_ACCESS=never`, the card shows the
-PowerShell command first, which installs exactly the same thing.
+the GitHub release of the Domovoi version it runs (else the latest
+release): the card offers **get the Windows Setup** (a few MB, checked
+against that release's `SHA256SUMS`), and every Windows PC in the house
+then gets it from your server. When no release carries it, or under
+`INTERNET_ACCESS=never`, the card shows the PowerShell command first,
+which installs exactly the same thing.
 
 The card may also say the server doesn't hold the **Windows files** yet
 (Python and its libraries, about 96 MB): press **get the Windows files**

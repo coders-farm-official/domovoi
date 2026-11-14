@@ -692,7 +692,7 @@ printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee /etc/systemd/system.conf.
 sudo reboot
 ```
 
-After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Household → Rooms → room → Overview; not the System → Health page) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
+After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Household → Rooms → room → Settings tab, Health first; not the System → Health page) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
 
 ### 8.4 Network settings (applied as root at every boot)
 
@@ -712,7 +712,7 @@ Three settings every satellite carries since 2026-10-12, because the router kept
 - **When the boot step does the rename itself** (the first boot after the upgrade, before that unit exists, and the first boot after a room rename, which the helper cannot know of), it asks DHCP once more under the new name: `nmcli device modify wlan0 ipv4.dhcp-hostname domovoi-<room>`. This changes only the active connection; nothing is saved in the profile. NetworkManager restarts its DHCP client without leaving the network. It does this only right after an actual rename, only on the house profile, and only once the link is up (it waits up to 45 s). The router then shows the new name after a **single** reboot.
 - **A new card** is named before setup joins the house Wi-Fi, so even its first DHCP request carries `domovoi-<room>`.
 
-**What it did is on the Health card.** Each satellite's health sample carries `net_step` (what the step did on this boot) and `hostname` (the unit's name now). The Health card (Settings → Household → Rooms → room → Overview) and the Android app's satellite overview show them as **boot network step**, with the reason:
+**What it did is on the Health card.** Each satellite's health sample carries `net_step` (what the step did on this boot) and `hostname` (the unit's name now). The Health card (Settings → Household → Rooms → room → Settings tab) and the Android app's satellite overview show them as **boot network step**, with the reason:
 
 | State | Meaning |
 |---|---|

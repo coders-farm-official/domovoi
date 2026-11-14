@@ -1912,8 +1912,10 @@ migrations. Not found, the button bounces core and web exactly as before.
 
 ### Release channels
 
-One version for the whole project, one tag per release (`v1.0.0`,
-`v1.0.1`, `v1.1.0-rc1`), and two branches a box can follow for updates:
+One tag per release, `v` + Domovoi's own version (`v1.0.0`, `v1.0.1`,
+`v1.1.0-rc1`; the server and the Windows Setup share it, the Android app
+keeps its own: [android/README.md, "Publishing a release"](../android/README.md#publishing-a-release-the-app-every-domovoi-server-hands-out)),
+and two branches a box can follow for updates:
 
 | Channel | What it holds | Who follows it |
 |---|---|---|
