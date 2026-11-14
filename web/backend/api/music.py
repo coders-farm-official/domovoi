@@ -31,7 +31,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 from sqlalchemy import text
 
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
@@ -1297,13 +1297,31 @@ async def enrich(request: Request):
     return bridge_response(status, payload)
 
 
+class EnrichRequeueWindow(BaseModel):
+    """``since <= enriched_at < until``, ISO 8601 with a timezone (the
+    core checks the order)."""
+
+    model_config = ConfigDict(extra="forbid")
+    since: AwareDatetime
+    until: AwareDatetime
+
+
+class EnrichRepairBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requeue_disagreed: EnrichRequeueWindow | None = None
+
+
 @router.post("/library/enrich/repair", dependencies=ADMIN)
-async def enrich_repair(request: Request):
+async def enrich_repair(request: Request, body: EnrichRepairBody | None = None):
     """Put the file's own names back on tracks song recognition renamed
     to a song that isn't theirs. Admin tier at both hops, like the
-    enrich it repairs after; hand-edited tracks are never touched."""
+    enrich it repairs after; hand-edited tracks are never touched. With
+    ``requeue_disagreed: {since, until}``: instead put the tracks marked
+    ``disagreed`` in that window back in the enrichment queue (the undo
+    for a repair that marked tracks wrongly)."""
+    forward = body.model_dump(mode="json", exclude_none=True) if body is not None else None
     status, payload = await post_admin(
-        "/v1/admin/library/enrich/repair", headers=auth_forward_headers(request)
+        "/v1/admin/library/enrich/repair", forward, headers=auth_forward_headers(request)
     )
     return bridge_response(status, payload)
 
