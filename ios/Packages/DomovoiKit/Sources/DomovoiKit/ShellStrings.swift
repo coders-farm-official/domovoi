@@ -405,11 +405,38 @@ public enum ShellStrings {
     public static func renameFailed(_ message: String) -> String { "rename failed: \(message)" }
     public static let nameCannotBeBlank = "name can't be blank"
 
-    public static func belongsTo(_ name: String) -> String { "this phone belongs to \(name)" }
-    public static let belongsToNobody = "this phone belongs to nobody in particular"
+    // ---- "This phone belongs to" and "Listening as" (2026-11-12) ----------
+    //
+    // The two toasts "this phone belongs to X" / "...nobody in particular"
+    // are retired: the picker now asks the SERVER (`PUT
+    // /api/devices/{id}/person`) and the toast says its answer
+    // (`ThisPhone.kt` `claimHere`, which `ConnectionPanel.kt` calls).
 
+    /// The answer to a claim: whose the phone is now (`ThisPhone.kt`).
+    public static func thisPhoneIsNow(_ name: String) -> String { "this phone is \(name)’s now" }
+    public static let thisPhoneIsNobodysNow = "this phone isn’t anyone’s now"
+
+    /// `ConnectionPanel.kt`'s card.
+    public static let phoneBelongsToCard = "This phone belongs to"
+    public static let phoneBelongsToCardSub =
+        "What plays here counts as this person's listening, and they can clear it from here. "
+        + "Voice messages still show who it heard; the marker is lighter when that's someone else."
+    /// Its nil row.
+    public static let nobodyInParticular = "nobody in particular"
+    /// A shared screen is nobody's: the card says so instead of a picker,
+    /// and so does the People page's "this phone" block.
+    public static let sharedScreenIsNobodys =
+        "This is a shared screen, so it isn’t anyone’s: what plays here counts for the whole household."
+
+    /// "Listening as": its subtitle, its nil row, the phone's own person's
+    /// row, and the two toasts.
+    public static let listeningAsCardSub =
+        "Whose the songs played here are, and where podcast and audiobook places sync. "
+        + "It follows whose this phone is until you pick someone; household is nobody in particular."
+    public static let listenerHousehold = "household"
+    public static func listenerThisPhone(_ name: String) -> String { "\(name) (this phone)" }
     public static func listeningAs(_ name: String) -> String { "listening as \(name)" }
-    public static let listeningAsThisDevice = "listening as this device"
+    public static let listeningAsHousehold = "listening as the household"
 }
 
 /// The plugin band's words: the band above a screen a plugin brought with it

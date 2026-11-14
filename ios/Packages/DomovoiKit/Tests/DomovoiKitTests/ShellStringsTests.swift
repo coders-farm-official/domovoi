@@ -100,6 +100,10 @@ final class ShellStringsTests: XCTestCase {
         "ui/screens/chat/ChatErrors.kt",
         "ui/screens/chat/AiOffRefusal.kt",
         "ui/screens/chat/ServerChatPlace.kt",
+        // "This is me" (CLAIM unit, 2026-11-14): the claim's toasts live
+        // with `claimHere`, which `ConnectionPanel.kt` calls.
+        "ui/screens/people/ThisPhone.kt",
+        "listens/ListeningHistory.kt",
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.
@@ -961,8 +965,14 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.serverSaved,
             ShellStrings.couldNotSwitch,
             ShellStrings.nameCannotBeBlank,
-            ShellStrings.belongsToNobody,
-            ShellStrings.listeningAsThisDevice,
+            ShellStrings.thisPhoneIsNobodysNow,
+            ShellStrings.listeningAsHousehold,
+            ShellStrings.listenerHousehold,
+            ShellStrings.nobodyInParticular,
+            ShellStrings.phoneBelongsToCard,
+            ShellStrings.phoneBelongsToCardSub,
+            ShellStrings.listeningAsCardSub,
+            ShellStrings.sharedScreenIsNobodys,
             ShellStrings.pairedToast,
         ] {
             assertKotlinSaysWhole(s)
@@ -972,7 +982,10 @@ final class ShellStringsTests: XCTestCase {
         assertKotlinSays("pinned ")
         assertKotlinSaysAround(ShellStrings.deviceRenamed(to: sentinel))
         assertKotlinSaysAround(ShellStrings.renameFailed(sentinel))
-        assertKotlinSaysAround(ShellStrings.belongsTo(sentinel))
+        // The answer to a claim, not the pick (`ThisPhone.kt` `claimHere`):
+        // "this phone belongs to X" is retired with the local-only owner.
+        assertKotlinSaysAround(ShellStrings.thisPhoneIsNow(sentinel))
+        assertKotlinSaysAround(ShellStrings.listenerThisPhone(sentinel))
         assertKotlinSaysAround(ShellStrings.listeningAs(sentinel))
         XCTAssertTrue(ShellStrings.forgotActive(address: "x").contains("—"), "em dash")
         XCTAssertTrue(ShellStrings.serverSaved.contains("—"), "em dash")

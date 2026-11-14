@@ -170,9 +170,8 @@ struct DomovoiApp: App {
         // ``DomovoiKit`` cannot even import.
         //
         // The id is kept in `UserDefaults` and deliberately not the Keychain
-        // (``DeviceIdentity``), and `ownerPersonID` is nil because no
-        // preference holds one yet — see ``DeviceSelf``, which says what the
-        // route does with a null and which batch has to fill it in.
+        // (``DeviceIdentity``). Whose phone this is is not ours to send: it
+        // is the server's answer (``DeviceSelf``, ``DeviceOwnerBook``).
         let deviceModel = UIDevice.current.model
         let who = DeviceSelf(
             deviceID: DeviceIdentity.stable(in: DeviceIdentity.UserDefaultsStore()),
@@ -180,10 +179,17 @@ struct DomovoiApp: App {
             userAgent: DeviceRegistry.userAgent(
                 systemVersion: UIDevice.current.systemVersion,
                 model: deviceModel
-            ),
-            ownerPersonID: nil
+            )
         )
-        let model = ShellModel(container: container, deviceSelf: { who })
+        // Whose the phone is per server (owners in `UserDefaults`, claim keys
+        // in the Keychain) and the listening-history outbox: the app's own,
+        // handed over here so a shell a test builds keeps neither.
+        let model = ShellModel(
+            container: container,
+            deviceSelf: { who },
+            owners: DeviceOwnerBook(),
+            listenOutbox: ListenOutbox.forApp()
+        )
         self.model = model
         // **Subscribed before the socket is opened**, in this order and not
         // in a view's `.task`, which runs later: a connect that landed in

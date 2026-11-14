@@ -158,11 +158,19 @@ public struct SystemKeychain: KeychainItems {
         ]
     }
 
-    public func set(_ secret: Data, account: String) throws {
+    /// What an item is ADDED with: this-device-only and never synchronised.
+    /// A function so a test can pin it without a Keychain (the claim keys'
+    /// review, 2026-11-14) — the household tokens and the claim keys share it.
+    func addAttributes(account: String, secret: Data) -> [String: Any] {
         var attributes = query(account: account)
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         attributes[kSecAttrSynchronizable as String] = false
         attributes[kSecValueData as String] = secret
+        return attributes
+    }
+
+    public func set(_ secret: Data, account: String) throws {
+        let attributes = addAttributes(account: account, secret: secret)
         let added = SecItemAdd(attributes as CFDictionary, nil)
         if added == errSecSuccess { return }
         guard added == errSecDuplicateItem else { throw TokenVaultError.keychain(added) }

@@ -151,6 +151,7 @@ public final class SavedShellStore: ShellStore {
     private struct State {
         var saved = Saved()
         var onSelectionChange: (@Sendable () -> Void)?
+        var onServerForgotten: (@Sendable (String) -> Void)?
     }
 
     private let state: Mutex<State>
@@ -358,12 +359,14 @@ public final class SavedShellStore: ShellStore {
         // by keeping both in one file.
         state.withLock { $0.saved.book.replacePin(url: url, pin: newPin) }
         persistAndToken(for: url)
+        serverForgotten(url)
     }
 
     @discardableResult
     public func removeKnownServer(_ url: String) -> TrustBook.ForgetReach {
         let reach = state.withLock { $0.saved.book.forget(url) }
         persistAndToken(for: url)
+        serverForgotten(url)
         return reach
     }
 
@@ -372,8 +375,21 @@ public final class SavedShellStore: ShellStore {
         let gone = state.withLock { $0.saved.book.forgetActiveServer()?.url }
         guard let gone else { return nil }
         persistAndToken(for: gone)
+        serverForgotten(gone)
         selectionChanged()
         return gone
+    }
+
+    public func notifyServerForgotten(to sink: @escaping @Sendable (String) -> Void) {
+        state.withLock { $0.onServerForgotten = sink }
+    }
+
+    /// Outside the lock, for ``selectionChanged()``'s reason. After the
+    /// household token's Keychain item has gone (``persistAndToken(for:)``),
+    /// so the claim key goes the same way, in the same call.
+    private func serverForgotten(_ url: String) {
+        let sink = state.withLock { $0.onServerForgotten }
+        sink?(url)
     }
 
     /// Set once and never cleared: something on the local network answered

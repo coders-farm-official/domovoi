@@ -97,6 +97,10 @@ public enum RedirectPolicy {
         // Always. The hop's own scope check puts it back where it belongs,
         // and nowhere else.
         next.setValue(nil, forHTTPHeaderField: deviceTokenHeader)
+        // And the claim key, always and for good: nothing puts it back. It
+        // goes to the one server that minted it, on the request made to it,
+        // and a redirect — even to the same server — is not that request.
+        next.setValue(nil, forHTTPHeaderField: claimKeyHeader)
         return next
     }
 

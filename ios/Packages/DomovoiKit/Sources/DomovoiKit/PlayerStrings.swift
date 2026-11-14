@@ -234,14 +234,8 @@ public enum PlayerStrings {
     /// The card's title (`ConnectionPanel.kt:352`).
     public static let listeningAsCard = "Listening as"
 
-    /// The card's subtitle, word for word (`ConnectionPanel.kt:353-355`).
-    public static let listeningAsCardSub =
-        "Podcast and audiobook resume positions sync to this person — pick "
-        + "yourself to share progress with the rooms; leave it on this device "
-        + "to keep it local."
-
-    /// The dropdown's null row (`ConnectionPanel.kt:338`, `:367`).
-    public static let listenerThisDevice = "me (this device)"
+    // The card's subtitle and its null row moved to ``ShellStrings`` with the
+    // 2026-11-12 rewording ("household", ``ShellStrings/listeningAsCardSub``).
 
     /// The hint chip on Podcasts and Audiobooks
     /// (`AudiobooksScreen.kt:343`, `PodcastsScreen.kt:310`).
