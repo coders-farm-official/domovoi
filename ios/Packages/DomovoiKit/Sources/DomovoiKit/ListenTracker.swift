@@ -31,6 +31,10 @@ public struct ListenTracker {
         var playedMs: Int64 = 0
         var sinceMono: Int64?
         var skipped = false
+        /// The Up next session the song belongs to (§3.5f).
+        var sessionID: String?
+        /// `explicit` | `list` | `auto`.
+        var origin = PlayerQueueOrigin.explicit.rawValue
     }
 
     /// Wall clock, epoch ms: when a song began (`started_at`).
@@ -64,13 +68,33 @@ public struct ListenTracker {
     /// A library song `trackID` from `server` starts now. Whatever was open
     /// is closed first, as stopped (the caller closes it with the right word
     /// before, when it knows one).
+    ///
+    /// `sessionID` and `origin`: the Up next session the song belongs to and
+    /// why it is in the queue (`ListenTracker.kt`, 4fb53334) — how its skip
+    /// or finish feeds that session.
     @discardableResult
-    public mutating func begin(trackID: Int64, server: String, durationSec: Double?, playing: Bool) -> ListenRow? {
+    public mutating func begin(
+        trackID: Int64,
+        server: String,
+        durationSec: Double?,
+        playing: Bool,
+        sessionID: String? = nil,
+        origin: String = PlayerQueueOrigin.explicit.rawValue
+    ) -> ListenRow? {
         let closed = close(natural: false)
         let positive = durationSec.flatMap { $0 > 0 && $0.isFinite ? $0 : nil }
         cur = Open(trackID: trackID, server: server, startedAtMs: wallMs(), beganMono: monoMs(), durationSec: positive)
+        cur?.sessionID = sessionID
+        cur?.origin = origin
         if playing { cur?.sinceMono = monoMs() }
         return closed
+    }
+
+    /// The Up next session of the song playing came back after it began
+    /// (the start's answer): its listen carries it. Never replaces one.
+    public mutating func session(_ sessionID: String) {
+        guard cur != nil, cur?.sessionID == nil else { return }
+        cur?.sessionID = sessionID
     }
 
     /// The player started or stopped producing sound.
@@ -124,7 +148,9 @@ public struct ListenTracker {
             durationSec: duration.map { Int($0.rounded()) },
             outcome: natural
                 ? "finished"
-                : Self.outcome(playedSec: played, durationSec: duration, skipped: c.skipped)
+                : Self.outcome(playedSec: played, durationSec: duration, skipped: c.skipped),
+            sessionID: c.sessionID,
+            origin: c.origin
         )
     }
 
@@ -149,4 +175,29 @@ public struct ListenRow: Equatable, Sendable {
     public let playedSec: Int
     public let durationSec: Int?
     public let outcome: String
+    /// The Up next session the song belonged to (§3.5f): how its skip or
+    /// finish feeds that session.
+    public let sessionID: String?
+    /// `explicit`, `list` or `auto` (``PlayerQueueOrigin``).
+    public let origin: String
+
+    public init(
+        trackID: Int64,
+        server: String,
+        startedAtMs: Int64,
+        playedSec: Int,
+        durationSec: Int?,
+        outcome: String,
+        sessionID: String? = nil,
+        origin: String = PlayerQueueOrigin.explicit.rawValue
+    ) {
+        self.trackID = trackID
+        self.server = server
+        self.startedAtMs = startedAtMs
+        self.playedSec = playedSec
+        self.durationSec = durationSec
+        self.outcome = outcome
+        self.sessionID = sessionID
+        self.origin = origin
+    }
 }

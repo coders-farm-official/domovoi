@@ -402,9 +402,13 @@ struct MusicPlayerTabView: View {
     // MARK: - the queue
 
     private var queue: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // The songs that play and were asked for; Up next's picks still to
+        // come have their own section under them, and aren't counted
+        // (`PlayerTab.kt`, 4fb53334).
+        let rows = player.explicitRows
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(MusicMoreStrings.queueHeader(player.queue.count))
+                Text(MusicMoreStrings.queueHeader(rows.count))
                     .font(.caption)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -421,9 +425,21 @@ struct MusicPlayerTabView: View {
                 saveIDs: player.maySaveAsPlaylist ? player.libraryIDsToSave : nil
             )
             LazyVStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(player.queue.enumerated()), id: \.element.uid) { index, item in
-                    MusicPlayerQueueRow(player: player, item: item, index: index)
+                // Keyed by place as well as uid: a track can be queued twice,
+                // and an Up next pick can be a song already queued.
+                ForEach(Array(rows.enumerated()), id: \.element) { k, index in
+                    if player.queue.indices.contains(index) {
+                        MusicPlayerQueueRow(
+                            player: player, item: player.queue[index], index: index,
+                            up: k > 0 ? rows[k - 1] : nil,
+                            down: k + 1 < rows.count ? rows[k + 1] : nil
+                        )
+                        .id(MusicPlayerMath.queueKey(index: index, item: player.queue[index]))
+                    }
                 }
+            }
+            if player.upNextShown {
+                PhoneUpNextSection(player: player)
             }
         }
     }
@@ -481,6 +497,10 @@ struct MusicPlayerQueueRow: View {
     let player: MusicLocalQueueModel
     let item: MusicPlayerItem
     let index: Int
+    /// The rows above and below among those shown: a move never goes into
+    /// Up next's picks below (`PlayerTab.kt`, 4fb53334).
+    let up: Int?
+    let down: Int?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -533,14 +553,14 @@ struct MusicPlayerQueueRow: View {
     @ViewBuilder
     private var edits: some View {
         HStack(spacing: 0) {
-            if index > 0 {
+            if let up {
                 control("arrow.up", MusicMoreStrings.moveUp) {
-                    player.engine?.move(from: index, to: index - 1)
+                    player.engine?.move(from: index, to: up)
                 }
             }
-            if index < player.queue.count - 1 {
+            if let down {
                 control("arrow.down", MusicMoreStrings.moveDown) {
-                    player.engine?.move(from: index, to: index + 1)
+                    player.engine?.move(from: index, to: down)
                 }
             }
             control("minus.circle", MusicStrings.removeFromQueue, tint: Color.errInk) {

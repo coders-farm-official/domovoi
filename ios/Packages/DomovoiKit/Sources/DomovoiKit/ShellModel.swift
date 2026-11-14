@@ -230,6 +230,10 @@ public final class ShellModel {
     ///     no audio engine. Left out, it is ``systemPlayer(_:_:)`` — the real
     ///     AVFoundation one on iOS and nil everywhere else, and "everywhere
     ///     else" includes the macOS this package's tests build for.
+    ///   - upNextAutoplay: this phone's Autoplay preference. Given (the app
+    ///     hands ``UpNextAutoplayStore/shared``), the player gets the phone's
+    ///     own Up next (``PhoneUpNext``); left out (a test's shell), it has
+    ///     none and plays exactly as before.
     public init(
         container: AppContainer,
         phoneCanChat: Bool = false,
@@ -237,6 +241,7 @@ public final class ShellModel {
         listeners: PlayerListenerStore? = nil,
         owners: DeviceOwnerBook? = nil,
         listenOutbox: ListenOutbox? = nil,
+        upNextAutoplay: UpNextAutoplayStore? = nil,
         player: ShellPlayerBuilder? = nil,
         probe: (@Sendable () async -> Bool)? = nil,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
@@ -263,6 +268,7 @@ public final class ShellModel {
             deviceSelf: deviceSelf
         )
         self.buildPlayer = player ?? ShellModel.systemPlayer
+        self.upNextAutoplay = upNextAutoplay
         self.inputs = container.shellInputs()
         self.clock = clock
         self.tick = tick
@@ -957,6 +963,10 @@ public final class ShellModel {
             // The owner may have just claimed it in a browser.
             if returning {
                 unclaimed.ask(.foreground, unreachable: unreachable)
+                // Up next's picks still waiting, read again: the server may
+                // have taken some back while the app was away
+                // (``PhoneUpNext/reread()``, `MainActivity.onResume`).
+                heldPlayer?.upNext?.reread()
             }
         case .inactive, .background:
             // `.inactive` is a step on the way out and also a transient state
@@ -1341,7 +1351,45 @@ public final class ShellModel {
         // that outlives the screen the tap was on. ``PlayerModel/say`` says
         // which two and why it is not every refusal.
         made.say = { [weak self] note in self?.showToast(note) }
+        // Up next on the phone itself (P9): the server the app talks to keeps
+        // a session for this phone's queue. Only while paired, never in room
+        // mode, and only for a shell given the preference (the app's).
+        if let autoplay = upNextAutoplay {
+            made.upNext = makeUpNext(for: made, deviceID: deviceID, autoplay: autoplay)
+        }
         return made
+    }
+
+    /// This phone's Autoplay preference; nil for a shell with no Up next.
+    public let upNextAutoplay: UpNextAutoplayStore?
+
+    /// The phone's Up next over `player`, keyed by the server the app talks
+    /// to (`AppContainer.kt`, 4fb53334).
+    private func makeUpNext(for player: PlayerModel, deviceID: String, autoplay: UpNextAutoplayStore) -> PhoneUpNext {
+        let store = container.store
+        let lock = container.lock
+        let client = container.client
+        let listeners = self.listeners
+        let owners = self.owners
+        let env = PhoneUpNextEnv(
+            server: { ServerCredentials.normalize(store.serverURL) },
+            paired: { [weak self] in (self?.isPaired ?? false) && !lock.roomModeActive },
+            deviceID: { deviceID },
+            autoplay: { autoplay.on },
+            saveAutoplay: { autoplay.set($0) },
+            listenerPick: { listeners.pick(for: $0) },
+            shared: { owners.sharedScreen(for: $0) == true },
+            setListener: { [weak self] id in self?.listenerChanged(to: id) },
+            people: { server in
+                do {
+                    let rows = try await client.raw(method: "GET", path: PeoplePath.roster, onlyTo: server)
+                    return UpNextPeople.read(rows)
+                } catch {
+                    return []
+                }
+            }
+        )
+        return PhoneUpNext(api: HttpUpNextApi(client: client, deviceID: { deviceID }), host: player, env: env)
     }
 
     /// Whether a player exists **without building one**.

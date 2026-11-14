@@ -243,6 +243,133 @@ public final class MusicLocalQueueModel {
         return true
     }
 
+    /// A whole list played (or shuffled) here on purpose — a playlist's or a
+    /// genre's `play` / `shuffle on this device` (`playTracksHereAndSay`,
+    /// `TrackSets.kt`, 4fb53334): the list is the queue, as it is, and Up
+    /// next carries on after it with songs like it (`context`: the list it
+    /// is; nil: the songs themselves, by `label`) while autoplay is on. Said
+    /// as ``playHere(_:startAt:)`` says it.
+    @discardableResult
+    public func playList(_ tracks: [LibraryTrack], context: UpNextContext?, label: String) -> Bool {
+        guard let engine, !tracks.isEmpty else { return false }
+        let list = context ?? UpNextContext(kind: "ids", name: label)
+        let left = engine.playList(tracks, context: list)
+        if left == nil { toast = MusicMoreStrings.playingHere(tracks[0].displayTitle) }
+        return true
+    }
+
+    /// A song played from a list it was shown in (`playFromListAndSay`,
+    /// `TrackSets.kt`): it plays here, and Up next goes on with the rest of
+    /// that list; with no list (or one it isn't in), songs like it from the
+    /// whole library. Said as ``playHere(_:startAt:)`` says it.
+    @discardableResult
+    public func playFromList(_ list: [LibraryTrack], track: LibraryTrack, context: UpNextContext?) -> Bool {
+        guard let engine else { return false }
+        let left: String?
+        if let at = list.firstIndex(where: { $0.id == track.id }), context != nil {
+            left = engine.playFromList(list, at: at, context: context)
+        } else {
+            left = engine.playFromList([track], at: 0, context: nil)
+        }
+        if left == nil { toast = MusicMoreStrings.playingHere(track.displayTitle) }
+        return true
+    }
+
+    // MARK: - Up next on this phone (P9)
+
+    /// The phone's own Up next, or nil with none wired.
+    public var upNext: PhoneUpNext? { engine?.upNext }
+
+    /// Whether the "up next" section shows at all (``phoneUpNextShown(paired:hasLibrary:state:casting:)``):
+    /// never unpaired, with no library song queued, after a refused start,
+    /// or while casting.
+    public var upNextShown: Bool {
+        guard let upNext else { return false }
+        return phoneUpNextShown(
+            paired: upNext.mayAsk,
+            hasLibrary: queue.contains { $0.kind == .library && $0.trackID > 0 },
+            state: upNext.state,
+            casting: isRemote
+        )
+    }
+
+    /// The queue rows drawn above the section (real indices): all of them
+    /// when the section is hidden, so no pick plays unseen.
+    public var explicitRows: [Int] {
+        upNextShown ? UpNextRules.explicitRows(queue.map(\.queueOrigin), index: index) : Array(queue.indices)
+    }
+
+    /// The waiting picks (real indices), in order; none while hidden.
+    public var pickRows: [Int] {
+        upNextShown ? UpNextRules.pickRows(queue.map(\.queueOrigin), index: index) : []
+    }
+
+    /// What the head says the mix is built from (`upNextBasis`); "" for none.
+    public var upNextBasis: String {
+        guard let state = upNext?.state else { return "" }
+        return RoomUpNextRules.basis(mode: state.mode, seed: state.seed)
+    }
+
+    /// The one muted line under the head, or nil.
+    public var upNextLine: String? {
+        guard let upNext else { return nil }
+        return phoneUpNextLine(upNext.state, autoplayOn: upNext.autoplay, waiting: pickRows.count)
+    }
+
+    /// Whether "less like this" is offered on queue row `i`: a pick of the
+    /// session the phone follows now.
+    public func mayLessLike(_ i: Int) -> Bool {
+        guard queue.indices.contains(i), let id = upNext?.state?.id else { return false }
+        let item = queue[i]
+        return item.queueOrigin == .auto && item.sessionID == id && item.upNextSeq != nil
+    }
+
+    /// The Autoplay switch. Its failure is said; the switch still says what
+    /// this phone does. A refused sign-in is the pairing screen's, not a
+    /// toast.
+    public func setUpNextAutoplay(_ on: Bool) {
+        guard let upNext else { return }
+        Task { @MainActor [weak self] in
+            do {
+                try await upNext.setAutoplay(on)
+            } catch {
+                self?.sayUpNext(error, PhoneUpNextStrings.autoplayFailed)
+            }
+        }
+    }
+
+    /// "Less like this" on the pick at queue row `i`.
+    public func lessLike(_ i: Int) {
+        guard let upNext, queue.indices.contains(i) else { return }
+        let artist = queue[i].artist
+        Task { @MainActor [weak self] in
+            do {
+                let gone = try await upNext.lessLikeThis(i)
+                if !gone.isEmpty { self?.toast = RoomUpNextStrings.lessLikeNote(artist, removed: gone.count) }
+            } catch {
+                self?.sayUpNext(error, PhoneUpNextStrings.lessLikeFailed)
+            }
+        }
+    }
+
+    /// The "for" selector picked `personID` (nil: the household).
+    public func setUpNextListener(_ personID: Int64?) {
+        guard let upNext else { return }
+        Task { @MainActor [weak self] in
+            do {
+                try await upNext.setListener(personID)
+            } catch {
+                self?.sayUpNext(error, PhoneUpNextStrings.listenerFailed)
+            }
+        }
+    }
+
+    private func sayUpNext(_ error: any Error, _ words: (String) -> String) {
+        let trouble = (error as? DomovoiError) ?? DomovoiError.unreachable(error.localizedDescription)
+        if case .refused(let failure) = trouble, failure.deviceTokenRequired { return }
+        toast = words(queueErrorText(trouble))
+    }
+
     /// Whether a cast menu is offered at all: only when a cast would send
     /// something. A menu over a queue nothing in which can go is the control
     /// [[no-misleading-controls]] forbids, and it is the exact one Android

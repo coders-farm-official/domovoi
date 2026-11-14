@@ -55,6 +55,13 @@ public struct MusicPlayerItem: Equatable, Sendable, Identifiable {
     public let seekable: Bool
     public let chapters: [MusicChapter]
 
+    // Up next (P9): why the song is queued, and a pick's number, reason and
+    // session (``PlayerItem/queueOrigin`` and the three after it).
+    public var queueOrigin: PlayerQueueOrigin = .explicit
+    public var upNextSeq: Int?
+    public var reasonLabel: String?
+    public var sessionID: String?
+
     public init(
         uid: String,
         kind: MusicPlayKind,
@@ -230,6 +237,21 @@ public protocol MusicMorePlayerEngine: AnyObject {
     @discardableResult
     func playTracks(_ tracks: [LibraryTrack], startAt: Int) -> String?
 
+    /// One library song tapped inside a list, played here on its own; Up
+    /// next goes on with the rest of `context` (nil: songs like it from the
+    /// whole library) — `PlayerController.playFromList`. The room it left,
+    /// as ``playTracks(_:startAt:)``.
+    @discardableResult
+    func playFromList(_ list: [LibraryTrack], at: Int, context: UpNextContext?) -> String?
+
+    /// A whole list played (or shuffled) on purpose: the list is the queue,
+    /// and Up next carries on after it — `PlayerController.playList`.
+    @discardableResult
+    func playList(_ tracks: [LibraryTrack], context: UpNextContext?) -> String?
+
+    /// The phone's own Up next session, or nil with none wired (P9).
+    var upNext: PhoneUpNext? { get }
+
     func toggle()
     func previous()
     func next()
@@ -254,6 +276,21 @@ public protocol MusicMorePlayerEngine: AnyObject {
     /// cast to first, then stop watching it and empty the queue. False, with
     /// nothing changed, when the room says it did not stop.
     func stopAndClose() async -> Bool
+}
+
+public extension MusicMorePlayerEngine {
+    @discardableResult
+    func playFromList(_ list: [LibraryTrack], at: Int, context: UpNextContext?) -> String? {
+        guard list.indices.contains(at) else { return nil }
+        return playTracks([list[at]], startAt: 0)
+    }
+
+    @discardableResult
+    func playList(_ tracks: [LibraryTrack], context: UpNextContext?) -> String? {
+        playTracks(tracks, startAt: 0)
+    }
+
+    var upNext: PhoneUpNext? { nil }
 }
 
 // `MusicMoreCastResult` stood here, a two-case wrapper — `went(MusicCastOutcome)`
@@ -427,17 +464,29 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
     /// room was paused" in both senses.
     @discardableResult
     public func playTracks(_ tracks: [LibraryTrack], startAt: Int) -> String? {
-        player.play(
-            tracks.map {
-                PlayerItem.fromTrack(
-                    id: $0.id,
-                    title: $0.displayTitle,
-                    artist: $0.artist,
-                    album: $0.album,
-                    durationSec: $0.durationSec
-                )
-            },
-            startAt: startAt
+        player.play(tracks.map(Self.item), startAt: startAt)
+    }
+
+    @discardableResult
+    public func playFromList(_ list: [LibraryTrack], at: Int, context: UpNextContext?) -> String? {
+        player.playFromList(list.map(Self.item), at: at, context: context)
+    }
+
+    @discardableResult
+    public func playList(_ tracks: [LibraryTrack], context: UpNextContext?) -> String? {
+        player.playList(tracks.map(Self.item), context: context)
+    }
+
+    public var upNext: PhoneUpNext? { player.upNext }
+
+    /// `PlayItem.fromTrack` (`PlayItem.kt:45`).
+    static func item(_ track: LibraryTrack) -> PlayerItem {
+        PlayerItem.fromTrack(
+            id: track.id,
+            title: track.displayTitle,
+            artist: track.artist,
+            album: track.album,
+            durationSec: track.durationSec
         )
     }
 
@@ -506,7 +555,7 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
     /// **player** still holds the item they came from — this is a view of the
     /// queue, not the queue.
     static func entry(_ item: PlayerItem) -> MusicPlayerItem {
-        MusicPlayerItem(
+        var out = MusicPlayerItem(
             uid: item.uid,
             kind: kind(item.kind),
             trackID: item.itemID,
@@ -518,6 +567,11 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
             seekable: item.seekable,
             chapters: item.chapters.map { MusicChapter(title: $0.title, startSec: $0.startSec) }
         )
+        out.queueOrigin = item.queueOrigin
+        out.upNextSeq = item.upNextSeq
+        out.reasonLabel = item.reasonLabel
+        out.sessionID = item.sessionID
+        return out
     }
 
     /// The two kind enums are the same five cases of `PlayKind`

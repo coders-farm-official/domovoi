@@ -215,8 +215,10 @@ struct MusicGenresSheet: View {
         }
     }
 
+    /// A whole list played on purpose: Up next carries on after it with
+    /// songs like this genre's (`genreContext`, `TrackSets.kt`).
     private func playHere(_ player: MusicLocalQueueModel, _ tracks: [LibraryTrack]) {
-        guard player.playHere(tracks) else { return }
+        guard player.playList(tracks, context: genreContext, label: detail.genre.name) else { return }
         if let sentence = MusicGenres.saidAfterPlayingHere(took: player.takeToast(), label: detail.genre.name) {
             onSay(sentence)
         }
@@ -295,9 +297,19 @@ struct MusicGenresSheet: View {
 
     /// One song on this phone (`playHereAndSay`), said in the sheet: the
     /// sheet stays up, as Android's drawer does for a row's play.
+    ///
+    /// Up next goes on with the rest of this genre (`playFromListAndSay`,
+    /// `GenresTab.kt:518`).
     private func playSong(_ track: LibraryTrack) {
-        guard let player, player.playHere([track]) else { return }
+        guard let player, player.playFromList(detail.loaded, track: track, context: genreContext) else { return }
         said = player.takeToast()
+    }
+
+    /// Up next's name for this genre's songs (the web's GenreDrawer
+    /// context): the genre by its key, or by its songs for "no genre".
+    private var genreContext: UpNextContext {
+        UpNextContext.genre(key: detail.genre.key, name: detail.genre.name)
+            ?? UpNextContext(kind: "ids", name: detail.genre.name)
     }
 }
 

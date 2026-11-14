@@ -245,7 +245,9 @@ public extension MusicModel {
             trackID: track.id,
             deviceID: deviceID,
             context: context,
-            listener: listener
+            listener: listener,
+            // This phone's Autoplay switch goes with it (on: left out).
+            autoplay: UpNextAutoplayStore.shared.on
         )
         Task { @MainActor [weak self] in
             do throws(DomovoiError) {

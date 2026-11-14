@@ -133,17 +133,29 @@ public final class ListenLog: PlayerListenHooks {
             lastKey = key
             close(natural: false)
             if eligible(s.item, local: s.local), let item = s.item {
-                tracker.begin(trackID: item.itemID, server: server(), durationSec: item.durationSec, playing: s.playing)
+                begin(item, playing: s.playing)
             }
         } else if s.playing, tracker.openTrack == nil, eligible(s.item, local: s.local), let item = s.item {
             // The same song starting again with nothing followed: played on
             // after it ended, back from a cast, after a stop.
-            tracker.begin(trackID: item.itemID, server: server(), durationSec: item.durationSec, playing: true)
+            begin(item, playing: true)
+        } else if let item = s.item, let session = item.sessionID, tracker.openTrack == item.itemID {
+            // The Up next session's id was just put on the song playing (the
+            // start's answer came after it began): the listen open for it
+            // carries it (`ListenLog.sessionArrived`).
+            tracker.session(session)
         }
         if let d = s.durationSec, d > 0, let item = s.item, tracker.openTrack == item.itemID {
             tracker.duration(d)
         }
         tracker.playing(s.playing && s.local)
+    }
+
+    private func begin(_ item: PlayerItem, playing: Bool) {
+        tracker.begin(
+            trackID: item.itemID, server: server(), durationSec: item.durationSec, playing: playing,
+            sessionID: item.sessionID, origin: item.queueOrigin.rawValue
+        )
     }
 
     /// Closed now, as skipped: the next snapshot shows the new song.
@@ -177,7 +189,9 @@ public final class ListenLog: PlayerListenHooks {
             durationSec: row.durationSec,
             outcome: row.outcome,
             listenerPersonID: pick.flatMap { $0 == ListenerPicks.household ? nil : Int64($0) },
-            asHousehold: pick == ListenerPicks.household
+            asHousehold: pick == ListenerPicks.household,
+            sessionID: row.sessionID,
+            origin: row.origin
         )
     }
 
