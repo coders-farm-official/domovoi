@@ -420,6 +420,8 @@ Your music library, on the server, played in any room or in the browser.
   background; until it is done the tab says "reading genres from your
   files… N of M".
 - Each queued song says which device added it.
+- When the songs you asked for run out, [Up next](#node:up-next) keeps
+  the music going with songs like them, in the browser and in a room.
 - **Dashboard:** the [player](#music/player) opens from the player bar at
   the bottom of any page: click the song's cover or title, the up chevron,
   or **open player** on a phone. The down chevron, Esc, Back or a swipe
@@ -437,6 +439,45 @@ Your music library, on the server, played in any room or in the browser.
   songs somebody asked for and before the room's up next. **Save as
   playlist** is the smaller button below: it asks for a name and keeps the
   queue's songs (while playing in a room, the room's queue).
+- **A playlist in a room.** Play or shuffle a playlist (or your
+  favorites) in a room, or say "play the road trip playlist" there, and
+  the whole playlist goes into the room's queue, from its first song. Edit
+  it like any room queue: jump to a song, move, remove, add, play next.
+  Songs like it join when it is nearly over (none with **autoplay** off).
+  The queue is a copy: changing it never changes the playlist; **save as
+  playlist** keeps it as a new one. Songs the music player can't find are
+  skipped. "Add <song> after this" puts a song right after the one
+  playing.
+- **Dashboard:** a MilkDrop visualizer: in the player, switch on
+  **milkdrop visualizer**. It draws what this browser is playing (not a
+  room), behind the panel. Its bar has previous and next preset, random,
+  lock, the preset list, **panel** (how much the panel covers the
+  picture, 30 to 100 %) and full screen (the picture alone; Esc leaves).
+  The arrow keys change preset while the picture has the focus. Full
+  screen and playing, the screen stays on.
+- **Dashboard:** add presets for the whole house *(admin)*: the preset
+  list → **add presets**, a classic `.milk` file or a Butterchurn 3
+  `.json`. A `.milk` file's custom shaders aren't converted, so it may
+  look plainer than in MilkDrop.
+
+**Try saying**
+
+- "how many songs do I have"
+- "what did I add this week"
+
+**Also:** guests on your Wi-Fi can change the queue of a room that's
+playing. See [Guests, household, admin](#node:guests).
+
+[More detail](docs/FAQ.md#who-added-that-song-and-can-i-stop-someone-adding-more)
+
+### Up next
+
+When the songs you asked for run out, Up next keeps the music going with
+songs from your library like the ones you've been playing: in this
+browser, and in a room.
+
+**How to**
+
 - **Dashboard:** **Up next** keeps the music going in this browser. Play
   a song from a list (a playlist, an artist, an album, a genre, search
   results) and the rest of that list follows it, shuffled toward songs
@@ -464,15 +505,6 @@ Your music library, on the server, played in any room or in the browser.
   browser takes its up next along, and casting back brings it home. A
   radio stream, a podcast or a book ends it, and so does stopping or
   clearing the room, or two hours paused.
-- **A playlist in a room.** Play or shuffle a playlist (or your
-  favorites) in a room, or say "play the road trip playlist" there, and
-  the whole playlist goes into the room's queue, from its first song. Edit
-  it like any room queue: jump to a song, move, remove, add, play next.
-  Songs like it join when it is nearly over (none with **autoplay** off).
-  The queue is a copy: changing it never changes the playlist; **save as
-  playlist** keeps it as a new one. Songs the music player can't find are
-  skipped. "Add <song> after this" puts a song right after the one
-  playing.
 - **Dashboard:** the room's picks show in [Music → Room queue](#music/queue)
   under **up next**, each with why it was picked, with the room's
   **autoplay** switch and **less like this**; while you play in a room
@@ -480,27 +512,15 @@ Your music library, on the server, played in any room or in the browser.
   [Settings → Household → Rooms](#settings/rooms) shows its next three under now
   playing, with **open queue**. Guests can play a song now, move and
   remove, but not switch autoplay or use less like this.
-- **Dashboard:** a MilkDrop visualizer: in the player, switch on
-  **milkdrop visualizer**. It draws what this browser is playing (not a
-  room), behind the panel. Its bar has previous and next preset, random,
-  lock, the preset list, **panel** (how much the panel covers the
-  picture, 30 to 100 %) and full screen (the picture alone; Esc leaves).
-  The arrow keys change preset while the picture has the focus. Full
-  screen and playing, the screen stays on.
-- **Dashboard:** add presets for the whole house *(admin)*: the preset
-  list → **add presets**, a classic `.milk` file or a Butterchurn 3
-  `.json`. A `.milk` file's custom shaders aren't converted, so it may
-  look plainer than in MilkDrop.
+- **Listening history** is what Up next learns from: a song heard to its
+  end counts toward more like it, one skipped early counts against it
+  (only time actually heard counts, not pauses or skipping ahead). Each
+  person's listening is kept apart once their phone or browser says
+  **this is me**; clearing it, or not keeping it at all, is under
+  [What's kept, and forgetting](#node:kept).
 
-**Try saying**
-
-- "how many songs do I have"
-- "what did I add this week"
-
-**Also:** guests on your Wi-Fi can change the queue of a room that's
-playing. See [Guests, household, admin](#node:guests).
-
-[More detail](docs/FAQ.md#who-added-that-song-and-can-i-stop-someone-adding-more)
+[Music and room queues](#node:music) has the queue itself: adding,
+moving and saving songs.
 
 ### Lyrics
 
@@ -549,19 +569,6 @@ to the server.
 
 Every video in your libraries, played in the browser or the app, resuming
 where you stopped. [Videos](#videos)
-
-### News
-
-A spoken briefing from the feeds your household picks, plus each person's
-own topics.
-
-**How to:** [News](#news) → **add topic**, or add a feed.
-
-**Try saying**
-
-- "what's the news"
-- "read me the headlines"
-- "any news about the city council"
 
 ### Radio *(plugin)*
 
@@ -1251,6 +1258,19 @@ dashboard and in the app, and a change shows everywhere at once.
 - "cross milk off the shopping list"
 - "clear the shopping list" (asks first)
 - "what lists do I have"
+
+### News
+
+A spoken briefing from the feeds your household picks, plus each person's
+own topics.
+
+**How to:** [News](#news) → **add topic**, or add a feed.
+
+**Try saying**
+
+- "what's the news"
+- "read me the headlines"
+- "any news about the city council"
 
 ---
 

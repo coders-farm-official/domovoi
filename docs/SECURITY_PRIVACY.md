@@ -2612,7 +2612,7 @@ connectivity probe (a TCP connection with no payload to
 while you have favorited internet stations. A chat looks something up only
 after a person allows it, so it adds nothing on its own. Answer **No** and
 it is zero, probe included. The
-[FAQ table](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
+[touchpoint table](INTERNET.md#every-touchpoint-and-how-to-turn-each-off)
 lists every outbound touchpoint, and [INTERNET.md](INTERNET.md) covers a
 server that has internet, one that only sometimes does, and one that never
 does.
