@@ -37,6 +37,17 @@ public struct QueueItem: Equatable, Sendable, Decodable {
     /// This is the entry coming out of the speaker now.
     public let playing: Bool
 
+    /// Up next (P4): `auto` for a song the room's Up next picked, with why
+    /// (``reasonLabel``: "same artist", "90s", "from road trip") and its
+    /// number in the session (``upNextSeq``, for "less like this");
+    /// `explicit` for one somebody asked for (`music_queue.py:220`).
+    public let origin: String
+    public let reasonLabel: String?
+    public let upNextSeq: Int?
+    /// The library song the entry is; nil for a stream, a podcast or a file
+    /// the library does not know.
+    public let trackID: Int64?
+
     public init(
         songID: Int64 = 0,
         pos: Int = 0,
@@ -48,7 +59,11 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         addedBy: String? = nil,
         addedByDeviceID: String? = nil,
         addedAt: String? = nil,
-        playing: Bool = false
+        playing: Bool = false,
+        origin: String = "explicit",
+        reasonLabel: String? = nil,
+        upNextSeq: Int? = nil,
+        trackID: Int64? = nil
     ) {
         self.songID = songID
         self.pos = pos
@@ -61,10 +76,17 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         self.addedByDeviceID = addedByDeviceID
         self.addedAt = addedAt
         self.playing = playing
+        self.origin = origin
+        self.reasonLabel = reasonLabel
+        self.upNextSeq = upNextSeq
+        self.trackID = trackID
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pos, file, title, artist, album, playing
+        case pos, file, title, artist, album, playing, origin
+        case reasonLabel = "reason_label"
+        case upNextSeq = "up_next_seq"
+        case trackID = "track_id"
         case songID = "song_id"
         case durationSec = "duration_sec"
         case addedBy = "added_by"
@@ -93,6 +115,14 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         // nothing, so it reads as nothing.
         addedAt = try? values.decodeIfPresent(String.self, forKey: .addedAt)
         playing = try values.decodeIfPresent(Bool.self, forKey: .playing) ?? false
+        // The four Up next fields are read **leniently**, each on its own:
+        // they are new (P4), and one of them in an unexpected shape must not
+        // throw the whole queue away, which is `added_at`'s reason above. An
+        // origin that is not `auto` is `explicit`, as the server writes it.
+        origin = (try? values.decodeIfPresent(String.self, forKey: .origin)) == "auto" ? "auto" : "explicit"
+        reasonLabel = try? values.decodeIfPresent(String.self, forKey: .reasonLabel)
+        upNextSeq = try? values.decodeIfPresent(Int.self, forKey: .upNextSeq)
+        trackID = try? values.decodeIfPresent(Int64.self, forKey: .trackID)
     }
 
     /// What a row calls it.
@@ -167,13 +197,23 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
     /// during the soak.
     public let guest: Bool
 
+    /// The room's Up next session (P4), all nil without one: its id (for
+    /// PATCH / feedback on `/api/music/up-next/sessions/{id}`), autoplay, and
+    /// what the mix is built from (``RoomUpNext``).
+    public let sessionID: String?
+    public let autoplay: Bool?
+    public let upNext: RoomUpNext?
+
     public init(
         roomID: String = "",
         items: [QueueItem] = [],
         currentSongID: Int64? = nil,
         editable: Bool = true,
         blockedReason: String? = nil,
-        guest: Bool = false
+        guest: Bool = false,
+        sessionID: String? = nil,
+        autoplay: Bool? = nil,
+        upNext: RoomUpNext? = nil
     ) {
         self.roomID = roomID
         self.items = items
@@ -181,10 +221,15 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
         self.editable = editable
         self.blockedReason = blockedReason
         self.guest = guest
+        self.sessionID = sessionID
+        self.autoplay = autoplay
+        self.upNext = upNext
     }
 
     private enum CodingKeys: String, CodingKey {
-        case items, editable, guest
+        case items, editable, guest, autoplay
+        case sessionID = "session_id"
+        case upNext = "up_next"
         case roomID = "room_id"
         case currentSongID = "current_song_id"
         case blockedReason = "blocked_reason"
@@ -219,6 +264,11 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
         // (pydantic defaults put them in the JSON whether or not they were
         // set), so this bites only a server older than the field.
         guest = try values.decodeIfPresent(Bool.self, forKey: .guest) ?? true
+        // Lenient, for the reason ``QueueItem``'s Up next fields are: new,
+        // and nothing to throw a whole queue away over.
+        sessionID = try? values.decodeIfPresent(String.self, forKey: .sessionID)
+        autoplay = try? values.decodeIfPresent(Bool.self, forKey: .autoplay)
+        upNext = try? values.decodeIfPresent(RoomUpNext.self, forKey: .upNext)
     }
 
     /// Can this phone empty the whole queue?
@@ -292,6 +342,31 @@ public enum MusicQueuePath {
 
     public static func clear(room: String) -> String {
         "/api/music/queue/\(escaped(room))/clear"
+    }
+
+    /// Add library tracks, `where` next or at the end (21b5ccfb, cb780e90).
+    public static func add(room: String) -> String {
+        "/api/music/queue/\(escaped(room))/add"
+    }
+
+    /// Play one entry now: the room's own jump, MPD `playid` (P4).
+    public static func play(room: String) -> String {
+        "/api/music/queue/\(escaped(room))/play"
+    }
+
+    /// The room's queue, in order, as a new playlist.
+    public static func savePlaylist(room: String) -> String {
+        "/api/music/queue/\(escaped(room))/save-playlist"
+    }
+
+    /// The room's Up next session: `PATCH` it for autoplay.
+    public static func session(_ id: String) -> String {
+        "/api/music/up-next/sessions/\(escaped(id))"
+    }
+
+    /// "Less like this" on one pick of the session.
+    public static func feedback(session id: String) -> String {
+        "/api/music/up-next/sessions/\(escaped(id))/feedback"
     }
 
     /// One room transport action — `POST /api/music/{action}/{room}`.

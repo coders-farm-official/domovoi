@@ -403,6 +403,9 @@ struct MusicView: View {
                 EmptyView()
             }
         }
+        // The queues unit's tools (search to add, Play next / Add to queue,
+        // a room's queue sheet), for everything on this screen and its sheets.
+        .environment(\.queueTools, model.queueTools())
     }
 
     /// Whether a sheet is up. The setter only ever **closes** one: a sheet is
@@ -447,6 +450,7 @@ struct MusicView: View {
             guard let deviceID = model.deviceID else { return }
             playlists = MusicPlaylistsModel(container: model.container, deviceID: deviceID)
         }
+        playlists?.listener = model.queueTools()?.listener ?? .unnamed
         playlists?.start()
     }
 
@@ -476,11 +480,13 @@ struct MusicView: View {
 
     private func openPlaylist(_ playlist: Playlist) {
         guard let deviceID = model.deviceID else { return }
-        sheet = .playlist(MusicPlaylistDetailModel(
+        let detail = MusicPlaylistDetailModel(
             playlist: playlist,
             container: model.container,
             deviceID: deviceID
-        ))
+        )
+        detail.listener = model.queueTools()?.listener ?? .unnamed
+        sheet = .playlist(detail)
     }
 
     /// Open the add-to-playlist sheet, **in place of** the track sheet it was

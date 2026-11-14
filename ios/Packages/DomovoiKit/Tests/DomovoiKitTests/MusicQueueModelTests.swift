@@ -70,7 +70,7 @@ final class MusicQueueModelTests: XCTestCase {
 
     /// A household queue with two entries, the first of them playing.
     private let twoEntries = """
-    {"room_id":"living room","current_song_id":7,"editable":true,"guest":false,
+    {"current_song_id":7,"editable":true,"guest":false,
      "items":[{"song_id":7,"pos":0,"file":"/srv/a.mp3","title":"Hey Jude",
                 "artist":"The Beatles","duration_sec":431,"playing":true},
                {"song_id":9,"pos":1,"file":"/srv/b.mp3","title":"Come Together",
@@ -79,7 +79,7 @@ final class MusicQueueModelTests: XCTestCase {
 
     /// The same queue, answered to a guest.
     private let guestQueue = """
-    {"room_id":"living room","editable":true,"guest":true,
+    {"editable":true,"guest":true,
      "items":[{"song_id":7,"title":"Hey Jude","playing":true},
                {"song_id":9,"title":"Come Together"}]}
     """
@@ -337,6 +337,8 @@ final class MusicQueueModelTests: XCTestCase {
         XCTAssertNil(queue.emptyNote)
     }
 
+    /// An empty queue this phone may add to points at the search box above
+    /// it, in Android's words (`QueueTab.kt:416`, 21b5ccfb).
     func testAnEmptyQueueNamesTheRoomAndWhatToDo() async {
         let (queue, _, _) = rig()
 
@@ -344,6 +346,23 @@ final class MusicQueueModelTests: XCTestCase {
         defer { queue.stop() }
 
         XCTAssertEqual("0 in the queue", queue.countText)
+        XCTAssertTrue(queue.canAdd)
+        XCTAssertEqual(
+            "queue is empty — search above to add a song, or say \"play something\" in den",
+            queue.emptyNote
+        )
+    }
+
+    /// One it may only watch has no search box, so its sentence does not
+    /// point at one.
+    func testAnEmptyQueueThisPhoneMayOnlyWatchDoesNotPointAtTheSearch() async {
+        let (queue, _, house) = rig()
+        house.queues.set(["den": #"{"items":[],"editable":false,"guest":true,"blocked_reason":"nothing is playing"}"#])
+
+        await started(queue, rooms: ["den"])
+        defer { queue.stop() }
+
+        XCTAssertFalse(queue.canAdd)
         XCTAssertEqual(
             "nothing queued in den — ask it to play something, or play a track from the library",
             queue.emptyNote
