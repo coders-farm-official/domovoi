@@ -163,16 +163,27 @@ object ShareRules {
      *  colour. */
     const val BUSY_TEXT = "sent a moment ago; trying again shortly"
 
-    /** A PUT refused with 403: the house no longer takes this phone's
-     *  calendar key. Nothing more is sent until sharing is turned off and
-     *  on again. */
+    /** Where the dashboard removes a phone's calendars (web/static:
+     *  settings.jsx Household → Calendars, calendar.jsx's button). */
+    const val DASHBOARD_REMOVE =
+        "Ask whoever runs Domovoi to remove this phone's calendars on the dashboard (Settings → Household → " +
+            "Calendars, \"remove all from this phone\")"
+
+    /** A PUT refused with 403: the house holds a key this phone doesn't
+     *  have, and only an admin's removal clears it (the server then hands
+     *  a new one). Sharing is turned off here, so "turn it on again" is a
+     *  real step. */
     const val KEY_REFUSED =
-        "the house no longer accepts this phone's calendars: turn sharing off and on again"
+        "The house no longer accepts this phone's calendars. $DASHBOARD_REMOVE, then turn sharing on again."
 
     /** A DELETE refused with 403: the copy is the house's to remove now. */
     const val KEY_REFUSED_OFF =
-        "the house no longer accepts this phone's calendar key, so it may still show them: an admin can " +
-            "remove them in the dashboard (Settings → Household → Calendars)"
+        "The house no longer accepts this phone's calendars, so it may still show them. $DASHBOARD_REMOVE."
+
+    /** The house refused this phone's key on a send: off here, nothing
+     *  pending (a DELETE would be refused the same way), and said. */
+    fun keyRefused(e: ShareEntry?): ShareEntry =
+        deleted(turnOff(e)).copy(notice = KEY_REFUSED)
 
     /** Whether the settings line is in the warning colour. */
     fun warns(e: ShareEntry?): Boolean =
@@ -233,6 +244,20 @@ class ShareStore(private val file: File) {
         val tmp = File(file.parentFile, file.name + ".tmp")
         tmp.writeText(JSON.encodeToString(SERIALIZER, map))
         AtomicFiles.replace(tmp, file)
+    }
+
+    /**
+     * The server at this address proved a different identity and the
+     * person said yes to it (ui/shell/IdentityChanged.kt trustAgain): a
+     * reinstalled or replaced Domovoi is a different house, which never
+     * got a yes for this phone's calendars. Its sharing entry and key go
+     * (sharing shows as off; no DELETE: the old house is gone, and the new
+     * one has nothing from this phone).
+     */
+    fun differentHouse(server: String, keys: CalendarKeys) {
+        val clean = com.domovoi.app.data.ServerCredentials.normalize(server)
+        forget(clean)
+        keys.setCalendarKey(clean, null)
     }
 
     companion object {

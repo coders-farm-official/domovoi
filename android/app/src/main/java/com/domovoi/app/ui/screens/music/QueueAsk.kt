@@ -155,5 +155,7 @@ internal const val SAVE_AS_PLAYLIST = "save as playlist"
 internal const val SAVE_AS_PLAYLIST_HINT = "save this queue as a playlist"
 internal const val SAVE_AS_PLAYLIST_NONE = "no library songs in the queue to save"
 internal const val PLAYLIST_NAME_PROMPT = "name your playlist…"
-internal fun savedAsNote(name: String) = "Saved as \"$name\"."
+/** The web's PlayerQueueSave note (player.jsx): the name, then how many
+ *  songs were saved, "1 song" / "2 songs". */
+internal fun savedAsNote(name: String, n: Int) = "Saved as \"$name\" ($n song${if (n == 1) "" else "s"})."
 internal fun saveFailedNote(err: String) = "Couldn't save the playlist: $err"

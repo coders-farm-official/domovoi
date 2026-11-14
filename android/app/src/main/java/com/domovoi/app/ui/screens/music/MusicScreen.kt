@@ -563,8 +563,8 @@ fun MusicScreen() {
                 val ids = savableTrackIds(app.player.queue.value)
                 scope.launchAction(
                     action = { saveQueueAsPlaylist(app.api, name, ids) },
-                    onSuccess = {
-                        toast(savedAsNote(name.trim()))
+                    onSuccess = { saved ->
+                        toast(savedAsNote(name.trim(), saved?.added ?: ids.size))
                         playlists.refresh()
                     },
                     onFailure = { toast(saveFailedNote(apiErrorText(it))) },

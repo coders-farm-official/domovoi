@@ -160,8 +160,8 @@ internal class SaveAsPlaylistFlow {
         val clean = name.trim()
         saving = true; note = ""
         try {
-            saveQueueAsPlaylist(api, clean, trackIds)
-            note = savedAsNote(clean); name = ""; open = false
+            val saved = saveQueueAsPlaylist(api, clean, trackIds)
+            note = savedAsNote(clean, saved?.added ?: trackIds.size); name = ""; open = false
             return true
         } catch (e: CancellationException) {
             throw e
@@ -217,19 +217,24 @@ internal fun savableTrackIds(queue: List<PlayItem>): List<Long> =
  * skipped, as on the web. Returns the playlist's id. Nothing is created for
  * a blank name or an empty list.
  */
-internal suspend fun saveQueueAsPlaylist(api: ApiClient, name: String, trackIds: List<Long>): Long? {
+/** A playlist saved from the queue: its id and how many songs went in. */
+internal data class SavedPlaylist(val id: Long, val added: Int)
+
+internal suspend fun saveQueueAsPlaylist(api: ApiClient, name: String, trackIds: List<Long>): SavedPlaylist? {
     val clean = name.trim()
     if (clean.isEmpty() || trackIds.isEmpty()) return null
     val created = api.post("/api/playlists", buildJsonObject { put("name", clean) })
     val pid = created.jsonObject["id"]?.jsonPrimitive?.longOrNull ?: error("no playlist id returned")
+    var added = 0
     for (tid in trackIds) {
         try {
             api.post("/api/playlists/$pid/tracks", buildJsonObject { put("track_id", tid) })
+            added++
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             // One the server won't take is skipped (the web's `catch {}`).
         }
     }
-    return pid
+    return SavedPlaylist(pid, added)
 }

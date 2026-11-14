@@ -21,7 +21,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import android.content.Context
 import com.domovoi.app.AppContainer
+import com.domovoi.app.calendarshare.CalendarShare
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.IdentityVerdict
 import com.domovoi.app.ui.components.DomovoiCard
@@ -69,8 +71,18 @@ internal fun changedIdentity(verdict: IdentityVerdict?): IdentityVerdict.Mismatc
 /** The yes: pin the key the server proved instead of the old one, drop the
  *  old household's token (Prefs.replacePin), and make the gate ask for a
  *  fresh proof against the new key. Pairing follows. */
-internal fun trustAgain(app: AppContainer, serverUrl: String, mismatch: IdentityVerdict.Mismatch, toast: (String) -> Unit) {
+internal fun trustAgain(
+    app: AppContainer,
+    context: Context,
+    serverUrl: String,
+    mismatch: IdentityVerdict.Mismatch,
+    toast: (String) -> Unit,
+) {
     val pin = mismatch.seenPin ?: return
+    // A different house at this address: this phone's calendar sharing
+    // there goes too (calendarshare/ShareState.kt differentHouse), so the
+    // new household gets nothing without a fresh yes.
+    CalendarShare.store(context).differentHouse(serverUrl, app.prefs)
     app.prefs.replacePin(serverUrl, pin)
     app.identity.pinChanged()
     toast("trusting ${ServerCredentials.address(serverUrl)} again — pair this phone with it")

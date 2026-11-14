@@ -468,23 +468,64 @@ class ShareSyncTest {
     @Test fun aRefusedKeyIsSaidAndNotRetried() = runBlocking {
         val s = store()
         s.update(server) { ShareRules.pick(ShareRules.turnOn(it), listOf(12)) }
+        keys.setCalendarKey(server, "lost-key")
         failWith = ApiException(403, "403 Forbidden")
         assertEquals(ShareSync.Outcome.Done, sync(s).run(server))
-        assertEquals(ShareRules.KEY_REFUSED, s.get(server)!!.lastError)
-        assertEquals(ShareRules.KEY_REFUSED, com.domovoi.app.ui.screens.settings.shareStatusLine(s.get(server)))
-        assertTrue(ShareRules.warns(s.get(server)))
-        assertEquals("the house no longer accepts this phone's calendars: turn sharing off and on again", ShareRules.KEY_REFUSED)
+        // Off here, nothing pending (a DELETE would be refused the same way),
+        // and the panel says the step that works.
+        val e = s.get(server)!!
+        assertFalse(e.enabled)
+        assertFalse(e.pendingDelete)
+        assertEquals(ShareAction.Nothing, ShareRules.action(e))
+        assertNull(keys.calendarKeyFor(server))
+        assertEquals(ShareRules.KEY_REFUSED, com.domovoi.app.ui.screens.settings.shareStatusLine(e))
+        assertTrue(ShareRules.warns(e))
+        assertEquals(
+            "The house no longer accepts this phone's calendars. Ask whoever runs Domovoi to remove this " +
+                "phone's calendars on the dashboard (Settings → Household → Calendars, \"remove all from this " +
+                "phone\"), then turn sharing on again.",
+            ShareRules.KEY_REFUSED,
+        )
+        assertFalse("no off-and-on advice that can't work", "off and on" in ShareRules.KEY_REFUSED)
         // The next passes (the change watch, the periodic one) send nothing.
         failWith = null
         val reads = calendarReads
         assertEquals(ShareSync.Outcome.Done, sync(s).run(server))
         assertEquals(ShareSync.Outcome.Done, sync(s).run(server))
         assertTrue(puts.isEmpty())
+        assertEquals(0, deletes)
         assertEquals(reads, calendarReads)
-        // Off and on again: tried again.
-        s.update(server) { ShareRules.turnOn(ShareRules.turnOff(it)) }
+        // After the admin's removal the person turns it on: sent, without
+        // the old key, and the new one the house hands back is kept.
+        answer = buildJsonObject { put("calendars", 1); put("events", 1); put("calendar_key", "new-key") }
+        s.update(server) { ShareRules.turnOn(it) }
+        assertNull(s.get(server)!!.notice)
         sync(s).run(server)
         assertEquals(1, puts.size)
+        assertEquals(listOf<String?>(null), putKeys)
+        assertEquals("new-key", keys.calendarKeyFor(server))
+    }
+
+    /** Re-trusting a reinstalled or replaced Domovoi at the same address:
+     *  a different house, which never got a yes for this phone's calendars.
+     *  Its sharing entry and key go, sharing shows as off, and no DELETE is
+     *  sent (the new house has nothing from this phone). */
+    @Test fun aDifferentHouseAtTheSameAddressGetsNothingWithoutAFreshYes() = runBlocking {
+        val s = store()
+        s.update(server) { ShareRules.toggle(ShareRules.turnOn(it), 12, true, "Work") }
+        sync(s).run(server)
+        keys.setCalendarKey(server, "old-house-key")
+        s.differentHouse("$server/", keys)
+        assertNull("the sharing entry is gone", s.get(server))
+        assertNull(keys.calendarKeyFor(server))
+        assertNull(com.domovoi.app.ui.screens.settings.shareStatusLine(s.get(server)))
+        assertEquals(ShareAction.Nothing, ShareRules.action(s.get(server)))
+        // Once paired with the new house, a pass sends nothing at all.
+        assertEquals(ShareSync.Outcome.Done, sync(s).run(server))
+        assertEquals(1, puts.size)
+        assertEquals(0, deletes)
+        // And it survives a restart.
+        assertNull(store().get(server))
     }
 
     /** A 403 on the DELETE: retrying changes nothing; said, not looped. */

@@ -72,10 +72,6 @@ class ShareSync(
     }
 
     private suspend fun send(server: String): Outcome {
-        // The house refused this phone's key: nothing more is sent (it
-        // would be refused again) until the person turns sharing off and
-        // on, which clears the error.
-        if (store.get(server)?.lastError == ShareRules.KEY_REFUSED) return Outcome.Done
         val t = now()
         // A provider that failed (IOException) is tried again later and
         // changes nothing; no permission is as good as turned off.
@@ -115,9 +111,14 @@ class ShareSync(
                 // (410): this upload is dropped, never retried. The next
                 // pass reads the phone again with a newer generation.
                 409, 410 -> Outcome.Done
+                // The house holds a key this phone doesn't: sharing goes
+                // off here and the panel says what will work. The saved
+                // key is useless now; the house hands a new one after an
+                // admin removes this phone's calendars.
                 403 -> {
-                    store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.KEY_REFUSED, t) }
-                    Outcome.Done
+                    store.update(server) { ShareRules.keyRefused(it) }
+                    keys.setCalendarKey(server, null)
+                    return Outcome.Done
                 }
                 else -> {
                     store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(e.status), t, e.retryAfterSec) }
