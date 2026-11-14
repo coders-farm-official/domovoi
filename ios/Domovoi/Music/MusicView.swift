@@ -153,7 +153,15 @@ struct MusicView: View {
     /// written on every tap.
     @State private var roomsOpen = MusicRoomsOpenStore().open
 
+    /// The queues unit's tools (search to add, Play next / Add to queue, a
+    /// room's queue sheet), for everything on this screen and its sheets.
+    /// Outside ``page``'s chain: one more modifier there is past what the
+    /// type checker will take in reasonable time.
     var body: some View {
+        page.environment(\.queueTools, model.queueTools())
+    }
+
+    private var page: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
@@ -403,9 +411,6 @@ struct MusicView: View {
                 EmptyView()
             }
         }
-        // The queues unit's tools (search to add, Play next / Add to queue,
-        // a room's queue sheet), for everything on this screen and its sheets.
-        .environment(\.queueTools, model.queueTools())
     }
 
     /// Whether a sheet is up. The setter only ever **closes** one: a sheet is
