@@ -91,6 +91,24 @@ public final class MusicPlaylistDetailModel {
     /// (`PlaylistDrawer.kt` refreshPlaylists).
     public var listChanged: @MainActor () -> Void = {}
 
+    /// Where a sentence goes that outlives this sheet: the copy's and the
+    /// delete's, both said as the sheet closes. The screen sets it to the
+    /// shell's toast; nil (a test, or a screen that set nothing) keeps it in
+    /// ``toast``.
+    ///
+    /// Handed over **here, by the model**, and not left for the screen to
+    /// take off ``toast`` when ``closing`` flips: the sheet's own
+    /// `onChange(of: closing)` dismisses it, the dismissal empties the
+    /// screen's sheet slot in the same update, and the screen's own
+    /// `onChange` then never sees `closing` true — train I044 measured the
+    /// copy's toast never drawn.
+    public var sayInShell: (@MainActor (String) -> Void)?
+
+    /// A closing sentence: to the shell when there is one, else ``toast``.
+    private func sayAsClosing(_ said: String) {
+        if let sayInShell { sayInShell(said) } else { say(said) }
+    }
+
     public private(set) var toast: String?
 
     /// Whether ``toast`` is a **failure** rather than an outcome.
@@ -406,7 +424,7 @@ public final class MusicPlaylistDetailModel {
             do throws(DomovoiError) {
                 try await client.send(method: "DELETE", path: path)
                 guard let self else { return }
-                self.say(MusicMoreStrings.deletedPlaylist(name))
+                self.sayAsClosing(MusicMoreStrings.deletedPlaylist(name))
                 self.deleted = true
             } catch let trouble {
                 guard let self else { return }
@@ -436,7 +454,7 @@ public final class MusicPlaylistDetailModel {
             do throws(DomovoiError) {
                 let made = try await MusicPlaylistReadOnly.copy(client: client, playlistID: id)
                 guard let self, self.container.store.serverURL == server else { return }
-                self.say(MusicPlaylistReadOnly.copiedText(made))
+                self.sayAsClosing(MusicPlaylistReadOnly.copiedText(made))
                 self.listChanged()
                 self.copied = made
             } catch let trouble {

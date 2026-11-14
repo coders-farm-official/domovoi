@@ -217,11 +217,13 @@ final class MusicCoverRevalidationTests: XCTestCase {
         XCTAssertEqual(.picture(Self.first, etag: nil), MusicCoverAnswer.from(status: 200, body: Self.first, etag: ""))
     }
 
-    /// The key is ready for a versioned cover URL; today there is none.
+    /// The key's path is the server's `cover_url` shape (V059), and a
+    /// version is its own key.
     func testTheKeysPathIsTheCoverRouteAndAVersionIsItsOwnKey() {
         XCTAssertEqual("/api/music/library/7/cover", MusicCoverKey(trackID: 7).path)
-        XCTAssertEqual("/api/music/library/7/cover?v=abc123", MusicCoverKey(trackID: 7, version: "abc123").path)
-        XCTAssertNotEqual(MusicCoverKey(trackID: 7, version: "a"), MusicCoverKey(trackID: 7, version: "b"))
+        XCTAssertEqual("/api/music/library/7/cover?v=3", MusicCoverKey(trackID: 7, version: 3).path)
+        XCTAssertNotEqual(MusicCoverKey(trackID: 7, version: 3), MusicCoverKey(trackID: 7, version: 4))
+        XCTAssertNotEqual(MusicCoverKey(trackID: 7), MusicCoverKey(trackID: 7, version: 0))
     }
 
     /// The defect: the lock screen's fetch went through `URLSession.shared`,

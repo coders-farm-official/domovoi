@@ -318,6 +318,23 @@ final class ShellModelTests: XCTestCase {
         PlayerArtwork.forgetMisses()
     }
 
+    /// `library.cover.changed` (V059) reaches the app-wide versions every
+    /// cover draws from. The defect: the event fanned out to nobody, so a
+    /// changed cover stayed old on every surface that had read its row.
+    func testACoverChangedEventMovesTheAppsCoverVersions() {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        MusicCoverVersions.shared.forget()
+        rig.model.coverEventArrived(StateEvent(
+            type: "library.cover.changed",
+            frame: #"{"type":"library.cover.changed","data":{"tracks":[{"id":12,"cover_v":4,"cover_url":"/api/music/library/12/cover?v=4"}]}}"#
+        ))
+        XCTAssertEqual(4, MusicCoverVersions.shared.known(12))
+        rig.model.coverEventArrived(StateEvent(type: "playlists.changed", frame: "{}"))
+        XCTAssertEqual(4, MusicCoverVersions.shared.known(12))
+        MusicCoverVersions.shared.forget()
+        rig.model.stop()
+    }
+
     /// Coming back re-asks the device register, no more often than the gap —
     /// and never for a phone that has no server at all.
     ///

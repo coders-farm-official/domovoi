@@ -47,6 +47,12 @@ public struct QueueItem: Equatable, Sendable, Decodable {
     /// The library song the entry is; nil for a stream, a podcast or a file
     /// the library does not know.
     public let trackID: Int64?
+    /// V059, for a library song: its credited artists, cover version and
+    /// versioned cover path (as on ``LibraryTrack``); `[]` / nil / nil for
+    /// anything else and from an older server.
+    public let artists: [String]
+    public let coverV: Int?
+    public let coverURL: String?
 
     public init(
         songID: Int64 = 0,
@@ -63,7 +69,10 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         origin: String = "explicit",
         reasonLabel: String? = nil,
         upNextSeq: Int? = nil,
-        trackID: Int64? = nil
+        trackID: Int64? = nil,
+        artists: [String] = [],
+        coverV: Int? = nil,
+        coverURL: String? = nil
     ) {
         self.songID = songID
         self.pos = pos
@@ -80,10 +89,15 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         self.reasonLabel = reasonLabel
         self.upNextSeq = upNextSeq
         self.trackID = trackID
+        self.artists = artists
+        self.coverV = coverV
+        self.coverURL = coverURL
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pos, file, title, artist, album, playing, origin
+        case pos, file, title, artist, album, playing, origin, artists
+        case coverV = "cover_v"
+        case coverURL = "cover_url"
         case reasonLabel = "reason_label"
         case upNextSeq = "up_next_seq"
         case trackID = "track_id"
@@ -123,6 +137,9 @@ public struct QueueItem: Equatable, Sendable, Decodable {
         reasonLabel = try? values.decodeIfPresent(String.self, forKey: .reasonLabel)
         upNextSeq = try? values.decodeIfPresent(Int.self, forKey: .upNextSeq)
         trackID = try? values.decodeIfPresent(Int64.self, forKey: .trackID)
+        artists = (try? values.decodeIfPresent([String].self, forKey: .artists)) ?? []
+        coverV = try? values.decodeIfPresent(Int.self, forKey: .coverV)
+        coverURL = try? values.decodeIfPresent(String.self, forKey: .coverURL)
     }
 
     /// What a row calls it.

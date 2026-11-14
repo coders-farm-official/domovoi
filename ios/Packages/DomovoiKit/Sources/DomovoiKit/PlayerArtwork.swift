@@ -28,6 +28,29 @@ public enum PlayerArtwork {
         "/api/music/library/\(trackID)/cover"
     }
 
+    /// The same path at a cover version (V059: the server's `cover_url`,
+    /// `/api/music/library/{id}/cover?v={cover_v}`), or the bare route for
+    /// none. The server ignores `?v=`; it makes a changed cover a new URL.
+    public static func libraryPath(trackID: Int64, coverV: Int?) -> String {
+        guard let coverV else { return libraryPath(trackID: trackID) }
+        return "\(libraryPath(trackID: trackID))?v=\(coverV)"
+    }
+
+    /// A library cover path's track and version, or nil for anything else
+    /// (a podcast's art, a phone file).
+    public static func coverPathParts(_ path: String) -> (trackID: Int64, version: Int?)? {
+        let prefix = "/api/music/library/"
+        guard path.hasPrefix(prefix) else { return nil }
+        let rest = path.dropFirst(prefix.count)
+        let pieces = rest.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let head = pieces.first, head.hasSuffix("/cover"),
+              let id = Int64(head.dropLast("/cover".count)) else { return nil }
+        guard pieces.count == 2 else { return (id, nil) }
+        let query = pieces[1]
+        guard query.hasPrefix("v="), let version = Int(query.dropFirst(2)) else { return (id, nil) }
+        return (id, version)
+    }
+
     /// What to hand an image loader for a cover path: a server path resolved
     /// against the active server; an on-device file URL or a full `http(s)`
     /// URL as it is; nil for none.

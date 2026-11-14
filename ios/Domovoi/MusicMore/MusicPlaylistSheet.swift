@@ -434,7 +434,7 @@ struct MusicPlaylistTrackRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            MusicCoverView(trackID: track.id, size: 40, covers: covers)
+            MusicCoverView(trackID: track.id, size: 40, covers: covers, coverV: track.coverV)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.displayTitle)
                     .font(.subheadline)
@@ -459,7 +459,9 @@ struct MusicPlaylistTrackRow: View {
 
     private var subtitle: String {
         let artist = track.artist?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let who = (artist?.isEmpty == false ? artist : nil) ?? MusicStrings.unknownArtist
+        let named = (artist?.isEmpty == false ? artist : nil) ?? MusicStrings.unknownArtist
+        // "A · with B, C" (V059, `PlaylistDrawer.kt`).
+        let who = MusicCredits.artistLine(named, credits: MusicCredits.with(track))
         guard let seconds = track.durationSec else { return who }
         return "\(who) · \(fmtDur(seconds))"
     }

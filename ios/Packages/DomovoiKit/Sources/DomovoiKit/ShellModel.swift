@@ -1107,6 +1107,7 @@ public final class ShellModel {
                 Task { @MainActor in
                     guard let self else { return }
                     self.container.stateEventArrived(frame)
+                    self.coverEventArrived(frame)
                     event?(frame)
                 }
             }
@@ -1118,6 +1119,18 @@ public final class ShellModel {
         // cannot be got wrong silently rather than something a counter
         // reports after the fact.
         socketConnectionChanged(container.socket.connected)
+    }
+
+    /// `library.cover.changed` (V059): the covers whose version moved are
+    /// remembered app-wide (``MusicCoverVersions``), which every cover on
+    /// screen redraws from, and the lock screen's artwork is attached again
+    /// when the playing song's moved. Keyed by the server the app talks to
+    /// now.
+    func coverEventArrived(_ frame: StateEvent) {
+        guard frame.type == MusicCoverVersions.event else { return }
+        let moved = MusicCoverVersions.shared.received(frame, server: container.store.serverURL)
+        guard !moved.isEmpty else { return }
+        heldPlayer?.coverVersionsMoved(moved)
     }
 
     /// The socket's own report, and the three things that follow a connect.

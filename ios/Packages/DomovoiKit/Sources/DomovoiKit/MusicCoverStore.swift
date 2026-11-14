@@ -95,10 +95,13 @@ public enum MusicCover: Sendable, Equatable {
 /// Within one epoch a held cover is not asked again, which is Android's
 /// memory cache: a list scrolled back and forth costs nothing.
 ///
-/// **The key is a ``MusicCoverKey``, not a bare track id**, so that a cover
-/// URL carrying a version (`?v=<cover_v>`, a server change on the way) can be
-/// its own key later — a new version is then a new picture without asking —
-/// with the `ETag` check kept for a server that sends no version.
+/// **The key is a ``MusicCoverKey``, not a bare track id.** A server from
+/// V059 on versions each cover (`cover_v`, `?v=` on the URL): a versioned
+/// cover held is shown without asking, whatever the epoch, and a new
+/// version is a new key, fetched fresh. The `ETag` check above is kept for
+/// a cover with no version (an older server). The version to draw at is the
+/// larger of the row's own and the newest the live event announced
+/// (``MusicCoverVersions``).
 @MainActor
 @Observable
 public final class MusicCoverStore {
@@ -205,6 +208,19 @@ public final class MusicCoverStore {
 
     public func cover(_ key: MusicCoverKey) -> MusicCover? { covers[key]?.cover }
 
+    /// The picture held for `trackID` at any version, the newest first: what
+    /// a cover shows while its new version is fetched, so it swaps rather
+    /// than flickering through the placeholder.
+    public func newestImage(trackID: Int64) -> MusicCover? {
+        var best: (version: Int, cover: MusicCover)?
+        for (key, held) in covers where key.trackID == trackID {
+            guard case .image = held.cover else { continue }
+            let version = key.version ?? -1
+            if best == nil || version > (best?.version ?? -1) { best = (version, held.cover) }
+        }
+        return best?.cover
+    }
+
     /// Ask for `trackID`'s cover if it has not been asked for this epoch.
     public func want(_ trackID: Int64) { want(MusicCoverKey(trackID: trackID)) }
 
@@ -225,7 +241,10 @@ public final class MusicCoverStore {
         case .loading:
             return
         case .image, .absent:
-            if held?.epoch == now { return }
+            // A versioned cover (V059) is that version's picture for good: a
+            // change is a new version, so it is shown without asking again.
+            // Without a version, once per renewal epoch, by its ETag.
+            if key.version != nil || held?.epoch == now { return }
         case .failed, nil:
             break
         }
@@ -325,33 +344,32 @@ public final class MusicCoverStore {
     public var count: Int { covers.count }
 
     /// Whether the server is being asked about `trackID`'s cover right now.
-    public func isAsking(_ trackID: Int64) -> Bool { inFlight.contains(MusicCoverKey(trackID: trackID)) }
+    public func isAsking(_ trackID: Int64) -> Bool { isAsking(MusicCoverKey(trackID: trackID)) }
+
+    public func isAsking(_ key: MusicCoverKey) -> Bool { inFlight.contains(key) }
 }
 
 /// Which cover is meant: a track, and the version of its art when the server
 /// names one.
 ///
-/// Today the server names none and `version` is nil: the path is the bare
-/// cover route and the `ETag` is what tells an old picture from a new one.
-/// A server that sends a cover version (`cover_v`) will put it in the URL
-/// (`?v=<cover_v>`), and then a new version is a new key — a new picture
-/// without asking — while the `ETag` check stays for an older server.
+/// A server from V059 on numbers each cover (`cover_v`) and puts it in the
+/// URL (`?v=<cover_v>`): a new version is a new key — a new picture, fetched
+/// fresh — and a known one is shown without asking. From an older server
+/// `version` is nil, the path is the bare route, and the `ETag` is what
+/// tells an old picture from a new one.
 public struct MusicCoverKey: Hashable, Sendable {
     public let trackID: Int64
-    public let version: String?
+    /// The cover's version (`cover_v`, V059), or nil from an older server.
+    public let version: Int?
 
-    public init(trackID: Int64, version: String? = nil) {
+    public init(trackID: Int64, version: Int? = nil) {
         self.trackID = trackID
         self.version = version
     }
 
-    /// The path this cover is asked at.
-    public var path: String {
-        let bare = MusicCoverPath.library(trackID: trackID)
-        guard let version, !version.isEmpty else { return bare }
-        let escaped = version.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? version
-        return "\(bare)?v=\(escaped)"
-    }
+    /// The path this cover is asked at: the server's `cover_url` shape,
+    /// `/api/music/library/{id}/cover?v={cover_v}`, or the bare route.
+    public var path: String { PlayerArtwork.libraryPath(trackID: trackID, coverV: version) }
 }
 
 /// What the cover route answered.

@@ -389,6 +389,24 @@ final class MusicPlaylistReadOnlyTests: XCTestCase {
         XCTAssertEqual(1, relisted.current, "the list behind the sheet is re-read")
     }
 
+    /// The defect (train I044): the copy's sentence was left in the sheet's
+    /// own `toast` for the screen to take as `closing` flipped — but the
+    /// sheet's dismissal emptied the screen's slot first, and the shell
+    /// never said it. The model hands it to the shell itself.
+    func testTheCopysSentenceGoesToTheShellAsTheSheetCloses() async throws {
+        let (container, _) = rig()
+        let detail = MusicPlaylistDetailModel(
+            playlist: Playlist(id: 9, name: "Dinner party", trackCount: 2, imported: true),
+            container: container, deviceID: phone
+        )
+        let shell = Shared<[String]>([])
+        detail.sayInShell = { said in shell.mutate { $0.append(said) } }
+        XCTAssertTrue(detail.copy())
+        await settleUntil({ detail.closing }, "the copy")
+        XCTAssertEqual(["copied to \u{201C}Dinner party (copy)\u{201D}"], shell.current)
+        XCTAssertNil(detail.toast, "said once, by the shell, not left for a sheet that is closing")
+    }
+
     /// A household playlist is never copied from here: the web offers the
     /// copy only for one from the files.
     func testAHouseholdPlaylistIsNotCopied() {

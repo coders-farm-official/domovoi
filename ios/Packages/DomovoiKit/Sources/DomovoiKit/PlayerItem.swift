@@ -167,13 +167,16 @@ public struct PlayerItem: Equatable, Sendable, Identifiable {
         title: String,
         artist: String? = nil,
         album: String? = nil,
-        durationSec: Double? = nil
+        durationSec: Double? = nil,
+        coverV: Int? = nil
     ) -> PlayerItem {
         PlayerItem(
             uid: "lib-\(id)", kind: .library, itemID: id,
             title: title, artist: artist, album: album,
             src: "/api/music/library/\(id)/audio",
-            coverPath: PlayerArtwork.libraryPath(trackID: id),
+            // The row's cover version (V059), so the lock screen asks for
+            // the picture this row was read with.
+            coverPath: PlayerArtwork.libraryPath(trackID: id, coverV: coverV),
             durationSec: durationSec
         )
     }
