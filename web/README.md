@@ -71,9 +71,9 @@ web/
 ## Settings
 
 `static/settings.jsx` builds Settings from `SETTINGS_GROUPS`: Household
-(Rooms, People, Phones & browsers, Printers & scanners), Voice (Wake
-words, Voices, Greetings), Chat & AI (Models, Search, Chat), Privacy
-(Internet, Voice history), Documents (Fonts) and System (About & updates,
+(Rooms, People, Phones & browsers, Media folders, Printers & scanners),
+Voice (Wake words, Voices, Greetings), Chat & AI (Models, Search, Chat),
+Privacy (Internet, Voice history, Listening history), Documents (Fonts) and System (About & updates,
 Health, App layout, Advanced). People is the People page (`people.jsx`),
 drawn inside its section; `#people` opens it there, and a shared screen
 doesn't list it.
@@ -96,8 +96,11 @@ shows a section that can't do anything yet.
   LISTEN/NOTIFY accelerates specific channels to ~50 ms. Clients get a
   single WebSocket at `/ws/state` (see `realtime.py`'s docstring for
   the channel list). Plugin channels register from manifests.
-* **Auth** (tiers in `docs/SECURITY_PRIVACY.md`): reads of household
-  state are open on the LAN. Everyday actions — playback, queues,
+* **Auth** (tiers in `docs/SECURITY_PRIVACY.md`, per route in
+  `docs/API_REFERENCE.md`): a few reads are open on the LAN (now playing,
+  the plugin manifest, the menu layout); most household reads are
+  **device read** (the household token, an admin Bearer or the dashboard
+  cookie). Everyday actions — playback, queues,
   saving a document, chat — need the household device token
   (`X-Device-Token`; every paired browser and phone sends it). Admin
   actions — plugin management, config, satellite pushes —
