@@ -69,9 +69,10 @@ final class ListenClaimReviewTests: XCTestCase {
             }
             return Self.row(owner: 3, name: "Alex", key: "k2-minted-AAAAAAAAAAAAAAAAAAAA")
         }
+        let server = base
         let registering = Task {
             await DeviceRegistry.register(
-                with: c, book: b, server: base, deviceID: "ios-1a2b", name: "iPhone", userAgent: "ua"
+                with: c, book: b, server: server, deviceID: "ios-1a2b", name: "iPhone", userAgent: "ua"
             )
         }
         for _ in 0..<200 where StubURLProtocol.requestCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
@@ -115,9 +116,10 @@ final class ListenClaimReviewTests: XCTestCase {
             statuses.mutate { $0.append(200) }
             return Self.row(owner: 3, name: "Alex", key: next)
         }
-        async let first = try? claimThisPhone(client: c, book: b, server: base, deviceID: "ios-1a2b", personID: 3)
+        let server = base
+        async let first = try? claimThisPhone(client: c, book: b, server: server, deviceID: "ios-1a2b", personID: 3)
         try await Task.sleep(for: .milliseconds(50))
-        async let second = try? claimThisPhone(client: c, book: b, server: base, deviceID: "ios-1a2b", personID: 3)
+        async let second = try? claimThisPhone(client: c, book: b, server: server, deviceID: "ios-1a2b", personID: 3)
         _ = await (first, second)
         XCTAssertEqual([200, 200], statuses.current, "the presses crossed: one carried a key already replaced")
         XCTAssertEqual(current.current, b.claimKey(for: base), "the phone does not hold the house's latest key")
