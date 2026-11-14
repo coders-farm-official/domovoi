@@ -67,6 +67,11 @@ SCRIPTS = sorted(p for p in STICK.rglob("*") if p.is_file() and (
 
 def test_every_stick_file_is_lf_only():
     for p in STICK.rglob("*"):
+        # A test that imports stick/room/console.py leaves Python's own
+        # __pycache__ beside it; the image packs named files only
+        # (domovoi/usb_stick/image.py), never those.
+        if "__pycache__" in p.parts or p.suffix == ".pyc":
+            continue
         if p.is_file():
             assert b"\r" not in p.read_bytes(), p
 

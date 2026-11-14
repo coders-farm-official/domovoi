@@ -506,8 +506,8 @@ class AssistantController(
             say("not enough free space: the download needs ${gb(ui.bytesNeeded)}")
             return
         }
-        startJob(models)
         _state.update { it.copy(setup = ModelSetup.Downloading(chatDone(null), "starting")) }
+        startJob(models)
         say("download started; it carries on if you leave the app")
     }
 
@@ -520,13 +520,16 @@ class AssistantController(
             say("not enough free space: the speech files need ${gb(ui.voiceBytesNeeded)}")
             return
         }
-        startJob(voiceModels)
         _state.update { it.copy(voiceSetup = ModelSetup.Downloading(voiceDone(null), "starting")) }
+        startJob(voiceModels)
         say("downloading the speech files; it carries on if you leave the app")
     }
 
     /** Starts the job for [wanted]; a job already running (the benchmark's)
      *  keeps its models. The downloader skips whatever is installed. */
+    // Called AFTER the card is set to "starting": the job's own state can
+    // arrive before this returns, and an optimistic write after it would
+    // cover the real one for good (the job's flow may not emit again).
     private fun startJob(wanted: List<CatalogModel>) {
         val running = lastJob?.takeIf { it.active }?.models.orEmpty()
         val all = (known().filter { it.id in running } + wanted).distinctBy { it.id }

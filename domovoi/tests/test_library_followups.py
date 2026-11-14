@@ -207,8 +207,21 @@ async def test_a_rescan_moves_the_version_only_when_the_art_changes(db_session, 
     assert await state() == [("A", 0, False), ("B", 0, False)]
     await index_music_dir()                       # the first reading: recorded, not a change
     assert await state() == [("A", 0, True), ("B", 0, True)]
-    await index_music_dir()                       # nothing changed
+    # Nothing changed: no tag is read and no cover version moves.
+    from domovoi.workers import library_indexer
+
+    def no_reads(path):
+        raise AssertionError(f"tags read for an unchanged file: {path}")
+
+    monkeypatch.setattr(library_indexer, "_resolve_metadata_for", no_reads)
+    sigs_before = (await db_session.execute(text(
+        "SELECT cover_sig, cover_changed_at FROM library_tracks ORDER BY title"))).all()
+    await db_session.commit()
+    await index_music_dir()
     assert await state() == [("A", 0, True), ("B", 0, True)]
+    assert (await db_session.execute(text(
+        "SELECT cover_sig, cover_changed_at FROM library_tracks ORDER BY title"))).all() == sigs_before
+    await db_session.commit()
     (music / "Album" / "folder.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 50)
     await index_music_dir()                       # a new album-folder image
     assert await state() == [("A", 1, True), ("B", 0, True)]

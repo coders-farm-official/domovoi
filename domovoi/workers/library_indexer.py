@@ -566,31 +566,40 @@ async def index_paths(paths: Iterable[Path | str]) -> dict[str, int]:
     }
 
 
-async def _sweep_cover_versions(
-    session: Any, known_rows: dict[str, tuple[int, str | None]], found: list[Path],
-) -> int:
+async def _sweep_cover_versions(found: list[Path], skip: set[str]) -> int:
     """Compare each already-indexed file's cover signature
-    (:func:`domovoi.library_cover_version.cover_signature`) with the one
-    stored, move ``cover_rev`` where it changed (one NOTIFY for all) and
-    record first readings silently. Returns how many tracks moved."""
+    (:func:`domovoi.library_cover_version.cover_signature`: stats of the
+    file and its album-folder image, never a tag read) with the one stored,
+    move ``cover_rev`` where it changed (one NOTIFY for all) and record
+    first readings silently. Its own transaction, after the walk's: it
+    never touches the walk's inserts, and a failure here costs nothing but
+    the cover check. ``skip``: files this walk just inserted (their first
+    reading comes next walk). Returns how many tracks moved."""
     from domovoi import library_cover_version as cover_version
 
-    paths = [p for p in found if str(p) in known_rows]
-    if not paths:
-        return 0
-    sigs = await asyncio.to_thread(cover_version.cover_signatures, paths)
-    first: dict[int, str | None] = {}
-    changed: dict[int, str | None] = {}
-    for path_str, sig in sigs.items():
-        if sig is None:
-            continue
-        track_id, stored = known_rows[path_str]
-        if stored is None:
-            first[track_id] = sig
-        elif stored != sig:
-            changed[track_id] = sig
-    await cover_version.record_signatures(session, first)
-    moved = await cover_version.bump(session, changed, changed)
+    async with session_scope() as session:
+        known_rows = {
+            r[1]: (int(r[0]), r[2]) for r in await session.execute(
+                text("SELECT id, file_path, cover_sig FROM library_tracks"))
+        }
+        paths = [p for p in found if str(p) in known_rows and str(p) not in skip]
+        if not paths:
+            return 0
+        sigs = await asyncio.to_thread(cover_version.cover_signatures, paths)
+        first: dict[int, str | None] = {}
+        changed: dict[int, str | None] = {}
+        for path_str, sig in sigs.items():
+            if sig is None:
+                continue
+            track_id, stored = known_rows[path_str]
+            if stored is None:
+                first[track_id] = sig
+            elif stored != sig:
+                changed[track_id] = sig
+        # Rows whose art didn't change are not written at all.
+        await cover_version.record_signatures(session, first)
+        moved = await cover_version.bump(session, changed, changed)
+        await session.commit()
     if moved:
         log.info("library indexer: cover art changed on %d track(s)", moved)
     return moved
@@ -632,11 +641,7 @@ async def index_music_dir() -> dict[str, int]:
     found = await asyncio.to_thread(_audio_files, music_dir)
 
     async with session_scope() as session:
-        known_rows = {
-            r[1]: (int(r[0]), r[2]) for r in await session.execute(
-                text("SELECT id, file_path, cover_sig FROM library_tracks"))
-        }
-        known = set(known_rows)
+        known = await _indexed_paths(session)
         # The library's artists, for reading untagged file names the right
         # way round: one query, and only once there is a new file to read.
         known_artists: frozenset[str] | None = None
@@ -659,17 +664,6 @@ async def index_music_dir() -> dict[str, int]:
                 errors += 1
                 log.warning("library indexer: failed on %s: %s", path, e)
 
-        # Art that changed since the last walk (V059): the file itself
-        # (re-tagged, a new embedded picture) or its album-folder image.
-        # Stats only, each folder listed once; a first reading is recorded
-        # without counting as a change.
-        try:
-            # In a savepoint: a failure here never costs the walk's inserts.
-            async with session.begin_nested():
-                await _sweep_cover_versions(session, known_rows, found)
-        except Exception as e:  # noqa: BLE001 — covers wait for the next walk
-            log.warning("library indexer: couldn't check cover art versions: %s", e)
-
         if inserted > 0:
             # Wake the web dashboard's LISTEN task so the Library / Stats
             # views refetch the moment new rows land — the web "Upload"
@@ -690,6 +684,14 @@ async def index_music_dir() -> dict[str, int]:
         "library indexer: scanned=%d inserted=%d skipped=%d errors=%d",
         scanned, inserted, skipped, errors,
     )
+    # Art that changed since the last walk (V059): the file itself
+    # (re-tagged, a new embedded picture) or its album-folder image. Stats
+    # only, each folder listed once, never a tag read; a first reading is
+    # recorded without counting as a change.
+    try:
+        await _sweep_cover_versions(found, {str(p) for p in added})
+    except Exception as e:  # noqa: BLE001 — covers wait for the next walk
+        log.warning("library indexer: couldn't check cover art versions: %s", e)
     if added:
         # Each room's MPD plays from its own database, which a Windows or
         # network music folder never tells about new files (F-V023).
