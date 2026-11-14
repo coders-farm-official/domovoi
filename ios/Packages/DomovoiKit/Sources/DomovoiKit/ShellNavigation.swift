@@ -49,9 +49,9 @@ public struct NavigationState: Equatable, Sendable {
     /// A Settings section a link asked for and Settings has not taken yet
     /// (`AppShell.kt:305`, Android's `settingsTab`). It is a **key**, not a
     /// section, because that is what a link carries and
-    /// ``SettingsSection/named(_:)`` is what resolves it — including through
-    /// the alias table, which is how a pre-regroup `"connection"` or
-    /// `"satellites"` link still lands.
+    /// ``settingsPlace(of:sharedScreen:)`` is what resolves it — including
+    /// through the alias tables, which is how a pre-regroup `"connection"`,
+    /// `"satellites"` or `"rooms-and-devices"` link still lands.
     public private(set) var settingsTab: String?
 
     public init(path: [Route] = [], settingsTab: String? = nil) {
@@ -91,7 +91,9 @@ public struct NavigationState: Equatable, Sendable {
     /// (`AppShell.kt:312`).
     ///
     /// A route that is really a Settings section (``settingsTabFor(_:)``:
-    /// Rooms and Containers) opens **Settings**, on that section. So Rooms is
+    /// Rooms, Containers and, since the nav regroup, People) opens
+    /// **Settings**, on that section — so a phone bar saved with a People tab
+    /// still opens People, in Settings → Household. So Rooms is
     /// not a destination on this platform either — it is a row inside
     /// Settings that a link can name.
     public mutating func navigate(_ route: Route) {
@@ -211,7 +213,7 @@ public enum ShellWidth: Equatable, Sendable { case compact, regular }
 ///   leave nothing for the content.
 ///
 /// **The iPad is an open question, deliberately left open.** It ships
-/// (`project.yml` targets both families) and Kamron has none to try it on, so
+/// (`project.yml` targets both families) and the owner has none to try it on, so
 /// this is the smallest defensible rule rather than a design: a real iPad
 /// story wants `NavigationSplitView`, the breadcrumb Android's drawer has,
 /// and a decision about where the player goes. Listed for I1-F in the report.
@@ -230,4 +232,13 @@ public func shellLayout(idiom: ShellIdiom, width: ShellWidth) -> ShellLayout {
 /// `testHomeIsTheBrandRowAndNotAListItem` holds it here.
 public func sidebarSections(_ visibility: RouteVisibility) -> (workspace: [Route], system: [Route]) {
     (workspace: workspaceRoutes.filter { $0.visibleOn(visibility) }, system: [.settings, .manual])
+}
+
+/// The sidebar's workspace section, grouped as the dashboard's is — Chat,
+/// then **Media** and **Tools** (``navTree(_:override:defaults:pluginGroups:)``):
+/// the iPad's counterpart of Android's drawer (`AppShell.kt:979-983`,
+/// `GroupedWorkspace`). An iPhone has no sidebar; its grouped surface is
+/// Home's grid (``tileRuns(_:)``).
+public func sidebarTree(_ visibility: RouteVisibility) -> [NavEntry] {
+    navTree(sidebarSections(visibility).workspace)
 }

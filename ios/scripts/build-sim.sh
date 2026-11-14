@@ -17,8 +17,9 @@ Runs `xcodegen generate` and then `xcodebuild build` for the iOS Simulator,
 with CODE_SIGNING_ALLOWED=NO. Agents never sign anything.
 
 Options
-  --destination DEST     an xcodebuild -destination string.
-                         Default: "platform=iOS Simulator,name=iPhone 16"
+  --destination DEST     an xcodebuild -destination string. The default is
+                         generic, so it needs no simulator device to exist.
+                         Default: "generic/platform=iOS Simulator"
   --configuration CONFIG Debug or Release. Default: Debug.
   --help                 this text.
 
@@ -29,7 +30,17 @@ Environment
 USAGE
 }
 
-destination="${DOMOVOI_SIM_DESTINATION:-platform=iOS Simulator,name=iPhone 16}"
+# `generic/platform=iOS Simulator` and NOT a device name, because this
+# script only ever BUILDS. A bare `name=iPhone 16` is resolved by
+# xcodebuild as `OS:latest`, so the moment Xcode gains a newer runtime
+# than that device has a simulator for, the build fails with "Unable to
+# find a device matching the provided destination specifier" and names a
+# device the list plainly shows (measured 2026-11-02: iPhone 16 exists at
+# 18.3.1, the newest runtime was 26.4, and the two never meet). A generic
+# destination needs no device at all, which is what a compile check wants.
+# `test.sh` and `stub_run.sh` do need a real one, and `stub_run.sh`
+# resolves a UDID by name for exactly this reason.
+destination="${DOMOVOI_SIM_DESTINATION:-generic/platform=iOS Simulator}"
 configuration="Debug"
 
 while [ $# -gt 0 ]; do
@@ -51,6 +62,19 @@ esac
 ios_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ios_dir"
 
+# Homebrew is not on a non-interactive ssh PATH (which is /usr/bin:/bin:
+# /usr/sbin:/sbin and nothing else), and the build user's profile does not add
+# it either — so `xcodegen` installed by Homebrew looked uninstalled to every
+# `ssh ... build-sim.sh`. Look where Homebrew puts things before giving up.
+if ! command -v xcodegen >/dev/null 2>&1; then
+	for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+		if [ -x "$brew_bin/xcodegen" ]; then
+			PATH="$brew_bin:$PATH"
+			export PATH
+			break
+		fi
+	done
+fi
 command -v xcodegen >/dev/null 2>&1 || die "xcodegen is not installed. On the Mac: brew install xcodegen"
 command -v xcodebuild >/dev/null 2>&1 || die "xcodebuild is not on PATH. Xcode is not set up for this user yet; see design-notes/IOS-SESSION-START.md, part A2."
 

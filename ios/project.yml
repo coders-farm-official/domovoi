@@ -49,7 +49,7 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: true
 
     # iPhone and iPad (owner answer Q4: iPad ships, Simulator-tested only,
-    # because Kamron has no iPad). Not on Apple-silicon Macs until someone has
+    # because the owner has no iPad). Not on Apple-silicon Macs until someone has
     # actually used it there.
     TARGETED_DEVICE_FAMILY: "1,2"
     SUPPORTS_MACCATALYST: false
@@ -57,24 +57,24 @@ settings:
     SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: false
 
     # Agents only ever build for the Simulator, which needs no signing. The
-    # team is empty here and comes from Kamron's own environment in his own
+    # team is empty here and comes from the owner's own environment in his own
     # script; no certificate, profile or Apple ID is ever in this repository.
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: ""
 
   # The bundle ID is per-configuration on purpose (plan 4.1). A bundle ID
   # registered by one team cannot be used by another, so a development build
-  # signed with Kamron's personal team must never register the real ID: it has
+  # signed with the owner's personal team must never register the real ID: it has
   # to be first registered by the Coders Farm organisation account. Debug —
   # which is what `install-on-phone.sh` builds — therefore carries a throwaway
-  # ID, and only Release, which only Kamron ever signs, carries
+  # ID, and only Release, which only the owner ever signs, carries
   # `com.domovoi.app` (owner answer Q2).
   #
   # To build under some other ID, override it on the command line:
   #   xcodebuild ... DOMOVOI_BUNDLE_ID=org.example.whatever
   configs:
     Debug:
-      DOMOVOI_BUNDLE_ID: org.codersfarm.domovoi.dev.kamron
+      DOMOVOI_BUNDLE_ID: org.codersfarm.domovoi.dev
     Release:
       DOMOVOI_BUNDLE_ID: com.domovoi.app
 
@@ -122,7 +122,7 @@ targets:
         #
         # No entitlements file at all in this batch. Background audio needs
         # only the UIBackgroundModes key below, and the increased-memory-limit
-        # entitlement is spike A0's decision to make, on Kamron's iPhone 14,
+        # entitlement is spike A0's decision to make, on the owner's iPhone 14,
         # with numbers — not ours to guess at.
     info:
       path: Domovoi/Info.plist
@@ -152,7 +152,7 @@ targets:
         # each one because the alert's title is the app's name and people read
         # the sentence, not the title.
 
-        # The I0 gate on Kamron's phone. iOS shows this the first time the app
+        # The I0 gate on the owner's phone. iOS shows this the first time the app
         # touches the local network, and there is no API that says whether it
         # was allowed (TN3179) — a refusal only shows up as a failure. So this
         # sentence is the whole explanation the person gets.

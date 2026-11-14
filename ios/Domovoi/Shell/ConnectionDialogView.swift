@@ -255,13 +255,7 @@ struct ServerPickerPanel: View {
                     }
                 }
                 .disabled(!picker.manualButtonEnabled)
-                .buttonStyle(.borderedProminent)
-                // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-                // a prominent button would fill with the ink and draw
-                // near-black `brandFg` on it at 3.08:1. The fill is the
-                // other token, and 8.49:1 with this label colour.
-                .tint(Color.brand)
-                .foregroundStyle(Color.brandFg)
+                .buttonStyle(BrandFillButtonStyle())
             }
             if let error = picker.manualError {
                 Text(error)
@@ -358,14 +352,213 @@ private struct ServerRow: View {
 
 /// A confirmation drawn as a card over a dim, which is what Android's
 /// `Dialog { DomovoiCard { … } }` is.
+///
+/// ### It has to say it is modal, and it did not
+///
+/// Android's `Dialog` is a window: the screen behind it stops being
+/// reachable. This is a `ZStack` over the screen, so the screen behind it
+/// stayed in the accessibility tree — focusable, swipeable, and read out.
+///
+/// The audit found it (2026-10-30, the `forget-card` sweep) without being
+/// asked about it. With the forget dialog open over Settings → Phones &
+/// browsers it reported two `Contrast failed`, both naming elements *behind*
+/// the card: the Trusted-servers paragraph and a `connected` badge. They were
+/// true readings. Those elements really were sitting under a 35% black scrim
+/// and really were unreadable — which is what a scrim is for, and is only a
+/// finding because they were still being offered to the person as content.
+///
+/// The worse half is what the same tree showed: the panel's own `forget`
+/// control at y=658 and the dialog's destructive `forget` at y=1409, both
+/// live, both labelled `forget`. A person moving by VoiceOver with this
+/// dialog open heard "forget", and then "forget", and one of the two deletes
+/// a server's token and identity without asking again.
+///
+/// `.isModal` was the first answer: VoiceOver ignores everything outside the
+/// element that carries it, so the duplicate control went away with it.
+///
+/// ### `.isModal` was not enough, and the measurement says so
+///
+/// It stops VoiceOver **navigating** out of the card. It leaves everything
+/// behind the card in the accessibility tree and rendered under the scrim,
+/// which is what Apple's audit reports. With the Alerts explain card up over
+/// Home — the same `ZStack`, with `.isModal` and with
+/// `screen.accessibilityHidden(…)` beside it — the audit still named
+/// `domovoi / home`, `127.0.0.1:6601`, `unverified`, `Kitchen` and the four
+/// phone-bar labels, `Contrast failed` and `Contrast nearly passed`, every one
+/// a view behind the 35% scrim; and the tree attachment listed the whole of
+/// Home as the card's siblings
+/// (train S009, `overnight-trains/S009/Alerts/att/testAlerts_TurningOnAlertsExplainsItselfFirst/`).
+///
+/// That item fixed its own card by making it a `fullScreenCover`
+/// (`AlertsHintRowView.swift:254-273`), which worked: `fullScreenCover` is
+/// `UIModalPresentationStyle.fullScreen`, and UIKit takes the presenting
+/// controller's views **out of the window** once the transition ends. There is
+/// then nothing behind the card to audit, to read at 35%, or to reach with
+/// VoiceOver. `.accessibilityHidden` could not do that from inside a
+/// `NavigationStack` destination, because it is a SwiftUI attribute and does
+/// not cross into the UIKit controller hosting the stack's content.
+///
+/// So the shape moves here, where all four dialogs share it (owner answer 6:
+/// "`DialogCard` becomes a presentation, shared fix for all four dialogs").
+/// **The call-site API is unchanged** — `DialogCard { … }` still — because its
+/// seven uses are in six files this unit does not own.
+///
+/// Three things are deliberate:
+///
+///  * **Outside the cover the host draws nothing** (``hostOfNothing``). It has
+///    to stay in the hierarchy for the presentation to live, and it must draw
+///    and measure nothing: a call site puts this in a `ZStack` beside the
+///    screen, not in place of it.
+///  * **No `.presentationBackground(.clear)`.** A transparent full-screen
+///    cover is the one case UIKit does *not* take the presenter's views out of
+///    the window for, so it would hand back the hole this change closes, and
+///    show black rather than the screen if it did not. The 35% dim stays
+///    inside the cover instead — it is what the Alerts card already ships and
+///    what the S009 train measured clean.
+///  * **The card is still a `ScrollView`, and still `.isModal`.** The scroll
+///    view is why the card is reachable at AX5 (`RouteScreen.swift:247-249`),
+///    and the trait is belt and braces for a future SwiftUI that presents over
+///    the window rather than in place of it.
+///
+/// `.constant(true)`: the host exists only while its call site's `if` holds, so
+/// the call site's own condition is the binding, and nothing inside the cover
+/// can dismiss it behind the call site's back — a swipe cannot dismiss a
+/// `fullScreenCover` either.
+///
+/// ### A presentation that does not arrive draws the card anyway
+///
+/// Review 1's must finding, and it is a real one: `AlertsHintLifecycle`
+/// presents ``AlertsPermissionCardView`` in a `fullScreenCover` of its own
+/// (`AlertsHintRowView.swift:273`) and that view's whole body is a
+/// `DialogCard`, so the Alerts card is a cover **inside** a cover. If SwiftUI
+/// drops an inner presentation requested during the outer transition, the
+/// outer cover is left showing this host — and a host that drew nothing, over
+/// an opaque presentation background, is a blank screen with no control on it
+/// and no dismiss gesture.
+///
+/// So the host is not unconditionally nothing. ``coverAppeared`` is set by the
+/// cover's own content, and if it has not been set by the time ``lostAfter``
+/// has passed, the card is drawn **inline** — the exact shape every one of
+/// these seven call sites shipped before answer 6. The failure mode that
+/// cannot happen any more is the dead end: whatever becomes of the
+/// presentation, the card and its buttons are on the screen.
+///
+/// It is a deadline and not a cleverer test because "did the presentation
+/// arrive" is a question about time: nothing in SwiftUI reports a dropped
+/// presentation, and `@Environment(\.isPresented)` answers true for a pushed
+/// `NavigationStack` destination as well as a sheet, which is where
+/// `RouteScreen.swift:273`'s card lives. Normal presentations take about a
+/// third of a second, so a second and a half is quiet in every case that
+/// works.
+///
+/// **What the fallback costs, which "a card late" did not say.** Inline is the
+/// pre-answer-6 shape exactly: the 35% scrim over the page, with the whole
+/// screen still behind it in the accessibility tree and still being sampled
+/// through the scrim. So when it fires it hands back the contrast and tree
+/// findings answer 6 removed — it trades a hard, visible failure (a blank
+/// screen, a picture attached to a train) for an intermittent accessibility
+/// regression that only an audit on that screen would notice (review 2). That
+/// is the better trade for a person holding the phone and it is not free, so
+/// it is written here, in ``DialogPresentationGuard`` and in DECISIONS §1
+/// rather than left as a card arriving late. The way not to pay it at all is
+/// the one-line Alerts fix the same §1 calls a merge blocker: with no cover
+/// inside a cover there is no presentation to drop.
+///
+/// **This does not make the Alerts fix optional.** One line in
+/// `AlertsHintRowView.body` ends the nesting itself, that file is not this
+/// unit's, and
+/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §1 says it blocks
+/// the merge. This is the guard under it, not a replacement for it.
 struct DialogCard<Content: View>: View {
 
     @ViewBuilder let content: Content
 
+    /// Set by the cover's own content the first time it appears. State, not a
+    /// binding: the question is about this host's presentation and nothing
+    /// outside it has an answer.
+    @State private var coverAppeared = false
+
+    /// Set when the deadline passed with no cover. Kept separately from
+    /// ``coverAppeared`` so a cover that arrives late still takes the screen —
+    /// it is opaque and on top — rather than racing one flag.
+    @State private var presentationLost = false
+
+    /// How long the presentation gets before the card is drawn inline —
+    /// ``DialogPresentationGuard/lostAfterNanoseconds``, which is where the
+    /// number and the reason for it are written and where `ShellFoldTests`
+    /// reads them.
+    private static var lostAfter: UInt64 { DialogPresentationGuard.lostAfterNanoseconds }
+
     var body: some View {
+        ZStack {
+            hostOfNothing
+            // **The rule is ``DialogPresentationGuard``, not an `&&` here.**
+            // Review 2: this guard had no test on any path, and what it
+            // reproduces when it fires — the page still behind the card, which
+            // is the pre-answer-6 shape — is the thing
+            // `testShell_ADialogLeavesNothingBehindIt` forbids. The decision is
+            // a value in the package now, where both paths have a test today,
+            // and that case asserts the fallback did **not** fire by looking
+            // for ``Self/inlineFallbackIdentifier``.
+            if DialogPresentationGuard.cardIsInline(
+                coverAppeared: coverAppeared,
+                deadlinePassed: presentationLost
+            ) {
+                // `.contain` and not a bare identifier: an identifier on a
+                // `ZStack` that is not itself an accessibility element can be
+                // dropped from the tree, and a marker that is sometimes in the
+                // tree is worse than none. A container keeps the card's own
+                // leaves reachable — the card is what a person is reading —
+                // and gives the marker an element of its own.
+                card
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(Self.inlineFallbackIdentifier)
+            }
+        }
+        .fullScreenCover(isPresented: .constant(true)) {
+            card.onAppear { coverAppeared = true }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: Self.lostAfter)
+            // A cancelled sleep means the dialog closed while we waited, and
+            // writing state into a view that is going away is how a SwiftUI
+            // warning becomes a habit.
+            guard !Task.isCancelled else { return }
+            if !coverAppeared { presentationLost = true }
+        }
+    }
+
+    /// The identifier the **inline fallback** carries, and nothing else does
+    /// — ``DialogPresentationGuard/inlineFallbackIdentifier``.
+    ///
+    /// It lives in the package because a **generic** type cannot hold a static
+    /// stored property, and because the reason for it belongs beside the rule:
+    /// a dropped presentation cannot be provoked from a UI case, so this is
+    /// the other half of the reading. Every case that asserts there is nothing
+    /// behind a dialog also asserts this is absent, which is what says the
+    /// case measured the presentation and not the fallback. Without it, a
+    /// branch that fired every time would show up only as a contrast finding
+    /// somebody else's screen is blamed for.
+    private static var inlineFallbackIdentifier: String {
+        DialogPresentationGuard.inlineFallbackIdentifier
+    }
+
+    /// The host: it takes no hits and says nothing, so the `ZStack` a call
+    /// site puts this in is the screen plus a presentation.
+    private var hostOfNothing: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    /// The card itself — the cover's content, and the inline fallback. One
+    /// property rather than two copies, so the thing a person sees cannot
+    /// differ between the path that works and the path that catches it.
+    private var card: some View {
         ZStack {
             Color.black.opacity(0.35)
                 .ignoresSafeArea()
+                .accessibilityHidden(true)
             ScrollView {
                 content
                     .padding(20)
@@ -373,6 +566,11 @@ struct DialogCard<Content: View>: View {
                     .background(.background, in: RoundedRectangle(cornerRadius: 14))
                     .padding(20)
             }
+            // **The reason this type exists rather than a `ZStack` at each
+            // call site.** Every dialog in the app gets the trait — and now
+            // the presentation — from here, so a new one cannot be added
+            // without them.
+            .accessibilityAddTraits(.isModal)
         }
     }
 }
@@ -411,17 +609,15 @@ struct TrustServerCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
+                // Android's `OutlinedButton` (`ServerPicker.kt:395`): no
+                // fill, so `cancel` is the ink on the card and not on a wash
+                // of itself (that `.bordered` chip is 4.38:1 on white — unit
+                // mx-ink, InkButtonStyles.swift; not opened by any case here:
+                // this sheet starts a LAN sweep).
                 Button(ShellStrings.trustCancel, action: onCancel)
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(InkOutlineButtonStyle())
                 Button(ShellStrings.trustConfirm, action: onConfirm)
-                    .buttonStyle(.borderedProminent)
-                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-                    // a prominent button would fill with the ink and draw
-                    // near-black `brandFg` on it at 3.08:1. The fill is the
-                    // other token, and 8.49:1 with this label colour.
-                    .tint(Color.brand)
-                    .foregroundStyle(Color.brandFg)
+                    .buttonStyle(BrandFillButtonStyle())
             }
         }
     }
@@ -442,6 +638,20 @@ struct ForgetServerCard: View {
                 .foregroundStyle(Color.errInk)
             Text(ask.address)
                 .font(.title3)
+                // **Apple's audit: "the accessibilityLabel of this element is
+                // not human-readable"** (2026-10-30). It is the one place in
+                // the app where an address is a bare line of text with
+                // nothing beside it saying what it is — the pill and the
+                // server rows are inside controls that name themselves — so
+                // VoiceOver announced `127.0.0.1:6601` and no more. The text
+                // on screen is unchanged: it is still the thing a person
+                // compares with the dashboard character by character.
+                // **`Text clipped` at AX5** (2026-10-30), which is what the
+                // audit reported for this element once it had a readable
+                // label: 286x131 points of an address that wraps, with no
+                // `fixedSize`, while every sibling on the card has one.
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(forgetServerAddressLabel(ask.address))
             // The prose in prose and the keys in monospace: §6.4 wants the
             // fingerprints comparable with the dashboard, and the paragraph
             // readable. Both halves come from
@@ -459,21 +669,32 @@ struct ForgetServerCard: View {
             }
             HStack {
                 Spacer()
+                // Android's `OutlinedButton` (`ForgetServer.kt:100`), for the
+                // trust card's reason above (unit mx-ink).
                 Button(forgetServerCancel, action: onCancel)
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
-                // **No brand colour here.** A destructive role draws itself
-                // red whatever the tint is, and forgetting a server is the
-                // one button on this sheet that should not look like the
-                // friendly one. `--danger` is its own token in
-                // `colors_and_type.css` for the same reason.
+                    .buttonStyle(InkOutlineButtonStyle())
+                // **Red, as Android's is** (`ForgetServer.kt:101-104`, a
+                // filled `Button` on `colors.err`): forgetting a server is
+                // the one button on this sheet that should not look like the
+                // friendly one, and `--danger` is its own token in
+                // `colors_and_type.css` for that reason.
+                //
+                // **What stood here was amber with a white label, 2.05:1** —
+                // train I011's screenshot samples `(255,255,255)` on
+                // `(242,166,24)`, and Apple's audit named `forget` for
+                // "Contrast failed" on every train from I004 on. It was a
+                // `.borderedProminent` with `.tint(Color.brand)` and no label
+                // colour, under a comment saying a destructive role "draws
+                // itself red whatever the tint is" (the explicit tint won: the
+                // fill was amber) and that the pair was 8.49:1 "with this
+                // label colour" (there was none, so SwiftUI drew white).
+                //
+                // ``DangerFillButtonStyle`` draws ``Color/dangerFg`` on
+                // ``Color/danger`` itself, 5.91:1 light and 6.53:1 dark — not
+                // Android's `brandFg` on `#EA3C3F`, which is 4.33:1 light; the
+                // style's doc comment has the comparison (unit ix-fill).
                 Button(forgetServerConfirm, role: .destructive, action: onConfirm)
-                    .buttonStyle(.borderedProminent)
-                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-                    // a prominent button would fill with the ink and draw
-                    // near-black `brandFg` on it at 3.08:1. The fill is the
-                    // other token, and 8.49:1 with this label colour.
-                    .tint(Color.brand)
+                    .buttonStyle(DangerFillButtonStyle())
             }
         }
     }

@@ -626,6 +626,142 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
+    /// **Picking a server in the connection dialog has to move the app.** It
+    /// did not, and the owner found it on the first install, on a real phone, on
+    /// his own network — the one path no stub house can test.
+    ///
+    /// What he saw: the sweep found the house, he tapped it, the row said
+    /// `selected` — and nothing else changed. The dialog still said
+    /// `no server yet · pick one below`, `this phone` still said `in use`,
+    /// the tabs were still the local-media ones, and the top bar still
+    /// offered `connect`. Tapping `your Domovoi` did nothing either, because
+    /// ``ServerChoice/isEnabled`` is false for `.noServer` and the card
+    /// disables itself.
+    ///
+    /// The store was right the whole time. ``ServerTrustGate/overStore(_:didConnect:)``
+    /// writes trust, the known row, the address and `preferLocal = false`,
+    /// and ``ServerPickerModel/rows`` reads `store.serverURL` live — which is
+    /// exactly why the row said `selected` while everything else disagreed.
+    /// What nothing did was tell ``ShellModel``, whose ``ShellModel/inputs``
+    /// is a snapshot taken by ``AppContainer/shellInputs()`` and refreshed
+    /// only by ``ShellModel/refresh()``. The picker never calls it, and
+    /// ``ShellModel/dismissSheet()`` only clears the sheet.
+    ///
+    /// So the app sat pointed at nothing until something unrelated refreshed
+    /// it — backgrounding and coming back, or a reachability verdict landing.
+    ///
+    /// **Third time on this track for the same shape**: a write that lands in
+    /// the store with nothing pulling it back out
+    /// (``testAThrottleRaisesTheCardWithNobodyCallingRefresh``, and the
+    /// satellite onboarding bug before it). There is no `refresh()` in this
+    /// test, deliberately.
+    func testPickingAServerMovesTheAppWithNobodyCallingRefresh() async {
+        let rig = Rig(serverURL: "")
+        XCTAssertEqual("", rig.model.inputs.serverURL, "the rig starts with nothing saved")
+
+        // Exactly what the dialog does: the gate the picker builds, over the
+        // same store, for a server this phone already trusts.
+        let gate = ServerTrustGate.overStore(rig.store)
+        rig.store.trustServer(server, identity: nil)
+        XCTAssertTrue(
+            gate.select(url: server, name: "Domovoi"),
+            "an already-trusted server connects without a trust dialog"
+        )
+
+        let moved = await rig.settleVerdict {
+            rig.model.inputs.serverURL == server && !rig.model.inputs.preferLocal
+        }
+        XCTAssertTrue(
+            moved,
+            "picking a server left the shell at serverURL='\(rig.model.inputs.serverURL)' "
+                + "preferLocal=\(rig.model.inputs.preferLocal); the store had it all along"
+        )
+        XCTAssertTrue(
+            rig.model.serverChoice.isEnabled,
+            "and `your Domovoi` has to be tappable, or there is no way back by hand"
+        )
+        rig.model.stop()
+    }
+
+    /// **A throttle has to raise the card by itself.** It could not.
+    ///
+    /// Every test that has ever seen the `.waiting` card wrote
+    /// `noteWait(…)` and then `rig.model.refresh()` on the next line, so the
+    /// card was always reached by a pull the app does not make. `refresh()`
+    /// is fired by a server switch, a token arriving, a reachability verdict,
+    /// a wait **already** counting down, and a foreground return. A `429` on
+    /// an ordinary read is none of those.
+    ///
+    /// So the state was unreachable in the running app: the throttle was
+    /// observed, the wait was stored, the countdown that keeps the card alive
+    /// was ready — and nothing put the card up. The sweep of 2026-10-30 found
+    /// it by trying to audit the card against a stub house that answers 429
+    /// and never finding it on screen. There is no `refresh()` in this test,
+    /// deliberately.
+    func testAThrottleRaisesTheCardWithNobodyCallingRefresh() async {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        rig.container.tokenHealth.observe(
+            url: server,
+            sent: "household-abc",
+            current: "household-abc",
+            status: 429,
+            // The core's own wording (`admin_auth.py:1892`), because
+            // `isDeviceTokenThrottle` is what decides whether this is about
+            // the token at all.
+            body: #"{"detail":"too many wrong X-Device-Token values from this address — retry in 30s"}"#,
+            retryAfter: "30"
+        )
+        let up = await rig.settleVerdict {
+            if case .tokenTroubleCard(.waiting) = rig.model.screen { return true }
+            return false
+        }
+        XCTAssertTrue(
+            up,
+            "a 429 about the household token left the screen at \(rig.model.screen); "
+                + "nothing re-derived the shell, so the card had no way to appear"
+        )
+        rig.model.stop()
+    }
+
+    /// The same for a **refused** token, which arrives the same way: on a
+    /// read, from a server, with nothing else happening.
+    ///
+    /// **Both of these fail without the hook**, measured by taking the
+    /// subscription out and running them: `a refused token left the screen at
+    /// workspace`, `a 429 … left the screen at workspace`. That is worth
+    /// writing down, because the first draft of this comment said a refusal
+    /// was reachable anyway, since a 401 also sets the client's
+    /// `pairingRequired` — and `pairingRequired` is read by
+    /// ``AppContainer/shellInputs()``, which is the same *pull* nothing was
+    /// making. The Simulator did show the pairing screen for a refused token,
+    /// so the claim looked true; what it had was a reachability verdict
+    /// landing after the 401 and refreshing the shell for its own reasons.
+    /// Timing, not a mechanism.
+    func testARefusalRaisesItsCardWithNobodyCallingRefresh() async {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        rig.container.tokenHealth.observe(
+            url: server,
+            sent: "household-abc",
+            current: "household-abc",
+            status: 401,
+            body: #"{"detail":"X-Device-Token or admin session required"}"#,
+            retryAfter: nil
+        )
+        let up = await rig.settleVerdict {
+            if case .tokenTroubleCard(.notRecognised) = rig.model.screen { return true }
+            return false
+        }
+        XCTAssertTrue(
+            up,
+            "a refused token left the screen at \(rig.model.screen)"
+        )
+        XCTAssertTrue(
+            rig.store.isTokenRejected(server),
+            "and the refusal was written down, not just drawn"
+        )
+        rig.model.stop()
+    }
+
     /// A **refused** token with a wait is not tried again, so its card stays
     /// — but `try the old token again` has to appear when the wait ends,
     /// because that is the moment the button can do what it says. Nothing

@@ -16,6 +16,12 @@ struct WorkspaceView: View {
     @Bindable var model: ShellModel
     @Environment(\.horizontalSizeClass) private var width
 
+    /// Read here and not only inside ``ShellScrollAwayChrome`` because this
+    /// view decides whether ``ShellTopBar`` is drawn at all: at the
+    /// accessibility sizes the header is the navigation bar's large title and
+    /// a band above the stack as well would be the header twice.
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     /// Seeded once and only once: a `NavigationStack` whose path is refilled
     /// behind the person's back cannot be navigated out of.
     @State private var seededPush = false
@@ -39,14 +45,27 @@ struct WorkspaceView: View {
     /// waiting would otherwise consume the one push and leave the test
     /// watching for a screen that never arrives. Pushing twice is harmless —
     /// ``NavigationState/go(_:)`` refuses a move to the open route.
+    ///
+    /// ``AuditStrip/seededSettingsTab`` is the same push by a Settings
+    /// **key** rather than a route — `openSettingsTab`, which is what a link
+    /// naming a section or a group does — so a case can hand Settings an old
+    /// key (`rooms-and-devices`) that no route names. It wins over a seeded
+    /// route when a launch passes both.
     private func seedPushIfAsked() async {
-        guard !seededPush, let route = AuditStrip.seededRoute else { return }
+        guard !seededPush else { return }
+        let tab = AuditStrip.seededSettingsTab
+        let route = AuditStrip.seededRoute
+        guard tab != nil || route != nil else { return }
         if let delay = AuditStrip.pushDelay {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
         guard !seededPush else { return }
         seededPush = true
-        model.navigate(route)
+        if let tab {
+            model.openSettingsTab(tab)
+        } else if let route {
+            model.navigate(route)
+        }
     }
 
     @ViewBuilder private var layout: some View {
@@ -103,11 +122,28 @@ struct WorkspaceView: View {
     /// The navigation bar keeps its back button, below our bar rather than
     /// inside it. On the root there is no title and no toolbar, so it
     /// collapses to nothing and Home looks as it did.
+    ///
+    /// ### At the accessibility sizes there is no bar here at all
+    ///
+    /// Owner answer 29. The band measured 300 of 852 points at AX5 and it
+    /// cannot scroll away from up here — it is above the `NavigationStack`,
+    /// not inside any page's scroll view. So at those sizes it is not drawn,
+    /// and ``ShellScrollAwayChrome`` puts the same two things inside the stack
+    /// where UIKit scrolls them away for us: the breadcrumb as a large
+    /// navigation title, the pill as a toolbar item. Below them nothing
+    /// changes.
     private var stack: some View {
         VStack(spacing: 0) {
-            if AuditStrip.active != .topBar {
+            // **The question is asked in `DomovoiKit`, not here.** Review 2
+            // sabotaged both halves of answer 29 in the view bodies — the
+            // size gate off this `if`, the branch off
+            // ``ShellScrollAwayChrome`` — and nothing in the repository
+            // caught it: `pkgtest.sh` builds the package only. So the rule is
+            // ``ShellHeaderFold``, which `ShellFoldTests` reads today, and
+            // these two bodies draw its answer.
+            if headerFold.drawsBarAboveTheStack {
                 ShellTopBar(
-                    leading: "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())",
+                    leading: crumb,
                     pill: model.chrome.pill,
                     onPill: { model.openConnection() }
                 ) {
@@ -116,11 +152,93 @@ struct WorkspaceView: View {
             }
             NavigationStack(path: $model.path) {
                 stackRoot
+                    // Applied to the stack's root here rather than inside
+                    // ``stackRoot``'s `switch`, so that every ``AuditStrip``
+                    // variant gets the same chrome as the shell it is a
+                    // variant of — except ``AuditStrip/topBar``, whose whole
+                    // job is to take the header away.
+                    .shellScrollAwayChrome(
+                        // **``startRoute`` and not the open route.** The root
+                        // is Home, whatever is pushed on top of it, and a
+                        // `UINavigationBar` builds the pushed screen's back
+                        // button and VoiceOver's "back to …" out of the
+                        // *root's* navigation item: with the open route here,
+                        // the control for leaving Videos was named after
+                        // Videos, and the root's own large title was wrong
+                        // through every push and pop animation (review 1, S1).
+                        crumb: screenTitle(for: startRoute),
+                        pill: model.chrome.pill,
+                        onPill: { model.openConnection() },
+                        drawn: AuditStrip.active != .topBar
+                    )
                     .navigationDestination(for: Route.self) { route in
                         destination(route)
                     }
             }
         }
+    }
+
+    /// The breadcrumb, written once: ``ShellTopBar``'s leading string below
+    /// the accessibility sizes and the navigation title above them, so the two
+    /// chromes cannot drift into saying different things about where a person
+    /// is.
+    ///
+    /// ``ShellTopBar``'s copy is the **open** route, which is what Android's
+    /// `Topbar` draws (`AppShell.kt:1021`): one bar above one stack, saying
+    /// where the person is. Each screen *inside* the stack gets its own
+    /// (``crumb(for:)``), because a navigation item belongs to the screen that
+    /// carries it and not to the shell.
+    private var crumb: String { crumb(for: model.navigation.route) }
+
+    /// Which shape the header takes here, from ``ShellHeaderFold`` — the one
+    /// place answer 29's rule is written, and the one a package test can read.
+    /// ``AuditStrip/topBar`` is the variant with no header at all.
+    private var headerFold: ShellHeaderFold {
+        ShellHeaderFold.forHeader(
+            drawn: AuditStrip.active != .topBar,
+            isAccessibilitySize: typeSize.isAccessibilitySize
+        )
+    }
+
+    /// One screen's breadcrumb. Taken apart from ``crumb`` by review 1's S1:
+    /// one value handed to both the stack's root and its destinations is one
+    /// value too few.
+    private func crumb(for route: Route) -> String {
+        "\(ShellStrings.homeCrumb) / \(route.label.lowercased())"
+    }
+
+    /// One screen's **navigation title** at the accessibility sizes: the
+    /// route's own label, and not ``crumb(for:)``.
+    ///
+    /// ### The breadcrumb did not fit, and the picture says so
+    ///
+    /// A `UINavigationBar` large title is one line, and UIKit truncates what
+    /// does not fit instead of wrapping. Train I003 photographed it at AX5:
+    /// `domovoi / vi…` on a pushed Videos
+    /// (`overnight-trains/I003/ALL/att/`
+    /// `testShell_TheHeaderScrollsAwayOnAPushedScreen/`
+    /// `shell-videos-ax5-after-a-swipe…png`) and `domovoi / h…` on Home — an
+    /// ellipsis drawn on the screen, with Apple's audit reporting "Text
+    /// clipped" against each. The trees agree: the label is clamped to
+    /// whatever is left beside the toolbar pill (301.3 points for
+    /// `domovoi / music` against a 393-point window).
+    ///
+    /// `minimumScaleFactor` is rejected here as everywhere else, and UIKit
+    /// gives no way to wrap a large title. So the title is shortened, which
+    /// is the answer ``ShellScrollAwayChrome``'s own note registered before
+    /// any of this was measured. Every route's label is ten characters or
+    /// fewer (`Route.label`), so each fits that width at AX5 with room.
+    ///
+    /// **Only the title changes.** ``ShellTopBar`` keeps the full breadcrumb
+    /// at every size below the accessibility ones (``crumb``), and the
+    /// toolbar pill still carries the server's address, so nothing that
+    /// named the house has stopped naming it.
+    ///
+    /// It is also what the pushed screen's back button is built from, so
+    /// VoiceOver now says "back to home" where it said "back to domovoi /
+    /// home" — shorter, and the same place.
+    private func screenTitle(for route: Route) -> String {
+        route.label.lowercased()
     }
 
     /// The stack's root. ``AuditStrip/root`` is the only way to audit a pushed
@@ -159,6 +277,25 @@ struct WorkspaceView: View {
                 RouteScreen(model: model, route: route)
             }
         }
+        // The pushed screen's own chrome: at the accessibility sizes this is
+        // where the breadcrumb and the pill are, because up above the stack
+        // they cannot scroll away. **No per-screen file changes** — every
+        // pushed screen in the app arrives through this one function.
+        //
+        // `route`, the destination's own argument, and not
+        // ``ShellModel/navigation``'s: they are the same screen while this one
+        // is on top, and they are **not** the same while a deeper screen is
+        // pushed over it — this title is what that screen's back button will
+        // be named after.
+        .shellScrollAwayChrome(
+            crumb: screenTitle(for: route),
+            pill: model.chrome.pill,
+            onPill: { model.openConnection() },
+            drawn: AuditStrip.active != .topBar
+        )
+        // The `navBar` variant hides the bar the chrome above now lives in,
+        // which is what that variant is for: it takes one piece of the shell
+        // away, and at the accessibility sizes the bar *is* the header.
         if AuditStrip.active == .navBar {
             screen.toolbar(.hidden, for: .navigationBar)
         } else {
@@ -191,6 +328,13 @@ enum AuditStrip: String {
     /// ``ShellTopBar`` — the breadcrumb and the connection pill. Roots have
     /// it too, so if this is the answer the eight are an *interaction* with
     /// being pushed rather than the bar's own defect.
+    ///
+    /// **It means "the shell without its header", not "without that one
+    /// view".** Since owner answer 29 the header is ``ShellTopBar`` below the
+    /// accessibility sizes and ``ShellScrollAwayChrome``'s large title and
+    /// toolbar pill above them, so this variant takes whichever of the two
+    /// this launch would have drawn (`stack`, `destination(_:)`). Without
+    /// that it was the control at AX5, measuring the same number twice.
     case topBar
     /// ``PhoneBarView`` — four tabs, each an icon and a caption. Eight
     /// leaves, which is a suspicious coincidence, and it is the one piece
@@ -200,6 +344,11 @@ enum AuditStrip: String {
     /// once already at 8 by hand; kept as the harness's control, so a run
     /// where *this* one moves means the harness is wired differently from
     /// that attempt rather than that the answer changed.
+    ///
+    /// **At the accessibility sizes it takes the header with it**, because
+    /// since answer 29 the header lives in that bar. So at AX5 this variant
+    /// removes two pieces and ``topBar`` removes one; a run that compares the
+    /// two has to read it that way (review 1, N5).
     case navBar
     /// The stack's **root**, replaced by nothing. Home stays mounted
     /// underneath a push, so its views are the only thing a pushed screen
@@ -257,6 +406,18 @@ enum AuditStrip: String {
         #endif
     }
 
+    /// A Settings key to open once the workspace is up, through
+    /// ``ShellModel/openSettingsTab(_:)`` — a section's key, a group's, or an
+    /// old one (`rooms-and-devices`). DEBUG-only, read once, like
+    /// ``seededRoute``.
+    static var seededSettingsTab: String? {
+        #if DEBUG
+        return value(after: "-domovoi-audit-settings")
+        #else
+        return nil
+        #endif
+    }
+
     /// Seconds to wait before the seeded push, so that the root has drawn
     /// before anything covers it. Nil means push on the first frame, which is
     /// what produced a run of zeroes that meant nothing.
@@ -285,12 +446,25 @@ enum AuditStrip: String {
 /// The sidebar's two sections (``sidebarSections(_:)``). Home is the brand
 /// row above them and never a list item, as on the web desktop and in
 /// Android's drawer.
+///
+/// **The workspace is grouped** since the nav regroup (``sidebarTree(_:)``):
+/// Chat, then **Media** and **Tools**, each a row that opens and shuts in
+/// place with its screens under it — Android's drawer
+/// (`NavGroupsUi.kt`, `GroupedWorkspace`). Which groups are open is this
+/// device's (``NavGroupsOpen``, kept in `UserDefaults` as Android keeps it in
+/// Prefs): Media starts open, and arriving on a screen opens the group holding
+/// it, as the web sidebar does. People is not here: it is Settings →
+/// Household.
 struct SidebarList: View {
 
     let model: ShellModel
 
+    @AppStorage(NavGroupsOpen.storageKey) private var openRaw = ""
+
     var body: some View {
         let sections = sidebarSections(model.visibility)
+        let tree = navTree(sections.workspace)
+        let open = NavGroupsOpen.decode(openRaw)
         List {
             Button {
                 model.navigate(.home)
@@ -304,20 +478,64 @@ struct SidebarList: View {
             }
             .accessibilityLabel(ShellStrings.homeLabel)
             Section(ShellStrings.drawerWorkspace) {
-                ForEach(sections.workspace, id: \.self) { route in
-                    SidebarRow(route: route, selected: model.navigation.route == route) {
-                        model.navigate(route)
+                ForEach(tree, id: \.self) { entry in
+                    switch entry {
+                    case .item(let route):
+                        row(route)
+                    case .group(let group, let routes):
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { NavGroupsOpen.isOpen(group, open) },
+                                set: { shown in
+                                    guard shown != NavGroupsOpen.isOpen(group, open) else { return }
+                                    openRaw = NavGroupsOpen.encode(NavGroupsOpen.toggled(group, open))
+                                }
+                            )
+                        ) {
+                            ForEach(routes, id: \.self) { route in row(route) }
+                        } label: {
+                            groupHeader(group, open: NavGroupsOpen.isOpen(group, open), routes: routes)
+                        }
                     }
                 }
             }
             Section(ShellStrings.drawerSystem) {
-                ForEach(sections.system, id: \.self) { route in
-                    SidebarRow(route: route, selected: model.navigation.route == route) {
-                        model.navigate(route)
-                    }
-                }
+                ForEach(sections.system, id: \.self) { route in row(route) }
             }
         }
+        // Arriving on a screen opens the group that holds it, and so does
+        // the tree changing under the open screen — a plugin arriving makes a
+        // one-item group a real one (`NavGroupsOpen.openedFor`, Android's
+        // `LaunchedEffect(route, tree)`, keyed on both).
+        .onAppear { openGroupHolding(model.navigation.route) }
+        .onChange(of: model.navigation.route) { _, route in openGroupHolding(route) }
+        .onChange(of: tree) { _, _ in openGroupHolding(model.navigation.route) }
+    }
+
+    /// A group's header. **Shut while it holds the open page, it is lit**, as
+    /// that page's row would be (`NavGroupHeader`, `NavGroupsUi.kt:72-90`):
+    /// the brand ink and the selected trait. Android also washes the row in
+    /// `brandSoft`; this app has no such token and a new fill would be a
+    /// colour nobody has measured, so the ink carries it — ``Color/brandInk``
+    /// is the measured text ink.
+    private func groupHeader(_ group: NavGroupInfo, open: Bool, routes: [Route]) -> some View {
+        let lit = !open && routes.contains(model.navigation.route)
+        return Label(group.label, systemImage: group.systemImage)
+            .foregroundStyle(lit ? Color.brandInk : Color.primary)
+            .fontWeight(lit ? .semibold : .regular)
+            .accessibilityAddTraits(lit ? .isSelected : [])
+    }
+
+    private func row(_ route: Route) -> some View {
+        SidebarRow(route: route, selected: model.navigation.route == route) {
+            model.navigate(route)
+        }
+    }
+
+    private func openGroupHolding(_ route: Route) {
+        let now = NavGroupsOpen.decode(openRaw)
+        let next = NavGroupsOpen.openedFor(route, tree: sidebarTree(model.visibility), state: now)
+        if next != now { openRaw = NavGroupsOpen.encode(next) }
     }
 }
 

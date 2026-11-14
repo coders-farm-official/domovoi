@@ -128,9 +128,27 @@ struct HomeAttentionView: View {
                     // the tap target rather than just the text in it.
                     .frame(minHeight: state.rowMinHeight, alignment: .leading)
                     .contentShape(.rect)
-                    .accessibilityElement(children: .ignore)
+                    // **`accessibilityLabel` alone, and never
+                    // `accessibilityElement(children: .ignore)` on a
+                    // `Button`.** The `.ignore` was here to stop the dot, the
+                    // sentence and the `3h ago` being three stops; what it
+                    // actually did was make SwiftUI mint a *new* element
+                    // around a view that was already one, leaving the Button
+                    // inside it with the identical label. Train I004's kept
+                    // hierarchy for `testNews_PassesApplesAccessibilityAudit`
+                    // holds both of them — `Button, 0x10f86d510,
+                    // {{32.0, 258.7}, {329.0, 44.0}}, label: 'study is
+                    // offline …'` wrapping `Button, 0x10fec69e0` at the same
+                    // frame with the same words — so VoiceOver stopped on
+                    // every `needs attention` row twice and the `.ignore`
+                    // ignored nothing.
+                    //
+                    // A `Button` already merges its label content into one
+                    // element, so relabelling it is the whole job, the way
+                    // `Files/FileRowView.swift:54-68` does it. `.isButton`
+                    // went with the `.ignore`: it was only ever there because
+                    // the minted element was not a button, and this one is.
                     .accessibilityLabel(state.spokenRow(row, nowMs: nowMs))
-                    .accessibilityAddTraits(.isButton)
             }
             // Both of these live **inside** the rows branch on Android
             // (`:337-339`), which is why ``HomeAttentionState`` answers false

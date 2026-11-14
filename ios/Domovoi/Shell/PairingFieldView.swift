@@ -60,13 +60,7 @@ struct CheckedPairingFieldView: View {
                     Task { await field.submit() }
                 }
                 .disabled(!field.canSubmit)
-                .buttonStyle(.borderedProminent)
-                // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-                // a prominent button would fill with the ink and draw
-                // near-black `brandFg` on it at 3.08:1. The fill is the
-                // other token, and 8.49:1 with this label colour.
-                .tint(Color.brand)
-                .foregroundStyle(Color.brandFg)
+                .buttonStyle(BrandFillButtonStyle())
             }
             if let hint = field.hint {
                 Text(hint)

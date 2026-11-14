@@ -89,6 +89,17 @@ final class ShellStringsTests: XCTestCase {
         "ui/components/Format.kt",
         // Part 3a: the toasts of the four writes, which live with the calls.
         "ui/screens/home/HomeIo.kt",
+        // I1-H part 1: Chat. All six files, because Chat's words are spread
+        // across all six — the list's in `ChatHome.kt`, the constants in
+        // `ChatPlace.kt`, the conversation's in `ChatScreen.kt`, the server
+        // place's own in `ServerChatPlace.kt`, and the two refusals in
+        // `ChatErrors.kt` and `AiOffRefusal.kt`.
+        "ui/screens/chat/ChatPlace.kt",
+        "ui/screens/chat/ChatHome.kt",
+        "ui/screens/chat/ChatScreen.kt",
+        "ui/screens/chat/ChatErrors.kt",
+        "ui/screens/chat/AiOffRefusal.kt",
+        "ui/screens/chat/ServerChatPlace.kt",
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.
@@ -246,6 +257,34 @@ final class ShellStringsTests: XCTestCase {
         }
         return out
     }
+
+    // MARK: - the nav regroup, before this tree's Kotlin has it
+
+    /// Whether this checkout's `SettingsScreen.kt` is still the one from
+    /// **before** Android's nav regroup (commit adb2ad06): it still declares
+    /// `RoomsAndDevices("rooms-and-devices", …)`.
+    ///
+    /// **The iOS branch is cut before the regroup.** The port lands on
+    /// wf/ios-b-all, whose `android/` is main from before it, and the Android
+    /// files are deliberately not copied onto an iOS branch. So until main is
+    /// merged in, the Kotlin this file reads cannot say "Household" or
+    /// People's sentence, and ``testEverySettingsSectionMatchesTheKotlin()``
+    /// pins exactly those fields — the Household group's label, key and
+    /// aliases, and the People section's label, key, sub and words — one by
+    /// one against adb2ad06's literals instead.
+    ///
+    /// It keys on the **old** marker being present, not the new one being
+    /// absent: the day the merge brings the regroup, the old declaration is
+    /// gone, this is false, and every field is read from the Kotlin again —
+    /// so a reformatted Kotlin fails loudly rather than leaving the pins on
+    /// for ever (NewsStringsTests' shape).
+    private static let kotlinPredatesTheNavRegroup: Bool = {
+        let url = repositoryRoot.appendingPathComponent(
+            "android/app/src/main/java/com/domovoi/app/ui/screens/settings/SettingsScreen.kt"
+        )
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        return text.contains("RoomsAndDevices(\"rooms-and-devices\"")
+    }()
 
     // MARK: - the helpers every assertion goes through
 
@@ -488,7 +527,7 @@ final class ShellStringsTests: XCTestCase {
     /// **The one deliberate difference in the whole file.** Android's drawer
     /// says `/ android`; ours says `/ iphone`. Asserted both ways so neither
     /// can drift into the other by accident — and flagged in `I1C1-REPORT.md`
-    /// as a choice for Kamron rather than a transcription.
+    /// as a choice for the owner rather than a transcription.
     func testThePlatformIsTheOneWordThatDiffers() {
         assertKotlinSaysWhole("/ android", "the Kotlin's word, which ours replaces")
         XCTAssertEqual("/ iphone", ShellStrings.platformCrumb)
@@ -856,14 +895,39 @@ final class ShellStringsTests: XCTestCase {
 
     /// Every section's label and `sub`, and the five group labels, read from
     /// the table they were ported from.
-    func testEverySettingsSectionMatchesTheKotlin() {
-        XCTAssertEqual(14, SettingsSection.all.count)
+    func testEverySettingsSectionMatchesTheKotlin() throws {
+        XCTAssertEqual(15, SettingsSection.all.count)
         XCTAssertEqual(5, SettingsGroup.allCases.count)
-        for group in SettingsGroup.allCases {
+        // Before the merge brings the regroup's Kotlin, the fields it added
+        // are pinned one by one against adb2ad06's own literals
+        // (`git show adb2ad06:android/app/src/main/java/com/domovoi/app/ui/screens/settings/SettingsScreen.kt`,
+        // `SettingsGroup.Household` and `SettingsSection.People`), and only
+        // those fields skip the Kotlin below.
+        let pinned = Self.kotlinPredatesTheNavRegroup
+        if pinned {
+            XCTAssertEqual("Household", SettingsGroup.household.label)
+            XCTAssertEqual("household", SettingsGroup.household.key)
+            XCTAssertEqual(["rooms-and-devices"], SettingsGroup.household.aliases)
+            let people = try XCTUnwrap(SettingsSection.named("people"))
+            XCTAssertEqual("People", people.label)
+            XCTAssertEqual("people", people.key)
+            XCTAssertEqual(
+                "Who lives here: each person's profile, what Domovoi remembers, and their conversations.",
+                people.sub
+            )
+            XCTAssertEqual(
+                "people person family member members household voice profile enrolled memory conversations denylist",
+                people.words
+            )
+            XCTAssertTrue(people.aliases.isEmpty)
+            XCTAssertNil(people.dashboard)
+        }
+        for group in SettingsGroup.allCases where !(pinned && group == .household) {
             assertKotlinSaysWhole(group.label)
             assertKotlinSaysWhole(group.key)
+            for alias in group.aliases { assertKotlinSaysWhole(alias) }
         }
-        for section in SettingsSection.all {
+        for section in SettingsSection.all where !(pinned && section.key == "people") {
             assertKotlinSaysWhole(section.label)
             assertKotlinSaysWhole(section.sub)
             assertKotlinSaysWhole(section.key)
@@ -872,7 +936,7 @@ final class ShellStringsTests: XCTestCase {
             if let dashboard = section.dashboard { assertKotlinSaysWhole(dashboard) }
         }
         // The keys are unique, and every alias resolves.
-        XCTAssertEqual(14, Set(SettingsSection.all.map(\.key)).count)
+        XCTAssertEqual(15, Set(SettingsSection.all.map(\.key)).count)
         XCTAssertEqual("rooms", SettingsSection.named("satellites")?.key)
         XCTAssertEqual("phones-and-browsers", SettingsSection.named("connection")?.key)
         XCTAssertEqual("advanced", SettingsSection.named("configuration")?.key)
@@ -1367,5 +1431,147 @@ final class ShellStringsTests: XCTestCase {
         )
         XCTAssertFalse(Self.haystack.contains("broadcast partial - "), "a hyphen is not an em dash")
         XCTAssertFalse(Self.haystack.contains("broadcast to "), "the Kotlin says broadcasted")
+    }
+
+    // MARK: - I1-H part 1: Chat
+
+    /// The page, the list, and what the list says when it has no rows.
+    func testTheChatListSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(ChatStrings.title)
+        assertKotlinSaysWhole(ChatStrings.subtitle, "U+2014 em dash, one space each side")
+        assertKotlinSaysWhole(ChatStrings.newChat)
+        assertKotlinSaysWhole(ChatStrings.searchHint)
+        assertKotlinSaysWhole(ChatStrings.composerHint, "U+2026 ellipsis, not three dots")
+        assertKotlinSaysWhole(ChatStrings.send)
+        assertKotlinSaysWhole(ChatStrings.openRow)
+        assertKotlinSaysWhole(ChatStrings.rowActions)
+        assertKotlinSaysWhole(ChatStrings.pinnedMark)
+        assertKotlinSaysWhole(ChatStrings.usedInternetMark)
+        assertKotlinSaysWhole(ChatStrings.noChatsYet)
+        assertKotlinSaysWhole(ChatStrings.noChatsMatch)
+        assertKotlinSaysWhole(ChatStrings.noArchivedChats)
+        assertKotlinSaysWhole(ChatStrings.searchFailed, "couldn't, ASCII apostrophe")
+        assertKotlinSaysWhole(ChatStrings.noMessagesYet)
+        assertKotlinSaysWhole(ChatStrings.archived)
+        assertKotlinSaysWhole(ChatStrings.backToChats)
+        // `"$SEARCH_FAILED everywhere: …"` (`ChatHome.kt:416`): the first
+        // clause is `searchFailed` interpolated, so only the tail is a
+        // literal — and `searchFailed` itself is asserted whole above, which
+        // is what makes the pair complete.
+        assertKotlinSaysAround(sentinel + " everywhere: some chats may be missing")
+        // The Kotlin's tail is still asserted present, so the divergence
+        // cannot go stale — but `ChatStrings.searchFailedPartly` is gone.
+        // There is one place to search here, so a search that failed cannot
+        // also have hits, and the sentence had no reader: it was ported, given
+        // this assertion, and never drawn.
+        // `"archived · $count"` (`ChatHome.kt:523`).
+        assertKotlinSaysAround("archived \u{b7} " + sentinel)
+        XCTAssertEqual("archived · 4", ChatStrings.archivedLabel(4))
+    }
+
+    /// The row menu, the swipe, and the two dialogs.
+    func testTheChatActionsAndDialogsSayWhatTheKotlinSays() {
+        assertKotlinSaysWhole(ChatStrings.actionRename)
+        assertKotlinSaysWhole(ChatStrings.actionPin)
+        assertKotlinSaysWhole(ChatStrings.actionUnpin)
+        assertKotlinSaysWhole(ChatStrings.actionArchive)
+        assertKotlinSaysWhole(ChatStrings.actionUnarchive)
+        assertKotlinSaysWhole(ChatStrings.actionShare)
+        assertKotlinSaysWhole(ChatStrings.actionDelete)
+        assertKotlinSaysWhole(ChatStrings.actionTryAgain)
+        assertKotlinSaysWhole(ChatStrings.swipeMoveBack)
+        assertKotlinSaysWhole(ChatStrings.deleteTitle)
+        assertKotlinSaysWhole(ChatStrings.deleteConfirm)
+        assertKotlinSaysWhole(ChatStrings.serverDeleteNote, "a sentence, with its full stop")
+        assertKotlinSaysWhole(ChatStrings.renameTitle)
+        assertKotlinSaysWhole(ChatStrings.renameField)
+        assertKotlinSaysWhole(ChatStrings.renameSave)
+        assertKotlinSaysWhole(ChatStrings.renameCancel)
+        assertKotlinSaysWhole(ChatStrings.archivedToast)
+        assertKotlinSaysWhole(ChatStrings.movedBackToast)
+        // `"Delete \"${row.title}\"? $SERVER_DELETE_NOTE This can't be
+        // undone."` (`ServerChatPlace.kt:102`) — two values in one literal, so
+        // the only piece long enough to check is the tail. The note itself is
+        // asserted whole above, and the rendering is pinned here, which
+        // together cover the sentence the fragment check cannot.
+        assertKotlinSaysAround("Delete \"" + sentinel + "\"? " + sentinel + " This can't be undone.")
+        XCTAssertEqual(
+            "Delete \"soup\"? Deletes it for everyone in the house. This can't be undone.",
+            ChatStrings.deleteText("soup")
+        )
+        XCTAssertEqual(200, ChatStrings.renameMaxChars, "`take(200)`, ChatHome.kt:562")
+        // The swipe's word is SHORTER than the menu's, and deliberately: a row
+        // has less width than a menu. Equal would mean one of the two was
+        // transcribed from the wrong line.
+        XCTAssertNotEqual(ChatStrings.swipeMoveBack, ChatStrings.actionUnarchive)
+    }
+
+    /// The conversation, the share text, and the words a failed write says.
+    func testTheChatConversationSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(ChatStrings.windowNote)
+        assertKotlinSaysWhole(ChatStrings.thisPhone)
+        assertKotlinSaysWhole(ChatStrings.shareYou)
+        assertKotlinSaysWhole(ChatStrings.shareDomovoi)
+        // The share header carries its own newline in the Kotlin
+        // (`ServerChatPlace.kt:41`), and `shareText` adds it back, so the
+        // whole-string lookup is of the header **with** the newline.
+        assertKotlinSaysWhole(ChatStrings.shareHeader + "\n", "the literal includes its \\n")
+        for verb in [
+            ChatStrings.verbDelete, ChatStrings.verbRename, ChatStrings.verbArchive,
+            ChatStrings.verbMoveBack, ChatStrings.verbSend, ChatStrings.verbNewChat,
+            ChatStrings.verbTryAgain,
+        ] {
+            assertKotlinSaysWhole(verb, "the verb `failureText` is given")
+        }
+        // `"couldn't try again: $why"` (`ChatScreen.kt:879`).
+        assertKotlinSaysAround("couldn't try again: " + sentinel)
+        XCTAssertEqual("couldn't try again: offline", ChatStrings.couldNotTryAgain("offline"))
+        // The two refusals.
+        assertKotlinSaysWhole(aiChatOffText)
+        assertKotlinSaysWhole(aiOffDetail, "the server's own sentence, matched on a 409")
+        assertKotlinSaysWhole(aiOffRefusal, "the header value")
+        assertKotlinSaysWhole(visionMissingText(nil), "U+2192 arrow in Settings → Models")
+        assertKotlinSaysAround("Pictures need the vision model " + sentinel
+            + ", which isn't installed on this Domovoi. "
+            + "An admin can install it in Settings \u{2192} Models, or pick another vision model there.")
+        for code in ChatErrors.modelCodes.sorted() {
+            assertKotlinSaysWhole(code, "a code the server sends, matched by value")
+        }
+    }
+
+    /// **The two strings this port had to write itself** — asserted to be
+    /// absent from the Kotlin, which is the only way a test can show that a
+    /// divergence was deliberate rather than mistyped.
+    ///
+    /// Both are in `design-notes/ios/IOS-ONLY-STRINGS.md` with the reason.
+    func testChatsThreeOwnStringsAreNotInTheKotlinAtAll() {
+        // `verbOpenChat`: Android's `loadMessages` has no failure branch at
+        // all (`ChatScreen.kt:508`), so there is no verb over there for a
+        // thread whose messages could not be read — and the one this port
+        // used, `verbSend`, said a send had failed when nothing was sent.
+        XCTAssertFalse(
+            Self.haystack.contains(ChatStrings.verbOpenChat),
+            "the read's verb is this port's own: Android words no read failure"
+        )
+        XCTAssertFalse(
+            Self.haystack.contains(ChatStrings.emptyHint),
+            "the empty hint is this port's own: Android's offers an image attachment"
+        )
+        XCTAssertFalse(
+            Self.haystack.contains("the server wouldn't answer this"),
+            "the refusal fallback is this port's own: Android says a status and a reason phrase"
+        )
+        // And the Android sentence it replaces must NOT have been ported: a
+        // hint that sends somebody looking for a paperclip this app does not
+        // have is [[no-misleading-controls]].
+        XCTAssertTrue(
+            Self.haystack.contains("attach an image"),
+            "the Kotlin really does say it, so the divergence is real and not a stale note"
+        )
+        XCTAssertFalse(
+            ChatStrings.emptyHint.contains("image"),
+            "nothing in this app's words offers an image"
+        )
+        XCTAssertFalse(ChatStrings.composerHint.contains("..."), "U+2026, not three dots")
     }
 }

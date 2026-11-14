@@ -23,12 +23,22 @@ public enum Route: String, CaseIterable, Sendable {
     case videos = "Videos"
     case images = "Images"
     case news = "News"
+    /// Not on the sidebar or Home's grid since the nav regroup: navigating
+    /// here opens Settings → Household → People (``settingsTabFor(_:)``), as
+    /// the web's old `#people` does. Still a bar choice
+    /// (``PhoneBar/choices``), so a bar saved with it keeps its tab
+    /// (`Routes.kt:56-60`).
     case people = "People"
     /// Not a screen of its own since 2026-10-11: navigating here opens
     /// Settings on its Rooms section (``settingsTabFor(_:)``). The route
     /// survives as the name a link uses.
     case satellites = "Satellites"
     case calendar = "Calendar"
+    /// The household's lists — To-do, Shopping and any it names — the web's
+    /// `#lists` (`Routes.kt:69-72`, Android 3a3b6422). Household data like
+    /// Calendar's, so a workspace screen only: never a local tab
+    /// (``localTabs(phoneCanChat:sharedScreen:savedBooks:)``).
+    case lists = "Lists"
     case stations = "Stations"
     case files = "Files"
     case settings = "Settings"
@@ -72,6 +82,7 @@ public enum Route: String, CaseIterable, Sendable {
         case .people: return "person.2.fill"
         case .satellites: return "dot.radiowaves.left.and.right"
         case .calendar: return "calendar"
+        case .lists: return "checklist"
         case .stations: return "antenna.radiowaves.left.and.right"
         case .files: return "folder.fill"
         case .settings: return "gearshape.fill"
@@ -106,38 +117,43 @@ public let launcherlessRoutes: Set<Route> = [.containers, .satellites]
 /// token. ``ShellStrings/sharedScreenNote`` is what a person is told.
 public let sharedScreenHidden: Set<Route> = [.people, .chat, .files, .news]
 
-/// The web sidebar's "workspace" section, in order. Home, Settings and the
-/// manual are deliberately out of it (`Routes.kt:141`).
+/// The web sidebar's "workspace" section, in its default order: Chat, then
+/// Media's members (the radio plugin's Stations and the image plugin's Images
+/// after the core four), then Tools' (`Routes.kt:160`, the nav regroup). This
+/// order is each route's sort position in ``navTree(_:override:defaults:pluginGroups:)``.
+/// Home, Settings and the manual are deliberately out of it, and so is People:
+/// it is a Settings section.
 public let workspaceRoutes: [Route] = [
-    .chat, .music, .podcasts, .audiobooks, .videos,
-    .images, .news, .people, .calendar,
-    .stations, .files,
+    .chat,
+    .music, .podcasts, .audiobooks, .videos, .stations, .images,
+    .news, .calendar, .lists, .files,
 ]
 
 /// The phone bar's default, left to right: home · music · videos · chat
-/// (`Routes.kt:150`, and Kamron's decision of 2026-10 that the bar is these
+/// (`Routes.kt:150`, and the owner's decision of 2026-10 that the bar is these
 /// four and is customisable).
 public let defaultPhoneBar: [Route] = [.home, .music, .videos, .chat]
 
 /// Every destination Home's "everything" grid may hold — the compact
-/// width's "more" (`Routes.kt:160`).
-public let everythingRoutes: [Route] = [
-    .chat, .music, .podcasts, .audiobooks, .videos,
-    .images, .news, .people, .calendar, .files,
-    .stations, .settings, .manual,
-]
+/// width's "more" — in the sidebar's grouped order, then Settings and the
+/// manual, which are never on the bar (`Routes.kt:369`). People is not here:
+/// it is a Settings section.
+public let everythingRoutes: [Route] = workspaceRoutes + [.settings, .manual]
 
 /// Routes that are really a Settings section, by that section's key
-/// (`Routes.kt:131`).
+/// (`Routes.kt:142-151`).
 ///
 /// `navigate(.satellites)` therefore opens **Settings**, on its Rooms
 /// section — it does not push a Rooms screen. This is the
 /// "Satellites moved into Settings" change of 2026-10-11, and on iOS it
-/// means Rooms is a row inside Settings and never a tab.
+/// means Rooms is a row inside Settings and never a tab. People joined it in
+/// the nav regroup: a People tab saved on the bar, or a link naming People,
+/// opens Settings → Household → People.
 public func settingsTabFor(_ route: Route) -> String? {
     switch route {
     case .satellites: return "rooms"
     case .containers: return "health"
+    case .people: return "people"
     default: return nil
     }
 }
@@ -230,8 +246,8 @@ public extension Route {
 /// that this server allows, and — on a shared screen — that is not somebody's
 /// own (`ui/screens/home/HomeModels.kt:703`).
 ///
-/// Satellites is not here and neither is Containers: they are Settings
-/// sections (``launcherlessRoutes``).
+/// Satellites, Containers and People are not here: they are Settings
+/// sections. ``tileRuns(_:)`` puts the tiles under the sidebar's headings.
 public func everythingTiles(_ visibility: RouteVisibility, bar: [Route]) -> [Route] {
     everythingRoutes.filter { !bar.contains($0) && $0.visibleOn(visibility) }
 }

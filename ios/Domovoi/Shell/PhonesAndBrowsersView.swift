@@ -5,16 +5,24 @@ import SwiftUI
 /// **Trusted servers**.
 ///
 /// A port of the first three cards of
-/// `android/.../ui/screens/settings/ConnectionPanel.kt` (map §6.1-§6.4).
-/// Which rows the list has is ``trustedServersRows(trusted:known:active:)``,
-/// what the identity section says is ``IdentityDisplay``, what each forget
-/// does is ``ForgetAffordance``, and the cascade is ``TrustBook/forget(_:)``.
+/// `android/.../ui/screens/settings/ConnectionPanel.kt` (map §6.1-§6.4), plus
+/// **Listening as** from §6.5. Which rows the list has is
+/// ``trustedServersRows(trusted:known:active:)``, what the identity section
+/// says is ``IdentityDisplay``, what each forget does is
+/// ``ForgetAffordance``, and the cascade is ``TrustBook/forget(_:)``.
 ///
-/// **§6.5 is not here and is not stubbed**: Appearance, This device, This
-/// phone belongs to and Listening as each need a store key or a network call
-/// no batch has built, and a theme chip that does not change the theme is the
-/// misleading control the owner has ruled out twice. `I1C3-REPORT.md` says so
-/// and sizes it as its own batch.
+/// **Listening as** arrived with the 2026-11-03 batch (the owner's answer 11:
+/// "yes, match Android: build the 'listening as' picker"). It is here and not
+/// on Podcasts or Audiobooks because that is where Android puts it — those two
+/// screens draw a *hint chip* and the real selector lives in this panel
+/// (`AudiobooksScreen.kt:333`, `ConnectionPanel.kt:350-378`). What it decides
+/// is which server row a resume position belongs to, and the rows it offers
+/// are ``PlayerListenerModel``'s.
+///
+/// **The rest of §6.5 is still not here and is still not stubbed**:
+/// Appearance, This device and This phone belongs to each need a store key or
+/// a writer no batch has built, and a theme chip that does not change the
+/// theme is the misleading control the owner has ruled out twice.
 /// ### This panel does not scroll, and does not own the forget dialog
 ///
 /// Both changed in 3b. It was `ZStack { ScrollView { … } }` **inside a screen
@@ -40,14 +48,113 @@ struct PhonesAndBrowsersPanel: View {
     @State private var saving = false
     @State private var seededFor = ""
 
+    /// The household, for the Listening as dropdown. Built in `.task` and not
+    /// in an initialiser, for ``HomeView``'s reason: the model needs the
+    /// container and a `@State` initialiser runs before the view has one.
+    @State private var listeners: PlayerListenerModel?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             serverCard
             householdTokenCard
             trustedServersCard
+            listeningAsCard
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { seedTheField() }
+        .task {
+            if listeners == nil {
+                listeners = PlayerListenerModel(in: model.container, listeners: model.listeners)
+            }
+            listeners?.start()
+        }
+        .onDisappear { listeners?.stop() }
+    }
+
+    // MARK: - §6.5 Listening as
+
+    /// Whose resume positions this phone saves — the real selector, of which
+    /// Podcasts and Audiobooks draw only a hint chip.
+    ///
+    /// `ConnectionPanel.kt:350-378`, word for word: the card's title and its
+    /// subtitle, a dropdown whose null row reads "me (this device)", the
+    /// write, and the toast naming whoever was picked. The failure sentence is
+    /// drawn only when the read has **no data at all**
+    /// (``PlayerListenerModel/trouble``), because a list a few seconds old
+    /// with a failed refresh behind it is still a list worth picking from.
+    ///
+    /// A `Menu`, as every other picker in this app is
+    /// (``FilesView/libraryPicker(_:)``) — not a `Picker`, whose `.menu` style
+    /// draws the selected value in a shape this app's cards do not use, and
+    /// whose automatic style on a phone is a wheel.
+    @ViewBuilder
+    private var listeningAsCard: some View {
+        PanelCard(title: PlayerStrings.listeningAsCard, sub: PlayerStrings.listeningAsCardSub) {
+            if let listeners {
+                if let trouble = listeners.trouble {
+                    Text(trouble)
+                        .font(.footnote)
+                        .foregroundStyle(Color.errInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    listenerPicker(listeners)
+                }
+            } else {
+                ProgressView()
+                    .accessibilityLabel(PlayerStrings.listeningAsCard)
+            }
+        }
+    }
+
+    private func listenerPicker(_ listeners: PlayerListenerModel) -> some View {
+        let chosen = listeners.selected
+        return Menu {
+            ForEach(listeners.options) { option in
+                Button {
+                    // The store and the player first, then this card's own
+                    // observed mirror of it: ``PlayerListenerStore`` is a
+                    // `Mutex` and not `@Observable`, so without `adopt()` the
+                    // tick below would follow the pick only because the toast
+                    // on the next line re-renders the whole shell — which is
+                    // not something this card may depend on.
+                    model.listenerChanged(to: option.personID)
+                    listeners.adopt()
+                    model.showToast(listeners.toast(for: option))
+                } label: {
+                    // A tick rather than a highlight: a menu row's selected
+                    // state is not read out, and this one decides whose
+                    // listening history a place belongs to.
+                    if option.personID == chosen?.personID {
+                        Label(option.name, systemImage: "checkmark")
+                    } else {
+                        Text(option.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Text(chosen?.name ?? PlayerStrings.listenerThisDevice)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.down")
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+            }
+            .padding(.horizontal, 12)
+            // 44 points, stated: a `Menu`'s label is hit-tested as the label
+            // draws, and one line of `subheadline` is 20.
+            .frame(minHeight: 44)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.fgMuted.opacity(0.35), lineWidth: 1)
+            )
+            .contentShape(.rect)
+        }
+        .accessibilityLabel(PlayerStrings.listeningAsCard)
+        .accessibilityValue(chosen?.name ?? PlayerStrings.listenerThisDevice)
     }
 
     /// The field is seeded from the saved server, and **re-seeded when that
@@ -88,7 +195,18 @@ struct PhonesAndBrowsersPanel: View {
             // arrive rather than at save time: `normalise(_:)` would see a
             // broken address, and the person would see their own typing
             // silently altered later instead of never accepting the newline.
-            TextField(ShellStrings.serverURLPlaceholder, text: $typedURL, axis: .vertical)
+            TextField(
+                ShellStrings.serverURLPlaceholder,
+                text: $typedURL,
+                // Owner answer 65's vertical leg. The one vertical-axis field
+                // train I005 measured drew its hint at 1.70:1 and
+                // `ShellHintInkAppearance`'s swap did not reach it, so the
+                // hint is passed as a prompt instead; the same string goes to
+                // the title, which keeps the accessibility label and
+                // `placeholderValue` exactly what they were.
+                prompt: ShellHintPrompt.text(ShellStrings.serverURLPlaceholder),
+                axis: .vertical
+            )
                 .onChange(of: typedURL) { _, new in
                     if new.contains(where: \.isNewline) {
                         typedURL = new.filter { !$0.isNewline }
@@ -138,13 +256,7 @@ struct PhonesAndBrowsersPanel: View {
             Button(saving ? ShellStrings.checking : ShellStrings.saveAndReconnect) {
                 Task { await save() }
             }
-            .buttonStyle(.borderedProminent)
-            // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-            // a prominent button would fill with the ink and draw
-            // near-black `brandFg` on it at 3.08:1. The fill is the
-            // other token, and 8.49:1 with this label colour.
-            .tint(Color.brand)
-            .foregroundStyle(Color.brandFg)
+            .buttonStyle(BrandFillButtonStyle())
             .disabled(ServerCredentials.isBlank(typedURL) || saving)
 
             if !ServerCredentials.isBlank(model.inputs.serverURL) {
@@ -219,9 +331,13 @@ struct PhonesAndBrowsersPanel: View {
                 .foregroundStyle(display == .noIdentityOffered ? AnyShapeStyle(Color.warnInk) : AnyShapeStyle(Color.fgMuted))
                 .fixedSize(horizontal: false, vertical: true)
             if display.offersPinning {
+                // Android's filled `Button` (`ConnectionPanel.kt:441`):
+                // ``Color/brandFg`` on ``Color/brand``, 8.50:1. The `.bordered`
+                // chip it replaces read the ink on a wash of itself over this
+                // card, about 4.06:1 (measured on Printing's card in I001 —
+                // unit mx-ink, InkButtonStyles.swift).
                 Button(ShellStrings.pinThisIdentity) { model.pinTheOfferedIdentity() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(BrandFillButtonStyle())
             }
         }
     }
@@ -265,8 +381,9 @@ struct PhonesAndBrowsersPanel: View {
                     model.showToast(ShellStrings.noLongerPaired)
                     model.refresh()
                 }
-                .buttonStyle(.bordered)
-                .tint(Color.brandInk)
+                // Android's filled `Button` (`ConnectionPanel.kt:229`), for
+                // the pin button's reason above (unit mx-ink).
+                .buttonStyle(BrandFillButtonStyle())
             }
         }
     }

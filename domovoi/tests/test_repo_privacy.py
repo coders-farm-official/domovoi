@@ -44,16 +44,12 @@ NAME_DIGESTS = frozenset({
     "214f3a838430f20ccd9ed41e1dc8983dfb989301ce22fd7676416ec73e34a6f9",
     "63d9d811a3c02c0c124fe5ad6e74e36928577e013b514c89e966a88e83b6c8a1",
 })
-# Files that may hold such a token. Third-party text only, plus one TEMPORARY
-# exemption: ios/ belongs to the iOS track, which has unmerged branches; it
-# scrubs its own files and then this entry is deleted.
+# Files that may hold such a token: third-party text only.
 NAME_ALLOWED_FILES = {
     "domovoi/phonemizer/data/cmudict/cmudict.dict",  # public dictionary data
     "web/static/fonts/figtree/OFL.txt",              # the font designer's copyright line
 }
-NAME_ALLOWED_PREFIXES = (
-    "ios/",  # TEMPORARY: remove once the iOS session has cleaned its files
-)
+NAME_ALLOWED_PREFIXES: tuple[str, ...] = ()
 _WORD = re.compile(rb"[A-Za-z]+")
 _CAMEL = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 

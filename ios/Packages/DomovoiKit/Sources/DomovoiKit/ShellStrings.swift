@@ -33,6 +33,32 @@ public enum ShellStrings {
     /// The local shell's top bar. **Two leading spaces.**
     public static let localTopbar = "  domovoi / local media"
 
+    /// The local shell's **navigation title** at the accessibility sizes —
+    /// the breadcrumb without the house crumb in front of it.
+    ///
+    /// ### Why the title is not the breadcrumb
+    ///
+    /// A `UINavigationBar` large title is one line and UIKit truncates it
+    /// rather than wrapping. Train I003 photographed the result at AX5 on
+    /// three screens: `domovoi / h…` on Home
+    /// (`overnight-trains/I003/ALL/att/testShell_TheHeaderScrollsAwayOnHome/`
+    /// `shell-home-ax5…png`) and `domovoi / vi…` on a pushed Videos
+    /// (`…/testShell_TheHeaderScrollsAwayOnAPushedScreen/`
+    /// `shell-videos-ax5-after-a-swipe…png`) — an ellipsis, in the picture,
+    /// and Apple's audit named each one "Text clipped". The measured widths
+    /// say the same: the label is clamped at the width left beside the
+    /// toolbar pill (301.3 points for `domovoi / music`, 346.7 for
+    /// `domovoi / home`, 360.0 for `domovoi / local media`).
+    ///
+    /// ``ShellScrollAwayChrome``'s own note pre-registered the answer before
+    /// anything had been measured: "the route's label alone (`music`) in
+    /// place of the breadcrumb (`domovoi / music`), which is the same
+    /// information one word shorter". The house is still named — by the
+    /// toolbar pill's address and by ``ShellTopBar`` at every size below the
+    /// accessibility ones. This is the local shell's half of that; the
+    /// workspace's is `WorkspaceView.screenTitle(for:)`.
+    public static let localMediaTitle = "local media"
+
     /// The server pill with no server saved, and its accessibility label.
     public static let connectPill = "connect"
     /// The pill's accessibility label when a server is saved.
@@ -56,7 +82,7 @@ public enum ShellStrings {
     /// (`AppShell.kt:892`).
     ///
     /// **This is a choice, not a transcription**, and the report flags it as
-    /// one for Kamron: `iphone` rather than `ios`, because every other string
+    /// one for the owner: `iphone` rather than `ios`, because every other string
     /// in both apps says "this phone" and "iphone" is the word a person uses.
     /// Nothing else in the app says which platform it is.
     public static let platformCrumb = "/ iphone"
@@ -384,4 +410,50 @@ public enum ShellStrings {
 
     public static func listeningAs(_ name: String) -> String { "listening as \(name)" }
     public static let listeningAsThisDevice = "listening as this device"
+}
+
+/// The plugin band's words: the band above a screen a plugin brought with it
+/// (`android/.../ui/components/PluginFrame.kt`, `PluginScreenFrame`).
+///
+/// **One band, so one copy of its words** (owner answer 58: "fold the two
+/// plugin bands into one view"). They were written twice the same night, into
+/// ``ImagesStrings`` and ``StationsStrings``, by the two items that each built
+/// a band; the two copies are identical and both are now unread. Deleting them
+/// is a one-line change in two files this unit does not own —
+/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md`.
+///
+/// They live beside the shell's strings because the band is the shell's now:
+/// ``PluginBandView`` is in `ios/Domovoi/Shell/`, and a shared view reaching
+/// into one screen's strings enum is how the next copy gets written.
+public enum PluginBandStrings {
+
+    /// `PluginFrame.kt:152`, the bordered badge.
+    public static let badge = "plugin"
+
+    /// `PluginFrame.kt:144`. Never a bare `by`: the caller passes a publisher
+    /// it has already checked is non-blank (``PluginBand/publisher``).
+    public static func by(_ publisher: String) -> String { "by \(publisher)" }
+
+    /// `PluginFrame.kt:178`, the word.
+    public static let manage = "manage"
+
+    /// `:181`, the link's screen-reader label. The word `manage` alone names
+    /// neither the plugin nor where the link goes.
+    public static func manageLabel(name: String) -> String {
+        "manage \(name) on the dashboard's Plugins page"
+    }
+
+    /// The collapsed row's screen-reader label, at the accessibility type
+    /// sizes where the band is one row (owner answer 29, and the shape
+    /// answer 62 already approved for the source switch).
+    ///
+    /// **An iOS-only composition of existing words, no new ones**: the badge
+    /// and `by <publisher>` are not drawn at those sizes, so they are said
+    /// instead. Nothing of the band is lost to a screen reader by the
+    /// collapse.
+    public static func collapsedLabel(name: String, publisher: String?) -> String {
+        var said = [name, badge]
+        if let publisher { said.append(by(publisher)) }
+        return said.joined(separator: ", ")
+    }
 }

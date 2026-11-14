@@ -1,5 +1,6 @@
 import DomovoiKit
 import SwiftUI
+import UIKit
 
 /// The app: one container, one shell model, one scene.
 ///
@@ -8,18 +9,25 @@ import SwiftUI
 /// dependency-injection framework: a small graph, built once, in an order a
 /// reader can check — and the order is ``AppContainer``'s own documentation.
 ///
-/// ### The store is in memory, and that is the one thing to know here
+/// ### The store remembers now, and that is the one thing to know here
 ///
-/// ``InMemoryShellStore`` is still the only ``ShellStore`` there is, so **the
-/// saved server does not survive a launch**. Part 1 left the persisted store
-/// to the batch that has something to write (the picker and Settings → App
-/// layout, part 3's), and a half-ported settings store is worse than none.
+/// ``SavedShellStore`` is what this app builds: the server, the trust, the
+/// known-server rows, the pins, the refusals and the "this phone" choice are
+/// read from `UserDefaults` in its `init`, and the household tokens from the
+/// Keychain.
 ///
-/// What that means on a Simulator today: every launch is a fresh install with
-/// no server, which is §2.11's first row — the local shell with a `connect`
-/// pill, no banner, and nothing opening by itself. That is the right screen
-/// for that state, and it is the only state this build can reach without a
-/// picker. The other states are reachable in the previews beside each view.
+/// **It used to be ``InMemoryShellStore``, on every launch**, which is how
+/// the first build on the owner's own iPhone forgot its server the moment the app
+/// was force-quit — and ``TokenVault`` had no caller at all, so the token did
+/// not survive either, whatever the comment here used to imply. Part 1 left
+/// the persisted store to "the batch that has something to write"; parts 2
+/// and 3 wrote the picker, the trust dialogs and the pairing screens and
+/// never came back for it. That is the shape of defect this track has a name
+/// for: shipped, but not where it is read.
+///
+/// A fresh install is still §2.11's first row — the local shell with a
+/// `connect` pill, no banner, and nothing opening by itself — because that is
+/// what an empty store says, not because there is nowhere to keep an answer.
 ///
 /// ### Room mode is not here
 ///
@@ -33,6 +41,12 @@ import SwiftUI
 struct DomovoiApp: App {
 
     private let model: ShellModel
+
+    /// The alerts' process-wide half — the three engines, the notification
+    /// delegate and the hint row's model (``AlertsAppWiring``, overnight
+    /// `alerts`). Everything it does is in that file; this is the property
+    /// that keeps it alive for the process.
+    private let alerts: AlertsAppWiring
 
     /// A server and token handed in on the command line, for a UI test.
     ///
@@ -76,7 +90,16 @@ struct DomovoiApp: App {
     /// why this reads `ProcessInfo` rather than `UserDefaults`: a launch
     /// argument lives for one process, where a default would persist and
     /// could outlive the test that set it.
-    private static func seededStore() -> InMemoryShellStore {
+    ///
+    /// **A seeded launch gets the in-memory store, and that is deliberate.**
+    /// Now that the ordinary path saves, a stub-house run that used
+    /// ``SavedShellStore`` would write the stub's address into the
+    /// Simulator's defaults and hand it to the next test — and read back
+    /// whatever the previous one left. The seam that keeps a launch argument
+    /// from outliving its process is worth nothing if the store it seeds
+    /// outlives it instead. So: seeded ⇒ nothing is kept; otherwise ⇒
+    /// everything is.
+    private static func store(vault: TokenVault) -> any ShellStore {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         func value(after flag: String) -> String? {
@@ -95,11 +118,52 @@ struct DomovoiApp: App {
             return InMemoryShellStore(serverURL: url, token: value(after: "-domovoi-token"))
         }
         #endif
-        return InMemoryShellStore()
+        return SavedShellStore(vault: vault)
+    }
+
+    /// Apple's placeholder grey, overridden for every `TextField` in the app
+    /// (owner answer 65).
+    ///
+    /// ``HintInk`` carries the colour and the four measured ratios;
+    /// ``ShellHintInkAppearance`` carries the mechanism, the train I004
+    /// readings that condemned the mechanism this used to be, and what it
+    /// would be replaced by.
+    ///
+    /// The short of it: SwiftUI hands the field a plain `placeholder` and
+    /// UIKit draws it in `UIColor.placeholderText`, which I004 measured at
+    /// **1.72:1** on white and **1.70:1** on the app's own field background.
+    /// `--fg-muted` is 7.44:1 on white — the ink every other muted line in the
+    /// app already uses, and the one Android's `OutlinedTextField` hints are
+    /// drawn in.
+    ///
+    /// **This was two `UILabel.appearance(whenContainedInInstancesOf:)` lines
+    /// and they reached nothing**, which is why the mechanism moved out of
+    /// this file rather than being narrowed inside it: both of I004's readings
+    /// came back as `UIColor.placeholderText` to the integer, because
+    /// `UITextField` sets its placeholder label's colour itself and an
+    /// explicit set beats an appearance proxy. A paragraph of this comment
+    /// used to argue about which private `UILabel` subclass the proxy might
+    /// reach; the measurement is that it reached none of them.
+    ///
+    /// It stays a function here, called from ``init()``, because the one
+    /// thing that *is* this file's business is the **when**: before a view
+    /// exists, so that no field is built through the old path.
+    private static func drawHintsInTheMutedInk() {
+        ShellHintInkAppearance.install()
     }
 
     init() {
-        let container = AppContainer(store: Self.seededStore())
+        // Before anything is built, let alone drawn: a field takes its hint
+        // through the setter when it is created, so a field already on screen
+        // would keep the grey.
+        Self.drawHintsInTheMutedInk()
+        // **One vault, handed to both.** Two `TokenVault()`s would reach the
+        // same Keychain items — same service, same accounts — so this is not
+        // a correctness fix; it is so that "where do the tokens live" has one
+        // answer at the one place that builds the graph, and so that a test
+        // or a future seam can replace it in one line rather than two.
+        let vault = TokenVault()
+        let container = AppContainer(store: Self.store(vault: vault), vault: vault)
         // The device id, and the two things only UIKit can answer. Read HERE,
         // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
         // closure running anywhere never reads `UIDevice`, which
@@ -134,6 +198,11 @@ struct DomovoiApp: App {
         // the app makes and not something a container does to whoever builds
         // one.
         container.start()
+        // After `container.start()`, because the alerts' first act is a read
+        // through the container's client, and `DomovoiApplication.onCreate`
+        // starts them beside the socket in the same order
+        // (`TimerAlerts.kt:97`).
+        alerts = AlertsAppWiring(container: container)
     }
 
     var body: some Scene {
@@ -156,17 +225,39 @@ struct DomovoiApp: App {
                 //
                 // ``Color/brandInk`` is 5.65:1 on white and is what the
                 // stylesheet has for "the brand as text or a meaningful
-                // graphic". The six `.borderedProminent` buttons name
-                // ``Color/brand`` back for their fill, because near-black
-                // ``Color/brandFg`` on the ink would be 3.08:1 — the fill
-                // role and the text role are two tokens for a reason.
+                // graphic". A filled button does not inherit it: it takes
+                // ``BrandFillButtonStyle``, which draws ``Color/brandFg`` on
+                // ``Color/brand`` itself, because near-black on the ink would
+                // be 3.08:1 and white on it is 1.91:1 in dark mode — the fill
+                // role and the text role are two tokens for a reason. A
+                // `.borderedProminent` left untinted fills with this ink and
+                // draws white on it; none is left (unit ix-fill, and
+                // `FilledButtonLabelTests` keeps it that way).
                 .tint(Color.brandInk)
+                // The alerts' hint: the model goes into the environment for
+                // Home's timers card to draw a row from, and the lifecycle
+                // re-reads this phone's notification status on every return
+                // to the foreground (`HomeScreen.kt:241-247`).
+                //
+                // **On the app's root rather than Home's**, which is the one
+                // place this departs from DECISIONS §2's hook 2. Home's root
+                // is `HomeView.swift`, and the modifier carries the explain
+                // card's overlay: a dialog that belongs to a screen inside a
+                // tab is a dialog a tab switch can take away mid-sentence,
+                // and `.accessibilityHidden` behind the scrim then covers
+                // the tab bar too — which is what `.isModal` promises and
+                // what the other `DialogCard` in the app had to be given by
+                // hand (`RouteScreen.swift:196-203`). The read is a status
+                // read and never a prompt, so doing it once at launch asks
+                // nothing of anybody.
+                .environment(\.alertsHintModel, alerts.hint)
+                .alertsHintLifecycle(alerts.hint)
         }
     }
 }
 
 /// The I0 gate's screen: it launched, it said what it was, and it showed the
-/// Local Network prompt's wording on Kamron's own iPhone.
+/// Local Network prompt's wording on the owner's own iPhone.
 ///
 /// **No longer the app's root** — the shell is — and kept because the two
 /// things it documents are still true of every screen from here on: the
@@ -239,11 +330,14 @@ extension Color {
     /// I1 replaces this with a real asset catalogue generated from the CSS,
     /// as plan 1.1 describes; one colour written out by hand is enough for a
     /// screen with three labels on it.
-    static let fgMuted = Color(UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.6555, green: 0.6434, blue: 0.6238, alpha: 1)   // oklch(0.72 0.008 80)
-            : UIColor(red: 0.3458, green: 0.3323, blue: 0.3104, alpha: 1)   // oklch(0.45 0.01 80)
-    })
+    ///
+    /// **The sRGB lives in ``HintInk`` and nowhere else.** Answer 65 needed
+    /// this token as a `UIColor` for an appearance proxy, which meant writing
+    /// it out in `DomovoiKit` as well; two copies of one token's literals is
+    /// how a token drifts (review 1, N2), so this is that colour rather than a
+    /// second spelling of it. ``HintInk``'s own doc comment carries the
+    /// conversion from the stylesheet's `oklch` and the four measured ratios.
+    static let fgMuted = Color(HintInk.ink)
 
     /// `--brand`: Domovoi's one accent, amber.
     ///
@@ -331,11 +425,64 @@ extension Color {
     /// still under the 4.5:1 body text needs.
     ///
     /// **6.08:1** on white, **6.30:1** on the dark canvas.
+    ///
+    /// **This is an ink, not a fill.** A destructive button filled with it
+    /// draws its own white label at 2.99:1 in dark mode, which is why
+    /// `DropInCallSheet` shipped `.bordered` with `.tint(Color.errInk)` until
+    /// the pair existed; the fill is ``Color/danger`` with ``Color/dangerFg``
+    /// on it, drawn by ``DangerFillButtonStyle``, and that is what that
+    /// button uses now. The note is
+    /// here because there is no `Color.err` or `Color.errFill` to grep for —
+    /// the stylesheet calls the pair `--danger`, so this target does too, and
+    /// anyone looking for Android's `colors.err` lands on this token first.
     static let errInk = Color(UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 1.0000, green: 0.3718, blue: 0.3577, alpha: 1)   // oklch(0.70 0.20 25)
             : UIColor(red: 0.7451, green: 0.1339, blue: 0.1637, alpha: 1)   // oklch(0.52 0.19 25)
     })
+
+    /// `--danger`: the **fill** a destructive button is drawn in — hang up,
+    /// delete, forget — with ``Color/dangerFg`` for the text on it.
+    ///
+    /// **The sRGB and the three ratios live in ``DangerInk`` and nowhere
+    /// else**, the way ``Color/fgMuted`` is ``HintInk``. The first pass wrote
+    /// them out here with the arithmetic in this comment and nothing
+    /// recomputing it — the defect `HintInk`'s own stale 7.72:1 was (review 1,
+    /// S6), found again in this token by review 3's S5. `ShellFoldTests`
+    /// recomputes all three from the kit's constants now. That type's doc
+    /// comment carries the reasoning: why the stylesheet's pair and not
+    /// Android's white (white on the dark fill is 2.99:1), and why it is two
+    /// tokens.
+    ///
+    /// Its one caller is ``DangerFillButtonStyle``, which draws it with
+    /// ``Color/dangerFg`` on it as one pair; that style's two callers are
+    /// `ios/Domovoi/DropIn/DropInCallSheet.swift`'s `leave` (Android's filled
+    /// `hang up`, `PhoneDropinCall.kt:180-183`) and the forget-server card's
+    /// `forget` in `ConnectionDialogView.swift` (`ForgetServer.kt:101-104`).
+    /// The token had no caller on `wf/ios-b-shell`, because the drop-in file
+    /// was the rooms unit's; the first call site was typed on the batch's
+    /// integration branch (shell's DECISIONS §3b, `INTEGRATION.md`), and both
+    /// moved onto the style in unit ix-fill.
+    static let danger = Color(DangerInk.fill)
+
+    /// `--danger-fg`: the text drawn **on** ``Color/danger``, the same way
+    /// ``Color/brandFg`` is the text on the amber.
+    ///
+    /// Near-white on the light theme's deep red (**5.91:1**) and near-black on
+    /// the dark theme's bright one (**6.53:1**). Never `.white` on both: that
+    /// is the 2.99:1 the pair exists to avoid. Both numbers are
+    /// ``DangerInk``'s, and recomputed there.
+    ///
+    /// **This declaration was missing.** The doc comment shipped on
+    /// `wf/ios-b-shell` with no `static let` under it, and three other notes
+    /// — ``Color/errInk``'s, ``Color/danger``'s and ``DangerInk``'s — all
+    /// pointed at it by name. Nothing caught it because the token had no
+    /// caller: `swift build` on the package never compiles this file, and
+    /// `night/appcheck.sh`, which type-checks the app target, answered
+    /// "DomovoiKit did not build" for every unit of the batch until its
+    /// `-Xcc -isysroot` was fixed. The first thing it said once it ran was
+    /// `type 'Color' has no member 'dangerFg'`.
+    static let dangerFg = Color(DangerInk.text)
 }
 
 #Preview {

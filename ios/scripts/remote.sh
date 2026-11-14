@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# remote.sh — run one command on Kamron's Mac, over SSH, as the build user.
+# remote.sh — run one command on the owner's Mac, over SSH, as the build user.
 #
 # Every other script that needs the Mac goes through this one, so the rules
 # live in one place: the key to use, the low priority, the no-doze wrapper,
@@ -18,7 +18,7 @@ usage: remote.sh [--forward PORT] [--quiet] -- COMMAND [ARG ...]
        remote.sh --help
 
 Runs COMMAND on the Mac as the build user, in its home directory, wrapped in
-caffeinate (so the Mac cannot doze mid-build) and at low priority (so Kamron's
+caffeinate (so the Mac cannot doze mid-build) and at low priority (so the owner's
 own work on it stays smooth).
 
 Options
@@ -45,7 +45,7 @@ USAGE
 
 # ---- the ports that are never touched ---------------------------------------
 #
-# 6369 and 6370 are Kamron's live Domovoi (core and web), 6432 is the live
+# 6369 and 6370 are the owner's live Domovoi (core and web), 6432 is the live
 # Postgres, and 11434 is Ollama. The Mac's build user must never be able to
 # reach any of them, and a typo in a --forward is the realistic way that
 # happens. So the refusal is in the code, not in a comment.
@@ -89,7 +89,7 @@ esac
 
 for bad in $FORBIDDEN_PORTS; do
 	if [ "$port" = "$bad" ]; then
-		die "port $bad is Kamron's live house, not an ssh port"
+		die "port $bad is the owner's live house, not an ssh port"
 	fi
 done
 
@@ -101,7 +101,7 @@ if [ -n "$forward" ]; then
 	esac
 	for bad in $FORBIDDEN_PORTS; do
 		if [ "$forward" = "$bad" ]; then
-			die "refusing to forward port $bad: that is Kamron's live Domovoi (core, web, database or Ollama). The Mac's build user never reaches the real house."
+			die "refusing to forward port $bad: that is the owner's live Domovoi (core, web, database or Ollama). The Mac's build user never reaches the real house."
 		fi
 	done
 	if [ "$forward" -lt "$LANE_LOW" ] || [ "$forward" -gt "$LANE_HIGH" ]; then
@@ -122,11 +122,11 @@ fi
 # One string for the remote shell, each argument single-quoted so a path with
 # a space survives. `caffeinate -i` keeps the Mac awake for as long as the
 # command runs; `nice` and `taskpolicy -b` put it in the background band so
-# Kamron's own work on the Mac comes first (plan 5.1, step 6).
+# The owner's own work on the Mac comes first (plan 5.1, step 6).
 #
 # An ssh session with no login shell gets a short PATH, and neither the place
 # xcodegen lands nor Homebrew's bin is on it, so they are added here rather
-# than in every script. On Kamron's Mac there is no Homebrew and the build
+# than in every script. On the owner's Mac there is no Homebrew and the build
 # user is a standard account that cannot install one, so XcodeGen is BUILT
 # FROM SOURCE into ~/tools (MIT, a build tool only) — that path comes first.
 argv=""

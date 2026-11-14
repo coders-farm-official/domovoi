@@ -29,9 +29,17 @@ import Synchronization
 ///   ``connected`` is false, which is also the state an unpaired phone is
 ///   permanently in on Android — its socket is refused — so the reachability
 ///   probe is the only evidence either phone has in that state.
-/// - **The player, the container guard's banner, the sidebar badge counts.**
-///   Later batches; ``ShellChrome`` takes the container banner as a
-///   parameter so the batch that has one has somewhere to put it.
+/// - **The container guard's banner and the sidebar badge counts.** Later
+///   batches; ``ShellChrome`` takes the container banner as a parameter so
+///   the batch that has one has somewhere to put it.
+///
+/// ### What arrived in this batch
+///
+/// **The player** (``player``). It is here and not on ``AppContainer``
+/// because ``PlayerModel`` is `@MainActor` and `AppContainer` is `Sendable`
+/// and not main-actor isolated, so a player cannot be a stored property of
+/// it. This object is already handed to every screen as `model:`, which is
+/// the other half of what the owner has to be.
 @MainActor
 @Observable
 public final class ShellModel {
@@ -196,6 +204,13 @@ public final class ShellModel {
     /// building many models over one container leaks a closure per model.
     private var networkSink: Int?
 
+    /// The container's token-health sink, for the same reason as
+    /// ``networkSink``. See ``TokenHealth``'s `changed` note for what this
+    /// being absent cost.
+    private var tokenHealthSink: Int?
+
+    private var selectionSink: Int?
+
     /// - Parameters:
     ///   - probe: one question to the server, for the reachability loop.
     ///     Android's `api.answers()`.
@@ -209,10 +224,18 @@ public final class ShellModel {
     ///   - deviceSelf: what this install calls itself, for the device
     ///     register. Nil means nothing can send one, and
     ///     ``registerSender`` is then nil — see its note.
+    ///   - listeners: this phone's "listening as" record. A test hands one
+    ///     over a ``SavedStateBox``.
+    ///   - player: how a player is built, for a test and for a platform with
+    ///     no audio engine. Left out, it is ``systemPlayer(_:_:)`` — the real
+    ///     AVFoundation one on iOS and nil everywhere else, and "everywhere
+    ///     else" includes the macOS this package's tests build for.
     public init(
         container: AppContainer,
         phoneCanChat: Bool = false,
         deviceSelf: (@Sendable () -> DeviceSelf)? = nil,
+        listeners: PlayerListenerStore? = nil,
+        player: ShellPlayerBuilder? = nil,
         probe: (@Sendable () async -> Bool)? = nil,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
@@ -221,6 +244,8 @@ public final class ShellModel {
         self.container = container
         self.phoneCanChat = phoneCanChat
         self.deviceSelf = deviceSelf
+        self.listeners = listeners ?? PlayerListenerStore()
+        self.buildPlayer = player ?? ShellModel.systemPlayer
         self.inputs = container.shellInputs()
         self.clock = clock
         self.tick = tick
@@ -233,6 +258,14 @@ public final class ShellModel {
             wait: wait,
             publish: { verdict in relay.send(verdict) }
         )
+        // Unclaimed server (UnclaimedServer.swift): each status read is sent
+        // to the address it was asked of, and its answer is checked against
+        // the store's current address when it lands.
+        self.unclaimed = UnclaimedServerModel(
+            server: container.store.serverURL,
+            read: { asked in await UnclaimedServerModel.read(using: client, server: asked) },
+            activeServer: { [container] in container.store.serverURL }
+        )
         // Every stored property is set, so `self` may be captured from here
         // on. Both sinks are connected after the fact rather than passed into
         // the initialisers above, because both have to reach back into this
@@ -244,6 +277,21 @@ public final class ShellModel {
         self.networkSink = container.onNetworkChange { [weak self] in
             Task { @MainActor in self?.networkChanged() }
         }
+        // A refused token or a new wait changes which screen this is, and a
+        // `429` on an ordinary read is not one of ``refresh()``'s triggers —
+        // so without this the `.waiting` card had nothing to raise it.
+        self.tokenHealthSink = container.onTokenHealthChange { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+        // And the one the connection dialog needs: its picker writes the
+        // store directly, through ``ServerTrustGate``, so without this a
+        // person who picked their house watched nothing happen —
+        // `ShellModelTest.testPickingAServerMovesTheAppWithNobodyCallingRefresh`.
+        self.selectionSink = container.onServerSelectionChange { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+        // Unclaimed server: "still not set up" is a toast like any other.
+        unclaimed.say = { [weak self] text in self?.showToast(text) }
         // A launch straight onto a waiting card has to count down too, and
         // the first `.active` is not a return, so `scenePhaseChanged` will
         // not refresh.
@@ -284,6 +332,19 @@ public final class ShellModel {
     }
 
     let verdicts: VerdictRelay
+
+    /// Whether the active server has been claimed (`UnclaimedServer.swift`,
+    /// Android's `AppShell.kt:165-197`). Asked when a server is picked
+    /// (``refresh()``), when the socket comes or goes
+    /// (``socketChanged(connected:sendRegister:)``), when the server comes
+    /// back into reach, on every real return to the screen
+    /// (``scenePhaseChanged(to:sendRegister:)``) and on `Check again`; the
+    /// blocker is drawn by `AppShellView` from
+    /// ``unclaimedReplaces(_:blocks:)``. Its own file carries the rules and
+    /// the per-server keying; each hook here (`init`, ``refresh()``, the
+    /// socket, the verdict, the scene phase) is a line or two marked
+    /// "Unclaimed server", so the shell's own code is unchanged around them.
+    public let unclaimed: UnclaimedServerModel
 
     // MARK: - what is drawn
 
@@ -421,8 +482,31 @@ public final class ShellModel {
 
     /// This phone's bar, filtered for this server and this install — every
     /// time it is drawn, never at save time (map §1.7).
+    ///
+    /// **It reads ``phoneBarRevision`` first**, and that read is the whole
+    /// redraw. The saved list lives in a store Observation cannot see, so
+    /// before this a write in Settings → App layout changed the data and
+    /// invalidated nothing: `PhoneBarView` kept its old tabs until the shell
+    /// was next drawn (the second "Needs a shared change" in
+    /// `design-notes/ios/overnight/systemsettings/DECISIONS.md`, measured on
+    /// trains S002/S005/S008 and again on I015, where a People tab saved by
+    /// `testNav_ASavedPeopleTabOpensSettingsPeople` never reached the bar).
+    /// Android's bar follows its `Prefs.phoneBar` StateFlow the moment it is
+    /// written; this is the same, through a tracked property.
     public var phoneBar: [Route] {
-        PhoneBar.routes(saved: PhoneBar.decode(container.store.phoneBar), visibility: visibility)
+        _ = phoneBarRevision
+        return PhoneBar.routes(saved: PhoneBar.decode(container.store.phoneBar), visibility: visibility)
+    }
+
+    /// Bumped by ``phoneBarSaved()``: the tracked stand-in for the store's
+    /// untracked `phoneBar`, so every view that read ``phoneBar`` (the bottom
+    /// bar, Home's grid) is invalidated by a save.
+    private var phoneBarRevision = 0
+
+    /// The saved bar was just written (Settings → App layout): redraw
+    /// everything drawn from it.
+    public func phoneBarSaved() {
+        phoneBarRevision &+= 1
     }
 
     /// Home's "everything" grid: what is not on the bar.
@@ -480,6 +564,17 @@ public final class ShellModel {
     }
 
     public func navigate(_ route: Route) {
+        // **A fresh visit to Settings starts at its index**, which is
+        // Android's (`SettingsScreen.kt:233-236`) and used to be free:
+        // ``settingsPlace`` lived as a `@State` on the view, so a new push
+        // built a new view with a new `.index`. Holding it here to survive a
+        // scene-phase bounce (see that property) means the reset has to be
+        // said out loud, and this is where a fresh visit happens.
+        //
+        // Not in `openSettingsTab(_:)`, which is the other way in: that one
+        // asks for a section by name, and `SettingsPlaceholder` sets the
+        // place from the request it takes.
+        if route == .settings { settingsPlace = .index }
         navigation.navigate(route)
     }
 
@@ -499,6 +594,29 @@ public final class ShellModel {
     public func takeSettingsTab() -> String? {
         navigation.takeSettingsTab()
     }
+
+    /// **Which panel Settings has open** — its index, a group, or a section
+    /// inside one.
+    ///
+    /// Held here, beside ``takeSettingsTab()``, and not as a `@State` on
+    /// `SettingsPlaceholder`, because a `@State` there did not survive a
+    /// scene-phase bounce. The house's own alert banner takes the scene
+    /// `.active` → `.inactive` → `.active`, ``scenePhaseChanged(to:
+    /// sendRegister:)`` runs ``refresh()`` on the way back in, the
+    /// destination is rebuilt and every `@State` under it goes — so somebody
+    /// reading Settings ▸ Rooms & devices ▸ Phones & browsers was thrown back
+    /// to the Settings index **with no action of their own**.
+    ///
+    /// Train I003 measured it in `testPlayer_TheListeningAsCardAudits`: the
+    /// card was reached at t=7.3s, the banner ran t=8.39s to t=15.19s, and
+    /// the tree and screenshot at t=15.2s are the index. The navigation
+    /// `path` is untouched throughout — it is only the section selection that
+    /// is lost, which is why the path was not where the fix went.
+    ///
+    /// The one thing the `@State` gave for free was Android's "a later visit
+    /// starts at the index" (`SettingsScreen.kt:233-236`): a new push built a
+    /// new view. That is said out loud now, in ``navigate(_:)``.
+    public var settingsPlace: SettingsPlace = .index
 
     /// The person tapped "not now" on the pairing screen. The one way out of
     /// it other than pasting a token, on both platforms.
@@ -724,6 +842,7 @@ public final class ShellModel {
             // Why `.inactive` needs none of this: it does not suspend the
             // app, so no callback is missed and `connected` *is* believable.
             // The re-mint earns its cost only against a frozen app.
+            let returning = departed
             if departed {
                 departed = false
                 // Before `refresh()`, because `connected` is **not to be
@@ -745,6 +864,12 @@ public final class ShellModel {
             // address and `wake()` is a no-op on a socket that is not parked.
             if was != .active {
                 refresh()
+            }
+            // Unclaimed server: a real return (Android's `onStart`), after
+            // `refresh()` so the read is of the server the app came back to.
+            // The owner may have just claimed it in a browser.
+            if returning {
+                unclaimed.ask(.foreground, unreachable: unreachable)
             }
         case .inactive, .background:
             // `.inactive` is a step on the way out and also a transient state
@@ -800,6 +925,11 @@ public final class ShellModel {
     public func refresh() {
         inputs = container.shellInputs()
         takePendingRoute()
+        // Before the reads below: this is where an address change arrives, and
+        // a player still stamped with the last house would save the next ten
+        // seconds of a book to a server that has never heard of it
+        // ([[read-after-await-wrong-key]] in its simplest form).
+        playerServerChanged()
         updateReachability()
         updateWaitTick()
         container.socket.serverChanged()
@@ -808,6 +938,12 @@ public final class ShellModel {
         // same place: `AppContainer.onServerChange`'s own note says why this
         // is a registry rather than a line in Home.
         container.serverAddressChanged()
+        // Unclaimed server: a newly picked address starts from "not known"
+        // and is asked. An unchanged address is not — this runs once a
+        // second under the token-trouble countdown.
+        if unclaimed.serverIs(inputs.serverURL) {
+            unclaimed.ask(.serverPicked, unreachable: unreachable)
+        }
     }
 
     /// Whether the token-trouble card's countdown is actually being written.
@@ -827,6 +963,10 @@ public final class ShellModel {
     public func socketChanged(connected: Bool, sendRegister: (@MainActor () -> Void)? = nil) {
         self.connected = connected
         updateReachability()
+        // Unclaimed server: the socket coming or going is one of Android's
+        // keys, and this is also the launch read — `watchSocket()` reports
+        // the socket's current value once at startup.
+        unclaimed.ask(.socket, unreachable: unreachable)
         if connected, let sendRegister, registerIfDue(reason: .changed) {
             sendRegister()
         }
@@ -899,6 +1039,17 @@ public final class ShellModel {
     /// What this install tells the server about itself, or nil when nothing
     /// can say — which is the state an app built without one is in.
     private let deviceSelf: (@Sendable () -> DeviceSelf)?
+
+    /// What this install calls itself on the wire, or nil when nothing can
+    /// say.
+    ///
+    /// Read by the room queue, whose every request carries `device_id`: the
+    /// server decides from it whether this phone may edit the queue, and a
+    /// request without one would be refused the household's view of who
+    /// queued what. One id per install, so it comes from the one place that
+    /// already holds it rather than being minted a second time beside the
+    /// screen that needs it.
+    public var deviceID: String? { deviceSelf?().deviceID }
 
     /// The device register's sender, or nil when there is nothing to send.
     ///
@@ -1005,6 +1156,172 @@ public final class ShellModel {
         _ = navigation.capabilitiesChanged(visibility)
     }
 
+    // MARK: - the phone's own player (D49 / D2)
+
+    /// The one ``PlayerModel`` in the app, or nil on a build that has no
+    /// audio engine.
+    ///
+    /// The owner, 2026-11-03 (answer 2 / 49): one shared player, "as the next
+    /// batch". Android holds it on its own container — `app.player`,
+    /// `AppContainer.kt:95`, reached by `BookPlay.kt:19`, `StationPlay.kt:71`,
+    /// `PlayerTab.kt` and the phone-media screens alike — so that Podcasts,
+    /// Audiobooks, Stations, Music and PhoneMedia **share one player rather
+    /// than one each**. Two players would be two things heard at once, which
+    /// is the bug ``PlayerModel/play(_:startAt:resumeSec:speed:)``'s own
+    /// `leaveRoom` exists for.
+    ///
+    /// ### Why here and not on ``AppContainer``
+    ///
+    /// ``PlayerModel`` is `@MainActor`; ``AppContainer`` is `Sendable` and not
+    /// main-actor isolated, so a `@MainActor` player cannot be one of its
+    /// stored properties. This object is `@MainActor`, lives for the shell and
+    /// is already handed to every screen as `model:` — which is the whole of
+    /// what an owner has to be.
+    ///
+    /// ### Built on first use, never at launch
+    ///
+    /// ``PlayerAudioSessionControl`` says it in as many words: an app that
+    /// activates a `.playback` session at launch **stops whatever the person
+    /// was already listening to** (`PlayerAudioSession.swift:11-18`). So
+    /// nothing is built until something asks — the first `play`, or a screen
+    /// asking whether it may draw a play control. `AVAudioSession` is touched
+    /// only by ``PlayerModel/play(_:startAt:resumeSec:speed:)`` itself, so
+    /// merely building one is silent; building it at launch anyway would put
+    /// four `NotificationCenter` observers and the mic arbiter's hook in place
+    /// for a player nobody asked for. (**Not** an `MPRemoteCommandCenter`
+    /// handler, which an earlier draft of this sentence claimed:
+    /// ``MPNowPlayingPublisher/wireIfNeeded()`` runs from `publish` and
+    /// `setEnabled` only — `PlayerNowPlaying.swift:55`, `:77` — so the lock
+    /// screen is wired by the first *play*, not by the build.)
+    ///
+    /// "First use" is as wide as a screen **asking** whether it may draw a
+    /// play control: `RouteScreen.swift`'s `stations` slot reads this on a
+    /// visit to Stations, before anything is tapped. That is the intent — the
+    /// question "may I draw play?" cannot be answered without the answer — and
+    /// it is still not launch.
+    ///
+    /// ### Why the storage is `@ObservationIgnored`
+    ///
+    /// A view body reads this. A tracked write inside a body evaluation is
+    /// SwiftUI's "Modifying state during view update", so the two fields the
+    /// lazy build touches are outside observation. Nothing needs to observe
+    /// *the player slot*; everything observes the player's own `@Observable`
+    /// state, which is what changes when it plays.
+    public var player: PlayerModel? {
+        if let heldPlayer { return heldPlayer }
+        guard let deviceID, !ServerCredentials.isBlank(deviceID) else {
+            // No device id, no player: a player built with an empty id writes
+            // every listener's place into one row belonging to nobody, in a
+            // slot the server keys by device (`audiobooks.py:599-604`).
+            //
+            // **Unreachable in the shipping app, and review 2 of the
+            // 2026-11-03 batch is what measured it.** The id does NOT come
+            // from joining a house: `DeviceIdentity.stable(in:)` returns the
+            // saved one or mints `"ios-"` plus eight random bytes and writes
+            // it back (`DeviceRegistry.swift:391-403`), on first launch, with
+            // no server in it — and `DomovoiApp.swift:142` is the only
+            // `ShellModel(` in the app and always passes it. So this arm is
+            // reached by a `ShellModel` built with no `deviceSelf` at all,
+            // which is a test's, and by nothing a person can do. Anything
+            // written on the premise that an unpaired phone has no player was
+            // wrong; the sentences hung on it are deleted rather than
+            // reworded (`StationsStrings`, `PhoneMediaStrings`).
+            return nil
+        }
+        guard let made = buildPlayer(container, deviceID) else { return nil }
+        playerBuilds += 1
+        heldPlayer = made
+        // The scope is settled **before** anything can be queued, so the
+        // first item is stamped with the house it came from.
+        made.serverChanged(to: playerScope)
+        made.listenerPersonID = listeners.personID
+        // Where the player's own late sentences go. The two that come back
+        // with nobody holding the question — a room's answer to the pause a
+        // play here sent it, and a fire-and-forget room control that failed —
+        // reach the person through the shell's toast, which is the one surface
+        // that outlives the screen the tap was on. ``PlayerModel/say`` says
+        // which two and why it is not every refusal.
+        made.say = { [weak self] note in self?.showToast(note) }
+        return made
+    }
+
+    /// Whether a player exists **without building one**.
+    ///
+    /// For a test, and for anything that wants to say "nothing is playing"
+    /// without the asking being what starts a player. Reading ``player``
+    /// builds one; reading this never does.
+    public var playerIsBuilt: Bool { heldPlayer != nil }
+
+    /// How many players this shell has built. One, for the life of a shell —
+    /// `PlayerOwnerTests` is the thing that says so.
+    ///
+    /// Outside observation with the other two: a route slot reads ``player``
+    /// from a `body` to decide whether it may draw a play control
+    /// (`RouteScreen.swift`'s `stations` slot), and a **tracked** counter
+    /// moving there is SwiftUI's "Modifying state during view update".
+    @ObservationIgnored public private(set) var playerBuilds = 0
+
+    @ObservationIgnored private var heldPlayer: PlayerModel?
+
+    private let buildPlayer: ShellPlayerBuilder
+
+    /// Which house the app talks to now, as the player's own scope type.
+    ///
+    /// Read off the **store** and not off ``inputs``: `inputs` is a snapshot
+    /// taken at the last ``refresh()`` and can lag the store by one switch,
+    /// and the client reads the store — so the store is what a request was
+    /// actually aimed at. The same reason ``register()`` reads it there.
+    private var playerScope: PlayerServerScope {
+        let url = container.store.serverURL
+        let pin = IdentityGate.pinKey(url).flatMap { container.store.pinFor($0) }
+        return PlayerServerScope.of(serverURL: url, pin: pin)
+    }
+
+    /// Tell the player the house moved, if there is one.
+    ///
+    /// **Told, not torn down**, which is the whole reason
+    /// ``PlayerModel/serverChanged(to:)`` exists: it drops whatever came from
+    /// the old server out of the queue, ends a cast to one of its rooms
+    /// *without a word to the new server*, and **leaves the phone's own songs
+    /// playing**. Tearing the player down here would stop a song that lives on
+    /// the handset because the phone changed house, which is nothing to do
+    /// with it. What *is* torn down is everything of the old house: that is
+    /// `dropServerMedia()`, inside the player.
+    ///
+    /// Called from ``refresh()``, which is where every address change already
+    /// arrives, and a no-op when the house has not moved.
+    /// **The shell keeps no copy of the scope.** It held one until this
+    /// review: a field that merged the old spelling with the new
+    /// (``PlayerServerScope/merge(_:)``), was stored, and was then read by
+    /// nothing — the *unmerged* scope went to the player, which merges against
+    /// its own held one anyway (`PlayerModel.serverChanged`). Dead state that
+    /// reads as if the shell were tracking something is worse than no state:
+    /// the next reader believes it.
+    private func playerServerChanged() {
+        heldPlayer?.serverChanged(to: playerScope)
+    }
+
+    /// Who the house's resume positions are saved under, on this phone.
+    ///
+    /// The owner, 2026-11-03 (answer 11): "yes, match Android: build the
+    /// 'listening as' picker". ``PlayerListenerStore`` is this phone's own
+    /// record of it, exactly as `prefs.listenerPersonId` is on Android
+    /// (`Prefs.kt:115`) — **one value for the install**, not one per house,
+    /// which is Android's shape.
+    public let listeners: PlayerListenerStore
+
+    /// The listener changed in Settings: the player saves under the new
+    /// person from here on.
+    ///
+    /// Only ever **forward**: a place already written under the old person
+    /// stays theirs. That is the server's own model — the row is keyed by
+    /// (device, person), `spoken_audio.py:145-147` — and moving rows between
+    /// people is not something a picker may do behind somebody's back.
+    public func listenerChanged(to personID: String?) {
+        listeners.set(personID)
+        heldPlayer?.listenerPersonID = personID
+    }
+
     /// Tear the loop down: the shell is going away.
     public func stop() {
         // Unsubscribe, do NOT stop the socket: it is ``AppContainer``'s and
@@ -1020,6 +1337,14 @@ public final class ShellModel {
         if let networkSink {
             container.removeNetworkChangeSink(networkSink)
             self.networkSink = nil
+        }
+        if let tokenHealthSink {
+            container.removeTokenHealthChangeSink(tokenHealthSink)
+            self.tokenHealthSink = nil
+        }
+        if let selectionSink {
+            container.removeServerSelectionSink(selectionSink)
+            self.selectionSink = nil
         }
     }
 
@@ -1099,9 +1424,18 @@ public final class ShellModel {
     /// back, which a probe's cadence could thrash — so that rescue is bounded
     /// by ``stateSocketConnectBudgetMs`` and the bound is measured
     /// (`testWakingASocketThatIsStillConnectingDoesNotThrashIt`).
-    private func verdictArrived(_ verdict: Bool) {
+    /// Internal rather than private so `UnclaimedServerTests` can pin the
+    /// back-in-reach guard below: the loop publishes a verdict on **every**
+    /// probe while the socket is down (``askWhileOnScreen``), so without
+    /// `was` an unpaired phone beside an answering server would send a
+    /// status read every probe, for ever.
+    func verdictArrived(_ verdict: Bool) {
+        let was = unreachable
         unreachable = verdict
         container.socket.wake()
+        // Unclaimed server: back in reach is a new chance to ask (Android's
+        // `unreachable` key); a house out of reach is never asked.
+        if was, !verdict { unclaimed.ask(.reachable, unreachable: false) }
     }
 
     /// The network picture changed.

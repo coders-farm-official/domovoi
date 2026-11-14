@@ -6,7 +6,7 @@ import Foundation
 /// `android/.../data/Prefs.kt`'s `KnownServer`. `url` is always the
 /// **normalised** spelling, because ``TrustBook/upsertKnown(url:name:)`` is the
 /// only thing that writes one and it normalises first.
-public struct KnownServer: Equatable, Sendable {
+public struct KnownServer: Equatable, Sendable, Codable {
     public let url: String
     public let name: String?
 
@@ -50,7 +50,7 @@ public struct KnownServer: Equatable, Sendable {
 /// dead state, so it is not kept — and because it is not kept, the cascade
 /// has nothing to remove where Android removes a trust decision. Named in
 /// `I1C3-REPORT.md` as a divergence rather than argued for here.
-public struct TrustBook: Equatable, Sendable {
+public struct TrustBook: Equatable, Sendable, Codable {
 
     /// The server in use, normalised, or blank.
     public var serverURL = ""
@@ -81,6 +81,55 @@ public struct TrustBook: Equatable, Sendable {
 
     public init(serverURL: String = "") {
         self.serverURL = serverURL
+    }
+
+    // MARK: - saved, and read back
+
+    /// The fields that go into a saved blob, which is **every field except
+    /// ``tokens``**.
+    ///
+    /// A household token is a credential and rests in the Keychain
+    /// (``TokenVault`` says at length under which protection class and why).
+    /// `UserDefaults` is a plain file in the app container and is not a place
+    /// to put one — so the one store that writes a book out
+    /// (``SavedShellStore``) must not be able to by accident. Leaving
+    /// `tokens` out of these keys makes that a property of the type instead
+    /// of a rule a writer has to remember: `encode(to:)` cannot emit it and
+    /// ``init(from:)`` does not look for it.
+    ///
+    /// The names are Android's `Prefs` keys where it has one, for the reason
+    /// ``ServerIdentity/Pin``'s coding keys are: the two apps' stored blobs
+    /// are then the same shape to a person comparing them.
+    enum CodingKeys: String, CodingKey {
+        case serverURL = "server_url"
+        case trusted = "trusted_servers"
+        case known = "known_servers"
+        case pins = "identity_pins"
+        case rejected = "rejected_tokens"
+        case sharedScreens = "shared_screens"
+        case owners
+    }
+
+    /// **Every field is optional on the way in**, and a missing one is that
+    /// field's default.
+    ///
+    /// Not defensiveness: a blob written by an older build is missing exactly
+    /// the keys that build did not have, and the synthesised decoder throws on
+    /// the first of them. For the one blob that holds the person's server,
+    /// that is an upgrade which silently forgets the house — the pins, the
+    /// trust and the rows with it — because a later version added a field.
+    /// The keys above are append-only for the same reason; renaming one is
+    /// the same event as dropping it.
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        serverURL = try values.decodeIfPresent(String.self, forKey: .serverURL) ?? ""
+        trusted = try values.decodeIfPresent(Set<String>.self, forKey: .trusted) ?? []
+        known = try values.decodeIfPresent([KnownServer].self, forKey: .known) ?? []
+        pins = try values.decodeIfPresent([String: ServerIdentity.Pin].self, forKey: .pins) ?? [:]
+        rejected = try values.decodeIfPresent(Set<String>.self, forKey: .rejected) ?? []
+        sharedScreens =
+            try values.decodeIfPresent([String: Bool].self, forKey: .sharedScreens) ?? [:]
+        owners = try values.decodeIfPresent([String: String].self, forKey: .owners) ?? [:]
     }
 
     // MARK: - trust

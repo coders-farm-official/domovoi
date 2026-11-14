@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// Settings → Phones & browsers: the three cards this batch owns, as
 /// decisions and words.
@@ -9,17 +10,18 @@ import Observation
 /// **Server**, **Household token** and **Trusted servers**, plus the
 /// forgetting cascade they both reach.
 ///
-/// ### What §6.5 is, and why it is not here
+/// ### §6.5, and which of its cards is now here
 ///
-/// The same Settings section also holds **Appearance** (a theme this app has
-/// no store for and no asset catalogue to switch), **This device** (a name
-/// read back from the device register, whose sender is I1-D's), **This phone
-/// belongs to** and **Listening as** (both over `/api/people`, a list nothing
-/// in this app fetches yet, and the second writes `householdNames` for a
-/// phone chat that does not exist). Each needs a store key or a network call
-/// that no batch has built. They are **not drawn as stubs either**: a theme
-/// chip that does not change the theme is the misleading control the owner
-/// has ruled out twice. §6.5 is its own batch, and the report says so.
+/// **Listening as** is here, as of the 2026-11-03 batch: The owner's answer 11,
+/// "yes, match Android: build the 'listening as' picker". Its store is
+/// ``PlayerListenerStore`` and its rows are ``listenerOptions(people:)``.
+///
+/// The rest of §6.5 is still not here, and still not stubbed: **Appearance**
+/// (a theme this app has no store for and no asset catalogue to switch),
+/// **This device** (a name read back from the device register) and **This
+/// phone belongs to** (which writes an owner the device register sends, not a
+/// listener). A theme chip that does not change the theme is the misleading
+/// control the owner has ruled out twice.
 
 // MARK: - §6.3, the rows
 
@@ -241,5 +243,238 @@ public func pairingWithheldText(
         // because a nil here would leave the screen with neither a field nor
         // a word.
         return TokenPasteField.message(.unavailable)
+    }
+}
+
+
+// ===========================================================================
+// §6.5 "Listening as" — whose resume positions this phone saves
+// ===========================================================================
+
+/// This phone's record of who is listening.
+///
+/// `prefs.listenerPersonId` (`Prefs.kt:115`, `:580`), down to its shape:
+/// **one value for the install**, not one per server. Android keeps it that
+/// way deliberately — a person is a person whichever house the phone is
+/// pointed at, and the id is only ever *sent* to the house that is connected,
+/// which is where it means something.
+///
+/// It is a `String?` and not an `Int?` for the same reason Android's is: the
+/// stored value came from a text field once and may be anything, and the one
+/// place that matters — the query and the body — parses it as an integer and
+/// **leaves it out when it is not one** (``PlayerServerPositions/readQuery(deviceID:personID:)``).
+/// A `person_id=` the server cannot read is a 422, and a 422 on a position
+/// read is swallowed into "start at the top", which is a three-hour book
+/// silently resuming at zero.
+///
+/// Over ``SavedState`` rather than `UserDefaults` directly, so a test can
+/// drive it with a ``SavedStateBox`` and so this compiles and is tested by
+/// `pkgtest.sh` — the same seam ``SavedShellStore`` uses and for the same
+/// reason.
+public final class PlayerListenerStore: @unchecked Sendable {
+
+    /// Its own `UserDefaults` key, under the app's prefix. **Not a field in
+    /// the shell's blob**: the shell's blob is one write of the server, the
+    /// trust and the pins, and picking a listener has nothing to do with any
+    /// of them — a listener change rewriting the trust book is how a
+    /// half-applied write comes to trust a server there is no row for
+    /// (``UserDefaultsSavedState/chatPinsKey`` says the same about chat pins).
+    public static let key = "domovoi.player.listener"
+
+    private let place: any SavedState
+    private let held = Mutex<String?>(nil)
+
+    public init(place: (any SavedState)? = nil) {
+        self.place = place ?? UserDefaultsSavedState(key: PlayerListenerStore.key)
+        held.withLock { $0 = Self.decode(self.place.read()) }
+    }
+
+    /// Who is listening, or nil for "me (this device)" — the unidentified
+    /// listener's slot on the server.
+    public var personID: String? { held.withLock { $0 } }
+
+    /// Record the choice. A blank is a nil, so a stored empty string from any
+    /// source reads as "this device" rather than as a person called nothing.
+    public func set(_ id: String?) {
+        let tidy = id?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = (tidy?.isEmpty ?? true) ? nil : tidy
+        held.withLock { $0 = next }
+        place.write(Self.encode(next))
+    }
+
+    /// A blob that cannot be read is **no listener**, not a crash: losing the
+    /// choice costs one trip to Settings, where a throw here would be a
+    /// launch that fails on a corrupt plist.
+    private static func decode(_ blob: Data?) -> String? {
+        guard let blob, !blob.isEmpty,
+              let text = String(data: blob, encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return nil }
+        return text
+    }
+
+    private static func encode(_ id: String?) -> Data {
+        Data((id ?? "").utf8)
+    }
+}
+
+/// One row of the "Listening as" dropdown: `nil` first, then the household.
+///
+/// `listenerOptions = listOf(null) + people` (`ConnectionPanel.kt:106`). The
+/// nil row's label is Android's own — `"me (this device)"` (`:338`) — and it
+/// is first because it is the state a phone that has never been asked is in.
+public struct ListenerOption: Equatable, Sendable, Identifiable {
+
+    /// Nil for "me (this device)".
+    public let personID: String?
+    public let name: String
+
+    public var id: String { personID ?? "" }
+
+    public init(personID: String?, name: String) {
+        self.personID = personID
+        self.name = name
+    }
+}
+
+/// The dropdown's rows for a household.
+///
+/// `ConnectionPanel.kt:106`. A people list that has not answered yet is
+/// **just the nil row**, which is honest: the picker still works, and the one
+/// thing it can offer is the slot that needs no server.
+public func listenerOptions(people: [Person]) -> [ListenerOption] {
+    [ListenerOption(personID: nil, name: PlayerStrings.listenerThisDevice)]
+        + people.map { ListenerOption(personID: String($0.id), name: $0.name) }
+}
+
+/// Which option is selected for a stored id.
+///
+/// `people.firstOrNull { it.id.toString() == listenerId }` (`:107`), and the
+/// **nil row when the stored person is not in the list** — a person removed
+/// from the household on the dashboard leaves this phone pointing at an id
+/// that no longer names anybody, and "me (this device)" is the only honest
+/// thing to show for it. Android lands on the same answer by `firstOrNull`.
+public func selectedListener(_ options: [ListenerOption], personID: String?) -> ListenerOption? {
+    guard let personID, !personID.isEmpty else { return options.first }
+    return options.first { $0.personID == personID } ?? options.first
+}
+
+/// The household, for the "listening as" picker and the two hint chips.
+///
+/// `rememberApi("people-hint") { it.api.get("/api/people").decode<List<PersonRow>>() }`
+/// (`AudiobooksScreen.kt:339`, `PodcastsScreen.kt:308`, and the panel's own at
+/// `ConnectionPanel.kt:103`). One read of `/api/people`, keyed to the server
+/// like every other read in this app, so a house move re-asks and a name from
+/// the old house cannot be shown under the new one's listener id.
+///
+/// It is a model rather than a `@State` in each of the three views for the
+/// standing reason: a view that holds a `Task` is a view whose request dies
+/// when a lazy row recycles, and the name under a chip is read on every
+/// redraw.
+@MainActor
+@Observable
+public final class PlayerListenerModel {
+
+    public let people: ApiRead<[Person]>
+
+    private let listeners: PlayerListenerStore
+
+    /// Who this phone saves under, or nil for "me (this device)".
+    ///
+    /// **A stored mirror of the store, and that is the point.**
+    /// ``PlayerListenerStore`` is a plain `final class` over a `Mutex` — it
+    /// has to be, because it is `Sendable` and read off the main actor by
+    /// every position request — so a `var` that read straight through it
+    /// would register no view against a change. A tick in the dropdown and a
+    /// chip on two screens are drawn from this, and until the review they
+    /// followed a pick only because the toast written on the same line
+    /// mutated ``ShellModel/toast`` and re-rendered the whole shell with
+    /// them. Drop that toast, or move the shell's toast into its own overlay
+    /// subtree, and the tick would silently stop following the pick while the
+    /// Simulator case went on passing.
+    ///
+    /// The store stays the truth — it is what a request reads, per request
+    /// (`ApiPositionRemote.kt:27`) — and this is re-synced from it in
+    /// ``start()`` and in ``adopt()``, never written independently. Three
+    /// views hold three of these models and the store is one value for the
+    /// install, so a pick made in Settings reaches the other two screens on
+    /// their next appearance, which is when `start()` runs.
+    public private(set) var personID: String?
+
+    public init(in container: AppContainer, listeners: PlayerListenerStore) {
+        self.listeners = listeners
+        self.personID = listeners.personID
+        let client = container.client
+        self.people = ApiRead(in: container) {
+            try await client.get(PeoplePath.roster, as: [Person].self)
+        }
+    }
+
+    /// Take whatever the store now holds.
+    ///
+    /// Called after a pick — by the picker, next to ``ShellModel/listenerChanged(to:)``,
+    /// which is what actually writes — rather than taking the id as an
+    /// argument, so this and the store cannot disagree about a blank or an
+    /// untrimmed value (``PlayerListenerStore/set(_:)`` tidies both).
+    public func adopt() { personID = listeners.personID }
+
+    /// The screen appeared.
+    ///
+    /// Re-read only when there is nothing yet, or when the house has moved
+    /// (``ApiRead/serverChanged()``, which re-reads only if the address is
+    /// actually different). Three views share this model's shape and one of
+    /// them is a chip under a lazy list's header: a bare `refresh()` here
+    /// would ask `/api/people` again on every appearance of every one of them.
+    public func start() {
+        // The listener is one value for the install and this is one of three
+        // models that mirror it, so a pick made in Settings is taken here on
+        // the next appearance of this screen.
+        adopt()
+        if people.data == nil, people.error == nil {
+            people.refresh()
+        } else {
+            people.serverChanged()
+        }
+    }
+
+    public func stop() { people.stop() }
+
+    /// The dropdown's rows.
+    public var options: [ListenerOption] { listenerOptions(people: people.data ?? []) }
+
+    /// Which row is selected, which is the nil row for a person who has since
+    /// left the household.
+    public var selected: ListenerOption? { selectedListener(options, personID: personID) }
+
+    /// Whether a chip should be drawn at all.
+    ///
+    /// `val id = listenerId ?: return` (`AudiobooksScreen.kt:337`) — a phone
+    /// that has never picked anybody shows **nothing**, rather than a chip
+    /// saying "listening as this device", because that is the state every
+    /// phone starts in and a chip for it would be on every screen for ever.
+    public var showsChip: Bool { personID != nil }
+
+    /// The chip's words, with an ellipsis until the name lands.
+    public var chip: String {
+        PlayerStrings.listeningAsChip(options.first { $0.personID == personID }?.name)
+    }
+
+    /// The toast after a pick (`ConnectionPanel.kt:369-372`).
+    public func toast(for option: ListenerOption) -> String {
+        option.personID == nil
+            ? ShellStrings.listeningAsThisDevice
+            : ShellStrings.listeningAs(option.name)
+    }
+
+    /// The card's failure sentence, or nil while there is nothing to say.
+    ///
+    /// Only when the read has **no data at all**: `peopleState.error != null
+    /// && peopleState.data == null` (`ConnectionPanel.kt:357`). A list that is
+    /// a few seconds old with a failed refresh behind it is still a list worth
+    /// picking from, which is the whole reason ``ApiRead`` keeps both.
+    public var trouble: String? {
+        guard people.data == nil, let why = people.error else { return nil }
+        return PlayerStrings.couldNotLoadPeople(why)
     }
 }

@@ -1,0 +1,1213 @@
+import XCTest
+
+/// The Images screen, against the stub house.
+///
+/// Every case is `testImages_<What>` and every piece of evidence is
+/// `images-…`, which is how a train hands these results back to the branch
+/// that wrote them (NIGHT-RULES §2).
+///
+/// ### The one thing to know before reading a failure here
+///
+/// **Images is the first route in this app that is gated on a capability.**
+/// `Route.requiredCapability` for `.images` is `capImagegen`, and
+/// `Capabilities.has` resolves a capability from
+/// `plugins[].android_capabilities` (`Capabilities.swift:79-81`). The stub
+/// house answers `/api/capabilities` with a **flat** `{"capabilities": [...]}`
+/// list (`stubhouse.py:706-712`) that iOS has no key for and does not decode,
+/// so until that route also publishes `plugins`, `has("imagegen")` is false,
+/// the route is invisible, and a pushed Images lands back on Home.
+///
+/// Every case except ``testImages_WithoutThePluginTheRouteIsNotOffered()``
+/// therefore fails on an unfixed house, and it fails in one recognisable way:
+/// `openImages` never finds its marker and prints the tree, which will show
+/// Home. That is the *house* being wrong and not the app — the fix is about
+/// six lines in `stubhouse.py`, written out in
+/// `design-notes/ios/overnight/images/DECISIONS.md` under "Needs a shared
+/// change", and `fixtures/images.py` already carries the `PLUGIN` dict for
+/// the collector to pick up. Nothing in these cases should be weakened to
+/// make them pass before then.
+///
+/// ### This screen is read-only from a phone, and that is why cases went
+///
+/// `POST …/generate`, `POST …/jobs/{id}/cancel` and `DELETE …/history/{id}`
+/// are all `dependencies=ADMIN_ONLY` on the plugin
+/// (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied at
+/// `:360`, `:339`, `:651`) and this app sends only `X-Device-Token`, so all
+/// three answered 401 from every phone. The controls are not drawn
+/// (2026-11-03, the owner's answer 41; `ImagesView.swift`'s header has the
+/// evidence), and the five cases that drove them are gone — each one named
+/// where it was, with what replaced it.
+///
+/// Nothing was weakened to make a case pass: the absences are asserted by
+/// name in `testScreens_ImagesOffersNothingOnlyAnAdminCanDo`, and the rules
+/// the deleted cases covered are pinned in the package, where they need no
+/// button.
+///
+/// ### What is not tested here, and where it is tested instead
+///
+/// **A server switch inside the generate round trip.** The only way to
+/// change the address from a UI case is the app's connection sheet, which
+/// NIGHT-RULES §1 forbids on a Simulator — it starts a LAN discovery sweep
+/// across the owner's real home network. The case exists and switches **inside**
+/// the round trip in the package, where the whole thing is driveable:
+/// `ImagesTests.testAServerSwitchMidGenerateLandsNowhere`, with a parked
+/// request. [[read-after-await-wrong-key]].
+extension StubHouseUITests {
+
+    // MARK: - the house, by the words on its screen
+
+    /// The stub's own seed (`fixtures/images.py`), spelt out here rather than
+    /// imported, as every other string in this file is: a query that silently
+    /// followed a renamed constant would stop testing what it claims to.
+    enum StubImages {
+
+        /// The three model **labels** the fixture serves — two installed, one
+        /// not.
+        ///
+        /// Every one of them must now appear nowhere on screen, for a reason
+        /// that grew: the picker filtered on `installed`
+        /// (`ImagesScreen.kt:148`) so the third was always forbidden, and
+        /// since 2026-11-03 there is no picker at all — `generate` is
+        /// admin-only, so the composer is not drawn
+        /// (`ImagesView.swift`'s header). They are the labels
+        /// `testScreens_ImagesOffersNothingOnlyAnAdminCanDo` denies.
+        ///
+        /// Their case matters: the history card's meta line says
+        /// `sdxl-turbo`, lower-cased and hyphenated, which is the job's
+        /// `model` id and not the catalog's label. So an exact-label query
+        /// for `SDXL Turbo` is a query for the picker and for nothing else on
+        /// this screen.
+        static let installedModel = "SDXL Turbo"
+        static let otherInstalledModel = "Flux Schnell"
+        static let uninstalledModel = "HiDream E1"
+        /// The menu row's own wording — `label + "  ·  recommended"`
+        /// (`:318`), both spaces either side. Nothing else on the screen
+        /// spells anything that way, which is what makes it the one string
+        /// that catches a picker drawn without its accessibility label.
+        static let recommended = "SDXL Turbo  ·  recommended"
+
+        /// The lane: a running job and a failed one.
+        static let runningPrompt = "a brass orrery on a velvet desk"
+        static let runningProgress = "sampling step 7 of 20 · 42%"
+        static let failedPrompt = "a cathedral of folded paper"
+        static let failedError = "the engine ran out of memory"
+
+        /// **The discriminating row.** `done` is not `pending`, `running`
+        /// or `failed`, so `laneJobs` (`:180-183`) must not hold it, and
+        /// `quicksilver` is in no other row in the fixture — so the word
+        /// being anywhere on screen means the lane filter was widened.
+        ///
+        /// The fixture's word for that row was `completed` until 2026-11-03,
+        /// when the routes were verified against the plugin's own code: the
+        /// column is `CHECK`-ed to `pending`, `running`, `done`, `failed`,
+        /// `cancelled` (`migrations/V001__imagegen_schema.sql`) and
+        /// `completed` is a word no version of the plugin has ever sent.
+        static let completedNotInLane = "quicksilver"
+
+        /// That row's status pill, which must not be on screen either.
+        ///
+        /// Its own constant, because the word has to be the fixture's: this
+        /// assertion is worthless against a word the house never sends, and
+        /// it was `completed` for four trains.
+        static let doneStatusWord = "done"
+
+        /// History row 21: four images, full params, a prompt that wraps.
+        static let historyPromptWord = "kingfisher"
+        /// The whole prompt, as `fixtures/images.py:207-209` writes it.
+        ///
+        /// Here because two cases need the leaf *itself* and not a word in
+        /// it: ``testImages_AtTheLargestTypeSize()`` measures its height at
+        /// both type sizes, and the audit case pins Apple's one attributed
+        /// `Text clipped` to this label — the three-line cap is Android's
+        /// (`ImagesScreen.kt:417-422`) and the measurement is what says the
+        /// three lines grow.
+        static let historyPrompt =
+            "a kingfisher on a frozen reed, painted as a woodblock print, "
+            + "with a wide pale sky above the ice and a single red seal in the corner"
+        static let historyMeta = "sdxl-turbo · 1024 × 1024 · 28 steps · seed 773451"
+        /// The three tiles that are drawn, and the fourth that is not. The
+        /// first name carries a **space**, which is what proves the path
+        /// escape end to end.
+        static let tileOne = "kingfisher 01.png"
+        static let tileTwo = "kingfisher-02.png"
+        static let tileThree = "kingfisher-03.png"
+        static let fourthImage = "kingfisher-04.png"
+        /// All four were counted by the confirmation, which is what was
+        /// being deleted (`:275`), not the three on the card. **The
+        /// confirmation is not drawn any more** (the delete behind it is
+        /// admin-only), so this is one of the sentences
+        /// `testScreens_ImagesOffersNothingOnlyAnAdminCanDo` denies. The
+        /// count itself is still pinned in the package
+        /// (`ImagesTests.testTheConfirmationPluralises`).
+        static let deleteFourImages =
+            "Delete this generation and its 4 images? This can't be undone."
+
+        /// History row 22: a `width` with **no `height`**, so the meta line
+        /// has the steps and **no `×`** (`:387`).
+        static let widthOnlyMeta = "flux-schnell · 4 steps"
+        static let widthOnlyPrompt = "a tin robot watering a window box"
+
+        /// What `…/models` says when the fixture is set to `unavailable`.
+        static let pluginSilent = "the plugin is not answering"
+
+        /// The band (`PluginFrame.kt:124`, `:144`, `:151`).
+        static let pluginName = "Image Generation"
+        static let pluginBy = "by Coders Farm"
+        static let pluginBadge = "plugin"
+    }
+
+    /// The app's own words, spelt out for the same reason.
+    ///
+    /// Five of these — ``promptHint``, ``generate``, ``pickAModel``,
+    /// ``cancel``, ``delete`` and ``deleteTitle`` — are now words that must
+    /// be **nowhere on the screen**: they are the three admin-only controls
+    /// this app does not draw. They are kept, not deleted, because an
+    /// absence case has to deny a string somebody would actually have used.
+    enum ImagesWords {
+        static let engineRunning = "engine running"
+        static let notInstalledTitle = "engine not installed"
+        static let offlineTitle = "engine offline"
+        static let unavailableTitle = "image generation unavailable"
+        static let promptHint = "describe the image…"
+        static let generate = "generate"
+        static let pickAModel = "pick a model"
+        static let history = "history"
+        static let cancel = "cancel"
+        static let delete = "delete"
+        static let deleteTitle = "delete generation"
+        static let deleted = "deleted"
+        static let close = "close"
+        /// ``ImagesStrings/tile(position:)`` — a tile's label since the audit
+        /// rejected the file name as one.
+        static func tile(position: Int) -> String { "picture \(position)" }
+        /// ``ImagesStrings/moreImages(total:shown:)`` — the owner's answer 27,
+        /// his wording. Spelt out here rather than built from the fixture's
+        /// counts: a helper that computed `4` and `3` from the same seed the
+        /// card reads would agree with the card however wrong both were.
+        static let fourImagesShowingThree = "4 images, showing 3"
+        /// The part of that sentence every form of it shares, for the count
+        /// that says it is on **one** card. Not the whole sentence: the
+        /// failure the count is for is a card drawing
+        /// ``oneImageShowingOne``, which shares no suffix with the sentence
+        /// above (review 1, finding 5).
+        static let moreImagesStem = "images, showing "
+        /// What row 22 would draw if the gate on the sentence were removed,
+        /// spelt out so the denial is of a string and not of an idea.
+        static let oneImageShowingOne = "1 images, showing 1"
+        /// The page's scroll view, named in `ImagesView.swift` so that
+        /// ``imagesPage(_:)`` can pick it out from the shell's phone bar at
+        /// any type size. Not a word anybody reads — an identifier.
+        static let pageIdentifier = "images-page"
+    }
+
+    // MARK: - getting there
+
+    /// Reset the fixtures, choose what the reads answer, and push Images.
+    ///
+    /// **Reset first, always.** The cases share one house for the whole run
+    /// and the generate and delete cases mutate it, so a case that relied on
+    /// the seed without resetting would pass or fail on which case ran before
+    /// it.
+    ///
+    /// **What it waits for.** `engine running` at the ordinary size, because
+    /// that line cannot exist until `…/models` has answered and been decoded
+    /// — a marker that only a *completed read* can produce, which is the
+    /// lesson `houseName(in:)` carries. For the three states where that line
+    /// is a card instead, the caller passes `waitingFor:`.
+    ///
+    /// **At AX5 it cannot be `engine running`**, and this said it could. On a
+    /// 393 × 852 phone at that size the shell's own header takes 300 points,
+    /// the navigation bar 44 and the plugin band 256, which leaves the page a
+    /// **102-point** window over 1626 points of content: the engine line is
+    /// some 600 points down it and a `LazyVStack`'s foot is unbuilt, not
+    /// merely off screen, so the marker never appeared and the case failed
+    /// 40 seconds later having opened the screen perfectly (train S001,
+    /// `testImages_AtTheLargestTypeSize`). That case passes
+    /// `waitingFor: StubImages.pluginName` — the band, which no other screen
+    /// draws and which is on the window at every type size. The 102-point
+    /// window itself is a real thing to decide about and is in DECISIONS,
+    /// "At an accessibility size the band leaves the page a 102-point window".
+    @MainActor
+    func openImages(
+        _ mode: String = StubHouseUITests.ordinaryTypeSize,
+        how: String = "normal",
+        plugin: Bool = true,
+        waitingFor marker: String? = nil,
+        delay: Double? = nil
+    ) -> (app: XCUIApplication, landed: Bool) {
+        control("reset-fixtures", "{}", port: 6601, what: "the images fixtures")
+        if how != "normal" {
+            control("images-state", "{\"how\":\"\(how)\"}", port: 6601,
+                    what: "what the imagegen reads answer")
+        }
+        if !plugin {
+            control("images-plugin", "{\"present\":false}", port: 6601,
+                    what: "whether the manifest has the imagegen plugin")
+        }
+        let app = launch(mode: mode, push: "Images", pushDelay: delay ?? Self.pushDelay)
+        let wanted = marker ?? ImagesWords.engineRunning
+        let found = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", wanted))
+            .firstMatch
+        let landed = found.waitForExistence(timeout: 40)
+        if !landed {
+            // The tree, not a sentence about the element: "Images did not
+            // open" is a claim about something that is not there, and the
+            // only useful answer is what *is* — which on an unfixed stub
+            // house is Home. [[ios-stub-house]].
+            print("=== IMAGES DID NOT OPEN (waited for \(wanted)) — tree follows ===")
+            print(app.debugDescription)
+        }
+        return (app, landed)
+    }
+
+    /// The prompt field — which must not exist.
+    ///
+    /// **It is a query for an absence now.** The composer was removed on
+    /// 2026-11-03 because `POST …/generate` is admin-only and 401s from every
+    /// phone, so three cases use this to say the field is gone and none types
+    /// into it.
+    ///
+    /// Still matched by label across every element type rather than as a
+    /// `.textField`: the field was a `TextField` with a vertical axis so that
+    /// it grew with the type size, and a vertically-growing SwiftUI field
+    /// does not always report as `.textField`. A query narrowed to
+    /// `.textFields` would therefore find nothing whether or not a field was
+    /// drawn, which is the way an absence check quietly stops checking.
+    @MainActor
+    func imagesPromptField(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", ImagesWords.promptHint))
+            .firstMatch
+    }
+
+    /// The `generate` button, and **not the keyboard key** that may share its
+    /// label.
+    ///
+    /// `firstMatch` takes a keyboard key when one has the same word, and a
+    /// key is hittable, so hittability cannot tell them apart. The keyboard's
+    /// top edge can: anything above it is this screen's.
+    /// (`StubHouseUITests.swift`'s own note on `firstMatch`.)
+    /// Scroll **this screen's** scroll view until `element` is built.
+    ///
+    /// Not ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``: that one drives
+    /// `app.collectionViews.firstMatch`, and its own doc says why — "the list
+    /// is a `UICollectionView` because Chat's rows need `swipeActions`"
+    /// (`ChatView.swift:202` is a `List`). Images is
+    /// `ScrollView { LazyVStack }` (`ImagesView.swift:99-102`), the shape
+    /// Files, Videos and Home have, and a SwiftUI `ScrollView` reports as
+    /// `.scrollView` and **never** as `.collectionView`. On an iPhone there
+    /// is no collection view anywhere in the pushed Images hierarchy — the
+    /// only other `List` is `SidebarList` (`WorkspaceView.swift:294`), which
+    /// is the regular size class only — so the shared helper waited its
+    /// twenty seconds, printed `NO LIST TO SCROLL` and returned false. Six
+    /// cases then failed on the history half of the screen while blaming the
+    /// app for a key read wrong (2026-11-02 review).
+    ///
+    /// The page is taken by its identifier and not by `firstMatch` — every
+    /// history card's tile strip is a horizontal scroll view of its own, and
+    /// the one worth flicking is the one that is the page. ``imagesPage(_:)``
+    /// carries the whole measurement.
+    /// `.slow` for ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``'s
+    /// measured reason — a plain `swipeUp()` steps over a row.
+    @MainActor
+    func imagesScrollUntilBuilt(
+        _ app: XCUIApplication,
+        _ element: XCUIElement,
+        flicks: Int = 30
+    ) -> Bool {
+        guard let page = imagesPage(app) else {
+            print("=== NO SCROLL VIEW TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<flicks {
+            if element.exists { return true }
+            page.swipeUp(velocity: .slow)
+        }
+        if !element.exists {
+            print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return element.exists
+    }
+
+    /// The other direction, for a measurement that has to walk down from the
+    /// top of the page twice ([[audit-reports-one-issue]], and Chat's own
+    /// note at `StubHouseUITests.swift:3732-3740`).
+    @MainActor
+    func imagesScrollToTop(_ app: XCUIApplication, flicks: Int = 30) {
+        guard let page = imagesPage(app) else { return }
+        for _ in 0..<flicks { page.swipeDown(velocity: .slow) }
+    }
+
+    /// One tile of a history card, by **the file it shows**.
+    ///
+    /// Not `app.buttons[name]` any more. A tile's label is now
+    /// `picture 1`/`picture 2`/`picture 3` — Apple's audit answered
+    /// `Label not human-readable` to a file name (train S001), and a label
+    /// reading `picture 1` repeats on every history card besides. The file
+    /// name is the tile's **value**, which is unique on the screen and is
+    /// still what proves the path escape: `kingfisher 01.png` carries a
+    /// space.
+    @MainActor
+    func imagesTile(_ app: XCUIApplication, showing name: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "value == %@", name)).firstMatch
+    }
+
+    /// The page's own scroll view, **by name**.
+    ///
+    /// This took the tallest scroll view in the tree, and the tallest one is
+    /// not always the page. At an ordinary type size it is — 568 points
+    /// against the phone bar's 146 — but at AX5 the plugin band above the
+    /// page leaves it a **102-point** window (DECISIONS, "At an accessibility
+    /// size the band leaves the page a 102-point window") and the phone bar
+    /// is then the taller of the two. Train S004 flicked the phone bar for a
+    /// whole minute, the flick landed on `music`, and
+    /// ``testImages_AtTheLargestTypeSize()`` measured the Music screen: eight
+    /// leaves at `large` against **none** at AX5, a case that compared
+    /// nothing while reporting that it had looked. The picture is what said
+    /// so — `images-ax5-AX5` is a track called *Veldrassen Overture*.
+    ///
+    /// `images-page` is `ImagesView.swift`'s own identifier on that scroll
+    /// view, which is the one thing in the tree that says *what* an element
+    /// is rather than how big it happens to be at this type size.
+    /// The fallback below is **not** the old rule put back. It is the old
+    /// rule with the phone bar taken out of the running: the bar is the one
+    /// scroll view that reaches the bottom of the window, and the page always
+    /// ends above it. It exists because no other view in this app carries an
+    /// identifier, so whether SwiftUI puts one on a `ScrollView` is a thing
+    /// this branch is finding out on a train — and a nil page would take
+    /// every scrolling case on this screen down with it, not just the one.
+    @MainActor
+    func imagesPage(_ app: XCUIApplication) -> XCUIElement? {
+        // Waiting on *a* scroll view and then asking for the named one, not
+        // waiting 20 seconds on the name: this is called inside every flick
+        // loop on the screen, and a 20-second wait per call would turn a
+        // missing identifier into a run that times out rather than one that
+        // falls back.
+        guard app.scrollViews.firstMatch.waitForExistence(timeout: 20) else {
+            print("=== NO SCROLL VIEW AT ALL — tree follows ===")
+            print(app.debugDescription)
+            return nil
+        }
+        let named = app.scrollViews[ImagesWords.pageIdentifier]
+        if named.exists { return named }
+        print("=== NO `\(ImagesWords.pageIdentifier)` SCROLL VIEW — falling back ===")
+        let floor = app.frame.maxY - 1
+        let all = app.scrollViews.allElementsBoundByIndex
+        let page = all.filter { $0.frame.maxY < floor }
+            .max(by: { $0.frame.height < $1.frame.height })
+            ?? all.max(by: { $0.frame.height < $1.frame.height })
+        return page
+    }
+
+    // MARK: - the screen draws the house
+
+    /// The engine line, the band, and the plugin's name — the three things
+    /// that can only be on screen if the manifest decoded **and** `…/models`
+    /// answered.
+    ///
+    /// A failure means one of: the band is missing, `plugins` in the manifest
+    /// is not decoded, or the engine `when` fell to the wrong arm
+    /// (`ImagesScreen.kt:190-212`).
+    @MainActor
+    func testImages_DrawsTheEngineStateAndThePluginBand() throws {
+        let (app, landed) = openImages()
+        evidence(app, "images-band")
+        XCTAssertTrue(landed, "Images never drew `engine running`")
+        XCTAssertTrue(
+            containing(app, StubImages.pluginName).exists,
+            "the band does not name the plugin"
+        )
+        XCTAssertTrue(
+            containing(app, StubImages.pluginBy).exists,
+            "the band does not say who publishes it"
+        )
+        XCTAssertTrue(
+            app.staticTexts[StubImages.pluginBadge].exists,
+            "the `plugin` badge is missing, so nothing says this screen is a plugin's"
+        )
+    }
+
+    /// With the plugin absent from the manifest, Images is **not offered**.
+    ///
+    /// `Route.visibleWith` hides a route whose capability the house does not
+    /// declare (`Route.swift:203-209`), and
+    /// `NavigationState.capabilitiesChanged` empties the path
+    /// (`ShellNavigation.swift:138-142`), so a pushed Images ends up back at
+    /// Home. A failure here means a plugin screen is rendering against a
+    /// house that has no plugin.
+    ///
+    /// The assertion is on the **quiet note or Home**, not on an absence
+    /// alone: "the screen is not there" passes on a house that answered
+    /// nothing at all, which is why the house's own name is asserted too.
+    @MainActor
+    func testImages_WithoutThePluginTheRouteIsNotOffered() throws {
+        let (app, landed) = openImages(plugin: false, waitingFor: "stub house")
+        evidence(app, "images-no-plugin")
+        XCTAssertTrue(landed, "the app never reached a house at all")
+        XCTAssertFalse(
+            containing(app, ImagesWords.engineRunning).exists,
+            "the Images screen drew itself on a house with no imagegen plugin"
+        )
+        XCTAssertFalse(
+            containing(app, StubImages.runningPrompt).exists,
+            "the plugin's jobs are on screen although the house declares no plugin"
+        )
+    }
+
+    // MARK: - choosing a model, and generating
+    //
+    // **Nothing here any more.** `POST …/generate` is
+    // `dependencies=ADMIN_ONLY` on the plugin
+    // (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied
+    // at `:360`) and this app sends only `X-Device-Token`, so the composer —
+    // the prompt field, the model picker and `generate` — answered 401 from
+    // every phone and is not drawn (the owner's answer 41; `ImagesView.swift`'s
+    // header carries the evidence). Four cases went with it:
+    // `testImages_ThePickerOffersOnlyInstalledModels`,
+    // `testImages_GenerateIsOffWithoutAPromptAndOnWithOne`,
+    // `testImages_GeneratingAddsAJobToTheLane` and
+    // `testImages_ARunningJobShowsItsProgressAndCanBeCancelled`.
+    //
+    // What replaces them is in `StubHouseUITests+Screens.swift`:
+    // `testScreens_ImagesOffersNothingOnlyAnAdminCanDo` denies all three
+    // controls by name on a screen whose reads it proves are there, and
+    // `testScreens_ImagesARunningJobShowsItsProgressAndNoCancel` keeps the
+    // progress line's own assertion. The **rules** behind the deleted cases
+    // are still pinned in the package, where they do not need a button:
+    // `ImagesTests` holds the `installed` filter, `canGenerate`'s four
+    // conjuncts, the generate body and the mid-generate house switch.
+
+    // MARK: - the lane
+
+    /// The lane holds what is still happening **and what failed**, and not
+    /// what finished.
+    ///
+    /// One of the two cases a sabotage of the lane filter must fail.
+    @MainActor
+    func testImages_TheLaneHoldsOnlyWhatIsStillHappening() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        XCTAssertTrue(
+            containing(app, StubImages.runningPrompt).exists,
+            "the running job is not in the lane"
+        )
+        XCTAssertTrue(
+            containing(app, StubImages.failedPrompt).exists,
+            "the failed job left the lane — a dead generation nobody can see"
+        )
+        evidence(app, "images-lane")
+        // Seeded so that this word exists nowhere else in the fixture: if the
+        // filter were widened to every job, the completed one would be here.
+        XCTAssertFalse(
+            containing(app, StubImages.completedNotInLane).exists,
+            "a finished job is in the live lane"
+        )
+        // **The pill, as well as the prompt.** The word above is the row's
+        // title; this is the row's *status*, and the fixture has no other
+        // `done` job in `…/jobs` — so a lane that drew the pill without the
+        // prompt (a card that fell back to `model`) is caught too. The
+        // history cards below draw no status pill at all
+        // (`ImagesScreen.kt:380-430`), which is what makes the word
+        // discriminating on this screen rather than everywhere.
+        XCTAssertFalse(
+            app.staticTexts[StubImages.doneStatusWord].exists,
+            "a `done` pill is on screen, so the lane filter took every job"
+        )
+    }
+
+    /// A failed job shows the engine's own words.
+    ///
+    /// The failure mode this catches is `error` being decoded and silently
+    /// not drawn, which makes a dead job look idle.
+    @MainActor
+    func testImages_AFailedJobShowsTheEnginesOwnWords() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        evidence(app, "images-failed")
+        XCTAssertTrue(
+            containing(app, StubImages.failedError).waitForExistence(timeout: 20),
+            "the engine said why it failed and the screen does not"
+        )
+        XCTAssertTrue(
+            containing(app, "failed").exists,
+            "the failed job has no status word, so nothing marks it as failed"
+        )
+        // A failed job offers **no cancel** (`:347`) — and neither does a
+        // running one any more, so the expected count is now **zero** and
+        // not one. `…/jobs/{id}/cancel` is admin-only and this app has no
+        // admin session, so the control is off the whole screen
+        // (`ImagesView.swift`'s header); the lane is a report on what the
+        // house is doing.
+        //
+        // The assertion is kept here rather than dropped, because this is
+        // the case that would catch a cancel coming back **on the wrong
+        // row**: `ImagesModel.cancel(_:)` still refuses a job that is not
+        // pending or running, and a future view that drew the button again
+        // without that guard would put one on this very row.
+        XCTAssertEqual(
+            0,
+            app.buttons.matching(NSPredicate(format: "label == %@", ImagesWords.cancel)).count,
+            "the lane is offering a cancel this phone cannot send"
+        )
+    }
+
+    // MARK: - the two wrappers
+
+    /// `jobs` and `history` are read from **their own keys**.
+    ///
+    /// `GET …/jobs` answers `{"jobs": […]}` and `GET …/history` answers
+    /// `{"history": […]}` — two wrappers, two keys, one row type
+    /// (`ImagesScreen.kt:120`, `:123`). Reading one with the other's key
+    /// decodes to an empty list, which on screen looks exactly like "nothing
+    /// has happened yet". Three of Home's four reads did that for a week.
+    ///
+    /// The other of the two cases a sabotage must fail.
+    @MainActor
+    func testImages_HistoryAndTheJobLaneAreReadFromTheirOwnKeys() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        // A word only a lane row has…
+        XCTAssertTrue(
+            containing(app, StubImages.runningPrompt).exists,
+            "the lane decoded to nothing — `jobs` was read with the wrong key"
+        )
+        XCTAssertTrue(
+            app.staticTexts[ImagesWords.history].waitForExistence(timeout: 20),
+            "there is no history section, so `history` decoded to nothing"
+        )
+        // …and a word only a history row has. The foot of a lazy list is
+        // **unbuilt**, not off screen, so it is scrolled to rather than
+        // looked for.
+        let historyRow = containing(app, StubImages.historyPromptWord)
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, historyRow),
+            "no history row is on screen — `history` was read with the wrong key"
+        )
+        evidence(app, "images-two-keys")
+    }
+
+    // MARK: - a history card
+
+    /// The meta line, and the branch where half a size is not a size.
+    ///
+    /// Row 21 has both a width and a height; row 22 has a width and **no**
+    /// height, so its line has the steps and no `×`. A failure means the
+    /// "both or neither" guard at `:387` was lost — which would print
+    /// `512 × 0`, or a dangling separator.
+    @MainActor
+    func testImages_AHistoryCardShowsItsModelAndSettings() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        let full = app.staticTexts[StubImages.historyMeta]
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, full),
+            "the full meta line is not `model · w × h · steps · seed`"
+        )
+        let widthOnly = app.staticTexts[StubImages.widthOnlyMeta]
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, widthOnly),
+            "the width-only row's meta line is not `model · steps`"
+        )
+        evidence(app, "images-meta")
+        // The discriminating negative: with the guard gone, the width-only
+        // row would carry a `×` of its own.
+        let stray = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "flux-schnell", "×")
+        )
+        XCTAssertEqual(
+            0,
+            stray.count,
+            "a row with a width and no height drew a size anyway"
+        )
+        // **The exact line the control drew**, named. `params.height ?? 0` is
+        // the shape a dropped "both or neither" takes — a width paired with a
+        // zero — and naming it says what went wrong in the failure message
+        // instead of leaving `stray.count == 1` to be worked out from a tree.
+        XCTAssertFalse(
+            app.staticTexts["flux-schnell · 512 × 0 · 4 steps"].exists,
+            "the width-only row drew `512 × 0`: the size came from a width alone"
+        )
+        // **The section exists when there is history**, which is the other
+        // half of ``testImages_WithNothingGeneratedYetTheComposerIsStillThere()``'s
+        // absence check. On its own, that absence passes for a screen whose
+        // history section was deleted outright; the pair pins the guard from
+        // both sides (`ImagesScreen.kt:247`, ``ImagesModel/showsHistory``).
+        XCTAssertTrue(
+            app.staticTexts[ImagesWords.history].exists,
+            "two history rows on screen with no `history` label over them"
+        )
+    }
+
+    /// Three tiles of four, and no affordance for the fourth.
+    ///
+    /// A failure means `take(3)` became `take(4)`, or a phantom "+1 more"
+    /// appeared — a control that opens nothing.
+    @MainActor
+    func testImages_AHistoryCardShowsThreeTilesOfFour() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        let first = imagesTile(app, showing: StubImages.tileOne)
+        XCTAssertTrue(imagesScrollUntilBuilt(app, first), "the first tile is not on the card")
+        XCTAssertTrue(
+            imagesTile(app, showing: StubImages.tileTwo).exists,
+            "the second tile is missing"
+        )
+        XCTAssertTrue(
+            imagesTile(app, showing: StubImages.tileThree).exists,
+            "the third tile is missing"
+        )
+        evidence(app, "images-tiles")
+        XCTAssertFalse(
+            imagesTile(app, showing: StubImages.fourthImage).exists,
+            "a fourth picture is drawn, which Android does not draw"
+        )
+        // **Two ways of being wrong, and the second one is new.** The fourth
+        // file's name is now a tile's *value* rather than its label, so a
+        // fourth tile could also be caught by the label it would carry —
+        // which is the assertion that still works if a future card ever draws
+        // a tile without a value.
+        XCTAssertFalse(
+            app.buttons[ImagesWords.tile(position: 4)].exists,
+            "a fourth tile is on the card"
+        )
+        // **Three, counted.** Both assertions above name the fourth file and
+        // the fourth position, so a `prefix` widened to five with a card that
+        // happens to have four images would slip past them. The count does
+        // not depend on knowing which tile is the extra one; `kingfisher` is
+        // row 21's word and no other row's (`fixtures/images.py:205`).
+        let kingfisherTiles = app.buttons.matching(
+            NSPredicate(format: "value BEGINSWITH %@", "kingfisher")
+        )
+        XCTAssertEqual(
+            3,
+            kingfisherTiles.count,
+            "the card draws \(kingfisherTiles.count) tiles of four, and Android draws three"
+        )
+        // **And it says so** (the owner's answer 27). Three tiles of four was
+        // Android's shape and it was also the whole of what a person could
+        // find out: the fourth picture was neither drawn nor mentioned. The
+        // sentence is this card's, in his words, and it is asserted on the
+        // same card as the count above so the two cannot drift.
+        XCTAssertTrue(
+            app.staticTexts[ImagesWords.fourImagesShowingThree].exists,
+            "the card draws three of four pictures and does not say so"
+        )
+        // Row 22 has one image, and a card with nothing to say says nothing.
+        //
+        // **This half asserted the wrong string for one round.** It counted
+        // the labels ending `images, showing 3`, and the failure it names —
+        // row 22 drawing `1 images, showing 1` once the
+        // `if job.hasMoreImagesThanTiles` gate at `ImagesJobCards.swift:221`
+        // is removed — ends `showing 1`, which that predicate never sees. The
+        // count passed against the very defect it was for (review 1,
+        // finding 5).
+        //
+        // So the discriminator is now row 22's own wording, denied by name on
+        // a card this has scrolled until it is **built** — a lazy list's foot
+        // is unbuilt, not off screen, and an absence check against an
+        // unbuilt row is the way this stops checking. `robot` is row 22's
+        // word and no other row's (`fixtures/images.py:235`).
+        let oneImageRow = containing(app, StubImages.widthOnlyPrompt)
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, oneImageRow),
+            "the one-image history row never built"
+        )
+        XCTAssertFalse(
+            app.staticTexts[ImagesWords.oneImageShowingOne].exists,
+            "the one-image card says `\(ImagesWords.oneImageShowingOne)`, so the "
+                + "sentence is drawn on every card rather than asked for"
+        )
+        // And the sentence is on **no more than one** card, on the stem every
+        // form of it shares. `<= 1` and not `== 1`: row 21 may have left the
+        // tree while this scrolled down to row 22, and a case that fails
+        // because a lazy list recycled a row is a case that reports the
+        // scroller. The `== 1`-shaped half of this is the existence
+        // assertion above, taken while row 21 was in the window.
+        XCTAssertLessThanOrEqual(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", ImagesWords.moreImagesStem)
+            ).count,
+            1,
+            "two cards are counting their pictures, and only one has more than three"
+        )
+    }
+
+    /// Tapping a tile opens the picture.
+    ///
+    /// **The file name carries a space**, so this is also the end-to-end
+    /// proof of the one escape this screen depends on: `Uri.encode` escapes
+    /// `/` and a space, the fixture 404s any name no generation produced, and
+    /// the bytes only arrive if the path was escaped the way Android escapes
+    /// it (`ImagesPaths.file`). A failure means the tile is not a button, or
+    /// the bytes were fetched without the token and 401'd.
+    @MainActor
+    func testImages_TappingATileOpensThePicture() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        let tile = imagesTile(app, showing: StubImages.tileOne)
+        XCTAssertTrue(imagesScrollUntilBuilt(app, tile), "the first tile is not on the card")
+        tile.tap()
+
+        // The sheet's title is the file's own name; `close` is its way out,
+        // and together they are something only the sheet draws.
+        let closer = app.buttons[ImagesWords.close].firstMatch
+        XCTAssertTrue(closer.waitForExistence(timeout: 30), "no picture sheet opened")
+        evidence(app, "images-picture")
+        // **In the navigation bar, not anywhere in the tree.** The tile that
+        // was just tapped still carries the file's name — as its
+        // `accessibilityValue` now rather than its label — and it is still
+        // behind the presented sheet, so `containing` was true before the
+        // sheet drew anything and would stay true with `.navigationTitle(name)`
+        // deleted (`ImagesPictureSheet.swift:62`).
+        XCTAssertTrue(
+            app.navigationBars.staticTexts[StubImages.tileOne]
+                .waitForExistence(timeout: 10),
+            "the sheet does not name the picture it is showing"
+        )
+        // The picture itself: the fixture serves a real PNG, so a sheet that
+        // could not fetch or decode it would be showing a sentence instead.
+        // `inSheet` is not needed — the screen behind is not drawing images.
+        XCTAssertTrue(
+            app.images.firstMatch.waitForExistence(timeout: 30),
+            "the sheet opened and there is no picture in it"
+        )
+        closer.tap()
+        XCTAssertTrue(waitUntilGone(closer, timeout: 20), "the sheet would not close")
+    }
+
+    // MARK: - deleting
+    //
+    // **Not from a phone.** `DELETE …/history/{id}` is `ADMIN_ONLY` too
+    // (`web.py:651`), so the bin and the confirmation it opened are not
+    // drawn, and `testImages_DeletingAGenerationAsksFirst` went with them.
+    // Their absence is asserted in
+    // `testScreens_ImagesOffersNothingOnlyAnAdminCanDo`, the sentence that
+    // counted the images is still pinned by `ImagesTests` in the package,
+    // and `ImagesModel.confirmDelete()` is still there and still tested for
+    // the day the plugin's three routes take the household tier.
+
+    // MARK: - nothing yet, and nothing answering
+
+    /// The three states where the engine cannot do anything, and the **one**
+    /// thing each of them must not have: a control.
+    ///
+    /// Android's `when` order matters: "no data **and** loading" is tested
+    /// before "no data", or a screen that is still reading announces that the
+    /// plugin did not answer (`:190-195`). The ordering itself is a package
+    /// test (`ImagesTests.testTheEngineLineFollowsAndroidsOrder`); this is the
+    /// three sentences on a real screen, and what is not drawn beside them.
+    ///
+    /// **The composer is now absent in all three, and in the two good states
+    /// too**, so its presence is no longer the variable: `generate` is
+    /// admin-only and is not drawn at all (`ImagesView.swift`'s header).
+    /// What this case still does that no other does is prove the three
+    /// *engine* controls were never invented — install, start, download —
+    /// on the three screens that would most tempt someone to add one.
+    @MainActor
+    func testImages_AnEngineThatCannotRunSaysSoAndOffersNothing() throws {
+        for (how, title) in [
+            ("not-installed", ImagesWords.notInstalledTitle),
+            // Installed but not running. Android draws the composer here —
+            // `:215` guards on `installed`, not on `ready` — and this port
+            // draws it nowhere, so the `offline` state is now the same
+            // read-only screen as the other two.
+            ("offline", ImagesWords.offlineTitle),
+            ("unavailable", ImagesWords.unavailableTitle),
+        ] {
+            let (app, landed) = openImages(how: how, waitingFor: title)
+            evidence(app, "images-engine-\(how)")
+            XCTAssertTrue(landed, "the `\(how)` state does not say `\(title)`")
+            XCTAssertFalse(
+                imagesPromptField(app).exists,
+                "`\(how)` draws a prompt field, and nothing on this phone can send it"
+            )
+            if how == "unavailable" {
+                // The read's own message, which is what Android puts in the
+                // sub when it has one (`:194`). A screen that fell back to
+                // the generic sentence would hide which house or plugin is
+                // broken.
+                XCTAssertTrue(
+                    containing(app, StubImages.pluginSilent).exists,
+                    "the plugin said why it is not answering and the screen does not"
+                )
+            }
+            // **No engine control, in any of the three.** The dashboard owns
+            // installing and starting it (`ImagesScreen.kt:70-74`), Android
+            // draws no button for either, and one here would be a control
+            // that cannot do what it says. `generate` and `pick a model` are
+            // in the same list now and for the same reason — the route
+            // behind each of them needs an admin session this app has not
+            // got.
+            for forbidden in [
+                "install", "start engine", "start the engine", "download",
+                ImagesWords.generate, ImagesWords.pickAModel,
+            ] {
+                XCTAssertEqual(
+                    0,
+                    app.buttons.matching(
+                        NSPredicate(format: "label CONTAINS[c] %@", forbidden)
+                    ).count,
+                    "`\(how)` offers a control (`\(forbidden)`) with no route this phone can call"
+                )
+            }
+            app.terminate()
+        }
+    }
+
+    // MARK: - Dynamic Type
+
+    /// The history card at the largest type size.
+    ///
+    /// **Measured, not believed.** A named Dynamic Type audit finding has
+    /// twice been a false positive on this track, so this compares the same
+    /// leaves at `large` and at AX5 and fails only on something that really
+    /// does not grow. The history card is the layout most likely to straddle
+    /// the viewport edge — three squares beside three lines of prompt — so
+    /// the evidence is kept at both sizes and the **picture** is the thing to
+    /// read when a failure will not attribute itself
+    /// ([[audit-reports-one-issue]]).
+    @MainActor
+    func testImages_AtTheLargestTypeSize() throws {
+        let leaves = [
+            ("engine", ImagesWords.engineRunning),
+            ("history-label", ImagesWords.history),
+            ("progress", StubImages.runningProgress),
+            ("lane-title", StubImages.runningPrompt),
+            ("error", StubImages.failedError),
+            ("meta", StubImages.historyMeta),
+            ("band", StubImages.pluginName),
+            // The history prompt, added after train S001: the audit case
+            // explains Apple's one attributed `Text clipped` by the
+            // three-line cap being deliberate, and an explanation with no
+            // measurement behind it is how a stuck leaf gets excused. If this
+            // leaf ever stops growing, that excuse fails here first.
+            ("prompt", StubImages.historyPrompt),
+            // `4 images, showing 3` — the owner's answer 27, added 2026-11-04
+            // for the same reason the prompt was. It is a new drawn text
+            // leaf on the card this case exists to measure, and the audit
+            // case waives anonymous `Text clipped` on the strength of *this*
+            // list; a caption nothing here measures is a leaf that waiver
+            // covers without having looked at it (review 2, finding 4).
+            //
+            // **Listed here and required below**: being in this array only
+            // gets a leaf compared *if it was found*, and the floor of three
+            // does not notice five missing. This one and `prompt` are
+            // unwrapped by name at the foot of the case (fix-pass review
+            // should 1).
+            ("more-images", ImagesWords.fourImagesShowingThree),
+        ]
+
+        /// Every leaf, **walked down from the top of the page**.
+        ///
+        /// Four of the eight are below the fold at AX5 and a lazy stack's
+        /// foot is unbuilt, not merely off screen, so one look at whatever
+        /// is on screen measures a different set in each pass. Flicking to
+        /// the tiles first and then looking is worse still: five of the
+        /// eight live above the tiles and the scroller only goes down, so
+        /// they were gone by the time this ran, and the case could satisfy
+        /// its own `compared >= 3` guard on two leaves while printing
+        /// all of them (2026-11-02 review). Chat's note at
+        /// `StubHouseUITests.swift:3732-3740` is the same lesson: the walk
+        /// has to start at the top and record each leaf the first time it
+        /// is seen.
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            func take() {
+                for (leaf, label) in leaves where out[leaf] == nil {
+                    let text = app.descendants(matching: .any)
+                        .matching(NSPredicate(format: "label == %@", label))
+                        .firstMatch
+                    if text.exists { out[leaf] = text.frame.height }
+                }
+            }
+            imagesScrollToTop(app)
+            take()
+            guard let page = imagesPage(app) else { return out }
+            // **Sixty, not thirty.** A flick moves about a window's worth and
+            // the window is 102 points at AX5 against 1626 points of content,
+            // so thirty flicks is roughly the whole page with nothing to
+            // spare — and a walk that runs out of flicks silently measures
+            // fewer leaves rather than failing. Each flick past the foot
+            // costs nothing.
+            for _ in 0..<60 where out.count < leaves.count {
+                page.swipeUp(velocity: .slow)
+                take()
+            }
+            return out
+        }
+
+        var measured: [String: [String: CGFloat]] = [:]
+        var tileSides: [String: CGFloat] = [:]
+        for (label, mode) in [
+            ("large", Self.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            // **The band, not the engine line.** At AX5 the page gets a
+            // 102-point window and its foot is unbuilt, so `engine running`
+            // — 600 points down it — is not there to wait for, and this case
+            // spent 40 seconds failing to find it on a screen it had opened
+            // (train S001). The band is the one thing only this screen draws
+            // that the window always holds; `heights` walks down to the rest
+            // from the top by itself. ``openImages(_:how:plugin:waitingFor:delay:)``
+            // carries the measurement.
+            let (app, landed) = openImages(mode, waitingFor: StubImages.pluginName)
+            XCTAssertTrue(landed, "Images never opened at \(label)")
+            usleep(2_000_000)
+            // **The text leaves first, from the top of the page.** Five of
+            // the eight — `engine`, `progress`, `lane-title`, `error` and
+            // `history-label` — live ABOVE the tiles, and the scroller only
+            // ever goes down: measured after the flick to the tile they are
+            // unbuilt or above the viewport, so the two passes compared
+            // different sets and the case could pass having compared two
+            // leaves while claiming all of them. Chat already paid for this exact
+            // bug (`StubHouseUITests.swift:3732-3740`) — walking down from
+            // the top is the whole trick, and it only works from the top.
+            // `heights` walks the page from the top itself, so it ends
+            // somewhere down the page — the tile is scrolled to afterwards,
+            // from wherever that is.
+            let sizes = heights(app)
+            measured[label] = sizes
+            evidence(app, "images-ax5-\(label)")
+            // **Back to the top before hunting the tile.** `heights` walks to
+            // the foot of the page, and the tile this measures is not at the
+            // foot: `kingfisher 01.png` is on history card 21 and the fixture
+            // puts card 22 — `robot-01.png`, one tile — below it
+            // (`fixtures/images.py:203,238`). The scroller only ever goes
+            // down, so at AX5, where the page is 2810 points seen through a
+            // 102-point window, the walk ended on the robot card and
+            // `imagesScrollUntilBuilt` then flicked sixty times against the
+            // bottom of a page it was already at. Train S006 read
+            // `the tile never built at AX5` and the evidence tree says
+            // otherwise — a tile was on screen the whole time, the wrong one.
+            // At `large` the same walk ends with the kingfisher tiles still in
+            // the window, which is why this only ever failed at AX5.
+            imagesScrollToTop(app, flicks: 60)
+            let tile = imagesTile(app, showing: StubImages.tileOne)
+            // Sixty for the same reason the walk takes sixty: at AX5 the page
+            // is 2810 points seen through a 102-point window, and this starts
+            // again from the top.
+            if imagesScrollUntilBuilt(app, tile, flicks: 60) {
+                tileSides[label] = tile.frame.width
+            }
+            evidence(app, "images-ax5-\(label)-tiles")
+            for (leaf, height) in sizes.sorted(by: { $0.key < $1.key }) {
+                print("SCALE [images \(label)] \(leaf) height=\(height)")
+            }
+            print("SCALE [images \(label)] tile side=\(tileSides[label] ?? -1)")
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            if grown < height * 2 { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf on this screen does not scale")
+        XCTAssertGreaterThanOrEqual(
+            compared,
+            3,
+            "nothing could be compared, so this proved nothing: \(small) / \(big)"
+        )
+        // **The two leaves the audit case leans on are required by name**,
+        // and the floor stays where it is.
+        //
+        // Eight entries against a floor of three means five of them may go
+        // missing and this case still passes while printing all eight — and
+        // two of the eight are leaves `testImages_PassesApplesAccessibilityAudit`
+        // *relies* on having been measured. It waives an anonymous
+        // `Text clipped`, and an attributed one against the history prompt,
+        // on the strength of this list; a leaf whose label quietly stops
+        // resolving drops out of the comparison at `guard let grown` and is
+        // then waived without anything ever having looked at it (review 2
+        // should 4, fix-pass review should 1).
+        //
+        // The floor is not raised to eight, because the same argument does
+        // not hold for the other six and one of them cannot be met:
+        // `engine running` is 600 points down a page seen through a
+        // 102-point window at AX5 and is not in any of the six trains' AX5
+        // pass. A floor by signature, never by total
+        // ([[audit-reports-one-issue]]).
+        //
+        // Both passes each, for the reason `tileSides` is unwrapped at the
+        // foot of this case: a check that quietly covers one size is not a
+        // comparison. The prompt has resolved at both sizes in all six trains
+        // that have run this case (`prompt height=58.0` -> `174.67`); the
+        // caption is new in this batch and has never been in a train, so a
+        // first red here means the label did not resolve — not that it is
+        // stuck, which is `stuck` above.
+        _ = try XCTUnwrap(
+            small["prompt"],
+            "the history prompt was never located at the ordinary size, so the "
+                + "audit case's attributed `Text clipped` waiver rests on an "
+                + "unmeasured leaf: \(small)"
+        )
+        _ = try XCTUnwrap(
+            big["prompt"],
+            "the history prompt was never located at AX5, which is the size "
+                + "its three-line cap is waived at: \(big)"
+        )
+        _ = try XCTUnwrap(
+            small["more-images"],
+            "`\(ImagesWords.fourImagesShowingThree)` was never located at the "
+                + "ordinary size, so the audit case's anonymous `Text clipped` "
+                + "waiver covers a leaf nothing measured: \(small)"
+        )
+        _ = try XCTUnwrap(
+            big["more-images"],
+            "`\(ImagesWords.fourImagesShowingThree)` was never located at AX5, "
+                + "which is the size that waiver is about: \(big)"
+        )
+        // **The tile.** 84 points through `@ScaledMetric`, so it grows with
+        // the type size; a fixed `frame(width: 84)` would be identical at both
+        // sizes, which is rule §3's own example and is the thing a height
+        // comparison of text cannot see.
+        //
+        // **Both sides are required, not measured if convenient.** Train S004
+        // never built the tile at AX5 — it was flicking the phone bar — and
+        // the `if let` turned the one check of the one `@ScaledMetric` on this
+        // screen into nothing at all, silently, while the case went on to
+        // report the text leaves. A check that disappears when the screen it
+        // checks cannot be reached is a check that proves nothing.
+        let narrow = try XCTUnwrap(tileSides["large"], "the tile never built at the ordinary size")
+        let wide = try XCTUnwrap(tileSides["AX5"], "the tile never built at AX5")
+        XCTAssertGreaterThan(
+            wide,
+            narrow * 1.4,
+            "the tile's side is fixed rather than @ScaledMetric (\(narrow) -> \(wide))"
+        )
+    }
+
+    // MARK: - Apple's audit
+
+    /// One audit over the screen, classified **by signature**.
+    ///
+    /// What it is looking for, in order of likelihood: contrast on the muted
+    /// text that sits on a tinted card while `Color.fgMuted` was measured
+    /// against the **white** canvas — the meta line, and now the
+    /// `4 images, showing 3` caption beside it — and a tile with no label.
+    /// Never a pinned total: a count passes for the wrong reason the moment a
+    /// row is added.
+    ///
+    /// **It found one, and it took the screenshot to name it.** Trains S004–
+    /// S006 reported a `Contrast failed` with `element: nil`, which no tree
+    /// dump could attribute; sampling the audit's own PNG put every text on
+    /// the screen at 5.4:1 or better except the **disabled** `generate`
+    /// button at 1.47:1 — `.borderedProminent` dims its fill and its label
+    /// towards each other, and the prompt was empty while this case ran, so
+    /// the button was disabled every time. [[audit-reports-one-issue]]: when
+    /// a finding will not attribute itself, look at the picture.
+    ///
+    /// **That button is now gone** with the rest of the composer (the route
+    /// behind it is admin-only), and so are the two unlabelled icon buttons
+    /// this used to watch — the lane's `cancel` and the card's `delete`. So
+    /// one source of findings here is removed rather than fixed, which is
+    /// worth saying plainly: if the next train still reports an anonymous
+    /// `Contrast failed`, the disabled button was not the whole of it and the
+    /// picture is again the thing to read. The caption added to the history
+    /// card is the one new muted leaf on a tinted surface, and it is the
+    /// first place to look.
+    @MainActor
+    @available(iOS 17.0, *)
+    func testImages_PassesApplesAccessibilityAudit() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        // The history card, which is where every finding this expects would
+        // be, is at the foot of a lazy list: an audit of a screen whose cards
+        // are unbuilt audits the header.
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, imagesTile(app, showing: StubImages.tileOne)),
+            "the history card never built, so this audited the header only"
+        )
+        let found = try auditIssues(app, "images-audit")
+        evidence(app, "images-audited")
+        let (floor, rest) = Self.floorAndRest(found)
+
+        // The page's own bottom edge, by its identifier rather than by being
+        // the tallest scroll view on screen — the tallest is the phone bar at
+        // an accessibility size, and the edge a row can straddle is this
+        // one's. ``imagesPage(_:)`` carries that measurement.
+        let bottom = imagesPage(app)?.frame.maxY ?? 0
+        XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
+        let unexplained = rest.filter { line in
+            // A Dynamic Type headline **with** an element is not a defect
+            // here: ``testImages_AtTheLargestTypeSize()`` measures these very
+            // leaves and fails if one of them is stuck. The measurement is the
+            // test; this is the classification that makes room for it.
+            if Self.knownAnonymousHeadlines.contains(where: { line.hasPrefix($0) }) {
+                return false
+            }
+            // A contrast finding against an element the scroll view's own
+            // bottom edge cuts in half. Half an element has no pixels to read,
+            // every list on this phone has a row straddling that edge, and
+            // scrolling one row makes it a different row's turn. The frame is
+            // what tells this from a real colour defect — and it is why the
+            // element is in the recorded string at all.
+            if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
+               box.minY < bottom, box.maxY > bottom {
+                return false
+            }
+            // **`Text clipped`, anonymous.** The headline says only that text
+            // *may* be clipped at a larger size, and with no element there is
+            // nothing to look at: `[[audit-reports-one-issue]]` — `element: nil`
+            // means the audit had no measurement, not that it found an
+            // anonymous view. Chat is the screen that paid for this one and
+            // carries the whole note (`StubHouseUITests.swift:3653-3662`); what
+            // stands behind it here is the same thing that stands behind it
+            // there — ``testImages_AtTheLargestTypeSize()`` measures eight of
+            // this screen's leaves at `large` and at AX5 and fails if one of
+            // them does not grow. An attributed one is *not* covered: it falls
+            // through to the assertion below.
+            //
+            // **Eight listed is not eight required**, and that gap was this
+            // waiver's weak point: that case's floor is three, so a leaf
+            // whose label stops resolving drops out of the comparison in
+            // silence and this waiver goes on covering it. The two leaves
+            // this waiver is actually about — the history prompt and the
+            // `4 images, showing 3` caption — are required there by name
+            // (`XCTUnwrap` on both passes), which is as much as a floor of
+            // three can honestly carry (fix-pass review should 1).
+            if line.hasPrefix("Text clipped"), line.hasSuffix("| element: nil") {
+                return false
+            }
+            // **`Text clipped`, naming the history prompt.** This one Apple
+            // can attribute, which is normally this file's definition of a
+            // defect — and it is right that the text is cut: the prompt is
+            // `lineLimit(3)` with a tail ellipsis, which is Android's own
+            // `maxLines = 3` (`ImagesScreen.kt:417-422`). What makes it a cap
+            // rather than a squeeze is that the three lines **grow**:
+            // ``testImages_AtTheLargestTypeSize()`` measures this very leaf
+            // by this very label at `large` and at AX5 and fails if it does
+            // not double. Nothing is lost to a screen reader either — the
+            // element's accessibility label is the whole prompt, which is why
+            // the finding can print all 131 characters of it.
+            //
+            // Pinned to **this leaf**: the same headline against any other
+            // element on the screen is not explained and fails below. Train
+            // S001 had it against the prompt at 118.7 points wide, with the
+            // second and third tiles reported across it; the card is a column
+            // since, so the prompt has the card's whole width.
+            if line.hasPrefix("Text clipped"), line.contains(StubImages.historyPrompt) {
+                return false
+            }
+            return true
+        }
+        XCTAssertEqual(
+            [],
+            unexplained,
+            "Images has findings neither the measurement nor the viewport edge explains"
+        )
+        // Zero, not ``knownPushedBarFloor``: that figure is Settings' and
+        // Music's. Asserting 8 here would be asserting another screen's
+        // shape; asserting nothing would let an anonymous finding of an
+        // unrecognised kind through, which is the thing the floor exists to
+        // catch.
+        XCTAssertEqual(0, floor, "an anonymous finding appeared on Images")
+    }
+}

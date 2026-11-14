@@ -12,7 +12,7 @@ final class SettingsPlaceTests: XCTestCase {
     func testAPlaceIsOneSaveableString() {
         XCTAssertEqual("", SettingsPlace.index.key)
         XCTAssertEqual("group:voice", SettingsPlace.group(.voice).key)
-        XCTAssertEqual("group:rooms-and-devices", SettingsPlace.group(.roomsAndDevices).key)
+        XCTAssertEqual("group:household", SettingsPlace.group(.household).key)
         let rooms = SettingsSection.named("rooms")!
         XCTAssertEqual("rooms", SettingsPlace.section(rooms).key)
         // And back again, for every one of them.
@@ -63,8 +63,8 @@ final class SettingsPlaceTests: XCTestCase {
     /// One level out, which is what back does inside Settings.
     func testBackStepsOutOneLevel() {
         let rooms = SettingsSection.named("rooms")!
-        XCTAssertEqual(.group(.roomsAndDevices), SettingsPlace.section(rooms).up)
-        XCTAssertEqual(.index, SettingsPlace.group(.roomsAndDevices).up)
+        XCTAssertEqual(.group(.household), SettingsPlace.section(rooms).up)
+        XCTAssertEqual(.index, SettingsPlace.group(.household).up)
         XCTAssertNil(SettingsPlace.index.up, "the index is where Settings stops handling back")
         // Two steps from any section reaches the index.
         for section in SettingsSection.all {
@@ -83,8 +83,61 @@ final class SettingsPlaceTests: XCTestCase {
         XCTAssertEqual(SettingsSection.all.count, counted)
         // The table's own order survives the filter.
         XCTAssertEqual(
-            ["rooms", "phones-and-browsers", "printers", "app-layout"],
-            sections(of: .roomsAndDevices).map(\.key)
+            ["rooms", "people", "phones-and-browsers", "printers"],
+            sections(of: .household).map(\.key)
         )
+    }
+
+    /// `settingsHasTheDashboardsGroupsAndNames`, after the nav regroup:
+    /// "Rooms & devices" is Household and holds People; App layout is in
+    /// System.
+    func testHouseholdHoldsPeopleAndAppLayoutIsInSystem() {
+        XCTAssertEqual(
+            ["Household", "Voice", "Chat & AI", "Privacy", "System"],
+            SettingsGroup.allCases.map(\.label)
+        )
+        XCTAssertEqual(
+            [
+                ["Rooms", "People", "Phones & browsers", "Printers & scanners"],
+                ["Wake words", "Voices", "Greetings"],
+                ["Models", "Chat"],
+                ["Internet", "Voice history"],
+                ["About & updates", "Health", "App layout", "Advanced"],
+            ],
+            SettingsGroup.allCases.map { sections(of: $0).map(\.label) }
+        )
+    }
+
+    /// `aSharedScreenLeavesPeopleOutOfSettingsToo`
+    func testASharedScreenLeavesPeopleOutOfSettingsToo() {
+        XCTAssertEqual(
+            ["Rooms", "Phones & browsers", "Printers & scanners"],
+            sections(of: .household, sharedScreen: true).map(\.label)
+        )
+        guard let people = SettingsSection.named("people") else { return XCTFail("no People section") }
+        XCTAssertEqual(.section(people), settingsPlace(of: "people"))
+        // A link to People on the kitchen tablet opens Household, without it.
+        XCTAssertEqual(.group(.household), settingsPlace(of: "people", sharedScreen: true))
+        // Every other group is shown on a shared screen as before.
+        for group in SettingsGroup.allCases where group != .household {
+            XCTAssertEqual(sections(of: group), sections(of: group, sharedScreen: true))
+        }
+        // And every other section still lands on itself there.
+        for section in SettingsSection.all where section.key != "people" {
+            XCTAssertEqual(.section(section), settingsPlace(of: section.key, sharedScreen: true))
+        }
+    }
+
+    /// `theOldGroupKeyStillLands`
+    func testTheOldGroupKeyStillLands() throws {
+        XCTAssertEqual("household", SettingsGroup.household.key)
+        XCTAssertEqual(.group(.household), settingsPlace(of: "group:rooms-and-devices"))
+        XCTAssertEqual(.group(.household), settingsPlace(of: "group:household"))
+        XCTAssertEqual(.group(.household), settingsPlace(of: "rooms-and-devices"))
+        XCTAssertEqual(.group(.household), settingsPlace(of: "household"))
+        XCTAssertEqual(.household, SettingsGroup.named("rooms-and-devices"))
+        // A section's old key still wins over a group of the same name.
+        XCTAssertEqual(.section(try XCTUnwrap(SettingsSection.named("voices"))), settingsPlace(of: "voice"))
+        XCTAssertEqual("group:household", settingsPlace(of: "group:rooms-and-devices").key)
     }
 }

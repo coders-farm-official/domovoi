@@ -33,7 +33,7 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     /// the dialog is part 3's — but the **token-trouble card** has a
     /// `use this phone's media` button of its own (`TokenTroubleScreen.kt:155`,
     /// `app.prefs.setPreferLocal(true)`), and that card is drawn in this
-    /// batch. A button that cannot do what it says is the one thing Kamron
+    /// batch. A button that cannot do what it says is the one thing the owner
     /// has asked for twice not to ship, so the write comes with the button.
     func setPreferLocal(_ value: Bool)
 
@@ -110,9 +110,58 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     /// ``TrustBook/forgetActiveServer()``: the address forgotten, or nil.
     @discardableResult
     func forgetActiveServer() -> String?
+
+    // MARK: - what the local network has ever done
+
+    /// Whether anything on the local network has **ever** answered this
+    /// install.
+    ///
+    /// Not a verdict about the network and not about now: one bit of install
+    /// history, set the first time a sweep or a typed address reaches a
+    /// dashboard and never cleared.
+    ///
+    /// It is here because of what the picker is entitled to say about an
+    /// empty sweep. iOS asks about Local Network access on the first local
+    /// connection and gives **no API that reports the answer** (TN3179), so
+    /// the sweep that runs while that alert is on screen has every probe
+    /// fail, finishes `.swept` with nothing found, and the picker said
+    /// *"nothing answered on port 6369 — is the web backend running?"* — an
+    /// accusation against the person's own server, for Apple's prompt.
+    /// The owner hit it within a minute of the first install.
+    ///
+    /// Once something has answered, the permission is settled and an empty
+    /// sweep really is about the house. Until then it is not, and the line
+    /// has to say so: ``ServerPickerNotice/nothingAnsweredYet(port:)``.
+    var localNetworkHasAnswered: Bool { get }
+
+    /// Something answered. Called by the picker for a sweep that found a
+    /// dashboard and for a typed address that reached one — the two things in
+    /// this app that prove a local connection was allowed.
+    func noteLocalNetworkAnswered()
+
+    /// Call `sink` after a write that changes **which server this phone is
+    /// pointed at** — the address, the "this phone" choice, or the active
+    /// server being forgotten.
+    ///
+    /// Without it a store is a place writes go to die. The connection
+    /// dialog's picker writes straight to the store through
+    /// ``ServerTrustGate``, and ``ShellModel/inputs`` is a snapshot that only
+    /// ``ShellModel/refresh()`` retakes, so picking a server left the app
+    /// pointed at nothing until something unrelated refreshed it. A registry
+    /// rather than a line at the call site, for the reason
+    /// ``onServerChange(_:)`` gives: a future caller cannot forget it.
+    ///
+    /// One sink, last one wins — the container installs it at init and is
+    /// expected to be the only caller.
+    func notifySelectionChanges(to sink: @escaping @Sendable () -> Void)
 }
 
 public extension ShellStore {
+
+    /// A store that cannot tell anyone, doesn't. The shell then behaves as it
+    /// did before the hook existed, which is a stale snapshot — so this is a
+    /// default for conformers that never move, not a reasonable one to take.
+    func notifySelectionChanges(to sink: @escaping @Sendable () -> Void) {}
 
     /// The pin for a saved address, through ``IdentityGate/pinKey(_:)``.
     /// Kotlin's `Prefs.pinForServer`, which is the same two lines wherever a
@@ -136,6 +185,8 @@ public final class InMemoryShellStore: ShellStore {
         var book = TrustBook()
         var preferLocal = false
         var phoneBar: String?
+        var localNetworkHasAnswered = false
+        var onSelectionChange: (@Sendable () -> Void)?
     }
 
     private let state = Mutex(State())
@@ -176,7 +227,28 @@ public final class InMemoryShellStore: ShellStore {
 
     public var phoneBar: String? { state.withLock { $0.phoneBar } }
 
-    public func setPreferLocal(_ value: Bool) { state.withLock { $0.preferLocal = value } }
+    public var localNetworkHasAnswered: Bool { state.withLock { $0.localNetworkHasAnswered } }
+
+    public func noteLocalNetworkAnswered() {
+        state.withLock { $0.localNetworkHasAnswered = true }
+    }
+
+    public func notifySelectionChanges(to sink: @escaping @Sendable () -> Void) {
+        state.withLock { $0.onSelectionChange = sink }
+    }
+
+    /// **Outside the lock, always.** A sink re-enters the store — the shell's
+    /// does, through ``AppContainer/shellInputs()`` — and `Mutex` is not
+    /// recursive, so firing it under `withLock` deadlocks the main thread.
+    private func selectionChanged() {
+        let sink = state.withLock { $0.onSelectionChange }
+        sink?()
+    }
+
+    public func setPreferLocal(_ value: Bool) {
+        state.withLock { $0.preferLocal = value }
+        selectionChanged()
+    }
     public func setPhoneBar(_ raw: String?) { state.withLock { $0.phoneBar = raw } }
 
     public func token(for url: String) -> String? {
@@ -215,7 +287,11 @@ public final class InMemoryShellStore: ShellStore {
     }
 
     public func setServerURL(_ url: String) -> Bool {
-        state.withLock { $0.book.setServerURL(url) }
+        // Only a write that took is a change: `false` means the book refused
+        // an untrusted address and wrote nothing.
+        let written = state.withLock { $0.book.setServerURL(url) }
+        if written { selectionChanged() }
+        return written
     }
 
     public func upsertKnownServer(url: String, name: String? = nil) {
@@ -233,7 +309,9 @@ public final class InMemoryShellStore: ShellStore {
 
     @discardableResult
     public func forgetActiveServer() -> String? {
-        state.withLock { $0.book.forgetActiveServer()?.url }
+        let gone = state.withLock { $0.book.forgetActiveServer()?.url }
+        if gone != nil { selectionChanged() }
+        return gone
     }
 }
 
@@ -430,6 +508,14 @@ public final class AppContainer: Sendable {
         self.vault = vault
         let observers = SinkRegistry()
         self.networkObservers = observers
+        let healthSinks = SinkRegistry()
+        self.tokenHealthObservers = healthSinks
+        // The store's writes, fanned out. Installed here because the
+        // container is the one thing that holds both the store and the
+        // registry, and because a picker that writes the store has no way to
+        // reach the shell otherwise.
+        let selectionSinks = self.selectionObservers
+        store.notifySelectionChanges(to: { selectionSinks.fire() })
 
         let book = ServerBook(
             activeServer: { store.serverURL },
@@ -451,7 +537,12 @@ public final class AppContainer: Sendable {
         // must add the cancellation here in the same change.
         self.network = NetworkWatch(onChange: { sink.fire() }, log: { log("NetworkWatch", $0) })
 
-        self.tokenHealth = TokenHealth(book: store, clock: clock, log: { log("TokenHealth", $0) })
+        self.tokenHealth = TokenHealth(
+                book: store,
+                clock: clock,
+                log: { log("TokenHealth", $0) },
+                changed: { healthSinks.fire() }
+            )
 
         // The circularity, resolved in one call: see
         // ``DomovoiClient/graph(book:health:lock:configuration:gate:)``.
@@ -597,6 +688,16 @@ public final class AppContainer: Sendable {
 
     private let networkObservers: SinkRegistry
 
+    /// ``onTokenHealthChange(_:)``'s sinks. Held here rather than on
+    /// ``TokenHealth`` because the health object is built before anything
+    /// that would subscribe to it, and because one registry per kind of
+    /// change is how the other two are done.
+    private let tokenHealthObservers: SinkRegistry
+
+    /// Whoever re-derives when the saved server, or the "this phone" choice,
+    /// is written. ``ShellStore/notifySelectionChanges(to:)`` says why.
+    private let selectionObservers = SinkRegistry()
+
     /// The reads keyed to the saved server's address — ``onServerChange(_:)``.
     private let serverObservers = SinkRegistry()
 
@@ -634,6 +735,42 @@ public final class AppContainer: Sendable {
     public func removeNetworkChangeSink(_ token: Int) {
         networkObservers.remove(token)
     }
+
+    /// Whoever wants to know that ``TokenHealth`` has learnt something — a
+    /// token refused, or a wait starting — because both change what the shell
+    /// should be showing and neither is a thing the shell can notice by
+    /// itself. Same shape, same ownership and same removal rule as
+    /// ``onNetworkChange(_:)``.
+    ///
+    /// ``TokenHealth``'s own `changed` note says what was broken without
+    /// this: the `.waiting` card had no way to appear.
+    @discardableResult
+    public func onTokenHealthChange(_ sink: @Sendable @escaping () -> Void) -> Int {
+        tokenHealthObservers.add(sink)
+    }
+
+    public func removeTokenHealthChangeSink(_ token: Int) {
+        tokenHealthObservers.remove(token)
+    }
+
+    /// Whoever has to re-derive when the phone is pointed somewhere else —
+    /// the connection dialog's picker writing the store, Settings forgetting
+    /// the active server, the "this phone" switch.
+    ///
+    /// ``ShellStore/notifySelectionChanges(to:)`` has the failure this was
+    /// built for: on a real phone, picking a discovered server moved nothing.
+    @discardableResult
+    public func onServerSelectionChange(_ sink: @Sendable @escaping () -> Void) -> Int {
+        selectionObservers.add(sink)
+    }
+
+    public func removeServerSelectionSink(_ token: Int) {
+        selectionObservers.remove(token)
+    }
+
+    /// How many sinks are keyed to the selection, for a test that has to say
+    /// one really joined and really left.
+    public var selectionSinkCount: Int { selectionObservers.count }
 
     /// Whoever has to be re-keyed when the saved server changes.
     ///

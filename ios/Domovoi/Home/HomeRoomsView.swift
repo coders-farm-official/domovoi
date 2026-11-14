@@ -150,18 +150,26 @@ struct HomeRoomsView: View {
     /// answer.
     private var stopAll: some View {
         let armed = arm.isArmed(nowMs: nowMs)
-        return Button(
-            arm.label(count: candidates.count, busy: stoppingAll, nowMs: nowMs),
-            action: onStopAll
-        )
-        .buttonStyle(.bordered)
         // Armed, it is about to stop other people's rooms, so it stops looking
         // like the friendly control. `errInk` is 6.08:1 where `.red` is 3.55.
-        .tint(armed ? Color.errInk : Color.brandInk)
-        .font(.subheadline)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(minHeight: 44)
-        .contentShape(.rect)
+        // In flight it cannot be pressed; ``InkOutlineButtonStyle`` draws the
+        // disabled state in the muted ink itself.
+        let ink = armed ? Color.errInk : Color.brandInk
+        return Button(action: onStopAll) {
+            Text(arm.label(count: candidates.count, busy: stoppingAll, nowMs: nowMs))
+                .font(.subheadline)
+                .multilineTextAlignment(.leading)
+        }
+        // **Not `.buttonStyle(.bordered)`.** That style washes the surface in
+        // the tint and draws the label in the same tint, measured under 4.5:1
+        // three times in this app (`#975800` on `#ECE1D1`, 4.38:1, the drop-in
+        // control and the call sheet's `mute`, train I005; 4.06:1 on the
+        // printer card, I001). Not measured on this button: it is drawn only
+        // for two or more playing rooms, and the stub house plays one. The
+        // app-wide outline style is the class's fix: tinted label on the
+        // canvas inside a stroke, no fill, which is Android's unarmed
+        // `OutlinedButton` (`HomeSections.kt:672`).
+        .buttonStyle(InkOutlineButtonStyle(ink: ink))
         .disabled(stoppingAll)
     }
 
@@ -250,7 +258,6 @@ struct HomeRoomsView: View {
                     if !verbs.isEmpty { transport(room, verbs: verbs) }
                 }
             }
-            chips(room)
         }
         // `alpha 0.6` for an offline, waiting or last-known room
         // (`HomeSections.kt:700`): Android's, and the thing on this screen
@@ -265,8 +272,15 @@ struct HomeRoomsView: View {
     }
 
     /// The left side: the dot, the room's **id** (never a label — the id *is*
-    /// the name here), the one pill, and the second line. Tapping it opens
-    /// Settings → Rooms.
+    /// the name here), the one pill, the second line **and the chips**.
+    /// Tapping it opens Settings → Rooms.
+    ///
+    /// The chips are inside because Android's are: they sit in the same
+    /// clickable `Column` as the name (`HomeSections.kt:712`, chips at
+    /// `:775-781`), so a tap on one opens the room and TalkBack reads them as
+    /// part of the room. Drawn under the button, a timer chip was a VoiceOver
+    /// stop of its own reading a bare `24m 58s` (train I005's kept tree, right
+    /// after `stop kitchen`), with nothing to say whose timer it was.
     private func identity(_ room: HomeRoom, pill: RoomPill?) -> some View {
         Button(action: onOpenRooms) {
             VStack(alignment: .leading, spacing: 4) {
@@ -281,13 +295,34 @@ struct HomeRoomsView: View {
                     }
                 }
                 secondLine(room)
+                chips(room)
             }
             .frame(minHeight: 44, alignment: .leading)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        // **One element, labelled on the `Button` itself** — the shape
+        // ``HomeAttentionView``'s rows and `Files/FileRowView.swift` use, and
+        // the one train I005 measured as a single `Button` for the attention
+        // rows (it had been two, `VANISH-TRACE.md` §4a). No
+        // `accessibilityElement(children:)` out here and no `.isButton`: a
+        // `Button` is already one element with the button trait and the
+        // activate action.
+        //
+        // The words are ``spokenRoom(_:stale:elapsedSec:nowMs:timerLeftSec:)``'s,
+        // in DomovoiKit where `swift test` holds them: what TalkBack reads
+        // for Android's one merged `Column` — the id, the pill, the song and
+        // its clock, every chip — and nothing for the dot or the bar, which
+        // carry no semantics there either.
+        .accessibilityLabel(
+            spokenRoom(
+                room,
+                stale: stale,
+                elapsedSec: roomElapsedSec(room, stale: stale, sinceReadSec: sinceReadSec),
+                nowMs: nowMs,
+                timerLeftSec: timerLeft[room.roomID]
+            )
+        )
     }
 
     /// The status dot: Ok online, Warn `waiting`, Idle otherwise
@@ -347,10 +382,10 @@ struct HomeRoomsView: View {
                     .frame(height: 3)
                     .tint(Color.brand)
                     .accessibilityHidden(true)
-                // ``fmtDur(_:)`` gives a bare em dash for a stream with no
-                // duration, which is why the second half is not conditional:
-                // `1:12 / —` is the honest line for a radio station.
-                Text("\(fmtDur(elapsed)) / \(fmtDur(song.durationSec))")
+                // ``roomClock(elapsedSec:song:)``: the elapsed alone for a
+                // stream or a zero duration, as Android (`HomeSections.kt:755`),
+                // and the spoken label reads the same string.
+                Text(roomClock(elapsedSec: elapsed, song: song))
                     .font(.caption.monospaced())
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -359,31 +394,18 @@ struct HomeRoomsView: View {
     }
 
     /// The chip row, drawn only if there is something in it
-    /// (`HomeSections.kt:775`).
+    /// (`HomeSections.kt:775`). The list is ``roomChips(_:timerLeftSec:)``'s,
+    /// the same one the row's spoken label reads, so the two cannot drift.
     @ViewBuilder
     private func chips(_ room: HomeRoom) -> some View {
-        let left = timerLeft[room.roomID]
-        let call = inCallChip(room)
-        let screenStopped = kioskDead(room)
-        // Not `weak`, which is a declaration modifier: an identifier the
-        // parser has another use for is not worth the four characters.
-        let weakLink = weakWifi(room)
-        if left != nil || call != nil || screenStopped || weakLink {
+        let list = roomChips(room, timerLeftSec: timerLeft[room.roomID])
+        if !list.isEmpty {
             // Wrapping, not scrolling: four chips and a long room name do not
             // fit one line at an accessibility size, and a horizontal scroll
             // view hides what it cannot fit without saying so.
             VStack(alignment: .leading, spacing: 6) {
-                if let left {
-                    chip("timer", fmtLeft(left), tone: .idle, monospaced: true)
-                }
-                if let call {
-                    chip("phone.fill", call, tone: .idle)
-                }
-                if screenStopped {
-                    chip("tv.slash", HomeRoomStrings.screenStopped, tone: .warn)
-                }
-                if weakLink {
-                    chip("wifi.slash", HomeRoomStrings.weakWifi, tone: .warn)
+                ForEach(list, id: \.label) { item in
+                    chip(item)
                 }
             }
         }
@@ -392,29 +414,40 @@ struct HomeRoomsView: View {
     /// One chip: a glyph and a word.
     ///
     /// The glyph is **never** the only carrier — every chip says its words
-    /// beside it — so the image is hidden from VoiceOver and the label reads
-    /// as the text alone.
-    private func chip(
-        _ systemImage: String,
-        _ label: String,
-        tone: HealthTone,
-        monospaced: Bool = false
-    ) -> some View {
+    /// beside it — so the image is hidden. The chip is no accessibility
+    /// element of its own any more: it is inside the room's `Button`, whose
+    /// label already says it.
+    private func chip(_ item: RoomChip) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: systemImage)
+            Image(systemName: chipGlyph(item))
                 .font(.caption2)
                 .accessibilityHidden(true)
-            Text(label)
-                .font(monospaced ? .caption.monospaced() : .caption)
+            Text(item.label)
+                .font(chipIsCountdown(item) ? .caption.monospaced() : .caption)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .foregroundStyle(tone.inkColour)
+        .foregroundStyle(item.tone.inkColour)
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         // Opaque, like every other pill on this screen: a contrast check
         // cannot read a colour that is whatever is behind it.
         .background(Color(.secondarySystemBackground), in: Capsule())
-        .accessibilityElement(children: .combine)
+    }
+
+    /// The countdown is monospaced for the reason the clock is: a
+    /// proportional digit changes width as it counts.
+    private func chipIsCountdown(_ item: RoomChip) -> Bool {
+        if case .timer = item { return true }
+        return false
+    }
+
+    private func chipGlyph(_ item: RoomChip) -> String {
+        switch item {
+        case .timer: return "timer"
+        case .inCall: return "phone.fill"
+        case .screenStopped: return "tv.slash"
+        case .weakWifi: return "wifi.slash"
+        }
     }
 
     /// pause + stop while playing, resume + stop while paused, and **nothing
