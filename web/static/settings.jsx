@@ -646,8 +646,11 @@ const VoicesPanel = () => {
  * side now includes is newer than the Windows side, the request for the
  * Windows step (POST /api/config/version/windows-request). The tray on the
  * PC does that step: at once when this browser is on that PC, else after a
- * click on its notification, so the card says "Finish on your PC" (and
- * "sign in on the PC to finish" when no tray has been heard from). When
+ * click on its icon or its notification, which it keeps showing until the
+ * request is handled. While it waits, the card says so plainly: when it
+ * was asked, and whether the icon on the PC has seen it (request.seen_at),
+ * is running without saying so (an older icon), or isn't running at all
+ * (sign in on the PC), with "Cancel request" until someone there starts it. When
  * only the Windows side is behind, "Update Domovoi" is that request alone.
  * The tray's outcome comes back to the card (declined, a bad signature, a
  * failed repair with its log), with "Try again". Under internet "never",
@@ -697,6 +700,7 @@ const VoicesPanel = () => {
  *   POST  /api/config/version/channel · follow stable or main; HEAD never moves → { ok, changed, channel, error }
  *   POST  /api/config/version/restart · bounce core+web, or start the update unit → { ok, mode, units, error }
  *   POST  /api/config/version/windows-request · a Windows install: ask the tray for the Windows step → { ok, request, tray }
+ *   POST  /api/config/version/windows-request/cancel · withdraw it while nobody at the PC has started it → { ok }
  *   GET   /api/config/core/restart · when the core doesn't answer: what "Restart the core" would do
  *   POST  /api/config/core/restart · the web ends a core that doesn't answer; systemd starts it again
  *
@@ -968,10 +972,44 @@ const browserOnThisPc = () => {
   catch { return false; }
 };
 
+// A time the PC side reported, in words: "9:14 AM (5m ago)", with the
+// date when it isn't today.
+const windowsWhen = (iso) => {
+  if (!iso) return null;
+  const t = new Date(iso);
+  if (isNaN(t.getTime())) return null;
+  const today = new Date().toDateString() === t.toDateString();
+  const clock = t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `${today ? clock : `${t.toLocaleDateString()} ${clock}`} (${relTime(iso)})`;
+};
+
+// The request's line while it waits: what is really happening, from what
+// the core knows (claimed, the tray's poll, the tray saying it saw it).
+// 2026-11-14: a press from a phone said "click Yes on your PC" while the
+// PC's one 30-second notification had come and gone unseen.
+const windowsRequestWords = (req, tray) => {
+  const asked = windowsWhen(req.at);
+  const waiting = `Waiting for someone at the PC${asked ? ` (asked ${asked})` : ''}.`;
+  if (req.claimed) {
+    return 'Someone at the PC started the Windows part: Windows asks for an administrator’s permission there, and this card shows how it went.';
+  }
+  if (tray.running === false) {
+    return `${waiting} The Domovoi icon on the PC isn’t running, so nothing there shows it: sign in on the PC (the icon beside its clock does the Windows part)${tray.seen_at ? `; it was last heard from ${windowsWhen(tray.seen_at)}` : ''}.`;
+  }
+  if (req.on_this_pc) {
+    return 'Windows asks for an administrator’s permission on this PC next: the Domovoi icon is updating the Windows part.';
+  }
+  if (req.seen_at) {
+    return `${waiting} The Domovoi icon on the PC has seen it (${windowsWhen(req.seen_at)}) and keeps showing it there until someone clicks it; Windows then asks for an administrator’s permission.`;
+  }
+  return `${waiting} The Domovoi icon on the PC is running but hasn’t said it saw the request: click its notification there, or “Finish updating Domovoi” in its menu.`;
+};
+
 // The Windows half of the Version card: its row's extra lines, under the
 // version (request, tray, outcome, why not). `onRetry`: the button that
-// asks for the Windows step again.
-const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
+// asks for the Windows step again; `onCancel`: the one that withdraws a
+// request nobody at the PC has started.
+const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, cancelling }) => {
   if (!win) return null;
   const req = win.request;
   const tray = win.tray || {};
@@ -987,21 +1025,13 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
     </div>);
   }
   if (req && !busy) {
-    lines.push(tray.running === false
-      ? <div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
-          Sign in on the PC to finish: the Domovoi icon beside its clock does the Windows part, and nobody
-          is signed in there now (or its icon isn’t running).
-        </div>
-      : req.on_this_pc
-        ? <div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
-            Windows asks for an administrator’s permission on this PC next: the Domovoi icon is updating
-            the Windows part.
-          </div>
-        : <div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
-            Finish on your PC: click the Domovoi notification there (or “Finish updating Domovoi” in its
-            icon’s menu), and Windows asks for an administrator’s permission.
-          </div>);
+    lines.push(<div key="rq" className="version-windows-request" style={{ color: 'var(--warn-ink)' }}>
+      {windowsRequestWords(req, tray)}
+    </div>);
   }
+  // Withdraw it: only while nobody at the PC has started it (a started step
+  // carries on whatever this card says, so no button claims to stop it).
+  const cancel = onCancel && req && !req.claimed && !busy;
   // A failure the Windows side has since caught up with (why_not
   // up_to_date) is history: the card kept an Oct 31 not_newer refusal in
   // red for days while the side already ran the release (2026-11-02).
@@ -1044,10 +1074,18 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
     </div>);
   }
   const retry = onRetry && win.step_needed && !req && !busy && windowsStepFailed(win);
-  if (!lines.length && !retry) return null;
+  if (!lines.length && !retry && !cancel) return null;
   return (
     <div className="version-windows-notes" style={{ padding: '0 16px 12px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
       {lines}
+      {cancel && (
+        <span>
+          <Button variant="secondary" icon="x" onClick={onCancel} disabled={cancelling}
+                  title="withdraw the request: the Domovoi icon on the PC stops showing it">
+            {cancelling ? 'Cancelling…' : 'Cancel request'}
+          </Button>
+        </span>
+      )}
       {retry && (
         <span>
           <Button variant="secondary" icon="rotate-cw" onClick={onRetry} disabled={requesting}>
@@ -1173,6 +1211,22 @@ const VersionSection = () => {
       reportMutationFailure(fire, 'the Windows update', e);
     } finally {
       setRequesting(false);
+      refreshCore();
+    }
+  };
+  // Withdraw a request nobody at the PC has started (the core's
+  // /v1/admin/windows/request/cancel); the tray stops showing it at its
+  // next poll.
+  const [cancelling, setCancelling] = React.useState(false);
+  const cancelWindows = async () => {
+    setCancelling(true);
+    try {
+      const res = await apiPost('/api/config/version/windows-request/cancel', {});
+      fire(res && res.ok ? 'request withdrawn: the PC stops showing it' : `the request wasn’t withdrawn: ${(res && (res.detail || res.error)) || 'unknown'}`);
+    } catch (e) {
+      reportMutationFailure(fire, 'cancelling the Windows update', e);
+    } finally {
+      setCancelling(false);
       refreshCore();
     }
   };
@@ -1619,7 +1673,8 @@ const VersionSection = () => {
         </div>
       )}
       <WindowsSideNotes win={win} channel={channel} busy={mode === 'busy' || !!restarting}
-                        onRetry={admin ? () => requestWindows(false) : null} requesting={requesting}/>
+                        onRetry={admin ? () => requestWindows(false) : null} requesting={requesting}
+                        onCancel={admin ? cancelWindows : null} cancelling={cancelling}/>
       {status && status.tag_warning && mode !== 'busy' && (
         // A release tag that moved upstream (or tags that didn't arrive):
         // the labels may be off; the check and the pull work as ever.

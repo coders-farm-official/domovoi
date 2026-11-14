@@ -7,7 +7,10 @@
 // includes, whether a Windows step is needed, and an admin's request from
 // the dashboard. A request from a browser on this PC starts the Windows
 // step at once (Windows' permission prompt comes next); one from another
-// device shows a notification, and a click on it starts the step. "Update
+// device puts the icon in an attention state and shows a notification, again
+// and again with a back-off until it is handled (Reminder.cs), and a click on
+// the notification or the icon starts the step; the next poll tells the core
+// the tray has seen it (?seen=, for the card's words). "Update
 // Domovoi..." in the menu does both halves: the Linux part runs first, in
 // the elevated program, then the Windows part.
 //
@@ -453,9 +456,20 @@ namespace Domovoi.Windows.Tray
 
         public HttpUpdateServer(string coreUrl) { core = Probe.Loopback((coreUrl ?? Loopback.Core).TrimEnd('/')); }
 
+        // The request this tray has noticed and reminds about: each poll says
+        // so (?seen=), and the core keeps the first time for the card.
+        public volatile string Noticed;
+
+        public string StateUrl()
+        {
+            string seen = Noticed;
+            return core + Loopback.StatePath + "?tray=" + Uri.EscapeDataString(BuildVersion.Version ?? "")
+                + (seen != null ? "&seen=" + Uri.EscapeDataString(seen) : "");
+        }
+
         public UpdateState State()
         {
-            JsonReply r = Loopback.Send("GET", core + Loopback.StatePath + "?tray=" + Uri.EscapeDataString(BuildVersion.Version ?? ""), null, 10000);
+            JsonReply r = Loopback.Send("GET", StateUrl(), null, 10000);
             return r != null && r.Status == 200 ? UpdateState.From(r.Body) : null;
         }
 

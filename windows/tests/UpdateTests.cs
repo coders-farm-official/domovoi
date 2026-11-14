@@ -50,7 +50,135 @@ static partial class Tests
         StepFlow();
         HelperStage();
         UpdatePollFlow();
+        RequestReminders();
         SideReport();
+    }
+
+    // A request from another device stays in sight until it is handled
+    // (Reminder.cs; 2026-11-14: one 30-second notification, hidden by
+    // Windows while nobody was at the PC, and the update looked failed).
+    static void RequestReminders()
+    {
+        const string Id = "0123456789abcdef";
+        Func<UpdateState> waiting = delegate
+        {
+            return new UpdateState { TargetTag = "v1.2.1", TargetVersion = "1.2.1", StepNeeded = true, RequestId = Id };
+        };
+        Run("reminder: only a request from another device that waits for a click here", delegate
+        {
+            Eq(Id, RequestReminder.Waiting(waiting(), false, false), "waits");
+            True(RequestReminder.Waiting(null, false, false) == null, "no core");
+            True(RequestReminder.Waiting(waiting(), true, false) == null, "a step runs");
+            True(RequestReminder.Waiting(waiting(), false, true) == null, "an outcome is on its way");
+            UpdateState s = waiting(); s.RequestClaimed = true;
+            True(RequestReminder.Waiting(s, false, false) == null, "claimed (this tray or another account's)");
+            s = waiting(); s.RequestOnThisPc = true;
+            True(RequestReminder.Waiting(s, false, false) == null, "from this PC: it starts at once instead");
+            s = waiting(); s.StepNeeded = false;
+            True(RequestReminder.Waiting(s, false, false) == null, "nothing left to do");
+            s = waiting(); s.LinuxBusy = true;
+            True(RequestReminder.Waiting(s, false, false) == null, "the Linux part is updating");
+            s = waiting(); s.RequestId = null;
+            True(RequestReminder.Waiting(s, false, false) == null, "withdrawn or answered");
+        });
+        Run("reminder: at once, then after 5, 15, 30 and 60 minutes, then hourly, while someone is here", delegate
+        {
+            var r = new RequestReminder();
+            DateTime t0 = new DateTime(2026, 11, 14, 9, 0, 0, DateTimeKind.Utc);
+            TimeSpan here = TimeSpan.FromSeconds(3);
+            Eq("started", r.Track(Id), "a new request");
+            True(r.Track(Id) == null, "the same one again is no change");
+            Eq("first", r.Due(t0, here), "at once");
+            r.Mark(t0);
+            DateTime t = t0;
+            foreach (int gap in new[] { 5, 15, 30, 60, 60, 60 })
+            {
+                True(r.Due(t.AddMinutes(gap).AddSeconds(-1), here) == null, "not before " + gap + " min");
+                t = t.AddMinutes(gap);
+                Eq("again", r.Due(t, here), "after " + gap + " min");
+                r.Mark(t);
+            }
+            Eq(7, r.Shown, "seven notifications in four hours and a half");
+        });
+        Run("reminder: none while nobody is at the PC; at once when someone comes back, never twice in 2 minutes", delegate
+        {
+            var r = new RequestReminder();
+            DateTime t0 = new DateTime(2026, 11, 14, 9, 0, 0, DateTimeKind.Utc);
+            r.Track(Id);
+            TimeSpan away = TimeSpan.FromMinutes(20);
+            True(r.Due(t0, away) == null, "nobody here: the first waits");
+            r.Observe(away);
+            r.Observe(TimeSpan.FromSeconds(5));
+            Eq("first", r.Due(t0.AddMinutes(1), TimeSpan.FromSeconds(5)), "the first, when someone is back");
+            r.Mark(t0.AddMinutes(1));
+            True(r.Due(t0.AddHours(3), away) == null, "an hour's gap passed, but nobody is here");
+            r.Observe(away);
+            r.Observe(TimeSpan.FromSeconds(10));
+            Eq("back", r.Due(t0.AddHours(3), TimeSpan.FromSeconds(10)), "someone came back");
+            r.Mark(t0.AddHours(3));
+            r.Observe(away);
+            r.Observe(TimeSpan.FromSeconds(1));
+            True(r.Due(t0.AddHours(3).AddMinutes(1), TimeSpan.FromSeconds(1)) == null, "not again within 2 minutes");
+            Eq("back", r.Due(t0.AddHours(3).AddMinutes(2), TimeSpan.FromSeconds(1)), "after 2 minutes, yes");
+            r.Mark(t0.AddHours(3).AddMinutes(2));
+            r.Observe(TimeSpan.FromSeconds(30));
+            True(r.Due(t0.AddHours(3).AddMinutes(5), TimeSpan.FromSeconds(30)) == null, "input without being away first is no return");
+            r.Unlocked();
+            Eq("back", r.Due(t0.AddHours(3).AddMinutes(5), TimeSpan.FromSeconds(1)), "the session unlocked");
+            r.Mark(t0.AddHours(3).AddMinutes(5));
+            r.Observe(TimeSpan.FromMinutes(4));
+            r.Observe(TimeSpan.FromSeconds(1));
+            True(r.Due(t0.AddHours(3).AddMinutes(8), TimeSpan.FromSeconds(1)) == null, "4 minutes idle is not away");
+        });
+        Run("reminder: it stops when the request goes, and a new one starts over", delegate
+        {
+            var r = new RequestReminder();
+            DateTime t0 = new DateTime(2026, 11, 14, 9, 0, 0, DateTimeKind.Utc);
+            r.Track(Id);
+            r.Mark(t0);
+            Eq("ended", r.Track(null), "gone");
+            True(r.Due(t0.AddHours(5), TimeSpan.Zero) == null && r.RequestId == null, "nothing more");
+            True(r.Track(null) == null, "still nothing: no change");
+            Eq("started", r.Track("fedcba9876543210"), "a new request");
+            Eq(0, r.Shown, "counted afresh");
+            Eq("first", r.Due(t0.AddHours(5), TimeSpan.Zero), "at once");
+        });
+        Run("reminder: the words, the attention icon, and the poll that says the tray saw it", delegate
+        {
+            True(ReminderWords.Tip.Length <= 63, "a tooltip holds 63 characters");
+            UpdateState s = waiting(); s.RequestAfterLinux = true;
+            string text = ReminderWords.Text(s);
+            True(text.StartsWith("The Linux part is updated. ") && text.Contains("Domovoi 1.2.1") && text.Contains("the Domovoi icon"), text);
+            True(text.Length <= 255, "a notification's text holds 255 characters");
+            foreach (int size in new[] { 16, 20, 24, 32 })
+                using (var plain = Icons.Picture(TrayState.Running, size, false))
+                using (var badge = Icons.Picture(TrayState.Running, size, true))
+                {
+                    Eq(size, badge.Width, "size " + size);
+                    // Inside the badge, left of the "!".
+                    float d = Math.Max(8f, size * 0.62f), ring = Math.Max(1f, size / 16f), inner = d - ring;
+                    float centre = size - d + inner / 2f;
+                    int px0 = (int)(centre - inner * 0.28f), py0 = (int)centre;
+                    System.Drawing.Color px = badge.GetPixel(px0, py0);
+                    True(px.B > 180 && px.R < 120, "blue in the badge at " + size + ": " + px);
+                    True(plain.GetPixel(px0, py0).ToArgb() != px.ToArgb(), "unlike the status dot at " + size);
+                }
+            using (var d = new FakeDashboard())
+            {
+                var seen = new List<string>();
+                d.Answer = (k, bearer, body) => { seen.Add(k); return R(404, "{}"); };
+                var srv = new HttpUpdateServer(d.Url);
+                srv.State();
+                srv.Noticed = Id;
+                srv.State();
+                srv.Noticed = null;
+                srv.State();
+                Eq(3, seen.Count, "three polls");
+                True(!seen[0].Contains("seen="), "nothing noticed: " + seen[0]);
+                True(seen[1].StartsWith("GET /v1/windows/update?tray=") && seen[1].EndsWith("&seen=" + Id), "noticed: " + seen[1]);
+                True(!seen[2].Contains("seen="), "forgotten: " + seen[2]);
+            }
+        });
     }
 
     static void Ed25519Vectors()

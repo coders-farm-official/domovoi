@@ -3130,16 +3130,20 @@ _NOT_LOCAL = {"detail": "this is answered only to the Domovoi tray on the server
 
 
 @app.get("/v1/windows/update")
-async def windows_update_state(request: Request, tray: str | None = None) -> JSONResponse:
+async def windows_update_state(request: Request, tray: str | None = None, seen: str | None = None) -> JSONResponse:
     """The tray's poll: the Windows side DomovoiHost reported, the release
     this code includes (``target``), whether a Windows step is needed and
     why not, the internet answer, whether an update is under way, and the
     admin's request (``{id, on_this_pc, at}``) when there is one. Answered
     to a loopback peer that sent no forwarding header only (403
-    ``not_local``); ``tray`` (its version) records that a tray is there."""
+    ``not_local``); ``tray`` (its version) records that a tray is there;
+    ``seen`` (a request id) that it noticed that request and is reminding
+    someone at the PC (``request.seen_at``, words for the card only)."""
     if not local_peer.from_this_pc(request):
         return JSONResponse(_NOT_LOCAL, status_code=403, headers={"Cache-Control": "no-store"})
     windows_side.note_tray(tray)
+    if seen:
+        await asyncio.to_thread(windows_side.note_seen, seen[:64])
     return JSONResponse(await windows_side.tray_state(), headers={"Cache-Control": "no-store"})
 
 

@@ -36,7 +36,8 @@ a newer ``DomovoiSetup.exe`` repairs the install. This module joins them:
 
 Files (the core's home, ``~/.domovoi/windows_update``; both processes run as
 the service user): ``request.json`` (the admin's request; a second press
-while one waits joins it), ``claim-<id>.json`` (the one tray that took it:
+while one waits joins it), ``seen.json`` (when a tray first said it
+noticed that request, for the card's words), ``claim-<id>.json`` (the one tray that took it:
 the hash of its token, made with O_EXCL so two signed-in accounts can't
 both run it), ``result.json`` (the tray's last outcome), ``unsigned.json``
 (releases the claiming tray found no signed Setup for), ``tray.json`` (when
@@ -277,14 +278,46 @@ def _iso(t: float) -> str:
     return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _seen_at(request_id: str) -> str | None:
+    doc = _read_json("seen.json")
+    if not isinstance(doc, dict) or doc.get("id") != request_id or not isinstance(doc.get("at"), str):
+        return None
+    return doc["at"]
+
+
 def read_request() -> dict | None:
+    """The admin's request, or None. ``seen_at``: when a tray on the PC
+    first said it noticed this request (:func:`note_seen`), None until one
+    has (a tray before 1.2.1 never says)."""
     doc = _read_json("request.json")
     if not isinstance(doc, dict) or not isinstance(doc.get("id"), str) or not _ID_RE.match(doc["id"]):
         return None
     return {"id": doc["id"], "on_this_pc": doc.get("on_this_pc") is True,
             "after_linux": doc.get("after_linux") is True,
             "at": doc.get("at") if isinstance(doc.get("at"), str) else None,
-            "claimed": (state_dir() / f"claim-{doc['id']}.json").exists()}
+            "claimed": (state_dir() / f"claim-{doc['id']}.json").exists(),
+            "seen_at": _seen_at(doc["id"])}
+
+
+def note_seen(request_id: object) -> bool:
+    """A tray's poll said it noticed this request (``?seen=<id>``) and is
+    reminding someone at the PC about it: kept once per request, so the
+    card can say "the Domovoi icon on the PC has seen it". Only for the
+    request that waits now; anything else changes nothing. Any process on
+    the PC can reach the poll, so this is words on the card only: it
+    authorises nothing. True when it was written now."""
+    if not isinstance(request_id, str) or not _ID_RE.match(request_id):
+        return False
+    req = read_request()
+    if req is None or req["id"] != request_id or req["seen_at"] is not None:
+        return False
+    try:
+        _write_json("seen.json", {"id": request_id, "at": _iso(_now())})
+    except OSError as e:
+        log.warning("windows side: can't record that the tray saw the request: %s", e)
+        return False
+    log.info("windows update: the tray on the PC has seen request %s", request_id)
+    return True
 
 
 def make_request(on_this_pc: bool, after_linux: bool = False) -> tuple[dict, bool]:
@@ -304,14 +337,16 @@ def make_request(on_this_pc: bool, after_linux: bool = False) -> tuple[dict, boo
             pass
     req = {"id": secrets.token_hex(8), "on_this_pc": bool(on_this_pc), "after_linux": bool(after_linux),
            "at": _iso(_now())}
+    _remove("seen.json")
     _write_json("request.json", req)
     # The outcome of the last one is history now.
     _remove("result.json")
-    return {**req, "claimed": False}, False
+    return {**req, "claimed": False, "seen_at": None}, False
 
 
 def clear_request() -> None:
     _remove("request.json")
+    _remove("seen.json")
 
 
 def _token_hash(token: str) -> str:
