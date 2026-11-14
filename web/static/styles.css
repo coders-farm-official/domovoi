@@ -2539,3 +2539,75 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .lists-done-toggle { min-height: 44px; }
   .lists-done-head .btn { height: 44px; }
 }
+
+/* --- calendars from elsewhere (1.3.0: links and phones) ---
+ * The slate "from outside Domovoi" look the synced kind always had, with
+ * the stripe and dot in the calendar's own colour (--cal-c, set inline
+ * from the calendar's '#rrggbb'; slate when it has none). */
+.cal-chip.src-ext {
+  background: transparent;
+  border: 1px dashed oklch(0 0 0 / 0.18);
+  border-left: 3px solid var(--cal-c, oklch(0.6 0.04 240));
+}
+[data-theme="dark"] .cal-chip.src-ext { border-color: oklch(1 0 0 / 0.18); border-left-color: var(--cal-c, oklch(0.6 0.04 240)); }
+.cal-chip.src-ext .dot { background: var(--cal-c, oklch(0.6 0.04 240)); }
+.cal-chip.src-ext.sel  { background: var(--raised); color: var(--fg); border-style: solid; border-color: var(--fg-muted); border-left-color: var(--cal-c, oklch(0.6 0.04 240)); }
+.cal-chip.src-ext.sel .t { color: var(--fg-muted); opacity: 1; }
+.cal-tg-event.src-ext {
+  background: var(--card);
+  border: 1px dashed oklch(0 0 0 / 0.18);
+  border-left: 3px solid var(--cal-c, oklch(0.6 0.04 240));
+}
+[data-theme="dark"] .cal-tg-event.src-ext { border-color: oklch(1 0 0 / 0.18); border-left-color: var(--cal-c, oklch(0.6 0.04 240)); }
+.cal-tg-event.src-ext.sel { background: var(--raised); color: var(--fg); border-style: solid; border-color: var(--fg-muted); border-left-color: var(--cal-c, oklch(0.6 0.04 240)); }
+.cal-tg-event.src-ext.sel .ts, .cal-tg-event.src-ext.sel .loc { color: var(--fg-muted); }
+.cal-detail-head .src-stripe.src-ext { background: var(--cal-c, oklch(0.6 0.04 240)); }
+.cal-tg-allday { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; width: 100%; min-width: 0; }
+.cal-src-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--fg-muted); white-space: nowrap;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+}
+.cal-src-tag .dot { width: 8px; height: 8px; border-radius: 9999px; flex: none; background: var(--brand); }
+.cal-src-tag.src-ext .dot { background: var(--cal-c, oklch(0.6 0.04 240)); }
+.cal-detail-ro { justify-content: flex-start; font-size: 12px; color: var(--fg-muted); line-height: 1.4; }
+.cal-notices { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.cal-notice {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; font-size: 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.cal-notice .dot { align-self: center; }
+.cal-notice .nm { font-weight: 500; color: var(--fg); }
+.cal-notice .why { color: var(--fg-muted); }
+
+/* Settings → Household → Calendars */
+.calsrc-list { display: flex; flex-direction: column; }
+.calsrc-row {
+  display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 12px; align-items: start;
+  padding: 12px 0; border-top: 1px solid var(--border-soft);
+}
+.calsrc-row:first-child { border-top: none; }
+.calsrc-row .sw { width: 12px; height: 12px; border-radius: 9999px; margin-top: 3px; background: var(--cal-c, oklch(0.6 0.04 240)); }
+.calsrc-row .nm { font-size: 13px; font-weight: 500; color: var(--fg); }
+.calsrc-row .sub { font-size: 12px; color: var(--fg-muted); margin-top: 2px; overflow-wrap: anywhere; }
+.calsrc-row .err { font-size: 12px; color: var(--warn-ink); margin-top: 4px; }
+.calsrc-row .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.calsrc-form { display: flex; flex-direction: column; gap: 12px; padding-top: 12px; }
+.calsrc-form .row2 { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.calsrc-form label { display: block; font-size: 11px; color: var(--fg-muted); margin-bottom: 4px; }
+.calsrc-form .hint { font-size: 12px; color: var(--fg-muted); line-height: 1.45; }
+.calsrc-colors { display: flex; gap: 8px; flex-wrap: wrap; }
+.calsrc-color {
+  appearance: none; width: 28px; height: 28px; border-radius: 9999px; cursor: pointer;
+  border: 2px solid transparent; background: var(--cal-c); padding: 0;
+}
+.calsrc-color[aria-pressed="true"] { border-color: var(--fg); }
+@media (max-width: 760px) {
+  .calsrc-row { grid-template-columns: 12px minmax(0, 1fr); }
+  .calsrc-row .acts { grid-column: 2; justify-content: flex-start; }
+  .calsrc-color { width: 44px; height: 44px; }
+}
+
+/* Home: today / next, a calendar's colour beside an event from elsewhere */
+.home-today-row .cal-src-tag { max-width: 120px; }

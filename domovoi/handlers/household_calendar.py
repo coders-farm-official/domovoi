@@ -7,10 +7,14 @@ and was offered as a web search ("I'd need the internet to get you that -
 want me to check my calendar today?", manual-content finding, 2026-10-17).
 
 It reads ``calendar_events``, the table the dashboard's and the app's
-Calendar page keeps (web/backend/api/calendar.py): local events and any
-synced ones. **Read-only**: nothing is added, moved or deleted by voice; a
-request to ("add the dentist to my calendar") is answered with where to do
-it instead. Offline: one query against the local database.
+Calendar page keeps (web/backend/api/calendar.py): the household's own
+events, and (1.3.0, V055) the events of the calendars the house reads by
+link (Google, Outlook, iCloud) and the ones household phones share, which
+the server keeps a copy of (domovoi/calendar_feeds.py). **Read-only**:
+nothing is added, moved or deleted by voice; a request to ("add the
+dentist to my calendar") is answered with where to do it instead.
+Offline: one query against the local database (a linked calendar answers
+from its last copy, however the internet answer is set).
 
 Days are the household's (domovoi/household_time.py, the server's own
 zone): "today" is from this midnight to the next on the wall clock, DST
@@ -207,8 +211,9 @@ class CalendarHandler(Handler):
     tool_schema = {
         "name": "calendar",
         "description": (
-            "Read the household calendar: what is on it for a day or a week, "
-            "or the next event. Read-only: it cannot add, move or delete events."
+            "Read the household calendar (with the calendars it shows from links "
+            "and phones): what is on it for a day or a week, or the next event. "
+            "Read-only: it cannot add, move or delete events."
         ),
         "parameters": {
             "type": "object",

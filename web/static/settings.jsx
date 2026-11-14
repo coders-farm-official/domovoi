@@ -5646,7 +5646,7 @@ const CapturesPanel = () => {
 const SETTINGS_GROUPS = [
   // "Rooms & devices" until 2026-11-09: its old address still opens it.
   { id: 'household', label: 'Household', icon: 'house', aliases: ['rooms-and-devices'],
-    sections: ['rooms', 'people', 'phones-and-browsers', 'media-folders', 'printers'] },
+    sections: ['rooms', 'people', 'phones-and-browsers', 'calendars', 'media-folders', 'printers'] },
   { id: 'voice', label: 'Voice', icon: 'audio-lines', sections: ['wake-words', 'voices', 'greetings'] },
   { id: 'chat-and-ai', label: 'Chat & AI', icon: 'sparkles', sections: ['models', 'search', 'chat'] },
   { id: 'privacy', label: 'Privacy', icon: 'shield', sections: ['internet', 'voice-history', 'listening-history'] },
@@ -5667,6 +5667,11 @@ const SETTINGS_SECTIONS = [
   { id: 'phones-and-browsers', label: 'Phones & browsers', aliases: ['devices'],
     sub: 'Name this device, get the app, the household token, guests, and who may edit a room’s play queue.',
     words: 'device devices phone phones browser browsers name rename household token pair pairing guest guests queue files shared screen tablet app android' },
+  // calendar.jsx registers it (1.3.0): calendars by link and phones' shared
+  // calendars, read-only.
+  { id: 'calendars', label: 'Calendars', optional: true,
+    sub: 'Show Google, Outlook, iCloud and phone calendars on the household calendar, read-only.',
+    words: 'calendar calendars google outlook icloud ical ics webcal link subscribe phone phones samsung microsoft apple agenda events share sync' },
   // media_folders.jsx registers it (2026-11-11): where the media really
   // is (the Windows folder on the Windows install), open, copy, move.
   { id: 'media-folders', label: 'Media folders', optional: true,

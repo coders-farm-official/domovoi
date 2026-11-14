@@ -866,19 +866,29 @@ const HomeGuestRooms = ({ np, busy, onAct }) => {
 
 /* ---- today --------------------------------------------------------- */
 
-/* Today's and tomorrow's events: time, title, place, a "now" pill while
- * one is running. Never the description. A shared screen gets the times
- * and "busy" only. Read from local midnight, because the server filters
- * on starts_at and an event already under way must still show. */
+/* Today / next: what is still on today, then the next few events of the
+ * coming week, across every calendar the house shows (its own, the ones
+ * added by link, the ones phones share): time ("all day" for an all-day
+ * one), title, place, the calendar's colour and name for one from
+ * elsewhere, a "now" pill while one is running. Never the description. A
+ * shared screen gets the times and "busy" only (no calendar names either).
+ * Read from local midnight: an event under way must still show. */
 const HomeToday = ({ events, answered, failed, now, shared, guest = false }) => {
   const list = Array.isArray(events) ? events : [];
   const d1 = HomeDayStart(now, 1);
   const d2 = HomeDayStart(now, 2);
+  const horizon = HomeDayStart(now, 7);
   const endOf = (e) => (e.ends_at ? Date.parse(e.ends_at) : Date.parse(e.starts_at) + 3600 * 1000);
   const sorted = [...list].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
-  const soon = sorted.filter((e) => Date.parse(e.starts_at) < d2 && endOf(e) >= now);
-  const shown = soon.slice(0, HOME_TODAY_ROWS);
+  const today = sorted.filter((e) => Date.parse(e.starts_at) < d1 && endOf(e) >= now);
+  const later = sorted.filter((e) => Date.parse(e.starts_at) >= d1 && Date.parse(e.starts_at) < horizon);
+  const shown = [...today, ...later].slice(0, HOME_TODAY_ROWS);
   const titleOf = (e) => (shared ? 'busy' : e.title);
+  const dayLabel = (ms) => {
+    if (ms < d1) return 'today';
+    if (ms < d2) return 'tomorrow';
+    return window.fmtDayLabel ? window.fmtDayLabel(new Date(ms)) : HomeFmtDate(ms);
+  };
 
   let content;
   if (!answered) {
@@ -889,41 +899,54 @@ const HomeToday = ({ events, answered, failed, now, shared, guest = false }) => 
   } else if (failed) {
     content = <div className="home-att-quiet">calendar unavailable</div>;
   } else if (!shown.length) {
-    const next = sorted.find((e) => Date.parse(e.starts_at) >= d2);
     const earlier = sorted.some((e) => Date.parse(e.starts_at) < d1 && endOf(e) < now);
-    const lead = earlier ? 'nothing more today' : 'nothing on today';
     content = (
       <div className="home-att-quiet">
-        {next
-          ? `${lead} · next: ${(window.fmtDayLabel ? window.fmtDayLabel(new Date(Date.parse(next.starts_at))) : HomeFmtDate(Date.parse(next.starts_at)))} ${HomeClock(next.starts_at)} ${titleOf(next)}`
-          : lead}
+        {earlier ? 'nothing more today, and nothing on the calendar this week' : 'nothing on the calendar this week'}
       </div>
     );
   } else {
-    const days = [
-      { key: 'today', label: 'today', rows: shown.filter((e) => Date.parse(e.starts_at) < d1) },
-      { key: 'tomorrow', label: 'tomorrow', rows: shown.filter((e) => Date.parse(e.starts_at) >= d1) },
-    ].filter((d) => d.rows.length);
+    const groups = [];
+    for (const e of shown) {
+      // Anything begun before today and still on (an all-day trip) is today's.
+      const label = dayLabel(Math.max(Date.parse(e.starts_at), HomeDayStart(now)));
+      const last = groups[groups.length - 1];
+      if (last && last.label === label) last.rows.push(e);
+      else groups.push({ label, rows: [e] });
+    }
+    const earlier = sorted.some((e) => Date.parse(e.starts_at) < d1 && endOf(e) < now);
     let n = 0;
     content = (
       <div className="home-today">
-        {days.map((d) => (
-          <div key={d.key} className="home-today-day">
-            <div className="home-group-label">{d.label}</div>
-            {d.rows.map((e) => {
+        {!today.length && (
+          <div className="home-att-quiet">{earlier ? 'nothing more today' : 'nothing on today'}</div>
+        )}
+        {groups.map((g) => (
+          <div key={g.label} className="home-today-day">
+            <div className="home-group-label">{g.label}</div>
+            {g.rows.map((e) => {
               const idx = n++;
               const running = Date.parse(e.starts_at) <= now && now < endOf(e);
+              const ext = !!e.read_only;
               return (
                 <a key={e.id} href="#calendar" data-event={e.id}
                    className={`cal-mlist-row home-today-row${idx >= HOME_PHONE_ROWS ? ' home-phone-extra' : ''}`}>
                   <div className="time mono">
-                    <div>{HomeClock(e.starts_at)}</div>
-                    {e.ends_at && <div className="end">{HomeClock(e.ends_at)}</div>}
+                    <div>{e.all_day ? 'all day' : HomeClock(e.starts_at)}</div>
+                    {e.ends_at && !e.all_day && <div className="end">{HomeClock(e.ends_at)}</div>}
                   </div>
                   <div className="body">
                     <div className="ti">{titleOf(e)}</div>
-                    {!shared && e.location && (
-                      <div className="meta"><span><Icon name="map-pin" size={11}/> {e.location}</span></div>
+                    {(ext || (!shared && e.location)) && (
+                      <div className="meta">
+                        {ext && (
+                          <span className="cal-src-tag src-ext"
+                                style={e.calendar_color ? { '--cal-c': e.calendar_color } : undefined}>
+                            <span className="dot"/>{shared ? '' : (e.calendar_name || '')}
+                          </span>
+                        )}
+                        {!shared && e.location && <span><Icon name="map-pin" size={11}/> {e.location}</span>}
+                      </div>
                     )}
                   </div>
                   {running ? <Pill tone="live" live>now</Pill> : <span/>}
@@ -937,7 +960,7 @@ const HomeToday = ({ events, answered, failed, now, shared, guest = false }) => 
   }
   return (
     <div className="home-sec home-sec-today">
-      <Card title="today" action={<a href="#calendar" className="home-link">calendar</a>}>{content}</Card>
+      <Card title="today / next" action={<a href="#calendar" className="home-link">calendar</a>}>{content}</Card>
     </div>
   );
 };
@@ -1059,7 +1082,7 @@ const HomePage = ({ counts, badges }) => {
   const calPath = React.useMemo(() => {
     const start = new Date(dayStart).toISOString();
     const end = new Date(HomeDayStart(dayStart, 7)).toISOString();
-    return `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=20`;
+    return `/api/calendar/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=50`;
   }, [dayStart]);
   // Not the WS payload: its window starts at now(), so an event already
   // under way drops out of it. The push only says "re-read".

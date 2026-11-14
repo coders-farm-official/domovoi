@@ -419,6 +419,49 @@ device tier already admits. Read-only — nothing is added, moved or deleted
 by voice — and every voice reads the one household calendar (events carry
 no owner).
 
+**Calendars from elsewhere (1.3.0, V055).** The house can show other
+calendars beside its own, **read-only** (owner decisions 2026-11-14: no
+two-way sync, no sign-in with Google, Microsoft, Apple or Samsung):
+
+* **By link.** An admin pastes a calendar's private ICS address (Google's
+  "secret address in iCal format", an Outlook published calendar, an
+  iCloud public calendar) in Settings → Household → Calendars. **That
+  address is a secret**: anyone holding it can read the calendar. It is
+  stored in one column (`calendar_sources.url`) and nowhere else; no API
+  answer carries it (`GET /api/calendar/sources` gives its host and `/…`);
+  no log line holds it: `domovoi/calendar_feeds.py` logs a calendar's id
+  and host, never an exception's text (which can quote the address), and
+  blanks the path out of httpx's own `HTTP Request: GET …` line. Adding,
+  changing, removing and **refresh now** are admin
+  (`require_admin_mutation`); seeing the list is household. The core
+  fetches it through the outbound gate (`domovoi/net_safety.py`: http(s)
+  only, no address inside the house unless `OUTBOUND_ALLOW_HOSTS` names
+  it, every redirect vetted, 10 MB at most) and only when the internet
+  answer allows: every 30 minutes, every 2 hours under **Sometimes**,
+  never under **No**. Its parser is the standard library only
+  (`domovoi/calendar_ics.py`), bounded in events, occurrences and steps.
+  Nothing but the address goes out with the request (a fixed user agent,
+  the last ETag/date).
+  A database backup holds the addresses: treat it like the calendars
+  themselves. Removing the calendar deletes the address and its events.
+* **From a phone.** A person can switch on "Share this phone's calendars
+  with the house" in the Android app (off by default; it asks
+  `READ_CALENDAR` then) and pick calendars. The phone sends each event's
+  title, time, place and the calendar's name and colour (never
+  descriptions or guests) for 30 days back to 180 ahead, to its own
+  household server only, over the house's network with the household
+  token (`PUT /api/calendar/phones/{device_id}`, device tier, once a
+  minute at most, 8 MB). Unpicking a calendar or turning sharing off
+  deletes the server's copy (`DELETE …/phones/{device_id}`; the app keeps
+  retrying a delete it couldn't send). A device id is self-asserted, as
+  everywhere in the device tier: a paired client could send under another
+  phone's id, which is the household trust the rest of that tier already
+  assumes.
+* **Everywhere they show** they are household data like the calendar: the
+  same device-read tier, masked to "busy" on a shared screen's Home, and
+  read aloud by voice with the rest. An imported event can't be edited or
+  deleted through Domovoi (`409`).
+
 **Documents by voice (2026-10-21).** "Read me the
 lease" reads a file from the household's Documents folder aloud in the
 room that asked: the same tier that can already open everything there
@@ -2591,6 +2634,7 @@ watch the server's traffic under **No**.
 | **Web answers** — "check that online", "double-check that", the weather: search queries through the local SearXNG container to public search engines. **The container also fetches on its own every time it starts**, with no query sent: the ClearURLs rule lists (rules1/rules2.clearurls.xyz, raw.githubusercontent.com), a Wikidata SPARQL query, and the radio-browser server list | While the `searxng` container runs. It follows the internet answer: started when **Yes** or **Sometimes** is saved (and by the dev scripts and the Linux update unit), stopped on **No** and at every core start while the answer is No (an answer set by hand in `.env` is never "saved") — which is why **No** stops it rather than only refusing searches; never started at boot | Answer **No**, or stop the container (`docker stop domovoi-searxng`); `DOMOVOI_MANAGE_SEARXNG=0` (process environment) stops Domovoi starting it. Under `never` no query is sent even if it runs, but its startup fetches would be, so leave it stopped. |
 | **Chat lookups** — a chat's search words to the local SearXNG (Wikipedia, Wikidata, then its other engines), Wikipedia's own API, the household's own SearXNG or Brave Search (with its key, in `X-Subscription-Token`, to Brave only), and a page a person names (`domovoi/lookup_web.py`, [below](#looking-things-up-chat-lookups)) | Only after the person allows it on the chat's card, or in a chat set to "Allow in this chat", or with **Always allow internet** on (off by default) | Leave **Always allow internet** off and answer **Not now**. Under `never` nothing is sent: the route refuses with 409, and only the manual and an offline library answer. |
 | **Podcasts** — the subscribed feeds and the episode files they point at; each show's artwork, fetched once by the server; a show's name to Apple's iTunes search when you subscribe by voice or use Discover | Only for shows you subscribed to, when the poller runs (on for the **Yes** answer, off otherwise) or you press "poll now"; the search only when you ask | `podcast_feed_poller_enabled = false`; unsubscribe from a show to stop fetching it. The browser and the phone load artwork from the server, never from the publisher. |
+| **Calendars by link** — a request for each calendar's ICS file at the private address an admin added (Google, Microsoft, Apple, or wherever the link points), with the last answer's ETag/date; nothing else is sent ([above](#the-tiers): the address is a secret, kept in one column, never logged or returned) | Every 30 min (every 2 h under `sometimes`), and when an admin presses **refresh now** or adds one | Remove the calendar (Settings → Household → Calendars). Under `never` nothing is fetched and each calendar keeps its last copy. Phones' shared calendars never use the internet: the phone sends them to the server on the LAN |
 | **More fonts** — the list of open-licence font families (GitHub's API for the google/fonts repository's folder listing, then each family's `METADATA.pb` from raw.githubusercontent.com) and, for a family an admin adds, its licence file and font files (`web/backend/api/fonts.py`). Nothing about the house is sent: no document, no name, only the requests for those public files | Only when an admin opens "More fonts" (Settings → Documents → Fonts; the list is then kept for a week) or adds a family | Don't use it: the bundled fonts never need the internet. Under `never` the button is greyed and the server refuses with the turned-off reason before asking GitHub. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID, with the AcoustID key, over HTTPS since 2026-10-17: pyacoustid's own default is plain HTTP; with the optional Shazam add-on, `shazamio`, a Shazam audio signature of the file when AcoustID has no answer) and metadata lookups (MusicBrainz) to identify/clean up untagged music files. An answer that shares nothing with the names the file already has is not used (`disagreed`). Settings → Advanced's **test the key** sends the key with one made-up fingerprint (`library_enricher.KEY_CHECK_FINGERPRINT`, never one of your files) | Background, when unenriched tracks exist; the test only when an admin presses it, never under **No** | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
 | **MusicBrainz year and genre** — for a library track whose own tags give no year or no genre but which has a MusicBrainz recording id (from song recognition or a provider download), `GET musicbrainz.org/ws/2/recording/<id>?inc=genres+artist-credits+releases+release-groups` for its first-release date and genres (the recording's, else its album's, else its artist's — all in that one answer, so no artist id is ever sent; a recording on so many releases that the answer is over 2 MB is asked once more with `inc=genres+artist-credits`, V052). **Only the recording id** (a public MusicBrainz identifier, checked to be one before it is sent) and the User-Agent leave the house: no title, artist, file name or anything about who listens (`domovoi/workers/library_year_fetch.py`, V050, V052) | Background, a batch of at most 25 every 30 s at one request a second through the same paced client as every other MusicBrainz call, only while the connectivity probe reports online, once per recording (a recording asked for its year before V052 is asked once more, for its genre); a 503/429 or no answer pauses it | Follows song recognition: `library_enricher_enabled = false` stops it before its next request, and it never runs under **No**. The genres and years read from your files' own tags (the Genres tab) never leave the house. |

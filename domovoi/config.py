@@ -1343,6 +1343,11 @@ class Settings(BaseSettings):
     # per-feed last_polled_at isn't separately throttled (the whole set is
     # cheap: one HTTP GET + parse each).
     podcast_feed_poller_interval_sec: float = 1800.0
+    # Calendars by link (V055, domovoi/calendar_feeds.py): how often the
+    # refresher looks for a calendar that is due. Each calendar is read
+    # every 30 min (every 2 h when the internet answer is "sometimes"),
+    # backing off after failures; never under "never".
+    calendar_feed_tick_sec: float = 300.0
     # Default newest-N episodes to keep downloaded per show. Per-subscription
     # keep_n overrides this; used only as the default when a subscription
     # doesn't set its own. LRU eviction removes downloaded episodes beyond

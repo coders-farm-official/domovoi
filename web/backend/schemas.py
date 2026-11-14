@@ -880,6 +880,96 @@ class CalendarEvent(BaseModel):
     source: str | None = None
     external_id: str | None = None
     last_synced_at: datetime | None = None
+    # 1.3.0 (V055). An all-day event's bounds are its local midnights,
+    # written with the household's offset so the text carries the date.
+    all_day: bool = False
+    # The calendar it comes from (a link or a phone), None for the
+    # household's own; such an event is read_only.
+    calendar_id: int | None = None
+    calendar_name: str | None = None
+    calendar_color: str | None = None
+    calendar_kind: str | None = None
+    owner_name: str | None = None
+    read_only: bool = False
+
+
+class CalendarSource(BaseModel):
+    """A calendar the house reads from elsewhere (``GET /api/calendar/sources``).
+    A link's address is never here: ``url_display`` is its host and "…"."""
+
+    id: int
+    kind: Literal["link", "phone"]
+    name: str
+    color: str
+    person_id: int | None = None
+    owner_name: str | None = None
+    url_display: str | None = None
+    device_id: str | None = None
+    device_name: str | None = None
+    account_name: str | None = None
+    event_count: int = 0
+    last_refreshed_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    next_refresh_at: datetime | None = None
+    last_error: str | None = None
+    last_error_words: str | None = None
+    status: Literal["ok", "error", "waiting", "internet_off"] = "ok"
+
+
+class CalendarSourceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(..., min_length=1, max_length=2048)
+    name: str = Field(..., min_length=1, max_length=80)
+    color: str | None = Field(default=None, max_length=7)
+    person_id: int | None = None
+
+
+class CalendarSourcePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    color: str | None = Field(default=None, max_length=7)
+    person_id: int | None = None
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+
+
+class CalendarSourceRefresh(BaseModel):
+    source: CalendarSource
+    ok: bool
+    events: int | None = None
+
+
+class PhoneCalendarEvent(BaseModel):
+    uid: str = Field(..., min_length=1, max_length=300)
+    title: str | None = Field(default=None, max_length=200)
+    starts_at_ms: int
+    ends_at_ms: int | None = None
+    all_day: bool = False
+    location: str | None = Field(default=None, max_length=200)
+
+
+class PhoneCalendar(BaseModel):
+    calendar_id: str = Field(..., min_length=1, max_length=200)
+    name: str = Field(..., min_length=1, max_length=200)
+    account_name: str | None = Field(default=None, max_length=200)
+    color: str | None = Field(default=None, max_length=9)
+    events: list[PhoneCalendarEvent] = Field(default_factory=list)
+
+
+class PhoneCalendarSnapshot(BaseModel):
+    """``PUT /api/calendar/phones/{device_id}``: everything a phone shares."""
+
+    phone_name: str | None = Field(default=None, max_length=80)
+    window_start_ms: int | None = None
+    window_end_ms: int | None = None
+    # Caps (25 calendars, 5000 events each, 20000 in all) answer 413 in the route.
+    calendars: list[PhoneCalendar] = Field(default_factory=list)
+
+
+class PhoneCalendarStored(BaseModel):
+    calendars: int
+    events: int
 
 
 class CalendarEventCreate(BaseModel):

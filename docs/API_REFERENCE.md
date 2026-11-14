@@ -1287,11 +1287,36 @@ withheld from an unpaired client); every write is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/calendar/events` | **Device read** · `?start=&end=&limit=500` | Events in a window (ISO datetimes). |
+| `GET /api/calendar/events` | **Device read** · `?start=&end=&limit=500` (at most 2000) | Events in a window (ISO datetimes): starting in it, or (1.3.0) begun before `start` and still on at it. Each event carries `all_day` and, for one from another calendar (1.3.0), `calendar_id`, `calendar_name`, `calendar_color` (`#rrggbb`), `calendar_kind` (`link` / `phone`), `owner_name` (the person, or the phone's name) and `read_only: true`; `source` is `local`, `link` or `phone`. An all-day event's `starts_at` / `ends_at` are its local midnights written with the server's own offset (`2026-11-26T00:00:00-05:00`), so the text carries its date. |
 | `POST /api/calendar/events` | `CalendarEventCreate` | Create an event. |
 | `GET /api/calendar/events/{event_id}` | **Device read** | One event. |
-| `PATCH /api/calendar/events/{event_id}` | `CalendarEventPatch` | Edit an event. |
-| `DELETE /api/calendar/events/{event_id}` | — | Delete an event. |
+| `PATCH /api/calendar/events/{event_id}` | `CalendarEventPatch` | Edit an event. `409` for one from another calendar: "this event comes from <calendar>; change it there". |
+| `DELETE /api/calendar/events/{event_id}` | — | Delete an event. `409` for one from another calendar, as above. |
+
+#### Calendars from elsewhere (1.3.0, V055)
+
+Read-only, both kinds: nothing is written back, and nothing signs in to a
+calendar company. `domovoi/calendar_feeds.py` keeps them; their events sit
+in `calendar_events` beside the household's own, so the Calendar page,
+Home and voice ("what's on my calendar today") read them all.
+
+| Method & path | Tier · request | Purpose |
+|---|---|---|
+| `GET /api/calendar/sources` | **Device read** | Every calendar the house shows besides its own: `[{id, kind: "link"\|"phone", name, color, person_id, owner_name, url_display, device_id, device_name, account_name, event_count, last_refreshed_at, last_attempt_at, next_refresh_at, last_error, last_error_words, status: "ok"\|"error"\|"waiting"\|"internet_off"}]`. A link's address is **never** in it: `url_display` is its host and `/…`. `last_error_words` says a failure in plain words (`not_found`: "The link doesn't work any more…"; `internet_off`: "…can't refresh. Showing the last copy."). |
+| `POST /api/calendar/sources` | **Admin (mutation)** · `{url, name, color?, person_id?}` | Add a calendar by its private ICS link (`https://`, `http://`, or `webcal://`, read as `https://`). `422` with plain words for anything else, or for an address inside the house (the outbound gate's rule; `OUTBOUND_ALLOW_HOSTS` opens one). `409` when the same link is already added. It is read once at once (unless internet access is **No**): `201 {source, ok, events}`, the calendar kept even when that first read fails (`ok: false`, the reason in `source.last_error_words`). |
+| `PATCH /api/calendar/sources/{source_id}` | **Admin (mutation)** · `{name?, color?, person_id?, url?}` | Rename, recolour, re-own; a new `url` replaces a link that was reset (read again at once). A phone's calendar takes its name and colour from the phone (`409`). |
+| `DELETE /api/calendar/sources/{source_id}` | **Admin (mutation)** | Remove a linked calendar and its events (the calendar itself is untouched). A phone's is stopped on the phone: `409`. |
+| `POST /api/calendar/sources/{source_id}/refresh` | **Admin (mutation)** | **Refresh now**: `{source, ok, events}` (`events: null` when unchanged, a `304`). Under internet **No** nothing is fetched (`ok: false`, `internet_off`). `409` while another read of it runs. |
+| `PUT /api/calendar/phones/{device_id}` | **Device** · `{phone_name?, window_start_ms?, window_end_ms?, calendars: [{calendar_id, name, account_name?, color?, events: [{uid, title?, starts_at_ms, ends_at_ms?, all_day, location?}]}]}` | The Android app's "Share this phone's calendars with the house": the COMPLETE set this phone shares. Each listed calendar's events are replaced; a calendar of this phone not listed is deleted (unpicked); `calendars: []` deletes them all. All-day instances come as CalendarContract keeps them (UTC midnights) and are stored by their date. One row per (phone, calendar), so a phone never overwrites another's; the id is self-asserted, as everywhere in the device tier. `200 {calendars, events}`. At most one a minute per phone (`429` + `Retry-After`); `413` past 25 calendars, 5,000 events in one, 20,000 in all, or an 8 MB body. |
+| `DELETE /api/calendar/phones/{device_id}` | **Device** | Sharing turned off on the phone: every calendar it shared leaves the house. `204`. |
+
+Refreshing (the core's `calendar_feed_refresher` worker, every
+`CALENDAR_FEED_TICK_SEC`): a link is read every 30 minutes (every 2 hours
+when the internet answer is **Sometimes**, never under **No**), with
+`If-None-Match` / `If-Modified-Since`, through `domovoi/net_safety.py`
+(every redirect vetted, 10 MB at most); a failure backs off from 15
+minutes, doubling, to 12 hours. Recurrences are expanded from 30 days back
+to a year ahead (`domovoi/calendar_ics.py`).
 
 ### 3.8a Lists
 

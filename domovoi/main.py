@@ -798,6 +798,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     WORKERS.add_worker(NewsFetcher(app=app), owner="core")
     WORKERS.add_worker(WakeWordTrainer(), owner="core")
     WORKERS.add_worker(PodcastFeedPoller(), owner="core")
+    # Calendars added by link (V055): read on schedule through the outbound
+    # gate, never under INTERNET_ACCESS=never (domovoi/calendar_feeds.py).
+    from domovoi.workers.calendar_feed_refresher import CalendarFeedRefresher
+
+    WORKERS.add_worker(CalendarFeedRefresher(), owner="core")
     WORKERS.add_worker(AudiobookIndexer(), owner="core")
     # The place in the book of a room playing one, every 30 s
     # (domovoi/workers/room_book_positions.py).

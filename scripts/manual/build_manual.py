@@ -67,6 +67,11 @@ ROUTES: dict[str, dict] = {
     "settings/people": {"dashboard": "#settings/people", "app": {"screen": "Settings", "tab": "people"}},
     "settings/greetings": {"dashboard": "#settings/greetings", "app": {"screen": "Settings", "tab": "greetings"}},
     "settings/printers": {"dashboard": "#settings/printers", "app": {"screen": "Settings", "tab": "printers"}},
+    # Calendars from elsewhere (1.3.0): links are added on the dashboard; a
+    # phone shares its own calendars from the app's Phone calendars section.
+    "settings/calendars": {"dashboard": "#settings/calendars", "app": {"dashboard": True}},
+    "settings/phone-calendars": {"dashboard": "#settings/calendars",
+                                 "app": {"screen": "Settings", "tab": "phone-calendars"}},
     "settings/voices": {"dashboard": "#settings/voices", "app": {"dashboard": True}},
     "settings/wake-words": {"dashboard": "#settings/wake-words", "app": {"screen": "Settings", "tab": "wake-words"}},
     "settings/phones-and-browsers": {"dashboard": "#settings/phones-and-browsers", "app": {"dashboard": True}},
