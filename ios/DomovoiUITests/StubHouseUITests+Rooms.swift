@@ -2261,6 +2261,9 @@ extension StubHouseUITests {
         }
         evidence(app, "rooms-31-audit-roster")
         let rosterShot = roomsWindowShot(app)
+        // Read now, on the roster: the floor's pin below depends on it, and
+        // by then the kitchen is open.
+        let entryCardDrawn = app.buttons[RoomModeUnderTest.entry].exists
         // The picture the foot's own ink is read from, in the same breath as
         // the shot, while D57's scroll has the foot drawn whole.
         let rosterPicture = app.screenshot().image.cgImage
@@ -2504,11 +2507,30 @@ extension StubHouseUITests {
         // retake is not counted, because it would count the same bars twice.
         // I008's split (`.dynamicType` alone) returned **0**, which is why
         // the split is gone.
+        //
+        // **12, or 13 with room mode's entry card on the page** (I037, I038).
+        // The 13th is one more anonymous `Dynamic Type font sizes are
+        // partially unsupported`, and it is NOT the kitchen card's clock:
+        // `1:52 / 5:02` is an *attributed* `Contrast failed`, which the floor
+        // never counts (it lands in `rest`, is retaken at the settled
+        // position, and is gone there); read off I038's settled picture it is
+        // `#58554F` on `#F1F1F2`, 6.58:1. The kitchen has played Harvest
+        // Moon on every train since I012 at a floor of 12 (I036 included,
+        // the queues stub's own). What changed in I037 is the page: the
+        // merge put R3's `THIS DEVICE · Use this device as a room` card on
+        // it (`RoomModeEntryCard.swift`), the page grew from 683 to 964
+        // points and D57's scroll now parks everything above the broadcast
+        // card off the window. Every font in that card is a text style, so
+        // the one finding is not attributed to a line of it; it is pinned to
+        // the card's presence, by its identifier, as one exact count — a
+        // fourteenth, or a 13 without the card, still fails.
+        let rosterFloor = entryCardDrawn ? 13 : 12
         XCTAssertEqual(
             rosterSplit.floor,
-            12,
+            rosterFloor,
             "the Rooms roster's anonymous floor is \(rosterSplit.floor), not the "
-                + "12 measured on train I004: " + rosterFirst.joined(separator: " | ")
+                + "\(rosterFloor) measured \(entryCardDrawn ? "with room mode's entry card (I037, I038)" : "on train I004")"
+                + ": " + rosterFirst.joined(separator: " | ")
         )
         //
         // **This number was measured before D56**, when the detail was drawn

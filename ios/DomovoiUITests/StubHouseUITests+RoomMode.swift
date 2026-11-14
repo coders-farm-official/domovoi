@@ -325,6 +325,26 @@ extension StubHouseUITests {
         let app = roomModeLaunch(room: RoomModeUnderTest.ready)
         let mute = app.buttons[RoomModeUnderTest.mute]
         guard roomModeWait(app, mute, "no mute on a running room") else { return }
+        // **Tap only once the room has settled.** Mute is drawn while the
+        // line above it still says "Connecting to the server…"; a moment
+        // later the ready room's sentence (the wake word, or the stub's
+        // five-line "no wake-word models") pushes it about 78 points down.
+        // I037 and I038 tapped in between: the synthesized tap was at
+        // (196.5, 586.7), Mute's centre when it was found, and by the time
+        // it landed Mute was at 628.3–700.3, so the tap hit the sentence
+        // (the I038 recording shows both frames).
+        let detail = app.staticTexts[RoomModeUnderTest.detail]
+        let deadline = Date().addingTimeInterval(30)
+        var said = ""
+        while Date() < deadline {
+            said = detail.exists ? detail.label : ""
+            if said == RoomModeUnderTest.say || said.hasPrefix(RoomModeUnderTest.noModels) { break }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        guard said == RoomModeUnderTest.say || said.hasPrefix(RoomModeUnderTest.noModels) else {
+            roomModeMiss(app, "the room never settled before mute: “\(said)”")
+            return
+        }
         mute.tap()
         guard roomModeWait(app, app.buttons[RoomModeUnderTest.unmute], "mute did not turn into unmute") else { return }
         let chip = app.descendants(matching: .any)[RoomModeUnderTest.chip]
