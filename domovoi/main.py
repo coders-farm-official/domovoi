@@ -7636,6 +7636,29 @@ async def admin_library_enrich() -> dict[str, Any]:
     return {"queued": True, "worker": "library_enricher"}
 
 
+@app.post(
+    "/v1/admin/library/enrich/repair",
+    # Admin tier, like the sweep it repairs after: it rewrites names
+    # library-wide and reads every matched file's tags.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_library_enrich_repair() -> dict[str, Any]:
+    """Put the file's own names back on tracks song recognition renamed
+    to a song that isn't theirs (``library_enricher.repair_disagreeing``),
+    in the background. Only rows the enricher matched are looked at; a
+    track a person edited is never touched. No network, so it runs with
+    internet access off too. ``{"queued": false, "reason": "running"}``
+    while a sweep (or another repair) is in progress."""
+    from domovoi.workers import library_enricher
+
+    if library_enricher.enrich_running():
+        return {"queued": False, "reason": "running"}
+    asyncio.create_task(
+        library_enricher.repair_disagreeing(), name="admin-library-enrich-repair",
+    )
+    return {"queued": True, "worker": "library_enricher_repair"}
+
+
 # ─── Streaming ────────────────────────────────────────────────────────────
 
 

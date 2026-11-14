@@ -150,6 +150,7 @@ ADMIN_TIER = [
     # the core routes behind each of these are admin-gated too.
     ("POST", "/api/music/library/reindex"),
     ("POST", "/api/music/library/enrich"),
+    ("POST", "/api/music/library/enrich/repair"),
     ("POST", "/api/satellites/{room_id}/restart"),
     ("POST", "/api/satellites/{room_id}/display"),
     ("PATCH", "/api/satellites/{room_id}/config"),
@@ -313,6 +314,8 @@ ADMIN_FAMILIES = {
                       "music", "post_admin"),
     "music-enrich": ("POST", "/api/music/library/enrich", None,
                      "music", "post_admin"),
+    "music-enrich-repair": ("POST", "/api/music/library/enrich/repair", None,
+                            "music", "post_admin"),
     "satellite-restart": ("POST", "/api/satellites/kitchen/restart", None,
                           "satellites", "post_admin"),
     "satellite-display": ("POST", "/api/satellites/kitchen/display",

@@ -33,6 +33,27 @@ _TITLE_TRAILING_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*$")
 _ILLEGAL_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
+def split_dashed(title: str | None) -> tuple[str, str] | None:
+    """The two sides of an "A - B" title, as written (B keeps any trailing
+    "(...)" modifier), or None when there is no such separator. The same
+    separator rules as :func:`parse_title_artist`."""
+    raw = (title or "").strip()
+    m = _ARTIST_TITLE_RE.match(raw) or _ARTIST_TITLE_LOOSE_RE.match(raw)
+    if not m:
+        return None
+    return m.group(1).strip(), m.group(2).strip()
+
+
+def strip_trailing_modifier(text: str) -> tuple[str, str]:
+    """``text`` without one trailing "(...)" / "[...]" modifier, and the
+    modifier itself ("" when there is none)."""
+    t = (text or "").strip()
+    cleaned = _TITLE_TRAILING_RE.sub("", t).strip()
+    if not cleaned:
+        return t, ""
+    return cleaned, t[len(cleaned):].strip()
+
+
 def parse_title_artist(title: str) -> tuple[str | None, str | None]:
     """Extract ``(artist, title)`` from an external media title.
 
@@ -42,12 +63,10 @@ def parse_title_artist(title: str) -> tuple[str | None, str | None]:
     """
     if not title:
         return None, None
-    raw = title.strip()
-    m = _ARTIST_TITLE_RE.match(raw) or _ARTIST_TITLE_LOOSE_RE.match(raw)
-    if not m:
+    parts = split_dashed(title)
+    if parts is None:
         return None, None
-    artist = m.group(1).strip()
-    rest = m.group(2).strip()
+    artist, rest = parts
     cleaned = _TITLE_TRAILING_RE.sub("", rest).strip() or rest
     return artist or None, cleaned or None
 

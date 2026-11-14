@@ -138,10 +138,14 @@ async def test_with_a_provider_legacy_rows_get_one_real_try(lane, monkeypatch, t
     ids = await _seed_live_like(lane, tmp_path)
     monkeypatch.setattr(f"{ENRICHER}.provider_available", lambda: True)
     found = {
+        # Answers that agree with the names the rows have (2026-11-13), in
+        # the catalog's own spelling: a fill-only row keeps its title.
         "01.mp3": Lookup(Verdict.MATCH, result=EnrichmentResult(
-            title="Real Title", artist="Real Artist", musicbrainz_recording_id="mb-01", source="acoustid")),
+            title="01 - Track (Remastered)", artist="Real Artist", musicbrainz_recording_id="mb-01",
+            source="acoustid")),
         "03.mp3": Lookup(Verdict.MATCH, result=EnrichmentResult(
-            title="Catalog Title", artist="Catalog Artist", musicbrainz_recording_id="mb-03", source="acoustid")),
+            title="My corrected title", artist="Catalog Artist", musicbrainz_recording_id="mb-03",
+            source="acoustid")),
         "04.mp3": Lookup(Verdict.NO_MATCH, detail="nothing"),
     }
     asked = _recording(monkeypatch, lambda p: found[p.name])
@@ -200,8 +204,9 @@ async def test_a_recheck_that_errors_waits_for_the_next_sweep(lane, monkeypatch,
     assert legacy.enriched_at is not None and legacy.enrich_outcome is None
     # The next sweep with an answer requeues them then, and they are still
     # fill-only.
-    _recording(monkeypatch, lambda _p: Lookup(Verdict.MATCH, result=EnrichmentResult(
-        title="Overwrite?", artist="Filled", source="shazam")))
+    agreeing = {"01": "01 - Track (Live)", "03": "My Corrected Title (Live)", "04": "04 - Track (Live)"}
+    _recording(monkeypatch, lambda p: Lookup(Verdict.MATCH, result=EnrichmentResult(
+        title=agreeing[p.stem], artist="Filled", source="shazam")))
     again = await enrich_library()
     assert again["requeued_legacy"] == 2 and again["matched"] == 3
     legacy = await _row(lane, ids["legacy_unanswered"])

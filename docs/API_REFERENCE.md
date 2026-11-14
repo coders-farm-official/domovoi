@@ -586,6 +586,7 @@ None of them creates a room. The routes that name a room (`play-track`, `play-tr
 | `POST /v1/admin/music/mpd-rescan` | — | Tell every provisioned room's MPD to rescan the music dir — the playability half of a reindex, without the library sweep. `{rooms, updated}`. Device tier on purpose: no caller input, no database, and the web calls it after an upload has already written the files. |
 | `POST /v1/admin/library/reindex` (**Admin**) | — | Background: sweep the music dir into `library_tracks`, then make every per-room MPD rescan. Returns `{"queued": true}` immediately. |
 | `POST /v1/admin/library/enrich` (**Admin**) | — | Background: metadata enrichment pass (rate-limited; can take minutes). `{"queued": true}`. When nothing can run: `{"queued": false, "reason": "disabled" \| "offline" \| "no_provider"}` (`no_provider`: no AcoustID key and no Shazam add-on). `409` under `never` (§1.6). |
+| `POST /v1/admin/library/enrich/repair` (**Admin**) | — | Background: put the file's own title and artist back on tracks an earlier enrichment renamed to a song that isn't theirs (the name check a sweep now makes, applied to rows it already matched); the wrong match's MusicBrainz id, and any year or genre fetched by it, go too, and the row is marked `disagreed` so it isn't renamed again. Hand-edited tracks are never touched. No network. `{"queued": true}`, or `{"queued": false, "reason": "running"}` while a sweep or repair runs. |
 
 ### 2.9 Printers, printing and scanning
 
@@ -750,6 +751,7 @@ next load.
 | `POST /api/music/previous/{room_id}` | **Device or guest** | — | Proxy → core `/v1/admin/music/previous/{room_id}`: back one song in the room's queue (the app's and the dashboard's previous while casting). Not a kiosk verb, so not open; a guest's press is passed through (the core decides) unless guests are off or the guest is banned. |
 | `POST /api/music/library/reindex` | **Admin (Bearer)** | — | Proxy → core background reindex. |
 | `POST /api/music/library/enrich` | **Admin (Bearer)** | — | Proxy → core background enrichment. |
+| `POST /api/music/library/enrich/repair` | **Admin (Bearer)** | — | Proxy → core background repair of names enrichment got wrong. |
 
 ### 3.5a Music: the room queue (editable) and device names
 

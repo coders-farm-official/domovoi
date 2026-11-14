@@ -4,6 +4,36 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-13 — Song recognition no longer renames songs to the wrong one
+
+Library enrichment (AcoustID, then Shazam) used to take a fingerprint
+answer as it came, and could rename a song to one that shared nothing
+with it: "In the End" by Linkin Park became the title "Linkin Park" by
+"Boomin". Now, when a track already has a title or an artist (from its
+tags or its file name), an answer is used only if its title or its artist
+matches what the track already says, allowing for case, punctuation,
+"feat.", "(Official Video)" and small spelling differences, and never when
+the answer's title is the track's artist. AcoustID's other candidates for
+the same fingerprint are looked at, not just the first. A track no answer
+agrees with keeps its names and is marked `disagreed`, so it isn't asked
+again.
+
+**To fix tracks an earlier run already renamed**, an admin runs the
+repair once: `POST /api/music/library/enrich/repair` on the dashboard
+(core: `POST /v1/admin/library/enrich/repair`), with the admin Bearer. It
+runs in the background, uses no network, and reads every track song
+recognition matched: where the track's names don't agree with the file's
+own (its tags, else its file name), the file's title and artist come
+back, the wrong match's MusicBrainz id goes, with any year or genre
+fetched by it, and the track is marked `disagreed`. Tracks you edited by
+hand are never touched. The core log lists every track it put back.
+
+Untagged files named "Title - Artist" are now read that way round when
+the part after the dash is an artist already in the library and the part
+before it isn't ("I against I - Massive Attack & Mos Def (Blade II
+version).mp3" is "I against I (Blade II version)" by Massive Attack & Mos
+Def). Files already in the library keep the names they were given.
+
 ## 2026-11-12 — "Play <artist>, the song <title>" asks for that song
 
 "Play Lil Seeto, the song Glitch Again" is now read as the song Glitch

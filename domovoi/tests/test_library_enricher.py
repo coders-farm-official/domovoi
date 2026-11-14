@@ -416,8 +416,8 @@ async def test_enrich_library_coalesce_preserves_existing_data(
     await enricher_db.commit()
 
     async def _partial(file_path):
-        # Title-only result; artist/album NULL.
-        return _match(EnrichmentResult(title="New Title", source="acoustid"))
+        # Title-only result (agreeing with the row's title); artist/album NULL.
+        return _match(EnrichmentResult(title="Old Title (2011 Remaster)", source="acoustid"))
 
     async def _miss(file_path):
         return _NO_MATCH
@@ -434,7 +434,7 @@ async def test_enrich_library_coalesce_preserves_existing_data(
     row = (await enricher_db.execute(
         text("SELECT title, artist, album FROM library_tracks")
     )).first()
-    assert row.title == "New Title"   # updated
+    assert row.title == "Old Title (2011 Remaster)"   # updated
     assert row.artist == "Old Artist"  # preserved
     assert row.album == "Old Album"    # preserved
 

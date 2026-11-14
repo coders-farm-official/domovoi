@@ -48,7 +48,10 @@ Metadata strategy:
   2. If title or artist is empty, parse the filename. Reuses the core
      ``library_naming.parse_title_artist`` so the "Artist - Title.mp3"
      parsing rules are consistent across every ingest path (this
-     indexer + provider plugins via ``sdk.library``).
+     indexer + provider plugins via ``sdk.library``). One exception
+     (2026-11-13): "A - B" where B is an artist the library already has
+     and A isn't is read "Title - Artist" (:func:`_fallback_filename_parse`;
+     the library's artists are loaded once per sweep).
   3. Last-resort fall back: title = filename stem, artist = NULL.
 
 Files are recorded under ``added_via='manual'`` so the audit trail
@@ -70,6 +73,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -80,6 +84,7 @@ from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.library_genres import TAGS_VERSION
 from domovoi.library_naming import parse_title_artist as _parse_title_artist
+from domovoi.library_naming import split_dashed, strip_trailing_modifier
 from domovoi.mpd_library_sync import update_rooms_for
 
 log = logging.getLogger(__name__)
@@ -227,11 +232,85 @@ def _read_tags(path: Path) -> dict[str, Any]:
     return out
 
 
-def _fallback_filename_parse(path: Path) -> tuple[str | None, str | None]:
+#: Artist credits that name nobody ("Unknown Artist"), by alias_key: never
+#: evidence that one side of a file name is an artist.
+_NOT_AN_ARTIST_KEYS = frozenset({"unknownartist", "variousartists", "unknown", "va"})
+#: A trailing "(...)" on a file name that is upload decoration, not part of
+#: the song's title ("(Official Video)", "[HD]", "(Lyrics)").
+_DECORATION_RE = re.compile(
+    r"official|video|audio|lyrics?|visuali[sz]er|\bhd\b|\bhq\b|\b4k\b", re.I,
+)
+
+
+def artist_keys(credit: str | None) -> set[str]:
+    """The keys an artist credit is known by: the whole credit's and each
+    performer's (``spoken_names.alias_key`` over ``split_credit``, the same
+    keys the library's name tables use), without the ones naming nobody."""
+    from domovoi.handlers.shared.spoken_names import alias_key, split_credit
+
+    raw = (credit or "").strip()
+    if not raw:
+        return set()
+    keys = {alias_key(raw), *(alias_key(p) for p in split_credit(raw))}
+    return {k for k in keys if k and k not in _NOT_AN_ARTIST_KEYS}
+
+
+def known_artist_keys_of(credits: Iterable[str | None]) -> frozenset[str]:
+    """Pure: every :func:`artist_keys` of ``credits``."""
+    out: set[str] = set()
+    for credit in credits:
+        out |= artist_keys(credit)
+    return frozenset(out)
+
+
+async def known_artist_keys(session: Any) -> frozenset[str] | None:
+    """The keys of every artist already in the library (one query; the
+    keys are worked out in a worker thread), for reading an untagged
+    file's name the right way round. Loaded once per sweep, and only when
+    the sweep has a new file to read. None when there are none or the read
+    fails: the file name is then read as "Artist - Title", as before."""
+    try:
+        result = await session.execute(text(
+            "SELECT DISTINCT artist FROM library_tracks "
+            "WHERE artist IS NOT NULL AND artist <> ''"
+        ))
+        credits = [r[0] for r in result]
+        keys = await asyncio.to_thread(known_artist_keys_of, credits)
+    except Exception as e:  # noqa: BLE001 — a nicety; the old reading still works
+        log.debug("library indexer: couldn't load the library's artists: %s", e)
+        return None
+    return keys or None
+
+
+def _fallback_filename_parse(
+    path: Path, known_artists: frozenset[str] | None = None,
+) -> tuple[str | None, str | None]:
     """When tags are missing, parse "Artist - Title.mp3" via the same
     helper every ingest path uses. Returns (artist, title); either may
     be None if the filename doesn't fit the pattern.
+
+    ``known_artists`` (:func:`known_artist_keys`): when the part AFTER the
+    dash names an artist the library already has (the whole credit, or one
+    performer of an "X & Y" / "feat." credit) and the part before it
+    doesn't, the name is "Title - Artist" and is read that way round. A
+    trailing "(...)" that isn't upload decoration stays on the title: "I
+    against I - Massive Attack & Mos Def (Blade II version)" is the title
+    "I against I (Blade II version)" by "Massive Attack & Mos Def". Pure.
     """
+    if known_artists:
+        parts = split_dashed(path.stem)
+        if parts is not None:
+            first, rest = parts
+            second, modifier = strip_trailing_modifier(rest)
+            if (
+                first and second
+                and artist_keys(second) & known_artists
+                and not artist_keys(first) & known_artists
+            ):
+                title = first
+                if modifier and not _DECORATION_RE.search(modifier):
+                    title = f"{first} {modifier}"
+                return second, title
     artist, title = _parse_title_artist(path.stem)
     if title is None:
         # No "Artist - Title" structure. Use the bare stem as title;
@@ -240,16 +319,19 @@ def _fallback_filename_parse(path: Path) -> tuple[str | None, str | None]:
     return artist, title
 
 
-def _resolve_metadata_for(path: Path) -> dict[str, Any]:
+def _resolve_metadata_for(
+    path: Path, known_artists: frozenset[str] | None = None,
+) -> dict[str, Any]:
     """Best-effort metadata pulled from tags first, filename fallback
     second. Always returns a dict with at least ``title`` populated
     (worst case: the bare filename stem). Blocking: the indexer runs it in
-    the ``tags`` pool (:func:`read_metadata`)."""
+    the ``tags`` pool (:func:`read_metadata`). ``known_artists``: see
+    :func:`_fallback_filename_parse`."""
     tags = _read_tags(path)
     title = tags.get("title")
     artist = tags.get("artist")
     if not title or not artist:
-        fn_artist, fn_title = _fallback_filename_parse(path)
+        fn_artist, fn_title = _fallback_filename_parse(path, known_artists)
         title = title or fn_title
         artist = artist or fn_artist
     if not title:
@@ -265,9 +347,13 @@ def _resolve_metadata_for(path: Path) -> dict[str, Any]:
     }
 
 
-async def read_metadata(path: Path) -> dict[str, Any]:
+async def read_metadata(
+    path: Path, known_artists: frozenset[str] | None = None,
+) -> dict[str, Any]:
     """:func:`_resolve_metadata_for`, in the ``tags`` pool: off the event
     loop, two files at a time at most."""
+    if known_artists:
+        return await executors.run("tags", _resolve_metadata_for, path, known_artists)
     return await executors.run("tags", _resolve_metadata_for, path)
 
 
@@ -285,12 +371,16 @@ async def _indexed_paths(session: Any) -> set[str]:
     return {r[0] for r in rows}
 
 
-async def _insert_track(session: Any, path: Path, *, known_new: bool = False) -> bool:
+async def _insert_track(
+    session: Any, path: Path, *, known_new: bool = False,
+    known_artists: frozenset[str] | None = None,
+) -> bool:
     """INSERT one audio file into ``library_tracks``; no-op when its
     ``file_path`` is already there, which is checked BEFORE the file's
     tags are read (``known_new``: the caller just checked). Returns True
     when a row was really added (so callers can tell inserted from
-    skipped).
+    skipped). ``known_artists``: :func:`known_artist_keys`, loaded once by
+    the caller.
 
     Split out of :func:`index_music_dir` so the bounded post-write path
     (:func:`index_paths`) writes rows exactly the way the full sweep
@@ -315,7 +405,7 @@ async def _insert_track(session: Any, path: Path, *, known_new: bool = False) ->
     """
     if not known_new and await _is_indexed(session, path):
         return False
-    meta = await read_metadata(path)
+    meta = await read_metadata(path, known_artists)
     result = await session.execute(
         text(
             """
@@ -405,9 +495,10 @@ async def index_paths(paths: Iterable[Path | str]) -> dict[str, int]:
     added: list[Path] = []
     if wanted:
         async with session_scope() as session:
+            known_artists = await known_artist_keys(session)
             for path in wanted:
                 try:
-                    if await _insert_track(session, path):
+                    if await _insert_track(session, path, known_artists=known_artists):
                         inserted += 1
                         added.append(path)
                     else:
@@ -474,13 +565,20 @@ async def index_music_dir() -> dict[str, int]:
 
     async with session_scope() as session:
         known = await _indexed_paths(session)
+        # The library's artists, for reading untagged file names the right
+        # way round: one query, and only once there is a new file to read.
+        known_artists: frozenset[str] | None = None
+        artists_loaded = False
         for path in found:
             scanned += 1
             if str(path) in known:
                 skipped += 1        # already indexed: its tags are not read again
                 continue
+            if not artists_loaded:
+                artists_loaded = True
+                known_artists = await known_artist_keys(session)
             try:
-                if await _insert_track(session, path, known_new=True):
+                if await _insert_track(session, path, known_new=True, known_artists=known_artists):
                     inserted += 1
                     added.append(path)
                 else:

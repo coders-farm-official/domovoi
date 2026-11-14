@@ -100,6 +100,7 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/sounds/setup-clips"),
     ("POST", "/v1/admin/library/reindex"),
     ("POST", "/v1/admin/library/enrich"),
+    ("POST", "/v1/admin/library/enrich/repair"),
 ]
 
 # CORE-2 / CORE-14: opening a live two-way mic bridge between two rooms
