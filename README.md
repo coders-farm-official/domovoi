@@ -130,9 +130,12 @@ We build Domovoi in public. Here's where it stands.
   Audiobooks, Videos and plugin pages such as Stations) and **Tools**
   (News, Calendar, Lists, Files), each opening in place, then Plugins. People
   moved into Settings → Household; `#people` still opens it.
-- **Settings in groups, with search and one Health page.** Household (Rooms, People, Phones & browsers, Printers & scanners), Voice, Chat & AI, Privacy and System (App layout lives here), with a search box
-  ("wake", "token"); the app's Settings uses the same groups and names, and
-  old bookmarks still land. System → Health lists every check, green or
+- **Settings in groups, with search and one Health page.** Household
+  (Rooms, People, Phones & browsers, Media folders, Printers & scanners),
+  Voice, Chat & AI, Privacy, Documents and System (App layout lives here),
+  with a search box ("wake", "token"); the app's Settings uses the same
+  groups and names, and old bookmarks still land. Saving a setting that
+  needs a restart asks **Restart now** or **Later**. System → Health lists every check, green or
   not (server, updates, rooms, plugins, internet, containers), and Home's
   "needs attention" rows open their part of it.
 - **Printing and scanning on network printers,** with no drivers: any
@@ -295,9 +298,11 @@ We build Domovoi in public. Here's where it stands.
 - **The Android app** brings the dashboard, a music player, chat and drop-in
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
-  still plays your phone's own music, videos and files. It is a signed
-  release, [v1.2.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0)
-  on GitHub, and your server can hand it to phones: press **Download the
+  still plays your phone's own music, videos and files. It is on
+  [Google Play](https://play.google.com/store/apps/details?id=com.domovoi.app),
+  and a signed release
+  ([v1.2.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0))
+  on GitHub; your server can hand it to phones: press **Download the
   app to this server** once on the dashboard, and a phone installs it from
   your server's own page by scanning a QR code
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
@@ -358,7 +363,10 @@ they have been tried on fewer devices than the rest, aren't yet held to
   running, the dashboard, a QR code for phones, and a helper that prepares
   a Raspberry Pi's SD card from Windows (it fetches the setup Wi-Fi's
   key itself, so nobody types it there)
-  ([the tray icon](docs/WINDOWS_HOST.md#the-tray-icon)).
+  ([the tray icon](docs/WINDOWS_HOST.md#the-tray-icon)). **Update Domovoi**
+  updates both the server and the Windows part; pressed on a phone, it
+  waits for someone at the PC, where the icon wears a blue **!** until it
+  is clicked ([a request from another device](docs/WINDOWS_HOST.md#a-request-from-another-device)).
 - **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
   phone or tablet through the Android app's room mode, can be a room instead
   of a Raspberry Pi. Each joins with a one-line command or a QR code from the
@@ -418,9 +426,6 @@ no longer cuts off its own announcement.
   flows that ask questions to build a resume or letter are built but not
   part of 1.0.0; plain "write a cover letter" in Chat ships.
 
-- **The Android app on Google Play.** Coders Farm's developer account is
-  cleared and the store listing is written; the release build is made
-  the way Google Play asks (shrunk with R8, with its `mapping.txt` kept).
 - **An iPhone app.** Its own track, apart from 1.0.0.
 - **The Windows installer out of preview,** so one download turns the household
   gaming PC into a Domovoi server.
@@ -469,8 +474,10 @@ Wi-Fi:
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
 - **The wake word** defaults to openWakeWord's built-in `hey_jarvis` model,
   and the documented path is to train your own **"Hey Domovoi"** from the
-  dashboard: record at least 15 clips through the satellite's own mic, train
-  on the server, push to the room. Training runs on your server, not in a
+  dashboard: record at least 15 clips through the room's own mic (or train
+  on synthetic voices alone), train on the server, push to the room. If a
+  room wakes on the TV or misses you, its Settings tab has **Wake
+  sensitivity** (0.7 by default) and **Wake confirmation** (2). Training runs on your server, not in a
   cloud; it needs a server with 24 GB of memory and a one-time download of
   about 22 GB ([wake-word training](scripts/wake_word/README.md)).
 
@@ -629,8 +636,8 @@ minutes, and **sign out** ends it at once.
 Day-to-day features work without logging in — the admin password gates the
 risky operations (plugin installs, configuration, credentials). The
 **household token** in `~/.domovoi/device-token.txt` (shown right after the
-claim, under "You're all set!", and later in Settings → Phones & browsers →
-Household token) is what your phones and dashboards present, once each, for
+claim, under "You're all set!", and later in Settings → Household → Phones &
+browsers → Household token) is what your phones and dashboards present, once each, for
 ordinary actions; it is not the admin password. "Want an easier one?" there
 sets one of your own (at least 12 characters, e.g. `maple-river-lamp`). Forgot the password? Run
 `python -m domovoi.main --reset-admin` on the server to clear it and write a
@@ -787,7 +794,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Push-to-talk voice | — | — | — | ✅ chat mic, and the phone's own chat |
 | Intercom & drop-in between rooms | ✅ initiate & receive; drop-in needs an echo-cancelling mic (the XVF3800 board, or a speakerphone on a laptop) | ✅ as a satellite; drop-in on phones with an echo canceller | — | ✅ drop into a room from your phone |
 | Music playback | ✅ in-room via MPD | ✅ the room's music | ✅ full web player | ✅ native local player |
-| Edit a room's shared queue (reorder, drop, clear) | voice: play / skip / stop | voice: play / skip / stop | ✅ drag to reorder | ✅ move & remove |
+| Edit a room's shared queue (jump, reorder, add, drop, save as playlist) | voice: play / skip / stop, "add <song> after this" | voice: play / skip / stop | ✅ drag to reorder, search to add | ✅ move, remove, play next, search to add |
 | Browse & organise files across every library | — | — | ✅ drag and drop to move | ✅ move via a destination picker |
 | Library, playlists, podcasts, audiobooks, news | voice control | voice control | ✅ full management | ✅ dashboard parity |
 | Videos | — | — | ✅ | ✅ |

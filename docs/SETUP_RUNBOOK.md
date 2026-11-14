@@ -247,9 +247,11 @@ it when you started it in a terminal; run as a service, it never prints
 the code, so it stays out of the journal. The journal gets one line
 saying where the file is.
 
-In the dashboard: **Settings → System → Advanced → Admin → "set up admin"**.
-(With the Windows installer, Setup's last page shows the code and its
-**Open Domovoi** button opens this dialog for you; there is no shell inside
+Open the dashboard: while nobody has claimed it, every page opens a
+welcome that asks for the code (it is also under **Settings → System →
+Advanced → Admin → "set up admin"**). (With the Windows installer,
+Setup's last page shows the code and its **Open Domovoi** button opens
+this dialog for you; there is no shell inside
 its distro to read the file from. A lost or expired code: run Setup again,
 see [WINDOWS_HOST.md](WINDOWS_HOST.md#when-something-goes-wrong).)
 Enter the code, choose a password. The code file is deleted the instant
@@ -408,28 +410,32 @@ quirks, your board's device name — applies to the rest.
 
 There are two routes.
 
-### The golden path (dashboard-prepared media)
+### The golden path (dashboard-prepared card)
 
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
-**Settings → Household → Rooms → prepare a room's SD card**. It writes a first-boot overlay
-and an offline payload (wheels, packages, the satellite code from this
-machine, plugin payloads) to the card. The payload comes from the
-server's caches, which the server fills while it has internet (**Refresh
-caches**; [INTERNET.md](INTERNET.md#before-you-disconnect) has the order).
-If a cache is incomplete the build warns, and the Pi fetches the rest over
-its own connection; its second boot also runs `apt` online to settle
-package dependencies, and tries again on later boots if it can't. Boot the
-Pi, plug it into the server's USB port, and adopt it from Settings →
-Household → Rooms — name and Wi-Fi, done.
+**Settings → Household → Rooms → prepare a room's SD card**, with **wi-fi
+setup portal** (the default), then **Prepare**. On the Windows installer,
+which can't see SD cards, choose **download for the card helper** and
+write the card with the tray icon's **Prepare a room's SD card**. It
+writes a first-boot overlay and an offline payload (wheels, packages, the
+satellite code from this machine, plugin payloads) to the card. The
+payload comes from the server's caches, which the server fills while it
+has internet (**Refresh caches**, under "details";
+[INTERNET.md](INTERNET.md#before-you-disconnect) has the order). If a
+cache is incomplete the build warns, and the Pi fetches the rest over its
+own connection; its second boot also runs `apt` online to settle package
+dependencies, and tries again on later boots if it can't.
 
-> ⚠️ **Be aware:** this flow is code-complete but has **not yet been
-> validated on real hardware** —
-> [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) is the checklist, and
-> it's entirely unticked. If you take this route, you're the first to run
-> it. Have the manual path ready as a fallback, and consider ticking that
-> checklist off as you go — it's exactly the pass the feature is waiting
-> on.
+Boot the Pi. It raises its own setup Wi-Fi, `Domovoi-Setup-<id>` (**show
+setup details** on the card gives its password): join it from a phone,
+pick your home Wi-Fi and name the room. The Pi then says a six-digit code;
+type it under **waiting for approval** and press **approve**.
+
+> The other choice on the card, **usb adoption** (the Pi plugged into the
+> server's USB port), has **not yet been validated on real hardware**:
+> [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md) is its checklist. Use
+> the Wi-Fi setup portal unless you are there to tick that list.
 
 ### The manual path (proven)
 
@@ -526,8 +532,13 @@ sudo -E sh ~/domovoi/satellite/scripts/install-service.sh
 ## Step 7 — The rest of the fleet
 
 Now repeat. With one satellite proven, each additional room is mechanical:
-flash, seat the board, install, set `room_id` and `domovoi_url`, install
-the service, verify.
+prepare a card (or, by hand, flash, seat the board, install, set `room_id`
+and `domovoi_url`, install the service), approve it, verify.
+
+A room doesn't have to be a Pi: a spare Linux or Windows laptop or PC, or
+an old Android phone or tablet in room mode, joins from **Settings →
+Household → Rooms → add a spare device** (previews;
+[SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md)).
 
 Some fleet-level things worth doing once you have two or more rooms:
 
@@ -550,15 +561,21 @@ Optional, in rough order of payoff:
 **If your Domovoi has internet, finish the extras.** Answering **Yes**
 already started web answers and artist names; podcast downloads start
 after the next restart. What's left: your town for local news, a free AcoustID application key for badly
-tagged music, and your radio market for "play 97.5 FM". The exact settings
+tagged music (Settings → System → Advanced, with a button to test it), and your radio market for "play 97.5 FM". The exact settings
 and why each one helps:
 [If your Domovoi will have internet](INTERNET.md#if-your-domovoi-will-have-internet).
 
+**Tune the wake word per room.** If a room wakes on the TV or misses you
+across the room, its Settings tab has **Wake sensitivity** (0.7 by
+default; higher wakes less) and **Wake confirmation** (2 by default; 3
+ignores more blips, 1 wakes on the first strong moment).
+
 **Train a custom wake word.** The default is the built-in `hey_jarvis`.
-The documented path is to record clips through a satellite's own mic,
-train on the server, and push to the room — all from the dashboard, no
-cloud, no third-party service. Covered in
-[SATELLITE_HARDWARE.md § Custom wake words](SATELLITE_HARDWARE.md).
+Record clips through a room's own mic (or use synthetic voices only),
+train on the server, and push to the room — all from Settings → Voice →
+Wake words, no cloud, no third-party service. Covered in
+[`scripts/wake_word/README.md`](../scripts/wake_word/README.md) and
+[SATELLITE_HARDWARE.md § Custom wake words](SATELLITE_HARDWARE.md#custom-wake-words).
 
 **Add your media library.** Point the music directory at wherever your
 files live (`~/Music` by default).
