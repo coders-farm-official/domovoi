@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from domovoi.models import MAX_CONFIG_CHANGES
 from domovoi.up_next.service import ContextIn as UpNextContext
@@ -75,8 +75,31 @@ class PlaylistReorder(BaseModel):
     track_ids: list[int]
 
 
+PLAYLIST_BULK_ADD_MAX = 500
+
+
 class PlaylistTrackAdd(BaseModel):
-    track_id: int = Field(..., ge=1)
+    """Add one library song (``track_id``) or many at once (``track_ids``,
+    in order, up to 500: "save the queue as a playlist" in one request
+    instead of one per song). Exactly one of the two."""
+    track_id: int | None = Field(default=None, ge=1)
+    track_ids: list[int] | None = Field(default=None, min_length=1, max_length=PLAYLIST_BULK_ADD_MAX)
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "PlaylistTrackAdd":
+        if (self.track_id is None) == (self.track_ids is None):
+            raise ValueError("send track_id or track_ids, not both")
+        if self.track_ids is not None and any(t < 1 for t in self.track_ids):
+            raise ValueError("track_ids must be library track ids")
+        return self
+
+
+class PlaylistBulkAdded(BaseModel):
+    """What a bulk add did: songs appended, songs already in the playlist
+    (or sent twice: saved once), ids the library doesn't have."""
+    added: int
+    duplicates: int
+    missing: int
 
 
 class TrackPatch(BaseModel):
@@ -491,6 +514,10 @@ class RecentlyPlayed(BaseModel):
     started_at: datetime
     in_library: bool = False
     can_add: bool = False
+    # The library song this play was, while the library still has it
+    # (media_plays.library_track_id): the drawer offers "play next" /
+    # "add to queue" on it (P5). Null for streams, podcasts and plugins.
+    track_id: int | None = None
 
 
 # ─── Satellites ───────────────────────────────────────────────────────────

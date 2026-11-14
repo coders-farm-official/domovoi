@@ -4914,6 +4914,147 @@ const roomSaveNote = (r, fallbackName) => {
   return why.length ? `${out}; ${why.join(', ')}.` : `${out}.`;
 };
 
+/* ── Queue rows, shared (Feature B, P5) ─────────────────────────────────
+ * The player's queue (player.jsx PlayerQueueRows: the bar's floating
+ * queue and the expanded player) and a room's queue (music.jsx QueueTab:
+ * the Music page's Room queue, and the player's queue aimed at a room)
+ * draw their rows with the same parts, so both look and work alike:
+ *   * QueueGrip — drag it to reorder, or focus it and press Up / Down to
+ *     move the song one place (the Lists page's pattern);
+ *   * QueueSectionHead — "now playing", "next" (what somebody asked for);
+ *     "up next" (the picks) has its own head with the Autoplay switch.
+ * A tap on a row's title plays it now (a room: the real jump), the x
+ * removes it, the "play next" arrow moves it right after the song
+ * playing. */
+const QueueGrip = ({ index, count, onMove, label = 'this song', disabled = false, className = '' }) => (
+  <button type="button" className={`q-grip${className ? ` ${className}` : ''}`} disabled={disabled}
+          title="drag to move, or press the up and down arrow keys"
+          aria-label={`move ${label}: up and down arrow keys`}
+          onKeyDown={(e) => {
+            if (disabled || !onMove) return;
+            const to = e.key === 'ArrowUp' ? index - 1 : e.key === 'ArrowDown' ? index + 1 : null;
+            if (to == null) return;
+            if (e.preventDefault) e.preventDefault();
+            if (to < 0 || to >= count) return;
+            onMove(index, to);
+          }}>
+    <Icon name="grip-vertical" size={13}/>
+  </button>
+);
+const QueueSectionHead = ({ children, className = '' }) => (
+  <div className={`q-sec${className ? ` ${className}` : ''}`}>{children}</div>
+);
+
+/* ── "play next" / "add to queue" on a song row (P5) ────────────────────
+ * One menu for every library song row: Library and search, an artist's,
+ * album's or genre's songs, a playlist's songs, a room's Recently played.
+ * It acts on where the music plays: this browser, or the room the player
+ * casts to, and says which ("play next here", "play next in kitchen").
+ * `room` aims it at one room whatever the player does (a room's own
+ * drawer). `tracks` (default [track]) are library rows ({id, title, ...}).
+ * `fire` is the page's toast; without one the menu says it under itself.
+ *
+ * No misleading controls: nothing at all when neither works (no player
+ * in this page and no room to send to). A room's refusal (a guest on a
+ * room that isn't playing, an admin's block) is said in words. */
+let _songRowMenuSeq = 0;
+const SongRowMenu = ({ track, tracks = null, room = null, fire = null, label = null, className = '' }) => {
+  const p = typeof usePlayback === 'function' ? usePlayback() : null;
+  const [open, setOpen] = React.useState(false);
+  const [note, setNote] = React.useState('');
+  const wrapRef = React.useRef(null);
+  const btnRef = React.useRef(null);
+  const itemRefs = React.useRef([]);
+  const idRef = React.useRef(null);
+  if (idRef.current == null) { _songRowMenuSeq += 1; idRef.current = `song-menu-${_songRowMenuSeq}`; }
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setOpen(false);
+      if (btnRef.current) btnRef.current.focus();
+    };
+    document.addEventListener('pointerdown', onDoc);
+    document.addEventListener('keydown', onKey);
+    const t = setTimeout(() => { if (itemRefs.current[0]) itemRefs.current[0].focus(); }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('pointerdown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const list = (tracks || [track]).filter((t) => t && t.id != null);
+  const casting = p && p.available && p.target && p.target.kind === 'room' ? p.target.roomId : null;
+  const where = room || casting;                 // a room, or null: this browser
+  const here = !where && !!(p && p.available);
+  if (!list.length || (!where && !here)) return null;
+  const name = label || (list.length === 1 ? (list[0].title || 'this song') : `${list.length} songs`);
+  const say = (msg) => { if (!msg) return; if (typeof fire === 'function') fire(msg); else setNote(msg); };
+  const act = async (next) => {
+    setOpen(false); setNote('');
+    try {
+      // The room the player casts to: its queue AND the copy this browser
+      // keeps of it (player.jsx playerAddTracks), as the queue's search does.
+      if (p && p.available && where && where === casting && typeof playerAddTracks === 'function') {
+        say(await playerAddTracks(p, list, next, name));
+        return;
+      }
+      if (where) {
+        await apiPost(roomQueuePath(where, '/add'), {
+          track_ids: list.map((t) => t.id), device_id: DeviceIdentity.id(), where: next ? 'next' : 'end',
+        });
+        say(`${next ? 'Playing next' : 'Added'} in ${where}: ${name}`);
+        return;
+      }
+      if (typeof playerAddTracks === 'function') say(await playerAddTracks(p, list, next, name));
+    } catch (e) {
+      if (typeof isAuthFailure === 'function' && isAuthFailure(e)) return;
+      say(`Couldn't add ${name}${where ? ` to ${where}` : ''}: ${apiErrorText(e)}`);
+    }
+  };
+  const items = [
+    { key: 'next', icon: 'list-start', text: where ? `play next in ${where}` : 'play next here' },
+    { key: 'end', icon: 'list-plus', text: where ? `add to ${where}'s queue` : 'add to queue here' },
+  ];
+  const onMenuKey = (e) => {
+    const els = itemRefs.current.filter(Boolean);
+    const i = els.indexOf(document.activeElement);
+    let to = null;
+    if (e.key === 'ArrowDown') to = els[(i + 1) % els.length];
+    else if (e.key === 'ArrowUp') to = els[(i - 1 + els.length) % els.length];
+    else if (e.key === 'Tab') { setOpen(false); return; }
+    if (to) { e.preventDefault(); to.focus(); }
+  };
+  return (
+    <span ref={wrapRef} className={`song-menu${className ? ` ${className}` : ''}`}
+          onClick={(e) => { if (e.stopPropagation) e.stopPropagation(); }}>
+      <button type="button" className="btn btn-ghost btn-icon" ref={btnRef}
+              title={where ? `play next or add to ${where}'s queue` : 'play next or add to the queue'}
+              aria-label={`queue ${name}`} aria-haspopup="menu" aria-expanded={open}
+              aria-controls={open ? idRef.current : undefined}
+              onClick={() => setOpen((o) => !o)}>
+        <Icon name="ellipsis" size={14}/>
+      </button>
+      {open && (
+        <span id={idRef.current} role="menu" aria-label={`queue ${name}`} className="song-menu-pop"
+              onKeyDown={onMenuKey}>
+          {items.map((it, i) => (
+            <button key={it.key} type="button" role="menuitem" tabIndex={-1} className="song-menu-item"
+                    ref={(el) => { itemRefs.current[i] = el; }}
+                    onClick={() => act(it.key === 'next')}>
+              <Icon name={it.icon} size={14}/>
+              {it.text}
+            </button>
+          ))}
+        </span>
+      )}
+      {note && <span className="song-menu-note" role="status">{note}</span>}
+    </span>
+  );
+};
+
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
@@ -4939,4 +5080,5 @@ Object.assign(window, {
   DeviceTokenNotice, deviceTokenNoticeText, tokenWaitClock,
   VoiceMatchLine, voiceMatchText,
   upNextBasis, roomQueuePath, roomPlayEntry, roomUpNextRows, roomUpNextBasis, roomUpNextLine, roomSaveNote,
+  QueueGrip, QueueSectionHead, SongRowMenu,
 });

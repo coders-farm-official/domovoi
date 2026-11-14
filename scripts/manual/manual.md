@@ -402,6 +402,19 @@ Your music library, on the server, played in any room or in the browser.
   goes straight there. **Save as playlist** keeps the room's queue as a new playlist;
   radio streams, podcasts and files that aren't in your library are left
   out, and it says how many.
+- **Dashboard:** every song in a list (Library, an artist's, album's or
+  genre's songs, a playlist, a room's **Recently played**) has a **⋯**
+  menu with **play next** and **add to queue**. It goes where the music
+  plays: this browser ("play next here") or the room you're playing in
+  ("play next in kitchen"); on a room's page it goes to that room.
+- **Dashboard:** the **Queue** panel (the bar's queue button, or the
+  player's **Queue** tab) shows this browser's queue; the menu at its top
+  switches it to any room's queue, with everything Room queue does. Songs
+  are grouped under **now playing**, **next** and **up next**. Drag a
+  song by its grip, or focus the grip and press the up and down arrow
+  keys; the arrow button plays a song next. On Home, a playing room's
+  **queue** button, and **open queue** on a room's page in
+  [Settings → Household → Rooms](#settings/rooms), open that room's queue.
 - **App:** [Music](#music/queue) → **room queue**: **move up**, **move
   down** and **remove from queue** on each song. **play next** on a song
   in the library puts it next in the room's queue.
