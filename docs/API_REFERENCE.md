@@ -1126,9 +1126,9 @@ as the core last did (null while it hasn't).
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `GET /api/music/mix` | **Device read** | — | `{discovery_favorites, close_wander, autoplay, list_repeat_min, steps: [1..5], list_repeat_min_range: [20, 500], internet: {similar_artists, popularity, state}, people_with_own_mix: [person id]}` |
-| `PUT /api/music/mix` | **Device** | any of `{discovery_favorites, close_wander, autoplay, list_repeat_min}` (the rest stay) | The new mix, as `GET`. `422` out of range. |
+| `PUT /api/music/mix` | **Admin** | any of `{discovery_favorites, close_wander, autoplay, list_repeat_min}` (the rest stay) | The new mix, as `GET`. `422` out of range. |
 | `GET /api/people/{id}/music-mix` | **Device read** | — | `{person_id, override: {discovery_favorites?, close_wander?} \| null, uses: {discovery_favorites, close_wander}}` (`null` = uses the household's). `404` for a person nobody has. |
-| `PUT /api/people/{id}/music-mix` | **Device** | `{override: {discovery_favorites, close_wander} \| null}` | As `GET`; `null` goes back to the household's. |
+| `PUT /api/people/{id}/music-mix` | **Admin, or that person's own device** (`owner_person_id`; `403` for any other) | `{override: {discovery_favorites, close_wander} \| null}` | As `GET`; `null` goes back to the household's. |
 
 ### 3.5d Music: the visualizer's presets
 
