@@ -976,7 +976,7 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
 
             await up_next_rooms.start_from_request(
                 ctx.room_id, track_id=track_id, context=context,
-                person_id=getattr(ctx, "person_id", None), autoplay=True,
+                person_id=getattr(ctx, "person_id", None), autoplay=None,  # the household's
                 client=mpd, whole_list=whole_list,
             )
         except Exception as e:  # noqa: BLE001 — the music plays without it

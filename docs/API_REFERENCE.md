@@ -1063,7 +1063,13 @@ itself (`X-Domovoi-Device-Id`, `X-Device-Id`, the registration cookie,
 person: {id, name} | null, seed: {track_id, title, artist, label, list:
 {kind, name} | null}, picks: [Pick], batch_no, have_through_seq, ended}`.
 `Pick` = `{seq, track_id, title, artist, album, duration_sec, reason_code,
-reason_label, status, mpd_song_id, batch_no}`; `reason_code` is
+reason_label, why, status, mpd_song_id, batch_no}`; `why` (1.3.0, V056) is
+"why this song?" in plain words, said from the signals the picker really
+used — what made it a candidate, then the scoring factor that lifted it
+most, if one did ("same artist as the last song · not played in 4
+months", "from the 90s, like the song you started with · you play this
+often"); null for a pick made before 1.3.0. The room queue's auto items
+carry the same `why`; `reason_code` is
 `same_artist`, `same_era`, `same_genre`, `played_together`, `wildcard`,
 `similar_artist` or `from_list`; `reason_label` is what the queue shows
 (`same artist`, `90s`, `from 1997-ish`, `soul`, `from road trip`,
@@ -1080,6 +1086,39 @@ label says what it shares with the song the session started from, else
 | `PATCH /api/music/up-next/sessions/{id}` | **Device** | `{autoplay?, listener_person_id?}` (`listener_person_id: null` = the household; left out = unchanged) | `Session`. Autoplay on again restarts a list that stopped at its end. The new listener counts from the next batch. |
 | `POST /api/music/up-next/sessions/{id}/move` | **Device** | `{target: {kind: "room", room_id} \| {kind: "device", device_id}}` | Casting (P4): the session carries on on another player — to a room after the cast (`play-tracks` can do both in one call: `up_next_session_id`; the room's own session ends, the core finds the picks in its queue by their files), or back to this device when playback comes home (only to the device asking: `403` otherwise). A device's session moves only at that device's request. `409` for an ended session. `Session`. |
 | `GET /api/music/up-next/room/{room_id}` | **Device read or guest (core decides)** | — | The room's active `Session`, or `null`. Read like the room's queue: open to the household, and to a guest while the room plays; a guest's leaves `person` out. |
+
+**How picks are weighed (1.3.0).** Inside each bucket a song's weight is
+favourite × personal affinity × **freshness** × **popularity** × the
+session's early-skip demotions. Freshness leans a little toward songs not
+heard in a while (×0.7 heard today up to ×1.3 for 90 days or never, by
+the listener's listens, else the household's; a nudge, not a filter).
+Popularity (×0.9–×1.2, how a song stands among its artist's songs on
+ListenBrainz) and `similar to <artist>` wildcards come from what the
+core's background `listenbrainz_fetch` worker stored (V056): **choosing
+songs never calls the network**, and with nothing stored (switches off,
+or never online) the mix is the library's alone.
+
+**The Music mix** (`web/backend/api/music_mix.py`, `domovoi/up_next/mix.py`;
+Settings → Household → Music mix). Two five-step sliders instead of
+weights: `discovery_favorites` (1 = Discovery: a wider freshness range;
+3 = the default; 5 = Favorites: a narrow one, more weight on play count)
+and `close_wander` (1 = Stay close: few wildcards, lists follow the song
+they started from; 5 = Wander: many wildcards); `autoplay`, the default a
+new session takes when its start doesn't say (rooms, browsers, phones);
+`list_repeat_min` (20–500, default 50), "no repeats within N songs": a
+shorter list plays through once, then similar songs follow. A person may
+set their own sliders (`people.music_mix`): sessions for that listener
+use them, the household's otherwise. The two internet switches are core
+settings (`music_similar_artists_enabled`, `music_popularity_enabled`),
+changed with `PATCH /api/config/editable` (admin); `internet` reports them
+as the core last did (null while it hasn't).
+
+| Method & path | Auth | Request | Response / purpose |
+|---|---|---|---|
+| `GET /api/music/mix` | **Device read** | — | `{discovery_favorites, close_wander, autoplay, list_repeat_min, steps: [1..5], list_repeat_min_range: [20, 500], internet: {similar_artists, popularity, state}, people_with_own_mix: [person id]}` |
+| `PUT /api/music/mix` | **Device** | any of `{discovery_favorites, close_wander, autoplay, list_repeat_min}` (the rest stay) | The new mix, as `GET`. `422` out of range. |
+| `GET /api/people/{id}/music-mix` | **Device read** | — | `{person_id, override: {discovery_favorites?, close_wander?} \| null, uses: {discovery_favorites, close_wander}}` (`null` = uses the household's). `404` for a person nobody has. |
+| `PUT /api/people/{id}/music-mix` | **Device** | `{override: {discovery_favorites, close_wander} \| null}` | As `GET`; `null` goes back to the household's. |
 
 ### 3.5d Music: the visualizer's presets
 

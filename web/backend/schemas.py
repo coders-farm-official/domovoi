@@ -1099,7 +1099,8 @@ class PlayTrackRequest(BaseModel):
     context: UpNextContext | None = None
     listener_person_id: int | None = Field(default=None, ge=1)
     as_household: bool = False
-    autoplay: bool = True
+    # Absent: the household's Music mix default.
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -1135,7 +1136,8 @@ class CastTracksRequest(BaseModel):
     context: UpNextContext | None = None
     listener_person_id: int | None = Field(default=None, ge=1)
     as_household: bool = False
-    autoplay: bool = True
+    # Absent: the household's Music mix default.
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -1157,7 +1159,8 @@ class PlayPlaylistRequest(BaseModel):
     # source adds similar songs once it is nearly over. All optional.
     listener_person_id: int | None = Field(default=None, ge=1)
     as_household: bool = False
-    autoplay: bool = True
+    # Absent: the household's Music mix default.
+    autoplay: bool | None = None
     up_next: bool = True
 
 

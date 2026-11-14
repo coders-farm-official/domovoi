@@ -18,16 +18,19 @@ session, with no FastAPI:
 
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 
-from . import store
+from . import mix, store
 from .data import MusicListens, SqlLibrary, playlist_label
 from .engine import next_batch
 from .model import DEFAULT_CONFIG, FROM_LIST, Track
+from .why import why_text
 from .pick import era_label
 from .session import IDS_CAP, SeedRef
 
@@ -125,7 +128,18 @@ def pick_json(p: dict[str, Any]) -> dict[str, Any]:
         "album": p["album"] or "", "duration_sec": p["duration_sec"], "reason_code": p["reason_code"],
         "reason_label": p["reason_label"], "status": p["status"], "mpd_song_id": p["mpd_song_id"],
         "batch_no": p["batch_no"],
+        # "why this song?" in plain words, from the signals the picker used.
+        "why": why_text(_why_list(p.get("why"))),
     }
+
+
+def _why_list(raw: Any) -> list | None:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    return raw if isinstance(raw, list) else None
 
 
 async def session_json(s: Any, st: store.Stored, *, picks: list[dict[str, Any]] | None = None,
@@ -183,8 +197,9 @@ async def draw(s: Any, st: store.Stored) -> tuple[int, list[dict[str, Any]], boo
     library = SqlLibrary(s)
     tail = await store.picks(s, sess.id, newest=SPACING_TAIL)
     prev_keys = [p["artist_norm"] or f"#{p['track_id']}" for p in tail]
+    config = (await mix.resolve(s, sess.person_id)).config()
     batch = await next_batch(sess, library=library, listens=MusicListens(s),
-                             now=datetime.now(timezone.utc), prev_keys=prev_keys)
+                             now=datetime.now(timezone.utc), prev_keys=prev_keys, config=config)
     labels: dict[int, str] = {}
     if sess.mode == "list" and batch.picks:
         ids = [p.track_id for p in batch.picks]

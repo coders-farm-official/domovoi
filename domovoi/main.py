@@ -832,6 +832,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
     WORKERS.add_worker(LibraryAliasFetcher(), owner="core")
+    # Up next P7 (V056): similar artists and song popularity from
+    # ListenBrainz, each behind its own switch, the internet answer and the
+    # probe; the ONLY code that asks ListenBrainz (the picker reads the
+    # stored answers). domovoi/workers/listenbrainz_fetch.py
+    from domovoi.workers.listenbrainz_fetch import ListenBrainzFetch
+
+    WORKERS.add_worker(ListenBrainzFetch(), owner="core")
     # Lyrics (V021): the local scan reads .lrc files and the songs' own tags;
     # the opt-in LRCLIB fetch is self-gated per tick on lyrics_lrclib_enabled,
     # INTERNET_ACCESS and the probe, and saves Domovoi-marked .lrc files.
@@ -2661,6 +2668,9 @@ async def admin_snapshot() -> dict[str, Any]:
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),
+        # Up next P7: the ListenBrainz switches and the fetch's state
+        # (Settings → Music mix reads the switches from here).
+        "listenbrainz_fetch": _listenbrainz_status(),
         # Lyrics: the local scan and the LRCLIB fetch (status only, never a lyric).
         "lyrics": lyrics_status(),
     }
@@ -5324,7 +5334,8 @@ class _AdminPlayTrackBody(BaseModel):
     # alone, as before 2026-11-12.
     context: dict[str, Any] | None = None
     person_id: int | None = Field(default=None, ge=1)
-    autoplay: bool = True
+    # None: the household's Music mix default (Settings → Music mix).
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -5591,7 +5602,8 @@ class _AdminPlayTracksBody(BaseModel):
     up_next_session_id: str | None = Field(default=None, max_length=64)
     context: dict[str, Any] | None = None
     person_id: int | None = Field(default=None, ge=1)
-    autoplay: bool = True
+    # None: the household's Music mix default (Settings → Music mix).
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -7472,7 +7484,8 @@ class _AdminPlayPlaylistBody(BaseModel):
     # Up next (2026-11-12), as for play-tracks: whose taste the picks follow,
     # Autoplay, or ``up_next: false`` for the playlist alone.
     person_id: int | None = Field(default=None, ge=1)
-    autoplay: bool = True
+    # None: the household's Music mix default (Settings → Music mix).
+    autoplay: bool | None = None
     up_next: bool = True
 
 
@@ -8057,3 +8070,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _listenbrainz_status() -> dict:
+    from domovoi.workers.listenbrainz_fetch import listenbrainz_status
+
+    return listenbrainz_status()

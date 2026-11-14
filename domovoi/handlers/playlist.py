@@ -342,7 +342,7 @@ class PlaylistHandler(Handler):
         try:
             played = await room_playlist.play_in_room(
                 ctx.room_id, mpd, playlist_id=playlist_id, shuffle=(mode == "shuffle"),
-                person_id=getattr(ctx, "person_id", None), autoplay=True,
+                person_id=getattr(ctx, "person_id", None), autoplay=None,
             )
         except room_playlist.PlaylistMissing:
             return self._reply(ctx, f"I don't have a playlist called {playlist_name} any more.")
