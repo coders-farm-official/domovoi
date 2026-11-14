@@ -353,6 +353,18 @@ public final class CalendarShareStore: Sendable {
         sink?()
     }
 
+    /// The server at this address is a different house: it proved another
+    /// identity and the person said yes to it (the trust-again yes), or the
+    /// phone forgot it. A reinstalled or replaced Domovoi never got a yes for
+    /// this phone's calendars, so its sharing entry and its calendar key go
+    /// (sharing shows as off) and **no DELETE is sent**: the old house is
+    /// gone, and the new one has nothing from this phone. Port of
+    /// `ShareStore.differentHouse` (`ShareState.kt`, 0e680b57).
+    public func differentHouse(_ server: String, keys: CalendarKeyVault) {
+        forget(server)
+        keys.forget(server: server)
+    }
+
     private func save(_ entries: [String: CalendarShareEntry]) {
         guard let url else { return }
         try? FileManager.default.createDirectory(

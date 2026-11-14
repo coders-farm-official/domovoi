@@ -113,6 +113,58 @@ final class ShellModelPartThreeTests: XCTestCase {
         model.stop()
     }
 
+    /// **A re-trusted house gets no calendars** (Android `differentHouse`,
+    /// 0e680b57). The yes replaces the pin, which fires the store's one
+    /// "server forgotten" signal; the app wires that signal to
+    /// `CalendarShareStore.differentHouse`. Ticked calendars and the key
+    /// held for the old house are gone, no DELETE is sent, and another
+    /// server's entry is untouched.
+    func testTheTrustAgainYesClearsCalendarSharingWithoutADelete() async throws {
+        let store = pinnedStore()
+        let (model, container) = makeModel(store: store)
+        let shares = CalendarShareStore(url: nil)
+        let keys = CalendarKeyVault(items: InMemoryKeychain())
+        let other = "http://10.0.0.43:6369"
+        let sharing = CalendarShareEntry(enabled: true, calendarIDs: ["a", "b"], lastSentAtMs: 5)
+        shares.update(server) { _ in sharing }
+        shares.update(other) { _ in sharing }
+        keys.save("k-old-house", for: server)
+        keys.save("k-other", for: other)
+        let sends = Shared(0)
+        StubURLProtocol.dispatch { request in
+            if request.url?.path.hasPrefix("/api/calendar") == true { sends.mutate { $0 += 1 } }
+            return .json("{}", status: 404)
+        }
+        model.onServerForgotten = { url in shares.differentHouse(url, keys: keys) }
+
+        await proveIdentity(.rogue, container: container)
+        model.refresh()
+        model.askTrustAgain()
+        XCTAssertNotNil(shares.get(server), "nothing happens before the yes")
+        XCTAssertTrue(model.confirmTrustAgain())
+
+        // The signal reaches the model through the main actor.
+        for _ in 0..<200 where shares.get(server) != nil || keys.key(for: server) != nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(shares.get(server), "sharing shows as off for the new house")
+        XCTAssertNil(keys.key(for: server), "the old house's calendar key is gone")
+        XCTAssertEqual("k-other", keys.key(for: other))
+        XCTAssertEqual(["a", "b"], shares.get(other)?.calendarIDs, "another house keeps its own answer")
+        XCTAssertEqual(0, sends.current, "no DELETE, and no PUT: it is a different house")
+        model.stop()
+    }
+
+    func testDifferentHouseDropsTheEntryAndTheKeyOfThatServerOnly() {
+        let shares = CalendarShareStore(url: nil)
+        let keys = CalendarKeyVault(items: InMemoryKeychain())
+        shares.update("http://10.0.0.42:6369") { _ in CalendarShareEntry(enabled: true, calendarIDs: ["a"]) }
+        keys.save("k1", for: "http://10.0.0.42:6369")
+        shares.differentHouse("http://10.0.0.42:6369/", keys: keys)
+        XCTAssertNil(shares.get("http://10.0.0.42:6369"))
+        XCTAssertNil(keys.key(for: "http://10.0.0.42:6369"))
+    }
+
     /// Every old verdict is stale after the pin changes: the gate's epoch is
     /// bumped, so the next request re-proves rather than reusing the
     /// mismatch that is on screen.
