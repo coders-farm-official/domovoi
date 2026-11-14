@@ -571,25 +571,24 @@ final class ListenClearGuardTests: XCTestCase {
         book.rememberDeviceOwner(DeviceOwner(id: 3, name: "Alex", claimedAt: "2025-01-01T00:00:00Z"), claimKey: "alex-key-AAAAAAAAA", for: houseA)
         let page = PeopleThisPhoneModel(shell: model)
 
-        // Allowed, then the app moves house before "Clear" is pressed.
-        page.askToClear(alex)
-        XCTAssertEqual(ClearCheck.allowed, page.ask?.check)
-        _ = store.setServerURL(houseB)
-        page.confirmClear(alex)
-        await settle(page)
-        XCTAssertEqual([], deletes(), "the clear went to a server it was not worked out for")
-        XCTAssertNil(page.ask)
-
-        // Back home: allowed and sent, with the key.
-        _ = store.setServerURL(houseA)
+        // Allowed, and sent, with the key.
         page.askToClear(alex)
         XCTAssertEqual(ClearCheck.allowed, page.ask?.check, "\(String(describing: page.ask))")
         page.confirmClear(alex)
         XCTAssertTrue(page.clearing, "confirmClear refused an allowed ask")
         await settle(page)
-        print("CLEAR GUARD paths: \(StubURLProtocol.recorded.map { "\($0.httpMethod ?? "") \($0.url?.absoluteString ?? "")" }) refused=\(page.clearRefused ?? "-")")
         XCTAssertEqual(["/api/music/listens/people/3"], deletes().map { $0.url?.path ?? "" })
         XCTAssertEqual("alex-key-AAAAAAAAA", deletes().first?.value(forHTTPHeaderField: claimKeyHeader))
+
+        // Allowed again, then the app moves house before "Clear" is pressed:
+        // nothing more is sent, to either server.
+        page.askToClear(alex)
+        XCTAssertEqual(ClearCheck.allowed, page.ask?.check)
+        XCTAssertTrue(store.setServerURL(houseB), "the rig could not switch house")
+        page.confirmClear(alex)
+        await settle(page)
+        XCTAssertEqual(1, deletes().count, "the clear went to a server it was not worked out for")
+        XCTAssertNil(page.ask)
         model.stop()
     }
 }
