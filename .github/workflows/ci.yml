@@ -19,8 +19,10 @@
 #            build, not a release: android/README.md "Release-signed builds").
 #   windows  windows/ (or a file its tests read) changed: build.ps1, the C#
 #            unit tests, and the installer when Inno Setup is on the runner.
-# A new job slots into `jobs:` beside these; `changes` also has an `ios`
-# output (ios/ or a workflow changed) for an iPhone-app job to gate on.
+#   ios      ios/ (or a workflow) changed: the iPhone app's package tests on
+#            macOS and the app + UI-test target compiled for the Simulator,
+#            unsigned (the Simulator UI trains stay on the owner's Mac).
+# A new job slots into `jobs:` beside these.
 #
 # No secrets anywhere, and none may be added: release signing and publishing
 # stay on the owner's PC with the owner's keys. Every action is pinned by
@@ -58,7 +60,7 @@ jobs:
       harness: ${{ steps.filter.outputs.harness }}
       android: ${{ steps.filter.outputs.android }}
       windows: ${{ steps.filter.outputs.windows }}
-      # For an iPhone-app job (none yet): ios/ or this workflow changed.
+      # For the ios job: ios/ or this workflow changed.
       ios: ${{ steps.filter.outputs.ios }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -366,3 +368,46 @@ jobs:
             exit 0
           }
           .\windows\build.ps1 -SkipTests -Iscc $iscc
+
+  # The iPhone app (owner decision 2026-11-14: "Build + package tests"):
+  # the DomovoiKit and DomovoiPhonemizer package tests on macOS, and the app
+  # plus its UI-test target compiled for the Simulator, unsigned. The
+  # Simulator UI trains stay on the owner's Mac: they need the stub house
+  # (ios/README.md). Nothing here signs anything or holds a secret.
+  ios:
+    name: ios
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The newest Xcode on the image: the project needs Swift 6 and the iOS 18
+      # SDK or later; FoundationModels is behind canImport, so an older SDK
+      # still builds.
+      - name: Pick the newest Xcode
+        run: |
+          xcode="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+          swift --version
+      - name: Package tests (DomovoiKit)
+        working-directory: ios/Packages/DomovoiKit
+        run: swift test
+      - name: Package tests (DomovoiPhonemizer)
+        working-directory: ios/Packages/DomovoiPhonemizer
+        run: swift test
+      - name: XcodeGen
+        run: brew install xcodegen
+      - name: The app and its UI tests compile for the Simulator (unsigned)
+        working-directory: ios
+        run: |
+          xcodegen generate
+          xcodebuild build-for-testing \
+            -project Domovoi.xcodeproj -scheme Domovoi \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO | tail -n 200
+          test "${PIPESTATUS[0]}" -eq 0
