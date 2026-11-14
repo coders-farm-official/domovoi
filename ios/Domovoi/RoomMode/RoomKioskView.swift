@@ -2,6 +2,7 @@ import Combine
 import DomovoiKit
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// The room screen (`roommode/RoomModeActivity.kt`, ROOMMODE-MAP §3.4):
 /// dark and plain so the phone reads as a room, not as the app — the room's
@@ -123,8 +124,11 @@ struct RoomKioskView<Footer: View>: View {
             .scrollBounceBehavior(.basedOnSize)
         }
         .background(Color.black.ignoresSafeArea())
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded { model.touched() })
+        // Any touch, for the dimming (D9) — watched by UIKit and never a
+        // SwiftUI gesture: a `.simultaneousGesture(TapGesture())` here took
+        // every tap the Mute button inside the ScrollView should have had
+        // on iOS 18 (train I037: Mute tapped, nothing changed).
+        .background(RoomTouchWatcher { model.touched() })
         .alert(RoomModeStrings.exitTitle, isPresented: presenting(.confirmNoLock)) {
             Button(RoomModeStrings.exitConfirm) { model.confirmExit() }
             Button(RoomModeStrings.stayARoom, role: .cancel) { model.dismissDialog() }
@@ -324,6 +328,70 @@ struct RoomMicChip: View {
         .accessibilityLabel(RoomModeStrings.micChipDescription(off: off, live: live))
         .accessibilityIdentifier("room-mic-chip")
     }
+}
+
+/// Tells the room screen that someone touched it, wherever they did, without
+/// taking the touch: a UIKit recognizer on the window that reports a touch
+/// as it begins and then fails, so it never claims, delays or cancels one.
+/// The buttons and the scroll get every tap exactly as they would without
+/// it (unlike a SwiftUI gesture on the screen, which competes with them).
+struct RoomTouchWatcher: UIViewRepresentable {
+    let onTouch: () -> Void
+
+    func makeUIView(context: Context) -> RoomTouchWatcherView {
+        let view = RoomTouchWatcherView()
+        view.isUserInteractionEnabled = false
+        view.onTouch = onTouch
+        return view
+    }
+
+    func updateUIView(_ view: RoomTouchWatcherView, context: Context) {
+        view.onTouch = onTouch
+    }
+
+    static func dismantleUIView(_ view: RoomTouchWatcherView, coordinator: ()) {
+        view.detach()
+    }
+}
+
+/// Installs ``RoomTouchBegan`` on whichever window it is in, and takes it
+/// off again when it leaves.
+final class RoomTouchWatcherView: UIView {
+    var onTouch: (() -> Void)?
+    private var recognizer: RoomTouchBegan?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        detach()
+        guard let window else { return }
+        let r = RoomTouchBegan(target: nil, action: nil)
+        r.onTouch = { [weak self] in self?.onTouch?() }
+        r.cancelsTouchesInView = false
+        r.delaysTouchesBegan = false
+        r.delaysTouchesEnded = false
+        window.addGestureRecognizer(r)
+        recognizer = r
+    }
+
+    func detach() {
+        if let r = recognizer { r.view?.removeGestureRecognizer(r) }
+        recognizer = nil
+    }
+}
+
+/// Reports the first touch of a sequence and fails at once: a recognizer
+/// that has failed can neither win nor block another.
+final class RoomTouchBegan: UIGestureRecognizer {
+    var onTouch: (() -> Void)?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        onTouch?()
+        state = .failed
+    }
+
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
 }
 
 struct RoomBigButton: View {

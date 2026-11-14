@@ -118,7 +118,14 @@ extension StubHouseUITests {
         XCTAssertTrue(app.buttons[MusicMoreUnderTest.close].exists, "the sheet closed; Android's drawer stays")
         let body = integrationQueueAdds(IntegrationUnderTest.parlour).last
         XCTAssertEqual("end", body?["where"] as? String, "not added at the end: \(String(describing: body))")
-        XCTAssertEqual([503, 504], body?["track_ids"] as? [Int], "\(String(describing: body))")
+        // The genre's ids in the SERVER's order, unshuffled — Android's
+        // `queueInRoom` sends `roomTrackIds(ids, shuffle = false)`
+        // (`GenresTab.kt:385`, `TrackSets.kt:31`). The server's order is
+        // `ORDER BY LOWER(artist), added_at DESC, id DESC`
+        // (`music_genres.py:186`); both Mossgaze songs are Nidra Vane's, so
+        // the newer 504 comes first (I037 caught this case asking for 503
+        // first, which is no order the server gives).
+        XCTAssertEqual([504, 503], body?["track_ids"] as? [Int], "\(String(describing: body))")
     }
 
     /// `queue here` puts the songs loaded so far on this phone's queue.

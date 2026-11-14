@@ -2308,6 +2308,9 @@ extension StubHouseUITests {
         let rosterFirst = try auditIssues(app, "rooms-roster")
         let rosterSplit = Self.floorAndRest(rosterFirst)
         let rosterSettled = roomsWindowShot(app)
+        // The picture of the settled position, in the same breath as its
+        // shot: the one place the bar's edge cuts a row is read off it.
+        let rosterSettledPicture = app.screenshot().image.cgImage
         let rosterMoves = Self.roomsPageMoves(from: rosterShot, to: rosterSettled)
         let rosterOther = rosterSplit.rest.filter { !Self.roomsSamplesPixels($0) }
         var rosterPixelLines = rosterSplit.rest.filter(Self.roomsSamplesPixels)
@@ -2370,11 +2373,30 @@ extension StubHouseUITests {
             picture: rosterPicture,
             window: app.frame
         )
-        let rosterRest = roomsOursOnly(rosterOther + rosterFoot.kept)
+        // **And the head, where the retake leaves it** (I037). Since the
+        // queues stub seeds the kitchen as playing, its card is a song line
+        // and a progress row taller, and the audit's move (74 points on
+        // I037) parks the kitchen card under the bar: `kitchen` and
+        // `online` wholly (no pixels, above), and `Harvest Moon · Neil
+        // Young` at 127.7–143.3 across the bar's edge at 137.3. Apple's
+        // contrast sample of that frame is two-thirds bar material. Read off
+        // I037's settled picture: the 9.7 points under the bar hold
+        // `#F6F7F6` bar and no glyph (best "ink" 1.04:1); the 6.0 points
+        // below it hold the line's own `#000000` on the card's `#F1F1F2`,
+        // **18.60:1** — the same reading I008 took of the whole line.
+        // ``roomsBarEdgeVisibleMeasured`` is that reading, by signature.
+        let rosterHead = roomsBarEdgeVisibleMeasured(
+            rosterFoot.kept,
+            cutOn: rosterJudgedOn,
+            picture: rosterMoves.isEmpty ? rosterPicture : rosterSettledPicture,
+            window: app.frame
+        )
+        let rosterRest = roomsOursOnly(rosterOther + rosterHead.kept)
         print(
             "ROOMS AUDIT roster floor=\(rosterSplit.floor) rest=\(rosterSplit.rest.count) "
                 + "moved=\(!rosterMoves.isEmpty) no-pixels=\(rosterSeen.noPixels.count) "
-                + "clipped-foot=\(rosterFoot.allowed.count) ours=\(rosterRest.count)"
+                + "clipped-foot=\(rosterFoot.allowed.count) bar-edge=\(rosterHead.allowed.count) "
+                + "ours=\(rosterRest.count)"
         )
 
         XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
@@ -3106,6 +3128,107 @@ extension StubHouseUITests {
         return (allowed, kept)
     }
 
+    /// How many points of a cut row must show below the bar's edge for
+    /// ``roomsBarEdgeVisibleMeasured(_:cutOn:picture:window:)`` to read it:
+    /// enough for the lower half of a footnote's lowercase, so the reading
+    /// is of glyphs and not of descender tails.
+    static let roomsBarEdgeReadable: CGFloat = 4
+
+    /// The roster's **measured allowance** at the bar's edge (I037), by
+    /// signature: the kitchen card's song line cut by the navigation bar's
+    /// lower edge where the audit leaves the page.
+    ///
+    /// ``roomsBarEdgeMeasured(_:straddlingOn:drawnWholeOn:picture:window:)``
+    /// reads a whole drawing from another picture; on the roster there is
+    /// none — before the audit D57's scroll has the kitchen card above the
+    /// page, after it the bar cuts it. So this reads the part that **is**
+    /// drawn, in the picture taken at the position Apple sampled.
+    ///
+    /// A line is allowed only when **all** of these hold, and each verdict is
+    /// printed:
+    ///  * its headline is one of the two contrast headlines;
+    ///  * its label is exactly ``RoomsStringsUnderTest/kitchenSongLine``;
+    ///  * in `settled`, every page element with that label (none of the
+    ///    bar's own) **crosses** the bar's lower edge, with at least
+    ///    ``roomsBarEdgeReadable`` points showing below it inside the page;
+    ///  * and that showing part measures **4.5:1 or better** off `picture`
+    ///    (``roomsLeafInk(_:window:frame:)``).
+    ///
+    /// Everything else is kept, so it fails the case: any other label, this
+    /// one whole on the window (Apple's finding is then a measurement), or
+    /// an ink under the floor.
+    @MainActor
+    func roomsBarEdgeVisibleMeasured(
+        _ lines: [String],
+        cutOn settled: RoomsWindowShot,
+        picture: CGImage?,
+        window: CGRect
+    ) -> (allowed: [String], kept: [String]) {
+        var allowed: [String] = []
+        var kept: [String] = []
+        let edge = settled.bar.maxY
+        let line = RoomsStringsUnderTest.kitchenSongLine
+        for finding in lines {
+            guard finding.hasPrefix(Self.roomsContrastFailed) || finding.hasPrefix(Self.roomsNearlyPassed),
+                  Self.roomsLabel(in: finding) == line, edge > 0
+            else {
+                kept.append(finding)
+                continue
+            }
+            let cut = settled.pageElements.filter { $0.label == line }
+            let onBar = settled.barElements.contains { $0.label == line }
+            let showing = cut.map { twin in
+                CGRect(
+                    x: twin.frame.minX,
+                    y: edge,
+                    width: twin.frame.width,
+                    height: min(twin.frame.maxY, settled.page.maxY) - edge
+                )
+            }
+            let crossing = !cut.isEmpty && !onBar
+                && cut.allSatisfy { Self.crosses(edge, $0.frame) }
+                && showing.allSatisfy { $0.height >= Self.roomsBarEdgeReadable }
+            let geometry = "cut at \(cut.map { "\($0.frame)" }.joined(separator: ", ")) by the "
+                + "bar's edge at \(edge); showing \(showing.map { "\($0)" }.joined(separator: ", "))"
+            guard crossing, let picture else {
+                print(
+                    "ROOMS AUDIT roster bar-edge NOT allowed :: \(finding) — crossing=\(crossing), "
+                        + "on-bar=\(onBar), picture=\(picture != nil); \(geometry)"
+                )
+                kept.append(finding)
+                continue
+            }
+            var readings: [String] = []
+            var under = false
+            for part in showing {
+                guard let reading = Self.roomsLeafInk(picture, window: window, frame: part) else {
+                    readings.append("\(part) holds only its paper")
+                    under = true
+                    continue
+                }
+                readings.append(
+                    "\(part) ink \(reading.ink) on \(reading.paper) "
+                        + String(format: "%.2f", reading.ratio) + ":1"
+                )
+                if reading.ratio < Self.roomsContrastFloor { under = true }
+            }
+            guard !under else {
+                print(
+                    "ROOMS AUDIT roster bar-edge NOT allowed, measured "
+                        + "\(readings.joined(separator: "; ")) :: \(finding) — \(geometry)"
+                )
+                kept.append(finding)
+                continue
+            }
+            print(
+                "ROOMS AUDIT roster bar-edge, measured :: \(finding) — \(geometry); "
+                    + readings.joined(separator: "; ")
+            )
+            allowed.append(finding)
+        }
+        return (allowed, kept)
+    }
+
     /// One element's ink against its paper, off a screenshot. The paper is
     /// the most common colour in the element's frame. The ink is whichever
     /// colour covering at least 0.5% of the frame contrasts most with the
@@ -3325,6 +3448,10 @@ enum RoomsStringsUnderTest {
 
     static let activeNow = "active now"
     static let noMusic = "no music"
+
+    /// The kitchen card's now-playing line, `<title> · <artist>`
+    /// (`RoomsCardView.swift`'s `songLine`), on the stub's playing kitchen.
+    static let kitchenSongLine = "Harvest Moon · Neil Young"
 
     static let roomIDLabel = "room id"
     static let registryDefault = "registry default"
