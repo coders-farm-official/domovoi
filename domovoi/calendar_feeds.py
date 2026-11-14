@@ -45,6 +45,26 @@ deleted with its events (the person unpicked it), and
 :func:`delete_phone` removes everything a phone shared (sharing turned
 off). No internet is involved, so phones work under ``never``.
 
+Whose they are and how long they last (V057 ``calendar_phones``, review
+2026-11-14):
+
+* **The calendar key.** A device id is self-asserted, so the first
+  snapshot of a phone mints a key (:func:`admit_phone`), handed back once;
+  only its SHA-256 is kept. Every later PUT or DELETE for that phone must
+  present it (``X-Domovoi-Calendar-Key``): another household device can't
+  write or delete this phone's calendars. An admin may delete any.
+* **Late uploads.** A snapshot may carry the phone's ``generation`` (a
+  number that only grows). Turning sharing off records the generation it
+  happened at; a snapshot at or below it arrived after the DELETE (it was
+  sent first, the phone went off mid-upload) and is refused (410), and
+  one older than a snapshot already stored is refused too (409).
+* **Left behind.** A phone sends every 6 hours. Without a snapshot for
+  :data:`PHONE_STALE_AFTER` (24 h) its calendars show as ``stale`` ("last
+  heard from …"); after :data:`PHONE_EXPIRE_AFTER` (7 days) the
+  refresher worker deletes them (:func:`expire_phones`). An admin can
+  remove one calendar or all of a phone's at any time, and replacing the
+  household device token removes every phone's (:func:`forget_all_phones`).
+
 Importable by both processes (the core's worker refreshes on schedule; the
 web's "refresh now" and "add" run :func:`refresh_link` in the web process).
 """
@@ -52,8 +72,11 @@ web's "refresh now" and "add" run :func:`refresh_link` in the web process).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -83,6 +106,10 @@ MAX_BACKOFF = timedelta(hours=12)
 PHONE_MAX_CALENDARS = 25
 PHONE_MAX_EVENTS_PER_CALENDAR = 5000
 PHONE_MAX_EVENTS = 20000
+
+PHONE_STALE_AFTER = timedelta(hours=24)
+PHONE_EXPIRE_AFTER = timedelta(days=7)
+CALENDAR_KEY_HEADER = "X-Domovoi-Calendar-Key"
 
 DEFAULT_COLOR = "#5b7a99"
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -249,6 +276,24 @@ class EventRow:
     ends_at: datetime | None
     all_day: bool
     location: str | None
+    # The iCalendar UID (one event in two calendars: listed once) and a
+    # private event sent as "busy" (no title or place).
+    ical_uid: str | None = None
+    busy: bool = False
+
+
+BUSY_TITLE = "Busy"
+
+# calendar_ics names a recurring instance "<UID>@<local start>".
+_INSTANCE_SUFFIX_RE = re.compile(r"@\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$")
+
+
+def master_uid(uid: str | None) -> str | None:
+    """A link event's iCalendar UID without the instance suffix."""
+    u = (uid or "").strip()
+    if not u or u.startswith("anon-"):
+        return None
+    return _INSTANCE_SUFFIX_RE.sub("", u)[:300] or None
 
 
 async def _replace_events(
@@ -261,8 +306,10 @@ async def _replace_events(
     rows = [
         {
             "sid": source_id, "kind": kind, "ext": e.external_id[:300],
-            "title": (e.title or "(no title)")[:200], "s": e.starts_at, "e": e.ends_at,
-            "ad": bool(e.all_day), "loc": (e.location or None) and e.location[:200], "now": now,
+            "title": BUSY_TITLE if e.busy else (e.title or "(no title)")[:200],
+            "s": e.starts_at, "e": e.ends_at, "ad": bool(e.all_day),
+            "loc": None if e.busy else ((e.location or None) and e.location[:200]), "now": now,
+            "uid": (e.ical_uid or None) and e.ical_uid[:300], "busy": bool(e.busy),
         }
         for e in events
     ]
@@ -272,8 +319,8 @@ async def _replace_events(
                 """
                 INSERT INTO calendar_events
                     (calendar_source_id, source, external_id, title, starts_at, ends_at,
-                     all_day, location, last_synced_at, created_via)
-                VALUES (:sid, :kind, :ext, :title, :s, :e, :ad, :loc, :now, 'sync')
+                     all_day, location, last_synced_at, created_via, ical_uid, busy)
+                VALUES (:sid, :kind, :ext, :title, :s, :e, :ad, :loc, :now, 'sync', :uid, :busy)
                 """
             ),
             rows,
@@ -395,7 +442,8 @@ async def refresh_link(session: AsyncSession, source_id: int, *, client: Any = N
                 )
                 truncated = parsed.truncated
                 stored = await _replace_events(session, source_id, "link", (
-                    EventRow(e.uid, e.title, e.start, e.end, e.all_day, e.location)
+                    EventRow(e.uid, e.title, e.start, e.end, e.all_day, e.location,
+                             ical_uid=master_uid(e.uid))
                     for e in parsed.events
                 ))
                 etag, modified = result.etag, result.last_modified
@@ -448,16 +496,92 @@ async def due_links(session: AsyncSession, limit: int = 20) -> list[int]:
 class PhoneCalendar:
     calendar_id: str
     name: str
-    account_name: str | None
     color: str | None
     events: list[EventRow]
 
 
+class PhoneRefused(Exception):
+    """A phone's PUT or DELETE the house won't take: ``status`` and plain
+    ``detail`` for the HTTP answer."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+WRONG_KEY_DETAIL = (
+    "this phone's calendar key is missing or wrong: only the phone that shares "
+    "these calendars, or an admin, can change them"
+)
+DELETED_DETAIL = (
+    "sharing was turned off on this phone after this update was made: it is not stored"
+)
+SUPERSEDED_DETAIL = "a newer update from this phone is already stored"
+
+
+def key_hash(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def key_matches(stored: str | None, presented: str | None) -> bool:
+    if not stored or not presented:
+        return False
+    return hmac.compare_digest(stored, key_hash(presented))
+
+
+async def _phone_row(session: AsyncSession, device_id: str, *, create: bool) -> dict[str, Any] | None:
+    if create:
+        await session.execute(
+            text("INSERT INTO calendar_phones (device_id) VALUES (:d) ON CONFLICT (device_id) DO NOTHING"),
+            {"d": device_id},
+        )
+    row = (
+        await session.execute(
+            text(
+                "SELECT device_id, key_hash, last_generation, deleted_generation "
+                "FROM calendar_phones WHERE device_id = :d FOR UPDATE"
+            ),
+            {"d": device_id},
+        )
+    ).mappings().first()
+    return dict(row) if row is not None else None
+
+
+async def admit_phone(
+    session: AsyncSession, device_id: str, *, key: str | None, generation: int | None,
+) -> str | None:
+    """May this snapshot be stored? Raises :class:`PhoneRefused` (403 wrong
+    key, 410 sharing turned off after it was made, 409 older than one
+    stored); otherwise returns a NEW calendar key when the phone has none
+    yet (hand it to the phone once), else None. Locks the phone's row, so a
+    PUT and a DELETE of one phone take turns."""
+    row = await _phone_row(session, device_id, create=True)
+    assert row is not None
+    if row["key_hash"] and not key_matches(row["key_hash"], key):
+        raise PhoneRefused(403, WRONG_KEY_DETAIL)
+    if generation is not None:
+        if row["deleted_generation"] is not None and generation <= int(row["deleted_generation"]):
+            raise PhoneRefused(410, DELETED_DETAIL)
+        if row["last_generation"] is not None and generation < int(row["last_generation"]):
+            raise PhoneRefused(409, SUPERSEDED_DETAIL)
+    if row["key_hash"]:
+        return None
+    minted = secrets.token_urlsafe(32)
+    await session.execute(
+        text("UPDATE calendar_phones SET key_hash = :h, updated_at = now() WHERE device_id = :d"),
+        {"h": key_hash(minted), "d": device_id},
+    )
+    return minted
+
+
 async def store_phone_snapshot(
-    session: AsyncSession, device_id: str, calendars: list[PhoneCalendar]
+    session: AsyncSession, device_id: str, calendars: list[PhoneCalendar],
+    *, generation: int | None = None,
 ) -> tuple[int, int]:
     """Make the house's copy of ``device_id``'s shared calendars exactly
-    ``calendars``. Returns (calendars, events) stored."""
+    ``calendars``. Returns (calendars, events) stored. The caller has
+    admitted it (:func:`admit_phone`)."""
     now = _now()
     keep: list[int] = []
     total = 0
@@ -467,12 +591,12 @@ async def store_phone_snapshot(
                 text(
                     """
                     INSERT INTO calendar_sources
-                        (kind, name, color, device_id, phone_calendar_id, account_name,
+                        (kind, name, color, device_id, phone_calendar_id,
                          last_refreshed_at, last_attempt_at)
-                    VALUES ('phone', :name, :color, :dev, :cid, :acct, :now, :now)
+                    VALUES ('phone', :name, :color, :dev, :cid, :now, :now)
                     ON CONFLICT (device_id, phone_calendar_id) WHERE kind = 'phone'
                     DO UPDATE SET name = EXCLUDED.name, color = EXCLUDED.color,
-                                  account_name = EXCLUDED.account_name,
+                                  account_name = NULL,
                                   last_refreshed_at = EXCLUDED.last_refreshed_at,
                                   last_attempt_at = EXCLUDED.last_attempt_at,
                                   last_error = NULL, updated_at = now()
@@ -480,7 +604,7 @@ async def store_phone_snapshot(
                     """
                 ),
                 {"name": cal.name[:MAX_NAME_LEN] or "Phone calendar", "color": valid_color(cal.color),
-                 "dev": device_id, "cid": cal.calendar_id[:200], "acct": cal.account_name, "now": now},
+                 "dev": device_id, "cid": cal.calendar_id[:200], "now": now},
             )
         ).scalar_one()
         keep.append(int(sid))
@@ -492,11 +616,56 @@ async def store_phone_snapshot(
         ),
         {"dev": device_id, "keep": keep},
     )
+    await session.execute(
+        text(
+            """
+            INSERT INTO calendar_phones (device_id, last_generation, last_snapshot_at)
+            VALUES (:d, :g, :now)
+            ON CONFLICT (device_id) DO UPDATE SET
+                last_generation = CASE
+                    WHEN EXCLUDED.last_generation IS NULL THEN calendar_phones.last_generation
+                    ELSE GREATEST(COALESCE(calendar_phones.last_generation, EXCLUDED.last_generation),
+                                  EXCLUDED.last_generation) END,
+                last_snapshot_at = EXCLUDED.last_snapshot_at, updated_at = now()
+            """
+        ),
+        {"d": device_id, "g": generation, "now": now},
+    )
     await notify_changed(session, "phone")
     return len(keep), total
 
 
-async def delete_phone(session: AsyncSession, device_id: str) -> int:
+async def delete_phone(
+    session: AsyncSession, device_id: str, *, key: str | None = None,
+    generation: int | None = None, admin: bool = False,
+) -> int:
+    """Every calendar ``device_id`` shared leaves the house. From the phone
+    (sharing turned off) it needs the phone's key and leaves a tombstone at
+    ``generation`` (or the last one stored), so an upload made before it
+    and arriving after it is refused. An admin needs no key, and the
+    phone's key is forgotten (its next snapshot, if it still shares, mints
+    a new one). Returns the calendars removed."""
+    row = await _phone_row(session, device_id, create=False)
+    if row is not None and not admin and row["key_hash"] and not key_matches(row["key_hash"], key):
+        raise PhoneRefused(403, WRONG_KEY_DETAIL)
+    if row is not None:
+        marks = [g for g in (row["deleted_generation"], row["last_generation"], generation) if g is not None]
+        await session.execute(
+            text(
+                "UPDATE calendar_phones SET deleted_generation = :g, deleted_at = :now, "
+                + ("key_hash = NULL, " if admin else "")
+                + "updated_at = now() WHERE device_id = :d"
+            ),
+            {"g": max(int(g) for g in marks) if marks else None, "now": _now(), "d": device_id},
+        )
+    elif generation is not None and not admin:
+        await session.execute(
+            text(
+                "INSERT INTO calendar_phones (device_id, deleted_generation, deleted_at) "
+                "VALUES (:d, :g, :now) ON CONFLICT (device_id) DO NOTHING"
+            ),
+            {"d": device_id, "g": generation, "now": _now()},
+        )
     res = await session.execute(
         text("DELETE FROM calendar_sources WHERE kind = 'phone' AND device_id = :dev"),
         {"dev": device_id},
@@ -507,13 +676,86 @@ async def delete_phone(session: AsyncSession, device_id: str) -> int:
     return n
 
 
+async def expire_phones(session: AsyncSession, now: datetime | None = None) -> int:
+    """Delete the calendars of phones not heard from for
+    :data:`PHONE_EXPIRE_AFTER` (an uninstalled app, a lost phone, a server
+    the phone forgot), and those phones' rows. Returns calendars removed."""
+    cutoff = (now or _now()) - PHONE_EXPIRE_AFTER
+    res = await session.execute(
+        text(
+            "DELETE FROM calendar_sources WHERE kind = 'phone' "
+            "AND COALESCE(last_refreshed_at, created_at) < :cut"
+        ),
+        {"cut": cutoff},
+    )
+    n = int(res.rowcount or 0)
+    await session.execute(
+        text(
+            """
+            DELETE FROM calendar_phones p
+            WHERE COALESCE(p.last_snapshot_at, p.created_at) < :cut
+              AND (p.deleted_at IS NULL OR p.deleted_at < :cut)
+              AND NOT EXISTS (SELECT 1 FROM calendar_sources s
+                              WHERE s.kind = 'phone' AND s.device_id = p.device_id)
+            """
+        ),
+        {"cut": cutoff},
+    )
+    if n:
+        log.info("phone calendars: %s expired (no update for %s days)", n, PHONE_EXPIRE_AFTER.days)
+        await notify_changed(session, "phone")
+    return n
+
+
+async def forget_all_phones(session: AsyncSession) -> int:
+    """The household device token was replaced: every phone's calendars
+    leave, with the phones' keys (a phone given the new token shares again
+    and is handed a new key)."""
+    present = (
+        await session.execute(text("SELECT to_regclass('calendar_phones') IS NOT NULL"))
+    ).scalar()
+    if not present:
+        return 0
+    res = await session.execute(text("DELETE FROM calendar_sources WHERE kind = 'phone'"))
+    await session.execute(text("DELETE FROM calendar_phones"))
+    n = int(res.rowcount or 0)
+    if n:
+        await notify_changed(session, "phone")
+    return n
+
+
+async def after_device_token_change(scope: Any) -> None:
+    """Called by the rotate / set device-token routes (web and core) with
+    their ``session_scope``: :func:`forget_all_phones` in its own
+    transaction, never failing the token change."""
+    try:
+        async with scope() as session:
+            n = await forget_all_phones(session)
+        if n:
+            log.info("device token replaced: %s phone calendars removed", n)
+    except Exception:  # noqa: BLE001 — the token change already happened
+        log.warning("device token replaced, but phones' calendars were not removed", exc_info=True)
+
+
 # ─── Reading the list ────────────────────────────────────────────────────
 
 
+def _ago(delta: timedelta) -> str:
+    hours = int(delta.total_seconds() // 3600)
+    if hours < 48:
+        return f"{hours} hours ago"
+    return f"{hours // 24} days ago"
+
+
+def phone_is_stale(last: datetime | None, now: datetime | None = None) -> bool:
+    return last is None or (now or _now()) - last >= PHONE_STALE_AFTER
+
+
 def status_of(row: dict[str, Any]) -> str:
-    """``ok`` / ``error`` / ``waiting`` (never read yet) / ``internet_off``."""
+    """``ok`` / ``error`` / ``waiting`` (never read yet) / ``internet_off``,
+    and for a phone ``ok`` / ``stale`` (no snapshot for a day)."""
     if row.get("kind") == "phone":
-        return "ok"
+        return "stale" if phone_is_stale(row.get("last_refreshed_at")) else "ok"
     if egress.internet_turned_off():
         return "internet_off"
     err = row.get("last_error")
@@ -526,14 +768,28 @@ def status_of(row: dict[str, Any]) -> str:
     return "ok"
 
 
-async def list_sources(session: AsyncSession) -> list[dict[str, Any]]:
+def stale_words(owner: str | None, last: datetime | None, now: datetime | None = None) -> str:
+    who = owner or "the phone"
+    days = PHONE_EXPIRE_AFTER.days
+    if last is None:
+        return f"Nothing heard from {who} yet."
+    return (
+        f"Last heard from {who} {_ago((now or _now()) - last)}. Phones send an update every "
+        f"6 hours; after {days} days without one, its calendars leave the house."
+    )
+
+
+async def list_sources(session: AsyncSession, *, admin: bool = False) -> list[dict[str, Any]]:
+    """Every calendar from elsewhere. A phone's ``device_id`` is an admin's
+    to see (it is what removing all of a phone's calendars takes); the
+    account a phone calendar lives in is never returned."""
     rows = (
         await session.execute(
             text(
                 """
                 SELECT s.id, s.kind, s.name, s.color, s.person_id, p.name AS person_name,
                        s.url_host, s.device_id, d.name AS device_name,
-                       dp.name AS device_person_name, s.account_name,
+                       dp.name AS device_person_name,
                        s.last_refreshed_at, s.last_attempt_at, s.last_error,
                        s.next_refresh_at, s.created_at,
                        (SELECT count(*) FROM calendar_events e WHERE e.calendar_source_id = s.id)
@@ -547,26 +803,38 @@ async def list_sources(session: AsyncSession) -> list[dict[str, Any]]:
             )
         )
     ).mappings().all()
+    now = _now()
     out = []
     for r in rows:
         d = dict(r)
-        if d["kind"] == "phone":
+        phone = d["kind"] == "phone"
+        if phone:
             owner = d.get("device_person_name") or d.get("device_name")
         else:
             owner = d.get("person_name")
-        out.append({
+        status = status_of(d)
+        item = {
             "id": d["id"], "kind": d["kind"], "name": d["name"], "color": d["color"],
             "person_id": d["person_id"], "owner_name": owner,
-            "url_display": redact(d["url_host"]) if d["kind"] == "link" else None,
-            "device_id": d["device_id"], "device_name": d.get("device_name"),
-            "account_name": d["account_name"], "event_count": int(d["event_count"] or 0),
+            "url_display": redact(d["url_host"]) if not phone else None,
+            "device_id": d["device_id"] if (phone and admin) else None,
+            "device_name": d.get("device_name"),
+            "account_name": None, "event_count": int(d["event_count"] or 0),
             "last_refreshed_at": d["last_refreshed_at"], "last_attempt_at": d["last_attempt_at"],
             "next_refresh_at": d["next_refresh_at"],
-            "status": status_of(d),
-        })
-        err = "internet_off" if out[-1]["status"] == "internet_off" else d["last_error"]
-        out[-1].update({
-            "last_error": err,
-            "last_error_words": ERROR_WORDS.get(err) if err else None,
-        })
+            "status": status,
+            "expires_at": ((d["last_refreshed_at"] or d["created_at"]) + PHONE_EXPIRE_AFTER)
+                          if phone else None,
+        }
+        if phone:
+            item["last_error"] = "stale" if status == "stale" else None
+            item["last_error_words"] = (
+                stale_words(d.get("device_name") or owner, d["last_refreshed_at"], now)
+                if status == "stale" else None
+            )
+        else:
+            err = "internet_off" if status == "internet_off" else d["last_error"]
+            item["last_error"] = err
+            item["last_error_words"] = ERROR_WORDS.get(err) if err else None
+        out.append(item)
     return out

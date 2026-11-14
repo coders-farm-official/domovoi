@@ -891,6 +891,11 @@ class CalendarEvent(BaseModel):
     calendar_kind: str | None = None
     owner_name: str | None = None
     read_only: bool = False
+    # A private event a phone shared as busy: ``title`` is "Busy", no place.
+    busy: bool = False
+    # The same event (same iCalendar UID and start) from other calendars,
+    # listed once: the other calendars' names ("Family · Galaxy").
+    also_in: list[str] = Field(default_factory=list)
 
 
 class CalendarSource(BaseModel):
@@ -904,8 +909,10 @@ class CalendarSource(BaseModel):
     person_id: int | None = None
     owner_name: str | None = None
     url_display: str | None = None
+    # A phone's device id: admins only (None for everyone else).
     device_id: str | None = None
     device_name: str | None = None
+    # No longer returned (always None): kept so older clients still parse.
     account_name: str | None = None
     event_count: int = 0
     last_refreshed_at: datetime | None = None
@@ -913,7 +920,10 @@ class CalendarSource(BaseModel):
     next_refresh_at: datetime | None = None
     last_error: str | None = None
     last_error_words: str | None = None
-    status: Literal["ok", "error", "waiting", "internet_off"] = "ok"
+    # ``stale``: a phone not heard from for a day (it sends every 6 h).
+    status: Literal["ok", "error", "waiting", "internet_off", "stale"] = "ok"
+    # A phone's calendar leaves the house at this time unless it sends again.
+    expires_at: datetime | None = None
 
 
 class CalendarSourceCreate(BaseModel):
@@ -947,11 +957,18 @@ class PhoneCalendarEvent(BaseModel):
     ends_at_ms: int | None = None
     all_day: bool = False
     location: str | None = Field(default=None, max_length=200)
+    # Optional (V057). The event's iCalendar UID (CalendarContract UID_2445):
+    # the same event shared by two phones is listed once.
+    ical_uid: str | None = Field(default=None, max_length=300)
+    # A private or confidential event: stored and shown as "Busy", with no
+    # title or place (whatever is sent in them is dropped).
+    busy: bool = False
 
 
 class PhoneCalendar(BaseModel):
     calendar_id: str = Field(..., min_length=1, max_length=200)
     name: str = Field(..., min_length=1, max_length=200)
+    # Accepted and ignored (V057: never stored or shown).
     account_name: str | None = Field(default=None, max_length=200)
     color: str | None = Field(default=None, max_length=9)
     events: list[PhoneCalendarEvent] = Field(default_factory=list)
@@ -963,6 +980,11 @@ class PhoneCalendarSnapshot(BaseModel):
     phone_name: str | None = Field(default=None, max_length=80)
     window_start_ms: int | None = None
     window_end_ms: int | None = None
+    # Optional (V057): a number that only grows on this phone (e.g. the
+    # epoch ms the snapshot was read). A snapshot at or below the
+    # generation sharing was turned off at is refused (410), one older than
+    # a stored one too (409).
+    generation: int | None = Field(default=None, ge=0)
     # Caps (25 calendars, 5000 events each, 20000 in all) answer 413 in the route.
     calendars: list[PhoneCalendar] = Field(default_factory=list)
 
@@ -970,6 +992,11 @@ class PhoneCalendarSnapshot(BaseModel):
 class PhoneCalendarStored(BaseModel):
     calendars: int
     events: int
+    # Handed out ONCE, on the first snapshot this server stores from the
+    # phone (or the first after an admin removed its calendars): the phone
+    # keeps it and sends it as X-Domovoi-Calendar-Key on every later PUT
+    # and DELETE. None otherwise.
+    calendar_key: str | None = None
 
 
 class CalendarEventCreate(BaseModel):

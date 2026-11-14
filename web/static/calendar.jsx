@@ -52,10 +52,12 @@ const calWhen    = (e) => (e.all_day ? 'all day' : fmtClock(e.starts_at));
 const calFromNote = (e) => {
   if (!e || !e.read_only) return null;
   const name = e.calendar_name || 'another calendar';
+  // The same event in other calendars (same iCalendar UID): listed once.
+  const also = Array.isArray(e.also_in) && e.also_in.length ? ` (also in ${e.also_in.join(', ')})` : '';
   if (e.calendar_kind === 'phone') {
-    return `from ${name}${e.owner_name ? ` on ${e.owner_name}'s phone` : ''}. change it on that phone`;
+    return `from ${name}${e.owner_name ? ` on ${e.owner_name}'s phone` : ''}${also}. change it on that phone`;
   }
-  return `from ${name}. change it there; Domovoi only shows it`;
+  return `from ${name}${also}. change it there; Domovoi only shows it`;
 };
 // The days an event covers: an all-day one every day to its end (at most a
 // month), a timed one the day it starts.
@@ -679,8 +681,15 @@ const CalendarPage = () => {
  *   GET    /api/calendar/sources               (household)
  *   POST   /api/calendar/sources               (admin) add a link
  *   PATCH  /api/calendar/sources/{id}          (admin) name, colour, whose, new link
- *   DELETE /api/calendar/sources/{id}          (admin) a link only
+ *   DELETE /api/calendar/sources/{id}          (admin) a link, or one phone calendar
+ *   DELETE /api/calendar/phones/{device_id}    (admin) all of one phone's calendars
  *   POST   /api/calendar/sources/{id}/refresh  (admin) "refresh now"
+ *
+ * A phone sends its calendars every 6 hours. One not heard from for a day
+ * is "stale" (status), its last_error_words saying when it was last heard
+ * from; after 7 days the server deletes its calendars. An admin can remove
+ * one left behind (an uninstalled app, a lost phone) sooner. device_id is
+ * only in the list for an admin.
  *
  * The link is a secret (anyone holding it can read the calendar): the
  * server keeps it and only ever answers with its host. */
@@ -693,7 +702,6 @@ const calSourceLine = (s) => {
     if (s.owner_name) bits.push(s.owner_name);
   } else {
     bits.push(`on ${s.owner_name || s.device_name || 'a phone'}`);
-    if (s.account_name) bits.push(s.account_name);
   }
   bits.push(`${s.event_count} ${s.event_count === 1 ? 'event' : 'events'}`);
   if (s.last_refreshed_at) bits.push(`${s.kind === 'phone' ? 'updated' : 'read'} ${relTime(s.last_refreshed_at)}`);
@@ -814,6 +822,13 @@ const CalendarsPanel = () => {
       refresh();
     } catch (e) { reportMutationFailure(fire, 'remove', e); }
   });
+  const delPhone = useDeleteConfirm(async (s) => {
+    try {
+      await apiDelete(`/api/calendar/phones/${encodeURIComponent(s.device_id)}`);
+      fire(`removed every calendar from ${s.device_name || 'that phone'}`);
+      refresh();
+    } catch (e) { reportMutationFailure(fire, 'remove', e); }
+  });
   const refreshNow = async (s) => {
     setBusyId(s.id);
     try {
@@ -838,7 +853,7 @@ const CalendarsPanel = () => {
       <div style={{ minWidth: 0 }}>
         <div className="nm">{s.name}</div>
         <div className="sub mono">{calSourceLine(s)}</div>
-        {(s.status === 'error' || (s.last_error === 'truncated')) && s.last_error_words && (
+        {(s.status === 'error' || s.status === 'stale' || (s.last_error === 'truncated')) && s.last_error_words && (
           <div className="err">{s.last_error_words}</div>
         )}
         {editing === s.id && (
@@ -857,6 +872,24 @@ const CalendarsPanel = () => {
                     title: `Remove ${s.name}?`, confirmLabel: 'Remove calendar',
                     body: <div>Its events leave this Domovoi. The calendar itself isn’t touched.</div>,
                   })}>remove</Button>
+        </>}
+        {s.kind === 'phone' && admin && <>
+          <Button icon="trash-2" style={{ color: 'var(--err-ink)' }}
+                  onClick={() => del.request(s, {
+                    title: `Remove ${s.name}?`, confirmLabel: 'Remove calendar',
+                    body: <div>Its events leave this Domovoi; the phone’s calendar isn’t touched. If
+                      {' '}{s.device_name || 'that phone'} still shares it, it comes back with the phone’s next
+                      update: to stop that, turn it off in the Domovoi app on the phone.</div>,
+                  })}>remove</Button>
+          {s.device_id && (
+            <Button icon="smartphone" style={{ color: 'var(--err-ink)' }}
+                    onClick={() => delPhone.request(s, {
+                      title: `Remove every calendar from ${s.device_name || 'this phone'}?`,
+                      confirmLabel: 'Remove all',
+                      body: <div>For a phone that is gone or no longer has the app: every calendar it
+                        shared leaves this Domovoi. A phone still sharing sends them again.</div>,
+                    })}>remove all from this phone</Button>
+          )}
         </>}
       </div>
     </div>
@@ -900,10 +933,12 @@ const CalendarsPanel = () => {
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 12, lineHeight: 1.45 }}>
           On an Android phone: the Domovoi app → Settings → Household → Phone calendars, then pick the
           calendars to share. They stay read-only here, update on their own, and leave this Domovoi
-          when that phone stops sharing them.
+          when that phone stops sharing them, or after 7 days without an update from it
+          (an uninstalled app, a lost phone).{admin ? ' You can also remove one here.' : ''}
         </div>
       </Card>
       {del.node}
+      {delPhone.node}
       {toastNode}
     </>
   );

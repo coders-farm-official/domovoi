@@ -223,3 +223,43 @@ async def test_the_tool_call_reads_the_same(db_session) -> None:
         assert r.text == "Next on the calendar: Book club at 7 PM tomorrow."
         r = await h.execute_from_tool({}, _ctx(), db_session)
         assert r.text.startswith("Nothing on the calendar today.")
+
+
+async def _busy(db_session, start: tuple, end: tuple, uid: str | None = None):
+    """A private event a phone shared as busy (V057): stored as "Busy"."""
+    await db_session.execute(
+        text(
+            "INSERT INTO calendar_events (title, starts_at, ends_at, all_day, source, created_via, busy, ical_uid) "
+            "VALUES ('Busy', :s, :e, FALSE, 'phone', 'sync', TRUE, :u)"
+        ),
+        {"s": _utc(*start), "e": _utc(*end), "u": uid},
+    )
+    await db_session.commit()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_private_event_is_read_as_busy_time(db_session) -> None:
+    await _busy(db_session, (2026, 10, 15, 15, 0), (2026, 10, 15, 16, 0))
+    with at(*WEDNESDAY_10AM):
+        assert await _say(db_session, "what do i have tomorrow") == "Tomorrow you're busy from 3 PM to 4 PM."
+        assert await _say(db_session, "what's next on my calendar") == (
+            "Next on the calendar: you're busy from 3 PM to 4 PM tomorrow."
+        )
+        assert await _say(db_session, "what's on my calendar today") == (
+            "Nothing on the calendar today. Next, you're busy from 3 PM to 4 PM tomorrow."
+        )
+    await _event(db_session, "Dentist", (2026, 10, 15, 10, 0))
+    with at(*WEDNESDAY_10AM):
+        said = await _say(db_session, "what do i have tomorrow")
+    assert said == "Tomorrow you have 2 things: Dentist at 10 AM and a busy time from 3 PM to 4 PM."
+    assert "None" not in said and "Busy at" not in said
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_one_event_shared_by_two_phones_is_said_once(db_session) -> None:
+    await _busy(db_session, (2026, 10, 15, 15, 0), (2026, 10, 15, 16, 0), uid="abc@google.com")
+    await _busy(db_session, (2026, 10, 15, 15, 0), (2026, 10, 15, 16, 0), uid="abc@google.com")
+    with at(*WEDNESDAY_10AM):
+        assert await _say(db_session, "what do i have tomorrow") == "Tomorrow you're busy from 3 PM to 4 PM."

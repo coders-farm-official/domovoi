@@ -8130,7 +8130,7 @@
           "calendar"
         ],
         "summary": "List Events",
-        "description": "Events in ``[start, end)``: starting in it, or (from 1.3.0) begun\nbefore ``start`` and still under way at it (a multi-day event).\n\nBoth bounds optional: omit ``start`` for a \"since the dawn of time\"\nsweep, omit ``end`` for everything from ``start`` onwards. Default\ncap at 500 keeps the JSON response sane on a year-spanning query.",
+        "description": "Events in ``[start, end)``: starting in it, or (from 1.3.0) begun\nbefore ``start`` and still under way at it (a multi-day event), in\nstart order, at most ``limit``.\n\nWith NEITHER bound the window is a day ago to 60 days ahead (until\n1.3.0 it was every event ever, oldest first, so the cap cut off what\nwas coming). One bound alone is open on the other side, as before.\nThe same event in two calendars (same iCalendar UID and start) is\nlisted once, with ``also_in`` naming the others.",
         "operationId": "list_events_api_calendar_events_get",
         "parameters": [
           {
@@ -8379,7 +8379,7 @@
           "calendar"
         ],
         "summary": "List Sources",
-        "description": "Every calendar the house reads besides its own: links (address\nshown as ``host/\u2026`` only) and phones' shared calendars, with when each\nwas last read and, for a link, what went wrong in plain words.",
+        "description": "Every calendar the house reads besides its own: links (address\nshown as ``host/\u2026`` only) and phones' shared calendars, with when each\nwas last read and, for a link, what went wrong in plain words; a phone\nnot heard from for a day is ``stale`` (\"last heard from \u2026\"). A phone's\n``device_id`` is in it for an admin only; ``account_name`` never.",
         "operationId": "list_sources_api_calendar_sources_get",
         "responses": {
           "200": {
@@ -8496,7 +8496,7 @@
           "calendar"
         ],
         "summary": "Delete Source",
-        "description": "Remove a linked calendar and its events from the house (the\ncalendar itself, wherever it lives, is untouched). A phone's calendar\nis stopped on the phone: removing it here would only last until the\nphone's next update, so it is refused with that sentence.",
+        "description": "Remove a calendar and its events from the house (the calendar\nitself, wherever it lives, is untouched). For a phone's calendar this\nis how one left behind goes (the app uninstalled, the phone lost); a\nphone still sharing it sends it again with its next update.",
         "operationId": "delete_source_api_calendar_sources__source_id__delete",
         "parameters": [
           {
@@ -8575,7 +8575,7 @@
           "calendar"
         ],
         "summary": "Put Phone Snapshot",
-        "description": "The complete set of calendars this phone shares, with their events\nin a rolling window. Each listed calendar's events are replaced;\na calendar of this phone that is not listed is deleted (unpicked), and\n``calendars: []`` deletes them all.",
+        "description": "The complete set of calendars this phone shares, with their events\nin a rolling window. Each listed calendar's events are replaced;\na calendar of this phone that is not listed is deleted (unpicked), and\n``calendars: []`` deletes them all.\n\nThe first snapshot from a phone answers ``calendar_key`` (once); every\nlater one must send it in ``X-Domovoi-Calendar-Key`` (403 without).\n410: sharing was turned off after this snapshot's ``generation``; 409:\nan update with a higher ``generation`` is already stored.",
         "operationId": "put_phone_snapshot_api_calendar_phones__device_id__put",
         "parameters": [
           {
@@ -8626,7 +8626,7 @@
           "calendar"
         ],
         "summary": "Delete Phone Calendars",
-        "description": "Sharing turned off on the phone: every calendar it shared, and\ntheir events, leave the house.",
+        "description": "Every calendar a phone shared, and their events, leave the house.\n\nFrom the phone (sharing turned off): with its calendar key (403\nwithout, once it has one) and, optionally, the ``generation`` it was\nat, so an upload made before this and arriving after it is refused\n(410). From an admin (Settings \u2192 Household \u2192 Calendars, \"remove all of\nthis phone's\"): no key needed, and the phone's key is forgotten.",
         "operationId": "delete_phone_calendars_api_calendar_phones__device_id__delete",
         "parameters": [
           {
@@ -8636,6 +8636,23 @@
             "schema": {
               "type": "string",
               "title": "Device Id"
+            }
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Generation"
             }
           }
         ],
@@ -21481,6 +21498,18 @@
             "type": "boolean",
             "title": "Read Only",
             "default": false
+          },
+          "busy": {
+            "type": "boolean",
+            "title": "Busy",
+            "default": false
+          },
+          "also_in": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Also In"
           }
         },
         "type": "object",
@@ -21768,10 +21797,23 @@
               "ok",
               "error",
               "waiting",
-              "internet_off"
+              "internet_off",
+              "stale"
             ],
             "title": "Status",
             "default": "ok"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           }
         },
         "type": "object",
@@ -26746,6 +26788,23 @@
               }
             ],
             "title": "Location"
+          },
+          "ical_uid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ical Uid"
+          },
+          "busy": {
+            "type": "boolean",
+            "title": "Busy",
+            "default": false
           }
         },
         "type": "object",
@@ -26791,6 +26850,18 @@
             ],
             "title": "Window End Ms"
           },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation"
+          },
           "calendars": {
             "items": {
               "$ref": "#/components/schemas/PhoneCalendar"
@@ -26812,6 +26883,17 @@
           "events": {
             "type": "integer",
             "title": "Events"
+          },
+          "calendar_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Key"
           }
         },
         "type": "object",

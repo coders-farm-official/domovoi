@@ -3640,6 +3640,9 @@ async def admin_set_device_token(body: _AdminDeviceTokenBody) -> dict[str, Any]:
         # The message, never the value.
         raise HTTPException(status_code=400, detail=str(e))
     admin_auth_mod.write_device_token_file(token)
+    from domovoi import calendar_feeds
+
+    await calendar_feeds.after_device_token_change(session_scope)
     log.info("device token set by an admin")
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 
@@ -3657,6 +3660,9 @@ async def admin_rotate_device_token() -> dict[str, Any]:
     async with session_scope() as s:
         token = await admin_auth_mod.rotate_device_token(s)
     admin_auth_mod.write_device_token_file(token)
+    from domovoi import calendar_feeds
+
+    await calendar_feeds.after_device_token_change(session_scope)
     log.info("device token rotated by an admin")
     return {"token": token, "header": admin_auth_mod.DEVICE_TOKEN_HEADER, "rotated": True}
 
