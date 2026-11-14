@@ -4,6 +4,108 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-13 — 1.2.0
+
+Version 1.2.0 (the app 1.2.0, versionCode 26111301; the Windows Setup
+1.2.0). It holds every entry between this one and "1.1.0" (2026-11-11);
+nothing else changed in the release commit itself. The update applies
+eight migrations by itself: **V046** (the music search column), **V047**
+(synthetic-voices-only wake words), **V048** (the household's lists),
+**V049** (the voice match on each satellite turn), **V050** (each track's
+genre and year), **V051** (listening history), **V052** (where a genre
+came from) and **V053** (Up next); there is nothing to run by hand. On a
+large library V046 and V050 take a moment while `library_tracks` is
+rewritten, and after the update the core reads the genre and year of every
+song already in the library in the background (about two and a half
+minutes for 6,000 songs; budget three quarters of an hour or more for
+100,000). The plain-language summary is `docs/release/v1.2.0.md`.
+
+What a household notices:
+
+* **Up next keeps the music going,** in the browser and in the rooms: a
+  song played from a list goes on with the rest of it, a song on its own
+  with similar songs from the library, and a whole list plays as it is
+  with similar songs when it is nearly over. Each pick says why, with
+  **less like this** and a per-room or per-player **autoplay** switch. A
+  short list plays once and then goes on with similar songs instead of
+  repeating; a streamed song is followed by library songs like it.
+* **A room's queue** jumps to a song for real, takes **play next** / **add
+  to queue** from a search box on Music → Room queue, saves as a new
+  playlist, and shows a long queue 100 songs at a time. A playlist played
+  in a room becomes the room's whole queue (from its first song; songs
+  the player can't find are skipped), and "add <song> after this" no
+  longer changes any playlist.
+* **Music:** a **Genres** tab (genres from the files' tags, and from
+  MusicBrainz for recognised songs while song recognition is on); the
+  expanded player opens from the player bar over any page (Music has no
+  Player tab; `#music/player` opens it over Music) with **Lyrics ·
+  Equalizer · Queue · Hide**; the web player's Queue ends in a search box;
+  a playlist plays in this browser; "play <artist>, the song <title>"
+  asks for that song; the room cards fold behind **Show rooms**; the
+  player bar's **×** stops and closes; a MilkDrop visualizer; a song the
+  library has only by another artist is never played in its place; a
+  forgiving search and an **Artists** tab.
+* **Listening history** is kept 1 year by default (Settings → Privacy →
+  **Listening history**: 90 days or **Don't keep**, `MUSIC_LISTENS_KEEP`).
+  **This is me** on a person's page claims the phone or browser in your
+  hand; a device marked as someone's before this update claims again once.
+  Room queues show the adding device's id only to an admin.
+* **The Android app:** Lists (Tools, after Calendar); Music → Genres;
+  play or shuffle a playlist on the phone; podcast episode details; a
+  room's queue with Up next (real jump, play next / add to end, save as
+  playlist, the picks and why, autoplay, less like this), a playlist in a
+  room as the room's queue, search to add on the phone's and a room's
+  queue, long room queues 100 songs at a time; "this is me" and the
+  phone's listening history; rooms folded behind Show rooms and the mini
+  player's **×**; music, audiobooks, podcast episodes and stations each
+  shown right in the media notification (15 s back and 30 s forward for
+  books and episodes, no seeking on a live station); a phone room waits
+  for a drop-in's announcement to finish and wakes with a Pi's patience
+  and cooldown.
+* **Lists:** To-do and Shopping (and lists of your own) by voice, on the
+  dashboard's **Lists** page under Tools, and in the app. The app API is
+  `/api/lists`. A plugin page whose route is `lists` is now refused.
+* **Voices and names:** "my name is …" is spelled back and can be
+  corrected, a sound-alike of someone the house knows gets "Did you mean
+  …?", and admins see each satellite turn's voice-match scores. A name
+  saved misspelled before this stays: rename the person in Settings →
+  Household → People. Switching voices no longer renames Domovoi, and the
+  spoken question model says it can't do what it has no command for.
+* **Podcasts:** episodes show their date, length, progress, download,
+  chapters and description; big feeds are read (the 200 newest episodes),
+  unchanged ones are skipped, and **Poll now** says which shows failed.
+  On Windows, episodes move to their own `Podcasts` media folder at the
+  next Setup or update.
+* **Settings:** saving a setting that needs a restart asks **Restart now**
+  or **Later**; a room drawer's Health section and command recordings are
+  on its Settings tab; **Settings → Household → Media folders** replaces
+  Paths; the network name is in **Settings → System → Advanced**; the SD
+  card box's download caches fold under "details".
+* **domovoi.local:** a Linux server announces it (with `ufw` on, allow
+  UDP 5353 from the LAN); a Windows install does once this release's
+  Windows side is in (Setup adds the `Domovoi-mDNS-5353` firewall rule).
+* **Wake words:** a word can train on synthetic voices only, you can hear
+  the training voices before training, and pushing a word sets the room's
+  Wake sensitivity instead of hiding its own value on the room.
+* **Rooms:** music players that stopped and stayed stopped start again by
+  themselves; the Files page refuses to delete or move the music folder's
+  podcasts and audiobooks folders. The wake-sensitivity move, the
+  domovoi.local fallback, the wake log lines and a drop-in that no longer
+  cuts off "Dropping in on the kitchen" reach a room with **Upgrade room**
+  on the dashboard.
+* **Song recognition** no longer renames a song to an unrelated one: a
+  fingerprint answer is used only when it agrees with the track's own
+  title or artist. An admin can put back tracks an earlier run renamed
+  with the one-time repair (below), and untagged "Title - Artist" files
+  are read that way round.
+* **Scripts:** `POST /api/music/queue/{room}/add` now puts `end` (the
+  default) before the room's Up next picks; `next` on a room's Up next
+  session is `409`; the core's `GET /v1/admin/snapshot` no longer carries
+  `current_playlist`. New: `/api/music/up-next`, `/api/music/listens`,
+  `/api/music/genres`, `POST …/queue/{room}/play` and `…/save-playlist`,
+  `POST /api/music/library/enrich/repair`
+  (docs/API_REFERENCE.md §3.5a, §3.5e, §3.5f).
+
 ## 2026-11-13 — Song recognition no longer renames songs to the wrong one
 
 Library enrichment (AcoustID, then Shazam) used to take a fingerprint

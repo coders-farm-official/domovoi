@@ -237,7 +237,7 @@ We build Domovoi in public. Here's where it stands.
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
 - **Updates from the dashboard,** on a release channel. Settings → System →
-  About & updates names the release the server runs (`1.1.0`, or `1.1.0 +
+  About & updates names the release the server runs (`1.2.0`, or `1.2.0 +
   14 (abc1234)` between releases) and pulls and applies updates, rolling
   back by itself when the new code doesn't come up healthy. Root only
   ever runs a verified copy of the commit, never the files in the checkout
@@ -296,7 +296,7 @@ We build Domovoi in public. Here's where it stands.
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
   still plays your phone's own music, videos and files. It is a signed
-  release, [v1.1.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.1.0)
+  release, [v1.2.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0)
   on GitHub, and your server can hand it to phones: press **Download the
   app to this server** once on the dashboard, and a phone installs it from
   your server's own page by scanning a QR code
@@ -352,7 +352,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **A Windows installer.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
-  [v1.1.0 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.1.0)
+  [v1.2.0 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0)
   ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
   Domovoi's icon beside the clock: whether Domovoi is
   running, the dashboard, a QR code for phones, and a helper that prepares
@@ -387,23 +387,30 @@ they have been tried on fewer devices than the rest, aren't yet held to
   setup. Tested in virtual machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
-**This release: Domovoi v1.1.0**
+**This release: Domovoi v1.2.0**
 
-Version 1.1.0 follows [v1.0.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0),
-the first full release. It is the server, the app and a Windows Setup (with the
-Windows satellite Setup beside it), one `SHA256SUMS` for every file, published
-as described in [Releasing](docs/CONTRIBUTING.md#releasing). `stable` points at
-it, and new installs follow it. A plain-language summary is in
-[docs/release/v1.1.0.md](docs/release/v1.1.0.md); every change is in the
-[release notes](docs/RELEASE_NOTES.md). Since 1.0.0: a simpler menu (Chat,
-Media, Tools, Plugins, with People under Settings → Household) that an admin
-can rearrange for the whole house, a welcome that claims a new Domovoi, rooms
-that never sit stuck "thinking", a room history that records every turn,
-fewer false wakes, wake-word clips that add up across takes with **Train
-again**, a Health row that says what uses the server's memory, a limit on how
-much of a Windows PC Domovoi may use, a Windows install that comes back by
-itself after Windows updates WSL, a 3-second music buffer in the rooms,
-notifications at the top of the page, and Android fixes.
+Version 1.2.0 follows [v1.1.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.1.0).
+It is the server, the app and a Windows Setup (with the Windows satellite
+Setup beside it), one `SHA256SUMS` for every file, published as described in
+[Releasing](docs/CONTRIBUTING.md#releasing). `stable` points at it, and new
+installs follow it. A plain-language summary is in
+[docs/release/v1.2.0.md](docs/release/v1.2.0.md); every change is in the
+[release notes](docs/RELEASE_NOTES.md). Since 1.1.0: Up next, which keeps
+the music going with songs like the ones playing, in the browser, in the
+rooms and on the phone; a room's queue you can search, jump, reorder and
+save as a playlist, with a playlist played in a room as its whole queue; a
+Genres tab, with genres from the files and from MusicBrainz; a player that
+opens from the player bar over any page; a listening history you control,
+with **this is me** for a phone or browser; podcast episodes with their
+details; the household's shared lists (to-do, shopping and your own) by
+voice, on the dashboard and in the app; the Music page's rooms folded behind
+**Show rooms** and **Stop and close** on the player; a MilkDrop visualizer;
+the right artist and a forgiving music search with an Artists tab;
+audiobooks, podcasts and stations each shown right in the phone's media
+notification; names spelled back and voice-match scores for admins; wake
+words trained on synthetic voices only; a Media folders page; the server
+reachable as `domovoi.local`; big podcast feeds read; and a drop-in that
+no longer cuts off its own announcement.
 
 **Later**
 

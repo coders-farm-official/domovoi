@@ -40,7 +40,7 @@ def domovoi_version() -> str:
 
         return version("domovoi")
     except Exception:  # noqa: BLE001 — not installed as a distribution
-        return "1.1.0"
+        return "1.2.0"
 
 
 class LoopLocalLock:

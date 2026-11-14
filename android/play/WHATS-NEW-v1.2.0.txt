@@ -1,0 +1,11 @@
+Domovoi 1.2.0
+
+- Up next in the rooms: picks and why, autoplay, less like this, save as playlist
+- Search to add in the phone's and a room's queue
+- Music: Genres, play or shuffle a playlist here
+- Podcast episodes show date, length, progress and description
+- "This is me" and listening history
+- Lists, under Tools
+- Rooms fold behind Show rooms; the mini player's x stops and closes
+- Books, podcasts and stations show right in the notification
+- Phone rooms let a drop-in finish speaking
