@@ -519,6 +519,20 @@ def synthesis_ipa(phrase: str) -> str:
     return ";".join(f"{w}={ipa}" for w, ipa in out.items())
 
 
+def _record_for_card(slug: str, *, synthetic_only: bool, recordings: int,
+                     env: dict[str, str]) -> None:
+    """Blocking. Keep the finished run's facts for the model card."""
+    from domovoi import wake_model_card, wake_trainer_setup
+    from domovoi.git_version import version_label
+
+    wake_model_card.record_training(
+        slug, synthetic_only=synthetic_only, recordings=recordings, env=env,
+        gpu=wake_trainer_setup.recorded_gpu(),
+        trainer_source=wake_trainer_setup.recorded_image_src(),
+        domovoi_version=version_label(),
+    )
+
+
 def _log_dir() -> Path:
     return Path(settings.wake_models_dir).parent / "wake_trainer" / "logs"
 
@@ -818,6 +832,15 @@ class WakeWordTrainer(Worker):
                     log.warning("wake-word trainer: no training marker for slug=%s (%s)",
                                 slug, e)
             await self._mark_ready(wake_word_id, slug, trained_clips=n_used)
+            # What the model card says about this run (Download on the
+            # dashboard): when, which Domovoi and trainer build, the knobs.
+            try:
+                await asyncio.to_thread(
+                    _record_for_card, slug, synthetic_only=synthetic_only,
+                    recordings=n_used, env=env,
+                )
+            except Exception as e:  # noqa: BLE001 - never fails a trained word
+                log.warning("wake-word trainer: no model-card record for slug=%s (%s)", slug, e)
             log.info("wake-word trainer: slug=%s trained → %s", slug, out_path)
         else:
             # Surface the tail of the output so the dashboard shows

@@ -3961,20 +3961,65 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
             except Exception:
                 pass  # a sidecar hiccup mustn't drop the score result
         silence = _we.silence_score(model)
+        summary = _we.summarize(clip_scores, threshold=threshold, silence=silence)
+        # Kept for the model card (Download), tied to this model file.
+        try:
+            from domovoi import wake_model_card
+
+            wake_model_card.record_score(slug, summary)
+        except Exception:  # noqa: BLE001 - the card is best effort
+            log.warning("admin wake score: could not keep the score for slug=%s", slug)
         return {
             "available": True,
             "slug": slug,
             "threshold": threshold,
             "clips": clip_scores,
-            "summary": _we.summarize(
-                clip_scores, threshold=threshold, silence=silence
-            ),
+            "summary": summary,
         }
 
     try:
         return await asyncio.to_thread(_run)
     except _we.WakeEvalUnavailable as e:
         raise HTTPException(status_code=501, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/admin/wake/export/{wake_word_id}",
+    # An admin READ, so the dashboard's Download works from the cookie as
+    # well as the Bearer. The model itself is served to satellites without
+    # auth; the card adds what the household trained it on (counts only).
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_wake_export(wake_word_id: int) -> FastAPIResponse:
+    """One trained wake word, packed to share: a zip of ``<slug>.onnx``
+    (and ``.onnx.json`` when there is one), ``SHA256SUMS``, ``MODEL_CARD.md``
+    and ``LICENSE-NOTICE.md`` (domovoi/wake_model_card.py). 404 when the
+    word doesn't exist, 409 when it isn't ready or its model file is gone."""
+    from domovoi import wake_model_card
+    from domovoi.db.repositories import WakeWordsRepository
+
+    async with session_scope() as s:
+        row = await WakeWordsRepository(s).get(wake_word_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"wake word {wake_word_id} not found")
+    if row["status"] != "ready" or not row["model_ref"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"“{row['name']}” has no trained model to download (status {row['status']})",
+        )
+    try:
+        data = await asyncio.to_thread(wake_model_card.build_bundle, row)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"“{row['name']}”'s model file is missing on the server: train it again",
+        ) from e
+    name = wake_model_card.bundle_name(row["slug"])
+    return FastAPIResponse(
+        content=data, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}"',
+                 "Cache-Control": "no-store"},
+    )
 
 
 # ─── Wake-word training: Settings → Wake words → "Turn on" ────────────────
@@ -4149,9 +4194,12 @@ async def admin_wake_forget(body: _AdminWakeForgetBody) -> dict[str, Any]:
     copies of its recordings) leave the trainer's cache volume; a training
     of it is stopped first. The dashboard calls this after a delete; the
     worker's first sweep after a start removes whatever a missed call
-    left. Runs in the background."""
+    left. Runs in the background. The model card's record goes at once."""
+    from domovoi import wake_model_card
     from domovoi.workers import wake_word_trainer as wwt
 
+    # The model card's record of its training and score (slug-guarded).
+    wake_model_card.forget(body.slug)
     task = asyncio.get_running_loop().create_task(
         asyncio.to_thread(wwt.forget_word, body.slug),
         name=f"wake-forget-{body.slug}",

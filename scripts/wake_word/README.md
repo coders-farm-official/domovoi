@@ -268,6 +268,22 @@ Apache-2.0 operating-system package installed from NVIDIA's repository.
 A default Domovoi could ship would need
 training data with permissive licences throughout.
 
+**Download (Settings → Voice → Wake words).** A ready word has a
+**Download** button: a zip with `<slug>.onnx` (and its `.onnx.json`
+when there is one), `SHA256SUMS`, `MODEL_CARD.md` and
+`LICENSE-NOTICE.md`. The card is filled from what the server knows: the
+phrase, the threshold, the model's size and SHA-256, when and how it was
+trained (recorded by the trainer from this version on; "not recorded" for
+an older model), how many of the household's recordings went in, the
+datasets and their pins read from `docker/`, and the last **Score clips**
+result for that model file. Its "Before sharing" section says whether the
+household's recordings shaped the model. The notice carries the
+attribution the datasets ask for and offers the model under CC BY-NC-SA
+4.0, the strongest terms its data allows; MUSDB18 (educational use only)
+and the unlicensed impulse responses still make that a judgement call for
+whoever shares it. Nothing private is in the zip: no recordings, clip
+names, rooms or paths.
+
 ## 6. When the model isn't good enough
 
 - **No detections at all**: the satellite's wake word must match the model
