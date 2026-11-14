@@ -141,7 +141,7 @@ final class PlayerItemTests: XCTestCase {
         PlayerArtwork.noteFailure(url, status: 404)
         XCTAssertTrue(PlayerArtwork.isMissing(url))
         reconnected.model.serverChanged(
-            to: PlayerServerScope(address: "http://192.168.0.9:6369", fingerprint: "AA")
+            to: PlayerServerScope(address: "http://192.168.1.9:6369", fingerprint: "AA")
         )
         XCTAssertTrue(
             PlayerArtwork.isMissing(url),

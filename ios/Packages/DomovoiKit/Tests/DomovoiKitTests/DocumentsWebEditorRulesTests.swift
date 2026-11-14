@@ -23,7 +23,7 @@ import XCTest
 /// (`:323, 328`).
 final class DocumentsWebEditorRulesTests: XCTestCase {
 
-    private let house = ServerURL.parse("http://192.168.0.197:6370")!
+    private let house = ServerURL.parse("http://192.168.1.197:6370")!
 
     /// `XCTFail` on an address that does not parse, rather than handing the
     /// rule a `nil`: `navigation(to: nil, …)` answers `.refuseQuietly`, so a
@@ -40,11 +40,11 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
 
     /// The house's own pages load, in the main frame and in a sub-frame.
     func testThePagesOfThisServerLoad() {
-        XCTAssertEqual(.allow, decide("http://192.168.0.197:6370/doc.html?path=letter.html"))
-        XCTAssertEqual(.allow, decide("http://192.168.0.197:6370/api/documents/raw/letter.html"))
+        XCTAssertEqual(.allow, decide("http://192.168.1.197:6370/doc.html?path=letter.html"))
+        XCTAssertEqual(.allow, decide("http://192.168.1.197:6370/api/documents/raw/letter.html"))
         XCTAssertEqual(
             .allow,
-            decide("http://192.168.0.197:6370/static/doc_editor.js", mainFrame: false)
+            decide("http://192.168.1.197:6370/static/doc_editor.js", mainFrame: false)
         )
     }
 
@@ -53,11 +53,11 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
     /// a port on the same machine is a different server for this purpose.
     func testAnythingOffThisOriginIsRefusedAndSaid() {
         XCTAssertEqual(.refuseAndSay, decide("http://example.com/anything"))
-        XCTAssertEqual(.refuseAndSay, decide("http://192.168.0.197:6369/doc.html"))
-        XCTAssertEqual(.refuseAndSay, decide("https://192.168.0.197:6370/doc.html"))
+        XCTAssertEqual(.refuseAndSay, decide("http://192.168.1.197:6369/doc.html"))
+        XCTAssertEqual(.refuseAndSay, decide("https://192.168.1.197:6370/doc.html"))
         // The same address with a userinfo part in it is not this server
         // either, and a reader could easily think it was.
-        XCTAssertEqual(.refuseAndSay, decide("http://192.168.0.197:6370@evil.example/x"))
+        XCTAssertEqual(.refuseAndSay, decide("http://192.168.1.197:6370@evil.example/x"))
     }
 
     /// `javascript:`, `file:` and a custom scheme are refused in the **main
@@ -71,7 +71,7 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
             // is a string `URL(string:)` may refuse, and this case is about
             // the lock, not about Foundation's parser.
             "data:text/html;base64,PHNjcmlwdD5mZXRjaCgnaHR0cDovL2V2aWwnKTwvc2NyaXB0Pg==",
-            "blob:http://192.168.0.197:6370/4f2a",
+            "blob:http://192.168.1.197:6370/4f2a",
         ] {
             XCTAssertEqual(.refuseAndSay, decide(address),
                            "\(address) was not refused in the main frame")
@@ -87,7 +87,7 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
     /// schemes, not "anything that is not http".
     func testASubFrameTakesDataAndBlobAndStillNotEverything() {
         XCTAssertEqual(.allow, decide("data:image/png;base64,AAAA", mainFrame: false))
-        XCTAssertEqual(.allow, decide("blob:http://192.168.0.197:6370/4f2a", mainFrame: false))
+        XCTAssertEqual(.allow, decide("blob:http://192.168.1.197:6370/4f2a", mainFrame: false))
         XCTAssertEqual(.refuseAndSay, decide("javascript:alert(1)", mainFrame: false))
         XCTAssertEqual(.refuseAndSay, decide("file:///etc/passwd", mainFrame: false))
         XCTAssertEqual(.refuseAndSay, decide("http://evil.example/x", mainFrame: false))
@@ -113,7 +113,7 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
     /// still allowed.
     func testANavigationWithNoTargetFrameGetsTheStrictRule() {
         XCTAssertEqual(.refuseAndSay, decide("data:text/plain;base64,eA==", mainFrame: true))
-        XCTAssertEqual(.allow, decide("http://192.168.0.197:6370/doc.html", mainFrame: true))
+        XCTAssertEqual(.allow, decide("http://192.168.1.197:6370/doc.html", mainFrame: true))
     }
 
     /// A navigation with no address at all is cancelled with **nothing said**:
@@ -139,7 +139,7 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
                 mainFrame: true
             )
         )
-        XCTAssertEqual(.allow, decide("http://192.168.0.197:6370/doc.html"))
+        XCTAssertEqual(.allow, decide("http://192.168.1.197:6370/doc.html"))
     }
 
     // MARK: - the one-shot token
@@ -176,7 +176,7 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
 
     // MARK: - ending a session that was admitted
 
-    private let page = "http://192.168.0.197:6370"
+    private let page = "http://192.168.1.197:6370"
 
     func testNothingChangedEndsNothing() {
         XCTAssertNil(DocumentsWebEditorRules.sessionEnd(
@@ -187,7 +187,7 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
 
     func testTheActiveServerMovingEndsIt() {
         XCTAssertEqual(.serverMoved, DocumentsWebEditorRules.sessionEnd(
-            activeServerURL: "http://192.168.0.44:6370", pageServerURL: page,
+            activeServerURL: "http://192.168.1.44:6370", pageServerURL: page,
             identityChanged: false, trouble: nil
         ))
     }
@@ -237,7 +237,7 @@ final class DocumentsWebEditorRulesTests: XCTestCase {
     /// ``DocumentsStrings/editorNotPaired`` for the other two.
     func testAMoveWinsOverTheOtherTwo() {
         XCTAssertEqual(.serverMoved, DocumentsWebEditorRules.sessionEnd(
-            activeServerURL: "http://192.168.0.44:6370", pageServerURL: page,
+            activeServerURL: "http://192.168.1.44:6370", pageServerURL: page,
             identityChanged: true, trouble: .notRecognised(waitMs: 0)
         ))
     }

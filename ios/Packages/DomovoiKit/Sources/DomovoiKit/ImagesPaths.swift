@@ -16,7 +16,7 @@ import Foundation
 /// router is mounted dynamically at `web/backend/plugin_host.py:531`). On
 /// 2026-11-03 the owner said to check the plugin out beside the app and verify
 /// them (answers 6 and 25), and the repository is at
-/// `domovoi-project/domovoi-plugin-imagegen`. **Every path, method, body
+/// `domovoi-plugin-imagegen`, checked out beside the app. **Every path, method, body
 /// field and response field below carries its `web.py` line.** Nothing was
 /// added: no parameter Android does not send, no route Android does not call.
 /// The whole pass is written up in

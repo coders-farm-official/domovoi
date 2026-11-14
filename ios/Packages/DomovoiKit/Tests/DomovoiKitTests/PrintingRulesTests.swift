@@ -362,7 +362,7 @@ final class PrintingRulesTests: XCTestCase {
         let src = "data:image/png;base64," + pixels.base64EncodedString()
         XCTAssertEqual(printingThumbData(src), pixels)
 
-        XCTAssertNil(printingThumbData("https://192.168.0.44/thumb/1.png"))
+        XCTAssertNil(printingThumbData("https://192.168.1.44/thumb/1.png"))
         XCTAssertNil(printingThumbData("data:image/png,not-base64-at-all"))
         XCTAssertNil(printingThumbData("data:text/html;base64,AAA="))
         XCTAssertNil(printingThumbData("data:image/png;base64,"))

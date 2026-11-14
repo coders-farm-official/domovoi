@@ -109,7 +109,7 @@ public enum CleartextPolicy {
     static func isPrivateIPv4(_ o: [Int]) -> Bool {
         if o[0] == 10 { return true }                               // 10.0.0.0/8
         if o[0] == 172 && (16...31).contains(o[1]) { return true }  // 172.16.0.0/12
-        if o[0] == 192 && o[1] == 168 { return true }               // 192.168.0.0/16
+        if o[0] == 192 && o[1] == 168 { return true }               // 192.168.1.0/16
         if o[0] == 127 { return true }                              // loopback
         if o[0] == 169 && o[1] == 254 { return true }               // link-local
         if o[0] == 100 && (64...127).contains(o[1]) { return true } // 100.64.0.0/10

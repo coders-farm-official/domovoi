@@ -14,7 +14,7 @@ import Foundation
 ///
 /// **Every shape here is now verified against the plugin's own code**
 /// (the owner's answers 6 and 25, 2026-11-03):
-/// `domovoi-project/domovoi-plugin-imagegen`, which is read-only to this
+/// `domovoi-plugin-imagegen`, checked out beside the app, which is read-only to this
 /// batch. The row the three reads share is `_job_row`
 /// (`domovoi_plugin_imagegen/web.py:114-127`) over the columns `_JOB_COLS`
 /// names (`:71-74`), and the table is

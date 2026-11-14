@@ -23,7 +23,7 @@ final class PrintingModelsTests: XCTestCase {
         let json = """
         {"printers":[
           {"id":1,"name":"office printer","make_and_model":"Brother HL-L2375DW",
-           "location":"the study","address":"192.168.0.44","uri":"ipp://192.168.0.44/ipp/print",
+           "location":"the study","address":"192.168.1.44","uri":"ipp://192.168.1.44/ipp/print",
            "added_via":"multicast","can_print":true,"can_scan":true,"color":false,"duplex":true,
            "is_default":true,"rooms":["kitchen"],"two_sided_default":null,"color_default":null,
            "defaults":{"sides":"one-sided","color":"monochrome","media":"iso_a4_210x297mm"},
@@ -32,10 +32,10 @@ final class PrintingModelsTests: XCTestCase {
            "status":{"state":"ready","tone":"ok","words":[],"message":"",
                      "checked_at":"2026-11-02T10:00:00+00:00"},
            "supplies":[{"name":"black toner","level":8,"color":"#000000","kind":"toner","low":true}],
-           "supplies_reported":true,"admin_url":"http://192.168.0.44/","needs_attention":null,
+           "supplies_reported":true,"admin_url":"http://192.168.1.44/","needs_attention":null,
            "identify":true,
            "scan":{"sources":["platen","adf"],"color":["color","grey"],"resolutions":[150,300,600]},
-           "active_job":null,"moved":"The office printer moved to 192.168.0.44."}
+           "active_job":null,"moved":"The office printer moved to 192.168.1.44."}
         ],
          "has_printer":true,"has_scanner":true,"default_printer_id":1,
          "rooms":[{"id":"kitchen","label":"Kitchen"},{"id":"study","label":"Study"}],
@@ -64,7 +64,7 @@ final class PrintingModelsTests: XCTestCase {
         XCTAssertEqual(printer.scan?.resolutions, [150, 300, 600])
         XCTAssertEqual(printer.supplies.first?.level, 8)
         XCTAssertTrue(printer.reportsSupplies)
-        XCTAssertEqual(printer.webPage?.absoluteString, "http://192.168.0.44/")
+        XCTAssertEqual(printer.webPage?.absoluteString, "http://192.168.1.44/")
         // `limits` is sent and deliberately not decoded; `moved` likewise.
         // Both being present must not fail the decode.
         XCTAssertEqual(answer.printable.exts, [".pdf", ".png", ".xlsx"])
@@ -220,11 +220,11 @@ final class PrintingModelsTests: XCTestCase {
     func testAFoundPrinterWithNullCapabilitiesStillDecodes() throws {
         let answer = try decode("""
         {"found":[
-          {"key":"ipp://192.168.0.61/","make_and_model":"HP ENVY 6000","location":"",
-           "address":"192.168.0.61","prints":true,"scans":true,"color":null,"duplex":null,
+          {"key":"ipp://192.168.1.61/","make_and_model":"HP ENVY 6000","location":"",
+           "address":"192.168.1.61","prints":true,"scans":true,"color":null,"duplex":null,
            "via":"multicast","already_added":null},
-          {"key":"ipp://192.168.0.44/","make_and_model":"Brother HL-L2375DW",
-           "address":"192.168.0.44","prints":true,"scans":true,"color":false,"duplex":true,
+          {"key":"ipp://192.168.1.44/","make_and_model":"Brother HL-L2375DW",
+           "address":"192.168.1.44","prints":true,"scans":true,"color":false,"duplex":true,
            "via":"unicast","already_added":1}
          ],
          "diagnostics":{"ran_at":"2026-11-02T10:05:00+00:00","found":2,"by_multicast":1,
@@ -235,15 +235,15 @@ final class PrintingModelsTests: XCTestCase {
         XCTAssertNil(answer.found[0].color)
         XCTAssertNil(answer.found[0].duplex)
         XCTAssertFalse(answer.found[0].isAlreadyAdded)
-        XCTAssertEqual(answer.found[0].id, "ipp://192.168.0.61/")
+        XCTAssertEqual(answer.found[0].id, "ipp://192.168.1.61/")
         XCTAssertTrue(answer.found[1].isAlreadyAdded)
         XCTAssertEqual(answer.diagnostics?.sweepRetrySec, 42)
     }
 
     func testAFoundPrinterThatNamedItselfNothingShowsItsAddress() throws {
-        let row = try decode(#"{"address":"192.168.0.99","prints":true}"#, as: PrintingFound.self)
-        XCTAssertEqual(row.displayTitle, "192.168.0.99")
-        XCTAssertEqual(row.id, "192.168.0.99")
+        let row = try decode(#"{"address":"192.168.1.99","prints":true}"#, as: PrintingFound.self)
+        XCTAssertEqual(row.displayTitle, "192.168.1.99")
+        XCTAssertEqual(row.id, "192.168.1.99")
         XCTAssertEqual(row.via, "")
     }
 
@@ -348,9 +348,9 @@ final class PrintingModelsTests: XCTestCase {
 
     func testAnAddBodyCarriesOnlyWhatWasGiven() throws {
         let typed = try XCTUnwrap(JSONSerialization.jsonObject(
-            with: PrintingIo.addBody(key: nil, address: " 192.168.0.50 ", name: "  ", roomID: nil)
+            with: PrintingIo.addBody(key: nil, address: " 192.168.1.50 ", name: "  ", roomID: nil)
         ) as? [String: Any])
-        XCTAssertEqual(typed["address"] as? String, "192.168.0.50")
+        XCTAssertEqual(typed["address"] as? String, "192.168.1.50")
         // A blank name would be saved as the household's name for the
         // printer and the card would lose its title.
         XCTAssertNil(typed["name"])

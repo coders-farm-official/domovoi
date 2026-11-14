@@ -20,7 +20,7 @@ import XCTest
 /// shape in `ImagesModels` was transcribed from Android's client,
 /// `ImagesScreen.kt:76-125`. On 2026-11-03 the owner said to check it out beside
 /// the app and verify (answers 6 and 25), and the repository is
-/// `domovoi-project/domovoi-plugin-imagegen`. One serialiser, `_job_row`
+/// `domovoi-plugin-imagegen`, checked out beside the app. One serialiser, `_job_row`
 /// (`domovoi_plugin_imagegen/web.py:114-127`), over the columns of
 /// `migrations/V001__imagegen_schema.sql`.
 ///

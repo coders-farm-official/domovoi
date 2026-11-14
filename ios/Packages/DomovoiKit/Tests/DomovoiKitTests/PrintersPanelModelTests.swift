@@ -112,7 +112,7 @@ final class PrintersPanelModelTests: XCTestCase {
              "status":{"state":"ready","tone":"ok","words":[],"message":"",
                        "checked_at":"2026-11-02T10:00:00+00:00"},
              "supplies":[{"name":"black toner","level":8,"color":"#000000","kind":"toner","low":true}],
-             "supplies_reported":true,"admin_url":"http://192.168.0.44/","identify":true,
+             "supplies_reported":true,"admin_url":"http://192.168.1.44/","identify":true,
              "scan":{"sources":["platen","adf"],"color":["color","grey"],"resolutions":[150,300,600]},
              "active_job":null}
             """
@@ -183,11 +183,11 @@ final class PrintersPanelModelTests: XCTestCase {
                     let again = body.contains("\"look_again\":true")
                     return .json("""
                     {"found":[
-                      {"key":"ipp://192.168.0.61/","make_and_model":"HP ENVY 6000 Series",
-                       "location":"the hall","address":"192.168.0.61","prints":true,"scans":true,
+                      {"key":"ipp://192.168.1.61/","make_and_model":"HP ENVY 6000 Series",
+                       "location":"the hall","address":"192.168.1.61","prints":true,"scans":true,
                        "color":true,"duplex":null,"via":"multicast","already_added":null},
-                      {"key":"ipp://192.168.0.44/","make_and_model":"Brother HL-L2375DW",
-                       "address":"192.168.0.44","prints":true,"scans":true,"color":false,
+                      {"key":"ipp://192.168.1.44/","make_and_model":"Brother HL-L2375DW",
+                       "address":"192.168.1.44","prints":true,"scans":true,"color":false,
                        "duplex":true,"via":"unicast","already_added":1}],
                      "diagnostics":{"ran_at":"2026-11-02T10:05:00+00:00","found":2,"by_multicast":1,
                                     "by_unicast":1,"by_sweep":0,"typed":0,
@@ -527,7 +527,7 @@ final class PrintersPanelModelTests: XCTestCase {
         model.start()
         await settleUntil({ model.rows.count == 2 }, "the list")
 
-        model.add(address: "192.168.0.99", name: "", roomID: nil)
+        model.add(address: "192.168.1.99", name: "", roomID: nil)
         await settleUntil({ model.toast != nil }, "the refusal")
         XCTAssertEqual(model.toast, "Nothing answered at that address.")
         XCTAssertNil(model.offerTestPage)

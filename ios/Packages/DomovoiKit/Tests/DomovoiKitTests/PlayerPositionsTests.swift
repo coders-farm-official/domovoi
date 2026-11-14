@@ -207,7 +207,7 @@ final class PlayerPositionsTests: XCTestCase {
         // `fetchPosition` that returned `.start` whatever happened — which is
         // the shape of a case that was never testing anything.
         let place = await readWithSwitch(
-            to: PlayerServerScope(address: "http://192.168.0.9:6369", fingerprint: "AA")
+            to: PlayerServerScope(address: "http://192.168.1.9:6369", fingerprint: "AA")
         )
         XCTAssertEqual(
             place.positionSec, 912,
@@ -315,7 +315,7 @@ final class PlayerPositionsTests: XCTestCase {
         h.model.tickForTests()
 
         h.model.pause()
-        h.model.serverChanged(to: PlayerServerScope(address: "http://192.168.0.9:6369", fingerprint: "AA"))
+        h.model.serverChanged(to: PlayerServerScope(address: "http://192.168.1.9:6369", fingerprint: "AA"))
 
         await h.settle(
             until: { PlayerHouse.methods(for: "/api/podcasts/positions/9").contains("POST") },

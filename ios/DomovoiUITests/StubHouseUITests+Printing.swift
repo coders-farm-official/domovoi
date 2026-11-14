@@ -690,7 +690,7 @@ extension StubHouseUITests {
         let address = app.textFields["address"]
         XCTAssertTrue(address.waitForExistence(timeout: 15), "the add sheet has no address field")
         address.tap()
-        app.typeText("192.168.0.60")
+        app.typeText("192.168.1.60")
         let name = app.textFields["name (optional)"]
         XCTAssertTrue(name.exists, "the add sheet has no name field")
         name.tap()

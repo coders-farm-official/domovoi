@@ -10,7 +10,7 @@ import XCTest
 final class PlayerServerScopeTests: XCTestCase {
 
     private let one = PlayerServerScope(address: "http://10.0.0.42:6369", fingerprint: "AA")
-    private let sameAtANewAddress = PlayerServerScope(address: "http://192.168.0.9:6369", fingerprint: "AA")
+    private let sameAtANewAddress = PlayerServerScope(address: "http://192.168.1.9:6369", fingerprint: "AA")
     private let another = PlayerServerScope(address: "http://10.0.0.99:6369", fingerprint: "BB")
 
     // MARK: - telling servers apart
@@ -50,8 +50,8 @@ final class PlayerServerScopeTests: XCTestCase {
         let unknown = PlayerServerScope(address: "http://10.0.0.42:6369")
         let learned = unknown.merge(PlayerServerScope(address: "http://10.0.0.42:6369", fingerprint: "AA"))
         XCTAssertEqual(learned.fingerprint, "AA", "an identity pinned since")
-        let moved = one.merge(PlayerServerScope(address: "http://192.168.0.9:6369"))
-        XCTAssertEqual(moved.address, "http://192.168.0.9:6369", "a new address")
+        let moved = one.merge(PlayerServerScope(address: "http://192.168.1.9:6369"))
+        XCTAssertEqual(moved.address, "http://192.168.1.9:6369", "a new address")
         XCTAssertEqual(moved.fingerprint, "AA", "and the identity is kept")
     }
 

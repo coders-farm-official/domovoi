@@ -111,13 +111,13 @@ final class AiSettingsDashboardTests: XCTestCase {
     /// gets the right key — a copy-paste that leaves `models` behind in the
     /// Internet card is the one failure the two cards can have.
     func testTheTwoSectionsOfThisItemGetTheirOwnAddress() {
-        let server = "http://192.168.0.5:6369"
+        let server = "http://192.168.1.5:6369"
         XCTAssertEqual(
-            "http://192.168.0.5:6369/#settings/models",
+            "http://192.168.1.5:6369/#settings/models",
             AiSettingsDashboard.url(serverURL: server, section: SettingsSection.named("models")?.dashboard)
         )
         XCTAssertEqual(
-            "http://192.168.0.5:6369/#settings/internet",
+            "http://192.168.1.5:6369/#settings/internet",
             AiSettingsDashboard.url(serverURL: server, section: SettingsSection.named("internet")?.dashboard)
         )
         // Both sections have a dashboard key at all — the signpost is drawn
