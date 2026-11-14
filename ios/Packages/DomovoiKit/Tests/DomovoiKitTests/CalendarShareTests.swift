@@ -333,8 +333,9 @@ final class CalendarShareSyncTests: XCTestCase {
             rows.set([PhoneEventRow(eventID: "new", calendarID: "a", beginMs: begin, endMs: nil,
                                     allDay: false, title: "New", location: nil)])
         })
-        async let first = sync.run(server: house)
-        async let second = sync.run(server: house)
+        let server = house
+        async let first = sync.run(server: server)
+        async let second = sync.run(server: server)
         _ = await (first, second)
         XCTAssertEqual(["PUT \(house)", "PUT done", "PUT \(house)", "PUT done"], rig.calls.current)
     }
