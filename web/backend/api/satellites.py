@@ -1171,6 +1171,8 @@ async def list_recently_played(
                 """
                 SELECT mp.id, mp.room_id, mp.source, mp.title, mp.artist,
                        mp.channel, mp.video_id, mp.url, mp.started_at,
+                       (SELECT lt.id FROM library_tracks lt
+                        WHERE lt.id = mp.library_track_id) AS track_id,
                        EXISTS (
                            SELECT 1 FROM library_tracks lt
                            WHERE lt.source = mp.source
@@ -1258,6 +1260,7 @@ async def list_recently_played(
             started_at=r.started_at,
             in_library=bool(r.in_library),
             can_add=_can_add(r),
+            track_id=getattr(r, "track_id", None),
         )
         for r in raw
     ]

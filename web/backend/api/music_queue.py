@@ -219,6 +219,10 @@ class QueueItem(BaseModel):
     # podcast or a file the library doesn't know.
     origin: Literal["explicit", "auto"] = "explicit"
     reason_label: str | None = None
+    # "why this song?" for a pick, in plain words, from the signals the
+    # picker really used ("same artist as the last song · not played in 4
+    # months"); null for a song somebody asked for.
+    why: str | None = None
     up_next_seq: int | None = None
     track_id: int | None = None
 
@@ -550,6 +554,7 @@ async def read_queue(
                 playing=current is not None and song_id == int(current),
                 origin="auto" if raw.get("origin") == "auto" else "explicit",
                 reason_label=raw.get("reason_label"),
+                why=raw.get("why") if isinstance(raw.get("why"), str) else None,
                 up_next_seq=raw.get("up_next_seq"),
                 track_id=raw.get("track_id"),
             )

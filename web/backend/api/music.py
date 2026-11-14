@@ -1098,8 +1098,8 @@ async def _room_up_next_fields(request: Request, body: Any) -> dict[str, Any]:
     context = getattr(body, "context", None)  # play-playlist: the core names the list
     if context is not None:
         out["context"] = context.model_dump(exclude_none=True)
-    if not body.autoplay:
-        out["autoplay"] = False
+    if body.autoplay is not None:
+        out["autoplay"] = body.autoplay
     return out
 
 

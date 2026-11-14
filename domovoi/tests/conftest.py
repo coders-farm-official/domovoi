@@ -248,6 +248,10 @@ TABLES_TO_TRUNCATE = [
     # music is (event data).
     "music_listens",
     "music_room_listeners",
+    # What ListenBrainz said about the library (V056; fetched data).
+    "artist_similarity",
+    "artist_similarity_lookups",
+    "recording_popularity",
 ]
 
 

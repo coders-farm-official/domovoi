@@ -275,6 +275,12 @@
     "dashboard": true
    }
   },
+  "settings/music-mix": {
+   "dashboard": "#settings/music-mix",
+   "app": {
+    "dashboard": true
+   }
+  },
   "settings/health": {
    "dashboard": "#settings/health",
    "app": {
@@ -1628,6 +1634,14 @@
        "only": "dashboard"
       },
       {
+       "text": "Every song in a list (Library, an artist's, album's or genre's songs, a playlist, a room's **Recently played**) has a **⋯** menu with **play next** and **add to queue**. It goes where the music plays: this browser (\"play next here\") or the room you're playing in (\"play next in kitchen\"); on a room's page it goes to that room.",
+       "only": "dashboard"
+      },
+      {
+       "text": "The **Queue** panel (the bar's queue button, or the player's **Queue** tab) shows this browser's queue; the menu at its top switches it to any room's queue, with everything Room queue does. Songs are grouped under **now playing**, **next** and **up next**. Drag a song by its grip, or focus the grip and press the up and down arrow keys; the arrow button plays a song next. On Home, a playing room's **queue** button, and **open queue** on a room's page in [Settings → Household → Rooms](route:settings/rooms), open that room's queue.",
+       "only": "dashboard"
+      },
+      {
        "text": "[Music](route:music/queue) → **room queue**: **move up**, **move down** and **remove from queue** on each song. **play next** on a song in the library puts it next in the room's queue.",
        "only": "app"
       },
@@ -1746,7 +1760,113 @@
        "only": "dashboard"
       },
       {
+       "text": "**Up next leans a little toward songs you haven't heard in a while.** Songs you play a lot still come up, just not every time."
+      },
+      {
+       "text": "**Why this song?** Tap the reason beside an Up next song (in the **Queue** panel or [Music → Room queue](route:music/queue)) to see why it was picked, in plain words: \"same artist as the last song · not played in 4 months\". In a room, ask \"why is this playing\"."
+      },
+      {
+       "text": "**The Music mix:** [Settings → Household → Music mix](route:settings/music-mix) sets how Up next picks for the whole house: **Discovery** or **Favorites**, **Stay close** or **Wander** (the middle of each is the default), **Autoplay when a playlist ends**, and **No repeats within** so many songs. Each person can have their own mix: open them in [Settings → Household → People](route:settings/people), **Profile** → **music mix**."
+      },
+      {
+       "text": "**Similar artists and popularity from the internet** (optional, in the Music mix): with them on, Up next can add songs you have by artists like the one playing, and lean a little toward an artist's best-known songs. Only your songs' and artists' MusicBrainz ids go to ListenBrainz, in the background; Up next never waits for the internet, and without them it works from your library alone."
+      },
+      {
        "text": "**Listening history** is what Up next learns from: a song heard to its end counts toward more like it, one skipped early counts against it (only time actually heard counts, not pauses or skipping ahead). Each person's listening is kept apart once their phone or browser says **this is me**; clearing it, or not keeping it at all, is under [What's kept, and forgetting](node:kept)."
+      },
+      {
+       "text": "**Up next by voice.** In a room, the commands below act on that room's queue; most also take the room's name after them (\"what's next in the kitchen\"). \"Next\" and \"play the next song\" still skip. A command that changes the mix from a voice Domovoi knows makes it that person's mix."
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "say",
+     "text": "Try saying"
+    },
+    {
+     "type": "say",
+     "phrases": [
+      {
+       "text": "what's next",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "what's up next",
+       "handler": "music",
+       "path": "fast",
+       "note": "the next two songs"
+      },
+      {
+       "text": "play … next",
+       "handler": "music",
+       "path": "fast",
+       "try": "play feeling good next",
+       "note": "right after the song playing now"
+      },
+      {
+       "text": "add … to the queue",
+       "handler": "music",
+       "path": "fast",
+       "try": "add feeling good to the queue"
+      },
+      {
+       "text": "queue up …",
+       "handler": "music",
+       "path": "fast",
+       "try": "queue up feeling good",
+       "note": "after the songs you asked for, before Up next's picks; with nothing playing, it plays the song"
+      },
+      {
+       "text": "clear the queue",
+       "handler": "music",
+       "path": "fast",
+       "note": "everything after the song playing now; Up next carries on while autoplay is on"
+      },
+      {
+       "text": "skip this artist",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "no more …",
+       "handler": "music",
+       "path": "fast",
+       "try": "no more nina simone",
+       "note": "skips them, and leaves them out of this mix"
+      },
+      {
+       "text": "turn autoplay off",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "turn autoplay on",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "stop after this list",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "why is this playing",
+       "handler": "music",
+       "path": "fast",
+       "note": "why Up next picked it: the same artist, the same decade, a playlist they share"
+      },
+      {
+       "text": "play something like this",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "more like this",
+       "handler": "music",
+       "path": "fast",
+       "note": "Up next starts again from the song playing now"
       }
      ]
     },

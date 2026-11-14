@@ -350,6 +350,10 @@ a.nav-item, a.nav-item:hover { text-decoration: none; }
   font-size: 11px; line-height: 1.3; color: var(--fg-muted);
 }
 .config-slider-ends span:last-child { text-align: right; }
+/* Settings → Music mix (music_mix.jsx): the step said in words. */
+.mix-slider { flex-wrap: wrap; }
+.mix-slider .config-slider-track { flex: 1 1 260px; }
+.mix-slider-now { flex-basis: 100%; font-size: 12px; color: var(--fg-muted); }
 @media (max-width: 760px) {
   .config-field-slider .config-field-control { flex-basis: 100%; max-width: none; margin-left: 0 !important; }
 }
@@ -646,7 +650,7 @@ html.mp-docked { --player-h: 64px; }
 
 /* queue rows (the desktop's floating queue and the expanded player) */
 .mp-q-row {
-  display: grid; grid-template-columns: 20px 1fr 22px; gap: 8px; align-items: center;
+  display: grid; grid-template-columns: 16px 20px minmax(0, 1fr) auto; gap: 8px; align-items: center;
   padding: 7px 12px; cursor: grab; border-bottom: 1px solid var(--border-soft);
 }
 .mp-q-row.cur { background: var(--brand-soft); }
@@ -665,6 +669,57 @@ html.mp-docked { --player-h: 64px; }
 .mp-q-res:last-child { border-bottom: none; }
 .mp-q-res.on { background: var(--brand-soft); }
 .mp-q-res-main { min-width: 0; padding: 6px 10px; cursor: pointer; }
+/* Shared queue parts (P5, components.jsx): the grip (drag, or the arrow
+   keys), the section heads ("now playing", "next"), the queue panel's head
+   with its picker (this browser / a room), and the song rows' menu. */
+.q-grip {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  width: 16px; height: 24px; color: var(--fg-muted); background: transparent; border: 0;
+  border-radius: var(--r-sm); cursor: grab;
+}
+.q-grip:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: 1px; }
+.q-grip:disabled { cursor: default; opacity: 0.5; }
+.q-sec {
+  padding: 8px 12px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--fg-muted); border-bottom: 1px solid var(--border-soft);
+}
+.rq-sec { padding: 8px 16px 4px; border-top: 1px solid var(--border-soft); border-bottom: none; }
+.q-panel-head {
+  padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 13px; font-weight: 600;
+}
+.q-head-what { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.q-head-count { color: var(--fg-muted); font-weight: 500; flex: none; }
+.q-head-acts { display: inline-flex; gap: 4px; flex: none; }
+.q-target {
+  font: inherit; font-size: 13px; font-weight: 600; height: 30px; padding: 0 6px; min-width: 0; max-width: 220px;
+  border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--card); color: var(--fg);
+}
+.q-target:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: 1px; }
+.q-panel-body { overflow-y: auto; flex: 1; }
+.q-panel .q-room-view { overflow-y: auto; flex: 1; min-height: 0; }
+.q-room-view .rq-rooms { padding: 8px 12px; }
+.q-link {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 0;
+  font: inherit; font-size: 12px; color: var(--brand-ink); background: none; border: 0; cursor: pointer;
+}
+.q-link:hover { text-decoration: underline; }
+.q-link:focus-visible { outline: 2px solid var(--brand-ring); outline-offset: 2px; border-radius: var(--r-sm); }
+.song-menu { position: relative; display: inline-flex; align-items: center; }
+.song-menu-pop {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 50; min-width: 200px;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: var(--shadow-md), var(--inner-highlight);
+}
+.song-menu-item {
+  display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 6px 10px;
+  font: inherit; font-size: 13px; text-align: left; white-space: nowrap;
+  color: var(--fg); background: transparent; border: 0; border-radius: var(--r-sm); cursor: pointer;
+}
+.song-menu-item:hover, .song-menu-item:focus-visible { background: var(--brand-soft); color: var(--brand-ink); outline: none; }
+.song-menu-note { position: absolute; right: 0; top: 100%; font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
 /* The queue's "up next" section (PlayerUpNext): Up next's picks, after the
    songs somebody asked for. A head (what the mix is built from + the
    Autoplay switch), "for <name>", one muted line when there is something
@@ -704,6 +759,16 @@ html.mp-docked { --player-h: 64px; }
   border-radius: var(--r-sm); background: var(--idle-soft); color: var(--fg-muted);
 }
 .mp-un-acts { display: flex; gap: 2px; }
+/* "why this song?" (UpNextWhy, components.jsx): the reason chip as a
+   button, and the plain line it opens under the row. */
+.un-why-btn { border: 0; cursor: pointer; font-family: inherit; }
+.un-why-btn:hover { color: var(--fg); }
+.un-why-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.un-why-line {
+  flex-basis: 100%; display: block; font-size: 11px; line-height: 15px; color: var(--fg-muted);
+  white-space: normal; padding-top: 2px;
+}
+.mp-un-sub { flex-wrap: wrap; }
 .mp-un .mp-q-note { padding: 0 12px 8px; }
 .mp-q-save input {
   flex: 1; min-width: 0; font: inherit; font-size: 12px; height: 30px; padding: 0 10px;
@@ -807,7 +872,7 @@ html.mp-docked { --player-h: 64px; }
 }
 .mp-sheet-more { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; }
 .mp-sheet-more:empty { display: none; }
-.mp-sheet .mp-q-row { grid-template-columns: 24px minmax(0, 1fr) 44px; min-height: 48px; padding: 2px 0 2px 12px; }
+.mp-sheet .mp-q-row { grid-template-columns: 24px minmax(0, 1fr) auto; min-height: 48px; padding: 2px 0 2px 12px; }
 .mp-sheet .mp-q-row .btn-icon { width: 44px; height: 44px; }
 .mp-sheet .mp-q-list > .mp-q-row:last-child { border-bottom: none; }
 .mp-sheet .mp-q-main { align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
@@ -1107,6 +1172,9 @@ button.lyr-line:hover { background: var(--brand-soft); }
 .rq-un-basis { font-size: 11px; color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rq-un-line { flex-basis: 100%; font-size: 11px; color: var(--fg-muted); }
 .rq-why { color: var(--fg-muted); }
+.rq-why-chip { background: none; padding: 0; color: inherit; font-size: inherit; }
+.rq-why-chip.un-why-btn { text-decoration: underline dotted; text-underline-offset: 2px; }
+.rq-why .un-why-line { white-space: normal; }
 .rq-save .mp-q-saverow { padding: 0; }
 /* The Room queue tab's search: add to the room's queue, under the room
    chips (the tab's main control), and "show more" for a long queue. */
@@ -2611,3 +2679,11 @@ a.home-att-row:hover { background: var(--brand-soft); }
 
 /* Home: today / next, a calendar's colour beside an event from elsewhere */
 .home-today-row .cal-src-tag { max-width: 120px; }
+
+/* The shared queue parts on a phone (P5; placed last so the player's own
+   phone rules above stay the first 760px block). */
+@media (max-width: 760px) {
+  .song-menu-item { min-height: 44px; }
+  .q-target { height: 40px; font-size: 16px; }
+  .q-grip { width: 24px; height: 44px; }
+}

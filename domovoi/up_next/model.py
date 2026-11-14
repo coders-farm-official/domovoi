@@ -68,11 +68,15 @@ class Track:
 @dataclass(frozen=True, slots=True)
 class TrackStats:
     """A track's listens in the affinity window (90 days), for the person
-    or, for the household, everyone."""
+    or, for the household, everyone. ``last_days``: days since it was last
+    heard by the same people within the freshness window (a year), None
+    when it wasn't (never played, or not in a year): the freshness weight
+    (:func:`domovoi.up_next.pick.freshness`)."""
 
     finished: int = 0
     plays: int = 0
     skipped: int = 0
+    last_days: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,10 @@ class Pick:
     reason_code: str
     reason_label: str
     seed_track_id: int | None = None
+    #: The signals that weighed most in choosing it, strongest first, as
+    #: ``(code, value)`` pairs (:func:`~.pick.why_signals`); "why this
+    #: song?" is said from these (:func:`~.why.why_text`), never invented.
+    why: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +102,45 @@ class Batch:
     #: True when the session has nothing more to give (a list played with
     #: autoplay off reached its end, or an empty library).
     ended: bool = False
+
+
+# ─── Freshness: the one place its numbers live ────────────────────────────
+#
+# Plain shuffles keep landing on the same rotation: the songs played most
+# get the most affinity, so they come up most, so they get played more.
+# Freshness pushes back a little. By days since the song was last heard
+# (by the listener, else the household), on a log scale so the first days
+# count most:
+#   heard today .......... ×0.70
+#   2 days ago ........... ×0.85
+#   a week ............... ×0.98
+#   a month .............. ×1.16
+#   90 days, or never .... ×1.30
+# then × (1 - 0.01 per play in the last 90 days, at most -0.15) for a song
+# played very often; never below ×0.6. Compare favourite ×1.5 and affinity
+# up to ×2.0: a well-liked song heard yesterday (2.0 × 0.8 = 1.6) still
+# beats a never-played stranger (1.3) — it just doesn't win every time.
+# No history at all (listening history off): every track ×1.3, i.e. no
+# effect. tests/test_up_next_freshness.py measures the coverage it buys. These
+# are the Music mix's middle step; its Discovery / Favorites ends move
+# FRESH_MIN, FRESH_MAX and AFFINITY_STEP (domovoi/up_next/mix.py).
+FRESH_MIN = 0.70
+FRESH_MAX = 1.30
+FRESH_FULL_DAYS = 90.0
+FRESH_PLAY_STEP = 0.01
+FRESH_PLAY_CAP = 15
+FRESH_FLOOR = 0.60
+#: Personal affinity per finished play (``1 + step·min(finished, 10)``).
+AFFINITY_STEP = 0.10
+
+# ─── Popularity (ListenBrainz, phase P7) ──────────────────────────────────
+# ``popularity``: track id -> 0..1, the song's listen count against its
+# artist's best-known song in the library, log scale (the data layer
+# computes it). ×0.9 for a deep cut up to ×1.2 for the artist's hit; no
+# figure ×1.0. Smaller than favourite, affinity and freshness on purpose:
+# the house's own taste leads.
+POP_LOW = 0.90
+POP_HIGH = 1.20
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +167,13 @@ class EngineConfig:
     spacing_max_in_window: int = 2
     #: the session's no-repeat memory (picked track ids kept in state).
     picked_memory: int = 2000
+    #: lean toward songs not heard in a while (:func:`~.pick.freshness`),
+    #: from ``fresh_min`` (heard today) to ``fresh_max`` (90 days, never).
+    freshness: bool = True
+    fresh_min: float = FRESH_MIN
+    fresh_max: float = FRESH_MAX
+    #: personal affinity per finished play.
+    affinity_step: float = AFFINITY_STEP
 
 
 DEFAULT_CONFIG = EngineConfig()

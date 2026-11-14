@@ -3360,6 +3360,166 @@
         }
       }
     },
+    "/api/music/mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Mix",
+        "operationId": "get_mix_api_music_mix_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Mix Api Music Mix Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Mix",
+        "operationId": "put_mix_api_music_mix_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MixIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Mix Api Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/people/{person_id}/music-mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Person Mix",
+        "operationId": "get_person_mix_api_people__person_id__music_mix_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Person Mix Api People  Person Id  Music Mix Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Person Mix",
+        "operationId": "put_person_mix_api_people__person_id__music_mix_put",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonMixIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Person Mix Api People  Person Id  Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -9871,7 +10031,7 @@
           "playlists"
         ],
         "summary": "Add Track To Playlist",
-        "description": "Append a library track to the end of a playlist.\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
+        "description": "Append a library track to the end of a playlist.\n\n``{track_id}``: one song; 204, 404 for a song the library doesn't\nhave, 409 when it is already in the playlist.\n\n``{track_ids: [...]}`` (P5, up to 500): many songs in one request, in\nthe order sent, after the playlist's last song. Songs already in the\nplaylist, or sent twice, are kept once; ids the library doesn't have\nare left out. 200 ``{added, duplicates, missing}``. The browser's\n\"save as playlist\" uses it (it used to send one request per song).\n\nRefused for the virtual Favorites playlist (``id == 0``) \u2014\nfavoriting is done via ``PATCH /api/music/library/{id}\n{favorited: true}``. Refusing here avoids two equally-valid\ncode paths writing the same flag.",
         "operationId": "add_track_to_playlist_api_playlists__playlist_id__tracks_post",
         "parameters": [
           {
@@ -9897,6 +10057,16 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "200": {
+            "description": "track_ids: what the bulk add did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistBulkAdded"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -22097,9 +22267,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -25769,6 +25945,62 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MixIn": {
+        "properties": {
+          "discovery_favorites": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Wander"
+          },
+          "autoplay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
+          },
+          "list_repeat_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 500.0,
+                "minimum": 20.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List Repeat Min"
+          }
+        },
+        "type": "object",
+        "title": "MixIn"
+      },
       "MoveIn": {
         "properties": {
           "target": {
@@ -26330,6 +26562,28 @@
         ],
         "title": "NowPlayingSong"
       },
+      "OverrideIn": {
+        "properties": {
+          "discovery_favorites": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Close Wander"
+          }
+        },
+        "type": "object",
+        "required": [
+          "discovery_favorites",
+          "close_wander"
+        ],
+        "title": "OverrideIn"
+      },
       "PasswordChangeRequest": {
         "properties": {
           "old_password": {
@@ -26627,6 +26881,22 @@
         ],
         "title": "Person"
       },
+      "PersonMixIn": {
+        "properties": {
+          "override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverrideIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "PersonMixIn"
+      },
       "PersonRename": {
         "properties": {
           "name": {
@@ -26909,9 +27179,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -27008,9 +27284,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -27099,6 +27381,30 @@
         ],
         "title": "Playlist",
         "description": "One row in the Playlists tab. ``is_virtual=True`` is the\npinned-at-top \"Favorites\" entry \u2014 derived from\n``library_tracks.favorited`` rather than a real ``playlists``\nrow, so it can't be renamed or deleted from the dashboard."
+      },
+      "PlaylistBulkAdded": {
+        "properties": {
+          "added": {
+            "type": "integer",
+            "title": "Added"
+          },
+          "duplicates": {
+            "type": "integer",
+            "title": "Duplicates"
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "added",
+          "duplicates",
+          "missing"
+        ],
+        "title": "PlaylistBulkAdded",
+        "description": "What a bulk add did: songs appended, songs already in the playlist\n(or sent twice: saved once), ids the library doesn't have."
       },
       "PlaylistCreate": {
         "properties": {
@@ -27227,16 +27533,37 @@
       "PlaylistTrackAdd": {
         "properties": {
           "track_id": {
-            "type": "integer",
-            "minimum": 1.0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Track Id"
+          },
+          "track_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 500,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Ids"
           }
         },
         "type": "object",
-        "required": [
-          "track_id"
-        ],
-        "title": "PlaylistTrackAdd"
+        "title": "PlaylistTrackAdd",
+        "description": "Add one library song (``track_id``) or many at once (``track_ids``,\nin order, up to 500: \"save the queue as a playlist\" in one request\ninstead of one per song). Exactly one of the two."
       },
       "PollFailure": {
         "properties": {
@@ -27868,6 +28195,17 @@
             ],
             "title": "Reason Label"
           },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          },
           "up_next_seq": {
             "anyOf": [
               {
@@ -28089,6 +28427,17 @@
             "type": "boolean",
             "title": "Can Add",
             "default": false
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
           }
         },
         "type": "object",
@@ -29516,9 +29865,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           }
         },
         "type": "object",

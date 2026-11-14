@@ -48,8 +48,10 @@ class MemoryLibrary:
     everything is a candidate, every track a wildcard."""
 
     def __init__(self, tracks: Sequence[Track], *, playlists: Mapping[int, tuple[str, list[int]]] | None = None,
-                 similar: Mapping[int, str] | None = None) -> None:
+                 similar: Mapping[int, str] | None = None,
+                 popularity: Mapping[int, float] | None = None) -> None:
         self.by_id = {t.id: t for t in tracks}
+        self._popularity = dict(popularity or {})
         self.playlists = dict(playlists or {})
         self._similar = dict(similar or {})
         self.calls: list[str] = []
@@ -91,8 +93,12 @@ class MemoryLibrary:
             return [t for t in self.by_id.values() if seed.ref in t.genre_keys]
         return []
 
-    async def similar(self, seeds):
+    async def similar(self, seeds, *, salt=""):
         return dict(self._similar)
+
+    async def popularity(self, track_ids):
+        ids = set(track_ids)
+        return {k: v for k, v in self._popularity.items() if k in ids}
 
 
 class MemoryListens:

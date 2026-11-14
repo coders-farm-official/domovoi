@@ -402,6 +402,19 @@ Your music library, on the server, played in any room or in the browser.
   goes straight there. **Save as playlist** keeps the room's queue as a new playlist;
   radio streams, podcasts and files that aren't in your library are left
   out, and it says how many.
+- **Dashboard:** every song in a list (Library, an artist's, album's or
+  genre's songs, a playlist, a room's **Recently played**) has a **⋯**
+  menu with **play next** and **add to queue**. It goes where the music
+  plays: this browser ("play next here") or the room you're playing in
+  ("play next in kitchen"); on a room's page it goes to that room.
+- **Dashboard:** the **Queue** panel (the bar's queue button, or the
+  player's **Queue** tab) shows this browser's queue; the menu at its top
+  switches it to any room's queue, with everything Room queue does. Songs
+  are grouped under **now playing**, **next** and **up next**. Drag a
+  song by its grip, or focus the grip and press the up and down arrow
+  keys; the arrow button plays a song next. On Home, a playing room's
+  **queue** button, and **open queue** on a room's page in
+  [Settings → Household → Rooms](#settings/rooms), open that room's queue.
 - **App:** [Music](#music/queue) → **room queue**: **move up**, **move
   down** and **remove from queue** on each song. **play next** on a song
   in the library puts it next in the room's queue.
@@ -512,12 +525,46 @@ browser, and in a room.
   [Settings → Household → Rooms](#settings/rooms) shows its next three under now
   playing, with **open queue**. Guests can play a song now, move and
   remove, but not switch autoplay or use less like this.
+- **Up next leans a little toward songs you haven't heard in a while.**
+  Songs you play a lot still come up, just not every time.
+- **Why this song?** Tap the reason beside an Up next song (in the
+  **Queue** panel or [Music → Room queue](#music/queue)) to see why it was
+  picked, in plain words: "same artist as the last song · not played in 4
+  months". In a room, ask "why is this playing".
+- **The Music mix:** [Settings → Household → Music mix](#settings/music-mix)
+  sets how Up next picks for the whole house: **Discovery** or
+  **Favorites**, **Stay close** or **Wander** (the middle of each is the
+  default), **Autoplay when a playlist ends**, and **No repeats within**
+  so many songs. Each person can have their own mix: open them in
+  [Settings → Household → People](#settings/people), **Profile** → **music
+  mix**.
+- **Similar artists and popularity from the internet** (optional, in the
+  Music mix): with them on, Up next can add songs you have by artists like
+  the one playing, and lean a little toward an artist's best-known songs.
+  Only your songs' and artists' MusicBrainz ids go to ListenBrainz, in the
+  background; Up next never waits for the internet, and without them it
+  works from your library alone.
 - **Listening history** is what Up next learns from: a song heard to its
   end counts toward more like it, one skipped early counts against it
   (only time actually heard counts, not pauses or skipping ahead). Each
   person's listening is kept apart once their phone or browser says
   **this is me**; clearing it, or not keeping it at all, is under
   [What's kept, and forgetting](#node:kept).
+- **Up next by voice.** In a room, the commands below act on that room's
+  queue; most also take the room's name after them ("what's next in the
+  kitchen"). "Next" and "play the next song" still skip. A command that
+  changes the mix from a voice Domovoi knows makes it that person's mix.
+
+**Try saying**
+
+- "what's next" · "what's up next" (the next two songs)
+- "play … next" (right after the song playing now)
+- "add … to the queue" · "queue up …" (after the songs you asked for, before Up next's picks; with nothing playing, it plays the song)
+- "clear the queue" (everything after the song playing now; Up next carries on while autoplay is on)
+- "skip this artist" · "no more …" (skips them, and leaves them out of this mix)
+- "turn autoplay off" · "turn autoplay on" · "stop after this list"
+- "why is this playing" (why Up next picked it: the same artist, the same decade, a playlist they share)
+- "play something like this" · "more like this" (Up next starts again from the song playing now)
 
 [Music and room queues](#node:music) has the queue itself: adding,
 moving and saving songs.
