@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Export options for an App Store Connect build, read by release.sh.
+
+  This is a TEMPLATE. release.sh copies it next to the archive and sets two
+  keys on the copy with plutil: teamID (from DOMOVOI_TEAM_ID, which is never
+  committed) and destination ("export" writes an .ipa, "upload" sends the
+  build to App Store Connect with the Apple ID signed in to Xcode).
+
+  manageAppVersionAndBuildNumber is false on purpose: the build number is the
+  shared YYMMDDNN sequence with Android and release.sh chooses it. Xcode must
+  not bump it on its own.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<key>teamID</key>
+	<string></string>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>stripSwiftSymbols</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,32 @@
+Domovoi is the home computer system that just works. Your music, movies, audiobooks and files live on a computer in your own home, and play in every room and on your phone. A private AI runs at home too, when you want it. No account, no cloud, no subscription, no ads.
+
+WORKS ON ITS OWN, TOO: NO SERVER NEEDED
+• Play the music and videos on your phone, from your photos or from the folders you choose.
+• Listen to the audiobooks you saved to the phone.
+• On an iPhone with Apple Intelligence, chat with an assistant that runs on the phone itself.
+
+With a Domovoi server (a computer in your home running the free Domovoi software), the app becomes the remote for the whole house:
+
+WITH YOUR DOMOVOI SERVER
+• Music in every room: browse your library, build a queue and play it in any room, or on the phone.
+• Movies and videos from your library, on your phone.
+• Audiobooks: listen at home or save a book to your phone for the road. Your place is kept, and if you got further in the kitchen, the app offers to pick up from there.
+• Radio stations and podcasts.
+• Your household's files and documents: browse, open, edit and add to them from your phone.
+• The whole house at a glance: which rooms are playing, every timer counting down, and anything that needs attention.
+• Timer and reminder alerts on your phone when one goes off anywhere in the house.
+• Drop in on a room like an intercom.
+
+TURN A SPARE IPHONE INTO A ROOM
+Got an old iPhone in a drawer? Domovoi turns it into a room: it plays music, rings timers and answers when called, like any Domovoi room. Scan the room code, approve it on your dashboard, plug it in and put it on a shelf. It listens only while Domovoi is open on its screen.
+
+WHEN YOU WANT IT: A PRIVATE ASSISTANT
+Domovoi can also answer questions, by voice or text. At home your own server answers, with a model running on your own hardware. Nothing you ask goes to an AI company.
+
+PRIVATE BY DESIGN
+• The app talks to your own Domovoi server on your home network, and to nothing run by us.
+• Plain connections are allowed only to addresses on your home network; anything on the internet must use HTTPS.
+• Your household pairing is kept in the iPhone's Keychain, on this device only.
+• No analytics, advertising or crash-reporting services.
+
+Domovoi keeps it in the house. It is free and open source under the MIT license, made by Coders Farm, a nonprofit that teaches people to code for free. Setting up a server, the source code and the documentation are at github.com/coders-farm-official/domovoi.

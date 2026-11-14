@@ -1,0 +1,32 @@
+WHAT DOMOVOI IS
+Domovoi is the phone app for Domovoi, free, open-source (MIT) software that a household runs on its own computer at home, like the app for a home NAS. Made by Coders Farm, a nonprofit. Source and setup: github.com/coders-farm-official/domovoi
+
+WHAT WORKS WITH NO SERVER (testable now)
+On first launch the app opens to the phone's own Music, Videos and Files tabs. Play music and videos from Photos or from a folder you pick in Files. Audiobooks appear once one has been saved. On an iOS 26 iPhone with Apple Intelligence on, a Chat tab answers with Apple's on-device model; nothing is sent anywhere.
+
+PAIRING, AND WHY YOU CANNOT REACH A SERVER
+Everything else (rooms, the library, timers, the intercom) comes from the household's own server on its home Wi-Fi. The app finds it on the local network (the Local Network prompt) or takes a typed address, and the household's admin approves the phone on the server's dashboard. Home servers live on private addresses inside a home, so a reviewer cannot reach one. Plain HTTP is allowed only to local addresses and to .home.arpa, .lan, .internal and .home, names that resolve only inside a home network; anything on the internet must use HTTPS. The attached video, filmed on an iPhone, shows pairing, Home, music in a room, an audiobook saved and played offline, a timer alert, chat and room mode.
+
+ROOM MODE
+A spare iPhone can be a room: it scans a room code, the household approves it on the dashboard, and it answers the wake word. It listens only while Domovoi is on screen. The audio background mode is used only for playback and drop-ins (2.5.4); the microphone is never started from the background. We suggest Guided Access to keep the phone in the app. Leaving room mode takes Face ID or the passcode. The wake-word and voice-detection models come from the household's own server, as data (2.5.2).
+
+DOWNLOADS
+The app downloads no executable code. There is no model download in this version: phone chat uses Apple's built-in model, and room mode's models are data from the household's own server.
+
+NO HIDDEN FEATURES (2.5.19)
+There are no developer options, no hidden gestures and no secret settings. The version line in Settings is plain text. Test switches exist only in debug builds and are compiled out of this one.
+
+NO ACCOUNTS (5.1.1)
+The app creates no account, with us or anyone. A phone is paired with a household's own server; that pairing is kept in the Keychain on this device only, never synced to iCloud.
+
+NO THIRD-PARTY AI (5.1.2(i))
+Nothing goes to a third-party AI. Chat is answered by the household's own server or by Apple's on-device model on the phone. Replies from the household's server can be reported from the reply's menu: the person sees the whole report, and it goes by their own email to info@codersfarm.org.
+
+PRIVACY
+No analytics, advertising, tracking or crash-reporting SDKs. Data goes only to the household's own server, which Coders Farm never sees.
+
+IPAD
+iPad layouts were tested in the iPad Simulator.
+
+CONTACT
+info@codersfarm.org

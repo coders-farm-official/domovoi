@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The privacy manifest (plan 4.3). Required since May 2024. It is bundled
+  into the app as a resource by ios/project.yml.
+
+  Three claims, all of them true of this app as the Android app is true of it:
+
+    * NSPrivacyTracking false and no tracking domains. There is no analytics
+      SDK, no advertising SDK and no crash-reporting SDK in this app, and the
+      licences test fails the build if one ever appears.
+    * NSPrivacyCollectedDataTypes empty. Everything the app sends goes to the
+      household's own server, which Coders Farm never sees; problem reports go
+      by the person's own email, from their own mail app. Apple's definition
+      of "collected" is data leaving the device in a way that lets US or a
+      partner of ours get at it, which is nothing here.
+    * The required-reason APIs below: ONLY the categories the code calls,
+      each with a reason code from Apple's published list.
+
+  Re-audited on 2026-11-14 by grepping ios/Domovoi and ios/Packages for every
+  API in Apple's five categories. Two categories that were declared before
+  are not used by any code and came out (declaring an API we do not call is
+  a claim we should not make):
+
+    * Disk space (was E174.1). Nothing calls volumeAvailableCapacity*,
+      systemFreeSize, statfs or statvfs. The model download it was meant for
+      is not in the iPhone app. Put E174.1 back in the batch that adds a
+      free-space check before a download.
+    * System boot time (was 35F9.1). Nothing calls systemUptime or
+      mach_absolute_time. Monotonic time is clock_gettime(CLOCK_MONOTONIC)
+      in TokenHealth.swift, ContinuousClock and DispatchTime, none of which
+      is on Apple's list.
+    * Active keyboards: never used (no activeInputModes).
+
+  When any of that stops being true (a phone lookup to Wikipedia, an HTTPS
+  report destination of ours, any service of ours, a new required-reason
+  call) this file and the App Store privacy label change in the same batch,
+  and the privacy policy the same day, as for Play. domovoi/tests/
+  test_ios_store.py checks this file against the code.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!--
+		  UserDefaults, always UserDefaults.standard: the app's own
+		  preferences (DeviceRegistry.UserDefaultsStore, AlertsStore,
+		  UserDefaultsSavedState for chat pins, heads-ups, the last chat place,
+		  the picked-folder bookmarks). CA92.1: "to read and write information
+		  that is only accessible to the app itself". The app is in no app
+		  group and shares nothing (no suiteName anywhere), so 1C8F.1 does not
+		  apply.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<!--
+		  File timestamps. The one call is PhoneFolderSource.page in
+		  Packages/DomovoiKit/Sources/DomovoiKit/PhoneMediaSource.swift: it
+		  reads .contentModificationDateKey for the files in a folder the
+		  person picked with the document picker (a security-scoped bookmark,
+		  PhoneFolderBookmarks.swift). 3B52.1: "to access the timestamps,
+		  size, or other metadata of files or directories that the user
+		  specifically granted access to, such as using a document picker view
+		  controller".
+
+		  Not C617.1: nothing reads a timestamp of a file in the app's own
+		  container. PHAsset.creationDate (PhonePhotosSource.swift) is Photos
+		  metadata, not a file-timestamp API. Add C617.1 beside this one if a
+		  timestamp of the app's own files is ever read.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>3B52.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
