@@ -1,13 +1,16 @@
-# Domovoi for Android: privacy policy
+# Domovoi for Android and iPhone: privacy policy
 
-Effective 21 October 2026. Published by Coders Farm, the makers of Domovoi
+Effective 21 October 2026; the iPhone and iPad app added 14 November 2026. Published by Coders Farm, the makers of Domovoi
 (github.com/coders-farm-official/domovoi). Questions: **info@codersfarm.org**.
 
 Domovoi is a home computer system that runs on your own hardware: your
 music, videos and files in every room and on your phone, with voice and AI
 when you want them. This policy covers the Domovoi Android app
 (`com.domovoi.app`), from Google Play, from GitHub, or from your own
-Domovoi server. The short version:
+Domovoi server, and the Domovoi iPhone and iPad app (`com.domovoi.app`, from
+the App Store). The sections below describe the Android app; the iPhone and
+iPad app is described in its own section, "The iPhone and iPad app", which
+says where it differs. The short version:
 
 - **Coders Farm collects nothing from the app.** There is no account with
   us, no analytics, no advertising, no crash reporting and no tracking of
@@ -15,8 +18,8 @@ Domovoi server. The short version:
   a report (below).
 - **What the app shares, it shares with your own Domovoi server**, on your
   home network, which you or your household run. We cannot see it.
-- **Phone chats run on the phone.** A chat with "Domovoi on this phone"
-  is answered by a model on the phone, and what you ask it and what it
+- **Phone chats run on the phone** (Android; the iPhone app has no phone
+  chat yet). A chat with "Domovoi on this phone" is answered by a model on the phone, and what you ask it and what it
   answers stay on the phone, with two exceptions you choose each time: a
   lookup you allow sends the words of that lookup to the service that
   answers it (see "Lookups you allow"), and a document, a photo of a
@@ -270,6 +273,63 @@ version, and an optional note.
   reply and improve Domovoi. Ask us at the address you sent it to, or at
   info@codersfarm.org, to delete it.
 - **Share as text** hands it to any app you choose.
+
+## The iPhone and iPad app
+
+The iPhone and iPad app follows the same rules: **Coders Farm collects
+nothing from it**, and what it shares, it shares only with your own Domovoi
+server. It has no analytics, advertising, crash-reporting or tracking
+service, creates no account, and sends nothing to an AI company. Where it
+differs from the Android app:
+
+- **No phone chats.** This version has no on-device assistant: no model is
+  downloaded, and there are no lookups from the phone. Chat is with your
+  Domovoi server only, so the sections "What phone chats read on the
+  phone", "Lookups you allow" and "Documents, letters and drafts" do not
+  apply, and the app asks for no location, contacts or calendar access.
+- **What stays on the phone.** Settings (your server's address, this
+  phone's name, the person it is "listening as", the phone bar, and the
+  servers you trusted with their identity keys) are kept in the app's own
+  storage. The household pairing token is kept in the iPhone's **Keychain**,
+  for this device only: it is not synced to iCloud Keychain or moved to
+  another phone. The app's private storage also holds the audiobooks you
+  save to the phone and your place in them, the timer and reminder alarms it
+  mirrors from your server (left out of backups), and problem reports that
+  iOS hands the app about its own crashes (left out of backups, never sent
+  anywhere). Deleting the app deletes its storage.
+- **The microphone** is used only for features you start, and iOS shows its
+  microphone indicator whenever it is on. Holding the talk button in Chat,
+  and the intercom ("drop in"), send the sound to **your Domovoi server** to
+  be transcribed or to reach the other room. **Room mode** (a spare iPhone
+  set up as a room, which you turn on yourself) listens for the wake word
+  on the phone, only while Domovoi is open on its screen; the microphone is
+  never started in the background. Only what is said after the wake word
+  goes to your Domovoi server. The wake-word and voice-detection models come
+  from your own server. Recordings are not kept by the app.
+- **The camera** is used only to read the room code your dashboard shows
+  when you set the phone up as a room. The picture is read on the phone and
+  never stored or sent.
+- **Photos.** With your permission (all photos or only those you choose),
+  the app shows your photos and videos so you can play them, or send one to
+  your house when you choose to. Saving a photo or video from your house
+  into your photos asks for permission to add to them. Nothing is sent
+  anywhere unless you send it.
+- **Files and folders.** Folders you pick with the Files picker are read on
+  the phone. Files you save from your server ("save to device") are handed
+  to the share sheet, and go wherever you put them.
+- **Local network.** iOS asks before the app looks for your Domovoi server
+  on your Wi-Fi; it asks the addresses there whether they are a Domovoi
+  server. Plain HTTP is allowed only to addresses on your home network, as
+  on Android.
+- **Notifications** for timers and reminders are made on the phone; no
+  push service is used.
+- **What goes to the internet:** internet radio and other streams your
+  server lists, fetched from their own servers when you play them, and
+  links you open, in your browser. The App Store updates the app.
+- **Reports about Domovoi's replies.** A reply in Chat can be reported from
+  its menu. The report shows exactly what it holds, and you choose to email
+  it to info@codersfarm.org from your own email app or to share it as text.
+  Nothing is sent until you send it.
 
 ## Children
 

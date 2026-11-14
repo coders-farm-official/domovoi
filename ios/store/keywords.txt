@@ -1,0 +1,1 @@
+self-hosted,media server,nas,music,audiobooks,podcasts,radio,intercom,timers,private,local,offline

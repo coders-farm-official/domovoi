@@ -23,6 +23,9 @@ Derived from `domovoi-icon.png`:
 * **Windows Setup** (`windows/installer/art/`): `domovoi.ico` and the wizard
   pictures, made from the icon by `make_art.py` (`--check` says whether they
   have drifted).
+* **iPhone app icon** (`ios/Domovoi/Assets.xcassets/AppIcon.appiconset/`): one
+  1024×1024 icon per iOS appearance (any, dark, tinted), made by
+  `ios/scripts/make_app_icon.py` (`--check` says whether they have drifted).
 * **Play Store listing graphics** (`android/play/graphics/`): made by
   `android/play/make_graphics.py` from the icon, the launcher background
   color and the app's theme colors.

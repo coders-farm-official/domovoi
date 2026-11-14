@@ -30,29 +30,32 @@ What is here:
 | | |
 |---|---|
 | `project.yml` | The whole Xcode project as YAML, for XcodeGen. Targets, capabilities, Info.plist keys, the permission wording. |
-| `PrivacyInfo.xcprivacy` | The privacy manifest: no tracking, no collected data, four required-reason APIs. |
+| `Domovoi/PrivacyInfo.xcprivacy` | The privacy manifest: no tracking, no collected data, and the required-reason APIs the code calls (UserDefaults, and file timestamps of folders the person picked). `domovoi/tests/test_ios_store.py` checks it against the code. |
 | `Domovoi/` | The app. One screen, enough to launch and to show the Local Network prompt. |
 | `DomovoiTests/`, `DomovoiUITests/` | The app's own tests: the Info.plist keys pairing depends on, and a launch plus Apple's accessibility audit. |
 | `Packages/DomovoiKit/` | The logic the screens sit on, green under `swift test`. I0-A's `ServerAddress`, `CleartextPolicy`, `TokenScope`, `Ed25519Verify`; I1-A's client and token layer (`DomovoiClient`, `RedirectPolicy`, `DeviceToken`, `TokenHealth`, `TokenTrouble`, `TokenVault`, `DeviceRegistry`, `Capabilities`, `HouseholdLock`). Each with its Kotlin test mirrored, case for case. |
 | `Packages/DomovoiPhonemizer/` | A skeleton. The 1,730-line port is its own milestone. |
-| `scripts/` | `pkgtest.sh` (the loop above), `remote.sh`, `build-sim.sh`, `test.sh`, `install-on-phone.sh`. |
+| `scripts/` | `pkgtest.sh` (the loop above), `remote.sh`, `build-sim.sh`, `test.sh`, `install-on-phone.sh`, and the owner's `release.sh` (below). |
+| `store/` | The App Store listing text, review notes and questionnaire answers (below). |
 | `licences/` | The licence rule and the per-package table. **Read it before adding a package.** |
 
-Not here yet, on purpose: `IdentityGate`, `Discovery`, `NetworkWatch`, the
-shell, and `release.sh`.
+Not here yet, on purpose: `IdentityGate`, `Discovery`, `NetworkWatch` and the
+shell.
 
 ## The layout it is growing into
 
 ```
 ios/
   project.yml            XcodeGen: targets, capabilities, Info.plist keys
-  PrivacyInfo.xcprivacy  the privacy manifest
-  Domovoi/               the app (SwiftUI screens, shell, player, alerts)
+  Domovoi/               the app (SwiftUI screens, shell, player, alerts),
+                         its icon and its privacy manifest
   DomovoiWidgets/        widgets and Live Activities (later)
   Packages/
     DomovoiKit/          client, pairing, identity, protocol, models
     DomovoiPhonemizer/   the Swift phonemizer; golden test
-  scripts/               remote.sh, build-sim.sh, test.sh, install-on-phone.sh
+  scripts/               remote.sh, build-sim.sh, test.sh, install-on-phone.sh,
+                         release.sh
+  store/                 the App Store listing, review notes, privacy answers
   licences/              the rule and the per-package table
   README.md
 ```
@@ -145,6 +148,39 @@ reachable only by key, with "allow full disk access for remote users" off.
   screen-on kiosk in v1: iOS cannot restart a microphone from the background.
 - **No increased-memory-limit entitlement yet.** Spike A0 decides it on
   the owner's iPhone 14, with numbers.
+
+## Releasing
+
+Releases are the owner's, on the Mac, in his own account, with his own
+keychain. No agent runs `release.sh`.
+
+```
+cd ~/domovoi && ios/scripts/release.sh            # archive, export an .ipa
+cd ~/domovoi && ios/scripts/release.sh --upload   # archive, send to App Store Connect
+```
+
+- **The team** comes from `DOMOVOI_TEAM_ID`, or from a line
+  `DOMOVOI_TEAM_ID=...` in `ios/release.local`, which is in `.gitignore`.
+- **It refuses** a dirty tree, a `MARKETING_VERSION` that is not three
+  integers, and a build number that is not a YYMMDDNN above every one used so
+  far (`android/release.json`, `android/app/build.gradle.kts`,
+  `ios/project.yml` and the Mac's own last release). Without `--build` it
+  takes today and the next counter.
+- **The version is the iPhone's own** (`MARKETING_VERSION`, 1.0.0 for the
+  first store release); it does not follow Android's versionName.
+- It runs `xcodegen generate`, archives Release (`com.domovoi.app`), checks the
+  archive's version, build, bundle id and privacy manifest, and exports with
+  `scripts/ExportOptions.plist` (App Store Connect). Then it writes the build
+  number into `project.yml` and prints the steps left by hand: upload, commit
+  the build number, TestFlight, and the store page.
+- **The store page** is `store/`: `details.txt` says which file goes in which
+  App Store Connect field; `REVIEW-NOTES.txt` is for App Review;
+  `APP-PRIVACY-ANSWERS.md` holds the App Privacy, export-compliance and
+  age-rating answers. `domovoi/tests/test_ios_store.py` keeps every text
+  inside its limit.
+- **The icon** is `Domovoi/Assets.xcassets/AppIcon.appiconset`, made by
+  `scripts/make_app_icon.py` from `docs/assets/domovoi-icon.png`
+  (`--check` says whether the PNGs have drifted).
 
 ## Where to look next
 

@@ -1,0 +1,42 @@
+App Store listing details (App Store Connect -> Domovoi -> the 1.0.0 version page, and App Information)
+
+The iPhone app keeps its own version: 1.0.0 is the first store release. Only
+the features match Android (owner decision, 2026-11-14). The voice and facts
+follow android/play/listing/, cut to what the iPhone app does.
+
+App Information
+  Name (30 max):                   name.txt
+  Subtitle (30 max):               subtitle.txt
+  Bundle ID:                       com.domovoi.app (Release configuration only)
+  Primary language:                English (U.S.)
+  Category:                        Productivity (secondary: Music)
+  Content rights:                  No third-party content is shown or offered by the app
+  Age rating:                      APP-PRIVACY-ANSWERS.md, "Age rating"
+  Privacy policy URL:              privacy_url.txt
+  App Privacy:                     APP-PRIVACY-ANSWERS.md, "App Privacy"
+  Encryption:                      answered by the build (ITSAppUsesNonExemptEncryption = NO);
+                                   APP-PRIVACY-ANSWERS.md, "Export compliance"
+
+Version 1.0.0
+  Promotional text (170 max):      promotional_text.txt
+  Description (4000 max):          description.txt
+  Keywords (100 max, comma-separated, no spaces needed): keywords.txt
+  Support URL:                     support_url.txt
+  Marketing URL (optional):        leave empty
+  What's New (4000 max):           WHATS-NEW-1.0.0.txt
+                                   (App Store Connect shows this field only from the
+                                   second version on; keep the file for the release record)
+  Copyright:                       2026 Coders Farm
+  App Review contact:              the owner's name, phone and info@codersfarm.org
+  Sign-in required:                No (the app creates no accounts)
+  Review notes (4000 bytes max):   REVIEW-NOTES.txt
+  Attachment:                      the review video (about 3 minutes, filmed on the iPhone
+                                   with another device; plan 4.2 item 2)
+
+Screenshots
+  6.9" iPhone (1320x2868) and 13" iPad, Simulator captures against the stub
+  house, the same screens as android/play/screenshots/. Not made yet.
+
+domovoi/tests/test_ios_store.py checks the limits above, that the icon is a
+1024x1024 PNG with no alpha, and that the privacy manifest declares exactly the
+required-reason API categories the code uses.
