@@ -1,5 +1,4 @@
 import Foundation
-import Synchronization
 
 // Room mode's shared contracts (I7, batch 2026-11-14): the types and seams the
 // three build units hold each other to, so they can run in parallel without
@@ -265,10 +264,10 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
         var trained: [String: String] = [:]
     }
 
-    private let state: Mutex<State>
+    private let state: RoomLock<State>
 
     public init(enrolment: RoomEnrolment? = nil, pairingToken: String? = nil, approvalCode: String? = nil) {
-        state = Mutex(State(enrolment: enrolment, token: pairingToken, code: approvalCode))
+        state = RoomLock(State(enrolment: enrolment, token: pairingToken, code: approvalCode))
     }
 
     public var enrolment: RoomEnrolment? { state.withLock { $0.enrolment } }
@@ -409,7 +408,7 @@ public final class RoomFeedPCMSource: RoomPCMSource, @unchecked Sendable {
 
     private let samples: [Int16]
     private let paced: Bool
-    private let state = Mutex<(open: Bool, at: Int, seed: UInt32)>((false, 0, 0x0D0E))
+    private let state = RoomLock<(open: Bool, at: Int, seed: UInt32)>((false, 0, 0x0D0E))
 
     /// `paced: false` returns at once (package tests); `true` sleeps 30 ms a
     /// frame like a microphone (a UI-test launch).

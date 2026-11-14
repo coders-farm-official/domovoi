@@ -1,5 +1,10 @@
 import Foundation
-@preconcurrency import OnnxRuntimeBindings
+// Implementation-only: no declaration DomovoiKit exports mentions an ONNX
+// Runtime type, so the app's targets (and appcheck's type-check, which has no
+// path to this Objective-C module) never need to load it. The two objects this
+// class keeps are held as `NSObject` for the same reason: nothing about
+// ONNX Runtime is part of this class's layout as a client sees it.
+@preconcurrency @_implementationOnly import OnnxRuntimeBindings
 
 /// One ONNX model on ONNX Runtime, the app's only copy of it (Package.swift).
 ///
@@ -35,8 +40,10 @@ public final class OnnxModel {
     /// none to give. What the link test checks first.
     public static var runtimeVersion: String? { ORTVersion() }
 
-    private let env: ORTEnv
-    private let session: ORTSession
+    private let envObject: NSObject
+    private let sessionObject: NSObject
+    // Always the object `init` stored, so the cast cannot fail.
+    private var session: ORTSession { sessionObject as! ORTSession }
 
     /// The model's input names, in the model's order.
     public let inputNames: [String]
@@ -46,12 +53,15 @@ public final class OnnxModel {
     /// Open the model at `url` (a local file) with `threads` intra-op threads.
     public init(contentsOf url: URL, threads: Int32 = 1) throws {
         do {
-            env = try ORTEnv(loggingLevel: .warning)
+            let env = try ORTEnv(loggingLevel: .warning)
             let options = try ORTSessionOptions()
             try options.setIntraOpNumThreads(threads)
-            session = try ORTSession(env: env, modelPath: url.path, sessionOptions: options)
+            let session = try ORTSession(env: env, modelPath: url.path, sessionOptions: options)
             inputNames = try session.inputNames()
             outputNames = try session.outputNames()
+            // The session refers to its environment; both live as long as this.
+            envObject = env
+            sessionObject = session
         } catch {
             throw Failure(note: "could not load \(url.lastPathComponent): \(error.localizedDescription)")
         }
