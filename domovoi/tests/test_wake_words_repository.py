@@ -68,10 +68,12 @@ async def test_create_and_lookup(repo):
 @requires_db
 @pytest.mark.asyncio
 async def test_create_defaults_threshold(repo):
-    """``threshold`` defaults to 0.5 when not supplied."""
+    """``threshold`` defaults to 0.7 when not supplied (the rooms' own wake
+    sensitivity default since 2026-11-14, so pushing a new word doesn't
+    loosen a room)."""
     wid = await repo.create(name="Computer", slug="computer", phrase="computer")
     got = await repo.get(wid)
-    assert got["threshold"] == pytest.approx(0.5)
+    assert got["threshold"] == pytest.approx(0.7)
 
 
 @requires_db

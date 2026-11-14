@@ -132,11 +132,11 @@ def test_the_core_knows_the_satellite_s_device_names() -> None:
 
 
 @requires_db
-def test_create_defaults_threshold_to_half() -> None:
+def test_create_defaults_threshold_to_the_rooms_default() -> None:
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = _create(client, name="Computer", phrase="computer")
         assert r.status_code == 201
-        assert r.json()["threshold"] == pytest.approx(0.5)
+        assert r.json()["threshold"] == pytest.approx(0.7)
 
 
 @requires_db

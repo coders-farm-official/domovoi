@@ -358,7 +358,7 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
     name = payload.name.strip()
     phrase = payload.phrase.strip()
     slug = wake_slug(name)
-    threshold = payload.threshold if payload.threshold is not None else 0.5
+    threshold = payload.threshold if payload.threshold is not None else 0.7
     try:
         async with session_scope() as s:
             repo = WakeWordsRepository(s)

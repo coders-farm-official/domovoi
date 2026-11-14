@@ -2043,7 +2043,7 @@ class WakeWordsRepository:
         name: str,
         slug: str,
         phrase: str,
-        threshold: float = 0.5,
+        threshold: float = 0.7,
         source_room_id: str | None = None,
         synthetic_only: bool = False,
     ) -> int:
