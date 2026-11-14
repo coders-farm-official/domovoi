@@ -427,6 +427,8 @@ async def _seed_places(book_id: int) -> None:
     async with session_scope() as s:
         await s.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex'), (2, 'Sam')"))
         await s.execute(text(
+            "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
+        await s.execute(text(
             "INSERT INTO devices (device_id, name, platform) VALUES "
             "('android-mine', 'Pixel', 'android'), ('browser-den', 'den laptop', 'browser') "
             "ON CONFLICT (device_id) DO UPDATE SET name = EXCLUDED.name"))
@@ -793,6 +795,8 @@ async def test_a_playing_room_has_its_place_saved(db_session, books, room_books)
     await _index()
     emma_id = next(r["id"] for r in await _rows(db_session) if r["title"] == "Emma")
     await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
+    await db_session.execute(text(
+        "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
     await _position(db_session, book_id, "kitchen", person=1, pos=0)
     await _position(db_session, emma_id, "den", person=None, pos=0)
     kitchen = await _playing(DUNE_FILES, at=1, sec=7)
@@ -824,6 +828,8 @@ async def test_the_room_writes_only_the_slot_of_who_started_the_book(db_session,
     await _index()
     emma = (await _rows(db_session))[0]["id"]
     await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex'), (2, 'Sam')"))
+    await db_session.execute(text(
+        "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
     await _position(db_session, emma, "kitchen", person=1, pos=7200)
     await _position(db_session, emma, "kitchen", person=None, pos=0)
     await db_session.execute(text("UPDATE playback_positions SET updated_at = now() - interval '1 day' "
@@ -863,6 +869,8 @@ async def _alex_plays_emma_by_voice(db_session, books):
     await _index()
     emma = (await _rows(db_session))[0]["id"]
     await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
+    await db_session.execute(text(
+        "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
     await db_session.commit()
     kitchen = MPDStubClient()
     mpd_module._clients = {"kitchen": kitchen}
@@ -948,6 +956,8 @@ async def test_a_voice_command_records_whose_book_plays_in_the_room(db_session, 
 
     book_id = await _folder_book_row(db_session, books)
     await db_session.execute(text("INSERT INTO people (id, name) VALUES (1, 'Alex')"))
+    await db_session.execute(text(
+        "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
     await db_session.commit()
     stub = MPDStubClient()
     mpd_module._clients = {"kitchen": stub}

@@ -615,6 +615,10 @@ async def test_a_turn_without_an_answer_is_forgotten_with_its_speaker(
     from domovoi.voice_history import delete_person_history
 
     await db_session.execute(text("INSERT INTO people (id, name) VALUES (7, 'Alex')"))
+
+    await db_session.execute(text(
+
+        "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
     await db_session.commit()
 
     async def _identify(*a, **kw):

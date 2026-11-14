@@ -43,12 +43,15 @@ def docker(monkeypatch):
     """The tag's image, each container's image, every call."""
     state = {"tag": OLD, "containers": {ROOMS[0][1]: OLD, ROOMS[1][1]: NEW, ROOMS[2][1]: OLD},
              "calls": [],
-             "held_during_build": None}
+             "held_during_build": None,
+             "build_gate": None}   # an asyncio.Event a build waits for, when set
 
     async def run_docker(*args, timeout=60.0):
         state["calls"].append(args)
         if args[0] == "build":
             await asyncio.sleep(0.05)  # a build takes a while: room for a second click
+            if state["build_gate"] is not None:
+                await asyncio.wait_for(state["build_gate"].wait(), 10)
             state["held_during_build"] = holds.held("mpd-image")
             state["tag"] = NEW
             return 0, "", ""
@@ -237,11 +240,16 @@ async def test_two_clicks_at_once_give_one_rebuild_and_one_409(_db, docker, monk
     monkeypatch.setattr(engine_mod, "get_guard", lambda: _Guard())
     async with web_client() as w:
         token = await claim_admin(w)
+    # The build holds until one click has been answered: on a slow runner
+    # the first click could otherwise finish before the second one asks.
+    docker["build_gate"] = asyncio.Event()
     async with core_client() as c:
-        a, b = await asyncio.gather(
-            c.post("/v1/admin/containers/mpd-image/rebuild", json={}, headers=bearer(token)),
-            c.post("/v1/admin/containers/mpd-image/rebuild", json={}, headers=bearer(token)),
-        )
+        first, second = (asyncio.ensure_future(
+            c.post("/v1/admin/containers/mpd-image/rebuild", json={}, headers=bearer(token)))
+            for _ in range(2))
+        await asyncio.wait({first, second}, return_when=asyncio.FIRST_COMPLETED)
+        docker["build_gate"].set()
+        a, b = await asyncio.gather(first, second)
     assert sorted((a.status_code, b.status_code)) == [200, 409], (a.text, b.text)
     busy = a if a.status_code == 409 else b
     assert "already being rebuilt" in busy.json()["detail"]

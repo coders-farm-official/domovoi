@@ -63,6 +63,8 @@ async def _generate(db, n: int) -> None:
         FROM generate_series(1, 60) p, generate_series(1, 100) k
         ON CONFLICT DO NOTHING"""), {"n": n})
     await db.execute(text("INSERT INTO people (id, name) VALUES (901, 'Alex'), (902, 'Sam')"))
+    await db.execute(text(
+        "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
     await db.execute(text("""
         INSERT INTO music_listens (track_id, person_id, room_id, device_id, player, origin,
                                    started_at, played_sec, duration_sec, outcome)

@@ -364,6 +364,8 @@ async def test_forgetting_someone_elses_name_needs_an_admin(voice) -> None:
 @pytest.mark.asyncio
 async def test_a_recognized_speaker_owns_their_names_in_any_room(voice) -> None:
     await voice.db.execute(text("INSERT INTO people (id, name) VALUES (7, 'Test Person'), (8, 'Other Person')"))
+    await voice.db.execute(text(
+        "SELECT setval(pg_get_serial_sequence('people', 'id'), (SELECT max(id) FROM people))"))
     await voice.db.commit()
     await voice("when i say gramps i mean hearth ensemble", room="den", person=7)
     r = await voice("forget the name gramps", room="kitchen", person=8)
