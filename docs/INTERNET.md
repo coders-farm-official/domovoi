@@ -240,7 +240,7 @@ stays yours to do:
   three Piper voices (about 130 MB, downloaded on first use unless the
   provisioning fetched them).
 - **Topic news every morning** (`NEWS_AUTO_FETCH`).
-- **A custom wake word.** Turning training on (Settings → Wake words)
+- **A custom wake word.** Turning training on (Settings → Voice → Wake words)
   downloads about 22 GB once: the trainer's image and its training data.
   Under No it can't be turned on, and answering No while it downloads stops
   the download. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
@@ -297,7 +297,7 @@ needs something it can only download is usually the day the line is down.
       Voices you upload on Settings → Voices are already on the server.
 - [ ] **The fast lane**, if you use it: `python -m domovoi.fast_lane fetch`.
 - [ ] **A custom wake word**, if you want one: turn training on in
-      Settings → Wake words and train it now (about 22 GB, once). Under No
+      Settings → Voice → Wake words and train it now (about 22 GB, once). Under No
       training is refused, even with the data already downloaded.
 - [ ] **Install the plugins you want** (the Plugins page). Installing one
       from GitHub, and the Python packages it needs, takes the internet.
@@ -573,7 +573,9 @@ allowed, they send short text:
   show's name when you subscribe by voice or search Discover (Apple's
   iTunes search); the server downloads each show's artwork once, so your
   browser and phone don't contact the publisher;
-- audio fingerprints of your music files (AcoustID), never the files;
+- audio fingerprints of your music files (AcoustID; with the Shazam
+  add-on, Shazam's own audio signature when AcoustID has no answer),
+  never the files;
 - station searches, an FM station's call sign when you favorite it, and
   the FCC import (radio plugin); short clips of a favorited internet
   station's audio to Shazam to name the song.

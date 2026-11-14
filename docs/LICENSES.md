@@ -104,6 +104,30 @@ Any other model you pull by name has its own licence: its page in the
 The app's own parts and libraries, with their licence texts, are in the
 app under Settings → About & updates → Open-source licences.
 
+## The Windows install
+
+`DomovoiSetup.exe` downloads two things from their publishers, each
+checked against a pinned SHA-256 (`windows/installer/pins.iss`):
+
+| What | Publisher, and where it comes from | Licence |
+|---|---|---|
+| Ubuntu's official WSL image, which becomes Domovoi's private distro | Canonical, from `releases.ubuntu.com` | Ubuntu's own: mostly free-software licences, GPL ones included. Canonical distributes it; Domovoi doesn't |
+| WSL, only when Windows has none or an older one | Microsoft, from [its GitHub releases](https://github.com/microsoft/WSL/releases) | [MIT](https://github.com/microsoft/WSL/blob/master/LICENSE) |
+
+Inside the distro, the server then installs the same things a Linux
+server does (the tables above). The installer itself is built with
+[Inno Setup](https://jrsoftware.org/isinfo.php), whose setup program is
+inside `DomovoiSetup.exe` under the
+[Inno Setup License](https://jrsoftware.org/files/is/license.txt)
+(permissive).
+
+## Plugins
+
+A plugin, Coders Farm's or anyone else's, may download its own models,
+programs or container images (Image generation's engine and models, an
+offline library's content). Each comes under its publisher's licence, and
+the plugin's own repository lists them; this page covers Domovoi itself.
+
 ## The wake-word trainer
 
 Wake-word training is off until you turn it on in Settings. The trainer is a
@@ -140,7 +164,8 @@ those voices shaped it; **Synthetic voices only** avoids that.
   [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library)
   (MIT). Its copyright notice and licence text are in that file and inside
   `DomovoiTray.exe`. Nothing else is bundled into the Windows programs:
-  they use only .NET Framework 4.8.1, which is part of Windows.
+  they use only .NET Framework 4.8.1, which is part of Windows (and
+  `DomovoiSetup.exe` carries Inno Setup's setup program, above).
 - **pypdfium2** (reads PDFs in Chat, draws pages for printing): Apache-2.0
   or BSD-3-Clause. Its wheel carries PDFium (BSD-3-Clause and Apache-2.0)
   and the libraries PDFium is built with: FreeType (under the FreeType
