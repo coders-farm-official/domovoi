@@ -201,10 +201,15 @@ extension StubHouseUITests {
             "the attic's queue never drew — tree follows\n" + app.debugDescription
         )
         let last = containing(app, QueuesUnderTest.gloamwickLast)
-        // The sheet's scroll view, not the Music page's behind it.
-        let sheet = app.scrollViews.containing(
-            NSPredicate(format: "label CONTAINS %@", QueuesUnderTest.gloamwickFirst)
-        ).firstMatch
+        // The sheet's scroll view, not the Music page's behind it, found by
+        // its fixed identifier: the rows are lazy, so "the scroll view that
+        // holds song 1" stops matching once song 1 has scrolled away
+        // (train I036 failed exactly there after two swipes).
+        let sheet = app.scrollViews[QueuesUnderTest.sheetScroll]
+        XCTAssertTrue(
+            sheet.waitForExistence(timeout: 10),
+            "the queue sheet's scroll view has no identifier — tree follows\n" + app.debugDescription
+        )
         for _ in 0..<60 where !last.exists {
             sheet.swipeUp(velocity: .fast)
         }
@@ -287,6 +292,8 @@ enum QueuesUnderTest {
     static let gloamwickFirst = "Gloamwick 001"
     static let gloamwickSecond = "Gloamwick 002"
     static let gloamwickLast = "Gloamwick 130"
+    /// RoomQueueSheet.scrollID.
+    static let sheetScroll = "room-queue-sheet.scroll"
     static let harvestMoon = "Harvest Moon"
 
     static let playNextIn = "play next in "

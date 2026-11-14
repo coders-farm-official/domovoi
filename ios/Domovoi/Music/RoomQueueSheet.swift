@@ -20,6 +20,8 @@ import SwiftUI
 /// the queue's edits are said on a line at the top of the sheet.
 struct RoomQueueSheet: View {
 
+    static let scrollID = "room-queue-sheet.scroll"
+
     let room: String
     let tools: QueueTools
 
@@ -36,6 +38,10 @@ struct RoomQueueSheet: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            // A fixed handle for UI tests: the rows are lazy, so a query
+            // "the scroll view that holds song 1" stops matching once song 1
+            // scrolls away. Must equal QueuesUnderTest.sheetScroll.
+            .accessibilityIdentifier(Self.scrollID)
             .navigationTitle(QueueStrings.roomQueueLabel(room))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
