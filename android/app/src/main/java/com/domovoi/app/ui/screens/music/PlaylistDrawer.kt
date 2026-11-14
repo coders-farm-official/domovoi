@@ -438,7 +438,7 @@ internal fun PlaylistDrawer(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    t.artist ?: "—",
+                                    artistWithCredits(t.artist ?: "—", creditedWith(t)),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Domovoi.colors.fgMuted,
                                     maxLines = 1,

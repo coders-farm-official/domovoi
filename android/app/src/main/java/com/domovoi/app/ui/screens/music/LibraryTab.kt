@@ -292,7 +292,7 @@ private fun LibraryRow(
             // The track's cover, read from its file by the server (404 →
             // the quiet placeholder stays). Same box either way.
             CoverImage(
-                CoverArt.model(CoverArt.libraryPath(t.id), app.api::absolute), 40.dp,
+                CoverArt.model(CoverArt.libraryPath(t.id, t.coverV), app.api::absolute), 40.dp,
                 modifier = Modifier.padding(start = 2.dp), corner = 6.dp,
             )
             Column(Modifier.weight(1f).padding(start = 10.dp)) {
@@ -304,7 +304,7 @@ private fun LibraryRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    t.artist ?: "—",
+                    artistWithCredits(t.artist ?: "—", creditedWith(t)),
                     style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgMuted,
                     maxLines = 1,

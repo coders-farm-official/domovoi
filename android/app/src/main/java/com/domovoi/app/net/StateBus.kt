@@ -18,7 +18,10 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
-data class WsEvent(val type: String, val payload: JsonElement?)
+/** One pushed event. [server] is the server URL the socket was opened to,
+ *  so a consumer can drop an event from a server the app has since left
+ *  ("" where nobody set it). */
+data class WsEvent(val type: String, val payload: JsonElement?, val server: String = "")
 
 /**
  * Android analog of the web stateBus (web/static/data.js): one WebSocket to
@@ -85,6 +88,7 @@ class StateBus(private val api: ApiClient, private val prefs: Prefs) {
     }
 
     private fun connect() {
+        val base = prefs.serverUrl.value
         val url = wsUrl() ?: run { scheduleReconnect(); return }
         // The household device token rides on the upgrade request, like it
         // does on every other call (ApiClient.wsRequest).
@@ -99,7 +103,7 @@ class StateBus(private val api: ApiClient, private val prefs: Prefs) {
                 runCatching {
                     val obj = DomovoiJson.parseToJsonElement(text).jsonObject
                     val type = obj["type"]?.jsonPrimitive?.content ?: return
-                    _events.tryEmit(WsEvent(type, obj["data"]))
+                    _events.tryEmit(WsEvent(type, obj["data"], base))
                 }
             }
 

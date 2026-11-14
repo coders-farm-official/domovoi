@@ -42,7 +42,10 @@ import com.domovoi.app.ui.theme.Domovoi
  * request is keyed in memory by [CoverArt.epoch] as well: after the app
  * comes back to the screen the picture is fetched again (from disk, after
  * the server confirms its ETag; CoverArt.revalidate), with the last epoch's
- * picture shown meanwhile so nothing flickers.
+ * picture shown meanwhile so nothing flickers. A versioned cover (V059,
+ * `?v=`) needs none of that: its memory key is its URL, and a newer version
+ * named by `library.cover.changed` ([CoverArt.versions]) replaces the one
+ * the caller passed, the old picture staying until the new one lands.
  *
  * [model] comes from [CoverArt.model]: an absolute URL or a content:// URI.
  * [placeholder] defaults to the quiet sunken tile; the player passes its
@@ -59,16 +62,25 @@ fun CoverImage(
     iconSize: Dp = size * 0.42f,
 ) {
     val shape = RoundedCornerShape(corner)
-    var shown by remember(model) { mutableStateOf(false) }
+    // A newer version `library.cover.changed` named than the row carried
+    // (V059): drawn at once, without the row being read again.
+    val versions by CoverArt.versions.collectAsState()
+    val drawn = CoverArt.withKnownVersion(model, versions)
+    var shown by remember(drawn) { mutableStateOf(false) }
+    // The memory key of the picture this box last showed: kept on screen
+    // while a new version of the same cover loads.
+    val last = remember { arrayOfNulls<String>(1) }
     val epoch by CoverArt.epoch.collectAsState()
-    val ask = model != null && !CoverArt.isMissing(model)
+    val ask = drawn != null && !CoverArt.isMissing(drawn)
     val context = LocalContext.current
-    val request = remember(model, epoch) {
-        model?.let {
+    val request = remember(drawn, epoch) {
+        drawn?.let {
+            val key = CoverArt.memoryKey(it, epoch)
+            val before = last[0]?.takeIf { k -> k != key && CoverArt.sameCover(k, it) }
             ImageRequest.Builder(context)
                 .data(it)
-                .memoryCacheKey(CoverArt.memoryKey(it, epoch))
-                .placeholderMemoryCacheKey(CoverArt.memoryKey(it, epoch - 1))
+                .memoryCacheKey(key)
+                .placeholderMemoryCacheKey(before ?: CoverArt.memoryKey(it, epoch - 1))
                 .build()
         }
     }
@@ -92,10 +104,13 @@ fun CoverImage(
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.matchParentSize(),
-                onSuccess = { shown = true },
+                onSuccess = {
+                    shown = true
+                    last[0] = CoverArt.memoryKey(drawn!!, epoch)
+                },
                 onError = { state ->
                     val status = (state.result.throwable as? HttpException)?.response?.code
-                    CoverArt.noteFailure(model!!, status)
+                    CoverArt.noteFailure(drawn!!, status)
                 },
             )
         }
