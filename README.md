@@ -962,11 +962,12 @@ used.
 
 The default wake word, `hey_jarvis`, is one of openWakeWord's pre-trained
 models, which are licensed CC BY-NC-SA 4.0 (non-commercial). A wake word
-you train on your own server can be shared under the same CC BY-NC-SA 4.0,
-with the notice its Download includes; a model trained on your household's
-voices is your call to share
-([details](scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)). Coders Farm's own trained
-models are in
+you train on your own server can be shared under the same CC BY-NC-SA 4.0:
+Settings → Voice → Wake words → **Download** gives a zip with the model,
+`SHA256SUMS`, `MODEL_CARD.md` and the `LICENSE-NOTICE.md` to pass on with
+it. A model trained on your household's voices is your call to share
+([details](scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)).
+Coders Farm's own trained models are in
 [domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models).
 Domovoi itself stays MIT.
 
