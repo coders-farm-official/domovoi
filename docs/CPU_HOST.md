@@ -30,7 +30,7 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | `whisper_compute_type` | `auto` (runs `float16`) | `auto` (runs **`int8`**) — or `int8` explicitly |
 | `whisper_model` | `large-v3` | **`small.en`**, or `medium` if you need the accuracy |
 | `whisper_cpu_threads` | `0` (one per physical core; ignored on `cuda`) | `0` — unchanged |
-| `ollama_tool_model` | `qwen2.5:14b` | **`qwen2.5:7b`** |
+| `ollama_tool_model` | `qwen2.5:14b` | **`qwen3:8b`** with thinking off (the installers' pick; [below](#qwen257b-instead-of-qwen2514b)), or `qwen2.5:7b` |
 | `ollama_model` | `llama3.2:3b` | `llama3.2:3b` — unchanged, already small |
 | `ollama_vision_model` (pictures in chat) | **`qwen2.5vl:7b`** — pick it in **Models** | `qwen3-vl:2b-instruct-q4_K_M` — the default, already the CPU pick |
 | `tts_engine` | `piper` | `piper` — unchanged, but read the note below |
@@ -328,6 +328,11 @@ hundred things you say daily and thoughtful for the ones you say
 occasionally. That is a much better trade than the raw numbers suggest,
 and it's worth setting expectations with the household on exactly this
 split.
+
+A slow turn is never an endless one: speech recognition gets three times
+the recording's length (20-40 s), and a turn that routes to a model gets
+a cold load plus two calls, then the room apologises and listens again
+([LINUX_HOST.md, "The voice turn watchdog"](LINUX_HOST.md#the-voice-turn-watchdog)).
 
 ### TTS: the one place local-first costs you something
 

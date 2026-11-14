@@ -212,7 +212,7 @@ If you see a warning like `device profile 'xvf3800_usb' expects playback through
 - [ ] **No brownout** — `vcgencmd get_throttled` should be `0x0`. A non-zero value means the supply can't feed the Pi + array; use a stronger PSU (or a powered USB hub for the array).
 - [ ] **Survives reboot** — `sudo reboot`, then after it comes back, confirm the array still enumerates at the expected index and the satellite reconnects. USB enumeration order is usually stable per-Pi, but verify once. If the index shifts, prefer the name-based `plughw:CARD=<name>,DEV=0` form for `[music]` and re-check the sounddevice indices.
 
-If the wake word feels less reliable than on the HAT: the XVF3800's beamforming/AGC reshapes the captured audio, so a wake-word model trained on HAT clips may not match it. See `scripts/wake_word/README.md` — re-record clips on the array and retrain for best accuracy. Lowering `[wake] threshold` to ~0.4 is a quick stopgap.
+If the wake word feels less reliable than on the HAT: the XVF3800's beamforming/AGC reshapes the captured audio, so a wake-word model trained on HAT clips may not match it. See `scripts/wake_word/README.md` — re-record clips on the array and retrain for best accuracy. A quick stopgap, in the room's Settings tab: **Wake confirmation** 1 (`[wake] patience_frames`, default 2), or a lower **Wake sensitivity** (`[wake] threshold`, default 0.7; 0.5 was the old default).
 
 ---
 
@@ -250,5 +250,5 @@ If anything's wrong and you want to revert (the HAT's provisioning — dtoverlay
 | LED ring stays dark | `xvf_host` missing or sudoers prompt | Install binary + sudoers entry (step 4); check the `xvf_host` log line |
 | Garbled transcripts | Wrong capture channel | Confirm `capture_select_channel = 1` (default); re-run the §3 capture test |
 | Random reboots / `get_throttled` ≠ 0x0 | Underpowered PSU for Pi + array | Stronger supply, or powered USB hub for the array |
-| Wake word less reliable than on HAT | Model trained on HAT clips ≠ XVF signal | Re-record/retrain (`scripts/wake_word/README.md`); stopgap: lower `[wake] threshold` |
+| Wake word less reliable than on HAT | Model trained on HAT clips ≠ XVF signal | Re-record/retrain (`scripts/wake_word/README.md`); stopgap: Wake confirmation 1, or lower Wake sensitivity |
 | No `mic-gain` / `noise gate` log lines | Expected — XVF profile disables them | Not a problem |
