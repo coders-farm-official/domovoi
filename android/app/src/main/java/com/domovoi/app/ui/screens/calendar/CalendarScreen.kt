@@ -412,7 +412,7 @@ private fun AgendaRow(e: CalendarEvent, selected: Boolean, onClick: () -> Unit) 
         }
         Column(Modifier.weight(1f)) {
             Text(
-                e.title,
+                e.displayTitle(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = Domovoi.colors.fg,
                 maxLines = 1,

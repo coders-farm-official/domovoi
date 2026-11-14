@@ -109,4 +109,29 @@ class CalendarImportedTest {
         val gs = monthGridStart(anchor)
         assertTrue(!startOfWeekSun(anchor).isBefore(gs) && startOfWeekSun(anchor).plusDays(7) <= gs.plusDays(42))
     }
+
+    /** Server V057: a busy event and one held by several calendars, as the
+     *  server writes them (docs/API_REFERENCE.md §3.8). */
+    @Test fun busyAndAlsoInDecodeAndShowQuietly() {
+        val list = DomovoiJson.parseToJsonElement(
+            """[{"id":7,"title":"Busy","starts_at":"2026-11-20T15:00:00Z","ends_at":"2026-11-20T16:00:00Z",
+                 "location":null,"source":"phone","all_day":false,"calendar_id":4,"calendar_name":"Work",
+                 "calendar_color":"#33b679","calendar_kind":"phone","owner_name":"Pixel 8","read_only":true,
+                 "busy":true,"also_in":[]},
+                {"id":8,"title":"Swim","starts_at":"2026-11-21T15:00:00Z","source":"phone","all_day":false,
+                 "calendar_name":"Family","calendar_kind":"phone","read_only":true,"busy":false,
+                 "also_in":["Family · Galaxy","School"]}]""",
+        ).decode<List<CalendarEvent>>()
+        assertTrue(list[0].busy)
+        assertEquals("Busy", list[0].displayTitle())
+        assertEquals("Busy", list[0].copy(title = "anything").displayTitle())
+        assertNull(list[0].alsoInLine())
+        assertEquals(listOf("Family · Galaxy", "School"), list[1].also_in)
+        assertEquals("also in Family · Galaxy, School", list[1].alsoInLine())
+        assertEquals("Swim", list[1].displayTitle())
+        // An older server sends neither.
+        val old = DomovoiJson.parseToJsonElement("""{"id":1,"title":"x","starts_at":"2026-11-20T15:00:00Z"}""").decode<CalendarEvent>()
+        assertFalse(old.busy)
+        assertNull(old.alsoInLine())
+    }
 }

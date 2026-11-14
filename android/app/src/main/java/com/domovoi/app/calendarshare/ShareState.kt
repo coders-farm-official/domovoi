@@ -163,6 +163,17 @@ object ShareRules {
      *  colour. */
     const val BUSY_TEXT = "sent a moment ago; trying again shortly"
 
+    /** A PUT refused with 403: the house no longer takes this phone's
+     *  calendar key. Nothing more is sent until sharing is turned off and
+     *  on again. */
+    const val KEY_REFUSED =
+        "the house no longer accepts this phone's calendars: turn sharing off and on again"
+
+    /** A DELETE refused with 403: the copy is the house's to remove now. */
+    const val KEY_REFUSED_OFF =
+        "the house no longer accepts this phone's calendar key, so it may still show them: an admin can " +
+            "remove them in the dashboard (Settings → Household → Calendars)"
+
     /** Whether the settings line is in the warning colour. */
     fun warns(e: ShareEntry?): Boolean =
         e != null && (e.notice != null || (e.lastError != null && e.lastError != BUSY_TEXT))

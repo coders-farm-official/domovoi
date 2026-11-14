@@ -41,7 +41,22 @@ internal data class CalendarEvent(
     val owner_name: String? = null,
     /** Can't be changed here: it comes from another calendar. */
     val read_only: Boolean = false,
+    /** A private event a phone shared as busy (server V057): its title is
+     *  "Busy" and it has no place. */
+    val busy: Boolean = false,
+    /** The other calendars holding the same event (same iCalendar UID and
+     *  start), listed once: `["Family · Galaxy"]`. */
+    val also_in: List<String> = emptyList(),
 )
+
+/** What the event is called on screen: "Busy" for a private one. */
+internal fun CalendarEvent.displayTitle(): String = if (busy) "Busy" else title
+
+/** The quiet line on the detail: "also in Family · Galaxy, School"; null
+ *  when the event is in one calendar only. */
+internal fun CalendarEvent.alsoInLine(): String? =
+    also_in.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        .takeIf { it.isNotEmpty() }?.joinToString(", ", prefix = "also in ")
 
 internal fun CalendarEvent.isGoogle(): Boolean = source == "google"
 

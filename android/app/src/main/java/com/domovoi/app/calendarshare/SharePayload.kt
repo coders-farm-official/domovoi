@@ -52,6 +52,10 @@ data class InstanceRow(
     val accessLevel: Int? = null,
     /** Instances.SELF_ATTENDEE_STATUS: [ATTENDEE_DECLINED] is never sent. */
     val selfStatus: Int? = null,
+    /** Instances.UID_2445, the event's iCalendar UID: sent as `ical_uid`, so
+     *  the house lists once an event two phones (or a phone and a link)
+     *  both hold. */
+    val icalUid: String? = null,
 )
 
 /** CalendarContract.Events.STATUS_CANCELED (a constant of the platform:
@@ -87,6 +91,7 @@ object SharePayload {
     const val MAX_TITLE = 200
     const val MAX_LOCATION = 200
     const val MAX_PHONE_NAME = 80
+    const val MAX_ICAL_UID = 300
 
     /** The title a private or confidential event goes with. */
     const val BUSY = "busy"
@@ -186,6 +191,7 @@ object SharePayload {
         picked: Set<Long>,
         nowMs: Long,
         maxTotal: Int = MAX_EVENTS_TOTAL,
+        generation: Long? = null,
     ): BuiltPayload {
         val pickedCals = calendars.filter { it.id in picked }.distinctBy { it.id }.sortedBy { it.id }
         val sent = pickedCals.take(MAX_CALENDARS)
@@ -207,6 +213,8 @@ object SharePayload {
             clip(phoneName, MAX_PHONE_NAME)?.let { put("phone_name", it) }
             put("window_start_ms", window.startMs)
             put("window_end_ms", window.endMs)
+            // Only grows: the epoch ms the snapshot was read (server V057).
+            generation?.let { put("generation", it) }
             put("calendars", buildJsonArray {
                 sent.forEach { c ->
                     add(buildJsonObject {
@@ -238,10 +246,14 @@ object SharePayload {
         if (end != null) put("ends_at_ms", end) else put("ends_at_ms", JsonNull)
         put("all_day", r.allDay)
         put("location", if (private) null else clip(place(r.location), MAX_LOCATION))
+        clip(r.icalUid, MAX_ICAL_UID)?.let { put("ical_uid", it) }
+        // The server stores a busy event as "Busy" with no place (V057);
+        // the title above says the same to an older one.
+        if (private) put("busy", true)
     }
 
     /** The keys that only say when the send was made: left out of [hash]. */
-    private val WINDOW_KEYS = setOf("window_start_ms", "window_end_ms")
+    private val WINDOW_KEYS = setOf("window_start_ms", "window_end_ms", "generation")
 
     /** What [body] says, without its window: two sends with the same hash
      *  would tell the house nothing new (hex SHA-256). */
@@ -266,15 +278,16 @@ object SharePayload {
         picked: Set<Long>,
         nowMs: Long,
         budget: Long = BODY_BUDGET_BYTES,
+        generation: Long? = null,
     ): BuiltPayload {
         var cap = MAX_EVENTS_TOTAL
-        var out = build(phoneName, window, calendars, rows, picked, nowMs, cap)
+        var out = build(phoneName, window, calendars, rows, picked, nowMs, cap, generation)
         var size = bytes(out.body)
         while (size > budget && out.events > 0) {
             // Shrink in proportion, at least by one tenth each round.
             val ratio = budget.toDouble() / size
             cap = minOf((out.events * ratio * 0.95).toInt(), out.events * 9 / 10).coerceAtLeast(0)
-            out = build(phoneName, window, calendars, rows, picked, nowMs, cap)
+            out = build(phoneName, window, calendars, rows, picked, nowMs, cap, generation)
             size = bytes(out.body)
         }
         return out

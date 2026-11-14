@@ -23,8 +23,8 @@ class SharePayloadTest {
 
     private fun row(id: Long, cal: Long = 12, begin: Long = now + id * 3_600_000, end: Long? = begin + 3_600_000,
                     allDay: Boolean = false, title: String? = "Event $id", location: String? = null, status: Int? = 1,
-                    access: Int? = null, self: Int? = null) =
-        InstanceRow(id, cal, begin, end, allDay, title, location, status, access, self)
+                    access: Int? = null, self: Int? = null, icalUid: String? = null) =
+        InstanceRow(id, cal, begin, end, allDay, title, location, status, access, self, icalUid)
 
     private fun cals(b: JsonObject): JsonArray = b["calendars"]!!.jsonArray
     private fun events(c: Any?): JsonArray = (c as JsonObject)["events"]!!.jsonArray
@@ -168,6 +168,8 @@ class SharePayloadTest {
         assertEquals(listOf("busy", "busy", "Lunch", "Default"), e.map { it["title"]!!.jsonPrimitive.content })
         assertEquals(JsonNull, e[0]["location"])
         assertEquals(JsonNull, e[1]["location"])
+        // The server's own flag (V057): it stores them as "Busy", no place.
+        assertEquals(listOf(true, true, null, null), e.map { it["busy"]?.jsonPrimitive?.boolean })
         assertEquals("Cafe", e[2]["location"]!!.jsonPrimitive.content)
         listOf("Therapy", "Dr Lee", "Interview", "Acme").forEach { assertFalse(it, it in b.toString()) }
         // The time still goes: the house can see it is busy.
@@ -239,5 +241,35 @@ class SharePayloadTest {
         assertFalse(SharePayload.hash(a) == SharePayload.hash(retitled))
         val renamedPhone = SharePayload.build("Pixel 9", SharePayload.window(now), listOf(work), listOf(row(1)), setOf(12L), now).body
         assertFalse(SharePayload.hash(a) == SharePayload.hash(renamedPhone))
+    }
+
+    /** Server V057: the event's iCalendar UID and the busy flag, each only
+     *  when there is one; every key pinned. */
+    @Test fun theIcalUidAndBusyGoWhenThereIsOne() {
+        val rows = listOf(
+            row(1, icalUid = "040000008200E00074C5B7101A82E008@outlook.com"),
+            row(2, access = ACCESS_PRIVATE, icalUid = "abc123@google.com"),
+            row(3, icalUid = "  "),
+        )
+        val e = events(cals(SharePayload.build(null, SharePayload.window(now), listOf(work), rows, setOf(12L), now).body).single())
+            .map { it.jsonObject }
+        assertEquals(setOf("uid", "title", "starts_at_ms", "ends_at_ms", "all_day", "location", "ical_uid"), e[0].keys)
+        assertEquals("040000008200E00074C5B7101A82E008@outlook.com", e[0]["ical_uid"]!!.jsonPrimitive.content)
+        assertEquals(setOf("uid", "title", "starts_at_ms", "ends_at_ms", "all_day", "location", "ical_uid", "busy"), e[1].keys)
+        assertTrue(e[1]["busy"]!!.jsonPrimitive.boolean)
+        assertEquals("busy", e[1]["title"]!!.jsonPrimitive.content)
+        assertEquals(setOf("uid", "title", "starts_at_ms", "ends_at_ms", "all_day", "location"), e[2].keys)
+    }
+
+    /** Server V057: the generation, at the top, only when given; never in
+     *  the hash (it changes every read). */
+    @Test fun theGenerationGoesAtTheTopAndNotIntoTheHash() {
+        val a = SharePayload.build("Pixel 8", SharePayload.window(now), listOf(work), listOf(row(1)), setOf(12L), now, generation = now).body
+        assertEquals(setOf("phone_name", "window_start_ms", "window_end_ms", "generation", "calendars"), a.keys)
+        assertEquals(now, a["generation"]!!.jsonPrimitive.long)
+        val b = SharePayload.build("Pixel 8", SharePayload.window(now + 1000), listOf(work), listOf(row(1)), setOf(12L), now, generation = now + 1000).body
+        assertEquals(SharePayload.hash(a), SharePayload.hash(b))
+        val within = SharePayload.buildWithinSize(null, SharePayload.window(now), listOf(work), listOf(row(1)), setOf(12L), now, generation = 42L)
+        assertEquals(42L, within.body["generation"]!!.jsonPrimitive.long)
     }
 }

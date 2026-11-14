@@ -84,7 +84,7 @@ internal fun EventDetailContent(
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    event.title,
+                    event.displayTitle(),
                     style = MaterialTheme.typography.titleMedium,
                     color = Domovoi.colors.fg,
                 )
@@ -155,6 +155,10 @@ internal fun EventDetailContent(
                     color = Domovoi.colors.fgFaint,
                 )
             }
+        }
+        // The same event in other calendars, listed once: said quietly.
+        event.alsoInLine()?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint)
         }
         if (!event.read_only) {
             Text(

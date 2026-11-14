@@ -636,4 +636,15 @@ class HomeModelsTest {
         assertEquals("http://10.0.0.5:6369/#plugins", dashboardUrl("http://10.0.0.5:6369/", "#plugins"))
         assertNull(dashboardUrl("  ", "#plugins"))
     }
+
+    /** Server V057: a private event shared as busy shows as "Busy", no place. */
+    @Test fun aBusyEventShowsAsBusy() {
+        val now = ms("2026-09-28T14:00:00Z")
+        val e = HomeEvent(1, "secret", "2026-09-28T15:00:00Z", location = "somewhere", calendar_name = "Work",
+            calendar_kind = "phone", busy = true)
+        val row = todayDays(listOf(e), now, zone, shared = false).single().rows.single()
+        assertEquals("Busy", row.title)
+        assertNull(row.location)
+        assertEquals("Work", row.calendar)
+    }
 }

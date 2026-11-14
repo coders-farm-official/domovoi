@@ -216,6 +216,8 @@ internal data class HomeEvent(
     val calendar_name: String? = null,
     val calendar_color: String? = null,
     val calendar_kind: String? = null,
+    /** A private event a phone shared as busy (server V057). */
+    val busy: Boolean = false,
 )
 
 @Serializable
@@ -693,8 +695,12 @@ internal fun todayDays(
             event = e,
             startMs = start,
             endMs = if (e.all_day) null else isoMs(e.ends_at),
-            title = if (shared) "busy" else e.title.ifBlank { "(no title)" },
-            location = if (shared) null else e.location?.takeIf { it.isNotEmpty() },
+            title = when {
+                shared -> "busy"
+                e.busy -> "Busy"
+                else -> e.title.ifBlank { "(no title)" }
+            },
+            location = if (shared || e.busy) null else e.location?.takeIf { it.isNotEmpty() },
             running = !e.all_day && start <= nowMs && nowMs < eventEndMs(e, zone),
             allDay = e.all_day,
             dot = homeHexColor(e.calendar_color),

@@ -72,6 +72,7 @@ class PhoneCalendarReader(private val context: Context) {
             CalendarContract.Instances.STATUS,
             CalendarContract.Instances.ACCESS_LEVEL,
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
+            CalendarContract.Instances.UID_2445,
         )
         val idList = ids.joinToString(",")
         val out = mutableListOf<InstanceRow>()
@@ -93,6 +94,7 @@ class PhoneCalendarReader(private val context: Context) {
                         status = if (c.isNull(7)) null else c.getInt(7),
                         accessLevel = if (c.isNull(8)) null else c.getInt(8),
                         selfStatus = if (c.isNull(9)) null else c.getInt(9),
+                        icalUid = c.getString(10)?.ifBlank { null },
                     )
                 }
             }

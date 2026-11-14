@@ -6,8 +6,23 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.io.IOException
+
+/**
+ * The per-server calendar key (server V057): handed to this phone ONCE,
+ * with the first snapshot a server stores from it, and sent as
+ * `X-Domovoi-Calendar-Key` on every later PUT and DELETE (403 without).
+ * Kept sealed in the app's private storage, outside every backup
+ * (data/Prefs.kt); never logged or shown.
+ */
+interface CalendarKeys {
+    fun calendarKeyFor(server: String): String?
+    fun setCalendarKey(server: String, key: String?)
+}
 
 /**
  * One pass of calendar sharing for one server: send the picked calendars
@@ -21,16 +36,23 @@ import java.io.IOException
  * is cancelled: a send cancelled half-way could otherwise reach the server
  * AFTER the delete that followed it, and leave the copy there for good.
  * After a send the stored state is read again, and if sharing was turned
- * off meanwhile the delete goes at once.
+ * off meanwhile the delete goes at once. The server holds the other half
+ * (V057): each PUT carries a `generation` (the epoch ms its snapshot was
+ * read) and each DELETE the time it was sent, and a PUT at or below a
+ * delete's is refused with 410 (one older than one stored, 409); either
+ * is dropped, never retried.
  */
 class ShareSync(
     private val store: ShareStore,
     /** The phone's calendars; null when READ_CALENDAR is not held. */
     private val calendars: () -> List<PhoneCalendar>?,
     private val instances: (ShareWindow, Set<Long>) -> List<InstanceRow>?,
-    private val put: suspend (server: String, body: JsonObject) -> Unit,
-    private val delete: suspend (server: String) -> Unit,
+    /** The PUT, with the saved key (null: none yet); answers the body. */
+    private val put: suspend (server: String, body: JsonObject, key: String?) -> JsonElement?,
+    /** The DELETE, with the saved key and the generation it is at. */
+    private val delete: suspend (server: String, key: String?, generation: Long) -> Unit,
     private val phoneName: () -> String?,
+    private val keys: CalendarKeys,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     enum class Outcome { Done, Retry }
@@ -50,6 +72,10 @@ class ShareSync(
     }
 
     private suspend fun send(server: String): Outcome {
+        // The house refused this phone's key: nothing more is sent (it
+        // would be refused again) until the person turns sharing off and
+        // on, which clears the error.
+        if (store.get(server)?.lastError == ShareRules.KEY_REFUSED) return Outcome.Done
         val t = now()
         // A provider that failed (IOException) is tried again later and
         // changes nothing; no permission is as good as turned off.
@@ -73,12 +99,34 @@ class ShareSync(
         val window = SharePayload.window(t)
         val rows = try { instances(window, ids) } catch (e: IOException) { return Outcome.Retry }
             ?: return permissionLost(server)
-        val built = SharePayload.buildWithinSize(phoneName(), window, onPhone, rows, ids, t)
+        val built = SharePayload.buildWithinSize(phoneName(), window, onPhone, rows, ids, t, generation = t)
         val hash = SharePayload.hash(built.body)
         if (ShareRules.unchanged(entry, hash, t)) return afterSend(server)
-        val out = call(server, t) {
-            put(server, built.body)
+        val out = try {
+            val answer = withContext(NonCancellable) { put(server, built.body, keys.calendarKeyFor(server)) }
+            // The key comes once (and again after the house dropped the old
+            // one): a new one replaces what is saved.
+            calendarKey(answer)?.let { keys.setCalendarKey(server, it) }
             store.update(server) { ShareRules.sent(it ?: ShareEntry(), now(), built.droppedEvents, hash) }
+            Outcome.Done
+        } catch (e: ApiException) {
+            when (e.status) {
+                // Superseded (409) or made before sharing was turned off
+                // (410): this upload is dropped, never retried. The next
+                // pass reads the phone again with a newer generation.
+                409, 410 -> Outcome.Done
+                403 -> {
+                    store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.KEY_REFUSED, t) }
+                    Outcome.Done
+                }
+                else -> {
+                    store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(e.status), t, e.retryAfterSec) }
+                    if (retries(e.status)) Outcome.Retry else Outcome.Done
+                }
+            }
+        } catch (e: IOException) {
+            store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(null), t) }
+            Outcome.Retry
         }
         return if (out == Outcome.Done) afterSend(server) else out
     }
@@ -99,17 +147,26 @@ class ShareSync(
     private suspend fun remove(server: String): Outcome {
         val t = now()
         return try {
-            withContext(NonCancellable) { delete(server) }
+            withContext(NonCancellable) { delete(server, keys.calendarKeyFor(server), t) }
             store.update(server) { ShareRules.deleted(it ?: ShareEntry()) }
             Outcome.Done
         } catch (e: ApiException) {
-            if (e.status == 404) {
+            when (e.status) {
                 // A server with no such route never had a copy to keep.
-                store.update(server) { ShareRules.deleted(it ?: ShareEntry()) }
-                Outcome.Done
-            } else {
-                store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(e.status), t, e.retryAfterSec) }
-                Outcome.Retry
+                404 -> {
+                    store.update(server) { ShareRules.deleted(it ?: ShareEntry()) }
+                    Outcome.Done
+                }
+                // The house refuses this phone's key: trying again changes
+                // nothing. Said, and the copy left to an admin.
+                403 -> {
+                    store.update(server) { ShareRules.deleted(it ?: ShareEntry()).copy(notice = ShareRules.KEY_REFUSED_OFF) }
+                    Outcome.Done
+                }
+                else -> {
+                    store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(e.status), t, e.retryAfterSec) }
+                    Outcome.Retry
+                }
             }
         } catch (e: IOException) {
             store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(null), t) }
@@ -117,23 +174,12 @@ class ShareSync(
         }
     }
 
-    private suspend fun call(server: String, t: Long, block: suspend () -> Unit): Outcome = try {
-        withContext(NonCancellable) { block() }
-        Outcome.Done
-    } catch (e: ApiException) {
-        store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(e.status), t, e.retryAfterSec) }
-        if (retries(e.status)) Outcome.Retry else Outcome.Done
-    } catch (e: IOException) {
-        store.update(server) { ShareRules.failed(it ?: ShareEntry(), ShareRules.errorText(null), t) }
-        Outcome.Retry
-    }
-
     /**
      * The phone is forgetting [server] (or unpairing from it): delete the
-     * house's copy while the token still works, then forget the entry
-     * whatever happened. True when nothing is left behind (deleted, or
-     * there was nothing to delete); false when the house still holds this
-     * phone's calendars, which the forget flow then says. At most
+     * house's copy while the token still works, then forget the entry and
+     * the key whatever happened. True when nothing is left behind (deleted,
+     * or there was nothing to delete); false when the house still holds
+     * this phone's calendars, which the forget flow then says. At most
      * [timeoutMs], so forgetting never hangs on an unreachable house.
      */
     suspend fun withdraw(server: String, timeoutMs: Long = WITHDRAW_TIMEOUT_MS): Boolean {
@@ -142,7 +188,7 @@ class ShareSync(
                 val e = store.get(server)
                 if (!ShareRules.mayHoldCopy(e)) return@withLock true
                 try {
-                    withContext(NonCancellable) { delete(server) }
+                    withContext(NonCancellable) { delete(server, keys.calendarKeyFor(server), now()) }
                     true
                 } catch (x: ApiException) {
                     x.status == 404
@@ -152,6 +198,7 @@ class ShareSync(
             }
         } ?: false
         store.forget(server)
+        keys.setCalendarKey(server, null)
         return ok
     }
 
@@ -161,9 +208,19 @@ class ShareSync(
 
         const val WITHDRAW_TIMEOUT_MS = 10_000L
 
+        /** The header the key goes in. */
+        const val KEY_HEADER = "X-Domovoi-Calendar-Key"
+
         /** Worth trying again by itself: the server busy, asked to wait, or
-         *  out of reach. A refusal (401/403/404/413/422) waits for the next
-         *  change or the periodic pass instead. */
+         *  out of reach. A refusal (401/403/404/409/410/413/422) waits for
+         *  the next change or the periodic pass instead. */
         fun retries(status: Int): Boolean = status == 408 || status == 429 || status >= 500
+
+        /** The `calendar_key` a PUT answered, when it handed one out. */
+        fun calendarKey(answer: JsonElement?): String? {
+            val v = (answer as? JsonObject)?.get("calendar_key") ?: return null
+            if (v is JsonNull) return null
+            return (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotEmpty() }
+        }
     }
 }

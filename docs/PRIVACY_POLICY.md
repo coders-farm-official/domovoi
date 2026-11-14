@@ -223,31 +223,33 @@ mode the phone also sends the room's health to the server: battery level,
 whether it is charging, Wi-Fi signal and speed, memory, temperature and
 whether the microphone is working.
 
-**Your phone's calendars, only if you choose to share them.** Off unless you
-turn on "Share this phone's calendars with the house" (Settings →
-Household → Phone calendars) and pick calendars. Then the app sends those
-calendars' events to your Domovoi server: each event's title, time and
-place, and the calendar's name and colour, for the last 30 days and the
-next 180, again soon after a change and when it is due to move on (a
+**Your phone's calendars, only if you choose to share them.** Off unless
+you turn on "Share this phone's calendars with the house" (Settings →
+Household → Phone calendars) and pick calendars. Then the app sends
+those calendars' events to your Domovoi server: each event's title, time
+and place, and the calendar's name and colour, for the last 30 days and
+the next 180, again soon after a change and when it is due to move on (a
 snapshot the server already has is not sent again, except once a day).
 An event marked private or confidential is sent as "busy", with its time
-and no title or place; a link in a place (a meeting link, which can carry
-its passcode) is sent as "online meeting"; an event you declined is not
-sent; and a calendar named after an email address is sent as "Main
-calendar". Never the descriptions, guests, reminders or the account a
-calendar belongs to, and never any calendar you didn't pick. The server
-shows them on the household calendar, read-only: everyone in your
-household can see them, and Domovoi can read them out in any room.
-Unpick a calendar or turn sharing off and the app deletes the server's
-copy; if the server can't be reached, it keeps trying while that server
-is the one the app is connected to. Forgetting the server, or unpairing
-the phone from it, deletes the copy first, and says so if it couldn't.
-If you take back the app's calendar permission, sharing turns off and the
-copy is deleted the same way. Uninstalling the app does not reach the
-server: turn sharing off first, or ask whoever runs the server, who can
-remove a phone's calendars in its dashboard. Either way the server
-deletes a phone's calendars by itself after 7 days without an update from
-that phone, and when its household token is replaced.
+and no title or place; a link in a place (a meeting link, which can
+carry its passcode) is sent as "online meeting"; an event you declined
+is not sent; and a calendar named after an email address is sent as
+"Main calendar". Each event also carries the code its calendar gives it
+(its iCalendar UID, so an event two phones share is shown once). Never
+the descriptions, guests, reminders or the account a calendar belongs
+to, and never any calendar you didn't pick. The server shows them on the
+household calendar, read-only: everyone in your household can see them,
+and Domovoi can read them out in any room. Unpick a calendar or turn
+sharing off and the app deletes the server's copy; if the server can't
+be reached, it keeps trying while that server is the one the app is
+connected to. Forgetting the server, or unpairing the phone from it,
+deletes the copy first, and says so if it couldn't. If you take back the
+app's calendar permission, sharing turns off and the copy is deleted the
+same way. Uninstalling the app does not reach the server: turn sharing
+off first, or ask whoever runs the server, who can remove a phone's
+calendars in its dashboard. Either way the server deletes a phone's
+calendars by itself after 7 days without an update from that phone, and
+when its household token is replaced.
 
 Your server is run by you or your household, on your own hardware; what it
 keeps is described in its own documentation

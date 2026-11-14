@@ -20,6 +20,7 @@ import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.HouseholdLock
 import com.domovoi.app.net.encodePathSegment
 import com.domovoi.app.net.suggestedDeviceName
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -176,6 +177,7 @@ object CalendarShare {
             put = calls::put,
             delete = calls::delete,
             phoneName = { suggestedDeviceName() },
+            keys = app.prefs,
         )
     }
 
@@ -192,6 +194,7 @@ object CalendarShare {
             // No token to send it with: whatever the house has stays.
             val had = ShareRules.mayHoldCopy(store(context).get(server))
             store(context).forget(server)
+            app.prefs.setCalendarKey(server, null)
             !had
         } else {
             sync(context, app, server).withdraw(server)
@@ -214,13 +217,16 @@ object CalendarShare {
 /** The two calls, as the app's client makes them ([onlyTo] null: to
  *  whichever server is active by then, which [ShareCalls] never does). */
 internal interface ShareHttp {
-    suspend fun put(path: String, body: JsonObject, onlyTo: String?)
-    suspend fun delete(path: String, onlyTo: String?)
+    suspend fun put(path: String, body: JsonObject, headers: Map<String, String>, onlyTo: String?): JsonElement?
+    suspend fun delete(path: String, headers: Map<String, String>, onlyTo: String?)
 }
 
 private class ApiShareHttp(private val api: ApiClient) : ShareHttp {
-    override suspend fun put(path: String, body: JsonObject, onlyTo: String?) { api.put(path, body, onlyTo = onlyTo) }
-    override suspend fun delete(path: String, onlyTo: String?) { api.delete(path, onlyTo = onlyTo) }
+    override suspend fun put(path: String, body: JsonObject, headers: Map<String, String>, onlyTo: String?): JsonElement? =
+        api.put(path, body, headers = headers, onlyTo = onlyTo)
+    override suspend fun delete(path: String, headers: Map<String, String>, onlyTo: String?) {
+        api.delete(path, headers = headers, onlyTo = onlyTo)
+    }
 }
 
 /**
@@ -231,8 +237,17 @@ private class ApiShareHttp(private val api: ApiClient) : ShareHttp {
  */
 internal class ShareCalls(deviceId: String, private val http: ShareHttp) {
     val path = "/api/calendar/phones/${encodePathSegment(deviceId)}"
-    suspend fun put(server: String, body: JsonObject) = http.put(path, body, onlyTo = server)
-    suspend fun delete(server: String) = http.delete(path, onlyTo = server)
+
+    /** The saved calendar key in its header; none before the first send. */
+    private fun keyHeader(key: String?): Map<String, String> =
+        key?.trim()?.takeIf { it.isNotEmpty() && it.all { c -> c in '!'..'~' } }
+            ?.let { mapOf(ShareSync.KEY_HEADER to it) } ?: emptyMap()
+
+    suspend fun put(server: String, body: JsonObject, key: String?): JsonElement? =
+        http.put(path, body, keyHeader(key), onlyTo = server)
+
+    suspend fun delete(server: String, key: String?, generation: Long) =
+        http.delete("$path?generation=$generation", keyHeader(key), onlyTo = server)
 }
 
 /** The send (or delete) for the active server. */

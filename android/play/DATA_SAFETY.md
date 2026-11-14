@@ -176,9 +176,15 @@ occurrences, 30 days back to 180 days ahead
 a few seconds after a tick, about 90 seconds after the phone's calendar
 changes, and every 6 hours (WorkManager, `calendarshare/CalendarShareWork.kt`);
 a snapshot the server already has is skipped, except once a day.
-Per event: an id ("event id:start"), title, start, end, all-day, location;
-per calendar: its name and colour; at the top: the phone's name (80
-characters at most) and the window. **Never** descriptions, guests,
+Per event: an id ("event id:start"), title, start, end, all-day, location,
+the event's iCalendar UID (`ical_uid`, so an event two phones share is
+listed once) and `busy` for a private one; per calendar: its name and
+colour; at the top: the phone's name (80 characters at most), the window
+and a `generation` (the epoch ms the snapshot was read, so an upload that
+arrives after the delete is refused). The server hands the phone a
+calendar key with its first snapshot; the phone keeps it sealed under a
+Keystore key of its own, outside every backup and transfer, never logged,
+and sends it only to that server, on every later PUT and DELETE. **Never** descriptions, guests,
 reminders, attachments or the calendar's account name
 (`calendarshare/SharePayload.kt`; `SharePayloadTest.anEventAsTheServerTakesIt`
 pins the exact keys at every level). A private or confidential event
