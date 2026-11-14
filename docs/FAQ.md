@@ -14,6 +14,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
 - [Can I use it with Home Assistant?](#can-i-use-it-with-home-assistant)
 - [Does it support multiple people?](#does-it-support-multiple-people)
+- [Why does music keep playing after my song ends?](#why-does-music-keep-playing-after-my-song-ends)
 - [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
 - [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
 - [Does the music visualizer keep the screen on?](#does-the-music-visualizer-keep-the-screen-on)
@@ -254,7 +255,8 @@ and anyone in the household can add to it, reorder it, or drop a track from the
 dashboard's **Music → Room queue** tab or the app's **room queue** tab (on a
 phone, each row has **play next**, **up** and **down** buttons, since a finger
 can't drag; a room's card on the Music page has a **queue** button that goes
-straight there). A guest's phone can too, while the room is playing — see the
+straight there). Both have a search box to add songs from the library, and
+**save as playlist** keeps the queue as a new playlist. A guest's phone can too, while the room is playing — see the
 next question. Each
 entry carries a quiet "added by *<device>*" note, so "who put this on?" has an
 answer. Entries Domovoi has no record of — a voice request, or a cast from
@@ -262,8 +264,8 @@ before this existed — simply show nothing rather than a guess.
 
 Devices name themselves. A browser or phone introduces itself the first time
 it loads, with a name guessed from the platform ("Chrome on Windows", "Pixel
-8"); you can rename it in **Settings → Household → Phones & browsers** (dashboard) or **Settings →
-Household → Phones & browsers** (app). Renaming relabels that device's existing queue entries.
+8"); you can rename it in **Settings → Household → Phones & browsers**, on the
+dashboard or in the app. Renaming relabels that device's existing queue entries.
 
 An admin can take queue editing away from a named device — one room, or every
 room — in **Settings → Household → Phones & browsers → Queue access**. A blocked device can still
@@ -273,6 +275,20 @@ nothing on a trusted LAN forces it to be honest, so this reliably settles a
 household argument but is not a defence against someone determined. Changing
 blocks needs the admin password, which is why it can't be undone from the
 device it was applied to.
+
+## Why does music keep playing after my song ends?
+
+That's **Up next**. A song played from a list goes on with the rest of that
+list; a song on its own is followed by similar songs from your library; a
+whole playlist plays as it is, and similar songs join when it is nearly
+over. Each pick says why it was chosen ("same artist", "90s"), and
+**less like this** plays less of that artist. To stop it, switch off
+**autoplay** at the top of **up next**: in the browser's player queue
+(remembered in that browser) or on a room's queue (for that room). What
+the mix learns from comes from the listening history, kept 1 year by
+default; Settings → Privacy → **Listening history** sets 90 days or
+**Don't keep**. Details: the user manual's
+*Music and room queues*.
 
 ## Can a guest change the music?
 
@@ -374,7 +390,7 @@ All of this is a plain file copy from your own server — nothing goes to the in
 
 ## Does the music visualizer keep the screen on?
 
-Yes, while it plays full screen: the screen doesn't dim, lock or start the screen saver, like a video site in full screen. It lets go when you leave full screen, pause, or switch away from the tab. (The visualizer is in the dashboard: Music → Player → **milkdrop visualizer**.)
+Yes, while it plays full screen: the screen doesn't dim, lock or start the screen saver, like a video site in full screen. It lets go when you leave full screen, pause, or switch away from the tab. (The visualizer is in the dashboard's player: open it from the player bar and switch on **milkdrop visualizer**.)
 
 How, and where that was checked:
 
@@ -382,7 +398,7 @@ How, and where that was checked:
 - **Firefox and Safari**: not measured. They offer the Screen Wake Lock on `https://` addresses, and the dashboard uses it there. On plain `http://` the same silent video is tried; whether it keeps the screen on there hasn't been checked.
 - **iPhone and iPad**: Safari there can only show a video full screen, not a page part, so the visualizer has no full-screen button.
 
-The visualizer needs WebGL 2 (any current desktop browser has it). It draws only what this browser is playing; while the player is sending music to a room, there is nothing here to draw, and the Player tab says so.
+The visualizer needs WebGL 2 (any current desktop browser has it). It draws only what this browser is playing; while the player is sending music to a room, there is nothing here to draw, and the player says so.
 
 ## Can I send pictures in chat?
 

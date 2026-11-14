@@ -190,8 +190,8 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
   the usual menu back. Nothing needs changing there; the phone app keeps
   its own layout.
 - **Settings** is in groups: Household (Rooms, People, Phones &
-  browsers, Printers & scanners), Voice, Chat & AI, Privacy, and System
-  (with App layout). The search box at the top finds a setting by name:
+  browsers, Media folders, Printers & scanners), Voice, Chat & AI,
+  Privacy, Documents (Fonts) and System (with App layout). The search box at the top finds a setting by name:
   try "wake", "voice history" or "token".
 
 [More detail](README.md#what-each-interface-can-do)
@@ -371,9 +371,11 @@ over the greeting aren't heard.
 **If something's wrong**
 
 - It doesn't wake: speak closer, or check the room is online in [Your
-  rooms](#node:rooms). An admin can make it more sensitive in the room's
-  **Settings** tab.
-- It wakes on the TV: the same setting, the other way.
+  rooms](#node:rooms). An admin can lower **Wake sensitivity** (0.7 by
+  default), or set **Wake confirmation** to 1, in the room's **Settings**
+  tab.
+- It wakes on the TV: raise **Wake sensitivity**, or set **Wake
+  confirmation** to 3.
 - It misheard a name: introduce yourself again ("my name is …"), or fix
   how it *says* a word in [Domovoi's voice](#node:voice).
 
@@ -395,8 +397,9 @@ Your music library, on the server, played in any room or in the browser.
   **Show rooms** to see them (it remembers your choice in that browser).
 - Each room has one shared queue, and anyone in the house can add to it.
 - **Dashboard:** [Music → Room queue](#music/queue): drag to reorder, tap
-  a song to play it now. A room card's **queue** button goes straight
-  there. **Save as playlist** keeps the room's queue as a new playlist;
+  a song to play it now. The search box at the top adds songs from the
+  library (Enter adds, Shift+Enter plays next). A room card's **queue** button
+  goes straight there. **Save as playlist** keeps the room's queue as a new playlist;
   radio streams, podcasts and files that aren't in your library are left
   out, and it says how many.
 - **App:** [Music](#music/queue) → **room queue**: **move up**, **move
@@ -1520,7 +1523,13 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
 
 - Make a room hear the wake word more or less easily, swap its greeting
   for a chime, or make its voice louder: its **Settings** tab, **Wake
-  sensitivity**, **Wake acknowledgement**, **Voice loudness boost**.
+  sensitivity** (0.7 by default; lower hears more easily), **Wake
+  confirmation** (2: the word has to be heard a moment longer, which
+  ignores short blips from the TV), **Wake acknowledgement**, **Voice
+  loudness boost**. A Pi or PC room set up before November 2026 keeps
+  0.5 until you change it.
+- Saving a setting that only applies after a restart asks **Restart
+  now** or **Later**.
 - A Pi or spare computer acting up: its **Overview** tab, under
   **maintenance**, **Restart room**. Updating it: **Upgrade
   room**, in the same place.
@@ -1712,7 +1721,9 @@ listens.
   and about 32 GB of disk. A word takes about 20 minutes to train with an
   NVIDIA graphics card, and over an hour on the processor.
 - The steps: **Create** the word, **Record** 15 or more clips on the
-  room device itself, press **Train**, then **Push to room**. The button
+  room device itself (or create it with **synthetic voices only**, which
+  needs no recordings; you can hear those voices first), press **Train**,
+  then **Push to room**. The button
   shows the wake sensitivity the room gets with the word; the room's
   Settings tab shows it after the push, and you can change it there.
 - Each **Record** adds to the clips already there, from any room, until
@@ -1942,10 +1953,13 @@ both in one go: it updates and restarts the Linux side, then the Windows
 side when a newer release is out.
 
 - On the PC itself, Windows asks an administrator for permission next.
-- From another device, the card says **Finish on your PC**. Click the
-  Domovoi notification on the PC, then allow it.
-- Nobody signed in on the PC? The card says **sign in on the PC to
-  finish**.
+- From another device, the card says **Waiting for someone at the PC**.
+  On the PC, the Domovoi icon beside the clock wears a blue **!** and
+  shows its notification again until someone clicks it (or **Finish
+  updating Domovoi...** in its menu). Then Windows asks for permission.
+  **Cancel request** on the card withdraws it.
+- Nobody signed in on the PC? The card says the icon isn't running: sign
+  in on the PC to finish.
 - Pressed twice, or from two devices? The PC is asked once. Windows asks
   for permission once.
 - From the PC's tray icon: **Update Domovoi...** does it all, after one

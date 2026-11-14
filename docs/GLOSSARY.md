@@ -39,6 +39,8 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Confirmation kind** — the namespaced label (`core.<kind>` or `<plugin-slug>.<kind>`) on a pending yes/no question Domovoi has asked you ("Should I remember that?"). Each session holds at most one pending confirmation, and the kind routes your "yes" back to the feature that asked.
 
+**Container guard** — Domovoi watching the Docker containers it runs (the database, each room's music player, the search helper, plugin containers): one that stops or goes missing opens an incident with a banner (Settings → System → Health), and one that looks tampered with pauses risky changes until an admin reviews it. See [Container guard](CONTAINER_GUARD.md).
+
 **Core** — the central voice service (`domovoi/`, FastAPI, port **6370**): speech-to-text → intent routing → handlers → text-to-speech, plus satellite WebSockets, persistence, background workers, and the plugin runtime. When docs say "the core" or "the Domovoi server," this is the process they mean.
 
 **Dashboard** — the web management UI (`web/`, separate FastAPI process, port **6369**). It reads the same Postgres as the core and proxies live actions (restart a satellite, play music) to the core's admin endpoints.
@@ -73,7 +75,11 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Intents log** — the audit table (`intents_log`) that records every routed voice turn: transcript, which handler matched, via which *matched path*, and who was speaking. Writing it is non-optional by design; the conversation log is its sibling.
 
+**Internet answer** — the household's reply to "Will your Domovoi have internet?": **Yes, always**, **Sometimes** or **No, keep everything in the house** (Settings → Privacy → Internet; `INTERNET_ACCESS`). It sets the defaults of every online extra; **No** makes the server contact nothing outside your network. See [INTERNET.md](INTERNET.md).
+
 **Letta** — the self-hosted agent framework that backs *chat mode*, running in its own container with its own database, entirely on the local Ollama. Only conversational turns touch it; normal commands never do.
+
+**Listening history** — the songs each room, browser and phone played, and for whom; what *Up next* learns from. Kept 1 year by default (Settings → Privacy → Listening history: 90 days, or Don't keep).
 
 **Local-first** — Domovoi's core contract: the voice pipeline (wake word, STT, routing, LLM, local TTS) runs entirely on your hardware, every handler declares its network needs, and anything that needs the internet must degrade honestly when it's absent. See the [FAQ](FAQ.md#does-it-work-offline).
 
@@ -111,17 +117,21 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Realtime channel** — the live-update path from database to browser: a feature fires a Postgres NOTIFY on commit, the dashboard's listener maps it to a named channel (e.g. `radio.stations`) and pushes a fresh snapshot over WebSocket. Plugins declare theirs in the manifest.
 
+**Release channel** — which updates a server follows: `stable` (releases only, the default for new installs) or `main` (every change as it lands). Chosen in Settings → System → About & updates, which also names the release the server runs (`1.2.0`, or `1.2.0 + 14 (abc1234)` between releases). The Android app has its own version number. See [LINUX_HOST.md](LINUX_HOST.md#release-channels).
+
 **Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Household → Rooms address; each room owns one satellite and one *MPD* instance.
 
 **Room mode** — an Android phone or tablet used as a room: on its charger it listens for the *wake word*, answers, plays the room's music and takes announcements. See [Spare-device satellites](SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode).
 
 **Room queue** — the play queue a room's speaker draws from. It lives in that room's *MPD* instance, not in the database, and it is SHARED: every household client sees the same list and can add to, reorder, or clear it (a *guest* only while the room is playing, and never clear). Domovoi annotates it rather than copying it — `room_queue_items` records which *device* added each entry, keyed by MPD's songid (stable across reorders, unlike a position), which is what the "added by" tag reads. Distinct from each client's own player queue, which never leaves that device.
 
-**Satellite** — the per-room listening device: a Raspberry Pi (Zero 2 W / Pi 4) with a ReSpeaker mic board, running the client in `satellite/`. It owns the local audio loop — wake word, VAD endpointing, *barge-in*, LEDs — and streams audio to the core over a WebSocket (`ws://<server>:6370`). Config lives in `~/.domovoi/config.toml` on the Pi; it runs as the `domovoi-satellite` systemd service. Since 2026-10-13 a spare Linux laptop or mini PC can be one too (the `generic_pc` profile, installed from the dashboard's **add a spare device**; no LEDs and no root helpers), and an Android phone through the app's room mode: see [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md).
+**Satellite** — the per-room listening device: a Raspberry Pi (Zero 2 W / Pi 4) with a ReSpeaker mic board, running the client in `satellite/`. It owns the local audio loop — wake word, VAD endpointing, *barge-in*, LEDs — and streams audio to the core over a WebSocket (`ws://<server>:6370`). Config lives in `~/.domovoi/config.toml` on the Pi; it runs as the `domovoi-satellite` systemd service. A spare Linux or Windows laptop or PC can be one too (the `generic_pc` profile, installed from the dashboard's **add a spare device**; no LEDs and no root helpers), and so can an Android phone through the app's room mode: see [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md).
 
 **Session context** — the per-room short-term memory in the `sessions` table: recent turns, the pending confirmation, expectation state ("waiting for a name"). It's what makes "yes", "repeat that", and follow-up questions work.
 
 **Setup code** — the 8-word one-time code written to `~/.domovoi/setup-code.txt` on first boot (and printed by the core only when it runs in a terminal, never into the journal). Entering it on the dashboard proves you control the server and lets you set the admin password; the file is deleted once used. `python -m domovoi.main --reset-admin` regenerates it.
+
+**Song recognition** — the library enricher identifying badly tagged songs by their audio fingerprint (AcoustID, with a free key in Settings → System → Advanced) and filling in names, year and genre from MusicBrainz. An answer is used only when it agrees with the song's own names (its artist, when the song has a real one), and never a cover, remix or instrumental the file doesn't name.
 
 **Stub mode** — `USE_STUBS=true`: Whisper, Ollama, and TTS are replaced by deterministic fakes so the full test suite (and a hardware-less dev loop) runs without CUDA, models, or audio. The test config forces it on.
 
@@ -129,11 +139,17 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Trust screen** — the unskippable confirmation step of a plugin install: publisher, permissions, the plugin's own warnings, and the blunt statement that a plugin runs with full access to your server. No plugin code executes before you accept it.
 
+**Up next** — what keeps the music going when the songs you asked for run out: the rest of the list a song came from, or similar songs from your library, each with why it was picked. Works in the browser, in the rooms and on the phone; the **autoplay** switch turns it off. Picks always come after the songs people add.
+
 **VAD (voice activity detection)** — the classifier that decides which audio frames contain speech. The satellite uses it to find the end of your utterance and to detect *barge-in* during playback.
 
 **Voice profile** — a locally stored voice embedding tied to a person, enrolled by introduction ("I'm Sarah") and matched on every utterance so Domovoi knows who's talking. Powers per-person memory and personalization; "forget me", said in that person's own voice, deletes it (a voice that only claimed the name loses just the samples it added).
 
 **Wake acknowledgement** — what a satellite does when it hears the *wake word*, before it listens for the command: a spoken greeting from the greeting bank (the default), a short chime, or the light alone (`[wake] ack_mode`, per satellite, also in the dashboard's satellite Settings). The sound plays to its end and the mic audio under it is dropped, so the satellite cannot hear — and answer — its own greeting.
+
+**Wake confirmation** — how long the *wake word* must be heard before a room wakes, in 80 ms steps (`[wake] patience_frames`, default 2): longer ignores short blips from a TV or phone. Per room, in its Settings tab, beside *wake sensitivity*.
+
+**Wake sensitivity** — the score the *wake word* must reach for a room to wake (`[wake] threshold`, 0–1, default 0.7; higher wakes less). Per room, in its Settings tab; pushing a trained word sets it to that word's own value.
 
 **Wake word** — the phrase that opens the mic (default `hey_jarvis`). Detection runs on the satellite via *openWakeWord*; custom words ("Hey Domovoi") are recorded, trained, and pushed to rooms from the dashboard's Settings → Voice → Wake words, with trained models synced into the Pi's `~/.domovoi/wake_models/` cache.
 
