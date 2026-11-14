@@ -88,7 +88,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "wake.threshold", "Wake sensitivity", "Wake word",
         "How easily the wake word triggers (0–1). HIGHER = fewer false "
         "wakes (the room triggers less); lower = more sensitive. "
-        "Default 0.5 — raise toward 0.6–0.7 if it wakes on background noise.",
+        "Default 0.7 — raise it if it wakes on background noise, lower it "
+        "if it misses you across the room.",
         "float", min=0.0, max=1.0, step=0.05, widget="slider",
         slider_labels=("more sensitive", "fewer false wakes"),
     ),
@@ -98,10 +99,10 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "wake.patience_frames", "Wake confirmation", "Wake word",
         "How long the wake word must be heard before the room wakes, in "
         "80 ms steps: the score has to stay up that many steps in a row and "
-        "reach the wake sensitivity on at least one. Default 1: the first "
-        "strong moment wakes the room. Raise to 2 or 3 if the room wakes on "
-        "short blips from the TV or a phone; a voice across the room can then "
-        "need saying twice, so try it before keeping it. A wake "
+        "reach the wake sensitivity on at least one. Default 2, which "
+        "ignores short blips from the TV or a phone. Set 1 if a voice across "
+        "the room has to say it twice (the first strong moment then wakes the "
+        "room); 3 if blips still get through. A wake "
         "word said to interrupt a reply (barge-in) or during a drop-in call "
         "still counts on the first step.",
         "int", min=1, max=5, step=1, widget="slider",

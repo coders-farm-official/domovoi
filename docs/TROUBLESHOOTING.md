@@ -112,7 +112,7 @@ The TTS engine chain is **piper → system** (every voice is local; the Microsof
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Never triggers, or only when shouting | Threshold too high, or mic level too low | Lower `[wake] threshold` (default 0.5; lower = more sensitive) in the Pi's config or via the dashboard's satellite Settings; check mic capture with `arecord` and let the boot-time mic-gain auto-tune run (HAT boards) |
+| Never triggers, or only when shouting | Threshold too high, or mic level too low | Lower `[wake] threshold` (default 0.7; lower = more sensitive) in the Pi's config or via the dashboard's satellite Settings; check mic capture with `arecord` and let the boot-time mic-gain auto-tune run (HAT boards) |
 | Triggers on random speech/TV | Threshold too low | Raise the threshold; if false triggers happen during playback, check that `[barge_in] require_wake_word` is still `true` (the default) for that room |
 | Custom wake word never fires after "push to room" | Model/sidecar mismatch on the Pi | The push writes the slug to `~/.domovoi/wake` and the model must exist as `~/.domovoi/wake_models/<slug>.onnx` (synced from the server's `/v1/wake-models` channel). Check the satellite log for sync errors; delete the `~/.domovoi/wake` sidecar to revert to the configured word |
 | Custom word fires poorly vs. the built-in | Too few / low-quality training clips | Server refuses training below 15 clips, but good models want far more — record hundreds on the actual satellite mic (especially XVF3800), then retrain; use the clip-quality scores shown while recording |

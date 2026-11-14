@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — New wake defaults: sensitivity 0.7, confirmation 2
+
+A room's **Wake sensitivity** (`[wake] threshold`) now defaults to 0.7
+instead of 0.5, and **Wake confirmation** (`[wake] patience_frames`) to 2
+instead of 1: the score has to stay up for two 80 ms steps and beat 0.7
+on one of them. Run in a real house that way, rooms woke less on the TV
+and phones and still heard the word. The same defaults apply on a Pi, a
+PC room and a phone in room mode.
+
+What an update changes: a room whose setting was saved in its Settings
+tab keeps it. **Wake confirmation** was never written to a room's config
+unless someone saved it, so a room that never set it moves to 2 with
+the room device's next update. **Wake sensitivity** is different: a Pi or
+PC room's `config.toml` was written at setup with `threshold = 0.5`
+already in it, so those rooms keep 0.5 until you set it, in the room's
+Settings tab (0.7 for the new default). A phone in room mode takes 0.7
+unless a pushed wake word gave it its own. If a room now misses you
+across the room, set its Wake confirmation to 1.
+
 ## 2026-11-14 — An update asked for from a phone stays in sight on the PC
 
 "Update Domovoi" pressed on another device asks the Domovoi icon on the

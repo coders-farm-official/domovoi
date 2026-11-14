@@ -115,12 +115,14 @@ def test_nothing_wakes_in_the_cooldown_and_the_swallowed_score_is_kept() -> None
 
 
 def test_the_settings_fall_back_to_the_defaults() -> None:
-    assert wake_gate.PATIENCE_DEFAULT == 1 and wake_gate.COOLDOWN_SEC_DEFAULT == 2.0
-    assert wake_gate.patience_setting(None) == 1
+    # 0.7 and 2 since 2026-11-14 (were 0.5 and 1): the owner's tuned rooms.
+    assert wake_gate.THRESHOLD_DEFAULT == 0.7
+    assert wake_gate.PATIENCE_DEFAULT == 2 and wake_gate.COOLDOWN_SEC_DEFAULT == 2.0
+    assert wake_gate.patience_setting(None) == 2
     assert wake_gate.patience_setting(3) == 3
     assert wake_gate.patience_setting(0) == 1 and wake_gate.patience_setting(9) == 5
     for bad in ("x", True, 2.5):
-        assert wake_gate.patience_setting(bad) == 1
+        assert wake_gate.patience_setting(bad) == 2
     assert wake_gate.cooldown_setting(None) == 2.0
     assert wake_gate.cooldown_setting(0) == 0.0
     assert wake_gate.cooldown_setting(99) == 10.0 and wake_gate.cooldown_setting(-1) == 0.0
@@ -133,7 +135,7 @@ def test_the_settings_fall_back_to_the_defaults() -> None:
 
 def test_the_config_reads_them_and_reports_them() -> None:
     cfg = client.Config.from_toml({})
-    assert (cfg.wake_patience_frames, cfg.wake_cooldown_sec) == (1, 2.0)
+    assert (cfg.wake_threshold, cfg.wake_patience_frames, cfg.wake_cooldown_sec) == (0.7, 2, 2.0)
     cfg = client.Config.from_toml({"wake": {"patience_frames": 3, "cooldown_sec": 2.5}})
     assert (cfg.wake_patience_frames, cfg.wake_cooldown_sec) == (3, 2.5)
     assert {"wake.patience_frames", "wake.cooldown_sec"} <= remote_config.SETTABLE
@@ -441,7 +443,7 @@ def test_start_moves_a_leftover_threshold_into_the_setting(config_home, caplog) 
 
 def test_start_removes_a_leftover_that_matches_the_setting(config_home) -> None:
     cfg_path, side = config_home
-    side.write_text("0.5\n", encoding="utf-8")
+    side.write_text("0.7\n", encoding="utf-8")  # the default setting
     assert client._migrate_wake_threshold_sidecar(client.Config.from_toml({}), cfg_path) is None
     assert not side.exists()
     assert not cfg_path.with_name("config.toml.bak").exists()   # nothing to write

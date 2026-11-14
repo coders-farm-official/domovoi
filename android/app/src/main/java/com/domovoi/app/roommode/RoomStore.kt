@@ -174,7 +174,7 @@ class RoomStore(context: Context) : RoomModels.ModelBook {
         const val KEY_ALIAS = "domovoi-room-key"
         val KEY_AAD: ByteArray = "domovoi-room-key-v1".toByteArray(Charsets.UTF_8)
         const val DEFAULT_WAKE_WORD = "hey_jarvis"
-        const val DEFAULT_THRESHOLD = 0.5f
+        const val DEFAULT_THRESHOLD = 0.7f
         private const val TOKEN_KEY = "room"
         private const val K_CORE = "core_url"
         private const val K_FP = "fingerprint"

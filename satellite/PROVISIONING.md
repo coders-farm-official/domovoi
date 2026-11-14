@@ -361,7 +361,7 @@ domovoi_url = "ws://<server-ip-or-hostname>:6370"    # or "auto": find it (below
 ```toml
 [wake]
 wake_word = "hey_jarvis"                             # dev wake word for now
-threshold = 0.5
+threshold = 0.7
 ```
 
 The example file ships with sensible defaults for everything else (barge-in, noise gate, music ALSA device, etc.).

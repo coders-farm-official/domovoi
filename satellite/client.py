@@ -1059,7 +1059,7 @@ class Config:
             sat_type=sat_type,
             mic_enabled=bool(mic.get("enabled", profile.voice_capable)),
             wake_word=str(wake.get("wake_word", "hey_jarvis")),
-            wake_threshold=float(wake.get("threshold", 0.5)),
+            wake_threshold=float(wake.get("threshold", wake_gate.THRESHOLD_DEFAULT)),
             wake_word_model_path=Path(wake_model).expanduser() if wake_model else None,
             wake_ack_mode=ack_mode,
             input_device=input_device,
