@@ -401,8 +401,10 @@ const SpokenAudio = (() => {
  * Listening history (V051, Up next P1, 2026-11-12). Each LIBRARY song this
  * browser plays is one row on the server, written when it ends:
  *   track_id, this browser's id, when it started, how long it really
- *   played (wall clock while playing; a pause adds nothing), its length,
- *   and how it ended: `finished` at 90 % or more, else `skipped` (next,
+ *   played (wall clock while playing; a pause or a seek adds nothing, and
+ *   a song that runs to its end is NOT padded up to its length: owner
+ *   decision 2026-11-14, count real time), its length, and how it ended:
+ *   `finished` when it ran to its own end or at 90 % or more, else `skipped` (next,
  *   or a queue row picked) or `stopped` (stop, a new play, casting to a
  *   room, the page closed).
  * Whose it is: the "listening as" person when one was picked, "nobody" as
@@ -444,7 +446,8 @@ const ListenLog = (() => {
     save(load().filter((r) => !gone.has(r.uid)));
   };
   const newUid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  const outcome = (played, duration, skipped) => {
+  const outcome = (played, duration, skipped, ended) => {
+    if (ended) return 'finished';
     if (duration > 0 && played >= FINISHED_SHARE * duration) return 'finished';
     return skipped ? 'skipped' : 'stopped';
   };
@@ -476,14 +479,15 @@ const ListenLog = (() => {
   // The song now playing has ended, however. `natural`: it ran to its end.
   const close = (natural = false) => {
     if (!cur) return;
+    // The time really heard: a natural end doesn't pad it up to the length
+    // (a seek to the last seconds isn't listening).
     let played = playedNow();
     const duration = cur.duration || 0;
-    if (natural && duration > 0) played = Math.max(played, duration);
     if (duration > 0) played = Math.min(played, duration);
     const row = {
       uid: newUid(),
       track_id: cur.trackId, device_id: DeviceIdentity.id(), started_at: cur.startedAt,
-      played_sec: Math.round(played), outcome: outcome(played, duration, cur.skipped && !natural),
+      played_sec: Math.round(played), outcome: outcome(played, duration, cur.skipped && !natural, natural),
     };
     if (duration > 0) row.duration_sec = Math.round(duration);
     // An Up next session's song: the server feeds it back to the session.

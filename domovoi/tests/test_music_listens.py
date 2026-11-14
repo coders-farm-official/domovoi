@@ -60,6 +60,11 @@ def test_outcome_rule() -> None:
     assert o(30, 200, False) == "stopped"
     assert o(30, None, False) == "stopped"            # no length: never "finished"
     assert o(30, None, True) == "skipped"
+    # A natural end is finished however little was really heard (a seek to
+    # the last seconds): played is real time, never padded (2026-11-14).
+    assert o(20, 360, False, True) == "finished"
+    assert o(20, None, True, True) == "finished"
+    assert o(20, 360, False, False) == "stopped"
 
 
 def test_keep_setting_never_deletes_more_than_asked() -> None:
@@ -816,7 +821,7 @@ async def test_two_devices_claiming_one_person_at_once_get_one_yes(_db, clean) -
 
 @requires_db
 @pytest.mark.asyncio
-async def test_the_server_works_out_the_outcome_and_ignores_a_shared_screens_pick(_db, clean) -> None:
+async def test_the_server_keeps_a_natural_end_and_ignores_a_shared_screens_pick(_db, clean) -> None:
     ids = await _seed()
     admin, token = await _setup_household()
     async with _dev(token, "browser-tab") as tab, \
@@ -825,7 +830,8 @@ async def test_the_server_works_out_the_outcome_and_ignores_a_shared_screens_pic
         await adm.patch("/api/devices/browser-tab/shared-screen", json={"shared_screen": True})
         now = datetime.now(timezone.utc)
         r = await tab.post("/api/music/listens", json={"listens": [
-            # says finished at 10 of 200 s: stopped
+            # says finished (it ran to its end) at 10 s really heard of
+            # 200: kept, the player alone saw the end (2026-11-14)
             _listen(ids["t1"], "browser-tab", played_sec=10, outcome="finished",
                     listener_person_id=ids["sam"], started_at=(now - timedelta(minutes=30)).isoformat()),
             # says stopped at 195 of 200: finished
@@ -838,7 +844,32 @@ async def test_the_server_works_out_the_outcome_and_ignores_a_shared_screens_pic
         assert r.json()["accepted"] == 3
     rows = await _listens()
     assert [(r.outcome, r.person_id) for r in rows] == [
-        ("stopped", None), ("finished", None), ("skipped", None)]
+        ("finished", None), ("finished", None), ("skipped", None)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_lone_seeked_song_that_ran_to_its_end_is_accepted_as_finished(_db, clean) -> None:
+    """0:10 heard, a seek to 5:50 of 6:00, the song ends: about 20 s of real
+    time. Sent alone, soon after it began, it fits the played-seconds check
+    and counts as finished. Padded to the full 360 s (the old players), the
+    same row is more played than time passed: the batch is refused."""
+    ids = await _seed()
+    admin, token = await _setup_household()
+    async with _dev(token, "browser-seek") as c:
+        await _register(c, "browser-seek")
+        began = (datetime.now(timezone.utc) - timedelta(seconds=25)).isoformat()
+        padded = await c.post("/api/music/listens", json={"listens": [
+            _listen(ids["t1"], "browser-seek", started_at=began, played_sec=360,
+                    duration_sec=360, outcome="finished")]})
+        assert padded.status_code == 422
+        r = await c.post("/api/music/listens", json={"listens": [
+            _listen(ids["t1"], "browser-seek", started_at=began, played_sec=20,
+                    duration_sec=360, outcome="finished")]})
+        assert r.status_code == 200, r.text
+        assert r.json()["accepted"] == 1
+    rows = await _listens()
+    assert [(r.outcome, float(r.played_sec)) for r in rows] == [("finished", 20.0)]
 
 
 @requires_db

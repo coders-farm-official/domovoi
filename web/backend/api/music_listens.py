@@ -168,7 +168,9 @@ async def _feed_up_next(items: list[ListenIn]) -> None:
             "track_id": i.track_id, "device_id": i.device_id, "session_id": i.session_id,
             "started_at": _aware(i.started_at), "played_sec": i.played_sec,
             "duration_sec": i.duration_sec,
-            "outcome": music_listens.outcome_for(i.played_sec, i.duration_sec, i.outcome == "skipped"),
+            "outcome": music_listens.outcome_for(
+                i.played_sec, i.duration_sec, i.outcome == "skipped", i.outcome == "finished",
+            ),
         }
         for i in items if i.session_id is not None
     ]
@@ -186,8 +188,11 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
 
     Checked here, not taken on the player's word (review 2026-11-12): the
     outcome is worked out again from the seconds played and the length
-    (only the player's "skipped" is kept: a skip is something only the
-    player saw); a shared screen's rows are the household's whatever person
+    (only the player's "skipped" and "finished" are kept: a skip, and a
+    song running to its own end, are things only the player saw.
+    ``played_sec`` is the time really heard, pauses and seeks left out,
+    so a natural end can be "finished" with little played: 2026-11-14);
+    a shared screen's rows are the household's whatever person
     they name; a batch in which one device played longer in total than the
     time since its first song began is refused (422); and a device adds at
     most ``DEVICE_DAILY_CAP`` listens a day."""
@@ -234,6 +239,7 @@ async def post_listens(body: ListensIn) -> dict[str, Any]:
                     "duration_sec": item.duration_sec,
                     "outcome": music_listens.outcome_for(
                         item.played_sec, item.duration_sec, item.outcome == "skipped",
+                        item.outcome == "finished",
                     ),
                 },
                 now=now,

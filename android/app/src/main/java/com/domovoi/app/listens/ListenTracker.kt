@@ -7,8 +7,11 @@ package com.domovoi.app.listens
  *
  *  * `played_sec` is the time it was actually PLAYING (a monotonic clock
  *    that runs only between "playing" and "not playing"): a pause adds
- *    nothing, and a seek forward isn't listening;
- *  * `outcome` is `finished` once 90 % or more played, whatever ended it;
+ *    nothing, and a seek forward isn't listening. Never padded, not even
+ *    when the song runs to its end (owner decision 2026-11-14: count real
+ *    time); only capped at the song's length;
+ *  * `outcome` is `finished` when the song ran to its own end (however
+ *    little was heard) or once 90 % or more played, whatever ended it;
  *    else `skipped` when next, a queue row or removing the current song
  *    ended it; else `stopped` (stop, a new play, casting, the app closing);
  *  * a song that played under a second is not a listen.
@@ -74,11 +77,9 @@ class ListenTracker(
         cur = null
         var playedMs = c.playedMs + (c.sinceMono?.let { monoMs() - it } ?: 0)
         val duration = c.durationSec
-        if (duration != null) {
-            val durMs = (duration * 1000).toLong()
-            if (natural) playedMs = maxOf(playedMs, durMs)
-            playedMs = minOf(playedMs, durMs)
-        }
+        // The time really heard: a natural end doesn't pad it up to the
+        // length (a seek to the last seconds isn't listening).
+        if (duration != null) playedMs = minOf(playedMs, (duration * 1000).toLong())
         val played = playedMs / 1000.0
         if (played < 1.0) return null
         return ListenRow(
@@ -87,7 +88,7 @@ class ListenTracker(
             startedAtMs = c.startedAtMs,
             playedSec = Math.round(played).toInt(),
             durationSec = duration?.let { Math.round(it).toInt() },
-            outcome = outcomeFor(played, duration, c.skipped && !natural),
+            outcome = outcomeFor(played, duration, c.skipped && !natural, ended = natural),
         )
     }
 
@@ -95,8 +96,10 @@ class ListenTracker(
         /** `finished` from this share of the song on (music_listens.py FINISHED_SHARE). */
         const val FINISHED_SHARE = 0.9
 
-        /** domovoi/music_listens.py `outcome_for`, word for word. */
-        fun outcomeFor(playedSec: Double, durationSec: Double?, skipped: Boolean): String = when {
+        /** domovoi/music_listens.py `outcome_for`, word for word. [ended]:
+         *  the song ran to its own end. */
+        fun outcomeFor(playedSec: Double, durationSec: Double?, skipped: Boolean, ended: Boolean = false): String = when {
+            ended -> "finished"
             durationSec != null && durationSec > 0 && playedSec >= FINISHED_SHARE * durationSec -> "finished"
             skipped -> "skipped"
             else -> "stopped"

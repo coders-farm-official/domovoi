@@ -63,10 +63,19 @@ MAX_CLOCK_AHEAD = timedelta(minutes=10)
 MAX_SECONDS = 86_400
 
 
-def outcome_for(played_sec: float, duration_sec: float | None, skipped: bool) -> str:
-    """``finished`` once 90 % or more played (whatever ended it), else
-    ``skipped`` when a skip ended it, else ``stopped``. The one rule every
-    player follows (the browser's copy is ``ListenLog`` in player.jsx)."""
+def outcome_for(played_sec: float, duration_sec: float | None, skipped: bool,
+                ended: bool = False) -> str:
+    """``finished`` when the song ran to its own end (``ended``: a player's
+    natural end, whatever seconds were really heard) or once 90 % or more
+    played (whatever ended it), else ``skipped`` when a skip ended it, else
+    ``stopped``. The one rule every player follows (the browser's copy is
+    ``ListenLog`` in player.jsx, the phone's ``ListenTracker.outcomeFor``).
+
+    ``played_sec`` is the time really heard: a pause or a seek forward adds
+    nothing, so a song seeked to its last seconds and left to end is a
+    short ``finished`` listen (owner decision 2026-11-14)."""
+    if ended:
+        return "finished"
     if duration_sec and duration_sec > 0 and played_sec >= FINISHED_SHARE * duration_sec:
         return "finished"
     return "skipped" if skipped else "stopped"
