@@ -92,6 +92,7 @@ object SharePayload {
     const val MAX_LOCATION = 200
     const val MAX_PHONE_NAME = 80
     const val MAX_ICAL_UID = 300
+    const val PLATFORM = "android"
 
     /** The title a private or confidential event goes with. */
     const val BUSY = "busy"
@@ -210,6 +211,9 @@ object SharePayload {
         }
         val events = perCal.values.sumOf { it.size }
         val body = buildJsonObject {
+            // Which app sent it ("android" | "ios"; the server answers 422
+            // to anything else, and reads none as android).
+            put("platform", PLATFORM)
             clip(phoneName, MAX_PHONE_NAME)?.let { put("phone_name", it) }
             put("window_start_ms", window.startMs)
             put("window_end_ms", window.endMs)

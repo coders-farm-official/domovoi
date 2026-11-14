@@ -46,7 +46,8 @@ class SharePayloadTest {
         val r = row(345, begin = 1_700_003_600_000, end = 1_700_007_200_000, title = "Dentist", location = " Main St ")
         val b = SharePayload.build("Pixel 8", SharePayload.window(now), listOf(work), listOf(r), setOf(12L), now).body
         // Every key at every level is pinned: a new field fails here first.
-        assertEquals(setOf("phone_name", "window_start_ms", "window_end_ms", "calendars"), b.keys)
+        assertEquals(setOf("platform", "phone_name", "window_start_ms", "window_end_ms", "calendars"), b.keys)
+        assertEquals("android", b["platform"]!!.jsonPrimitive.content)
         assertEquals("Pixel 8", b["phone_name"]!!.jsonPrimitive.content)
         val c = cals(b).single().jsonObject
         assertEquals(setOf("calendar_id", "name", "color", "events"), c.keys)
@@ -265,7 +266,7 @@ class SharePayloadTest {
      *  the hash (it changes every read). */
     @Test fun theGenerationGoesAtTheTopAndNotIntoTheHash() {
         val a = SharePayload.build("Pixel 8", SharePayload.window(now), listOf(work), listOf(row(1)), setOf(12L), now, generation = now).body
-        assertEquals(setOf("phone_name", "window_start_ms", "window_end_ms", "generation", "calendars"), a.keys)
+        assertEquals(setOf("platform", "phone_name", "window_start_ms", "window_end_ms", "generation", "calendars"), a.keys)
         assertEquals(now, a["generation"]!!.jsonPrimitive.long)
         val b = SharePayload.build("Pixel 8", SharePayload.window(now + 1000), listOf(work), listOf(row(1)), setOf(12L), now, generation = now + 1000).body
         assertEquals(SharePayload.hash(a), SharePayload.hash(b))
