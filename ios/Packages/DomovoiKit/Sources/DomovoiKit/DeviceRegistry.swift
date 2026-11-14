@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// This install's identity on the server — the iOS half of the web's
 /// `DeviceIdentity` (web/static/data.js) and of
@@ -26,20 +27,48 @@ public enum DeviceRegistry {
         /// ``sharedScreenAnswer(_:)``, which reads absent as "no".
         public let sharedScreen: Bool?
 
-        public init(deviceID: String = "", name: String = "", platform: String? = nil, lastSeenAt: String? = nil, sharedScreen: Bool? = nil) {
+        /// Whose phone this is, as THE SERVER says (V035; "this is me",
+        /// 2026-11-12): the person's id on that server, their name, and when
+        /// this phone itself last said "this is me" (nil after an admin set
+        /// it). For display only: what the app stores is worked out from the
+        /// raw answer by ``ownerAnswer(_:before:heldKey:)``, because there an
+        /// absent field and a null one mean different things.
+        public let ownerPersonID: Int?
+        public let ownerPersonName: String?
+        public let ownerClaimedAt: String?
+
+        public init(
+            deviceID: String = "",
+            name: String = "",
+            platform: String? = nil,
+            lastSeenAt: String? = nil,
+            sharedScreen: Bool? = nil,
+            ownerPersonID: Int? = nil,
+            ownerPersonName: String? = nil,
+            ownerClaimedAt: String? = nil
+        ) {
             self.deviceID = deviceID
             self.name = name
             self.platform = platform
             self.lastSeenAt = lastSeenAt
             self.sharedScreen = sharedScreen
+            self.ownerPersonID = ownerPersonID
+            self.ownerPersonName = ownerPersonName
+            self.ownerClaimedAt = ownerClaimedAt
         }
 
+        // **No `claim_key` here, on purpose.** The one-time key goes from the
+        // raw answer straight into the ``ClaimBook`` (the Keychain), so no
+        // value that is passed around, compared or printed ever holds it.
         enum CodingKeys: String, CodingKey {
             case deviceID = "device_id"
             case name
             case platform
             case lastSeenAt = "last_seen_at"
             case sharedScreen = "shared_screen"
+            case ownerPersonID = "owner_person_id"
+            case ownerPersonName = "owner_person_name"
+            case ownerClaimedAt = "owner_claimed_at"
         }
 
         public init(from decoder: any Decoder) throws {
@@ -49,6 +78,9 @@ public enum DeviceRegistry {
             platform = try c.decodeIfPresent(String.self, forKey: .platform)
             lastSeenAt = try c.decodeIfPresent(String.self, forKey: .lastSeenAt)
             sharedScreen = try c.decodeIfPresent(Bool.self, forKey: .sharedScreen)
+            ownerPersonID = (try? c.decodeIfPresent(Int.self, forKey: .ownerPersonID)) ?? nil
+            ownerPersonName = (try? c.decodeIfPresent(String.self, forKey: .ownerPersonName)) ?? nil
+            ownerClaimedAt = (try? c.decodeIfPresent(String.self, forKey: .ownerClaimedAt)) ?? nil
         }
     }
 
@@ -68,50 +100,29 @@ public enum DeviceRegistry {
 
     /// The register body, as bytes.
     ///
-    /// `ownerPersonId` is this server's "This phone belongs to" (Settings →
-    /// Connection, a `people.id` kept as text): **always sent**, as a
-    /// positive integer or as JSON `null`, because the route documents that a
-    /// field left out keeps the stored value — so omitting it would keep a
-    /// stale owner on the server forever. Null (nobody, or an id that isn't a
-    /// number ≥ 1) clears it.
+    /// **No `owner_person_id`** (2026-11-12, `DeviceRegistry.kt`
+    /// `registerPayload`). Left out, the server keeps the person the phone
+    /// already has. Sending it — as this app did until now, `null` for a
+    /// phone nobody had picked — would undo, on every app start, a claim made
+    /// on the People page, in the dashboard or by an admin. Whose the phone
+    /// is comes back in the ANSWER instead (``rememberDeviceAnswer(_:server:data:)``).
     ///
     /// Returning `Data` rather than a dictionary is what lets the test assert
-    /// the bytes that go on the wire, including that `owner_person_id` is
-    /// *present* and null rather than missing — the one thing about this body
-    /// that a `[String: Any]` round-trip cannot tell apart.
-    public static func registerPayload(
-        deviceID: String,
-        name: String,
-        userAgent: String,
-        ownerPersonID: String?
-    ) throws -> Data {
-        try JSONEncoder().encode(Registration(
-            deviceID: deviceID,
-            name: name,
-            userAgent: userAgent,
-            ownerPersonID: personID(ownerPersonID)
-        ))
-    }
-
-    /// Kotlin's `ownerPersonId?.trim()?.toLongOrNull()?.takeIf { it >= 1 }`.
-    static func personID(_ raw: String?) -> Int64? {
-        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let value = Int64(trimmed), value >= 1 else { return nil }
-        return value
+    /// the bytes that go on the wire, including that the owner is *absent*.
+    public static func registerPayload(deviceID: String, name: String, userAgent: String) throws -> Data {
+        try JSONEncoder().encode(Registration(deviceID: deviceID, name: name, userAgent: userAgent))
     }
 
     struct Registration: Encodable {
         let deviceID: String
         let name: String
         let userAgent: String
-        let ownerPersonID: Int64?
 
         enum CodingKeys: String, CodingKey {
             case deviceID = "device_id"
             case name
             case platform
             case userAgent = "user_agent"
-            case ownerPersonID = "owner_person_id"
         }
 
         func encode(to encoder: any Encoder) throws {
@@ -120,10 +131,6 @@ public enum DeviceRegistry {
             try c.encode(name, forKey: .name)
             try c.encode(DeviceRegistry.platform, forKey: .platform)
             try c.encode(userAgent, forKey: .userAgent)
-            // `encodeNil` rather than letting an optional be skipped: the
-            // field must be THERE.
-            if let ownerPersonID { try c.encode(ownerPersonID, forKey: .ownerPersonID) }
-            else { try c.encodeNil(forKey: .ownerPersonID) }
         }
     }
 
@@ -132,7 +139,14 @@ public enum DeviceRegistry {
         try JSONEncoder().encode(["name": name])
     }
 
-    /// Upsert this device's row and refresh `last_seen_at`.
+    /// Upsert this device's row and refresh `last_seen_at` **at `server`**,
+    /// and store what the answer says about whose the phone is there.
+    ///
+    /// `registerWith` (`DeviceRegistry.kt`): the call goes only while
+    /// `server` is still the active one (`onlyTo`), and the answer is filed
+    /// under `server` — the address the caller read BEFORE the await, never
+    /// the active one afterwards (read-after-await). With no `book` the
+    /// answer is only returned.
     ///
     /// Returns nil on any failure, as Android's `registerDevice` does — the
     /// app works unnamed, its queue entries just carry no tag — so no caller
@@ -140,18 +154,21 @@ public enum DeviceRegistry {
     /// Whether it should be called at all is ``shouldRegister(now:lastAskedAt:reason:connected:paired:)``.
     public static func register(
         with client: DomovoiClient,
+        book: (any ClaimBook)? = nil,
+        server: String? = nil,
         deviceID: String,
         name: String,
-        userAgent: String,
-        ownerPersonID: String?
+        userAgent: String
     ) async -> DeviceRow? {
-        guard let body = try? registerPayload(
-            deviceID: deviceID,
-            name: name,
-            userAgent: userAgent,
-            ownerPersonID: ownerPersonID
+        guard let body = try? registerPayload(deviceID: deviceID, name: name, userAgent: userAgent) else {
+            return nil
+        }
+        guard let data = try? await client.raw(
+            method: "POST", path: "/api/devices/register", body: body, onlyTo: server
         ) else { return nil }
-        return try? await client.post("/api/devices/register", body: body, as: DeviceRow.self)
+        guard let row = try? DomovoiClient.decode(data, as: DeviceRow.self) else { return nil }
+        if let book, let server { rememberDeviceAnswer(book, server: server, data: data) }
+        return row
     }
 
     /// Rename this device. Throws, so the Settings panel can report the
@@ -251,7 +268,7 @@ public enum DeviceRegistry {
     /// The cadence rule, without the timer.
     ///
     /// Android hangs this on Compose: a `LaunchedEffect` keyed on the
-    /// connection, the server, the token and the owner fires one register
+    /// connection, the server and the token fires one register
     /// when any of them changes, and a second effect wakes every
     /// ``reaskEveryMs`` while the lifecycle is `STARTED` and registers if
     /// ``reaskGapMs`` has passed since the last ask. Nothing pushes an
@@ -265,7 +282,7 @@ public enum DeviceRegistry {
     /// app leaves the screen on both phones).
     ///
     /// `reason` being `.changed` is Android's first effect — a new
-    /// connection, server, token or owner — and it still respects the gap, as
+    /// connection, server or token — and it still respects the gap, as
     /// Android's second effect does, because the two can fire together.
     public static func shouldRegister(
         now: Int64,
@@ -284,8 +301,9 @@ public enum DeviceRegistry {
     }
 
     public enum ReaskReason: Equatable, Sendable {
-        /// The connection came up, the server changed, a token arrived, or
-        /// "This phone belongs to" changed.
+        /// The connection came up, the server changed, or a token arrived.
+        /// (Not whose the phone is: since 2026-11-12 that is the answer's,
+        /// never the body's — ``registerPayload(deviceID:name:userAgent:)``.)
         case changed
         /// The on-screen poll woke up.
         case onScreenTick
@@ -317,9 +335,10 @@ public enum DeviceRegistry {
 
 /// What this install tells the server about itself, as one value.
 ///
-/// The four arguments of ``DeviceRegistry/register(with:deviceID:name:userAgent:ownerPersonID:)``,
-/// collected so that ``ShellModel``'s sender takes one closure rather than
-/// four and so that the **two that cannot be read in `DomovoiKit` at all**
+/// The three arguments of ``DeviceRegistry/register(with:book:server:deviceID:name:userAgent:)``
+/// that are this install's, collected so that ``ShellModel``'s sender takes
+/// one closure rather than three and so that the **two that cannot be read in
+/// `DomovoiKit` at all**
 /// have an obvious home. `name` and `userAgent` come from `UIDevice`
 /// (``DeviceRegistry/suggestedDeviceName(model:)``,
 /// ``DeviceRegistry/userAgent(systemVersion:model:)``), and this package does
@@ -327,26 +346,20 @@ public enum DeviceRegistry {
 /// over, which is also what keeps the UIKit read out of a `Sendable` closure
 /// that runs anywhere.
 ///
-/// `ownerPersonID` is this server's "This phone belongs to", which Android
-/// keeps per server in its prefs
-/// (`ServerCredentials.ownerFor(prefs.owners.value, server)`,
-/// `AppShell.kt:354`). **There is no such preference on iOS yet** — nothing
-/// in ``ShellStore`` holds one — so every caller today passes nil, which the
-/// route reads as "nobody" and clears. That is the right wire value for a
-/// phone nobody has claimed; the batch that ports Settings → Connection's
-/// owner field has to fill this in, and `I1D1-REPORT.md` lists it.
+/// It carried a fourth, `ownerPersonID`, until 2026-11-12: whose phone this
+/// is no longer rides on the registration (an app start must not undo a claim
+/// made elsewhere), so it is not this install's to say. It is the server's
+/// answer, kept per server by ``DeviceOwnerBook``.
 public struct DeviceSelf: Equatable, Sendable {
 
     public let deviceID: String
     public let name: String
     public let userAgent: String
-    public let ownerPersonID: String?
 
-    public init(deviceID: String, name: String, userAgent: String, ownerPersonID: String? = nil) {
+    public init(deviceID: String, name: String, userAgent: String) {
         self.deviceID = deviceID
         self.name = name
         self.userAgent = userAgent
-        self.ownerPersonID = ownerPersonID
     }
 }
 
@@ -449,4 +462,285 @@ public enum DeviceIdentity {
         }
         return true
     }
+}
+
+// ===========================================================================
+// "This is me" — whose phone this is, per server (2026-11-12)
+// ===========================================================================
+//
+// `DeviceRegistry.kt` (Android a1e611b6) and MOBILE-HANDOFF-2026-11-12 §1.
+// The server decides (web/backend/api/devices.py `claim_decision`), and every
+// device answer — the registration's and the claim's — says who the phone
+// belongs to: `owner_person_id` / `owner_person_name` / `owner_claimed_at`.
+// That ANSWER is what the app stores and shows, per server, never what it
+// asked for, so a refused claim is never shown as the owner. Only
+// ``claimThisPhone(client:book:server:deviceID:personID:)`` ("this is me" /
+// "not me", and Settings' "This phone belongs to") changes it.
+
+/// The person a server says this phone is: `id` on THAT server, the name it
+/// had in the answer, and when this phone itself last said "this is me" (nil
+/// after an admin set it, or a claim from before keys). `DeviceOwner`.
+public struct DeviceOwner: Equatable, Sendable, Codable {
+    public let id: Int
+    public let name: String
+    public let claimedAt: String?
+
+    public init(id: Int, name: String = "", claimedAt: String? = nil) {
+        self.id = id
+        self.name = name
+        self.claimedAt = claimedAt
+    }
+}
+
+/// Where whose-phone-this-is and the claim key are kept, per server
+/// (normalised address). ``DeviceOwnerBook`` in the app; the tests use the
+/// same type over a ``SavedStateBox`` and an ``InMemoryKeychain``.
+/// `ClaimBook` (`DeviceRegistry.kt`).
+public protocol ClaimBook: AnyObject, Sendable {
+    func deviceOwner(for server: String) -> DeviceOwner?
+    func claimKey(for server: String) -> String?
+    /// Store `owner` (nil: nobody) as the phone's owner at `server`, and
+    /// `claimKey` as the key it holds there (nil: none).
+    func rememberDeviceOwner(_ owner: DeviceOwner?, claimKey: String?, for server: String)
+    func setSharedScreen(_ shared: Bool, for server: String)
+    /// What `server` last said about this phone being a shared screen; nil
+    /// before it has answered.
+    func sharedScreen(for server: String) -> Bool?
+}
+
+/// The app's ``ClaimBook``: owners in `UserDefaults` (they are not secret —
+/// the dashboard shows them to the household), claim keys in the Keychain
+/// (``ClaimKeyVault``), shared-screen answers in memory (the shell re-asks
+/// within seconds of every launch).
+///
+/// `@unchecked Sendable` with the reason the house rule asks for: every
+/// mutable thing is behind the one `Mutex`, the ``SavedState`` and the vault
+/// are `Sendable`, and ``changed`` is set once by the shell before any call.
+public final class DeviceOwnerBook: ClaimBook, @unchecked Sendable {
+
+    /// Its own `UserDefaults` key, under the app's prefix, for the reason
+    /// ``PlayerListenerStore/key`` gives about the shell's blob.
+    public static let key = "domovoi.device.owners"
+
+    private struct State {
+        var owners: [String: DeviceOwner]
+        /// Keys read from the Keychain so far; `.some(nil)` is "read, none".
+        var keys: [String: String?] = [:]
+        var shared: [String: Bool] = [:]
+    }
+
+    private let place: any SavedState
+    private let vault: ClaimKeyVault
+    private let state: Mutex<State>
+
+    /// Told after every change of owner, key or shared answer, off no
+    /// particular thread. Carries nothing: a listener reads what it needs.
+    public var changed: (@Sendable () -> Void)?
+
+    public init(place: (any SavedState)? = nil, vault: ClaimKeyVault = ClaimKeyVault()) {
+        let place = place ?? UserDefaultsSavedState(key: DeviceOwnerBook.key)
+        self.place = place
+        self.vault = vault
+        let owners = place.read().flatMap { try? JSONDecoder().decode([String: DeviceOwner].self, from: $0) } ?? [:]
+        self.state = Mutex(State(owners: owners))
+    }
+
+    private static func k(_ server: String) -> String { ServerCredentials.normalize(server) }
+
+    public func deviceOwner(for server: String) -> DeviceOwner? {
+        state.withLock { $0.owners[Self.k(server)] }
+    }
+
+    public func claimKey(for server: String) -> String? {
+        let key = Self.k(server)
+        guard !key.isEmpty else { return nil }
+        if let cached = state.withLock({ $0.keys[key] }) { return cached }
+        let read = vault.key(for: key)
+        state.withLock { $0.keys[key] = .some(read) }
+        return read
+    }
+
+    /// Whether a key is held for `server`, without handing the key out.
+    public func holdsClaimKey(for server: String) -> Bool { claimKey(for: server) != nil }
+
+    public func rememberDeviceOwner(_ owner: DeviceOwner?, claimKey: String?, for server: String) {
+        let key = Self.k(server)
+        guard !key.isEmpty else { return }
+        let safe = headerSafeClaimKey(claimKey)
+        let before = self.claimKey(for: key)
+        let owners: [String: DeviceOwner]? = state.withLock { s in
+            let next: [String: DeviceOwner] = {
+                var o = s.owners
+                o[key] = owner
+                return o
+            }()
+            s.keys[key] = .some(safe)
+            guard next != s.owners else { return nil }
+            s.owners = next
+            return next
+        }
+        if let owners, let blob = try? JSONEncoder().encode(owners) { place.write(blob) }
+        if safe != before { vault.set(safe, for: key) }
+        if owners != nil || safe != before { changed?() }
+    }
+
+    public func setSharedScreen(_ shared: Bool, for server: String) {
+        let key = Self.k(server)
+        guard !key.isEmpty else { return }
+        let moved = state.withLock { s -> Bool in
+            guard s.shared[key] != shared else { return false }
+            s.shared[key] = shared
+            return true
+        }
+        if moved { changed?() }
+    }
+
+    public func sharedScreen(for server: String) -> Bool? {
+        state.withLock { $0.shared[Self.k(server)] }
+    }
+
+    /// The phone forgot `server`: its owner and its key go with it
+    /// (`Prefs.forgetServer`, `rememberDeviceOwner(url, null, null)`).
+    public func forget(server: String) {
+        rememberDeviceOwner(nil, claimKey: nil, for: server)
+        state.withLock { _ = $0.shared.removeValue(forKey: Self.k(server)) }
+    }
+}
+
+/// What a device answer means for the phone at its server, or nil when the
+/// answer says nothing about whose it is (a server from before V035).
+///
+/// The web's `DeviceIdentity.rememberOwner` rule (`ownerAnswer`,
+/// `DeviceRegistry.kt`): the key comes once, in the answer to the claim
+/// that minted it; a phone that is nobody's now, or whose person changed
+/// without a new key (an admin set it), holds none.
+public struct OwnerAnswer: Equatable, Sendable {
+    public let owner: DeviceOwner?
+    public let claimKey: String?
+}
+
+public func ownerAnswer(_ answer: [String: Any], before: DeviceOwner?, heldKey: String?) -> OwnerAnswer? {
+    guard answer.keys.contains("owner_person_id") else { return nil }
+    let id: Int? = {
+        guard let n = answer["owner_person_id"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else {
+            return nil
+        }
+        return n.intValue
+    }()
+    let next = id.map {
+        DeviceOwner(
+            id: $0,
+            name: answer["owner_person_name"] as? String ?? "",
+            claimedAt: answer["owner_claimed_at"] as? String
+        )
+    }
+    let minted = headerSafeClaimKey(answer["claim_key"] as? String)
+    let key: String?
+    if let minted {
+        key = minted
+    } else if next == nil {
+        key = nil
+    } else if let before, before.id != next?.id {
+        key = nil
+    } else {
+        key = heldKey
+    }
+    return OwnerAnswer(owner: next, claimKey: key)
+}
+
+/// Store what `data` (a device answer) says about the phone at `server` —
+/// the server the call was made TO, read before it, never the active one
+/// afterwards. `rememberDeviceAnswer` (`DeviceRegistry.kt`).
+public func rememberDeviceAnswer(_ book: any ClaimBook, server: String, data: Data) {
+    guard let row = try? JSONDecoder().decode(DeviceRegistry.DeviceRow.self, from: data),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return }
+    book.setSharedScreen(DeviceRegistry.sharedScreenAnswer(row), for: server)
+    if let answer = ownerAnswer(object, before: book.deviceOwner(for: server), heldKey: book.claimKey(for: server)) {
+        book.rememberDeviceOwner(answer.owner, claimKey: answer.claimKey, for: server)
+    }
+}
+
+/// The server's refusals of a claim (the hand-off's table), by what the app
+/// does about each. `ClaimRefusal` (`DeviceRegistry.kt`).
+public enum ClaimRefusal: Equatable, Sendable {
+    /// Another phone or browser already has the person: an admin's yes.
+    case takenByAnother
+    /// The id in the path isn't this phone: a bug.
+    case notThisDevice
+    /// No claim key, or the wrong one: drop it, offer "this is me".
+    case cantProve
+    /// An admin marked this phone a shared screen.
+    case sharedScreen
+    /// The person (or the device row) is gone: refresh People.
+    case gone
+    case other
+}
+
+/// `claimRefusal` (`DeviceRegistry.kt`), clause for clause.
+public func claimRefusal(status: Int, detail: String?) -> ClaimRefusal {
+    let d = detail ?? ""
+    if status == 409 { return .sharedScreen }
+    if status == 404 { return .gone }
+    guard status == 403 else { return .other }
+    if d.contains("already claimed by another phone or browser") { return .takenByAnother }
+    if d.contains("only that phone or browser itself") { return .notThisDevice }
+    if d.contains("can't prove it is") || d.contains("say \"this is me\" again") { return .cantProve }
+    return .other
+}
+
+/// The `detail` sentence of a refusal, or nil. `apiDetail` (`DeviceRegistry.kt`).
+public func claimDetail(_ error: DomovoiError) -> String? {
+    guard let detail = jsonDetail(of: error.failure?.body)?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !detail.isEmpty
+    else { return nil }
+    return detail
+}
+
+/// "This is me" (`personID`) or "not me" (nil) for THIS phone at `server`:
+/// `PUT /api/devices/{id}/person` with `X-Device-Id` and, **only when one is
+/// held for `server`**, the claim key. `claimThisPhone` (`DeviceRegistry.kt`).
+///
+/// - The key is read for `server` and the call goes only while `server` is
+///   the active one (`onlyTo`), so a key minted by one house can never be
+///   sent to another — not by a switch mid-call, and not by a redirect
+///   (``RedirectPolicy`` strips the header on every hop).
+/// - The answer is stored for `server` and returned: whose the phone is NOW,
+///   which is what the caller shows.
+/// - Throws the server's refusal unchanged (the caller shows its sentence,
+///   ``claimDetail(_:)``). A refusal that says the phone can't prove whose it
+///   is drops the stored key: it no longer works.
+public func claimThisPhone(
+    client: DomovoiClient,
+    book: any ClaimBook,
+    server: String,
+    deviceID: String,
+    personID: Int?
+) async throws(DomovoiError) -> DeviceOwner? {
+    let path = "/api/devices/\(DeviceRegistry.pathEscaped(deviceID))/person"
+    let body: Data
+    if let personID {
+        body = Data("{\"person_id\":\(personID)}".utf8)
+    } else {
+        body = Data("{\"person_id\":null}".utf8)
+    }
+    let data: Data
+    do {
+        data = try await client.raw(
+            method: "PUT", path: path, body: body,
+            headers: claimHeaders(deviceID: deviceID, claimKey: book.claimKey(for: server)),
+            onlyTo: server
+        )
+    } catch {
+        if let status = error.failure?.status,
+           claimRefusal(status: status, detail: claimDetail(error)) == .cantProve {
+            book.rememberDeviceOwner(book.deviceOwner(for: server), claimKey: nil, for: server)
+        }
+        throw error
+    }
+    guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {
+        throw DomovoiError.notDomovoi("that isn't Domovoi: the answer is not what this app understands")
+    }
+    rememberDeviceAnswer(book, server: server, data: data)
+    return book.deviceOwner(for: server)
 }

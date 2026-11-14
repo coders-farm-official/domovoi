@@ -83,6 +83,10 @@ struct PeopleView: View {
     /// model would have hidden rather than fixed.
     @State private var detail: PersonDetailModel?
 
+    /// The profile's "this phone" and "listening history" sections' model,
+    /// one per screen like ``detail``.
+    @State private var thisPhone: PeopleThisPhoneModel?
+
     /// The confirmation that is up, held **here** rather than in the tab that
     /// raises it.
     ///
@@ -135,6 +139,7 @@ struct PeopleView: View {
             if people == nil {
                 people = PeopleModel(in: model.container)
                 detail = PersonDetailModel(in: model.container)
+                thisPhone = PeopleThisPhoneModel(shell: model)
             }
             people?.start()
         }
@@ -142,6 +147,7 @@ struct PeopleView: View {
         .onDisappear {
             visible = false
             people?.stop()
+            thisPhone?.stop()
         }
         // **The toasts are the shell's**, drawn over the whole app: a toast
         // about a memory that would not save must outlive a scroll, and does
@@ -184,7 +190,9 @@ struct PeopleView: View {
                     people: people,
                     detail: detail,
                     forgetting: $forgetting,
-                    embedded: embedded
+                    embedded: embedded,
+                    thisPhone: thisPhone,
+                    onPeopleChanged: { people.roster.refresh() }
                 )
             } else {
                 roster(people)

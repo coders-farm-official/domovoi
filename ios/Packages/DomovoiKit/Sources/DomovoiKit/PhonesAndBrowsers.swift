@@ -248,123 +248,227 @@ public func pairingWithheldText(
 
 
 // ===========================================================================
-// §6.5 "Listening as" — whose resume positions this phone saves
+// §6.5 "Listening as" — whose songs and resume positions this phone's are
 // ===========================================================================
 
-/// This phone's record of who is listening.
+/// This phone's record of who is listening, **per server** (2026-11-12).
 ///
-/// `prefs.listenerPersonId` (`Prefs.kt:115`, `:580`), down to its shape:
-/// **one value for the install**, not one per server. Android keeps it that
-/// way deliberately — a person is a person whichever house the phone is
-/// pointed at, and the id is only ever *sent* to the house that is connected,
-/// which is where it means something.
+/// `Prefs.listenerPicks` + `Prefs.listenerPersonId` (`Prefs.kt`, Android
+/// a1e611b6): the stored thing is the *pick* for each server — a person id,
+/// ``ListenerPicks/household``, or nothing (follow whose the phone is) — and
+/// the listener the app acts as, ``personID``, is worked out from the pick,
+/// whose the phone is there and whether it is a shared screen
+/// (``ListenerPicks/effective(_:owner:shared:)``). It was one value for the
+/// install until then; a person id belongs to the server that issued it, and
+/// "follow the phone" can only mean something per server.
 ///
 /// It is a `String?` and not an `Int?` for the same reason Android's is: the
 /// stored value came from a text field once and may be anything, and the one
 /// place that matters — the query and the body — parses it as an integer and
 /// **leaves it out when it is not one** (``PlayerServerPositions/readQuery(deviceID:personID:)``).
-/// A `person_id=` the server cannot read is a 422, and a 422 on a position
-/// read is swallowed into "start at the top", which is a three-hour book
-/// silently resuming at zero.
+///
+/// **Which server is "here"** is the shell's to say: ``attach(book:server:)``
+/// hands over the owner book and the active address. A store nobody has
+/// attached (a test's) keeps its picks under the empty address, and the
+/// first attach moves them to the server the phone is on — the same move a
+/// pick saved before 2026-11-12, when this was one value, gets (`Prefs.kt`:
+/// "the pick from before it was per server belongs to the server the phone
+/// was on").
 ///
 /// Over ``SavedState`` rather than `UserDefaults` directly, so a test can
-/// drive it with a ``SavedStateBox`` and so this compiles and is tested by
-/// `pkgtest.sh` — the same seam ``SavedShellStore`` uses and for the same
-/// reason.
+/// drive it with a ``SavedStateBox``.
 public final class PlayerListenerStore: @unchecked Sendable {
 
     /// Its own `UserDefaults` key, under the app's prefix. **Not a field in
     /// the shell's blob**: the shell's blob is one write of the server, the
     /// trust and the pins, and picking a listener has nothing to do with any
-    /// of them — a listener change rewriting the trust book is how a
-    /// half-applied write comes to trust a server there is no row for
-    /// (``UserDefaultsSavedState/chatPinsKey`` says the same about chat pins).
+    /// of them (``UserDefaultsSavedState/chatPinsKey`` says the same about
+    /// chat pins).
     public static let key = "domovoi.player.listener"
 
+    private struct State {
+        var picks: [String: String]
+        var book: (any ClaimBook)?
+        var server: (@Sendable () -> String)?
+    }
+
+    /// The saved shape since 2026-11-12. The shape before it was the bare
+    /// id as text, which ``decode(_:)`` still reads.
+    private struct Saved: Codable {
+        var picks: [String: String]
+    }
+
     private let place: any SavedState
-    private let held = Mutex<String?>(nil)
+    private let held: Mutex<State>
 
     public init(place: (any SavedState)? = nil) {
         self.place = place ?? UserDefaultsSavedState(key: PlayerListenerStore.key)
-        held.withLock { $0 = Self.decode(self.place.read()) }
+        held = Mutex(State(picks: Self.decode(self.place.read())))
     }
 
-    /// Who is listening, or nil for "me (this device)" — the unidentified
-    /// listener's slot on the server.
-    public var personID: String? { held.withLock { $0 } }
+    /// The shell's wiring: whose the phone is per server, and the active
+    /// address, read at each question. Picks made before (under no server)
+    /// move to the active server unless it already has one of its own.
+    public func attach(book: any ClaimBook, server: @Sendable @escaping () -> String) {
+        let active = ServerCredentials.normalize(server())
+        let moved: [String: String]? = held.withLock { s in
+            s.book = book
+            s.server = server
+            guard let loose = s.picks[""] else { return nil }
+            s.picks[""] = nil
+            if !active.isEmpty, s.picks[active] == nil { s.picks[active] = loose }
+            return s.picks
+        }
+        if let moved { write(moved) }
+    }
 
-    /// Record the choice. A blank is a nil, so a stored empty string from any
-    /// source reads as "this device" rather than as a person called nothing.
+    private struct Here {
+        let server: String
+        let pick: String?
+        let owner: DeviceOwner?
+        let shared: Bool
+    }
+
+    private func here() -> Here {
+        let (book, server, picks) = held.withLock { ($0.book, $0.server, $0.picks) }
+        let active = ServerCredentials.normalize(server?() ?? "")
+        return Here(
+            server: active,
+            pick: picks[active],
+            owner: book?.deviceOwner(for: active),
+            shared: book?.sharedScreen(for: active) == true
+        )
+    }
+
+    /// Who the phone listens as on the active server, or nil for the
+    /// household: the pick there, else whose the phone is (not on a shared
+    /// screen). What every position request and listening-history row reads.
+    public var personID: String? {
+        let h = here()
+        return ListenerPicks.effective(h.pick, owner: h.owner?.id, shared: h.shared)
+    }
+
+    /// Whose the phone is on the active server, as it last said; nil on a
+    /// shared screen, where it is nobody's.
+    public var ownerHere: DeviceOwner? {
+        let h = here()
+        return h.shared ? nil : h.owner
+    }
+
+    /// Whether the active server last said this phone is a shared screen.
+    public var sharedHere: Bool { here().shared }
+
+    /// The raw pick for `server`: a person id, ``ListenerPicks/household``, or
+    /// nil (follow the phone). What a listening-history row is sent with.
+    public func pick(for server: String) -> String? {
+        held.withLock { $0.picks[ServerCredentials.normalize(server)] }
+    }
+
+    /// Pick who the phone listens as on the active server: a person id, or
+    /// nil for the household. A blank is the household, so a stored empty
+    /// string from any source never reads as a person called nothing. Picking
+    /// whose the phone is goes back to following it
+    /// (``ListenerPicks/toStore(_:owner:shared:)``).
     public func set(_ id: String?) {
         let tidy = id?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let next = (tidy?.isEmpty ?? true) ? nil : tidy
-        held.withLock { $0 = next }
-        place.write(Self.encode(next))
+        let chosen = (tidy?.isEmpty ?? true) ? nil : tidy
+        let h = here()
+        let stored = ListenerPicks.toStore(chosen, owner: h.owner?.id, shared: h.shared)
+        let next: [String: String] = held.withLock { s in
+            s.picks[h.server] = stored
+            return s.picks
+        }
+        write(next)
     }
 
-    /// A blob that cannot be read is **no listener**, not a crash: losing the
+    /// A server marked this phone a shared screen: its pick there goes (the
+    /// web's `SpokenAudio.forgetPick`).
+    public func forgetPick(for server: String) {
+        let key = ServerCredentials.normalize(server)
+        let next: [String: String]? = held.withLock { s in
+            guard s.picks[key] != nil else { return nil }
+            s.picks[key] = nil
+            return s.picks
+        }
+        if let next { write(next) }
+    }
+
+    private func write(_ picks: [String: String]) {
+        place.write((try? JSONEncoder().encode(Saved(picks: picks))) ?? Data())
+    }
+
+    /// A blob that cannot be read is **no pick**, not a crash: losing the
     /// choice costs one trip to Settings, where a throw here would be a
-    /// launch that fails on a corrupt plist.
-    private static func decode(_ blob: Data?) -> String? {
-        guard let blob, !blob.isEmpty,
-              let text = String(data: blob, encoding: .utf8)?
+    /// launch that fails on a corrupt plist. The shape from before
+    /// 2026-11-12 — the bare id as text — is a pick under no server, which
+    /// ``attach(book:server:)`` moves to the server the phone is on.
+    private static func decode(_ blob: Data?) -> [String: String] {
+        guard let blob, !blob.isEmpty else { return [:] }
+        if let saved = try? JSONDecoder().decode(Saved.self, from: blob) { return saved.picks }
+        guard let text = String(data: blob, encoding: .utf8)?
                   .trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty
-        else { return nil }
-        return text
-    }
-
-    private static func encode(_ id: String?) -> Data {
-        Data((id ?? "").utf8)
+        else { return [:] }
+        return ["": text]
     }
 }
 
-/// One row of the "Listening as" dropdown: `nil` first, then the household.
+/// One row of the "Listening as" dropdown, and of "This phone belongs to":
+/// `nil` first, then the household's people.
 ///
-/// `listenerOptions = listOf(null) + people` (`ConnectionPanel.kt:106`). The
-/// nil row's label is Android's own — `"me (this device)"` (`:338`) — and it
-/// is first because it is the state a phone that has never been asked is in.
+/// `listenerOptions = listOf(null) + people` (`ConnectionPanel.kt`). `name`
+/// is the person's name, for a toast; `label` is what the row reads, which
+/// for the phone's own person is "Alex (this phone)" in "Listening as".
 public struct ListenerOption: Equatable, Sendable, Identifiable {
 
-    /// Nil for "me (this device)".
+    /// Nil for the household (nobody in particular).
     public let personID: String?
     public let name: String
+    public let label: String
 
     public var id: String { personID ?? "" }
 
-    public init(personID: String?, name: String) {
+    public init(personID: String?, name: String, label: String? = nil) {
         self.personID = personID
         self.name = name
+        self.label = label ?? name
     }
 }
 
-/// The dropdown's rows for a household.
+/// The "Listening as" rows for a household: "household", then everyone,
+/// with the phone's own person marked (`ConnectionPanel.kt`'s label:
+/// `it.id == owner?.id && !sharedHere -> "${it.name} (this phone)"`).
 ///
-/// `ConnectionPanel.kt:106`. A people list that has not answered yet is
-/// **just the nil row**, which is honest: the picker still works, and the one
-/// thing it can offer is the slot that needs no server.
-public func listenerOptions(people: [Person]) -> [ListenerOption] {
-    [ListenerOption(personID: nil, name: PlayerStrings.listenerThisDevice)]
-        + people.map { ListenerOption(personID: String($0.id), name: $0.name) }
+/// A people list that has not answered yet is **just the nil row**, which is
+/// honest: the picker still works, and "household" needs no server.
+public func listenerOptions(people: [Person], ownerID: Int? = nil) -> [ListenerOption] {
+    [ListenerOption(personID: nil, name: ShellStrings.listenerHousehold)]
+        + people.map {
+            ListenerOption(
+                personID: String($0.id),
+                name: $0.name,
+                label: $0.id == ownerID ? ShellStrings.listenerThisPhone($0.name) : $0.name
+            )
+        }
 }
 
-/// Which option is selected for a stored id.
+/// Which option is selected for a listener id.
 ///
-/// `people.firstOrNull { it.id.toString() == listenerId }` (`:107`), and the
-/// **nil row when the stored person is not in the list** — a person removed
-/// from the household on the dashboard leaves this phone pointing at an id
-/// that no longer names anybody, and "me (this device)" is the only honest
-/// thing to show for it. Android lands on the same answer by `firstOrNull`.
+/// `people.firstOrNull { it.id.toString() == listenerId }`, and the **nil
+/// row when the person is not in the list** — a person removed from the
+/// household on the dashboard leaves this phone pointing at an id that no
+/// longer names anybody, and "household" is the only honest thing to show.
 public func selectedListener(_ options: [ListenerOption], personID: String?) -> ListenerOption? {
     guard let personID, !personID.isEmpty else { return options.first }
     return options.first { $0.personID == personID } ?? options.first
 }
 
-/// The household, for the "listening as" picker and the two hint chips.
+/// The household, for the "listening as" picker, "This phone belongs to"
+/// and the two hint chips.
 ///
 /// `rememberApi("people-hint") { it.api.get("/api/people").decode<List<PersonRow>>() }`
-/// (`AudiobooksScreen.kt:339`, `PodcastsScreen.kt:308`, and the panel's own at
-/// `ConnectionPanel.kt:103`). One read of `/api/people`, keyed to the server
+/// (`AudiobooksScreen.kt:339`, `PodcastsScreen.kt:308`, and the panel's own
+/// in `ConnectionPanel.kt`). One read of `/api/people`, keyed to the server
 /// like every other read in this app, so a house move re-asks and a name from
 /// the old house cannot be shown under the new one's listener id.
 ///
@@ -380,56 +484,51 @@ public final class PlayerListenerModel {
 
     private let listeners: PlayerListenerStore
 
-    /// Who this phone saves under, or nil for "me (this device)".
+    /// Who this phone listens as here, or nil for the household.
     ///
     /// **A stored mirror of the store, and that is the point.**
     /// ``PlayerListenerStore`` is a plain `final class` over a `Mutex` — it
     /// has to be, because it is `Sendable` and read off the main actor by
     /// every position request — so a `var` that read straight through it
-    /// would register no view against a change. A tick in the dropdown and a
-    /// chip on two screens are drawn from this, and until the review they
-    /// followed a pick only because the toast written on the same line
-    /// mutated ``ShellModel/toast`` and re-rendered the whole shell with
-    /// them. Drop that toast, or move the shell's toast into its own overlay
-    /// subtree, and the tick would silently stop following the pick while the
-    /// Simulator case went on passing.
-    ///
-    /// The store stays the truth — it is what a request reads, per request
-    /// (`ApiPositionRemote.kt:27`) — and this is re-synced from it in
-    /// ``start()`` and in ``adopt()``, never written independently. Three
-    /// views hold three of these models and the store is one value for the
-    /// install, so a pick made in Settings reaches the other two screens on
-    /// their next appearance, which is when `start()` runs.
+    /// would register no view against a change. Re-synced from the store in
+    /// ``start()`` and in ``adopt()``, never written independently.
     public private(set) var personID: String?
+
+    /// Whose the phone is here (nil: nobody's, or a shared screen), mirrored
+    /// from the store with ``personID`` and for the same reason.
+    public private(set) var owner: DeviceOwner?
+
+    /// Whether the server last said this phone is a shared screen.
+    public private(set) var shared = false
+
+    /// A "This phone belongs to" pick on its way to the server.
+    public private(set) var claiming = false
 
     public init(in container: AppContainer, listeners: PlayerListenerStore) {
         self.listeners = listeners
         self.personID = listeners.personID
+        self.owner = listeners.ownerHere
+        self.shared = listeners.sharedHere
         let client = container.client
         self.people = ApiRead(in: container) {
             try await client.get(PeoplePath.roster, as: [Person].self)
         }
     }
 
-    /// Take whatever the store now holds.
-    ///
-    /// Called after a pick — by the picker, next to ``ShellModel/listenerChanged(to:)``,
-    /// which is what actually writes — rather than taking the id as an
-    /// argument, so this and the store cannot disagree about a blank or an
-    /// untrimmed value (``PlayerListenerStore/set(_:)`` tidies both).
-    public func adopt() { personID = listeners.personID }
+    /// Take whatever the store now holds: after a pick, after a claim, and
+    /// on every appearance.
+    public func adopt() {
+        personID = listeners.personID
+        owner = listeners.ownerHere
+        shared = listeners.sharedHere
+    }
 
     /// The screen appeared.
     ///
     /// Re-read only when there is nothing yet, or when the house has moved
     /// (``ApiRead/serverChanged()``, which re-reads only if the address is
-    /// actually different). Three views share this model's shape and one of
-    /// them is a chip under a lazy list's header: a bare `refresh()` here
-    /// would ask `/api/people` again on every appearance of every one of them.
+    /// actually different).
     public func start() {
-        // The listener is one value for the install and this is one of three
-        // models that mirror it, so a pick made in Settings is taken here on
-        // the next appearance of this screen.
         adopt()
         if people.data == nil, people.error == nil {
             people.refresh()
@@ -440,19 +539,21 @@ public final class PlayerListenerModel {
 
     public func stop() { people.stop() }
 
-    /// The dropdown's rows.
-    public var options: [ListenerOption] { listenerOptions(people: people.data ?? []) }
+    /// The "Listening as" rows.
+    public var options: [ListenerOption] {
+        listenerOptions(people: people.data ?? [], ownerID: shared ? nil : owner?.id)
+    }
 
-    /// Which row is selected, which is the nil row for a person who has since
+    /// Which row is selected, which is "household" for a person who has since
     /// left the household.
     public var selected: ListenerOption? { selectedListener(options, personID: personID) }
 
     /// Whether a chip should be drawn at all.
     ///
     /// `val id = listenerId ?: return` (`AudiobooksScreen.kt:337`) — a phone
-    /// that has never picked anybody shows **nothing**, rather than a chip
-    /// saying "listening as this device", because that is the state every
-    /// phone starts in and a chip for it would be on every screen for ever.
+    /// listening as the household shows **nothing**, because that is the state
+    /// every phone starts in and a chip for it would be on every screen for
+    /// ever.
     public var showsChip: Bool { personID != nil }
 
     /// The chip's words, with an ellipsis until the name lands.
@@ -460,21 +561,59 @@ public final class PlayerListenerModel {
         PlayerStrings.listeningAsChip(options.first { $0.personID == personID }?.name)
     }
 
-    /// The toast after a pick (`ConnectionPanel.kt:369-372`).
+    /// The toast after a pick (`ConnectionPanel.kt`): the plain name, never
+    /// the "(this phone)" label.
     public func toast(for option: ListenerOption) -> String {
         option.personID == nil
-            ? ShellStrings.listeningAsThisDevice
+            ? ShellStrings.listeningAsHousehold
             : ShellStrings.listeningAs(option.name)
     }
 
     /// The card's failure sentence, or nil while there is nothing to say.
     ///
     /// Only when the read has **no data at all**: `peopleState.error != null
-    /// && peopleState.data == null` (`ConnectionPanel.kt:357`). A list that is
-    /// a few seconds old with a failed refresh behind it is still a list worth
+    /// && peopleState.data == null` (`ConnectionPanel.kt`). A list that is a
+    /// few seconds old with a failed refresh behind it is still a list worth
     /// picking from, which is the whole reason ``ApiRead`` keeps both.
     public var trouble: String? {
         guard people.data == nil, let why = people.error else { return nil }
         return PlayerStrings.couldNotLoadPeople(why)
+    }
+
+    // MARK: - "This phone belongs to"
+
+    /// Its rows: "nobody in particular", then everyone (`ConnectionPanel.kt`:
+    /// the same `listenerOptions`, labelled `it?.name ?: "nobody in particular"`).
+    public var ownerOptions: [ListenerOption] {
+        [ListenerOption(personID: nil, name: ShellStrings.nobodyInParticular)]
+            + (people.data ?? []).map { ListenerOption(personID: String($0.id), name: $0.name) }
+    }
+
+    /// The row the SERVER's answer selects — never what was last asked for,
+    /// so a refused claim never shows here. A person the roster does not
+    /// have (yet) is still named, from the answer.
+    public var selectedOwner: ListenerOption {
+        guard let owner else { return ownerOptions[0] }
+        return ownerOptions.first { $0.personID == String(owner.id) }
+            ?? ListenerOption(personID: String(owner.id), name: owner.name)
+    }
+
+    /// Whether the card is drawn at all: only on a paired phone (an unpaired
+    /// one would only be refused), as on Android.
+    public static func showsOwnerCard(paired: Bool) -> Bool { paired }
+
+    /// Pick whose this phone is, through the same PUT the People page uses,
+    /// and say the SERVER's answer (``claimHere(_:personID:)``). One at a
+    /// time: the picker is disabled while ``claiming``.
+    public func pickOwner(_ option: ListenerOption, shell: ShellModel) {
+        guard !claiming else { return }
+        claiming = true
+        let personID = option.personID.flatMap(Int.init)
+        Task { @MainActor [weak self] in
+            let out = await claimHere(shell, personID: personID)
+            self?.claiming = false
+            self?.adopt()
+            shell.showToast(out.message)
+        }
     }
 }

@@ -235,6 +235,8 @@ public final class ShellModel {
         phoneCanChat: Bool = false,
         deviceSelf: (@Sendable () -> DeviceSelf)? = nil,
         listeners: PlayerListenerStore? = nil,
+        owners: DeviceOwnerBook? = nil,
+        listenOutbox: ListenOutbox? = nil,
         player: ShellPlayerBuilder? = nil,
         probe: (@Sendable () async -> Bool)? = nil,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
@@ -244,7 +246,22 @@ public final class ShellModel {
         self.container = container
         self.phoneCanChat = phoneCanChat
         self.deviceSelf = deviceSelf
-        self.listeners = listeners ?? PlayerListenerStore()
+        let listenerStore = listeners ?? PlayerListenerStore()
+        self.listeners = listenerStore
+        // "This is me" and listening history (the CLAIM unit, 2026-11-14):
+        // whose the phone is per server, and the outbox. Given by the app;
+        // a shell built without them (a test's) keeps the owners in memory
+        // and logs nothing.
+        let owners = owners ?? DeviceOwnerBook(
+            place: SavedStateBox(), vault: ClaimKeyVault(items: InMemoryKeychain())
+        )
+        self.owners = owners
+        let store = container.store
+        listenerStore.attach(book: owners, server: { store.serverURL })
+        self.listens = Self.listenLog(
+            container: container, outbox: listenOutbox, listeners: listenerStore, owners: owners,
+            deviceSelf: deviceSelf
+        )
         self.buildPlayer = player ?? ShellModel.systemPlayer
         self.inputs = container.shellInputs()
         self.clock = clock
@@ -292,6 +309,9 @@ public final class ShellModel {
         }
         // Unclaimed server: "still not set up" is a toast like any other.
         unclaimed.say = { [weak self] text in self?.showToast(text) }
+        owners.changed = { [weak self] in
+            Task { @MainActor in self?.ownersChanged() }
+        }
         // A launch straight onto a waiting card has to count down too, and
         // the first `.active` is not a return, so `scenePhaseChanged` will
         // not refresh.
@@ -878,6 +898,9 @@ public final class ShellModel {
             if phase == .background, was != .background {
                 departed = true
                 container.appBackgrounded()
+                // Listening history waiting in the outbox goes when the app
+                // leaves the screen (`MainActivity.onStop`).
+                listens?.flushNow()
             }
         }
         updateReachability()
@@ -930,6 +953,7 @@ public final class ShellModel {
         // seconds of a book to a server that has never heard of it
         // ([[read-after-await-wrong-key]] in its simplest form).
         playerServerChanged()
+        ownersChanged()
         updateReachability()
         updateWaitTick()
         container.socket.serverChanged()
@@ -1106,15 +1130,22 @@ public final class ShellModel {
         // store by one switch — and the client reads the store, so the store
         // is what the request was actually aimed at.
         let asked = container.store.serverURL
+        // `book` + `server`: whose the phone is comes back in the answer and
+        // is filed under `asked` (``rememberDeviceAnswer(_:server:data:)``).
         let row = await DeviceRegistry.register(
             with: container.client,
+            book: owners,
+            server: asked,
             deviceID: who.deviceID,
             name: who.name,
-            userAgent: who.userAgent,
-            ownerPersonID: who.ownerPersonID
+            userAgent: who.userAgent
         )
         guard let row else { return }
         sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row), for: asked)
+        ownersChanged()
+        // The server answered: a good moment to send the songs waiting in
+        // the listening-history outbox (`registerDevice`, `DeviceRegistry.kt`).
+        listens?.flushSoon()
     }
 
     /// Fetch the capability manifest. Android fetches it at connect and again
@@ -1235,6 +1266,7 @@ public final class ShellModel {
         // first item is stamped with the house it came from.
         made.serverChanged(to: playerScope)
         made.listenerPersonID = listeners.personID
+        made.listens = listens
         // Where the player's own late sentences go. The two that come back
         // with nobody holding the question — a room's answer to the pause a
         // play here sent it, and a fire-and-forget room control that failed —
@@ -1320,6 +1352,98 @@ public final class ShellModel {
     public func listenerChanged(to personID: String?) {
         listeners.set(personID)
         heldPlayer?.listenerPersonID = personID
+    }
+
+    // MARK: - "this is me" and listening history (the CLAIM unit, 2026-11-14)
+
+    /// Whose the phone is per server, and the claim keys
+    /// (``DeviceOwnerBook``). Every claim and every registration answer is
+    /// written here, keyed by the server it was for.
+    public let owners: DeviceOwnerBook
+
+    /// Listening history from the phone's own player, or nil for a shell
+    /// built without an outbox (a test's). Handed to the player as its
+    /// ``PlayerModel/listens`` hook.
+    public let listens: ListenLog?
+
+    /// Bumped whenever whose the phone is, its key or the shared-screen
+    /// answer may have moved. Carries nothing: a view that draws the owner
+    /// reads it so that it follows (``DeviceOwnerBook`` is not observable).
+    public private(set) var ownerRevision = 0
+
+    /// Whose the phone is may have changed (a claim, a registration, a
+    /// server switch): the listener follows it (``PlayerListenerStore``),
+    /// the player is told, and views re-read. A shared screen loses its
+    /// "listening as" pick (the web's `SpokenAudio.forgetPick`).
+    public func ownersChanged() {
+        let server = container.store.serverURL
+        if owners.sharedScreen(for: server) == true { listeners.forgetPick(for: server) }
+        heldPlayer?.listenerPersonID = listeners.personID
+        // Bumped only when something a view draws moved: ``refresh()`` runs
+        // this, and runs once a second under the token-trouble countdown.
+        let seen = OwnerSeen(
+            server: ServerCredentials.normalize(server),
+            owner: owners.deviceOwner(for: server),
+            shared: owners.sharedScreen(for: server),
+            keyHeld: owners.holdsClaimKey(for: server),
+            listener: listeners.personID
+        )
+        if seen != ownerSeen {
+            ownerSeen = seen
+            ownerRevision += 1
+        }
+    }
+
+    private struct OwnerSeen: Equatable {
+        let server: String
+        let owner: DeviceOwner?
+        let shared: Bool?
+        let keyHeld: Bool
+        let listener: String?
+    }
+
+    @ObservationIgnored private var ownerSeen: OwnerSeen?
+
+    private static func listenLog(
+        container: AppContainer,
+        outbox: ListenOutbox?,
+        listeners: PlayerListenerStore,
+        owners: DeviceOwnerBook,
+        deviceSelf: (@Sendable () -> DeviceSelf)?
+    ) -> ListenLog? {
+        guard let outbox, let deviceSelf else { return nil }
+        let store = container.store
+        let lock = container.lock
+        let client = container.client
+        let active: @Sendable () -> String = { ServerCredentials.normalize(store.serverURL) }
+        let off = RecordingOff()
+        let sender = ListenSender(
+            outbox: outbox,
+            client: client,
+            server: active,
+            canSend: { server in !lock.roomModeActive && client.deviceToken != nil },
+            onRecordingOff: { off.fire() }
+        )
+        let log = ListenLog(
+            outbox: outbox,
+            tracker: ListenTracker(monoMs: TokenHealth.monotonicMs),
+            sender: sender,
+            server: active,
+            deviceID: { deviceSelf().deviceID },
+            pickFor: { listeners.pick(for: $0) },
+            sharedAt: { owners.sharedScreen(for: $0) == true },
+            roomMode: { lock.roomModeActive }
+        )
+        off.log = log
+        return log
+    }
+
+    /// The sender's "the household keeps none", on its way to the main
+    /// actor. `@unchecked Sendable`: its one property is main-actor
+    /// isolated and set once, before the sender can call ``fire()``.
+    private final class RecordingOff: @unchecked Sendable {
+        @MainActor weak var log: ListenLog?
+        func fire() { Task { @MainActor [weak self] in self?.log?.recordingOff() } }
     }
 
     /// Tear the loop down: the shell is going away.
@@ -1452,6 +1576,9 @@ public final class ShellModel {
     private func networkChanged() {
         networkGeneration += 1
         container.socket.wake()
+        // ...and the listening-history outbox goes (`AppContainer.kt`'s
+        // network watch, `listens.flushSoon(3_000)`).
+        listens?.flushSoon(delayMs: 3_000)
     }
 
     /// Act on a route asked for from outside the UI.

@@ -264,6 +264,16 @@ public final class PlayerModel {
     /// keys a place by (device, person).
     public var listenerPersonID: String?
 
+    /// Listening history (``ListenLog``), set by the shell; nil in the tests
+    /// that do not ask for it, and then nothing is logged. **The CLAIM
+    /// unit's hook (2026-11-14)**: one snapshot per published change
+    /// (``refreshNowPlaying()``) and four one-line calls that say why the
+    /// song in front changed — `skip` in ``next()``, ``jump(to:)`` and
+    /// ``remove(at:)``, `ended` in `itemFinished`, `stopped` in
+    /// ``play(_:startAt:resumeSec:speed:)`` and ``clear()``. Android's
+    /// `PlayerController.listens`, a1e611b6.
+    public var listens: (any PlayerListenHooks)?
+
     /// Which part of a folder book the engine is on.
     private var partIndex = 0
 
@@ -463,6 +473,7 @@ public final class PlayerModel {
             : PlayerStrings.playingOnThisDevice
         let left = leaveRoom(playing: starting)
         tagQueued(window.items, replaced: true)
+        listens?.stopped()
         queue = window.items
         index = window.index
         partIndex = 0
@@ -502,6 +513,7 @@ public final class PlayerModel {
     public func jump(to i: Int) {
         guard !target.isCasting else { return }
         guard i >= 0, i < queue.count else { return }
+        if i != index { listens?.skip() }
         index = i
         partIndex = 0
         activateSession()
@@ -516,6 +528,7 @@ public final class PlayerModel {
     public func remove(at i: Int) {
         guard i >= 0, i < queue.count else { return }
         let wasCurrent = i == index
+        if wasCurrent { listens?.skip() }
         queue.remove(at: i)
         if i < index { index -= 1 }
         if index >= queue.count { index = max(queue.count - 1, 0) }
@@ -548,6 +561,7 @@ public final class PlayerModel {
 
     /// `PlayerController.kt:400` — the place is flushed **first**.
     public func clear() {
+        listens?.stopped()
         flushSpokenPosition()
         queueServer = nil
         queue = []
@@ -664,6 +678,7 @@ public final class PlayerModel {
             ))
             return
         }
+        if index < queue.count - 1 { listens?.skip() }
         advanceItem()
     }
 
@@ -913,6 +928,7 @@ public final class PlayerModel {
             refreshNowPlaying()
             return
         }
+        listens?.ended()
         if index < queue.count - 1 {
             index += 1
             partIndex = 0
@@ -977,6 +993,9 @@ public final class PlayerModel {
     /// `CastAwarePlayer.refresh()` / `commandsChanged()` (`:245-281`) as one
     /// call: on iOS the dictionary is a push, so there is no listener plumbing.
     private func refreshNowPlaying() {
+        listens?.observe(ListenSnapshot(
+            item: current, playing: isPlaying, local: !target.isCasting, durationSec: engine.durationSec
+        ))
         guard let item = current else {
             nowPlaying.publish(nil)
             nowPlaying.setEnabled([])
