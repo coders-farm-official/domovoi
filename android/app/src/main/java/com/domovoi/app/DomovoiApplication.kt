@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.pm.ApplicationInfo
 import android.os.StrictMode
 import coil.ImageLoader
+import com.domovoi.app.player.CoverArt
 import coil.ImageLoaderFactory
 import com.domovoi.app.alerts.HelpNotifier
 import com.domovoi.app.alerts.IncidentNotifier
@@ -85,8 +86,13 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
      * (DeviceAuthInterceptor) and follow the same cleartext policy as every
      * other request (net/CleartextPolicy.kt). Without this Coil would build a
      * client of its own and its requests would be the only unauthenticated —
-     * and unpoliced — ones the app makes.
+     * and unpoliced — ones the app makes. Coil's copy of that client adds
+     * one interceptor, CoverArt.revalidate: a cover kept on disk is shown
+     * only once the server says it hasn't changed (a cover can change inside
+     * its file, V058). The copy shares the client's connections.
      */
     override fun newImageLoader(): ImageLoader =
-        ImageLoader.Builder(this).okHttpClient { container.api.http }.build()
+        ImageLoader.Builder(this).okHttpClient {
+            container.api.http.newBuilder().addInterceptor(CoverArt.revalidate).build()
+        }.build()
 }

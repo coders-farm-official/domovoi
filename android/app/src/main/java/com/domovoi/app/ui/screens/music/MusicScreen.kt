@@ -156,7 +156,9 @@ fun MusicScreen() {
 
     val npList = nowPlaying.data.orEmpty()
     val rooms = castRooms(npList)
-    val realPlaylists = playlists.data.orEmpty().filter { !it.isVirtual }
+    // The bulk-add picker: household playlists, never Favorites or one made
+    // from the music files (read-only; PlaylistReadOnly.kt).
+    val realPlaylists = bulkAddTargets(playlists.data.orEmpty())
 
     // ── Local playback (this device) ──────────────────────────────────
     fun toItem(t: LibraryTrack): PlayItem = libraryPlayItem(t)
@@ -248,20 +250,28 @@ fun MusicScreen() {
         scope.launch {
             var added = 0
             var dupes = 0
+            var refused: String? = null
             for (tid in trackIds) {
                 runAction {
                     app.api.post("/api/playlists/$pid/tracks", buildJsonObject {
                         put("track_id", tid)
                     })
                 }.onSuccess { added++ }.onFailure { e ->
-                    val msg = e.message ?: ""
-                    if (msg.contains("already", ignoreCase = true) || msg.contains("409")) dupes++
-                    else toast("add failed: $msg")
+                    when (val f = bulkAddFailure(e)) {
+                        BulkAddFailure.Duplicate -> dupes++
+                        // The playlist refuses every add (made from the music
+                        // files): no point asking for the rest.
+                        is BulkAddFailure.Refused -> refused = f.text
+                        is BulkAddFailure.Other -> toast("add failed: ${e.message ?: ""}")
+                    }
                 }
+                if (refused != null) break
             }
             toast(
-                "added $added track" + (if (added == 1) "" else "s") +
-                    (if (dupes > 0) ", $dupes already in" else ""),
+                refused ?: (
+                    "added $added track" + (if (added == 1) "" else "s") +
+                        (if (dupes > 0) ", $dupes already in" else "")
+                    ),
             )
             playlists.refresh()
             ui.selectedIds.clear()

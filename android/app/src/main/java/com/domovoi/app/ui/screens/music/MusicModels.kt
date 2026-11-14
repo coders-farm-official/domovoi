@@ -72,6 +72,10 @@ data class Playlist(
     @SerialName("is_virtual") val isVirtual: Boolean = false,
     @SerialName("cover_emoji") val coverEmoji: String? = null,
     @SerialName("cover_color") val coverColor: String? = null,
+    // Made from the music files (an .m3u file or the songs' own PLAYLIST
+    // tags, V058): read-only in Domovoi, copied to be changed
+    // (PlaylistReadOnly.kt). Absent from an older server: false.
+    val imported: Boolean = false,
 )
 
 @Serializable

@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Headphones
@@ -60,7 +61,9 @@ import kotlinx.serialization.json.putJsonArray
 
 /** Playlist detail drawer — tracks in playback order, play/shuffle to a
  *  room, edit meta, up/down reorder, remove, delete. Virtual Favorites
- *  can't be edited, reordered, or deleted. Mirrors web PlaylistDrawer. */
+ *  can't be edited, reordered, or deleted; a playlist made from the music
+ *  files (V058) can't be changed at all, and offers a copy instead
+ *  (PlaylistReadOnly.kt). Mirrors web PlaylistDrawer. */
 @Composable
 internal fun PlaylistDrawer(
     playlist: Playlist,
@@ -97,6 +100,27 @@ internal fun PlaylistDrawer(
     var confirmDelete by remember(playlist.id) { mutableStateOf(false) }
 
     val items = localOrder ?: tracksState.data.orEmpty()
+
+    // A 409 from any write here: the playlist is one the files own and this
+    // drawer opened from an older list. Say so in plain words and re-read
+    // the list, whose row then carries the flag that hides these controls.
+    fun failed(action: String, e: Throwable) {
+        val conflict = playlistConflictText(e)
+        toast(conflict ?: "$action failed: ${e.message}")
+        if (conflict != null) refreshPlaylists()
+    }
+
+    fun copy() {
+        scope.launchAction(
+            action = { copyPlaylist(app.api, playlist.id) },
+            onSuccess = { made ->
+                toast(copiedText(made))
+                refreshPlaylists()
+                if (open()) onClose()
+            },
+            onFailure = { toast("copy playlist failed: ${it.message}") },
+        )
+    }
 
     fun play(shuffle: Boolean) {
         val room = room ?: return
@@ -145,7 +169,7 @@ internal fun PlaylistDrawer(
                     )
                 }
             },
-            onFailure = { toast("update failed: ${it.message}") },
+            onFailure = { failed("update", it) },
         )
     }
 
@@ -164,7 +188,7 @@ internal fun PlaylistDrawer(
             },
             onSuccess = { refreshPlaylists() },
             onFailure = {
-                toast("reorder failed: ${it.message}")
+                failed("reorder", it)
                 localOrder = null
             },
         )
@@ -179,13 +203,17 @@ internal fun PlaylistDrawer(
                 tracksState.refresh()
                 refreshPlaylists()
             },
-            onFailure = { toast("remove failed: ${it.message}") },
+            onFailure = { failed("remove", it) },
         )
     }
 
     DrawerScaffold(onClose = onClose, widthDp = 460) {
         DrawerHeader(
-            eyebrow = (if (playlist.isVirtual) "virtual" else "playlist") + " · #${playlist.id}",
+            eyebrow = when {
+                playlist.isVirtual -> "virtual"
+                playlist.imported -> IMPORTED_EYEBROW
+                else -> "playlist"
+            } + " · #${playlist.id}",
             onClose = onClose,
         )
         // A lazy list, a row per track: a long playlist (or a big Favorites)
@@ -256,7 +284,7 @@ internal fun PlaylistDrawer(
                                 Spacer(Modifier.size(6.dp))
                                 Text(if (compactWidth()) "shuffle" else "shuffle all", color = Domovoi.colors.fg)
                             }
-                            if (!playlist.isVirtual) {
+                            if (playlist.editable) {
                                 OutlinedButton(onClick = {
                                     if (editing) {
                                         editing = false
@@ -273,6 +301,16 @@ internal fun PlaylistDrawer(
                                     )
                                     Spacer(Modifier.size(6.dp))
                                     Text(if (editing) "cancel" else "edit", color = Domovoi.colors.fg)
+                                }
+                            }
+                            if (playlist.imported) {
+                                OutlinedButton(onClick = { copy() }) {
+                                    Icon(
+                                        Icons.Filled.ContentCopy, contentDescription = null,
+                                        modifier = Modifier.size(14.dp), tint = Domovoi.colors.fg,
+                                    )
+                                    Spacer(Modifier.size(6.dp))
+                                    Text(COPY_TO_NEW_PLAYLIST, color = Domovoi.colors.fg)
                                 }
                             }
                         }
@@ -307,7 +345,15 @@ internal fun PlaylistDrawer(
                             Spacer(Modifier.size(8.dp))
                             Text(note, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
                         }
-                        if (editing && !playlist.isVirtual) {
+                        if (playlist.imported) {
+                            Spacer(Modifier.size(10.dp))
+                            Text(
+                                IMPORTED_NOTE,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Domovoi.colors.fgMuted,
+                            )
+                        }
+                        if (editing && playlist.editable) {
                             Spacer(Modifier.size(12.dp))
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(
@@ -353,8 +399,12 @@ internal fun PlaylistDrawer(
                 rows.isEmpty() -> item(key = "playlist-empty") {
                     EmptyState(
                         "no tracks yet",
-                        if (playlist.isVirtual) "favorite a track to add it here"
-                        else "tap + on a library row to add tracks",
+                        when {
+                            playlist.isVirtual -> "favorite a track to add it here"
+                            // Nothing can be added to one the files own.
+                            playlist.imported -> null
+                            else -> "tap + on a library row to add tracks"
+                        },
                     )
                 }
                 else -> items(
@@ -398,7 +448,7 @@ internal fun PlaylistDrawer(
                             // This phone's queue, or the room it casts to (batch 2 §2).
                             SmallIconButton(Icons.Filled.SubdirectoryArrowRight, "play next") { queueSong(t, true) }
                             SmallIconButton(Icons.Filled.QueueMusic, "add to queue") { queueSong(t, false) }
-                            if (!playlist.isVirtual) {
+                            if (playlist.editable) {
                                 SmallIconButton(
                                     Icons.Filled.KeyboardArrowUp, "move up",
                                     enabled = i > 0,
@@ -408,8 +458,10 @@ internal fun PlaylistDrawer(
                                     enabled = i < rows.size - 1,
                                 ) { move(i, 1) }
                             }
-                            SmallIconButton(Icons.Filled.Close, "remove from playlist") {
-                                removeTrack(t)
+                            if (!playlist.imported) {
+                                SmallIconButton(Icons.Filled.Close, "remove from playlist") {
+                                    removeTrack(t)
+                                }
                             }
                         }
                         if (i < rows.size - 1) {
@@ -420,8 +472,8 @@ internal fun PlaylistDrawer(
             }
         }
 
-        // Delete footer (real playlists only)
-        if (!playlist.isVirtual) {
+        // Delete footer (household playlists only)
+        if (playlist.editable) {
             HorizontalDivider(color = Domovoi.colors.border)
             Column(
                 Modifier
@@ -455,7 +507,7 @@ internal fun PlaylistDrawer(
                         if (open()) onClose()
                         refreshPlaylists()
                     },
-                    onFailure = { toast("delete failed: ${it.message}") },
+                    onFailure = { failed("delete", it) },
                 )
             },
             onDismiss = { confirmDelete = false },
