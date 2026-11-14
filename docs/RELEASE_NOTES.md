@@ -4,6 +4,94 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-14 — 1.2.1
+
+Version 1.2.1: the server and the Windows Setup (1.2.1, with the Windows
+satellite Setup beside it). It is the first release numbered by Domovoi's
+own version alone (docs/CONTRIBUTING.md, "Releasing"): **the Android app
+is unchanged and stays 1.2.0 (versionCode 26111301)**. It isn't released
+again, the v1.2.1 release carries no APKs, and `android/release.json`
+still names v1.2.0, so servers keep handing phones the app from there and
+phones get nothing new. A server's spare-PC satellite Setup now comes from
+its own release (v1.2.1). The release holds every entry between this one
+and "1.2.0" (2026-11-13); nothing else changed in the release commit
+itself. **No migrations:** the newest is still V053, from 1.2.0. The
+plain-language summary is `docs/release/v1.2.1.md`.
+
+What a household notices:
+
+* **Song recognition** no longer renames songs wrongly: an answer must
+  agree with a real artist the track names (a title alone counts only when
+  the track has none), and covers, instrumentals, karaoke, remixes and
+  tributes are refused; files with a video upload's names ("(Lyrics)",
+  "Official", a channel as the artist) are understood instead of being
+  "repaired" back to those names. The repair finds tracks the earlier rule
+  renamed, and a time window puts tracks it marked back in the queue (the
+  two entries below).
+* **Updating a Windows install** (the two Windows entries below and the
+  next paragraph): the tray's **Update Domovoi** finishes the Windows part
+  when the Linux part brought a release that needs it, and says honestly
+  what ran; the Version card shows one update button for each state; and
+  an update asked for from a phone stays in sight on the PC, with a blue
+  "!" on the icon, reminders while someone is there, and **Cancel
+  request** on the card.
+* **Wake defaults:** Wake sensitivity 0.7 and Wake confirmation 2 on every
+  room kind, and a newly trained wake word starts at 0.7 (the first entry
+  below).
+* **Wake words can be downloaded:** Settings → Voice → Wake words →
+  **Download** on a ready word gives a zip of the model (`.onnx`),
+  `SHA256SUMS`, a `MODEL_CARD.md` filled from what the server recorded and
+  a `LICENSE-NOTICE.md` (`GET /api/wake-words/{id}/export`, admin; core:
+  `GET /v1/admin/wake/export/{id}`; `404` unknown, `409` not ready). No
+  recordings, clip names, rooms or paths go in. The docs now say a word
+  trained at home may be shared non-commercially under CC BY-NC-SA 4.0
+  with that notice, and that one trained on the household's voices is the
+  household's call to share (scripts/wake_word/README.md, section 5).
+* **The docs** (user guides, the manual, the host and device guides, the
+  API reference's tiers, licences and privacy) were checked against the
+  code and brought up to date.
+
+The tray's own update, which had no entry: on 2026-11-14 a 1.1.0 tray's
+**Update Domovoi** ran the Linux part alone, which pulled 1.2.0, and
+reported a bare "ok" that the card showed as the Windows side updated. Now
+a result says what ran (`kind`: `windows`, or `linux` for the menu's Linux
+part alone, which carries no `tag`; from an older tray, an `ok` or
+`nothing_new` with no request and no version is read as `linux`), the
+card never shows a Linux part as the Windows side updated or as a failed
+Windows step, and after its Linux part the tray reads the state again and
+goes on to the Windows part when the pulled code needs it. The release the
+running code includes is checked again every 5 minutes instead of once
+per boot. The card offers one action at a time: **Update Domovoi** while
+the Windows step is needed, nothing while the PC has the request, **Try
+again** after a failed step, and **Check for updates** only when nothing
+is known to be pending.
+
+Also in this release's code, already in 1.2.0 but missing from its notes:
+speech recognition can no longer loop forever on one window of audio.
+Music could make the speech model write the same timestamp twice; the
+same 30 s window was then decoded again and again, and every turn in that
+room timed out until a restart. The full-window decode now runs without
+timestamps.
+
+By hand:
+
+* **Pi and PC rooms keep Wake sensitivity 0.5** (their `config.toml` was
+  written with it at setup) until you set it in the room's Settings tab
+  (0.7 for the new default). Wake confirmation 2 reaches a room that never
+  saved it with **Upgrade room**.
+* **A library damaged by song recognition:** an admin runs `POST
+  /api/music/library/enrich/repair` once with no body (admin Bearer), then,
+  to look those tracks up again under the new rule, the same call with
+  `{"requeue_disagreed": {"since": …, "until": …}}` around the repair's run
+  (the entries below; the core log's "library enricher repair" lines give
+  the times). Tracks edited by hand are never touched.
+* **The Windows tray fixes arrive only with the new Setup** (the Windows
+  part of this update). On a PC whose tray is 1.2.0 (or 1.1.0), press
+  **Update Domovoi** on the dashboard's Version card (Settings → System →
+  About & updates), or use the tray's **Finish updating Domovoi...**, for
+  the Windows step; don't rely on the old tray's own **Update Domovoi**
+  to do both parts.
+
 ## 2026-11-14 — New wake defaults: sensitivity 0.7, confirmation 2
 
 A room's **Wake sensitivity** (`[wake] threshold`) now defaults to 0.7

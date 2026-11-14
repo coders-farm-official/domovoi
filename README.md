@@ -240,7 +240,7 @@ We build Domovoi in public. Here's where it stands.
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
 - **Updates from the dashboard,** on a release channel. Settings → System →
-  About & updates names the release the server runs (`1.2.0`, or `1.2.0 +
+  About & updates names the release the server runs (`1.2.1`, or `1.2.1 +
   14 (abc1234)` between releases) and pulls and applies updates, rolling
   back by itself when the new code doesn't come up healthy. Root only
   ever runs a verified copy of the commit, never the files in the checkout
@@ -357,7 +357,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **A Windows installer.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
-  [v1.2.0 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0)
+  [v1.2.1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.1)
   ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
   Domovoi's icon beside the clock: whether Domovoi is
   running, the dashboard, a QR code for phones, and a helper that prepares
@@ -395,30 +395,25 @@ they have been tried on fewer devices than the rest, aren't yet held to
   setup. Tested in virtual machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
-**This release: Domovoi v1.2.0**
+**This release: Domovoi v1.2.1**
 
-Version 1.2.0 follows [v1.1.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.1.0).
-It is the server, the app and a Windows Setup (with the Windows satellite
-Setup beside it), one `SHA256SUMS` for every file, published as described in
-[Releasing](docs/CONTRIBUTING.md#releasing). `stable` points at it, and new
+Version 1.2.1 follows [v1.2.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0).
+It is the first release numbered by Domovoi's own version alone: the server
+and a Windows Setup (with the Windows satellite Setup beside it), one
+`SHA256SUMS` for every file, published as described in
+[Releasing](docs/CONTRIBUTING.md#releasing). The Android app is unchanged
+and stays 1.2.0, on the v1.2.0 release. `stable` points at 1.2.1, and new
 installs follow it. A plain-language summary is in
-[docs/release/v1.2.0.md](docs/release/v1.2.0.md); every change is in the
-[release notes](docs/RELEASE_NOTES.md). Since 1.1.0: Up next, which keeps
-the music going with songs like the ones playing, in the browser, in the
-rooms and on the phone; a room's queue you can search, jump, reorder and
-save as a playlist, with a playlist played in a room as its whole queue; a
-Genres tab, with genres from the files and from MusicBrainz; a player that
-opens from the player bar over any page; a listening history you control,
-with **this is me** for a phone or browser; podcast episodes with their
-details; the household's shared lists (to-do, shopping and your own) by
-voice, on the dashboard and in the app; the Music page's rooms folded behind
-**Show rooms** and **Stop and close** on the player; a MilkDrop visualizer;
-the right artist and a forgiving music search with an Artists tab;
-audiobooks, podcasts and stations each shown right in the phone's media
-notification; names spelled back and voice-match scores for admins; wake
-words trained on synthetic voices only; a Media folders page; the server
-reachable as `domovoi.local`; big podcast feeds read; and a drop-in that
-no longer cuts off its own announcement.
+[docs/release/v1.2.1.md](docs/release/v1.2.1.md); every change is in the
+[release notes](docs/RELEASE_NOTES.md). Since 1.2.0: song recognition that
+no longer renames songs to covers, instrumentals or the wrong song, reads
+video-upload names, and a repair for libraries it damaged; a Windows update
+that finishes its Windows part from the tray, says honestly what ran, and,
+asked for from a phone, stays in sight on the PC until it is done; one
+button per state on the Version card; rooms that wake less on the TV
+(sensitivity 0.7, confirmation 2 by default); a **Download** for a trained
+wake word, with its model card and licence notice; and the guides brought
+up to date.
 
 **Later**
 

@@ -33,7 +33,7 @@
 ;
 ; Build: windows\build.ps1 (Inno Setup 6), beside DomovoiSetup.exe.
 
-#define AppVersion "1.2.0"
+#define AppVersion "1.2.1"
 #define Worker "satellite-setup.ps1"
 
 [Setup]
@@ -63,7 +63,7 @@ SolidCompression=yes
 WizardStyle=modern dynamic
 CloseApplications=no
 RestartIfNeededByRun=no
-VersionInfoVersion=1.2.0.0
+VersionInfoVersion=1.2.1.0
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCompany=Coders Farm
 VersionInfoDescription=Domovoi Satellite Setup (preview)
