@@ -13,9 +13,10 @@ conflict, and Home Assistant can make Domovoi speak.
   not 5432), and 6650+N / 8050+N for per-room MPD. The one possible clash
   on a shared machine is Ollama on 11434: share one instance or keep them on
   separate hosts.
-- **No discovery overlap.** Domovoi registers no mDNS/zeroconf services, so
-  Home Assistant won't discover it and it won't appear in Home Assistant's
-  device list.
+- **No discovery overlap.** Domovoi answers mDNS only for its own name on
+  the home network (`domovoi.local` by default; Settings → Advanced →
+  Network name) and registers no services, so Home Assistant won't discover it and it won't
+  appear in Home Assistant's device list.
 - **One voice system per microphone.** A Domovoi satellite owns its mic
   board. Don't run a Wyoming satellite against the same mic. Domovoi in some
   rooms and Home Assistant voice hardware in others is fine.
@@ -23,12 +24,13 @@ conflict, and Home Assistant can make Domovoi speak.
 ## Spoken announcements from Home Assistant
 
 Home Assistant's `rest_command` can call Domovoi's announce endpoint to
-speak a message on one satellite, or on every satellite if `room_id` is
-left out of the request. An empty `room_id` is not the same as leaving it
+speak a message in one room, or in every connected room (satellites, spare
+computers, phones in room mode) if `room_id` is left out of the request. An empty `room_id` is not the same as leaving it
 out: Domovoi answers it with "room '' not connected" (404). The example below
 always names a room; to announce everywhere, make a second `rest_command`
-whose payload has only `message`. A satellite that is mid-response is skipped rather than cut off,
-and music resumes after the announcement.
+whose payload has only `message`. With no room connected at all it answers
+503. A room that is mid-response is skipped rather than cut off, and music
+resumes after the announcement.
 
 The endpoint is on Domovoi's device tier (see
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#the-tiers)), so it needs the

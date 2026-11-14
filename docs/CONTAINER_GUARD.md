@@ -264,6 +264,10 @@ the Plugins page says "containers not watched".
   The guard lists them on Settings → Health as "unrecognized" and never
   opens an incident for them: on a shared or development host there are
   always some, and an alarm that always rings is no alarm.
+* The wake-word trainer's containers (`domovoi-wake-train`,
+  `domovoi-wake-warm`, `domovoi-wake-preview`), which come and go with training and
+  its setup: Settings → Health lists one that is running as
+  "unrecognized".
 * Anything at all while `CONTAINER_GUARD_ENABLED=false`.
 
 ## The rules
