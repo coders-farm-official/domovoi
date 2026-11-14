@@ -134,8 +134,11 @@ final class RoomModeScene: ObservableObject {
         setup = RoomSetupRequest(payload: payload)
     }
 
+    /// A link while setup is already up is the setup screen's own to take
+    /// (it fills the form there, keeping what the person has read); this
+    /// opens setup only when it is not showing.
     func handle(url: URL) {
-        guard url.scheme?.lowercased() == RoomEnrolmentParser.scheme else { return }
+        guard url.scheme?.lowercased() == RoomEnrolmentParser.scheme, setup == nil else { return }
         openSetup(payload: url.absoluteString)
     }
 
