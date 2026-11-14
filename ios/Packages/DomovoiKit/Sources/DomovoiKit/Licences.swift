@@ -25,13 +25,26 @@ public struct LicenceRule: Equatable, Sendable {
     public let source: String
     /// Anything the reader needs to know.
     public let note: String?
+    /// The notice files the app ships for it, as paths under
+    /// `ios/licences/notices/` (bundled into the app as `notices/`): the
+    /// licences card's "show …" toggles (`LicencesCard.kt:213`).
+    /// `LicencesTests` holds every path to a file that exists.
+    public let notices: [String]
 
-    public init(title: String, identities: [String], licence: String, source: String, note: String? = nil) {
+    public init(
+        title: String,
+        identities: [String],
+        licence: String,
+        source: String,
+        note: String? = nil,
+        notices: [String] = []
+    ) {
         self.title = title
         self.identities = identities
         self.licence = licence
         self.source = source
         self.note = note
+        self.notices = notices
     }
 
     public func matches(identity: String) -> Bool {
@@ -65,9 +78,9 @@ public enum Licences {
     ]
 
     /// Every package the app may link, with the licence read from its own
-    /// licence file on 2026-10-21 (plan section 3). Nothing is linked yet:
-    /// this batch has no dependencies at all, and each entry arrives in the
-    /// batch that actually adds the package.
+    /// licence file on 2026-10-21 (plan section 3). ONNX Runtime is linked
+    /// since batch 2026-11-14 (room mode); the others arrive with the batch
+    /// that actually adds them (``systemSettingsLinkedIdentities``).
     public static let rules: [LicenceRule] = [
         LicenceRule(
             title: "LiteRT-LM (the phone assistant's model runtime)",
@@ -77,12 +90,22 @@ public enum Licences {
             note: "Ships CLiteRTLM.xcframework, a binary: at each pin, list what is "
                 + "compiled into it and carry its THIRD_PARTY_NOTICE."
         ),
+        // Linked, 1.24.2 (Package.swift). The title and the note are what the
+        // licences card draws, so they are written for the person reading it,
+        // as Android's row is (`LicencesCard.kt:81`). Its LICENSE and its
+        // ThirdPartyNotices.txt were taken from microsoft/onnxruntime at
+        // v1.24.2 on 2026-11-14 and ship in the app; the notices name what is
+        // compiled in, Eigen (MPL-2.0, unmodified) among them, which the
+        // policy allows only as a notice shipped with the app, as here.
         LicenceRule(
-            title: "ONNX Runtime (Silero, openWakeWord, Piper, the G2P model)",
+            title: "ONNX Runtime 1.24.2",
             identities: ["onnxruntime-swift-package-manager"],
             licence: "MIT",
-            source: "github.com/microsoft/onnxruntime-swift-package-manager",
-            note: "Ship its ThirdPartyNotices.txt, as Android does."
+            source: "github.com/microsoft/onnxruntime",
+            note: "Copyright (c) Microsoft Corporation. Runs room mode's wake word and voice "
+                + "detection on this phone. Compiled in: the parts its third-party notice "
+                + "lists, Eigen (MPL-2.0, unmodified) among them.",
+            notices: ["onnxruntime/LICENSE", "onnxruntime/ThirdPartyNotices.txt"]
         ),
         LicenceRule(
             title: "ZIPFoundation (.docx and .xlsx are ZIP files)",

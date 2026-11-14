@@ -63,6 +63,9 @@ struct RoomsDetailView: View {
     /// to lose.
     let reads: RoomsRoomModel?
 
+    /// The room's queue sheet is up (21b5ccfb, `SatelliteDetail.kt:715`).
+    @State private var queueRoom: RoomQueueSheetItem?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
@@ -70,6 +73,9 @@ struct RoomsDetailView: View {
             tabBody
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(item: $queueRoom) { item in
+            if let tools = shell.queueTools() { RoomQueueSheet(room: item.room, tools: tools) }
+        }
     }
 
     /// The dot, the room and its status (`CardHeader`,
@@ -92,6 +98,10 @@ struct RoomsDetailView: View {
                 tone: room.online ? .ok : .idle
             )
             Spacer(minLength: 8)
+            // The room's queue, one tap from the room (21b5ccfb).
+            RoomQueueButton(room: room.roomID, tools: shell.queueTools()) {
+                queueRoom = RoomQueueSheetItem(room: room.roomID)
+            }
         }
     }
 

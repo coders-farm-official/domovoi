@@ -280,6 +280,9 @@ allowed_signers
 ios/Domovoi.xcodeproj/
 ios/Domovoi/Info.plist
 ios/.build-device/
+# release.sh (the owner's): its archives and exports, and his team id file.
+ios/.release/
+ios/release.local
 .build/
 DerivedData/
 *.xcuserstate

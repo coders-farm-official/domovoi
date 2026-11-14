@@ -531,6 +531,21 @@ browser, and in a room.
   person's listening is kept apart once their phone or browser says
   **this is me**; clearing it, or not keeping it at all, is under
   [What's kept, and forgetting](#node:kept).
+- **Up next by voice.** In a room, the commands below act on that room's
+  queue; most also take the room's name after them ("what's next in the
+  kitchen"). "Next" and "play the next song" still skip. A command that
+  changes the mix from a voice Domovoi knows makes it that person's mix.
+
+**Try saying**
+
+- "what's next" · "what's up next" (the next two songs)
+- "play … next" (right after the song playing now)
+- "add … to the queue" · "queue up …" (after the songs you asked for, before Up next's picks; with nothing playing, it plays the song)
+- "clear the queue" (everything after the song playing now; Up next carries on while autoplay is on)
+- "skip this artist" · "no more …" (skips them, and leaves them out of this mix)
+- "turn autoplay off" · "turn autoplay on" · "stop after this list"
+- "why is this playing" (why Up next picked it: the same artist, the same decade, a playlist they share)
+- "play something like this" · "more like this" (Up next starts again from the song playing now)
 
 [Music and room queues](#node:music) has the queue itself: adding,
 moving and saving songs.

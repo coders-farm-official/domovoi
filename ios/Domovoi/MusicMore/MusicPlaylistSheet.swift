@@ -31,16 +31,19 @@ import SwiftUI
 ///   and this sheet's rows carry three controls each inside a `ScrollView`
 ///   the rest of Music already uses.
 ///
-/// ### Playing it on the phone arrived in the 2026-11-03 batch
+/// ### Playing it on the phone
 ///
-/// Android's playlist drawer plays to **rooms only** (`PlaylistDrawer.kt:222`)
-/// — its phone playback is reached from the library row's sheet instead. This
-/// sheet gets both, which is the one place this port is deliberately wider
-/// than Android: D46 says the play buttons land in this work, and a playlist
-/// is the only thing in MusicMore that is a list of library tracks ready to
-/// hand over. The section is absent on a phone with no player, and `shuffle on
-/// this device` shuffles **here** rather than asking the server, because the
-/// phone's queue is the phone's.
+/// Arrived here in the 2026-11-03 batch (D46), when Android's playlist drawer
+/// still played to rooms only; Android caught up in 3cdd261b
+/// (`PlaylistDrawer.kt:115`, `:277-307`), so this is no longer wider than
+/// Android. That commit's two details are this sheet's too since the
+/// 2026-11-14 batch: the sentence names **the playlist** — "playing Favorites
+/// on this device" (``MusicGenres/saidAfterPlayingHere(took:label:)``) — and
+/// a list longer than the phone's queue says how much of it goes
+/// (``MusicGenres/phoneCapNote(_:)``). The whole list, Favorites included. The
+/// section is absent on a phone with no player, and `shuffle on this device`
+/// shuffles **here** rather than asking the server, because the phone's
+/// queue is the phone's.
 struct MusicPlaylistSheet: View {
 
     let detail: MusicPlaylistDetailModel
@@ -233,19 +236,26 @@ struct MusicPlaylistSheet: View {
                 HStack(spacing: 12) { phoneButtons(player) }
                 VStack(alignment: .leading, spacing: 4) { phoneButtons(player) }
             }
+            if let note = MusicGenres.phoneCapNote(detail.tracks.count) {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     @ViewBuilder
     private func phoneButtons(_ player: MusicLocalQueueModel) -> some View {
-        HomeLink(MusicMoreStrings.playHere) {
-            player.playHere(detail.tracks)
-            said = player.takeToast()
-        }
-        HomeLink(MusicMoreStrings.shuffleHere) {
-            player.playHere(detail.tracks.shuffled())
-            said = player.takeToast()
-        }
+        HomeLink(MusicMoreStrings.playHere) { playHere(player, detail.tracks) }
+        HomeLink(MusicMoreStrings.shuffleHere) { playHere(player, detail.tracks.shuffled()) }
+    }
+
+    /// The whole list (`PlaylistDrawer.kt:115`), and the playlist's name in
+    /// what is said — not its first song's.
+    private func playHere(_ player: MusicLocalQueueModel, _ tracks: [LibraryTrack]) {
+        guard player.playHere(tracks) else { return }
+        said = MusicGenres.saidAfterPlayingHere(took: player.takeToast(), label: detail.playlist.name)
     }
 
     /// One room chip. The picked one is **told**, not only drawn darker:
@@ -359,7 +369,8 @@ struct MusicPlaylistSheet: View {
                     detail: detail,
                     covers: covers,
                     track: track,
-                    index: index
+                    index: index,
+                    onQueued: { said = $0 }
                 )
             }
             if let (title, note) = detail.emptyNote {
@@ -403,6 +414,8 @@ struct MusicPlaylistTrackRow: View {
     let covers: MusicCoverStore
     let track: LibraryTrack
     let index: Int
+    /// What the song's Play next / Add to queue said (the sheet's line).
+    let onQueued: (String) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -418,6 +431,12 @@ struct MusicPlaylistTrackRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
+            // Play next / Add to queue, where the player plays now
+            // (`PlaylistDrawer.kt:394-396`, 21b5ccfb). Outside `edits`, which
+            // is disabled while a playlist write is out: a queue add is not
+            // one.
+            SongQueueMenu(track: track, onSaid: onQueued)
+                .accessibilityIdentifier("music-playlist-song-queue-\(track.id)")
             edits
         }
         .padding(.vertical, 2)

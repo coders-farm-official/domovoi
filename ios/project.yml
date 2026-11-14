@@ -84,9 +84,20 @@ targets:
     platform: iOS
     sources:
       - path: Domovoi
+        excludes:
+          - PrivacyInfo.xcprivacy
       # The privacy manifest has to be IN the app bundle, not just in the
       # repository, or it is not there at all as far as Apple is concerned.
-      - path: PrivacyInfo.xcprivacy
+      # It is excluded above and named here so its build phase is said in so
+      # many words rather than left to XcodeGen's guess for the extension.
+      - path: Domovoi/PrivacyInfo.xcprivacy
+        buildPhase: resources
+      # The notices of what the app links (ios/licences/README.md's
+      # procedure), bundled as the folder `notices/`: the licences card opens
+      # each one (SystemSettingsNoticeToggle). A folder reference, so the
+      # paths inside it stay what Licences.swift names.
+      - path: licences/notices
+        type: folder
         buildPhase: resources
     dependencies:
       - package: DomovoiKit
@@ -110,14 +121,11 @@ targets:
         # light and dark, and they round-trip to the two hexes Android ships
         # (`#F2A618`, `#F9AD26`), which is how they were checked.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        # **Empty on purpose.** The moment a target has an asset catalogue,
-        # this defaults to "AppIcon" and the build *fails* if no such set is
-        # there: "None of the input catalogs contained a matching stickers
-        # icon set, app icon set, or icon stack named AppIcon". This app has
-        # no icon yet — that is a real gap with a real owner decision behind
-        # it, not something to paper over with a placeholder square so the
-        # build goes quiet.
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # `Assets.xcassets/AppIcon.appiconset`: one single-size 1024 px icon
+        # per iOS 18 appearance (any, dark, tinted), cut from the same cat
+        # head as the Android launcher by `scripts/make_app_icon.py`. App
+        # Store Connect refuses a build without it.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # INFOPLIST_FILE is set by XcodeGen from the `info:` block below.
         #
         # No entitlements file at all in this batch. Background audio needs
@@ -169,6 +177,23 @@ targets:
         NSCameraUsageDescription:
           Domovoi uses the camera to read the square code that sets this phone
           up as a room in your house. No photo is taken or kept.
+
+        # Room mode (I7, batch 2026-11-14): leaving it takes the phone's own
+        # unlock, through LAContext's deviceOwnerAuthentication — Android's
+        # "exit behind the phone's unlock" (RoomLockRules.kt). Without this
+        # key iOS ends the app the moment Face ID is asked for.
+        NSFaceIDUsageDescription:
+          Domovoi asks for Face ID or your passcode before this phone stops
+          being a room, so only someone who can unlock it can leave room mode.
+
+        # `domovoi-room:` links, as Android's setup screen takes them
+        # (AndroidManifest.xml, RoomSetupActivity's intent filter): a link
+        # only fills the room-code form; nothing becomes a room until the
+        # person has read the explainer and confirmed.
+        CFBundleURLTypes:
+          - CFBundleURLName: org.codersfarm.domovoi.room
+            CFBundleURLSchemes:
+              - domovoi-room
 
         NSPhotoLibraryUsageDescription:
           Domovoi shows your own photos and videos so you can play them here
@@ -235,7 +260,9 @@ targets:
         # `audio` only. Room mode stays on screen in v1 (owner answer Q9 and
         # App Review guideline 2.5.4: a background mode is for its purpose and
         # nothing else), and iOS cannot restart a microphone from the
-        # background anyway.
+        # background anyway. Room mode adds NO background mode: it listens
+        # only while its screen is up, stops when the app leaves the
+        # foreground, and asks for a tap to resume (ROOMMODE-MAP §3).
         UIBackgroundModes:
           - audio
 

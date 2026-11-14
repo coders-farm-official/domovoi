@@ -313,7 +313,42 @@ known  domovoi/tests/test_whisper_local_files.py::test_… (error in setup)  [si
 Only the `NEW` ones are yours to explain. The list only labels: a known
 failure still fails, prints its traceback and makes the exit status
 non-zero. When a fix lands, take its entry off; the summary prints
-`passed …` for an entry whose test passed.
+`passed …` for an entry whose test passed. CI is the one exception: it
+sets `DOMOVOI_FAIL_ON_NEW_ONLY=1`, under which a run whose failures are
+all known exits 0 (and says so under the summary).
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push to `main`, and from the
+Actions tab ("ci" → "Run workflow"), which runs every job. GitHub's hosted
+runners are free for this public repository. A first job, *what changed*,
+compares the push's files and starts only what they touch; a push of
+Markdown (and pictures under `docs/`) alone runs the docs gates only.
+
+| Job | Runner | What it runs |
+|---|---|---|
+| docs gates | ubuntu | `build_manual.py --check` and the file-only gate tests (privacy, licences, version copies, mermaid, the manual, the workflow pins); every push |
+| pytest 1/6 … 6/6 | ubuntu | the whole suite (all three test trees), split by `scripts/dev/ci_shard.py` into six shards of whole files, each `pytest -n 4` on its own migrated Postgres |
+| web | ubuntu | `node scripts/dev/jsxcheck.js` (every `.jsx` compiles with the vendored Babel; no two dashboard scripts share a top-level name), then `web/openapi.json` and `web/static/manual-content.json` regenerated and diffed against the commit |
+| bash harnesses | ubuntu | `scripts/dev/run-linux-harness.sh all`, when `scripts/linux/` changed |
+| android | ubuntu | `./gradlew testDebugUnitTest assembleDebug`; uploads the debug APK (`domovoi-debug-apk`, 14 days) |
+| windows | windows | `windows/build.ps1 -SkipInstaller` (the exes and the C# tests), then the installers when the image has Inno Setup 6 |
+
+Reading a red run: open it from the README's CI badge or the Actions tab
+and pick the red job. For a pytest shard, the end of its log has the
+`known failures: N new, M known` block: only `NEW` lines fail the job,
+and the `pytest-junit-<n>` artifact has the whole report. To run that
+shard's files locally: `python scripts/dev/ci_shard.py <n> 6` lists them.
+A web job failure names the file that is out of date and the command that
+rebuilds it. **Re-running:** "Re-run failed jobs" on the run's page
+re-runs the red jobs on the same commit (worth it once for something that
+looks flaky; a second red is a real failure, so fix it or add it to
+`known_failures.toml` with its reason). Main stays green: a red run on
+`main` is fixed before anything else is pushed.
+
+No workflow uses a secret, and none may: release signing and publishing
+stay on the owner's PC ("Releasing", below). Actions are pinned by commit
+SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
 
 New code needs tests in the same PR. The house pattern is tiered: pure
 functions get plain unit tests, handler fast-paths get regex + behavior
@@ -532,8 +567,11 @@ version without a suffix does. A published tag never moves
 and is never deleted, and `stable` is never rewound or force-pushed: a bad
 release gets a warning in its notes and a patch release.
 
-Everything is built on the owner's PC; GitHub only hosts, and pushing a tag
-starts no workflow. Every pushed commit carries `[skip ci]`. There are two
+Every release artifact is built and signed on the owner's PC; CI ("CI",
+above) tests each push to `main`, and pushing a tag starts no workflow.
+Release from a `main` whose CI run is green. The manifest commit
+`android/scripts/release.ps1` makes carries `[skip ci]`: it changes only
+`android/release.json`, on a commit CI has already tested. There are two
 paths, by whether the Android app changed: **app changed**, steps 1, 2 and
 3; **server and Windows only**, steps 1 and 3. In order:
 

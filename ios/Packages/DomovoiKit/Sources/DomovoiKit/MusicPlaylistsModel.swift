@@ -27,6 +27,10 @@ public final class MusicPlaylistsModel {
 
     private let container: AppContainer
     private let deviceID: String
+
+    /// Whose mix the room's Up next follows when a playlist plays in a room
+    /// (bd274c2f); the screen sets it from the queue tools.
+    public var listener = RoomListener.unnamed
     private var eventSink: Int?
 
     public init(container: AppContainer, deviceID: String) {
@@ -108,13 +112,15 @@ public final class MusicPlaylistsModel {
         }
         toast = MusicMoreStrings.playingPlaylist(playlist.name, room: room)
         let client = container.client
-        let body = Self.playBody(room: room, playlistID: playlist.id, shuffle: false, deviceID: deviceID)
+        let container = container
+        let (deviceID, listener) = (deviceID, listener)
         Task { @MainActor [weak self] in
             do throws(DomovoiError) {
-                try await client.send(
-                    method: "POST",
-                    path: MusicPlaylistPath.playPlaylist,
-                    body: body
+                // bd274c2f: the listener fields, the answer read, and an open
+                // room queue re-read while a long playlist fills in.
+                _ = try await RoomPlaylistPlay.send(
+                    client: client, container: container, room: room,
+                    playlistID: playlist.id, shuffle: false, deviceID: deviceID, listener: listener
                 )
             } catch let trouble {
                 self?.toast = MusicMoreStrings.playPlaylistFailed(trouble.message)

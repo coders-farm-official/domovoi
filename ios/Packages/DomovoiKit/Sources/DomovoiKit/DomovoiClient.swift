@@ -602,12 +602,30 @@ public final class DomovoiClient: Sendable {
         body: Data? = nil,
         contentType: String? = nil,
         trackPairing: Bool = true,
-        timeout: TimeInterval? = nil
+        timeout: TimeInterval? = nil,
+        headers: [String: String] = [:],
+        onlyTo: String? = nil
     ) async throws(DomovoiError) -> Data {
-        guard !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // Read ONCE: the `onlyTo` check and the address the request goes to
+        // must be the same reading of the active server, or a switch between
+        // the two would send a call checked for A to B.
+        let base = baseURL
+        guard !base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw DomovoiError.noServer
         }
-        guard let url = URL(string: absolute(path)) else {
+        // `onlyTo`: the server this call was meant for (Android's `raw`
+        // `onlyTo`, a1e611b6). When the active server is another one by now,
+        // nothing is sent, so what a caller read for server A — a claim key,
+        // an outbox row — never goes to server B. `.unreachable`, so it is
+        // kept and tried again like any call that didn't get through.
+        if let onlyTo, ServerCredentials.normalize(onlyTo) != ServerCredentials.normalize(base) {
+            throw DomovoiError.unreachable(Self.serverChanged)
+        }
+        // A call held to one server is never an absolute URL to another.
+        let absolutePath = path.hasPrefix("http://") || path.hasPrefix("https://")
+        if onlyTo != nil, absolutePath { throw DomovoiError.notPermitted("that is not a server address") }
+        let target = absolutePath ? path : base + path
+        guard let url = URL(string: target) else {
             throw DomovoiError.notPermitted("that is not a server address")
         }
         var request = URLRequest(url: url)
@@ -617,6 +635,9 @@ public final class DomovoiClient: Sendable {
         // before the side effect lands (WEB-6). The dashboard sends the same
         // header.
         request.setValue("DomovoiApp", forHTTPHeaderField: "X-Requested-With")
+        // This call's own headers (the claim key, `X-Device-Id`). The token
+        // header is not one of them: `prepare` strips it and decides it.
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         if let body {
             request.httpBody = body
             request.setValue(contentType ?? "application/json", forHTTPHeaderField: "Content-Type")
@@ -669,6 +690,10 @@ public final class DomovoiClient: Sendable {
     }
 
     static let emptyObject = Data("{}".utf8)
+
+    /// Why a call made for one server was not sent to another (``raw``'s
+    /// `onlyTo`).
+    public static let serverChanged = "the server changed; not sent"
 
     /// Kotlin's `parse`: a blank body is JSON null, which decodes into an
     /// optional and fails anything else.

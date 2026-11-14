@@ -175,15 +175,27 @@ or in the cloud; they override your tool's defaults.
 
 - **No pull requests.** Don't open one unless the owner asks for it in
   that session.
-- **GitHub Actions runs only by hand.** Actions minutes cost the owner
-  money, so `.github/workflows/android-apk.yml` has no push or
-  pull_request trigger (2026-10-09). Don't add one, and don't start the
-  workflow: build the APK yourself (below). Still put `[skip ci]` in the
-  message of every commit pushed from a session, so a workflow added
-  later can't fire on it by accident.
-- **Android changes ship as an APK built in the session.** Build the debug
-  APK yourself and hand the file to the owner with your tool's file
-  sharing (Claude Code: `SendUserFile`). With an Android SDK already on
+- **CI runs on every push to main.** `.github/workflows/ci.yml` (the
+  pytest suite in shards, the web and docs checks, the bash harnesses, the
+  Android app, the Windows build) runs on GitHub's hosted runners, free for
+  this public repo (2026-11-14). Don't put `[skip ci]` in commit messages.
+  Main stays green: a red run on main is fixed before anything else is
+  pushed. It fails on NEW test failures only; one listed in
+  `domovoi/tests/known_failures.toml` is reported, not fatal.
+  docs/CONTRIBUTING.md, "CI", says how to read and re-run a failure.
+- **Signing secrets live only in the `release` environment.** Releases
+  are signed and published by `.github/workflows/release.yml`, whose
+  signing job runs in the GitHub environment `release`: the owner must
+  approve each run, and only `main` may use it (owner decision
+  2026-11-14). Never add a signing key, keystore, passphrase or token to
+  any other workflow, job or environment, or to the repository-level
+  secrets; never print or echo one. The local release scripts stay the
+  fallback.
+- **Android changes: an APK the owner can install.** CI uploads a debug
+  APK (artifact `domovoi-debug-apk`) for every push that touches the app.
+  To hand one over without waiting for CI, build the debug APK in the
+  session and send the file with your tool's file sharing (Claude Code:
+  `SendUserFile`). With an Android SDK already on
   the machine that is `cd android && ./gradlew testDebugUnitTest
   assembleDebug` (`gradlew.bat` on Windows). In a fresh Linux container,
   install the SDK first:

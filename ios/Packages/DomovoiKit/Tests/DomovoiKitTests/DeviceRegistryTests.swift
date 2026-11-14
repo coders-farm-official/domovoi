@@ -4,47 +4,35 @@ import XCTest
 
 /// This phone's row on the server.
 ///
-/// The register body is the part that matters most: `owner_person_id` rides
-/// along on every register, as a number or as `null`, and is never left out —
-/// the route documents that a field left out keeps the stored value, so
-/// omitting it would keep a stale owner there for ever. A port of
+/// The register body: since 2026-11-12 it carries **no** `owner_person_id`
+/// — an app start must not undo a claim made on the People page, in the
+/// dashboard or by an admin — and whose the phone is comes back in the
+/// answer (`ClaimTests` holds that half). A port of
 /// `android/.../net/DeviceRegistryTest.kt`, with the reply and the cadence
 /// added.
 final class DeviceRegistryTests: XCTestCase {
 
-    private func body(owner: String?) throws -> [String: Any] {
+    private func body() throws -> [String: Any] {
         let data = try DeviceRegistry.registerPayload(
             deviceID: "ios-1a2b3c4d5e6f7a8b",
             name: "iPhone",
-            userAgent: "iOS 18.3; iPhone",
-            ownerPersonID: owner
+            userAgent: "iOS 18.3; iPhone"
         )
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     func testTheBodyIsWhatTheRouteDocuments() throws {
-        let sent = try body(owner: "3")
+        let sent = try body()
         XCTAssertEqual(sent["device_id"] as? String, "ios-1a2b3c4d5e6f7a8b")
         XCTAssertEqual(sent["name"] as? String, "iPhone")
         XCTAssertEqual(sent["platform"] as? String, "ios")
         XCTAssertEqual(sent["user_agent"] as? String, "iOS 18.3; iPhone")
-        XCTAssertEqual(sent["owner_person_id"] as? Int, 3)
-        XCTAssertEqual(sent.count, 5, "and nothing else")
+        XCTAssertEqual(sent.count, 4, "and nothing else")
     }
 
-    func testNobodyClearsTheOwnerAndTheFieldIsStillThere() throws {
-        let sent = try body(owner: nil)
-        XCTAssertTrue(sent.keys.contains("owner_person_id"), "sent, not left out")
-        XCTAssertTrue(sent["owner_person_id"] is NSNull)
-    }
-
-    func testAnIdThatIsNotAPersonClearsIt() throws {
-        for raw in ["abc", "0", "", "-1", "1.5"] {
-            XCTAssertTrue(try body(owner: raw)["owner_person_id"] is NSNull, raw)
-        }
-        XCTAssertEqual(try body(owner: " 12 ")["owner_person_id"] as? Int, 12)
-        XCTAssertEqual(DeviceRegistry.personID("7"), 7)
-        XCTAssertNil(DeviceRegistry.personID(nil))
+    /// Left out, so the server keeps the person the phone already has.
+    func testTheBodyHasNoOwner() throws {
+        XCTAssertFalse(try body().keys.contains("owner_person_id"))
     }
 
     /// `platform` is `"ios"`, honestly, even though the server mislabels an
@@ -210,8 +198,7 @@ final class DeviceRegistryTests: XCTestCase {
             with: client(),
             deviceID: "ios-1a2b",
             name: "iPhone",
-            userAgent: "iOS 18.3; iPhone",
-            ownerPersonID: "7"
+            userAgent: "iOS 18.3; iPhone"
         )
         XCTAssertEqual(row?.deviceID, "ios-1a2b")
         XCTAssertEqual(row?.name, "Kitchen", "the name the server already had, not the seed we sent")
@@ -222,7 +209,7 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertEqual(sent.value(forHTTPHeaderField: deviceTokenHeader), "household-abc")
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(sent.httpBody)) as? [String: Any])
         XCTAssertEqual(body["platform"] as? String, "ios")
-        XCTAssertEqual(body["owner_person_id"] as? Int, 7)
+        XCTAssertFalse(body.keys.contains("owner_person_id"), "an app start must not undo a claim")
     }
 
     /// Android swallows every registration failure: the app works unnamed,
@@ -231,7 +218,7 @@ final class DeviceRegistryTests: XCTestCase {
         StubURLProtocol.reset()
         StubURLProtocol.enqueue(.json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401))
         let row = await DeviceRegistry.register(
-            with: client(), deviceID: "ios-1a2b", name: "iPhone", userAgent: "iOS 18.3; iPhone", ownerPersonID: nil
+            with: client(), deviceID: "ios-1a2b", name: "iPhone", userAgent: "iOS 18.3; iPhone"
         )
         XCTAssertNil(row)
     }

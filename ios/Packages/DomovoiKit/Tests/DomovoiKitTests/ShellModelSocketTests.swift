@@ -89,7 +89,9 @@ final class ShellModelSocketTests: XCTestCase {
         )
         let body = String(decoding: sent, as: UTF8.self)
         XCTAssertTrue(body.contains(#""platform":"ios""#))
-        XCTAssertTrue(body.contains(#""owner_person_id":null"#), "the field is THERE and null")
+        // Since 2026-11-12 the owner is the ANSWER's, never the body's: an
+        // app start must not undo a claim made elsewhere.
+        XCTAssertFalse(body.contains("owner_person_id"), "the register body carries no owner")
 
         // The answer is taken: the kitchen tablet learns it is one.
         await settleUntil { model.sharedScreenAnswer == true }

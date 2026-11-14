@@ -31,12 +31,8 @@ import SwiftUI
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// * **"Save queue as playlist"** (`MusicScreen.kt:515`).
-///   ``MusicLocalQueueModel/libraryIDsToSave`` names the ids it would store
-///   and nothing writes them: that is a create-then-add-per-id loop, which
-///   belongs to a model and there is none. A button with no request behind
-///   it is the control [[no-misleading-controls]] forbids, so it is absent
-///   until the engine's item brings the write.
+/// * **"Save queue as playlist"** is under the queue's search box now
+///   (``QueueAddBox``, 21b5ccfb), offered only with a library song queued.
 /// * **Songs stored on the phone** (``MusicPlayKind/device``). This app has
 ///   no list of them; it is the `phonemedia` item's.
 /// * **Speed and chapters while casting.** A room plays at its own rate and
@@ -56,6 +52,16 @@ struct MusicPlayerTabView: View {
     /// The rooms the **server** reported, for the cast menu.
     let rooms: [String]
 
+    /// The panel tab picked **for one song** — its key
+    /// (``MusicPlayerPanel/songKey(castingTo:lyricsTrackID:currentUID:)``)
+    /// and the tab. The session's pick is ``MusicPlayerPanelMemory``.
+    @State private var pickedHere: PanelPick?
+
+    private struct PanelPick: Equatable {
+        let song: String
+        let tab: MusicPlayerPanelTab
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if player.isEmpty {
@@ -67,10 +73,69 @@ struct MusicPlayerTabView: View {
                 if player.maySetSpeed { speeds }
                 sleep
                 if !player.chapters.isEmpty { chapters }
-                if let lyrics { MusicLyricsPanelView(lyrics: lyrics, open: false) }
-                queue
+                panel
             }
         }
+    }
+
+    // MARK: - the panel: Lyrics · Queue · Hide
+
+    /// The full player's panel tabs (`PlayerQueueSheet.kt:102-123`,
+    /// 3cdd261b) — on this tab because the phone has no mini player and this
+    /// is the full player (``MusicPlayerPanelTab``).
+    ///
+    /// The lyrics panel stays in the hierarchy whichever tab is picked, with
+    /// `shown` false when it is not the lyrics tab: its `.task` is what keeps
+    /// the words loading, and the default rule — Lyrics when the song has
+    /// some — has to know before anyone looks.
+    @ViewBuilder
+    private var panel: some View {
+        let tab = panelTab
+        tabStrip(selected: tab)
+        if let lyrics {
+            MusicLyricsPanelView(lyrics: lyrics, open: true, titled: false, shown: tab == .lyrics)
+        }
+        if tab == .queue { queue }
+    }
+
+    /// Whether this song can have a lyrics tab: a library track (the model
+    /// has a track), whose words the house did not refuse this viewer.
+    private var lyricsTab: Bool {
+        guard let lyrics else { return false }
+        return lyrics.trackID != nil && lyrics.result != .hidden
+    }
+
+    private var songKey: String {
+        MusicPlayerPanel.songKey(
+            castingTo: player.castingTo,
+            lyricsTrackID: player.lyricsTrackID,
+            currentUID: player.current?.uid
+        )
+    }
+
+    private var panelTab: MusicPlayerPanelTab {
+        MusicPlayerPanel.choose(
+            here: pickedHere.flatMap { $0.song == songKey ? $0.tab : nil },
+            picked: MusicPlayerPanelMemory.picked,
+            lyricsTab: lyricsTab,
+            lyricsFound: MusicPlayerPanel.lyricsFound(lyrics?.state),
+            lyricsLoading: lyrics != nil && lyrics?.result == nil
+        )
+    }
+
+    private func tabStrip(selected: MusicPlayerPanelTab) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(MusicPlayerPanel.tabs(lyricsTab: lyricsTab), id: \.self) { one in
+                    chipButton(one.label, chosen: one == selected) {
+                        pickedHere = PanelPick(song: songKey, tab: one)
+                        MusicPlayerPanelMemory.picked = one
+                    }
+                    .accessibilityIdentifier(one.identifier)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - nothing queued
@@ -348,6 +413,13 @@ struct MusicPlayerTabView: View {
                     HomeLink(MusicMoreStrings.clear) { player.engine?.clearQueue() }
                 }
             }
+            // The queue's search box (21b5ccfb): adds where the player plays
+            // — the room it casts to, else this phone — and "save as
+            // playlist" under it for the library songs queued here.
+            QueueAddBox(
+                target: .following(castsTo: player.castingTo),
+                saveIDs: player.maySaveAsPlaylist ? player.libraryIDsToSave : nil
+            )
             LazyVStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(player.queue.enumerated()), id: \.element.uid) { index, item in
                     MusicPlayerQueueRow(player: player, item: item, index: index)

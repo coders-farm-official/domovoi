@@ -109,6 +109,11 @@ struct HomeRoomsView: View {
     /// platforms (`HomeScreen.kt:429`): there is no deep link to one room.
     let onOpenRooms: () -> Void
 
+    /// A room's queue, one tap from its row (21b5ccfb, `HomeSections.kt:793`):
+    /// nil draws no queue button.
+    var tools: QueueTools?
+    @State private var queueRoom: RoomQueueSheetItem?
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var candidates: [String] { stopAllCandidates(rooms, stale: stale) }
@@ -119,6 +124,9 @@ struct HomeRoomsView: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(item: $queueRoom) { item in
+            if let tools { RoomQueueSheet(room: item.room, tools: tools) }
+        }
     }
 
     /// The label row: `rooms`, and `stop all` at its right.
@@ -249,12 +257,16 @@ struct HomeRoomsView: View {
                 // share a line at AX5.
                 VStack(alignment: .leading, spacing: 8) {
                     identity(room, pill: pill)
-                    if !verbs.isEmpty { transport(room, verbs: verbs) }
+                    HStack(spacing: 4) {
+                        queueButton(room)
+                        if !verbs.isEmpty { transport(room, verbs: verbs) }
+                    }
                 }
             } else {
                 HStack(alignment: .top, spacing: 10) {
                     identity(room, pill: pill)
                     Spacer(minLength: 8)
+                    queueButton(room)
                     if !verbs.isEmpty { transport(room, verbs: verbs) }
                 }
             }
@@ -263,6 +275,16 @@ struct HomeRoomsView: View {
         // (`HomeSections.kt:700`): Android's, and the thing on this screen
         // most likely to cost a contrast finding.
         .opacity(dimmed(room) ? 0.6 : 1)
+    }
+
+    /// The room's queue button: an online room, a live read, a paired phone.
+    @ViewBuilder
+    private func queueButton(_ room: HomeRoom) -> some View {
+        if room.online, !stale {
+            RoomQueueButton(room: room.roomID, tools: tools) {
+                queueRoom = RoomQueueSheetItem(room: room.roomID)
+            }
+        }
     }
 
     /// Offline, waiting, or any room at all while the core is down — because

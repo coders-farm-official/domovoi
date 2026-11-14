@@ -21,6 +21,8 @@ from domovoi.clients.mpd import (
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.music_choice import MUSIC_CHOICE_KIND, MusicChoiceMixin
+from domovoi.handlers.music_queue_voice import ROOM_SUFFIXABLE as _QUEUE_ROOM_PATTERNS
+from domovoi.handlers.music_queue_voice import MusicQueueMixin
 from domovoi.handlers.music_rooms import (
     ROOM_OR_TITLE_KIND,
     ROOM_PLAY_RE,
@@ -223,6 +225,15 @@ _NEXT_RE = re.compile(
     r"|skip (?:this|it|this one|this song|this track)"
     r")$"
 )
+# "skip this" alone: the same skip, on the longer hold, because it also
+# starts "skip this artist" (music_queue_voice.py). Its path comes before
+# _NEXT_RE's, which still matches it.
+_SKIP_THIS_RE = re.compile(r"^skip this$")
+# "play next" / "play the next song" are a skip, never "play <X> next"
+# (music_queue_voice.PLAY_NEXT_RE) nor a search for a song called "next".
+# Its own path, never an early commit: "play the next" also starts "play
+# the next episode".
+_PLAY_NEXT_SKIP_RE = re.compile(r"^play (?:the )?next(?: song| track| one)?(?: please)?$")
 _PREV_RE = re.compile(r"^(?:previous|back|previous song|previous track|go back)$")
 _NOW_PLAYING_RE = re.compile(
     r"^(?:what(?:'s| is) playing|what song is this|what is this song|who sang that|who sings this)$"
@@ -253,9 +264,12 @@ _VOLUME_DOWN_RE = re.compile(
 # _CONTROL_HEAD_RE is the control alone, for telling the command from its
 # place when the words split more than one way.
 # _ROOM_FIRST_RE: the place said first — "in the garage, play some jazz".
+# The queue's closed commands (music_queue_voice.py) take a room too:
+# "what's next in the garage", "clear the queue in the office".
 _ROOM_CONTROL_RE, _CONTROL_HEAD_RE, _ROOM_FIRST_RE = control_room_patterns([
     _PLAY_RANDOM_RE, _PAUSE_RE, _RESUME_RE, _STOP_RE, _NEXT_RE, _PREV_RE,
     _NOW_PLAYING_RE, _VOLUME_SET_RE, _VOLUME_UP_RE, _VOLUME_DOWN_RE,
+    *_QUEUE_ROOM_PATTERNS,
 ])
 
 # Volume is presented to the user as a 1-10 knob — people say "set it to 5",
@@ -387,7 +401,7 @@ def _format_song(song: dict) -> str:
     return title
 
 
-class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
+class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
     name = "music"
     # band rationale: greedy "^play (.+)$" catch-all — after every anchored media band
     #   (spoken_audio 270, radio plugin 280, playlist 290).
@@ -459,6 +473,11 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             FastPath(ROOM_PLAY_RE, MusicHandler._room_play_from_match),
             FastPath(_ROOM_CONTROL_RE, MusicHandler._room_control_from_match),
             FastPath(_ROOM_FIRST_RE, MusicHandler._room_first_from_match),
+            # The room's queue and Up next (music_queue_voice.py, plan §7):
+            # before the "by" split and the catch-all, so "play jazz next"
+            # isn't a search for "jazz next", nor "play something like
+            # this" one for "something like this".
+            *self.queue_fast_paths(),
             FastPath(_PLAY_ARTIST_SONG_RE, MusicHandler._play_artist_song_from_match),
             FastPath(_PLAY_ARTIST_RE, MusicHandler._play_artist_from_match),
             # Random/shuffle BEFORE _PLAY_ANY_RE so "play a song" hits the
@@ -472,7 +491,9 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             FastPath(_PAUSE_RE, MusicHandler._pause_from_match, early_commit="A"),
             FastPath(_RESUME_RE, MusicHandler._resume_from_match, early_commit="A"),
             FastPath(_STOP_RE, MusicHandler._stop_from_match, early_commit="A"),
+            FastPath(_SKIP_THIS_RE, MusicHandler._next_from_match, early_commit="B"),
             FastPath(_NEXT_RE, MusicHandler._next_from_match, early_commit="A"),
+            FastPath(_PLAY_NEXT_SKIP_RE, MusicHandler._next_from_match),
             FastPath(_PREV_RE, MusicHandler._prev_from_match, early_commit="B"),
             FastPath(_NOW_PLAYING_RE, MusicHandler._now_playing_from_match, early_commit="A"),
             FastPath(_VOLUME_SET_RE, MusicHandler._volume_set_from_match, early_commit="B"),

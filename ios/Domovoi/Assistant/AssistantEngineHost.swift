@@ -16,10 +16,10 @@ import SwiftUI
 ///    one of ``AssistantFakeScripts``' named scripts. The engine the UI cases
 ///    drive, because Apple's model is not on a Simulator at all and a test
 ///    that needed it would be a test of Apple.
-///  - iOS 26 with `FoundationModels`: ``AppleAssistantEngine``.
-///  - anything older: ``AssistantNoEngine`` with
-///    ``AssistantUnavailableReason/osTooOld``, which is M4's case — a model
-///    file of our own is what will answer those phones.
+///  - everything else, which is every shipping build: ``AssistantNoEngine``.
+///    Apple's model is not offered in 1.0 (owner answer Q11, 2026-11-14), so
+///    ``AppleAssistantEngine`` is compiled and unreachable — see ``real()``.
+///    The phone's own chat comes back with a model file of our own (M4).
 ///
 /// ### Why the two flags are `#if DEBUG` here and not in the package
 ///
@@ -57,13 +57,26 @@ enum AssistantEngines {
         #endif
     }
 
+    /// The shipping path. **It never builds Apple's engine** while
+    /// ``AssistantEngineChoice/offersAppleModel`` is false (owner answer Q11,
+    /// 2026-11-14: "Hide it for 1.0"), so every shipping phone gets
+    /// ``AssistantNoEngine`` and the phone place is hidden. The decision is the
+    /// package's (``AssistantEngineChoice/production(osHasAppleModel:)``), where
+    /// `AssistantEngineTests` pins it; this only turns it into an engine.
     private static func real() -> any AssistantEngine {
+        var osHasAppleModel = false
         #if canImport(FoundationModels)
-        if #available(iOS 26, macOS 26, *) {
-            return AppleAssistantEngine()
-        }
+        if #available(iOS 26, macOS 26, *) { osHasAppleModel = true }
         #endif
-        return AssistantNoEngine(reason: .osTooOld)
+        switch AssistantEngineChoice.production(osHasAppleModel: osHasAppleModel) {
+        case .none(let reason):
+            return AssistantNoEngine(reason: reason)
+        case .apple:
+            #if canImport(FoundationModels)
+            if #available(iOS 26, macOS 26, *) { return AppleAssistantEngine() }
+            #endif
+            return AssistantNoEngine(reason: .osTooOld)
+        }
     }
 }
 

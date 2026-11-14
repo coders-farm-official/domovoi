@@ -19,10 +19,16 @@ import SwiftUI
 /// is which server row a resume position belongs to, and the rows it offers
 /// are ``PlayerListenerModel``'s.
 ///
+/// **This phone belongs to** arrived with the CLAIM unit (2026-11-14,
+/// Android a1e611b6): it shows the SERVER's answer for whose this phone is
+/// and changes it through the same `PUT /api/devices/{id}/person` the People
+/// page uses (``PlayerListenerModel/pickOwner(_:shell:)``); the toast is the
+/// server's answer, never the pick.
+///
 /// **The rest of §6.5 is still not here and is still not stubbed**:
-/// Appearance, This device and This phone belongs to each need a store key or
-/// a writer no batch has built, and a theme chip that does not change the
-/// theme is the misleading control the owner has ruled out twice.
+/// Appearance and This device each need a store key or a writer no batch has
+/// built, and a theme chip that does not change the theme is the misleading
+/// control the owner has ruled out twice.
 /// ### This panel does not scroll, and does not own the forget dialog
 ///
 /// Both changed in 3b. It was `ZStack { ScrollView { … } }` **inside a screen
@@ -58,6 +64,9 @@ struct PhonesAndBrowsersPanel: View {
             serverCard
             householdTokenCard
             trustedServersCard
+            if PlayerListenerModel.showsOwnerCard(paired: model.container.client.deviceToken != nil) {
+                phoneOwnerCard
+            }
             listeningAsCard
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -69,6 +78,83 @@ struct PhonesAndBrowsersPanel: View {
             listeners?.start()
         }
         .onDisappear { listeners?.stop() }
+        // A claim or a registration answer moved whose this phone is: the
+        // two cards' mirrors follow (``ShellModel/ownerRevision``).
+        .onChange(of: model.ownerRevision) { _, _ in listeners?.adopt() }
+    }
+
+    // MARK: - §6.5 This phone belongs to
+
+    /// Whose this phone is, as the server last said — `ConnectionPanel.kt`'s
+    /// card: a shared screen says it is nobody's instead of a picker; a
+    /// people list that never answered says so; else a dropdown whose pick
+    /// is a claim, disabled while one is on its way.
+    @ViewBuilder
+    private var phoneOwnerCard: some View {
+        PanelCard(title: ShellStrings.phoneBelongsToCard, sub: ShellStrings.phoneBelongsToCardSub) {
+            if let listeners {
+                if listeners.shared {
+                    Text(ShellStrings.sharedScreenIsNobodys)
+                        .font(.footnote)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let trouble = listeners.trouble {
+                    Text(trouble)
+                        .font(.footnote)
+                        .foregroundStyle(Color.errInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ownerPicker(listeners)
+                }
+            } else {
+                ProgressView()
+                    .accessibilityLabel(ShellStrings.phoneBelongsToCard)
+            }
+        }
+    }
+
+    private func ownerPicker(_ listeners: PlayerListenerModel) -> some View {
+        let chosen = listeners.selectedOwner
+        return Menu {
+            ForEach(listeners.ownerOptions) { option in
+                Button {
+                    listeners.pickOwner(option, shell: model)
+                } label: {
+                    if option.personID == chosen.personID {
+                        Label(option.label, systemImage: "checkmark")
+                    } else {
+                        Text(option.label)
+                    }
+                }
+            }
+        } label: {
+            dropdownLabel(chosen.label)
+        }
+        .disabled(listeners.claiming)
+        .accessibilityLabel(ShellStrings.phoneBelongsToCard)
+        .accessibilityValue(chosen.label)
+    }
+
+    /// The closed dropdown, shared by the two pickers.
+    private func dropdownLabel(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Text(text)
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.down")
+                .font(.footnote)
+                .foregroundStyle(Color.fgMuted)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 44)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.fgMuted.opacity(0.35), lineWidth: 1)
+        )
+        .contentShape(.rect)
     }
 
     // MARK: - §6.5 Listening as
@@ -89,7 +175,7 @@ struct PhonesAndBrowsersPanel: View {
     /// whose automatic style on a phone is a wheel.
     @ViewBuilder
     private var listeningAsCard: some View {
-        PanelCard(title: PlayerStrings.listeningAsCard, sub: PlayerStrings.listeningAsCardSub) {
+        PanelCard(title: PlayerStrings.listeningAsCard, sub: ShellStrings.listeningAsCardSub) {
             if let listeners {
                 if let trouble = listeners.trouble {
                     Text(trouble)
@@ -125,15 +211,15 @@ struct PhonesAndBrowsersPanel: View {
                     // state is not read out, and this one decides whose
                     // listening history a place belongs to.
                     if option.personID == chosen?.personID {
-                        Label(option.name, systemImage: "checkmark")
+                        Label(option.label, systemImage: "checkmark")
                     } else {
-                        Text(option.name)
+                        Text(option.label)
                     }
                 }
             }
         } label: {
             HStack(spacing: 10) {
-                Text(chosen?.name ?? PlayerStrings.listenerThisDevice)
+                Text(chosen?.label ?? ShellStrings.listenerHousehold)
                     .font(.subheadline)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
@@ -154,7 +240,7 @@ struct PhonesAndBrowsersPanel: View {
             .contentShape(.rect)
         }
         .accessibilityLabel(PlayerStrings.listeningAsCard)
-        .accessibilityValue(chosen?.name ?? PlayerStrings.listenerThisDevice)
+        .accessibilityValue(chosen?.label ?? ShellStrings.listenerHousehold)
     }
 
     /// The field is seeded from the saved server, and **re-seeded when that

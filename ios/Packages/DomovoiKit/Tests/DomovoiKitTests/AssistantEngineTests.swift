@@ -170,6 +170,25 @@ final class AssistantEngineTests: XCTestCase {
         )
     }
 
+    /// Owner answer Q11 (2026-11-14, "Hide it for 1.0"): the real path, which
+    /// is the only one a shipping build has, never yields Apple's engine, on
+    /// an old OS or on an iOS 26 phone with Apple Intelligence. Fails if
+    /// `offersAppleModel` is turned back on, or if the production choice
+    /// stops consulting it.
+    func testTheProductionChoiceNeverYieldsApplesEngine() {
+        XCTAssertFalse(AssistantEngineChoice.offersAppleModel, "Apple's model is offered: the owner said hide it for 1.0")
+        for osHasAppleModel in [false, true] {
+            let engine = AssistantEngineChoice.production(osHasAppleModel: osHasAppleModel)
+            XCTAssertNotEqual(engine, .apple, "Apple's engine on a phone where the OS has it = \(osHasAppleModel)")
+            guard case .none(let reason) = engine else {
+                XCTFail("no engine expected, got \(engine)")
+                continue
+            }
+            // With no engine the place reads unavailable, which is what hides it.
+            XCTAssertFalse(AssistantSupport.phoneCanChat(.unavailable(reason)))
+        }
+    }
+
     // MARK: - the fake, which every other test rides on
 
     func testTheFakeStreamsWordsAndRepeatsItsLastReply() async throws {

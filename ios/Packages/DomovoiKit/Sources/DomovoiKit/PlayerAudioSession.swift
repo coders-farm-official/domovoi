@@ -25,6 +25,14 @@ public enum PlayerAudioCategory: Equatable, Sendable {
     /// The microphone is wanted: `.playAndRecord`. Playback is paused before
     /// this is asked for (``PlayerMicArbiter``) rather than left to duck.
     case recording
+    /// Room mode (ROOMMODE-MAP §4): `.playAndRecord` with mode `.default` and
+    /// `.defaultToSpeaker` — the microphone as raw as iOS gives it, so the
+    /// wake word scores what it scores on a Pi (`VOICE_RECOGNITION` on
+    /// Android), while the room's replies and music play from the speaker.
+    /// Not `.spokenAudio` (``recording``'s mode): that is a hint for
+    /// playback, and the room's music is music. A drop-in inside room mode
+    /// turns voice processing on at the engine, not here.
+    case room
 }
 
 @MainActor
@@ -90,6 +98,8 @@ public final class AVAudioSessionControl: PlayerAudioSessionControl {
             try session.setCategory(.playback, mode: .spokenAudio)
         case .recording:
             try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker])
+        case .room:
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
         }
     }
 

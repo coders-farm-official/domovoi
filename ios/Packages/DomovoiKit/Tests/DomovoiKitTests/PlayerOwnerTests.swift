@@ -353,12 +353,13 @@ final class PlayerOwnerTests: XCTestCase {
         rig.model.listenerChanged(to: "7")
         XCTAssertEqual("7", player.listenerPersonID)
         XCTAssertEqual("7", rig.model.listeners.personID)
-        // The next launch, over the same saved bytes.
-        XCTAssertEqual("7", PlayerListenerStore(place: rig.place).personID)
+        // The next launch, over the same saved bytes — kept for THIS house
+        // since 2026-11-12 (a pick is per server, `Prefs.listenerPicks`).
+        XCTAssertEqual("7", PlayerListenerStore(place: rig.place).pick(for: houseA))
 
         rig.model.listenerChanged(to: nil)
-        XCTAssertNil(player.listenerPersonID, "going back to this device left the person set")
-        XCTAssertNil(PlayerListenerStore(place: rig.place).personID)
+        XCTAssertNil(player.listenerPersonID, "going back to the household left the person set")
+        XCTAssertNil(PlayerListenerStore(place: rig.place).pick(for: houseA))
     }
 
     /// The store treats a blank as "me (this device)".
@@ -395,7 +396,7 @@ final class PlayerOwnerTests: XCTestCase {
             Person(id: 9, name: "Chevy"),
         ])
         XCTAssertEqual(
-            [PlayerStrings.listenerThisDevice, "Jordan", "Chevy"], rows.map(\.name)
+            [ShellStrings.listenerHousehold, "Jordan", "Chevy"], rows.map(\.name)
         )
         XCTAssertEqual([nil, "7", "9"], rows.map(\.personID))
     }
@@ -404,7 +405,7 @@ final class PlayerOwnerTests: XCTestCase {
     /// picker still works, and the one thing it can offer needs no server.
     func testTheDropdownWorksBeforeThePeopleListAnswers() {
         let rows = listenerOptions(people: [])
-        XCTAssertEqual([PlayerStrings.listenerThisDevice], rows.map(\.name))
+        XCTAssertEqual([ShellStrings.listenerHousehold], rows.map(\.name))
         XCTAssertNil(selectedListener(rows, personID: nil)?.personID)
     }
 
@@ -422,7 +423,7 @@ final class PlayerOwnerTests: XCTestCase {
             "a person who has left the household is still shown as selected"
         )
         XCTAssertEqual(
-            PlayerStrings.listenerThisDevice,
+            ShellStrings.listenerHousehold,
             selectedListener(rows, personID: "7")?.name
         )
     }

@@ -3360,6 +3360,166 @@
         }
       }
     },
+    "/api/music/mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Mix",
+        "operationId": "get_mix_api_music_mix_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Mix Api Music Mix Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Mix",
+        "operationId": "put_mix_api_music_mix_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MixIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Put Mix Api Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/people/{person_id}/music-mix": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Get Person Mix",
+        "operationId": "get_person_mix_api_people__person_id__music_mix_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Person Mix Api People  Person Id  Music Mix Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Put Person Mix",
+        "operationId": "put_person_mix_api_people__person_id__music_mix_put",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonMixIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put Person Mix Api People  Person Id  Music Mix Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -21456,9 +21616,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -25128,6 +25294,62 @@
         "type": "object",
         "title": "MemoryPatch"
       },
+      "MixIn": {
+        "properties": {
+          "discovery_favorites": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Wander"
+          },
+          "autoplay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
+          },
+          "list_repeat_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 500.0,
+                "minimum": 20.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List Repeat Min"
+          }
+        },
+        "type": "object",
+        "title": "MixIn"
+      },
       "MoveIn": {
         "properties": {
           "target": {
@@ -25689,6 +25911,28 @@
         ],
         "title": "NowPlayingSong"
       },
+      "OverrideIn": {
+        "properties": {
+          "discovery_favorites": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Discovery Favorites"
+          },
+          "close_wander": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Close Wander"
+          }
+        },
+        "type": "object",
+        "required": [
+          "discovery_favorites",
+          "close_wander"
+        ],
+        "title": "OverrideIn"
+      },
       "PasswordChangeRequest": {
         "properties": {
           "old_password": {
@@ -25986,6 +26230,22 @@
         ],
         "title": "Person"
       },
+      "PersonMixIn": {
+        "properties": {
+          "override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OverrideIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "PersonMixIn"
+      },
       "PersonRename": {
         "properties": {
           "name": {
@@ -26089,9 +26349,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -26188,9 +26454,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           },
           "up_next": {
             "type": "boolean",
@@ -27092,6 +27364,17 @@
               }
             ],
             "title": "Reason Label"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
           },
           "up_next_seq": {
             "anyOf": [
@@ -28752,9 +29035,15 @@
             "default": false
           },
           "autoplay": {
-            "type": "boolean",
-            "title": "Autoplay",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoplay"
           }
         },
         "type": "object",

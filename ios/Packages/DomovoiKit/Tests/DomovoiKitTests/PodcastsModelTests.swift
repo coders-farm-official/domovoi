@@ -70,6 +70,9 @@ final class PodcastsModelTests: XCTestCase {
         /// can be answered.
         let deleteBody = Shared<String>(#"{"deleted":true}"#)
         let discoverStatus = Shared<Int>(200)
+        /// The poll's 200 body. Settable so a pass that could not read a
+        /// feed can be answered (`PollResult.failures`, `podcasts.py:510-517`).
+        let pollBody = Shared<String>(#"{"polled":4,"new":2,"downloaded":3,"evicted":0}"#)
 
         /// `Night Shift NN`, with the one named show at index 0 — the only
         /// row with an author, and the only one with artwork.
@@ -111,7 +114,7 @@ final class PodcastsModelTests: XCTestCase {
                 guard index > 0 else {
                     return """
                     {"id":901,"title":"Brining a bird","duration_sec":3180,"has_file":true,\
-                    "download_status":"downloaded","file_ext":".mp3",\
+                    "download_status":"downloaded","file_ext":".mp3","position_sec":null,\
                     "chapters":[{"title":"Why brine","start_sec":0},{"title":"The bird","start_sec":640}]}
                     """
                 }
@@ -172,7 +175,7 @@ final class PodcastsModelTests: XCTestCase {
                     guard self.pollStatus.current == 200 else {
                         return .json(#"{"detail":"poll failed: feed timed out"}"#, status: self.pollStatus.current)
                     }
-                    return .json(#"{"polled":4,"new":2,"downloaded":3,"evicted":0}"#)
+                    return .json(self.pollBody.current)
 
                 case ("GET", "/api/podcasts/discover"):
                     guard self.discoverStatus.current == 200 else {
@@ -454,14 +457,21 @@ final class PodcastsModelTests: XCTestCase {
         XCTAssertEqual(50, model.episodes?.state.items.count)
         XCTAssertEqual("showing 50 of 57 episodes", model.episodeCountText)
 
+        let calendar = PodcastFormat.phoneCalendar
         let newest = model.episodes?.state.items.first
         XCTAssertEqual("Brining a bird", newest?.displayTitle)
-        XCTAssertEqual("53:00 · 2 chapters", newest?.metaLine)
+        XCTAssertEqual(
+            "53 min · 2 chapters · downloaded",
+            newest.map { PodcastFormat.metaLine($0, now: Date(), calendar: calendar) }
+        )
         XCTAssertEqual(true, newest?.canPlay)
-        // The row with no file: its meta line says why, and nothing draws a
+        // The row with no file: its meta line says so, and nothing draws a
         // play control for it.
         let pending = model.episodes?.state.items.dropFirst().first
-        XCTAssertEqual("30:00 · pending", pending?.metaLine)
+        XCTAssertEqual(
+            "30 min · not downloaded",
+            pending.map { PodcastFormat.metaLine($0, now: Date(), calendar: calendar) }
+        )
         XCTAssertEqual(false, pending?.canPlay)
 
         model.closeEpisodes()
@@ -514,6 +524,143 @@ final class PodcastsModelTests: XCTestCase {
             queries(to: "/api/podcasts/subscriptions/1/episodes")
         )
         XCTAssertEqual("", model.needle, "the grid's own needle is untouched")
+    }
+
+    // MARK: - the listener's slot (Android `bd84d970`)
+
+    /// The episodes read carries the listener's slot — the same `device_id`
+    /// + `person_id` the player saves positions under — so every row comes
+    /// with that listener's place (`PodcastsEpisodes.kt:121-127`).
+    func testTheEpisodesReadAsksForTheListenersPlace() async {
+        let (model, _, _, _, _) = rig()
+
+        model.listen(deviceID: "ios-ab12", personID: "7")
+        await started(model)
+        defer { model.stop() }
+        guard let show = model.shows.state.items.first else {
+            return XCTFail("the grid answered no shows: \(model.shows.state)")
+        }
+
+        model.select(show)
+        await settleUntil { model.episodes?.state.loaded == true }
+
+        XCTAssertEqual(
+            ["device_id=ios-ab12&person_id=7&limit=50"],
+            queries(to: "/api/podcasts/subscriptions/1/episodes")
+        )
+        // The server's `position_sec: null` under a slot that was sent is
+        // "not started": the unplayed dot.
+        XCTAssertEqual(
+            PodcastProgress.new,
+            model.episodes?.state.items.first.map { PodcastFormat.progress($0) }
+        )
+    }
+
+    /// With **no** device sent, the same `position_sec: null` is the server
+    /// not knowing who asked (`podcasts.py:356`), so it must not draw an
+    /// unplayed dot on every row: the row reads as unknown.
+    func testWithNoDeviceANullPlaceIsUnknownNotUnplayed() async {
+        let (model, _, _, _, _) = rig()
+
+        await started(model)
+        defer { model.stop() }
+        guard let show = model.shows.state.items.first else {
+            return XCTFail("the grid answered no shows: \(model.shows.state)")
+        }
+        model.select(show)
+        await settleUntil { model.episodes?.state.loaded == true }
+
+        XCTAssertEqual(["limit=50"], queries(to: "/api/podcasts/subscriptions/1/episodes"))
+        XCTAssertEqual(
+            PodcastProgress.unknown,
+            model.episodes?.state.items.first.map { PodcastFormat.progress($0) },
+            "a read that sent no device drew a place it was never told"
+        )
+    }
+
+    /// Changing the listener while the sheet is open re-reads it under the
+    /// new slot, with the search kept; handing over the **same** slot again
+    /// (every appearance of the screen does) reads nothing.
+    func testANewListenerReReadsTheOpenSheetAndTheSameOneDoesNot() async {
+        let (model, _, waits, _, _) = rig()
+
+        model.listen(deviceID: "ios-ab12", personID: nil)
+        await started(model)
+        defer { model.stop() }
+        guard let show = model.shows.state.items.first else {
+            return XCTFail("the grid answered no shows: \(model.shows.state)")
+        }
+        model.select(show)
+        await settleUntil { model.episodes?.state.loaded == true }
+        model.typedEpisode("brine")
+        waits.release()
+        await settleUntil { model.episodeNeedle == "brine" }
+        await settleUntil { model.episodes?.state.items.count == 1 }
+
+        model.listen(deviceID: "ios-ab12", personID: nil)
+        await nothingHappens()
+        XCTAssertEqual(
+            ["device_id=ios-ab12&limit=50", "q=brine&device_id=ios-ab12&limit=50"],
+            queries(to: "/api/podcasts/subscriptions/1/episodes"),
+            "the same slot handed over again re-read the list"
+        )
+
+        model.listen(deviceID: "ios-ab12", personID: "3")
+        await settleUntil { queries(to: "/api/podcasts/subscriptions/1/episodes").count == 3 }
+        await settleUntil { model.episodes?.state.loaded == true }
+        XCTAssertEqual(
+            "q=brine&device_id=ios-ab12&person_id=3&limit=50",
+            queries(to: "/api/podcasts/subscriptions/1/episodes").last
+        )
+        XCTAssertEqual(show.id, model.selected?.id, "the sheet stayed on its show")
+        XCTAssertEqual(1, model.episodes?.state.items.count, "the search survived the new slot")
+    }
+
+    /// A person id that is not an integer is **left out**: the server types
+    /// `person_id` as one (`podcasts.py:341`), and a 422 there would cost the
+    /// whole list, not just the places. With no device, no slot at all.
+    func testTheSlotSendsOnlyAnIntegerPersonAndOnlyWithADevice() {
+        XCTAssertEqual(
+            "/api/podcasts/subscriptions/1/episodes?device_id=dev%201&person_id=7",
+            PodcastPath.episodes(showID: 1, deviceID: "dev 1", personID: "7")
+        )
+        XCTAssertEqual(
+            "/api/podcasts/subscriptions/1/episodes?q=news&device_id=ios-ab12",
+            PodcastPath.episodes(showID: 1, search: "news", deviceID: "ios-ab12", personID: nil)
+        )
+        XCTAssertEqual(
+            "/api/podcasts/subscriptions/1/episodes?device_id=ios-ab12",
+            PodcastPath.episodes(showID: 1, deviceID: "ios-ab12", personID: "alex")
+        )
+        XCTAssertEqual(
+            "/api/podcasts/subscriptions/1/episodes",
+            PodcastPath.episodes(showID: 1, deviceID: nil, personID: "7")
+        )
+        XCTAssertEqual(
+            "/api/podcasts/subscriptions/1/episodes",
+            PodcastPath.episodes(showID: 1, deviceID: "", personID: "7")
+        )
+    }
+
+    /// `poll now` names a show whose feed couldn't be read, with the server's
+    /// own words (`PodcastsScreen.kt:115`).
+    func testPollNamesAShowWhoseFeedCouldNotBeRead() async {
+        let house = House()
+        house.pollBody.set(#"""
+        {"polled":1,"new":3,"downloaded":0,"evicted":0,"failed":1,
+         "failures":[{"subscription_id":7,"title":"The Big Show","reason":"too_large","message":"feed too large"}]}
+        """#)
+        let (model, _, _, _, _) = rig(house: house)
+
+        await started(model)
+        defer { model.stop() }
+        model.poll()
+        await settleUntil { !model.polling }
+
+        XCTAssertEqual(
+            "Polled — 0 downloaded, 3 new. 1 show couldn't be read: The Big Show — feed too large",
+            model.toast
+        )
     }
 
     // MARK: - poll now

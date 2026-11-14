@@ -20,9 +20,9 @@ import XCTest
 /// - `ios/licences/README.md` names every rule, so the card and the list
 ///   cannot drift apart.
 ///
-/// Nothing is linked in this batch, so the `Package.resolved` part of it is
-/// dormant: it starts biting the first time a package is added, which is the
-/// moment it is needed. The rest runs today.
+/// Since batch 2026-11-14 ONNX Runtime is linked, so `swift test` writes
+/// `ios/Packages/DomovoiKit/Package.resolved` and the `Package.resolved` part
+/// of it bites.
 ///
 /// First run on 2026-10-28: the `#filePath` walk lands where it should and the
 /// test passes, reporting "no Package.resolved anywhere under ios/ — nothing is
@@ -101,6 +101,37 @@ final class LicencesTests: XCTestCase {
                 + "and a row in ios/licences/README.md"
         )
         XCTAssertEqual(forbidden, [], "analytics, advertising or crash reporting is never in this app")
+    }
+
+    /// The card says what is linked (``systemSettingsLinkedIdentities``); the
+    /// build says it too (`Package.resolved`). They must agree, both ways, or
+    /// the card makes a claim about the binary that is not true.
+    func testTheCardsLinkedListIsWhatTheBuildResolved() throws {
+        let file = Self.repositoryRoot.appendingPathComponent("ios/Packages/DomovoiKit/Package.resolved")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            // `swift test` writes it before it builds anything; reaching this
+            // line without one means the test is running somewhere else.
+            print("no ios/Packages/DomovoiKit/Package.resolved: not run under swift test")
+            return
+        }
+        let resolved = Set(try Self.pins(in: file).map { $0.identity.lowercased() })
+        XCTAssertEqual(resolved, Set(systemSettingsLinkedIdentities))
+    }
+
+    /// Every notice a rule names ships: it is a file under
+    /// `ios/licences/notices/`, and not an empty one.
+    func testEveryNoticeARuleNamesIsInTheRepo() throws {
+        let root = Self.repositoryRoot.appendingPathComponent("ios/licences/notices")
+        for rule in Licences.rules {
+            for notice in rule.notices {
+                let url = root.appendingPathComponent(notice)
+                let data = try? Data(contentsOf: url)
+                XCTAssertNotNil(data, "\(rule.title): ios/licences/notices/\(notice) is missing")
+                XCTAssertGreaterThan(data?.count ?? 0, 100, "\(rule.title): \(notice) is empty")
+            }
+        }
+        let onnx = Licences.rule(for: "onnxruntime-swift-package-manager")
+        XCTAssertEqual(["onnxruntime/LICENSE", "onnxruntime/ThirdPartyNotices.txt"], onnx?.notices)
     }
 
     // ---- the card and the list stay together -------------------------------

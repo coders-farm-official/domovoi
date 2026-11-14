@@ -796,9 +796,10 @@ enum PlayerListenerUnderTest {
     /// the picker's accessibility label.
     static let card = "Listening as"
 
-    /// ``PlayerStrings/listenerThisDevice`` — the nil row, and the picker's
-    /// value for a phone that has never been asked.
-    static let thisDevice = "me (this device)"
+    /// ``ShellStrings/listenerHousehold`` — the nil row, and the picker's
+    /// value for a phone nobody has claimed that has never been asked
+    /// ("household" since 2026-11-12, `ConnectionPanel.kt`).
+    static let thisDevice = "household"
 
     /// `fixtures/people.py`'s second person, chosen because the name appears
     /// nowhere else in the app's chrome.

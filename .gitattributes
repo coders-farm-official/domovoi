@@ -16,3 +16,8 @@ domovoi/usb_stick/stick/** text eol=lf
 # Signed release fixtures for the Windows update tests: signatures are over
 # the exact bytes, so no line-ending conversion on checkout.
 windows/tests/release-sig/** -text
+# The iPhone package tests' fixtures (ONNX models, PCM): bytes, never text.
+ios/Packages/DomovoiKit/Tests/DomovoiKitTests/Fixtures/** -text
+
+# Regenerated on any OS and compared byte for byte by CI: always LF.
+web/openapi.json text eol=lf

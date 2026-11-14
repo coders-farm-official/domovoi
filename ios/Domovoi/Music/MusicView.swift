@@ -9,8 +9,10 @@ import SwiftUI
 /// ### What is here
 ///
 /// A card per room — what it is playing, how far in, its transport, its
-/// cover and the line of lyric it is on. Four tabs: the library a page at a
-/// time with its search, filters and sort; the house's **playlists**, each
+/// cover and the line of lyric it is on. The tabs: the library a page at a
+/// time with its search, filters and sort; the library **by genre**
+/// (``MusicGenresView``, 3cdd261b), each genre opening a sheet that plays it
+/// in a room or on this phone; the house's **playlists**, each
 /// opening a sheet that plays, reorders, renames and deletes it; the
 /// **room's** queue, reorderable and clearable; and the library's
 /// whole-house numbers. A track opens a sheet with its cover, everything the
@@ -79,6 +81,13 @@ struct MusicView: View {
     /// library should not be sending its read.
     @State private var playlists: MusicPlaylistsModel?
 
+    /// The genres tab's model, built **the first time that tab is opened**
+    /// for ``queue``'s reason, and stopped whenever another tab is picked:
+    /// while the server is still reading tags it re-reads every ten seconds,
+    /// which is Android's `rememberGenresTab` — called only while its tab is
+    /// open.
+    @State private var genres: MusicGenresModel?
+
     /// The covers every list on this screen draws from. One store for the
     /// whole screen, because it is a cache with a cap — two of them would
     /// fetch the same picture twice and hold it twice.
@@ -135,9 +144,12 @@ struct MusicView: View {
     /// nothing more. Each case also carries a main-actor model, so an
     /// `Identifiable` `id` would be a nonisolated witness reaching them.
     private enum MusicMoreSheet {
-        case track(LibraryTrack, MusicRoomLyricsModel)
+        /// The song, its words, and the list it was opened from (a genre's
+        /// songs), which `play in <room>` plays on through.
+        case track(LibraryTrack, MusicRoomLyricsModel, UpNextContext?)
         case playlist(MusicPlaylistDetailModel)
         case addTo(LibraryTrack, MusicAddToPlaylistModel)
+        case genre(MusicGenresDetailModel)
     }
 
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
@@ -153,7 +165,15 @@ struct MusicView: View {
     /// written on every tap.
     @State private var roomsOpen = MusicRoomsOpenStore().open
 
+    /// The queues unit's tools (search to add, Play next / Add to queue, a
+    /// room's queue sheet), for everything on this screen and its sheets.
+    /// Outside ``page``'s chain: one more modifier there is past what the
+    /// type checker will take in reasonable time.
     var body: some View {
+        page.environment(\.queueTools, model.queueTools())
+    }
+
+    private var page: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
@@ -210,6 +230,10 @@ struct MusicView: View {
                             covers: covers,
                             onOpen: { openTrack($0) }
                         )
+                    case .genres:
+                        if let genres {
+                            MusicGenresView(genres: genres, onOpen: { openGenre($0) })
+                        }
                     case .playlists:
                         if let playlists {
                             MusicPlaylistsView(
@@ -275,6 +299,7 @@ struct MusicView: View {
             }
             music?.start()
             playlists?.start()
+            if tab == .genres { genres?.start() }
         }
         .onAppear { visible = true }
         .onDisappear {
@@ -282,6 +307,7 @@ struct MusicView: View {
             music?.stop()
             queue?.stop()
             playlists?.stop()
+            genres?.stop()
             // Each room card's model is stopped too: a panel left running
             // off screen republishes a position ten times a second for
             // nothing.
@@ -295,6 +321,7 @@ struct MusicView: View {
             guard let music else { return }
             if now == .queue { startQueue(with: music) }
             if now == .playlists { startPlaylists() }
+            if now == .genres { startGenres() } else { genres?.stop() }
         }
         // A satellite came online, or went away: the open queue is re-offered
         // the list, so a room that has gone does not leave the tab asking for
@@ -359,6 +386,7 @@ struct MusicView: View {
             music?.serverChanged()
             queue?.serverChanged()
             playlists?.serverChanged()
+            genres?.serverChanged()
             covers?.serverChanged()
             lyricsStore?.serverChanged()
             // Every room model held is the old house's — a room name is one
@@ -374,14 +402,15 @@ struct MusicView: View {
         // `isPresented`, not `item`: see ``MusicMoreSheet``.
         .sheet(isPresented: sheetUp) {
             switch sheet {
-            case .track(let track, let lyrics):
+            case .track(let track, let lyrics, let context):
                 if let music, let covers {
                     MusicTrackSheet(
                         music: music,
                         track: track,
                         covers: covers,
                         lyrics: lyrics,
-                        onAddToPlaylist: { openAddToPlaylist(track) }
+                        onAddToPlaylist: { openAddToPlaylist(track) },
+                        listContext: context
                     )
                 }
             case .playlist(let detail):
@@ -397,6 +426,24 @@ struct MusicView: View {
                 }
             case .addTo(_, let add):
                 MusicAddToPlaylistSheet(add: add)
+            case .genre(let detail):
+                if let covers, let music {
+                    MusicGenresSheet(
+                        detail: detail,
+                        covers: covers,
+                        rooms: music.castRooms,
+                        player: player,
+                        // A song's own sheet **replaces** this one, as
+                        // `add to playlist` replaces the track sheet: one
+                        // presentation, a content swap (``MusicMoreSheet``).
+                        // …with the genre as the list `play in <room>` plays
+                        // on through (`MusicScreen.kt:527`, cb780e90).
+                        onOpenTrack: {
+                            openTrack($0, context: UpNextContext.genre(key: detail.genre.key, name: detail.genre.name))
+                        },
+                        onSay: { model.showToast($0) }
+                    )
+                }
             case .none:
                 // The slot emptied while the sheet was coming down. Nothing
                 // rather than a half-built sheet.
@@ -447,6 +494,7 @@ struct MusicView: View {
             guard let deviceID = model.deviceID else { return }
             playlists = MusicPlaylistsModel(container: model.container, deviceID: deviceID)
         }
+        playlists?.listener = model.queueTools()?.listener ?? .unnamed
         playlists?.start()
     }
 
@@ -458,7 +506,7 @@ struct MusicView: View {
     /// the model falls back to the track's own document, which it shows
     /// still: that fallback is
     /// ``MusicRoomLyricsModel``'s own, not something invented here.
-    private func openTrack(_ track: LibraryTrack) {
+    private func openTrack(_ track: LibraryTrack, context: UpNextContext? = nil) {
         guard let lyricsStore, let nudges, let music else { return }
         let lyrics = MusicRoomLyricsModel(
             // Nil, **not** `?? ""`: an empty room made the model ask
@@ -471,16 +519,39 @@ struct MusicView: View {
             nudges: nudges
         )
         lyrics.offer(trackID: track.id)
-        sheet = .track(track, lyrics)
+        sheet = .track(track, lyrics, context)
+    }
+
+    private func startGenres() {
+        if genres == nil {
+            genres = MusicGenresModel(container: model.container)
+        }
+        genres?.start()
+    }
+
+    /// Open a genre's sheet. Its failures come back after the sheet has
+    /// closed (a room play closes it, as Android's drawer does), so the model
+    /// is handed the shell's toast to say them in.
+    private func openGenre(_ genre: MusicGenreRow) {
+        guard let deviceID = model.deviceID else { return }
+        let shell = model
+        sheet = .genre(MusicGenresDetailModel(
+            genre: genre,
+            container: model.container,
+            deviceID: deviceID,
+            say: { shell.showToast($0) }
+        ))
     }
 
     private func openPlaylist(_ playlist: Playlist) {
         guard let deviceID = model.deviceID else { return }
-        sheet = .playlist(MusicPlaylistDetailModel(
+        let detail = MusicPlaylistDetailModel(
             playlist: playlist,
             container: model.container,
             deviceID: deviceID
-        ))
+        )
+        detail.listener = model.queueTools()?.listener ?? .unnamed
+        sheet = .playlist(detail)
     }
 
     /// Open the add-to-playlist sheet, **in place of** the track sheet it was
@@ -870,6 +941,8 @@ struct MusicTrackRow: View {
     let track: LibraryTrack
     let onOpen: (LibraryTrack) -> Void
 
+    @Environment(\.queueTools) private var tools
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             // The row's text is the button that opens the sheet; the two
@@ -902,6 +975,9 @@ struct MusicTrackRow: View {
             }
             .buttonStyle(.plain)
             favouriteButton
+            // Play next / Add to queue, where the player plays now
+            // (`LibraryTab.kt:355-356`, 21b5ccfb); said in the shell's toast.
+            SongQueueMenu(track: track) { music.setToast($0) }
             playMenu
         }
         .padding(.vertical, 4)
@@ -926,7 +1002,9 @@ struct MusicTrackRow: View {
         .accessibilityLabel(track.favorited ? MusicStrings.unfavorite : MusicStrings.favorite)
     }
 
-    /// Play, in one of the rooms the server reported.
+    /// Play, in one of the rooms the server reported — the room's mix, with
+    /// this phone's device id and listener
+    /// (``MusicModel/play(_:in:tools:context:)``, integration fix A2).
     ///
     /// **Not drawn at all when no room has answered.** ``MusicModel/play(_:in:)``
     /// refuses a room it has not seen, so a menu offered over an empty list
@@ -936,7 +1014,7 @@ struct MusicTrackRow: View {
     private var playMenu: some View {
         let rooms = music.castRooms
         if rooms.count == 1, let only = rooms.first {
-            Button { music.play(track, in: only) } label: {
+            Button { music.play(track, in: only, tools: tools) } label: {
                 Image(systemName: "play.circle")
                     .frame(minWidth: 44, minHeight: 44)
                     .contentShape(.rect)
@@ -947,7 +1025,7 @@ struct MusicTrackRow: View {
         } else if rooms.count > 1 {
             Menu {
                 ForEach(rooms, id: \.self) { room in
-                    Button(MusicStrings.playIn(room: room)) { music.play(track, in: room) }
+                    Button(MusicStrings.playIn(room: room)) { music.play(track, in: room, tools: tools) }
                 }
             } label: {
                 Image(systemName: "play.circle")

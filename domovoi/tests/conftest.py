@@ -436,6 +436,9 @@ async def db_session():
 
 # The bash_harness tests a worker left out, for the controller's summary.
 _HARNESS_DESELECTED = pytest.StashKey[list]()
+# Set when DOMOVOI_FAIL_ON_NEW_ONLY turned an all-known-failures run's exit
+# status to 0, for the summary to say so.
+_ONLY_KNOWN = pytest.StashKey[bool]()
 
 
 def pytest_collection_modifyitems(config, items):
@@ -454,6 +457,21 @@ def pytest_sessionfinish(session):
     workeroutput = getattr(session.config, "workeroutput", None)
     if workeroutput is not None:
         workeroutput["domovoi_harness_deselected"] = session.config.stash.get(_HARNESS_DESELECTED, [])
+        return
+    # CI's opt-in (known_failures.FAIL_ON_NEW_ONLY_ENV): only known failures
+    # → exit 0. Any other non-zero status (a usage or collection error, an
+    # interrupted run) stands, and the repo-root conftest's home guard runs
+    # after this (trylast) and can still fail the run.
+    from domovoi.tests import known_failures
+
+    if os.environ.get(known_failures.FAIL_ON_NEW_ONLY_ENV) != "1":
+        return
+    if session.exitstatus != pytest.ExitCode.TESTS_FAILED:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None and known_failures.only_known(reporter.stats):
+        session.exitstatus = pytest.ExitCode.OK
+        session.config.stash[_ONLY_KNOWN] = True
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -510,6 +528,11 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     from domovoi.tests import known_failures
 
     known_failures.summarize(terminalreporter)
+    if config.stash.get(_ONLY_KNOWN, False):
+        terminalreporter.write_line(
+            f"{known_failures.FAIL_ON_NEW_ONLY_ENV}=1: every failure is a known one, so the exit status is 0",
+            yellow=True,
+        )
     left_out = config.stash.get(_HARNESS_DESELECTED, [])
     if left_out:
         terminalreporter.write_line(
