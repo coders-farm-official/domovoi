@@ -648,8 +648,10 @@ def test_the_memory_of_covers_is_bounded(monkeypatch, fresh_memo):
 # ── the tier ─────────────────────────────────────────────────────────
 
 def _route(path: str):
-    return next(r for r in web_app.routes
-                if getattr(r, "path", None) == path and "GET" in getattr(r, "methods", ()))
+    from domovoi.tests.route_walk import iter_route_contexts
+
+    return next(r for r in iter_route_contexts(web_app.routes)
+                if getattr(r, "path", None) == path and "GET" in (getattr(r, "methods", None) or ()))
 
 
 def test_same_tier_as_the_library_listing():

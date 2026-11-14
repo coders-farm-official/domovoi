@@ -17,6 +17,7 @@ The DB-backed tests carry ``requires_db`` (a lane with V051 applied).
 from __future__ import annotations
 
 import re
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -653,13 +654,18 @@ def _play(stub, file: str, songid: int, elapsed: float = 0.0, duration: float | 
 
 @requires_db
 @pytest.mark.asyncio
-async def test_room_listens_finished_skipped_stopped(clean, room_player) -> None:
+async def test_room_listens_finished_skipped_stopped(clean, room_player, monkeypatch) -> None:
     from domovoi.workers.listen_logger import ListenLogger
 
     ids = await _seed()
     async with engine.begin() as conn:
         await music_listens.set_room_listener(conn, "kitchen", ids["alex"])
     clock = _Clock()
+    # note_skip stamps with time.monotonic(): put it on the worker's clock,
+    # or the skip compares a real stamp with a fake song start (it passed
+    # only on a box up longer than the fake clock's ~20 min, never on a
+    # fresh CI runner).
+    monkeypatch.setattr(music_listens, "time", types.SimpleNamespace(monotonic=clock))
     worker = ListenLogger(clock=clock)
 
     # A song the player moves on from by itself near its end: finished.

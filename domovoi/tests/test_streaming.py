@@ -1041,8 +1041,12 @@ def test_music_stop_cancels_pending_handshake(
     fire later and resume the same track the user just stopped."""
     from domovoi.clients import mpd as mpd_module
 
+    # Long enough that the timer can't fire while turn 2 is still being
+    # handled on a slow runner (0.2 s raced turn 2 on CI: the fallback had
+    # already resumed before the stop arrived). The test then checks the
+    # timer task itself was cancelled, so it needn't sleep the 5 s out.
     monkeypatch.setattr(
-        "domovoi.streaming.settings.music_prepare_fallback_sec", 0.2
+        "domovoi.streaming.settings.music_prepare_fallback_sec", 5.0
     )
 
     # First turn: start playing.
@@ -1092,6 +1096,7 @@ def test_music_stop_cancels_pending_handshake(
                 ws.receive_json()  # response_end
                 ws.receive_json()  # music_start
                 assert "office" in app.state.pending_music_start
+                fallback = app.state.pending_music_start["office"]["task"]
 
                 # Turn 2: stop — should cancel pending and emit music_stop
                 ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word"}))
@@ -1105,9 +1110,12 @@ def test_music_stop_cancels_pending_handshake(
                 assert stop == {"type": "music_stop"}
                 assert "office" not in app.state.pending_music_start
 
-                # Sleep past where the fallback WOULD have fired. resume
-                # must NOT be called — the user asked to stop.
-                time.sleep(0.5)
+                # The fallback timer is cancelled, not left to fire later
+                # and resume the track the user just stopped.
+                deadline = time.monotonic() + 2.0
+                while not fallback.done() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                assert fallback.cancelled()
                 assert tracker.resume_calls == 0
     finally:
         mpd_module._clients.pop("office", None)

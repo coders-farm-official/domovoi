@@ -321,7 +321,10 @@ jobs:
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "17"
+          # 21, not 17: the unit tests load LiteRT-LM's classes on the JVM
+          # (NoNetworkTest), and its jar is built for Java 21 (class files
+          # version 65). The app itself still targets Java 17.
+          java-version: "21"
       # Caches Gradle's downloads and validates the wrapper jar. The runner
       # image's Android SDK (ANDROID_HOME) has its licences accepted, so the
       # Android Gradle plugin fetches any platform it lacks by itself.

@@ -16,21 +16,6 @@
 #   since  = the commit of origin/main it was first recorded on
 
 [[failure]]
-test = "domovoi/tests/test_library_cover_art.py::test_same_tier_as_the_library_listing"
-reason = "route lookup trips on how this FastAPI version nests included routers (sometimes passes)"
-since = "eb4a497"
-
-[[failure]]
-test = "domovoi/tests/test_whisper_local_files.py::test_the_recorder_sees_the_per_load_revision_check"
-reason = "huggingface_hub is not installed in the dev venv"
-since = "eb4a497"
-
-[[failure]]
-test = "domovoi/tests/test_whisper_local_files.py::test_the_real_client_loads_a_cached_model_with_no_outbound_attempt"
-reason = "huggingface_hub is not installed in the dev venv"
-since = "eb4a497"
-
-[[failure]]
 test = "domovoi/tests/test_library_alias_fetch.py::test_searches_and_lookups_share_one_pace"
 reason = "flaky on Windows (about 1 run in 12): asks for >= 0.14 s between paced calls, but asyncio may fire a timer up to one 15.6 ms clock tick early"
 since = "eb4a497"
@@ -68,35 +53,6 @@ since = "19e9e43"
 [[failure]]
 test = "domovoi/tests/test_phone_dropin.py::test_phone_relay_failure_tears_down"
 reason = "flaky under load: the test polls 50 x 10 ms for the relay failure to tear both sides down, which a busy box can outlast"
-since = "19e9e43"
-
-# Back on the list (dropped at 1012 after 5 clean full runs): the same 5
-# failed in a full -n 4 run on 19e9e43 (wf/voice-page-fixes' builder,
-# 2026-10-12). Each nests a plugin router under an outer one, and the route
-# comes out named with the outer prefix ("/in/both", not "/both").
-[[failure]]
-test = "domovoi/tests/test_plugin_device_tier.py::test_both_markers_one_router_down_are_still_a_conflict"
-reason = "a nested router's route is named with the outer prefix (/in/both): how this FastAPI version nests included routers, as test_same_tier_as_the_library_listing (sometimes passes)"
-since = "19e9e43"
-
-[[failure]]
-test = "domovoi/tests/test_plugin_device_tier.py::test_the_core_load_refuses_a_marker_the_preview_cannot_see[nested-setattr-device]"
-reason = "a nested router's route is named with the outer prefix (/in/sneaky): how this FastAPI version nests included routers (sometimes passes)"
-since = "19e9e43"
-
-[[failure]]
-test = "domovoi/tests/test_plugin_device_tier.py::test_the_web_mount_refuses_a_marker_the_preview_cannot_see[nested-setattr-device]"
-reason = "a nested router's route is named with the outer prefix (/in/sneaky): how this FastAPI version nests included routers (sometimes passes)"
-since = "19e9e43"
-
-[[failure]]
-test = "domovoi/tests/test_plugin_device_tier.py::test_the_core_refuses_a_websocket_route[nested-websocket]"
-reason = "a nested router's route is named with the outer prefix (/in/ws): how this FastAPI version nests included routers (sometimes passes)"
-since = "19e9e43"
-
-[[failure]]
-test = "domovoi/tests/test_plugin_device_tier.py::test_the_web_mount_refuses_a_websocket_route[nested-websocket]"
-reason = "a nested router's route is named with the outer prefix (/in/ws): how this FastAPI version nests included routers (sometimes passes)"
 since = "19e9e43"
 
 # Seen once in the full -n 4 run at integration/1014a (774f0aa, 2026-10-15,
