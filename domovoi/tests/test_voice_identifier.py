@@ -25,6 +25,17 @@ from domovoi.voice_identifier import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _threshold_075(monkeypatch):
+    """The vectors below were drawn for a 0.75 threshold and no extra bar
+    for a room's own samples; the policy, not the number, is what's tested
+    here (the same-room margin has its own test)."""
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "voice_profile_match_threshold", 0.75)
+    monkeypatch.setattr(settings, "voice_profile_same_room_margin", 0.0)
+
+
 # Test PCMs — same bytes ⇒ same stub embedding ⇒ matchable; different
 # bytes ⇒ different embedding.
 _SARAH = (np.full(16_000, 1234, dtype=np.int16)).tobytes()
@@ -413,12 +424,18 @@ def test_person_scores_skip_unusable_rows() -> None:
 
 
 class _Store:
+    """Samples in the current embedding (``profiles``) and the legacy one
+    (``legacy``, pre-1.3.0), and the denylist by embedding."""
+
     def __init__(self) -> None:
         self.profiles: list[tuple[int, int, bytes, str | None]] = []
+        self.legacy: list[tuple[int, int, bytes, str | None]] = []
+        self.deny: dict[str, list[bytes]] = {"resemblyzer-v2": [], "resemblyzer-v1": []}
         self.touched: list[int] = []
 
-    def enroll(self, person_id: int, v: np.ndarray, room: str | None) -> None:
-        self.profiles.append((len(self.profiles) + 1, person_id, _blob(v), room))
+    def enroll(self, person_id: int, v: np.ndarray, room: str | None, *, legacy: bool = False) -> None:
+        rows = self.legacy if legacy else self.profiles
+        rows.append((len(self.profiles) + len(self.legacy) + 1, person_id, _blob(v), room))
 
     def count(self, person_id: int) -> int:
         return sum(1 for p in self.profiles if p[1] == person_id)
@@ -436,34 +453,47 @@ def store(monkeypatch) -> _Store:
             return False
 
     class _Profiles:
-        EMBEDDING_MODEL_TAG = "resemblyzer-v1"
+        EMBEDDING_MODEL_TAG = "resemblyzer-v2"
+        LEGACY_MODEL_TAG = "resemblyzer-v1"
 
         def __init__(self, _s) -> None: ...
 
-        async def all_for_model(self, _model):
-            return list(st.profiles)
+        def _rows(self, model):
+            return st.profiles if model == self.EMBEDDING_MODEL_TAG else st.legacy
+
+        async def all_for_model(self, model):
+            return list(self._rows(model))
+
+        async def phone_matching_rows(self, model):
+            return [(i, p, e, r, "satellite") for i, p, e, r in self._rows(model)]
 
         async def add(self, *, person_id, embedding, model, room_id, sample_seconds, claim_of=None):
-            st.profiles.append((len(st.profiles) + 1, person_id, embedding, room_id))
-            return len(st.profiles)
+            rows = self._rows(model)
+            rows.append((len(st.profiles) + len(st.legacy) + 1, person_id, embedding, room_id))
+            return rows[-1][0]
 
-        async def person_samples(self, person_id, _model):
+        async def person_samples(self, person_id, model):
             # No name claims here (V029; test_voice_claims.py has them):
             # every sample is the person's own.
             from domovoi.db.repositories import VoiceSample
 
             return [
                 VoiceSample(id=i, embedding=e, source="satellite", room_id=r, claimed=False, claim_of=None)
-                for i, p, e, r in st.profiles if p == person_id
+                for i, p, e, r in self._rows(model) if p == person_id
             ]
 
     class _Denylist:
-        EMBEDDING_MODEL_TAG = "resemblyzer-v1"
+        EMBEDDING_MODEL_TAG = "resemblyzer-v2"
+        LEGACY_MODEL_TAG = "resemblyzer-v1"
 
         def __init__(self, _s) -> None: ...
 
-        async def all_for_model(self, _model):
-            return []
+        async def all_for_model(self, model):
+            return list(enumerate(st.deny[model]))
+
+        async def add(self, *, embedding, model, notes=None):
+            st.deny[model].append(embedding)
+            return len(st.deny[model])
 
     class _People:
         def __init__(self, _s) -> None: ...
@@ -675,3 +705,114 @@ async def test_identical_voices_on_two_people_are_ambiguous(db_session) -> None:
     assert result.ambiguous
     assert result.best_similarity == pytest.approx(1.0, abs=1e-5)
     assert result.runner_up_similarity == pytest.approx(1.0, abs=1e-5)
+
+
+# ─── 1.3.0: two embeddings, rooms, noisy turns ─────────────────────────────
+
+from domovoi.clients.voice_embedder import VoicePrint  # noqa: E402
+from domovoi.voice_identifier import room_person_scores  # noqa: E402
+
+
+def test_room_person_scores_use_this_rooms_samples_when_there_are_any() -> None:
+    """A person heard in this room is held to how they sound here; anyone
+    else to all their samples."""
+    office, garage = _unit(1, 0, 0), _unit(0, 1, 0)
+    other = _unit(0, 0, 1)
+    samples = [(1, _blob(office), "office"), (1, _blob(garage), "garage"), (2, _blob(other), "office")]
+    here = room_person_scores(garage, samples, room_id="garage")
+    assert here[1] == pytest.approx(1.0, abs=1e-5)       # the garage sample alone
+    assert here[2] == pytest.approx(0.0, abs=1e-5)
+    anywhere = room_person_scores(garage, samples, room_id=None)
+    assert anywhere[1] == pytest.approx(np.sqrt(0.5), abs=1e-5)  # the centroid of both
+    unknown_room = room_person_scores(garage, samples, room_id="attic")
+    assert unknown_room == anywhere
+
+
+def test_decide_holds_each_person_to_their_own_threshold() -> None:
+    """A person held to this room's samples has a higher bar than the
+    rest; a runner-up under ITS threshold is no contender."""
+    d = _decide({1: 0.77, 2: 0.76}, {1: 0.75, 2: 0.78})
+    assert d.person_id == 1 and not d.ambiguous
+    d = _decide({1: 0.77, 2: 0.70}, {1: 0.78, 2: 0.75})
+    assert d.person_id is None and not d.ambiguous
+    d = _decide({1: 0.80, 2: 0.79}, {1: 0.78, 2: 0.75})
+    assert d.person_id is None and d.ambiguous
+
+
+async def test_a_voice_from_before_1_3_is_matched_by_its_legacy_samples(store) -> None:
+    """Nobody enrolled before 1.3.0 stops being recognized: a person with
+    only legacy samples is scored with the turn's legacy embedding."""
+    store.enroll(1, _ALEX, "office", legacy=True)
+    store.enroll(2, _BLAKE, "office")
+    turn = VoicePrint(current=_unit(0, 0, 1), legacy=_ALEX, snr_db=30.0, speech_sec=2.0)
+    result = await identify(b"", embedding=turn, room_id="office")
+    assert result.person_id == 1
+    assert result.legacy_embedding is not None
+    # The same turn without its legacy embedding can't reach them.
+    bare = await identify(b"", embedding=_unit(0, 0, 1), room_id="office")
+    assert bare.person_id is None
+
+
+async def test_confident_legacy_matches_save_a_first_current_sample(store, monkeypatch) -> None:
+    """A legacy person's confident run in a room saves the turn's CURRENT
+    embedding there; from then on they are held in the current one."""
+    monkeypatch.setattr(voice_identifier.settings, "voice_profile_drift_reenroll_after", 2)
+    store.enroll(1, _ALEX, "office", legacy=True)
+    now = _unit(0.3, 0.3, 0.9055)
+    turn = VoicePrint(current=now, legacy=_ALEX, snr_db=30.0, speech_sec=2.0)
+    await identify(b"", embedding=turn, room_id="office")
+    assert store.profiles == []
+    await identify(b"", embedding=turn, room_id="office")
+    assert [(p, e, r) for _i, p, e, r in store.profiles] == [(1, _blob(now), "office")]
+    # Held in the current embedding now: the legacy one no longer decides.
+    moved = VoicePrint(current=now, legacy=_unit(0, 1, 0), snr_db=30.0, speech_sec=2.0)
+    assert (await identify(b"", embedding=moved, room_id="office")).person_id == 1
+
+
+async def test_a_noisy_turn_is_scored_but_names_nobody_and_learns_nothing(store, monkeypatch) -> None:
+    monkeypatch.setattr(voice_identifier.settings, "voice_profile_drift_reenroll_after", 1)
+    store.enroll(1, _ALEX, "office")
+    music = VoicePrint(current=_ALEX, legacy=_ALEX, snr_db=4.0, speech_sec=1.5)
+    result = await identify(b"", embedding=music, room_id="garage")
+    assert result.person_id is None
+    assert result.outcome == voice_identifier.OUTCOME_NOISY
+    assert result.best_person_id == 1 and result.best_similarity == pytest.approx(1.0, abs=1e-5)
+    assert store.count(1) == 1 and store.touched == []
+    match = voice_identifier.VoiceMatch.of(result, speech_seconds=3.0)
+    assert match.outcome == "noisy" and match.best_score == pytest.approx(1.0)
+    assert "too noisy" in match.describe()
+    # A clear turn in the same room is named (and learns the room).
+    clear = VoicePrint(current=_ALEX, legacy=_ALEX, snr_db=25.0, speech_sec=1.5)
+    assert (await identify(b"", embedding=clear, room_id="garage")).person_id == 1
+    assert store.count(1) == 2
+
+
+async def test_a_phone_turn_is_never_held_back_as_noisy(store) -> None:
+    store.enroll(1, _ALEX, "office")
+    music = VoicePrint(current=_ALEX, legacy=_ALEX, snr_db=4.0, speech_sec=1.5)
+    result = await identify(b"", embedding=music, room_id="phone-1", samples="phone")
+    assert result.person_id == 1
+
+
+async def test_a_legacy_opt_out_carries_over_to_the_current_embedding(store) -> None:
+    store.deny["resemblyzer-v1"].append(_blob(_ALEX))
+    store.enroll(1, _ALEX, "office")
+    turn = VoicePrint(current=_unit(0, 1, 0), legacy=_ALEX, snr_db=30.0, speech_sec=2.0)
+    result = await identify(b"", embedding=turn, room_id="office")
+    assert result.denylisted and result.person_id is None
+    assert store.deny["resemblyzer-v2"] == [_blob(_unit(0, 1, 0))]
+    # Heard again without a legacy embedding: still opted out.
+    again = await identify(b"", embedding=_unit(0, 1, 0), room_id="office")
+    assert again.denylisted
+
+
+async def test_a_person_held_to_this_rooms_samples_clears_a_higher_bar(store, monkeypatch) -> None:
+    """A room's samples carry the room: someone heard there needs
+    ``voice_profile_same_room_margin`` more to be named from them."""
+    monkeypatch.setattr(voice_identifier.settings, "voice_profile_same_room_margin", 0.03)
+    store.enroll(1, _unit(1, 0, 0), "garage")
+    store.enroll(1, _unit(0, 1, 0), "office")
+    near = _unit(0.765, 0, 0.6440)                 # 0.765 to the garage sample
+    assert (await identify(b"", embedding=near, room_id="garage")).person_id is None
+    clear = _unit(0.79, 0, 0.6131)
+    assert (await identify(b"", embedding=clear, room_id="garage")).person_id == 1

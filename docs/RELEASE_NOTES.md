@@ -4,6 +4,43 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 — Rooms tell voices apart better; what an update changes for voice ID
+
+Voice identification now embeds **the speech alone, at one loudness**: the
+quiet room before a command and the second of silence after it are cut off,
+and a far-off voice is brought to the same level as a near one. That quiet
+tail carried the room rather than the person, so two people's samples from
+one room used to look alike through it, and a person sounded different in
+each room partly by how loud they were. A room also now holds a person to
+the samples it heard itself when it has one (each room's mic, distance and
+echo colour a voice), with a slightly higher bar for those
+(`VOICE_PROFILE_SAME_ROOM_MARGIN`, 0.03: the room is in everybody's voice
+there). And a command with music or a TV under it is scored
+but names nobody (`noisy` in the room's history, "too noisy to tell"):
+under music the right person and the wrong one score alike.
+
+**What an update changes: nobody has to enrol again.** Samples from before
+1.3.0 are kept and still used: a person who has only those is matched
+exactly as before, and after a few clear matches in a room (three in a row,
+as rooms have always learned) Domovoi saves a new sample of them there and
+moves them over by itself. From then on they are named less often by
+mistake, but a far-off room that has no sample of them yet names them less
+often too — which is what the next paragraph fixes. An opt-out ("never save
+my voice") carries over the first time that voice is heard.
+
+**What to do for rooms that never recognize someone** (a garage, a dining
+room far from the satellite): the People page now shows, for each person,
+**rooms that know this voice**. In a room marked "not yet", the person says
+"my name is …" there and answers yes; that room then has their voice. A
+room only learns a voice by itself from matches it is already sure of, so
+a room that has never heard someone clearly enough needs this once.
+
+`scripts/eval_voice_id.py` measures all this on synthetic speakers in
+simulated rooms (near and far, echo, music, a TV): how often each room
+names the right person, the wrong one, and the equal error rate.
+`VOICE_PROFILE_NOISY_SNR_DB` (10) is how far the speech must stand above
+the rest of the recording to be scored for a name.
+
 ## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
 
 A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm

@@ -118,8 +118,13 @@ async def test_the_real_embedder_gives_the_reference_embedding(monkeypatch) -> N
     from domovoi.config import settings
 
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
-    got = await RealVoiceEmbedder().embed(pcm("norman_a.wav"))
-    assert float(got @ np.array(REF["embeddings"]["norman_a.wav"], dtype=np.float32)) == pytest.approx(1.0, abs=1e-6)
+    got = await RealVoiceEmbedder().embed_print(pcm("norman_a.wav"))
+    # The legacy embedding is Resemblyzer's, of the recording as it came;
+    # the current one is of its speech alone at one loudness (voice_prep).
+    ref = np.array(REF["embeddings"]["norman_a.wav"], dtype=np.float32)
+    assert float(got.legacy @ ref) == pytest.approx(1.0, abs=1e-6)
+    assert 0.8 < float(got.current @ ref) < 0.9999
+    assert got.speech_sec < 1.7 and got.snr_db > 30
 
 
 # ─── voice ID end to end (torch + weights + the test DB) ─────────────────
@@ -154,6 +159,9 @@ async def test_voice_id_end_to_end_with_the_real_encoder(db_session, monkeypatch
 
     her = await voice_identifier.identify(pcm("kristin_b.wav"))
     assert her.person_id == ids["Kristin"]
-    assert her.best_similarity == pytest.approx(0.7593, abs=1e-3)       # Resemblyzer's own score
+    # Resemblyzer's own score for the whole clips was 0.7593; of the
+    # speech alone, at one loudness, it is 0.8017 (domovoi/voice_prep.py).
+    assert her.best_similarity == pytest.approx(0.8017, abs=1e-3)
+    assert her.legacy_embedding is not None
     him = await voice_identifier.identify(pcm("norman_a.wav"))
     assert him.person_id == ids["Norman"] and him.best_similarity > 0.999

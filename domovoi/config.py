@@ -1569,6 +1569,21 @@ class Settings(BaseSettings):
     # the same person on a cold or distant mic. Tunable per-household.
     voice_profile_match_threshold: float = 0.75
 
+    # Added to the threshold for a person scored against samples from the
+    # turn's own room (domovoi/voice_identifier.py, ``room_person_scores``).
+    # A room's mic and echo are in every sample it keeps, so anyone heard
+    # there scores a little closer to them: in scripts/eval_voice_id.py's
+    # simulated rooms, room samples at 0.75 named the wrong person up to
+    # 9 % of the time, at 0.78 no more often than before 1.3.0 (2026-11).
+    voice_profile_same_room_margin: float = 0.03
+
+    # A turn whose speech stands less than this far (dB) above the rest of
+    # the recording — music, a TV, a running machine under the command — is
+    # scored but nobody is named from it, and no room learns from it
+    # (outcome ``noisy``). The voice under music is coloured by it: in the
+    # simulated garage the right person and the wrong one score alike.
+    voice_profile_noisy_snr_db: float = 10.0
+
     # How far ahead of the next-closest person the best one must score
     # when both clear the threshold. Inside this gap the voice is
     # "ambiguous" and nobody is named — two similar voices (same-sex
@@ -1577,7 +1592,8 @@ class Settings(BaseSettings):
     voice_profile_match_margin: float = 0.05
 
     # Minimum utterance length (in seconds of int16 PCM @ 16 kHz) before
-    # we even attempt embedding. Resemblyzer needs ~1 s of voiced audio
+    # we even attempt embedding — and of the speech left once the silence
+    # around it is trimmed (domovoi/voice_prep.py). Resemblyzer needs ~1 s of voiced audio
     # to produce a stable vector; sub-second clips are mostly noise and
     # produce embeddings that match nobody, polluting the audit trail.
     voice_profile_min_utterance_sec: float = 1.0
