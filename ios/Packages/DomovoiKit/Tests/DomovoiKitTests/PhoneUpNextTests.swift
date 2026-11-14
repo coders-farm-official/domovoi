@@ -364,7 +364,8 @@ final class PhoneUpNextTests: XCTestCase {
         r.model.next()
         await r.drain()
         let bodies = r.api.calls.filter { $0.what == "next" }.map(\.body)
-        XCTAssertEqual(bodies, [#"{"have_through_seq":2}"#, #"{"have_through_seq":2}"#])
+        XCTAssertEqual(Array(bodies.prefix(2)), [#"{"have_through_seq":2}"#, #"{"have_through_seq":2}"#],
+                       "the same number again after a failure")
         XCTAssertEqual(r.upNext.state?.offline, false)
     }
 
@@ -603,9 +604,11 @@ final class PhoneUpNextTests: XCTestCase {
         await playing(r, picks: [unPick(1, 601)])
         _ = await r.model.cast(to: "office")
         r.api.moveAnswer = .failure(unFailure(409))
+        r.api.startAnswer = .success(UpNextSession(id: "s2", mode: "continue"))
         _ = await r.model.cast(to: nil)
         await r.drain()
-        XCTAssertNotEqual(r.upNext.state?.id, "s1", "the room's session was replaced: dropped here")
+        XCTAssertEqual(r.api.count("start"), 2, "dropped here, and the queue starts a new one near its end")
+        XCTAssertEqual(r.upNext.state?.id, "s2", "the room's session was replaced: dropped here")
     }
 
     // MARK: back on screen
@@ -624,9 +627,10 @@ final class PhoneUpNextTests: XCTestCase {
         let r = UpNextRig()
         await playing(r, picks: [unPick(1, 601), unPick(2, 602)])
         r.api.readAnswer = .failure(unFailure(404))
+        r.api.startAnswer = .success(UpNextSession(id: "s2", mode: "continue"))
         r.upNext.reread()
         await r.drain()
-        XCTAssertNotEqual(r.upNext.state?.id, "s1")
+        XCTAssertEqual(r.upNext.state?.id, "s2", "the forgotten session is dropped; the queue starts its own")
     }
 
     // MARK: the queue
