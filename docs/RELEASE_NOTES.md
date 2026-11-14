@@ -4,6 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — The queue and Up next by voice
+
+In a room (or with the room's name after it, "… in the kitchen"):
+
+- **"what's next"** / "what's up next" says the next two songs.
+- **"play *song* next"** puts it right after the song playing now;
+  **"add *song* to the queue"**, **"queue up *song*"** or **"queue
+  *song*"** put it after the songs already asked for, before Up next's
+  picks. **Changed meaning:** "queue up *song*" used to play it at once;
+  it now adds it when something is playing, and plays it only when the
+  room is quiet (owner decision 2026-11-12).
+- **"clear the queue"** removes everything after the song playing now
+  (it keeps playing; Up next refills while autoplay is on).
+- **"skip this artist"** / **"no more *artist*"** skips them and leaves
+  them out of the room's mix; their waiting picks leave the queue.
+- **"turn autoplay off / on"**, **"stop after this list"**: the room's
+  Autoplay switch. On with no Up next yet makes one from the queue's
+  songs.
+- **"why is this playing"** says the pick's reason in words.
+- **"play something like this"** / **"more like this"** starts Up next
+  again from the song playing now (the song plays on; the old picks make
+  way). A stream or a podcast isn't a library song, and it says so.
+- **"play next"** and **"play the next song"** now skip, as "next" does
+  (they used to search the library for a song called "next"). A bare
+  "skip this" waits the longer pause before acting, because it also
+  starts "skip this artist".
+- A command that changes the room's mix from a recognised voice makes it
+  that person's mix.
+
+Nothing here needs the internet; none of it is offered to the language
+model's tools (they are fast paths only).
+
 ## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
 
 A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm

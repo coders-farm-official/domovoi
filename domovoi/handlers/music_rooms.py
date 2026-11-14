@@ -179,6 +179,14 @@ _ACTION_BY_METHOD = {
     "_volume_set_from_match": "volume",
     "_volume_up_from_match": "volume",
     "_volume_down_from_match": "volume",
+    # The queue's commands (music_queue_voice.py): reads a guest may make
+    # ("now_playing"), edits never ("queue").
+    "_whats_next_from_match": "now_playing",
+    "_why_from_match": "now_playing",
+    "_clear_queue_from_match": "queue",
+    "_skip_artist_from_match": "queue",
+    "_autoplay_from_match": "queue",
+    "_more_like_from_match": "queue",
 }
 # Core handlers whose plays are the room's player and nothing else, so a
 # play in another room may go through them: MusicHandler itself and
