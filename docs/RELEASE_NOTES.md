@@ -23,6 +23,11 @@ Settings tab (0.7 for the new default). A phone in room mode takes 0.7
 unless a pushed wake word gave it its own. If a room now misses you
 across the room, set its Wake confirmation to 1.
 
+A newly trained wake word starts at 0.7 as well (it was 0.5). Pushing a
+word to a room sets the room's Wake sensitivity to the word's own value,
+so a new word no longer loosens a room back to 0.5. Words you already
+made keep their value.
+
 ## 2026-11-14 — An update asked for from a phone stays in sight on the PC
 
 "Update Domovoi" pressed on another device asks the Domovoi icon on the
