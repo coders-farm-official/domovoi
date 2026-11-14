@@ -8,7 +8,10 @@ one glance instead of an A/B against main.
 
 It only labels. A known failure still fails, still prints its traceback,
 still counts in "N failed" and still makes the exit status non-zero;
-nothing here skips, deselects or xfails anything.
+nothing here skips, deselects or xfails anything. The one exception is
+CI's opt-in, ``DOMOVOI_FAIL_ON_NEW_ONLY=1`` (``only_known`` below): there a
+run whose failures are all known exits 0, so the workflow goes red on NEW
+failures only; the summary still lists every known one.
 
 Entries name pytest node ids as the summary prints them, relative to the
 repo root (``domovoi/tests/test_x.py::test_y[param]``). ``*`` in an entry
@@ -126,3 +129,19 @@ def _when(rep: Any) -> str:
     """" (error in setup)" and the like; nothing for a failed test body."""
     when = getattr(rep, "when", None)
     return f" (error in {when})" if when in ("setup", "teardown", "collect") else ""
+
+
+#: CI's opt-in (.github/workflows/ci.yml): with this set to 1, a run whose
+#: every failure is on the list exits 0, so the workflow fails on NEW
+#: failures only. Unset (any local run), nothing changes: a known failure
+#: still makes the exit status non-zero.
+FAIL_ON_NEW_ONLY_ENV = "DOMOVOI_FAIL_ON_NEW_ONLY"
+
+
+def only_known(stats: dict, entries: list[Known] | None = None) -> bool:
+    """True when the run failed and every failed or errored test is listed."""
+    bad = [r for key in ("failed", "error") for r in stats.get(key, [])]
+    if not bad:
+        return False
+    entries = load() if entries is None else entries
+    return all(find(entries, rep.nodeid) is not None for rep in bad)

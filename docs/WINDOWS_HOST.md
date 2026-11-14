@@ -1082,7 +1082,7 @@ ssh-keygen -t ed25519 -a 100 -C "Domovoi release key" -f $HOME\.domovoi-release\
 # choose a passphrase; keep the private file (domovoi-release) and a backup of it
 copy $HOME\.domovoi-release\domovoi-release.pub windows\installer\release-signing.pub
 git add windows/installer/release-signing.pub
-git commit -m "windows: pin Domovoi's release key [skip ci]"
+git commit -m "windows: pin Domovoi's release key"
 ```
 
 From the next release on, `finish-release` asks for the private file and

@@ -117,8 +117,9 @@ What a build carries (`app/build.gradle.kts`):
 
 ## Release-signed builds
 
-The APK the CI workflow publishes (`.github/workflows/android-apk.yml`,
-run by hand from the Actions tab only, the `domovoi-debug-apk` artifact)
+The APK CI publishes (`.github/workflows/ci.yml`, the `android` job: on
+every push to main that touches the app, and on a run started by hand from
+the Actions tab; the `domovoi-debug-apk` artifact, kept 14 days)
 is **debug-signed** with a key the
 runner makes up for that run, and its SHA-256 is in the run summary. It is
 a test build: each CI run carries a different key, Android won't install
