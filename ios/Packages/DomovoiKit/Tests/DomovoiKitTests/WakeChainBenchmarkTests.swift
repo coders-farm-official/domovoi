@@ -19,9 +19,12 @@ import XCTest
 /// busy build Mac (other units' tests, `nice`) does not fail it by itself.
 final class WakeChainBenchmarkTests: XCTestCase {
 
-    /// The build Mac (Apple M1 Pro) budget, ms per chunk. See
-    /// ``testTheWakeChainStaysInsideItsBudgetPerChunk()`` for how it was set.
-    static let macBudgetMs = 3.0
+    /// The build Mac (Apple M1 Pro) budget, ms per chunk: the A12's 8 ms over
+    /// the M1 Pro's single-core lead on an A12 (about 1.6-1.8x, public
+    /// benchmarks, not measured), rounded down, so a Mac pass means an A12
+    /// would likely stay inside its own budget. Measured 2026-11-14 on that
+    /// Mac: 2.20-2.28 ms per chunk (max 2.7 ms), best of three passes.
+    static let macBudgetMs = 4.0
     /// ROOMMODE-MAP §5, the A12's budget, which the Mac budget stands in for.
     static let a12BudgetMs = 8.0
 
