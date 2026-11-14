@@ -166,6 +166,43 @@ const PersonVoiceSamples = ({ samples, onDelete }) => (
   </div>
 );
 
+/* ---- Rooms that know this voice (GET …/voice-rooms) ------- */
+/*
+ * A far-off room recognizes a voice it has heard there far better than one
+ * heard only in another room (each room's mic, distance and echo colour a
+ * voice), so the household sees which rooms don't know a person yet and
+ * how to fix it: "my name is …" said in that room, then "yes", adds a
+ * sample there. A room with only a sample from before 1.3.0 still counts
+ * until a newer one replaces it.
+ */
+const PersonVoiceRooms = ({ person, rooms }) => {
+  if (!rooms || rooms.length === 0) return null;
+  const missing = rooms.filter(r => !r.current && !r.legacy);
+  return (
+    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <div className="label">rooms that know this voice</div>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+          {rooms.length - missing.length}/{rooms.length}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        {rooms.map(r => (
+          <Pill key={r.room_id} tone={r.current || r.legacy ? 'ok' : 'idle'}>
+            {r.room_id}{r.current || r.legacy ? '' : ' · not yet'}
+          </Pill>
+        ))}
+      </div>
+      {missing.length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 8, lineHeight: 1.5 }}>
+          Rooms recognize a voice best once they have heard it themselves. In each room marked
+          “not yet”, {person.name || 'they'} can say “my name is {person.name || '…'}” and answer yes.
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* ---- Same name as somebody else ---------------------------- */
 /*
  * One name, one person (handlers/voice_profile.py): voice enrolment makes
@@ -552,7 +589,7 @@ const ListeningHistoryPanel = () => {
 
 window.ListeningHistoryPanel = ListeningHistoryPanel;
 
-const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceMatches, onDeleteSample, onForget, onRenamed, fire, listens, onDeviceChanged }) => {
+const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceRooms, voiceMatches, onDeleteSample, onForget, onRenamed, fire, listens, onDeviceChanged }) => {
   // Rename: PATCH /api/people/{id}, admin tier. A name somebody else has
   // is refused (409) with the server's reason, and the box stays open.
   const [editing, setEditing] = React.useState(false);
@@ -633,6 +670,8 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceMatches, on
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>conversation_log rows</div>
         </div>
       </div>
+
+      <PersonVoiceRooms person={person} rooms={voiceRooms}/>
 
       <PersonVoiceSamples samples={samples} onDelete={onDeleteSample}/>
 
@@ -1264,6 +1303,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
   const [favorites, setFavorites] = React.useState([]);
   const [preferences, setPreferences] = React.useState({});
   const [samples, setSamples] = React.useState([]);
+  const [voiceRooms, setVoiceRooms] = React.useState([]);
   const [voiceMatches, setVoiceMatches] = React.useState([]);
   const [perPersonLoading, setPerPersonLoading] = React.useState(false);
   const [refreshTick, setRefreshTick] = React.useState(0);
@@ -1280,7 +1320,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
   React.useEffect(() => {
     if (selectedId == null) {
       setSessions([]); setConversations([]);
-      setMemories([]); setFavorites([]); setPreferences({}); setSamples([]); setVoiceMatches([]);
+      setMemories([]); setFavorites([]); setPreferences({}); setSamples([]); setVoiceRooms([]); setVoiceMatches([]);
       setPersonRefusal(null);
       return;
     }
@@ -1293,7 +1333,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
     });
     setPerPersonLoading(true);
     (async () => {
-      const [ss, cc, mm, ff, pp, vs, vm] = await Promise.all([
+      const [ss, cc, mm, ff, pp, vs, vm, vr] = await Promise.all([
         read(`/api/people/${selectedId}/sessions?limit=50`, []),
         read(`/api/people/${selectedId}/conversations?limit=${PERSON_TURNS_FETCHED}`, []),
         read(`/api/people/${selectedId}/memories`, []),
@@ -1302,6 +1342,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
         read(`/api/people/${selectedId}/profiles`, []),
         // Admin-only scores; [] for anyone else (never a refusal).
         apiGet(`/api/people/${selectedId}/voice-matches?limit=10`).catch(() => []),
+        read(`/api/people/${selectedId}/voice-rooms`, []),
       ]);
       if (cancelled) return;
       setSessions(ss || []);
@@ -1310,6 +1351,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
       setFavorites(ff || []);
       setPreferences(pp || {});
       setSamples(vs || []);
+      setVoiceRooms(vr || []);
       setVoiceMatches(vm || []);
       setPersonRefusal(refusal);
       setPerPersonLoading(false);
@@ -1480,6 +1522,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
                           sessionCount={sessions.length}
                           turnCount={conversations.length}
                           samples={samples}
+                          voiceRooms={voiceRooms}
                           voiceMatches={voiceMatches}
                           onDeleteSample={onDeleteSample}
                           onForget={() => setConfirmFor(selected)}

@@ -358,6 +358,18 @@ class PersonRename(BaseModel):
     name: str = Field(min_length=1, max_length=60)
 
 
+class VoiceRoom(BaseModel):
+    """Whether one room knows a person's voice (``GET /api/people/{id}/
+    voice-rooms``). A room recognizes a voice best from a sample heard in
+    that room (domovoi/voice_identifier.py, ``room_person_scores``).
+    ``current``: a satellite sample from this room in the current embedding
+    (1.3.0); ``legacy``: one from before 1.3.0 only, which is used until a
+    current sample of the person exists."""
+    room_id: str
+    current: bool = False
+    legacy: bool = False
+
+
 class VoiceProfile(BaseModel):
     id: int
     person_id: int
@@ -461,8 +473,9 @@ class VoiceMatchInfo(BaseModel):
     enrolled yet) | "timeout" | "denylist" (an opted-out voice) | "error".
     The closest person and the runner-up with their scores (cosine, 0..1;
     the match threshold is ``voice_profile_match_threshold``, 0.75 by
-    default) are set for the first four; a person since forgotten reads
-    null. Names are the people's current names."""
+    default) are set for the first four and "noisy" (music or
+    a TV under the voice: scored, nobody named; 1.3.0); a person since
+    forgotten reads null. Names are the people's current names."""
     outcome: str
     best_person_id: int | None = None
     best_name: str | None = None

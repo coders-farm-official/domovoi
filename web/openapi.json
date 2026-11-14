@@ -5286,6 +5286,53 @@
         }
       }
     },
+    "/api/people/{person_id}/voice-rooms": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "List Voice Rooms",
+        "description": "Every room of the house (its satellites) and whether it has a sample\nof this person's voice, so the household can see where Domovoi doesn't\nknow them yet: a far-off room recognizes a voice it has heard there far\nbetter than one heard only elsewhere. The People page says how to fix a\ngap \u2014 \"my name is \u2026\" said in that room adds one. Rooms that have a\nsample but no satellite any more are listed too. Satellite samples\nonly; a phone's are never used by a room.",
+        "operationId": "list_voice_rooms_api_people__person_id__voice_rooms_get",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VoiceRoom"
+                  },
+                  "title": "Response List Voice Rooms Api People  Person Id  Voice Rooms Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/people/{person_id}/profiles/{profile_id}": {
       "delete": {
         "tags": [
@@ -32005,7 +32052,7 @@
           "outcome"
         ],
         "title": "VoiceMatchInfo",
-        "description": "How voice identification scored a satellite turn (V049). ``outcome``:\n\"confident\" | \"match\" (somebody was named) | \"ambiguous\" (two people too\nclose to tell apart: nobody named) | \"no_match\" (the closest was under\nthe threshold) | \"too_short\" (the recording was too short to embed) |\n\"no_embedding\" (the embedder gave nothing) | \"no_samples\" (nobody\nenrolled yet) | \"timeout\" | \"denylist\" (an opted-out voice) | \"error\".\nThe closest person and the runner-up with their scores (cosine, 0..1;\nthe match threshold is ``voice_profile_match_threshold``, 0.75 by\ndefault) are set for the first four; a person since forgotten reads\nnull. Names are the people's current names."
+        "description": "How voice identification scored a satellite turn (V049). ``outcome``:\n\"confident\" | \"match\" (somebody was named) | \"ambiguous\" (two people too\nclose to tell apart: nobody named) | \"no_match\" (the closest was under\nthe threshold) | \"too_short\" (the recording was too short to embed) |\n\"no_embedding\" (the embedder gave nothing) | \"no_samples\" (nobody\nenrolled yet) | \"timeout\" | \"denylist\" (an opted-out voice) | \"error\".\nThe closest person and the runner-up with their scores (cosine, 0..1;\nthe match threshold is ``voice_profile_match_threshold``, 0.75 by\ndefault) are set for the first four and \"noisy\" (music or\na TV under the voice: scored, nobody named; 1.3.0); a person since\nforgotten reads null. Names are the people's current names."
       },
       "VoiceNote": {
         "properties": {
@@ -32188,6 +32235,30 @@
           "enrolled_at"
         ],
         "title": "VoiceProfile"
+      },
+      "VoiceRoom": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "current": {
+            "type": "boolean",
+            "title": "Current",
+            "default": false
+          },
+          "legacy": {
+            "type": "boolean",
+            "title": "Legacy",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id"
+        ],
+        "title": "VoiceRoom",
+        "description": "Whether one room knows a person's voice (``GET /api/people/{id}/\nvoice-rooms``). A room recognizes a voice best from a sample heard in\nthat room (domovoi/voice_identifier.py, ``room_person_scores``).\n``current``: a satellite sample from this room in the current embedding\n(1.3.0); ``legacy``: one from before 1.3.0 only, which is used until a\ncurrent sample of the person exists."
       },
       "VoiceSettings": {
         "properties": {

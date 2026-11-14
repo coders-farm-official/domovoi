@@ -2268,10 +2268,10 @@ class StreamSession:
         slot. Pure: nothing here may count as having heard somebody, since
         this copy may never be used. On any failure the turn embeds the
         audio itself, exactly as it would have without this."""
-        from domovoi.voice_identifier import embed_voice
+        from domovoi.voice_identifier import embed_print
 
         try:
-            return True, await self._one_at_a_time(lambda: embed_voice(pcm))
+            return True, await self._one_at_a_time(lambda: embed_print(pcm))
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -4805,6 +4805,10 @@ class StreamSession:
                 embedding_bytes: bytes | None = None
                 if ident is not None and ident.embedding is not None:
                     embedding_bytes = ident.embedding.astype("float32").tobytes()
+                legacy = getattr(ident, "legacy_embedding", None)
+                legacy_embedding_bytes = (
+                    legacy.astype("float32").tobytes() if legacy is not None else None
+                )
 
                 # Stamp the most-recent WiFi self-report from this room's Pi
                 # into the Context so WifiHandler's diagnostic path can
@@ -4831,6 +4835,7 @@ class StreamSession:
                     person_id=person_id,
                     presence_tier=presence_tier,
                     embedding_bytes=embedding_bytes,
+                    legacy_embedding_bytes=legacy_embedding_bytes,
                     voice_candidates=list(getattr(ident, "candidates", ()) or ()),
                     trigger=trigger,
                     wifi_status=wifi_status,

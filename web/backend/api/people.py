@@ -44,6 +44,7 @@ from web.backend.schemas import (
     Session,
     VoiceNote,
     VoiceProfile,
+    VoiceRoom,
 )
 
 router = APIRouter(prefix="/api/people", tags=["people"])
@@ -395,6 +396,47 @@ async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
                 claim_of=r[11] if admin else None,
             ))
         return out
+
+
+@router.get("/{person_id}/voice-rooms", response_model=list[VoiceRoom], dependencies=READ)
+async def list_voice_rooms(person_id: int) -> list[VoiceRoom]:
+    """Every room of the house (its satellites) and whether it has a sample
+    of this person's voice, so the household can see where Domovoi doesn't
+    know them yet: a far-off room recognizes a voice it has heard there far
+    better than one heard only elsewhere. The People page says how to fix a
+    gap — "my name is …" said in that room adds one. Rooms that have a
+    sample but no satellite any more are listed too. Satellite samples
+    only; a phone's are never used by a room."""
+    from domovoi.db.repositories import VoiceProfilesRepository
+
+    async with session_scope() as s:
+        rows = await s.execute(
+            text(
+                """
+                SELECT r.room_id,
+                       bool_or(v.model = :current) AS current,
+                       bool_or(v.model = :legacy) AS legacy
+                  FROM (SELECT room_id FROM satellites
+                        UNION
+                        SELECT room_id FROM voice_profiles
+                         WHERE person_id = :pid AND source = 'satellite'
+                           AND room_id IS NOT NULL) r
+                  LEFT JOIN voice_profiles v
+                    ON v.room_id = r.room_id AND v.person_id = :pid AND v.source = 'satellite'
+                 GROUP BY r.room_id
+                 ORDER BY r.room_id
+                """
+            ),
+            {
+                "pid": person_id,
+                "current": VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                "legacy": VoiceProfilesRepository.LEGACY_MODEL_TAG,
+            },
+        )
+        return [
+            VoiceRoom(room_id=r[0], current=bool(r[1]), legacy=bool(r[2]))
+            for r in rows.all()
+        ]
 
 
 # ─── Destructive ───────────────────────────────────────────────────────────

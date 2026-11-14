@@ -11,6 +11,14 @@ bytes, projected onto the unit sphere. Same input → same vector, so
 tests that want "the same speaker said two things" reuse the same PCM
 bytes; tests that want "two different speakers" use different bytes.
 
+Two embeddings per recording (1.3.0, :class:`VoicePrint`): the *current*
+one, of the speech alone at one loudness (domovoi/voice_prep.py), which
+every new sample is kept in (``resemblyzer-v2``), and the *legacy* one, of
+the whole recording as it came (``resemblyzer-v1``), which voices enrolled
+before 1.3.0 are still matched with until a room saves a current sample of
+theirs (domovoi/voice_identifier.py, "Two embeddings"). Each is one pass of
+the small encoder (~25 ms on a CPU).
+
 Both paths are async-fronted (Resemblyzer is sync C-extension code; we
 push it to a worker thread so it doesn't pin the event loop during
 inference).
@@ -21,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
@@ -32,10 +41,28 @@ log = logging.getLogger(__name__)
 EMBEDDING_DIM = 256  # Resemblyzer's output dimension. Stub matches it.
 
 
+@dataclass(frozen=True)
+class VoicePrint:
+    """One recording's voice. ``current``: the unit-norm embedding of its
+    speech alone, at one loudness; ``legacy``: of the whole recording as it
+    came (None when it couldn't be made); ``snr_db``: how far the speech
+    stood above the rest of the recording (None: not measured — the stub);
+    ``speech_sec``: how much speech was found."""
+
+    current: np.ndarray
+    legacy: np.ndarray | None = None
+    snr_db: float | None = None
+    speech_sec: float | None = None
+
+
 class VoiceEmbedder(Protocol):
     async def embed(self, pcm_int16: bytes) -> np.ndarray | None:
-        """Return a unit-norm float32 embedding, or None if the clip is
-        too short / silent / otherwise unembeddable."""
+        """Return the unit-norm float32 *current* embedding, or None if the
+        clip is too short / silent / otherwise unembeddable."""
+        ...
+
+    async def embed_print(self, pcm_int16: bytes) -> VoicePrint | None:
+        """Both embeddings and the speech's clarity, or None as above."""
         ...
 
 
@@ -49,6 +76,12 @@ class StubVoiceEmbedder:
     """
 
     async def embed(self, pcm_int16: bytes) -> np.ndarray | None:
+        voice = await self.embed_print(pcm_int16)
+        return None if voice is None else voice.current
+
+    async def embed_print(self, pcm_int16: bytes) -> VoicePrint | None:
+        """The same hash vector as both embeddings (a stub voice sounds the
+        same either way), clarity unmeasured."""
         if not pcm_int16:
             return None
         # SHA-256 → 64 hex chars → seed an RNG → standard normal vector.
@@ -58,7 +91,9 @@ class StubVoiceEmbedder:
         rng = np.random.default_rng(seed)
         v = rng.standard_normal(EMBEDDING_DIM).astype(np.float32)
         norm = float(np.linalg.norm(v))
-        return v / norm if norm > 0 else v
+        v = v / norm if norm > 0 else v
+        return VoicePrint(current=v, legacy=v, snr_db=None,
+                          speech_sec=len(pcm_int16) / (16_000 * 2))
 
 
 class RealVoiceEmbedder:
@@ -106,37 +141,55 @@ class RealVoiceEmbedder:
         return True
 
     async def embed(self, pcm_int16: bytes) -> np.ndarray | None:
+        voice = await self.embed_print(pcm_int16)
+        return None if voice is None else voice.current
+
+    async def embed_print(self, pcm_int16: bytes) -> VoicePrint | None:
         if not pcm_int16:
             return None
         # Resemblyzer expects float32 in [-1, 1] at 16 kHz. The Pi sends
-        # int16 PCM at exactly 16 kHz so the conversion is the only
-        # preprocessing needed. Below the configured minimum length we
-        # bail rather than emit a noisy embedding.
+        # int16 PCM at exactly 16 kHz. Below the configured minimum length
+        # we bail rather than emit a noisy embedding.
         sample_count = len(pcm_int16) // 2
         seconds = sample_count / 16_000.0
         if seconds < settings.voice_profile_min_utterance_sec:
             return None
 
         # The load (when the boot preload hasn't done it) and the NN
-        # forward pass both run in a worker thread — synchronous torch
-        # code that would otherwise block the event loop.
+        # forward passes run in a worker thread — synchronous torch code
+        # that would otherwise block the event loop.
         from domovoi import executors
 
         return await executors.run("speech", self._embed_sync, pcm_int16)
 
-    def _embed_sync(self, pcm_int16: bytes) -> np.ndarray | None:
+    def _embed_sync(self, pcm_int16: bytes) -> VoicePrint | None:
+        from domovoi.voice_prep import prepare
+
         try:
             self._ensure_encoder()
-            wav = np.frombuffer(pcm_int16, dtype=np.int16).astype(np.float32) / 32768.0
             assert self._encoder is not None
-            emb = self._encoder.embed_utterance(wav)
-            # `embed_utterance` already returns unit-norm; defensive
-            # renormalize against future Resemblyzer behavior changes.
-            norm = float(np.linalg.norm(emb))
-            return emb.astype(np.float32) / norm if norm > 0 else emb.astype(np.float32)
+            wav = np.frombuffer(pcm_int16, dtype=np.int16).astype(np.float32) / 32768.0
+            legacy = _unit(self._encoder.embed_utterance(wav))
+            speech = prepare(wav)
+            if speech.speech_sec < settings.voice_profile_min_utterance_sec:
+                # Too little speech once the silence around it is gone: no
+                # current embedding, so nothing is named or saved from it.
+                log.debug("voice embedding: %.2f s of speech, too short", speech.speech_sec)
+                return None
+            current = _unit(self._encoder.embed_utterance(speech.audio))
+            return VoicePrint(current=current, legacy=legacy,
+                              snr_db=speech.snr_db, speech_sec=speech.speech_sec)
         except Exception as e:
             log.warning("voice embedding failed: %s", e)
             return None
+
+
+def _unit(emb: np.ndarray) -> np.ndarray:
+    """``embed_utterance`` already returns unit-norm; renormalised against
+    future changes."""
+    emb = np.asarray(emb, dtype=np.float32)
+    norm = float(np.linalg.norm(emb))
+    return emb / norm if norm > 0 else emb
 
 
 _client: VoiceEmbedder | None = None

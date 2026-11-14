@@ -1096,7 +1096,12 @@ class VoiceProfilesRepository:
     own voice. :meth:`person_samples` reads them for "forget me".
     """
 
-    EMBEDDING_MODEL_TAG = "resemblyzer-v1"
+    #: Every new sample is kept in the current embedding (the speech alone,
+    #: at one loudness: domovoi/voice_prep.py, 1.3.0); samples from before
+    #: it stay in the legacy one, and a person with no current sample yet is
+    #: matched by those (domovoi/voice_identifier.py, "Two embeddings").
+    EMBEDDING_MODEL_TAG = "resemblyzer-v2"
+    LEGACY_MODEL_TAG = "resemblyzer-v1"
     SATELLITE = "satellite"
     PHONE = "phone"
 
@@ -1283,7 +1288,8 @@ class VoiceDenylistRepository:
     a denylisted user has explicitly opted out of being a person row.
     """
 
-    EMBEDDING_MODEL_TAG = "resemblyzer-v1"
+    EMBEDDING_MODEL_TAG = "resemblyzer-v2"
+    LEGACY_MODEL_TAG = "resemblyzer-v1"
 
     def __init__(self, session: AsyncSession) -> None:
         self.s = session

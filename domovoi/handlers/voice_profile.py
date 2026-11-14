@@ -1840,7 +1840,9 @@ class VoiceProfileHandler(Handler):
         saying "this is Alex" + "yes" would enroll a voice whose owner
         explicitly said "never save my voice" (audit: denylist bypass via
         third-party intro). Same threshold as profile matching, biasing
-        toward respecting the opt-out on noisy embeddings.
+        toward respecting the opt-out on noisy embeddings. Current-embedding
+        rows only: a pre-1.3.0 opt-out gets its current twin the first time
+        identify() hears that voice (voice_identifier._denylisted).
 
         Fail-open on DB errors (mirrors the identifier): a transient
         denylist read failure shouldn't block a legitimate enrollment.
@@ -2218,11 +2220,18 @@ class VoiceProfileHandler(Handler):
         """
         repo = VoiceProfilesRepository(session)
         samples = await repo.person_samples(ctx.person_id, repo.EMBEDDING_MODEL_TAG)
+        heard = ctx.embedding_bytes
+        if not samples:
+            # Nothing in the current embedding yet: a voice enrolled before
+            # 1.3.0 is held in its legacy samples, against the turn's legacy
+            # embedding (voice_identifier, "Two embeddings").
+            samples = await repo.person_samples(ctx.person_id, repo.LEGACY_MODEL_TAG)
+            heard = ctx.legacy_embedding_bytes
         if all(s.own for s in samples):
             return "person", []
-        if ctx.embedding_bytes is None or len(ctx.embedding_bytes) != EMBEDDING_DIM * 4:
+        if heard is None or len(heard) != EMBEDDING_DIM * 4:
             return "unheard", []
-        voice = np.frombuffer(ctx.embedding_bytes, dtype=np.float32)
+        voice = np.frombuffer(heard, dtype=np.float32)
         if is_own_voice(voice, samples, phone=phone_chat_mic(ctx)):
             return "person", []
         mine = claims_by_this_voice(voice, samples)
