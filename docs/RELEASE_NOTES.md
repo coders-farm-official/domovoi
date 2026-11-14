@@ -27,6 +27,10 @@ Review fixes to the phone calendars below, before 1.3.0 ships.
 - The same event shared by two phones (`ical_uid`, optional) is listed
   once, with `also_in`. A private event a phone sends as `busy` shows and
   is read aloud as busy time ("Tomorrow you're busy from 3 PM to 4 PM").
+- **iPhones share calendars too.** The snapshot's optional `platform`
+  (`"android"` or `"ios"`, anything else `422`) is recorded on the phone's
+  device entry, so an iPhone is no longer listed as an Android phone. A
+  body without it (an older Android build) still counts as `"android"`.
 - `GET /api/calendar/sources`: a phone's `device_id` is for admins only,
   `account_name` is no longer kept or returned, `status` may be `stale`,
   and a phone's calendars carry `expires_at`.
