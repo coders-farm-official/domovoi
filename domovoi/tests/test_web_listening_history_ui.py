@@ -295,6 +295,9 @@ apiFetch = (p, o) => new Promise((res) => { window.__pending.push({ p, o, res })
 Auth.isPaired = () => true;
 DeviceIdentity.sharedScreen = () => false;
 DeviceIdentity.owner = () => null;
+// The clock ListenLog reads: a song is only as long as the time that passes.
+window.__now = 1762970591000;
+Date.now = () => window.__now;
 """
 
 _OUTBOX_SCRIPT = r"""
@@ -304,11 +307,13 @@ _OUTBOX_SCRIPT = r"""
   const item = (uid, trackId) => ({ uid, kind: 'library', trackId, durationSec: 200 });
   const outbox = () => JSON.parse(w.__store['domovoi-listen-outbox'] || '[]');
   LL.follow(item('a', 1), true, 200);
+  w.__now += 30000;
   LL.close(true);                       // row 1 waits
   const first = LL.flush({ keepalive: true });    // the tab was hidden: row 1 on its way...
   const second = LL.flush();                      // ...and the 5 s flush sends it again
   await h.settle();
   LL.follow(item('b', 2), true, 200);
+  w.__now += 30000;
   LL.close(true);                       // row 2 lands meanwhile
   const sentFirst = JSON.parse(w.__pending[0].o.body).listens;
   w.__pending[0].res({ accepted: 1 });
@@ -337,3 +342,58 @@ def test_an_overlapping_flush_keeps_the_rows_it_did_not_send(tmp_path) -> None:
     assert [r["track_id"] for r in out["sent"]] == [1] and out["uidsSent"] is False
     assert out["sent"][0]["outcome"] == "finished"
     assert out["left"] == [2]
+
+
+# ─── player.jsx ListenLog: a natural end counts the time really heard ─────
+# (owner decision 2026-11-14, "count real time": no padding up to the
+# length; the outcome stays "finished" on a natural end.)
+
+_REAL_TIME_SETUP = _OUTBOX_SETUP
+
+_REAL_TIME_SCRIPT = r"""
+  h.render();
+  const w = h.global('window');
+  const LL = w.__LL;
+  const tick = (sec) => { w.__now += sec * 1000; };
+  const outbox = () => JSON.parse(w.__store['domovoi-listen-outbox'] || '[]');
+  const song = (uid, trackId, dur) => ({ uid, kind: 'library', trackId, durationSec: dur });
+  // 6:00 song: 10 s heard, a seek to 5:50 (no time passes), 10 s to its end.
+  LL.follow(song('a', 1, 360), true, 360);
+  tick(10);
+  tick(10);
+  LL.close(true);
+  // 200 s song: 60 s, paused five minutes, 45 s more, then it ends.
+  LL.follow(song('b', 2, 200), true, 200);
+  tick(60);
+  LL.follow(song('b', 2, 200), false, 200);
+  tick(300);
+  LL.follow(song('b', 2, 200), true, 200);
+  tick(45);
+  LL.close(true);
+  // 200 s song stopped at 20 s: stopped, 20 s.
+  LL.follow(song('c', 3, 200), true, 200);
+  tick(20);
+  LL.close(false);
+  return outbox().map((r) => [r.track_id, r.played_sec, r.duration_sec, r.outcome]);
+"""
+
+
+def test_a_natural_end_counts_only_the_time_heard(tmp_path) -> None:
+    node = shutil.which("node")
+    assert node
+    spec = tmp_path / "realtime.json"
+    spec.write_text(json.dumps({"realtime": {
+        "files": ["web/static/components.jsx", "web/static/player.jsx"],
+        "component": "(() => { window.__LL = ListenLog; return null; })",
+        "setup": _REAL_TIME_SETUP, "script": _REAL_TIME_SCRIPT,
+    }}), encoding="utf-8")
+    proc = subprocess.run([node, str(HARNESS), str(REPO_ROOT), f"@{spec}"],
+                          capture_output=True, text=True, encoding="utf-8", timeout=180)
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)["realtime"]
+    assert isinstance(out, list), out
+    assert out == [
+        [1, 20, 360, "finished"],    # seeked near the end: 20 s heard, still finished
+        [2, 105, 200, "finished"],   # the pause adds nothing
+        [3, 20, 200, "stopped"],
+    ]
