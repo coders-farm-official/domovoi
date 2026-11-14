@@ -52,7 +52,7 @@ final class CalendarImportedTests: XCTestCase {
     func testTheNoteSaysWhereToChangeIt() {
         XCTAssertEqual("from Work on Pixel 8 \u{2014} change it on that phone", phoneEvent().readOnlyNote)
         XCTAssertEqual("from Work \u{2014} change it on that phone", phoneEvent(owner: nil).readOnlyNote)
-        XCTAssertEqual("from a phone calendar \u{2014} change it on that phone", phoneEvent(name: " ").readOnlyNote)
+        XCTAssertEqual("from a phone calendar on Pixel 8 \u{2014} change it on that phone", phoneEvent(name: " ").readOnlyNote)
         XCTAssertEqual("from School \u{2014} change it there", linkEvent().readOnlyNote)
         XCTAssertEqual("from another calendar \u{2014} change it there", linkEvent(name: nil).readOnlyNote)
         XCTAssertTrue(linkEvent().isImported)

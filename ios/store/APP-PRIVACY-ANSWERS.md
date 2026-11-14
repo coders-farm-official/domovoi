@@ -23,6 +23,17 @@ request in real time. Nothing here does:
   drop-ins (the intercom). The audio goes only to the household's own server,
   never to Coders Farm or anyone else, and is not kept by the app. So "Data
   Not Collected" still holds with room mode.
+- **Phone calendars** (Settings → Phone calendars, off until the person
+  turns it on; iOS asks for calendar access only then). The events of the
+  calendars they tick (title, time, place, the calendar's name and colour)
+  go **only to the household's own Domovoi server**, which the household
+  runs and Coders Farm never sees; never to Coders Farm or any third party,
+  and nothing is kept by the app beyond which calendars were ticked. Apple
+  counts data as collected only when it reaches the developer or its
+  partners, so **"Data Not Collected" still holds**. Do not tick
+  "Contacts" or "Other user content" for this: it is the person's data
+  moving to their own device. If the app ever sent calendar data to a
+  service of ours, this answer would change the same day.
 - **Chat** is answered only by the household's own server. This version has
   no on-device chat (owner answer Q11: Apple's model is not offered) and
   sends nothing to an AI company.

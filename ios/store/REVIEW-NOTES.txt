@@ -10,6 +10,9 @@ Everything else (rooms, the library, timers, the intercom) comes from the househ
 ROOM MODE
 A spare iPhone can be a room: it scans a room code, the household approves it on the dashboard, and it answers the wake word. It listens only while Domovoi is on screen. The audio background mode is used only for playback and drop-ins (2.5.4); the microphone is never started from the background. We suggest Guided Access to keep the phone in the app. Leaving room mode takes Face ID or the passcode. The wake-word and voice-detection models come from the household's own server, as data (2.5.2).
 
+PHONE CALENDARS (5.1.1)
+Off until turned on in Settings > Household > Phone calendars; calendar access is asked only then, read-only. The calendars the person ticks go only to the household's own server, never to us. It syncs while the app is open; there is no background refresh.
+
 DOWNLOADS
 The app downloads no executable code and no AI model. Room mode's wake-word and voice-detection models are data from the household's own server.
 
