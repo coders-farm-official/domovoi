@@ -15,6 +15,16 @@ import Foundation
 ///  * The house refusing this phone (401/403) → off, no retry (correction 2).
 ///  * An unchanged snapshot is skipped, except once a day (correction 8).
 ///
+/// And the server's V057 contract (main `8769500d`):
+///
+///  * **the calendar key** (``CalendarKeyVault``): sent on every PUT and
+///    DELETE once this phone has one, kept when a PUT hands out a new one,
+///    and forgotten on a 403 — the house no longer accepts this phone's
+///    calendars, and sharing stops with a notice;
+///  * **the generation**: every PUT and DELETE carries one that only grows;
+///    a 410 (sharing was turned off after this upload was read) or a 409 (a
+///    newer one is already stored) drops the upload, with no retry.
+///
 /// **Every write is keyed by the server the pass is for** — the `server`
 /// argument, never "the active server" read after an await — and the two
 /// calls are made `onlyTo` it by the caller's closures, so a pass for house A
@@ -34,10 +44,14 @@ public actor CalendarShareSync {
 
     public typealias Calendars = @Sendable () -> [PhoneCalendarInfo]?
     public typealias Events = @Sendable (ShareWindow, Set<String>) -> [PhoneEventRow]?
-    public typealias Put = @Sendable (_ server: String, _ body: Data) async throws -> Void
-    public typealias Delete = @Sendable (_ server: String) async throws -> Void
+    /// The PUT, with the calendar key when there is one; answers the
+    /// `calendar_key` the house handed out, if it did.
+    public typealias Put = @Sendable (_ server: String, _ body: Data, _ key: String?) async throws -> String?
+    /// The DELETE, with the key and `?generation=`.
+    public typealias Delete = @Sendable (_ server: String, _ key: String?, _ generation: Int64) async throws -> Void
 
     private let store: CalendarShareStore
+    private let keys: CalendarKeyVault
     private let calendars: Calendars
     private let events: Events
     private let put: Put
@@ -53,6 +67,7 @@ public actor CalendarShareSync {
 
     public init(
         store: CalendarShareStore,
+        keys: CalendarKeyVault,
         calendars: @escaping Calendars,
         events: @escaping Events,
         put: @escaping Put,
@@ -62,6 +77,7 @@ public actor CalendarShareSync {
         now: @escaping @Sendable () -> Int64 = { Int64((Date().timeIntervalSince1970 * 1000).rounded()) }
     ) {
         self.store = store
+        self.keys = keys
         self.calendars = calendars
         self.events = events
         self.put = put
@@ -131,22 +147,44 @@ public actor CalendarShareSync {
         )
         let fingerprint = CalendarSharePayload.fingerprint(built.body)
         guard CalendarShareRules.needsSend(entry, fingerprint: fingerprint, nowMs: t) else { return .done }
+        // Kept before the call, so the next one only grows even if this one
+        // never answers.
+        let generation = claimGeneration(server, at: t)
+        var body = built.body
+        body.generation = generation
         do {
-            try await put(server, CalendarSharePayload.encode(built.body))
+            let minted = try await put(server, CalendarSharePayload.encode(body), keys.key(for: server))
+            if let minted { keys.save(minted, for: server) }
             store.update(server) {
                 CalendarShareRules.sent($0 ?? CalendarShareEntry(), nowMs: self.now(), dropped: built.droppedEvents,
                                         fingerprint: fingerprint)
             }
             return .done
         } catch {
+            let status = Self.status(error)
+            if status == 410 || status == 409 {
+                // Older than the off, or than one already stored: dropped,
+                // not retried. The next change sends a newer one.
+                return .done
+            }
             return failed(server, error, at: t, deleting: false)
         }
     }
 
+    private func claimGeneration(_ server: String, at t: Int64) -> Int64 {
+        let entry = store.update(server) { (e: CalendarShareEntry?) -> CalendarShareEntry in
+            var next = e ?? CalendarShareEntry()
+            next.lastGeneration = CalendarShareRules.nextGeneration(e, nowMs: t)
+            return next
+        }
+        return entry.lastGeneration ?? t
+    }
+
     private func remove(_ server: String) async -> Outcome {
         let t = now()
+        let generation = claimGeneration(server, at: t)
         do {
-            try await delete(server)
+            try await delete(server, keys.key(for: server), generation)
             store.update(server) { CalendarShareRules.deleted($0 ?? CalendarShareEntry()) }
             return .done
         } catch {
@@ -161,7 +199,13 @@ public actor CalendarShareSync {
 
     private func failed(_ server: String, _ error: any Error, at t: Int64, deleting: Bool) -> Outcome {
         let status = Self.status(error)
-        if status == 401 || status == 403 {
+        if status == 403 {
+            // The calendar key is gone on the house's side (V057).
+            keys.forget(server: server)
+            store.update(server) { CalendarShareRules.keyRefused($0 ?? CalendarShareEntry()) }
+            return .done
+        }
+        if status == 401 {
             store.update(server) { CalendarShareRules.refused($0 ?? CalendarShareEntry()) }
             return .done
         }

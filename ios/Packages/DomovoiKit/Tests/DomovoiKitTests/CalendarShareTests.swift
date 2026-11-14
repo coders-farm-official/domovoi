@@ -51,7 +51,8 @@ final class CalendarShareTests: XCTestCase {
         XCTAssertEqual(Set(["calendar_id", "name", "color", "events"]), Set(first.keys))
         let events = try XCTUnwrap(first["events"] as? [[String: Any]])
         let event = try XCTUnwrap(events.first)
-        XCTAssertEqual(Set(["uid", "title", "starts_at_ms", "ends_at_ms", "all_day", "location"]), Set(event.keys))
+        XCTAssertEqual(Set(["uid", "title", "starts_at_ms", "ends_at_ms", "all_day", "location", "busy"]),
+                       Set(event.keys))
         XCTAssertEqual("e1:\(now + hour)", event["uid"] as? String, "one uid per occurrence")
         XCTAssertEqual("Market Street", event["location"] as? String)
     }
@@ -95,16 +96,70 @@ final class CalendarShareTests: XCTestCase {
         XCTAssertEqual("Church hall", CalendarSharePayload.sentLocation("Church hall (www.example.org/map)"))
     }
 
-    /// Correction 4: a private event goes as `busy` with no place. On an
-    /// iPhone the reader can never say private (EventKit has no flag), so
-    /// this pins the rule the body shares with Android, and the panel says
-    /// the iPhone can't tell.
-    func testCorrection4_APrivateEventIsBusyWithNoPlace() {
+    /// Correction 4 and V057: a private event goes as `busy: true` with **no
+    /// title and no place**. On an iPhone the reader can never say private
+    /// (EventKit has no flag), so this pins the rule the body shares with
+    /// Android, and the panel says the iPhone can't tell. Fails if a busy
+    /// event's words reach the body.
+    func testV057_APrivateEventIsBusyWithNoTitleOrPlace() throws {
         let built = build([cal("a")], [row("p", title: "Therapy", location: "Elm St", isPrivate: true)])
         let event = built.body.calendars.first?.events.first
-        XCTAssertEqual("busy", event?.title)
+        XCTAssertEqual(true, event?.busy)
+        XCTAssertNil(event?.title)
         XCTAssertNil(event?.location)
+        let text = String(decoding: CalendarSharePayload.encode(built.body), as: UTF8.self)
+        XCTAssertFalse(text.contains("Therapy"))
+        XCTAssertFalse(text.contains("Elm St"))
+        XCTAssertEqual(false, build([cal("a")], [row("q")]).body.calendars.first?.events.first?.busy)
         XCTAssertTrue(CalendarShareStrings.privateEvents.contains("doesn't tell apps which events are marked private"))
+    }
+
+    /// V057: the event's iCalendar UID goes as `ical_uid` (so two phones
+    /// sharing one family calendar are listed once), and not at all when
+    /// EventKit has none.
+    func testV057_TheICalUIDIsSentWhenThereIsOne() throws {
+        let rows = [
+            PhoneEventRow(eventID: "e1", calendarID: "a", beginMs: now, endMs: nil, allDay: false,
+                          title: "x", location: nil, icalUID: "040000008200E00074C5B7101A82E008@example.org"),
+            PhoneEventRow(eventID: "e2", calendarID: "a", beginMs: now + 1, endMs: nil, allDay: false,
+                          title: "y", location: nil),
+        ]
+        let body = try json(build([cal("a")], rows).body)
+        let events = try XCTUnwrap(((body["calendars"] as? [[String: Any]])?.first?["events"]) as? [[String: Any]])
+        XCTAssertEqual("040000008200E00074C5B7101A82E008@example.org", events.first?["ical_uid"] as? String)
+        XCTAssertNil(events.last?["ical_uid"], "no key at all when there is no UID")
+    }
+
+    /// V057: `generation` is in the body when set, and only grows.
+    func testV057_TheGenerationOnlyGrows() throws {
+        var body = build([cal("a")], []).body
+        XCTAssertNil(try json(body)["generation"])
+        body.generation = 1234
+        XCTAssertEqual(1234, (try json(body)["generation"] as? NSNumber)?.int64Value)
+        XCTAssertEqual(now, CalendarShareRules.nextGeneration(nil, nowMs: now))
+        let used = CalendarShareEntry(lastGeneration: now + 5_000)
+        XCTAssertEqual(now + 5_001, CalendarShareRules.nextGeneration(used, nowMs: now), "a clock gone back")
+        // The fingerprint does not move with it.
+        var later = body
+        later.generation = 99_999
+        XCTAssertEqual(CalendarSharePayload.fingerprint(body), CalendarSharePayload.fingerprint(later))
+    }
+
+    /// V057: the key lives in its own Keychain service, per server, and is
+    /// never kept in a shape a header could not carry.
+    func testV057_TheKeyIsKeptPerServer() {
+        let items = InMemoryKeychain()
+        let vault = CalendarKeyVault(items: items)
+        vault.save("k-abc123", for: "http://10.0.0.42:6369/")
+        XCTAssertEqual("k-abc123", vault.key(for: "http://10.0.0.42:6369"))
+        XCTAssertNil(vault.key(for: "http://10.0.0.43:6369"))
+        vault.save("bad key\n", for: "http://10.0.0.43:6369")
+        XCTAssertNil(vault.key(for: "http://10.0.0.43:6369"))
+        vault.forget(server: "http://10.0.0.42:6369")
+        XCTAssertNil(vault.key(for: "http://10.0.0.42:6369"))
+        XCTAssertEqual("org.codersfarm.domovoi.calendar-key", CalendarKeyVault.service)
+        XCTAssertNotEqual(TokenVault.service, CalendarKeyVault.service)
+        XCTAssertEqual("X-Domovoi-Calendar-Key", CalendarKeyVault.header)
     }
 
     /// Correction 10: `phone_name` within the server's 80 characters.
@@ -252,6 +307,12 @@ final class CalendarShareTests: XCTestCase {
 /// A pretend phone and house for ``CalendarShareSync``.
 private final class Rig: @unchecked Sendable {
     let store = CalendarShareStore(url: nil)
+    let keys = CalendarKeyVault(items: InMemoryKeychain())
+    /// What the house hands out on the next PUT.
+    let mint = Shared<String?>(nil)
+    /// The key each call carried, and the generation and body each sent.
+    let sentKeys = Shared<[String]>([])
+    let generations = Shared<[Int64]>([])
     let calendars = Shared<[PhoneCalendarInfo]?>([PhoneCalendarInfo(id: "a", name: "Work", colorHex: "#33b679")])
     let rows = Shared<[PhoneEventRow]?>([])
     let calls = Shared<[String]>([])
@@ -264,17 +325,28 @@ private final class Rig: @unchecked Sendable {
     func sync() -> CalendarShareSync {
         CalendarShareSync(
             store: store,
+            keys: keys,
             calendars: { [self] in calendars.current },
             events: { [self] _, ids in rows.current.map { $0.filter { ids.contains($0.calendarID) } } },
-            put: { [self] server, _ in
+            put: { [self] server, body, key in
                 calls.mutate { $0.append("PUT \(server)") }
+                sentKeys.mutate { $0.append(key ?? "-") }
+                if let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                   let g = (object["generation"] as? NSNumber)?.int64Value {
+                    generations.mutate { $0.append(g) }
+                }
                 duringPut.current?()
                 try await Task.sleep(nanoseconds: 20_000_000)
                 if let e = putError.current { throw e }
                 calls.mutate { $0.append("PUT done") }
+                let minted = mint.current
+                mint.set(nil)
+                return minted
             },
-            delete: { [self] server in
+            delete: { [self] server, key, generation in
                 calls.mutate { $0.append("DELETE \(server)") }
+                sentKeys.mutate { $0.append(key ?? "-") }
+                generations.mutate { $0.append(generation) }
                 if let e = deleteError.current { throw e }
             },
             phoneName: { "Alex's iPhone" },
@@ -446,13 +518,82 @@ final class CalendarShareSyncTests: XCTestCase {
         XCTAssertEqual(["PUT \(house)", "PUT done"], rig.calls.current)
     }
 
+    /// V057 key: the first PUT goes without one and keeps what the house
+    /// hands out; every later PUT and the DELETE carry it. Fails if the key
+    /// is not saved, not sent, or sent to another server.
+    func testV057_TheKeyIsKeptAndSentOnEveryLaterCall() async {
+        let rig = Rig()
+        rig.ticked(house)
+        rig.mint.set("key-one")
+        let sync = rig.sync()
+        _ = await sync.run(server: house)
+        XCTAssertEqual("key-one", rig.keys.key(for: house))
+        XCTAssertNil(rig.keys.key(for: other))
+        rig.clock.mutate { $0 += 25 * 3_600_000 }
+        _ = await sync.run(server: house)
+        rig.store.update(house) { CalendarShareRules.turnOff($0) }
+        _ = await sync.run(server: house)
+        XCTAssertEqual(["-", "key-one", "key-one"], rig.sentKeys.current)
+        // A new key replaces the old.
+        rig.store.update(house) { CalendarShareRules.toggle(CalendarShareRules.turnOn($0), id: "a", name: "Work", on: true) }
+        rig.mint.set("key-two")
+        rig.clock.mutate { $0 += 1 }
+        _ = await sync.run(server: house)
+        XCTAssertEqual("key-two", rig.keys.key(for: house))
+    }
+
+    /// V057 key: a 403 means the house no longer has this phone's key (an
+    /// admin removed its calendars, or the household token changed). Sharing
+    /// stops, the key is forgotten, and the notice says to turn it off and on.
+    func testV057_A403ForgetsTheKeyAndSaysWhatToDo() async {
+        let rig = Rig()
+        rig.ticked(house)
+        rig.keys.save("stale-key", for: house)
+        rig.putError.set(.refused(Rig.failure(403)))
+        let out = await rig.sync().run(server: house)
+        XCTAssertEqual(.done, out, "not retried")
+        XCTAssertNil(rig.keys.key(for: house))
+        XCTAssertEqual(false, rig.store.get(house)?.enabled)
+        XCTAssertEqual(CalendarShareStrings.keyRefusedNotice, rig.store.get(house)?.notice)
+        XCTAssertTrue(CalendarShareStrings.keyRefusedNotice.contains("Turn sharing off and on again"))
+    }
+
+    /// V057 generation: every call carries one, they only grow (even with the
+    /// clock put back), and the DELETE's is above the PUT's before it.
+    func testV057_GenerationsOnlyGrowAcrossPutAndDelete() async {
+        let rig = Rig()
+        rig.ticked(house)
+        let sync = rig.sync()
+        _ = await sync.run(server: house)
+        rig.clock.mutate { $0 -= 10_000 }                    // the clock goes back
+        rig.store.update(house) { CalendarShareRules.turnOff($0) }
+        _ = await sync.run(server: house)
+        let g = rig.generations.current
+        XCTAssertEqual(2, g.count)
+        XCTAssertLessThan(g.first ?? 0, g.last ?? 0)
+    }
+
+    /// V057 generation: a 410 (older than the off) or a 409 (older than one
+    /// stored) drops the upload — no retry, no error line.
+    func testV057_A410Or409DropsTheUploadWithoutRetry() async {
+        for status in [410, 409] {
+            let rig = Rig()
+            rig.ticked(house)
+            rig.putError.set(.httpError(Rig.failure(status)))
+            let out = await rig.sync().run(server: house)
+            XCTAssertEqual(.done, out, "\(status) is not retried")
+            XCTAssertNil(rig.store.get(house)?.lastError, "\(status) is not a failure to report")
+            XCTAssertNil(rig.store.get(house)?.lastSentAtMs)
+        }
+    }
+
     /// A shared screen (or a room) sends nothing, but may still delete.
     func testAPhoneThatMayNotSendStillDeletes() async {
         let rig = Rig()
         rig.ticked(house)
         let sync = CalendarShareSync(
-            store: rig.store, calendars: { nil }, events: { _, _ in nil },
-            put: { _, _ in XCTFail("no send") }, delete: { _ in },
+            store: rig.store, keys: rig.keys, calendars: { nil }, events: { _, _ in nil },
+            put: { _, _, _ in XCTFail("no send"); return nil }, delete: { _, _, _ in },
             phoneName: { nil }, maySend: { _ in false }
         )
         let out = await sync.run(server: house)

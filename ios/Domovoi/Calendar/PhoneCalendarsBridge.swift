@@ -193,6 +193,8 @@ final class PhoneCalendarsBridge {
     static let partingSeconds: Double = 8
 
     @ObservationIgnored let store: CalendarShareStore
+    /// The per-phone calendar keys, in the Keychain (V057).
+    @ObservationIgnored let keys = CalendarKeyVault()
     @ObservationIgnored let reader = PhoneCalendarReader()
     @ObservationIgnored private let sync: CalendarShareSync
     @ObservationIgnored private let container: AppContainer
@@ -212,21 +214,33 @@ final class PhoneCalendarsBridge {
         self.container = container
         self.model = model
         let reader = self.reader
+        let keys = self.keys
         let client = container.client
         let deviceID: String? = model.deviceID
         let owners = model.owners
         let path: String? = deviceID.map { "/api/calendar/phones/\(encodedRoomPathSegment($0))" }
         sync = CalendarShareSync(
             store: store,
+            keys: keys,
             calendars: { reader.calendars() },
             events: { window, ids in reader.events(window, ids) },
-            put: { server, body in
+            put: { server, body, key in
                 guard let path else { throw DomovoiError.noServer }
-                _ = try await client.raw(method: "PUT", path: path, body: body, onlyTo: server)
+                let headers: [String: String] = key.map { [CalendarKeyVault.header: $0] } ?? [:]
+                let answer = try await client.raw(
+                    method: "PUT", path: path, body: body, headers: headers, onlyTo: server
+                )
+                // `{calendars, events, calendar_key}`: the key once, on the
+                // first snapshot this house stores.
+                let object = try? JSONSerialization.jsonObject(with: answer) as? [String: Any]
+                return object?["calendar_key"] as? String
             },
-            delete: { server in
+            delete: { server, key, generation in
                 guard let path else { throw DomovoiError.noServer }
-                _ = try await client.raw(method: "DELETE", path: path, onlyTo: server)
+                let headers: [String: String] = key.map { [CalendarKeyVault.header: $0] } ?? [:]
+                _ = try await client.raw(
+                    method: "DELETE", path: "\(path)?generation=\(generation)", headers: headers, onlyTo: server
+                )
             },
             phoneName: { phoneName },
             maySend: { server in
@@ -239,7 +253,11 @@ final class PhoneCalendarsBridge {
             Task { @MainActor in self?.revision += 1 }
         }
         model.beforeForgetting = { [weak self] server in await self?.part(server) }
-        model.onServerForgotten = { [weak self] server in self?.store.forget(server) }
+        // A forgotten server takes its entry and its calendar key with it.
+        model.onServerForgotten = { [weak self] server in
+            self?.store.forget(server)
+            self?.keys.forget(server: server)
+        }
 
         let centre = NotificationCenter.default
         observers.append(centre.addObserver(
@@ -364,6 +382,7 @@ final class PhoneCalendarsBridge {
         let key = ServerCredentials.normalize(server)
         guard CalendarShareRules.mayHaveCopy(store.get(key)) else {
             store.forget(key)
+            keys.forget(server: key)
             return
         }
         store.update(key) { CalendarShareRules.turnOff($0) }
@@ -380,5 +399,6 @@ final class PhoneCalendarsBridge {
             }
         }
         store.forget(key)
+        keys.forget(server: key)
     }
 }

@@ -204,6 +204,13 @@ struct CalendarEventSheetView: View {
     private var provenance: some View {
         VStack(alignment: .leading, spacing: 6) {
             CalendarSourceBadge(entry: entry)
+            // V057: the same event in other calendars, said quietly.
+            if let also = entry.alsoInLine {
+                Text(also)
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // `synced <relTime>` for a row from another calendar that has
             // one, and only then (`EventEditor.kt:149-156`). There is no
             // sync control to go with it on this screen.

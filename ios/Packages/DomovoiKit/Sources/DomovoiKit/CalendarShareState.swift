@@ -44,12 +44,14 @@ public struct CalendarShareEntry: Equatable, Sendable, Codable {
     /// Something the person should know that is not a failure: sharing was
     /// turned off for them, or a calendar went. Cleared when they act.
     public var notice: String?
+    /// The last `generation` used (V057), so the next only grows.
+    public var lastGeneration: Int64?
 
     public init(
         enabled: Bool = false, calendarIDs: [String] = [], calendarNames: [String: String] = [:],
         pendingDelete: Bool = false, lastSentAtMs: Int64? = nil, lastError: String? = nil,
         notBeforeMs: Int64? = nil, lastDropped: Int = 0, lastFingerprint: String? = nil,
-        notice: String? = nil
+        notice: String? = nil, lastGeneration: Int64? = nil
     ) {
         self.enabled = enabled
         self.calendarIDs = calendarIDs
@@ -61,6 +63,7 @@ public struct CalendarShareEntry: Equatable, Sendable, Codable {
         self.lastDropped = lastDropped
         self.lastFingerprint = lastFingerprint
         self.notice = notice
+        self.lastGeneration = lastGeneration
     }
 
     // Every key optional on the way in, so an entry an older build wrote
@@ -77,6 +80,7 @@ public struct CalendarShareEntry: Equatable, Sendable, Codable {
         lastDropped = try c.decodeIfPresent(Int.self, forKey: .lastDropped) ?? 0
         lastFingerprint = try c.decodeIfPresent(String.self, forKey: .lastFingerprint)
         notice = try c.decodeIfPresent(String.self, forKey: .notice)
+        lastGeneration = try c.decodeIfPresent(Int64.self, forKey: .lastGeneration)
     }
 }
 
@@ -211,6 +215,28 @@ public enum CalendarShareRules {
         next.lastError = nil
         next.notBeforeMs = nil
         next.notice = CalendarShareStrings.refusedNotice
+        return next
+    }
+
+    /// The next `generation` (V057): the epoch ms of this read, or one past
+    /// the last one used when the clock went back — it only ever grows.
+    public static func nextGeneration(_ e: CalendarShareEntry?, nowMs: Int64) -> Int64 {
+        max(nowMs, (e?.lastGeneration ?? 0) + 1)
+    }
+
+    /// The house no longer takes this phone's calendar key (403, V057): an
+    /// admin removed its calendars, or the household's device token changed.
+    /// Sharing stops, the key is forgotten (by the caller), and the notice
+    /// says what to do.
+    public static func keyRefused(_ e: CalendarShareEntry) -> CalendarShareEntry {
+        var next = e
+        next.enabled = false
+        next.pendingDelete = false
+        next.lastError = nil
+        next.notBeforeMs = nil
+        next.lastSentAtMs = nil
+        next.lastFingerprint = nil
+        next.notice = CalendarShareStrings.keyRefusedNotice
         return next
     }
 

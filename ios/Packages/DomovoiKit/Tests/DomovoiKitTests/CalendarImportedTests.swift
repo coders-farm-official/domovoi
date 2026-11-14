@@ -47,6 +47,21 @@ final class CalendarImportedTests: XCTestCase {
         XCTAssertEqual("household", old.sourceLabel)
     }
 
+    /// V057: a busy event and one listed once for several calendars. Fails
+    /// on a decoder that drops `also_in` (the detail would not say where else
+    /// the event is) or `busy`.
+    func testV057_BusyAndAlsoInDecodeAndAreSaidQuietly() throws {
+        let rows = try decode("""
+        [{"id":3,"title":"Busy","starts_at":"2026-11-20T15:00:00Z","busy":true,"read_only":true,
+          "calendar_kind":"phone","also_in":["Family · Galaxy","School"]}]
+        """)
+        let e = try XCTUnwrap(rows.first)
+        XCTAssertTrue(e.busy)
+        XCTAssertEqual(["Family · Galaxy", "School"], e.alsoIn)
+        XCTAssertEqual("also in Family · Galaxy, School", e.alsoInLine)
+        XCTAssertNil(CalendarEntry().alsoInLine)
+    }
+
     /// `theNoteSaysWhereToChangeIt`, character for character — em dash and
     /// all. Fails if a read-only event says nothing about where it changes.
     func testTheNoteSaysWhereToChangeIt() {

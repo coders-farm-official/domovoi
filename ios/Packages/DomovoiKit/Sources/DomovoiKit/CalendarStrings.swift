@@ -162,6 +162,12 @@ public enum CalendarStrings {
     /// raw `source`; now it names the calendar.
     public static let householdSource = "household"
 
+    /// V057's `also_in`, quietly under the badge: the other calendars the
+    /// same event is in.
+    public static func alsoIn(_ names: [String]) -> String {
+        "also in " + names.joined(separator: ", ")
+    }
+
     /// The badge on a phone's event with no calendar name.
     public static let phoneCalendarSource = "phone calendar"
 

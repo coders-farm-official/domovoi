@@ -84,6 +84,9 @@ extension StubHouseUITests {
         XCTAssertTrue(cal130Find(app, Cal130.schoolNote, timeout: 15), "the read-only note is missing")
         evidence(app, "calendars130-02-linked")
         XCTAssertTrue(app.staticTexts["School"].exists, "the badge does not name the calendar")
+        // V057: the same event in Galaxy's phone calendar is listed once,
+        // and the sheet names it quietly.
+        XCTAssertTrue(containing(app, "also in Family \u{00B7} Galaxy").exists, "no `also in` line")
         XCTAssertFalse(app.buttons[CalendarWords.edit].exists, "a read-only event offers edit")
         XCTAssertFalse(app.buttons[CalendarWords.delete].exists, "a read-only event offers delete")
         XCTAssertFalse(startingWith(app, "event #").exists, "a read-only event shows the house's row number")

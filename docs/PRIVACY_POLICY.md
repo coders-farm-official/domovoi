@@ -355,7 +355,10 @@ differs from the Android app:
   pick only calendars you're happy to share. Everyone in your household
   can see them, and Domovoi can read them out in any room. The copy is
   sent again when you open the app and when a calendar changes while it is
-  open; iOS doesn't let the app update it on a schedule in the background.
+  open; iOS doesn't let the app update it on a schedule in the background,
+  and the server removes a phone's calendars after a week without one.
+  So that only this phone can change them, the server gives it a key,
+  kept in the iPhone's Keychain for this device only.
   Turn sharing off, take away calendar access in iOS Settings, or forget
   the server in the app, and the app deletes the server's copy (if the
   server no longer accepts the phone, ask whoever runs it). Uninstalling

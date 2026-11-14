@@ -21,6 +21,13 @@ import Foundation
 //  * the body has a fingerprint without the window, so an unchanged snapshot
 //    is not sent again (correction 8).
 //
+// And the server's V057 contract (main 8769500d, `docs/API_REFERENCE.md`):
+// each event carries its `ical_uid` (EventKit's
+// `calendarItemExternalIdentifier`) so one event two phones share is listed
+// once, a private one goes as `busy: true` with **no** title or place, and the
+// body carries a `generation` that only grows, so an upload that lands after
+// the DELETE is refused (410) rather than stored.
+//
 // Pure: the app's EventKit reader turns `EKCalendar` / `EKEvent` into
 // ``PhoneCalendarInfo`` / ``PhoneEventRow``, and every rule lives here, where
 // the package tests reach it. Minimum data: a title, a time, a place, the
@@ -71,11 +78,15 @@ public struct PhoneEventRow: Equatable, Hashable, Sendable {
     /// the iPhone reader always says false; the rule is here so the body
     /// matches Android's, which can read it.
     public let isPrivate: Bool
+    /// The event's iCalendar UID (`calendarItemExternalIdentifier`), shared by
+    /// every copy of one event: two phones sharing one family calendar are
+    /// listed once (V057).
+    public let icalUID: String?
 
     public init(
         eventID: String, calendarID: String, beginMs: Int64, endMs: Int64?, allDay: Bool,
         title: String?, location: String?, cancelled: Bool = false, declined: Bool = false,
-        isPrivate: Bool = false
+        isPrivate: Bool = false, icalUID: String? = nil
     ) {
         self.eventID = eventID
         self.calendarID = calendarID
@@ -87,6 +98,7 @@ public struct PhoneEventRow: Equatable, Hashable, Sendable {
         self.cancelled = cancelled
         self.declined = declined
         self.isPrivate = isPrivate
+        self.icalUID = icalUID
     }
 }
 
@@ -105,20 +117,26 @@ public struct ShareSnapshotBody: Equatable, Sendable, Encodable {
 
     public struct Event: Equatable, Sendable, Encodable {
         public let uid: String
-        public let title: String
+        /// Nil for a busy event: its title is not sent.
+        public let title: String?
         public let startsAtMs: Int64
         public let endsAtMs: Int64?
         public let allDay: Bool
+        /// Nil for a busy event: its place is not sent.
         public let location: String?
+        public let icalUID: String?
+        public let busy: Bool
 
         enum CodingKeys: String, CodingKey {
-            case uid, title, location
+            case uid, title, location, busy
             case startsAtMs = "starts_at_ms"
             case endsAtMs = "ends_at_ms"
             case allDay = "all_day"
+            case icalUID = "ical_uid"
         }
 
-        // Nulls written out, as Android's `put(…, null)` does.
+        // Nulls written out, as Android's `put(…, null)` does; `ical_uid`
+        // only when there is one.
         public func encode(to encoder: any Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
             try c.encode(uid, forKey: .uid)
@@ -127,6 +145,8 @@ public struct ShareSnapshotBody: Equatable, Sendable, Encodable {
             try c.encode(endsAtMs, forKey: .endsAtMs)
             try c.encode(allDay, forKey: .allDay)
             try c.encode(location, forKey: .location)
+            try c.encodeIfPresent(icalUID, forKey: .icalUID)
+            try c.encode(busy, forKey: .busy)
         }
     }
 
@@ -153,10 +173,25 @@ public struct ShareSnapshotBody: Equatable, Sendable, Encodable {
     public let phoneName: String?
     public let windowStartMs: Int64
     public let windowEndMs: Int64
+    /// V057: a number that only grows on this phone — the epoch ms of the
+    /// read, or one past the last one sent
+    /// (``CalendarShareRules/nextGeneration(_:nowMs:)``). Nil leaves it out.
+    public var generation: Int64?
     public let calendars: [Calendar]
 
+    public init(
+        phoneName: String?, windowStartMs: Int64, windowEndMs: Int64,
+        generation: Int64? = nil, calendars: [Calendar]
+    ) {
+        self.phoneName = phoneName
+        self.windowStartMs = windowStartMs
+        self.windowEndMs = windowEndMs
+        self.generation = generation
+        self.calendars = calendars
+    }
+
     enum CodingKeys: String, CodingKey {
-        case calendars
+        case calendars, generation
         case phoneName = "phone_name"
         case windowStartMs = "window_start_ms"
         case windowEndMs = "window_end_ms"
@@ -167,6 +202,7 @@ public struct ShareSnapshotBody: Equatable, Sendable, Encodable {
         try c.encodeIfPresent(phoneName, forKey: .phoneName)
         try c.encode(windowStartMs, forKey: .windowStartMs)
         try c.encode(windowEndMs, forKey: .windowEndMs)
+        try c.encodeIfPresent(generation, forKey: .generation)
         try c.encode(calendars, forKey: .calendars)
     }
 }
@@ -390,14 +426,18 @@ public enum CalendarSharePayload {
         )
     }
 
+    /// One event. A private one goes as `busy: true` with **no** title and
+    /// no place (correction 4, V057): the server shows it as "Busy".
     static func event(_ r: PhoneEventRow) -> ShareSnapshotBody.Event {
         ShareSnapshotBody.Event(
             uid: uid(r),
-            title: r.isPrivate ? busy : (clip(r.title, maxTitle) ?? ""),
+            title: r.isPrivate ? nil : (clip(r.title, maxTitle) ?? ""),
             startsAtMs: r.beginMs,
             endsAtMs: r.endMs,
             allDay: r.allDay,
-            location: r.isPrivate ? nil : sentLocation(r.location)
+            location: r.isPrivate ? nil : sentLocation(r.location),
+            icalUID: clip(r.icalUID, 300),
+            busy: r.isPrivate
         )
     }
 
@@ -411,13 +451,14 @@ public enum CalendarSharePayload {
 
     public static func bytes(_ body: ShareSnapshotBody) -> Int64 { Int64(encode(body).count) }
 
-    /// The snapshot's fingerprint **without the window** (correction 8): the
-    /// window moves every call, and a snapshot that differs only in it is
-    /// not worth sending again — until a day has passed
+    /// The snapshot's fingerprint **without the window or the generation**
+    /// (correction 8): both move every call, and a snapshot that differs only
+    /// in them is not worth sending again — until a day has passed
     /// (``CalendarShareRules/needsSend(_:fingerprint:nowMs:)``).
     public static func fingerprint(_ body: ShareSnapshotBody) -> String {
         let bare = ShareSnapshotBody(
-            phoneName: body.phoneName, windowStartMs: 0, windowEndMs: 0, calendars: body.calendars
+            phoneName: body.phoneName, windowStartMs: 0, windowEndMs: 0, generation: nil,
+            calendars: body.calendars
         )
         let digest = SHA256.hash(data: encode(bare))
         return digest.map { String(format: "%02x", $0) }.joined()

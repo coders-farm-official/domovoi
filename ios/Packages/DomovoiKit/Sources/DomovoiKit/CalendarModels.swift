@@ -77,6 +77,14 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
     /// answers 409 to an edit or a delete (`calendar.py` `_refuse_read_only`).
     public let readOnly: Bool
 
+    /// V057: a private event a phone shared as busy — the server's title is
+    /// "Busy" and it has no place.
+    public let busy: Bool
+
+    /// V057: the other calendars the same event is in (same iCalendar UID and
+    /// start), `["Family · Galaxy"]`; listed once, these named quietly.
+    public let alsoIn: [String]
+
     public init(
         id: Int64 = 0,
         title: String = "",
@@ -93,7 +101,9 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         calendarColor: String? = nil,
         calendarKind: String? = nil,
         ownerName: String? = nil,
-        readOnly: Bool = false
+        readOnly: Bool = false,
+        busy: Bool = false,
+        alsoIn: [String] = []
     ) {
         self.id = id
         self.title = title
@@ -111,6 +121,8 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         self.calendarKind = calendarKind
         self.ownerName = ownerName
         self.readOnly = readOnly
+        self.busy = busy
+        self.alsoIn = alsoIn
     }
 
     enum CodingKeys: String, CodingKey {
@@ -126,6 +138,8 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         case calendarKind = "calendar_kind"
         case ownerName = "owner_name"
         case readOnly = "read_only"
+        case busy
+        case alsoIn = "also_in"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -146,6 +160,15 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
         calendarKind = try c.decodeIfPresent(String.self, forKey: .calendarKind)
         ownerName = try c.decodeIfPresent(String.self, forKey: .ownerName)
         readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
+        busy = try c.decodeIfPresent(Bool.self, forKey: .busy) ?? false
+        alsoIn = try c.decodeIfPresent([String].self, forKey: .alsoIn) ?? []
+    }
+
+    /// `also in Family · Galaxy, School` for the detail sheet; nil when the
+    /// event is in no other calendar.
+    public var alsoInLine: String? {
+        let names = alsoIn.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return names.isEmpty ? nil : CalendarStrings.alsoIn(names)
     }
 
     /// `isGoogle()` (`CalendarModels.kt:61`).

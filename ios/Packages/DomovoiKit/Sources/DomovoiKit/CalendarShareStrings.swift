@@ -38,7 +38,8 @@ public enum CalendarShareStrings {
     public static let timing =
         "It updates when you open Domovoi, and when a calendar changes while Domovoi is open. iPhone doesn't "
             + "let apps update on a schedule in the background, so if Domovoi hasn't been opened for a while, "
-            + "the house shows the last copy it got."
+            + "the house shows the last copy it got, and after a week without an update it removes this phone's "
+            + "calendars until you open Domovoi again."
 
     public static let sharedScreen =
         "This is a shared screen, so it doesn't share calendars. Turn it on from your own phone."
@@ -69,6 +70,12 @@ public enum CalendarShareStrings {
     public static let refusedNotice =
         "Your Domovoi no longer accepts this phone, so sharing is off. If the house still shows this phone's "
             + "calendars, ask whoever runs your Domovoi to remove them."
+
+    /// A 403 on the calendar key (V057): an admin removed this phone's
+    /// calendars, or the household's device token changed.
+    public static let keyRefusedNotice =
+        "Your Domovoi no longer accepts this phone's calendars. Turn sharing off and on again to share them "
+            + "afresh."
 
     /// A ticked calendar that has gone (correction 7):
     /// `Work is no longer on this phone`.
