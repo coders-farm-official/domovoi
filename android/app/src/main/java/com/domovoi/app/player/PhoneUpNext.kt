@@ -57,8 +57,13 @@ class PhoneUpNext(
         /** Paired with that server, and not a room: Up next may be asked for. */
         fun paired(): Boolean
         fun deviceId(): String
-        /** The Autoplay preference (per device, default on). */
-        fun autoplay(): Boolean
+        /** What the person chose for Autoplay on this phone: null until they
+         *  flip the switch here (then nothing is sent, and the household's
+         *  Music mix default applies). */
+        fun autoplayChoice(): Boolean?
+        /** The household's Autoplay default as [server] last answered it
+         *  (`GET /api/music/mix`); null when not read yet. */
+        fun autoplayDefault(server: String): Boolean? = null
         fun saveAutoplay(on: Boolean)
         /** The raw "listening as" pick for [server] ([com.domovoi.app.listens.ListenerPicks]). */
         fun listenerPick(server: String): String?
@@ -77,6 +82,11 @@ class PhoneUpNext(
     private var refilling = false
 
     private fun current(u: UpNextState): Boolean = u.gen == gen && u.server == env.server()
+
+    /** Autoplay on this phone for [server]: the person's choice here, else
+     *  that server's household default, else on. */
+    fun autoplayHere(server: String): Boolean =
+        com.domovoi.app.mix.effectiveAutoplay(env.autoplayChoice(), env.autoplayDefault(server))
 
     private fun stillFor(g: Int, server: String): Boolean = g == gen && server == env.server()
 
@@ -112,7 +122,8 @@ class PhoneUpNext(
         if (!env.paired()) return
         val g = gen
         val server = env.server()
-        val auto = env.autoplay()
+        val choice = env.autoplayChoice()
+        val auto = autoplayHere(server)
         _state.value = UpNextState(server = server, gen = g, loading = true, autoplay = auto, start = start)
         val body = buildJsonObject {
             putJsonObject("target") {
@@ -120,7 +131,9 @@ class PhoneUpNext(
                 put("device_id", env.deviceId())
             }
             put("start", start)
-            put("autoplay", auto)
+            // Only what the person chose on this phone; left out, the
+            // session takes the household's Music mix default.
+            choice?.let { put("autoplay", it) }
             listenerFields(env.listenerPick(server), env.shared(server))
         }
         launch {
@@ -167,7 +180,7 @@ class PhoneUpNext(
         if (q.size - 1 - index > UpNextRules.REFILL_AT) return
         val u = _state.value
         if (u == null) {
-            if (!env.autoplay() || !env.paired()) return
+            if (!env.paired() || !autoplayHere(env.server())) return
             val lib = q.filter { it.isLibrarySong }
             if (lib.isEmpty()) return
             val g = newPlay()
@@ -318,7 +331,8 @@ class PhoneUpNext(
     /**
      * What a cast (`POST /api/music/play-tracks`) adds: this
      * phone's session goes with the queue (the room's server carries it on
-     * and refills the room itself), autoplay when off, and whose mix it is.
+     * and refills the room itself), autoplay when the person chose it on this
+     * phone (left out otherwise: the household's default), and whose mix it is.
      */
     fun castFields(b: JsonObjectBuilder) {
         val server = env.server()
@@ -327,7 +341,7 @@ class PhoneUpNext(
         if (u != null && id != null && !u.ended && !u.refused && u.server == server && u.gen == gen) {
             b.put("up_next_session_id", id)
         }
-        if (!env.autoplay()) b.put("autoplay", false)
+        env.autoplayChoice()?.let { b.put("autoplay", it) }
         b.listenerFields(env.listenerPick(server), env.shared(server))
     }
 

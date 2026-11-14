@@ -22,7 +22,7 @@ class SettingsModelsTest {
         )
         assertEquals(
             listOf(
-                listOf("Rooms", "People", "Phones & browsers", "Printers & scanners", "Phone calendars"),
+                listOf("Rooms", "People", "Phones & browsers", "Music mix", "Printers & scanners", "Phone calendars"),
                 listOf("Wake words", "Voices", "Greetings"),
                 listOf("Models", "Chat"),
                 listOf("Internet", "Voice history"),
@@ -34,7 +34,7 @@ class SettingsModelsTest {
 
     @Test fun aSharedScreenLeavesPeopleOutOfSettingsToo() {
         assertEquals(
-            listOf("Rooms", "Phones & browsers", "Printers & scanners"),
+            listOf("Rooms", "Phones & browsers", "Music mix", "Printers & scanners"),
             sectionsOf(SettingsGroup.Household, shared = true).map { it.label },
         )
         assertEquals(SettingsSection.People, searchSettings("people").first())

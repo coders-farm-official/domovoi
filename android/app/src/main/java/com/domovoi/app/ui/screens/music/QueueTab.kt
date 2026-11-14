@@ -56,7 +56,6 @@ import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.LoadingState
-import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.runAction
@@ -567,6 +566,8 @@ private fun RoomQueueRow(
     onLessLike: (() -> Unit)?,
 ) {
     val title = item.title ?: item.file.ifBlank { "unknown" }
+    val chip = roomWhyChip(item)
+    var whyOpen by remember(item.songId, item.upNextSeq) { mutableStateOf(false) }
     Row(
         drag.rowModifier(index)
             .fillMaxWidth()
@@ -629,9 +630,11 @@ private fun RoomQueueRow(
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    // Why the room picked it: a muted chip ("same artist", "90s").
-                    item.reasonLabel?.takeIf { item.isPick && it.isNotBlank() }?.let { Pill(it) }
+                    // Why the room picked it: a muted chip ("same artist", "90s");
+                    // with the server's sentence, a tap shows it under the row.
+                    chip?.let { UpNextWhyChip(it, whyOpen) { whyOpen = !whyOpen } }
                 }
+                whyLine(chip, whyOpen)?.let { UpNextWhyLine(it, Modifier.padding(top = 4.dp)) }
             }
         }
         onLessLike?.let { f ->

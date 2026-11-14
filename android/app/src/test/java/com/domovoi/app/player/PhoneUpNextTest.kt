@@ -47,14 +47,18 @@ class PhoneUpNextTest {
     private class FakeEnv : PhoneUpNext.Env {
         var server = "http://10.0.0.5:6369"
         var paired = true
-        var autoplay = true
+        /** What the person chose here: null until they flip the switch. */
+        var autoplay: Boolean? = null
+        /** The household's Music mix default, as the server last said. */
+        var householdDefault: Boolean? = null
         var pick: String? = null
         var shared = false
         var picked: String? = "unset"
         override fun server(): String = server
         override fun paired(): Boolean = paired
         override fun deviceId() = "android-1a2b"
-        override fun autoplay(): Boolean = autoplay
+        override fun autoplayChoice(): Boolean? = autoplay
+        override fun autoplayDefault(server: String): Boolean? = householdDefault
         override fun saveAutoplay(on: Boolean) { autoplay = on }
         override fun listenerPick(server: String) = pick
         override fun shared(server: String) = shared
@@ -140,7 +144,7 @@ class PhoneUpNextTest {
         assertEquals("Band|Album", ctx["ref"]!!.jsonPrimitive.content)
         assertFalse("an album names itself by ref, not its songs", "track_ids" in ctx)
         assertFalse("whole_list" in start)
-        assertTrue(body["autoplay"]!!.jsonPrimitive.boolean)
+        assertFalse("never flipped here: the household's default applies", "autoplay" in body)
     }
 
     @Test fun anIdsListSendsItsSongsCappedAt500() {
@@ -408,7 +412,7 @@ class PhoneUpNextTest {
         withSession(mode = "library", picks = 3)
         upNext.setAutoplay(false)
         assertTrue(host.queue.none { it.queueOrigin == QueueOrigin.Auto })
-        assertFalse(env.autoplay)
+        assertEquals(false, env.autoplay)
         val (call, body) = api.named("patch").single()
         assertEquals("patch s1", call)
         assertFalse(body!!["autoplay"]!!.jsonPrimitive.boolean)
@@ -614,5 +618,58 @@ class PhoneUpNextTest {
         assertNull(phoneUpNextLine(UpNextState("s", 1, id = "x"), true, 2))
         assertEquals(UP_NEXT_AUTOPLAY_OFF, phoneUpNextLine(null, false, 0))
         assertEquals("autoplay: keep playing similar songs when the queue ends", UP_NEXT_AUTOPLAY_LABEL)
+    }
+
+    // ── Autoplay unset until flipped here (1.3.0) ────────────────────────
+    // The server now takes the household's Music mix default when a start,
+    // cast or room play leaves `autoplay` out; the phone says it only once
+    // the person flipped the switch on this phone.
+
+    @Test fun neverFlippedSendsNoAutoplayOnAStartOrACast() {
+        env.householdDefault = false
+        playing(listOf(song(7)))
+        upNext.startFromList(7, null, listOf(7))
+        assertFalse("the household's default applies", "autoplay" in startBody())
+        val cast = kotlinx.serialization.json.buildJsonObject { upNext.castFields(this) }
+        assertFalse("autoplay" in cast)
+    }
+
+    @Test fun onceFlippedTheChoiceGoesWithEveryStartAndCastEvenOn() = runBlocking {
+        withSession(picks = 1)
+        upNext.setAutoplay(true)
+        assertEquals(true, env.autoplay)
+        playing(listOf(song(8)))
+        upNext.startFromList(8, null, listOf(8))
+        assertTrue("on is said too: the household's default may be off", startBody()["autoplay"]!!.jsonPrimitive.boolean)
+        val cast = kotlinx.serialization.json.buildJsonObject { upNext.castFields(this) }
+        assertTrue(cast["autoplay"]!!.jsonPrimitive.boolean)
+        env.autoplay = false
+        playing(listOf(song(9)))
+        upNext.startFromList(9, null, listOf(9))
+        assertFalse(startBody()["autoplay"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test fun whileUnsetTheSwitchSaysTheHouseholdsDefaultUntilTheSessionAnswers() {
+        env.householdDefault = false
+        api.startAnswer = { throw IOException("unreachable") }
+        playing(listOf(song(7)))
+        upNext.startFromList(7, null, listOf(7))
+        assertFalse("what this phone will do: the household's off", upNext.state.value!!.autoplay)
+        env.autoplay = true
+        assertTrue("a choice here wins over the household's", upNext.autoplayHere(env.server))
+        env.autoplay = null
+        env.householdDefault = null
+        assertTrue("nothing known: on, the server's own default", upNext.autoplayHere(env.server))
+    }
+
+    @Test fun aQueueAddedOneByOneFollowsTheHouseholdsDefaultWhileUnset() {
+        env.householdDefault = false
+        host.queue = listOf(song(1), song(2))
+        upNext.check()
+        assertTrue("the household's autoplay is off: no session", api.calls.isEmpty())
+        env.autoplay = true
+        upNext.check()
+        assertEquals(1, api.named("start").size)
+        assertTrue(startBody()["autoplay"]!!.jsonPrimitive.boolean)
     }
 }

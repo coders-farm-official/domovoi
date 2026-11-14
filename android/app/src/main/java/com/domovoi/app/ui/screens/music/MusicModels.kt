@@ -123,6 +123,9 @@ data class QueueItem(
     // session (for "less like this"); `explicit` for one somebody asked for.
     val origin: String = "explicit",
     @SerialName("reason_label") val reasonLabel: String? = null,
+    // "Why this song?" (1.3.0): the server's sentence for a pick, null for
+    // anything else or a pick from before. Shown as it is.
+    val why: String? = null,
     @SerialName("up_next_seq") val upNextSeq: Int? = null,
     // The library song the entry is; null for a stream, a podcast or a
     // file the library doesn't know.

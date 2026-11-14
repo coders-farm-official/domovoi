@@ -285,6 +285,8 @@ private fun ProfileTab(
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         ThisPhoneSection(person, onPeopleChanged)
         ListeningHistorySection(person)
+        // Their own music mix (1.3.0): theirs to change from their phone.
+        com.domovoi.app.ui.screens.settings.PersonMusicMixSection(person.id, person.name)
 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
