@@ -428,5 +428,9 @@ jobs:
             -project Domovoi.xcodeproj -scheme Domovoi \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/dd" \
-            CODE_SIGNING_ALLOWED=NO | tail -n 200
-          test "${PIPESTATUS[0]}" -eq 0
+            CODE_SIGNING_ALLOWED=NO > "$RUNNER_TEMP/build.log" 2>&1 && rc=0 || rc=$?
+          # Every compile error first (a long log hides them above any tail),
+          # then the end of the log.
+          grep -E "(error|fatal error):" "$RUNNER_TEMP/build.log" | sort -u | head -n 80 || true
+          tail -n 60 "$RUNNER_TEMP/build.log"
+          exit "$rc"
