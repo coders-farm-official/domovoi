@@ -464,6 +464,10 @@ extension StubHouseUITests {
             app.staticTexts[SystemSettingsStringsUnderTest.noAnalytics].exists,
             "the privacy card does not say there is no analytics or crash-reporting service"
         )
+        XCTAssertTrue(
+            startingWith(app, SystemSettingsStringsUnderTest.roomModeOpening).exists,
+            "the privacy card does not carry room mode's sentence (PrivacyCard.kt:65-66)"
+        )
         for absent in SystemSettingsStringsUnderTest.droppedPrivacyClauses {
             XCTAssertEqual(
                 0,
@@ -1178,9 +1182,12 @@ enum SystemSettingsStringsUnderTest {
     /// ``SystemSettingsPrivacy/noAnalytics``, verbatim from Android.
     static let noAnalytics = "There is no analytics, advertising or crash-reporting service in the app."
     /// Features this app does not have, which Android's points promise
-    /// (`PrivacyCard.kt:60-66`). A claim about one of them is the same fault
-    /// as a control that cannot act.
-    static let droppedPrivacyClauses = ["room mode", "microphone"]
+    /// (`PrivacyCard.kt:60-64`, the phone chats'). A claim about one of them
+    /// is the same fault as a control that cannot act. Room mode's sentence
+    /// is back with room mode (I7), and it does not say "microphone".
+    static let droppedPrivacyClauses = ["phone chats", "microphone"]
+    /// ``SystemSettingsPrivacy/roomMode``'s opening, Android's words.
+    static let roomModeOpening = "Room mode, which you turn on yourself, listens for its wake word"
 
     // MARK: - problem reports (SystemSettingsStrings)
 

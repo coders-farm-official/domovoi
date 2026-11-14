@@ -146,15 +146,31 @@ final class SystemSettingsLicencesTests: XCTestCase {
         )
     }
 
-    /// Room mode and the microphone are gone, because this app has neither.
-    /// A claim about a feature the app does not have is the same fault as a
+    /// The phone chats' sentences are gone, because this app has none. A
+    /// claim about a feature the app does not have is the same fault as a
     /// control that cannot act.
     func testNoPointClaimsAFeatureThisAppDoesNotHave() {
-        XCTAssertEqual(3, SystemSettingsPrivacy.points.count)
+        XCTAssertEqual(4, SystemSettingsPrivacy.points.count)
         let text = SystemSettingsPrivacy.points.joined(separator: "\n").lowercased()
-        for absent in ["room mode", "microphone", "wake word", "phone chats", "photo of a letter"] {
+        for absent in ["microphone", "phone chats", "photo of a letter"] {
             XCTAssertFalse(text.contains(absent), "this app has no \(absent)")
         }
+    }
+
+    /// Room mode is here now (I7), so Android's sentence about it is back,
+    /// word for word and in Android's place: after storage, before the
+    /// problem reports (`PrivacyCard.kt:44-70`, `assistant == false`).
+    func testRoomModesSentenceIsAndroidsAndInItsPlace() {
+        XCTAssertEqual(
+            "Room mode, which you turn on yourself, listens for its wake word all the time and says what it sends "
+                + "before it starts.",
+            SystemSettingsPrivacy.roomMode
+        )
+        XCTAssertEqual(
+            [SystemSettingsPrivacy.storage, SystemSettingsPrivacy.roomMode,
+             SystemSettingsPrivacy.problemReports, SystemSettingsPrivacy.noAnalytics],
+            SystemSettingsPrivacy.points
+        )
     }
 
     /// The no-analytics sentence is kept true by ``Licences/never`` — the iOS

@@ -74,6 +74,10 @@ struct LocalShellView: View {
                     onTrustAgain: { model.askTrustAgain() }
                 )
             }
+            // A phone with no household server is the spare phone room
+            // mode is for (ROOMMODE-MAP D11): Android's own "Domovoi Room"
+            // launcher icon is the way in there; an iPhone has one icon.
+            RoomModeEntryLine()
             TabView(selection: $model.localSelection) {
                 ForEach(model.localShellTabs, id: \.self) { route in
                     tab(route)

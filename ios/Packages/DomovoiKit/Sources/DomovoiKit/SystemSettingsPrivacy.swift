@@ -10,22 +10,16 @@ import Foundation
 ///
 /// Android's `assistant: false` branch — the right one for iOS, since
 /// ``RouteVisibility/phoneCanChat`` is false and will be until the on-device
-/// engine lands — already drops three of its six sentences. Two more go, and
-/// one is rewritten. All three changes are in
-/// `design-notes/ios/overnight/systemsettings/IOS-ONLY-STRINGS.md` and in
-/// `DECISIONS.md`:
+/// engine lands — already drops three of its six sentences. One is
+/// rewritten (`design-notes/ios/overnight/systemsettings/IOS-ONLY-STRINGS.md`
+/// and `DECISIONS.md`):
 ///
-///  - **Room mode goes.** `PrivacyCard.kt:65-66` promises that room mode says
-///    what it sends before it starts. This app has no room mode:
-///    ``HouseholdLock`` is a seam and the scene that reads it is a later
-///    batch's (`DomovoiApp.swift:31-38`). A claim about a feature the app does
-///    not have is the same fault as a control that cannot act.
-///  - **The microphone sentence goes with it.** Nothing in this app opens the
-///    microphone yet.
 ///  - **The storage sentence is split.** See ``storage``.
 ///
-/// Every sentence here comes back, in Android's own words, with the feature
-/// it is about.
+/// **Room mode's sentence is back** (``roomMode``, `PrivacyCard.kt:65-66`):
+/// it went while this app had no room mode, and came back with the feature
+/// (I7, batch 2026-11-14). Its phone-chats half stays out with the phone
+/// chats.
 public enum SystemSettingsPrivacy {
 
     /// **iOS-only wording.** Android's one sentence
@@ -56,6 +50,15 @@ public enum SystemSettingsPrivacy {
             + "transfers; your server's address and your choices are part of this phone's own backup, "
             + "and go nowhere else."
 
+    /// `PrivacyCard.kt:65-66`, the `assistant == false` branch, **verbatim**.
+    /// Backed by the room-mode setup: the explainer (`RoomModeStrings
+    /// .explainer`, "Always listening") is read to its end before **Start
+    /// room mode** works (`RoomSetupModelTests`), and nothing turns room mode
+    /// on but its last button.
+    public static let roomMode =
+        "Room mode, which you turn on yourself, listens for its wake word all the time and says what it sends "
+            + "before it starts."
+
     /// `PrivacyCard.kt:67-68`, the `assistant == false` branch, **verbatim**.
     /// ``SystemSettingsProblemStore`` and the absence of any uploader are
     /// what back it; `SystemSettingsProblemStoreTests` pins that the store
@@ -75,5 +78,5 @@ public enum SystemSettingsPrivacy {
         "There is no analytics, advertising or crash-reporting service in the app."
 
     /// The points, in order (`PRIVACY_POINTS`, `PrivacyCard.kt:74`).
-    public static let points: [String] = [storage, problemReports, noAnalytics]
+    public static let points: [String] = [storage, roomMode, problemReports, noAnalytics]
 }

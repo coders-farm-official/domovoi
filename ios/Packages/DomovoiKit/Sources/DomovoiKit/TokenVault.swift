@@ -102,6 +102,16 @@ public struct TokenVault: Sendable {
         try items.remove(account: account)
     }
 
+    /// Whether this phone holds a household token for ANY server — room
+    /// mode's `RoomLockRules` fact (`RoomDevice.holdsHouseholdToken`): a
+    /// phone that is, or was, paired needs a passcode to be a room.
+    ///
+    /// A Keychain that will not answer counts as holding one: the rule's
+    /// safe side is "ask for the passcode", never "anyone may leave".
+    public func holdsAnyToken() -> Bool {
+        (try? items.holdsAnyItem()) ?? true
+    }
+
     /// The Keychain account for a server: the same normalised address every
     /// other per-server answer is keyed by, so the token, the refusal and the
     /// wait are all filed under one spelling.
@@ -135,6 +145,18 @@ public protocol KeychainItems: Sendable {
     func get(account: String) throws -> Data?
     /// Removing what is not there is not an error.
     func remove(account: String) throws
+    /// Whether any item is kept, under any account. A requirement (so the
+    /// real Keychain's answer is the one called through `any KeychainItems`)
+    /// with a default that cannot say, below.
+    func holdsAnyItem() throws -> Bool
+}
+
+extension KeychainItems {
+    /// Whether any item is kept at all (``TokenVault/holdsAnyToken()``). A
+    /// store that cannot say throws, which the vault reads as "yes".
+    public func holdsAnyItem() throws -> Bool {
+        throw TokenVaultError.keychain(errSecUnimplemented)
+    }
 }
 
 /// The real Keychain.
@@ -217,6 +239,22 @@ public struct SystemKeychain: KeychainItems {
             throw TokenVaultError.keychain(status)
         }
     }
+
+    /// Any item under this service, whatever its account (room mode's lock
+    /// fact). No data is returned, only whether one exists.
+    public func holdsAnyItem() throws -> Bool {
+        let attributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        let status = SecItemCopyMatching(attributes as CFDictionary, nil)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw TokenVaultError.keychain(status) }
+        return true
+    }
 }
 
 /// A Keychain that is a dictionary. For the tests, and for nothing else.
@@ -240,5 +278,9 @@ public final class InMemoryKeychain: KeychainItems {
 
     public func remove(account: String) throws {
         items.withLock { $0[account] = nil }
+    }
+
+    public func holdsAnyItem() throws -> Bool {
+        items.withLock { !$0.isEmpty }
     }
 }
