@@ -202,6 +202,13 @@ class GroupPlacePattern:
             n = len(phrase)
             if len(words) > n and tuple(words[-n:]) == phrase:
                 head = " ".join(words[:-n])
+                if not _music_head(head):
+                    # "do i have anything for the kids" with a group "the
+                    # kids" is the library's, as it was: only a play or a
+                    # music control is taken here, so no later band's
+                    # sentence is poached (the router takes the first
+                    # match and would never reach them).
+                    return None
                 return re.match(
                     r"^(?P<head>" + re.escape(head) + r") (?P<place>"
                     + re.escape(" ".join(phrase)) + r")$",
@@ -214,6 +221,22 @@ class GroupPlacePattern:
 
     def __repr__(self) -> str:
         return f"GroupPlacePattern({self.pattern!r})"
+
+
+#: A play's head, as the room paths read it: "play jazz", "put on jazz",
+#: "shuffle jazz".
+_PLAY_HEAD_RE = re.compile(r"^(?:play|put on|put|shuffle) \S.*$")
+
+
+def _music_head(head: str) -> bool:
+    """Whether ``head`` — the words before a group's bare name — is a play
+    or one of MusicHandler's closed controls ("stop the music", "pause",
+    "turn it up", "what's playing")."""
+    if _PLAY_HEAD_RE.match(head):
+        return True
+    from domovoi.handlers import music as music_mod
+
+    return bool(music_mod._CONTROL_HEAD_RE.match(CONTROL_ALIASES.get(head, head)))
 
 
 GROUP_PLACE_RE = GroupPlacePattern()
@@ -743,14 +766,13 @@ class MusicRoomsMixin(RoomCommandsMixin):
         phrase = self._place_phrase(place)
         if run_play is None and ask.obj in THIS_WORDS:
             return await self._share_here(place or Place("everywhere", "everywhere"), rooms, ctx)
-        online = [r for r in rooms if r.online]
+        # Rooms that can be in a shared queue: connected, with a music player
+        # of their own (one adopted but never connected has none).
+        online = [r for r in rooms if r.online and r.has_player]
         here = next((r for r in rooms if r.room_id == ctx.room_id), None)
         host_room = here or (self._pick_room(online) if online else None)
         if host_room is None:
             return self._room_reply(ctx, f"None of the speakers {phrase} are online right now.")
-        if music_groups.is_member(host_room.room_id):
-            # It plays its own music now, which the others will hear.
-            await music_groups.leave(ctx.app, host_room.room_id)
         response: Response | None
         started = False
         if host_room.room_id == ctx.room_id:
@@ -777,10 +799,15 @@ class MusicRoomsMixin(RoomCommandsMixin):
             return self._room_reply(ctx, "I couldn't play that.")
         if response.failure or not started:
             return response
-        others = [r.room_id for r in online if r.room_id != host_room.room_id]
+        # The play went to the player this room hears: its own, or — when it
+        # is a member of a shared queue — its host's (the whole group's
+        # music changed, owner answer 1). That player is the one the other
+        # rooms join; nothing left a group before the play worked.
+        player_room = music_groups.host_of(host_room.room_id) or host_room.room_id
+        others = [r.room_id for r in online if r.room_id != player_room]
         if others:
             await music_groups.share(
-                ctx.app, host_room.room_id, others,
+                ctx.app, player_room, others,
                 group_id=place.group.id if place is not None and place.group is not None else None,
                 everywhere=place is None or place.kind == "everywhere",
             )
@@ -805,7 +832,8 @@ class MusicRoomsMixin(RoomCommandsMixin):
         if not host or not (await guest_queue.room_activity(ctx.room_id)).active:
             return self._room_reply(ctx, "Nothing is playing here to share.")
         wanted = rooms if place.kind == "everywhere" else list(place.rooms)
-        others = [r for r in wanted if r.online and r.room_id != host and r.room_id != ctx.room_id]
+        others = [r for r in wanted if r.online and r.has_player
+                  and r.room_id != host and r.room_id != ctx.room_id]
         if place.kind == "rooms" and others:
             others = [self._pick_room(others)]
         if not others:
@@ -832,6 +860,10 @@ class MusicRoomsMixin(RoomCommandsMixin):
             return refused
         if ctx.from_phone or not ctx.room_id:
             return self._room_reply(ctx, "Only a room's speaker can join another room's music.")
+        if not music_groups.has_own_player(ctx.room_id):
+            return self._room_reply(
+                ctx, "This room's music player isn't running yet, so it can't join another room.",
+            )
         candidates = [r for r in place.rooms if r.room_id != ctx.room_id]
         if not candidates:
             return self._room_reply(ctx, "That's this room.")

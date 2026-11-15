@@ -163,20 +163,29 @@ async def start_shared(body: _ShareBody, request: Request) -> dict[str, Any]:
     if body.host_room not in by_id:
         raise HTTPException(status_code=404, detail="no such room")
     host = music_groups.host_of(body.host_room) or body.host_room
-    if not await _playing(host):
+    if not music_groups.has_own_player(host) or not await _playing(host):
         raise HTTPException(status_code=409, detail=f"nothing is playing in {body.host_room}")
     rooms: list[str] = []
     unknown = [r for r in body.rooms if r not in by_id]
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown room: {unknown[0]}.")
+    # A room with no music player of its own (adopted, never connected)
+    # can't be in a shared queue: asked for by name it is refused, and a
+    # group or "everywhere" leaves it out.
+    playerless = [r for r in body.rooms if not music_groups.has_own_player(r)]
+    if playerless:
+        raise HTTPException(
+            status_code=409, detail=f"{playerless[0]} has no music player yet (it hasn't connected)",
+        )
     rooms += body.rooms
     if body.group_id is not None:
         g = music_groups.group(body.group_id)
         if g is None:
             raise HTTPException(status_code=404, detail="no such group")
-        rooms += [r for r in g.rooms if r in by_id and by_id[r].online]
+        rooms += [r for r in g.rooms if r in by_id and by_id[r].online
+                  and music_groups.has_own_player(r)]
     if body.everywhere:
-        rooms += [r.room_id for r in house if r.online]
+        rooms += [r.room_id for r in house if r.online and music_groups.has_own_player(r.room_id)]
     rooms = [r for r in dict.fromkeys(rooms) if r != host]
     if not rooms:
         raise HTTPException(status_code=409, detail="no other room is connected to share with")
@@ -195,6 +204,10 @@ async def join_shared(body: _JoinBody, request: Request) -> dict[str, Any]:
     house = {r.room_id for r in await _house(request)}
     if body.room_id not in house or body.host_room not in house:
         raise HTTPException(status_code=404, detail="no such room")
+    if not music_groups.has_own_player(body.room_id):
+        raise HTTPException(
+            status_code=409, detail=f"{body.room_id} has no music player yet (it hasn't connected)",
+        )
     host = music_groups.host_of(body.host_room) or body.host_room
     if host == body.room_id:
         raise HTTPException(status_code=409, detail="that is the room's own music")

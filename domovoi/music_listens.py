@@ -91,9 +91,14 @@ SKIP_STAMPS: dict[str, float] = {}
 
 
 def note_skip(room_id: str | None) -> None:
-    """A person skipped the song playing in ``room_id``."""
+    """A person skipped the song playing in ``room_id``. Kept under the
+    room whose player plays it: a room in a shared queue (a group,
+    domovoi/music_groups.py) skipped its host's song, and the ListenLogger
+    looks at the host's player only."""
     if room_id:
-        SKIP_STAMPS[room_id] = time.monotonic()
+        from domovoi import music_groups
+
+        SKIP_STAMPS[music_groups.host_of(room_id) or room_id] = time.monotonic()
 
 
 def take_skip(room_id: str, since: float) -> bool:

@@ -1376,6 +1376,24 @@ def own_mpd_client(room_id: str | None) -> MPDClient:
     return client
 
 
+def own_player(room_id: str | None) -> MPDClient | None:
+    """``room_id``'s OWN player when it has one, else None — never another
+    room's (``own_mpd_client`` falls back to the first provisioned room for
+    room-agnostic callers) and never a new one. What the groups use
+    (domovoi/music_groups.py): pausing a joining room's player, or handing
+    a queue to a room, must touch that room's daemon or nothing."""
+    if not room_id or is_phone_room(room_id):
+        return None
+    if settings.use_stubs:
+        cached = _clients.get(room_id)
+        if cached is not None:
+            return cached
+        return own_mpd_client(room_id) if room_id in _room_ports else None
+    if room_id not in _room_ports:
+        return None
+    return own_mpd_client(room_id)
+
+
 def iter_mpd_clients() -> list[tuple[str, MPDClient]]:
     """Return ``(room_id, client)`` for every provisioned room — each room's
     OWN daemon, once, whatever shared queue it is in.

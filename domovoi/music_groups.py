@@ -48,6 +48,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import text
@@ -201,6 +202,8 @@ async def create_group(s: Any, name: str, rooms: Iterable[str], *, room_keys: It
             text("INSERT INTO room_group_rooms (group_id, room_id) VALUES (:g, :r)"),
             {"g": gid, "r": r},
         )
+    # Committed first: memory never holds a group the database doesn't.
+    await s.commit()
     g = RoomGroup(id=gid, name=clean, rooms=picked)
     _groups[gid] = g
     return g
@@ -228,16 +231,20 @@ async def update_group(
                 text("INSERT INTO room_group_rooms (group_id, room_id) VALUES (:g, :r)"),
                 {"g": g.id, "r": r},
             )
+    await s.commit()
     out = RoomGroup(id=g.id, name=new_name, rooms=new_rooms)
     _groups[g.id] = out
     return out
 
 
 async def delete_group(s: Any, group_id: int) -> bool:
-    g = _groups.pop(int(group_id), None)
+    g = _groups.get(int(group_id))
     if g is None:
         return False
     await s.execute(text("DELETE FROM room_groups WHERE id = :g"), {"g": g.id})
+    # Committed first: a delete the database refused leaves the group named.
+    await s.commit()
+    _groups.pop(g.id, None)
     for sh in _shares.values():
         if sh.group_id == g.id:
             sh.group_id = None  # the queue plays on, without the name
@@ -260,6 +267,9 @@ class Share:
     started_by: str | None = None
     #: monotonic: when each member's satellite was first seen gone.
     offline_since: dict[str, float] = field(default_factory=dict)
+    #: When each member joined (wall clock, strictly increasing in join
+    #: order): the hand-off order, kept across a restart.
+    joined_at: dict[str, datetime] = field(default_factory=dict)
     #: sweeper looks in a row that found the host stopped.
     stopped_looks: int = 0
 
@@ -289,6 +299,16 @@ class Share:
 _shares: dict[str, Share] = {}
 _by_room: dict[str, str] = {}
 _lock = asyncio.Lock()
+
+
+def _joined_now(sh: Share) -> datetime:
+    """Now, but after every member already in ``sh``: the join order is the
+    hand-off order, even for rooms joined in the same instant."""
+    now = datetime.now(timezone.utc)
+    latest = max(sh.joined_at.values(), default=None)
+    if latest is not None and now <= latest:
+        now = latest + timedelta(microseconds=1)
+    return now
 
 
 def host_of(room_id: str | None) -> str | None:
@@ -370,10 +390,15 @@ async def _persist(sh: Share, *, ended: bool = False) -> None:
                      "AND ended_at IS NULL AND id <> :id"),
                 {"host": sh.host, "id": sh.id},
             )
-            # A room hears one shared queue: whatever row it had elsewhere goes.
+            # A room hears one shared queue: whatever row it had elsewhere
+            # goes, and so does this queue's row of a room that left. A
+            # member's own row stays as it is (its joined_at is the
+            # hand-off order).
             await s.execute(
-                text("DELETE FROM shared_queue_rooms WHERE queue_id = :id OR room_id = ANY(:rooms)"),
-                {"id": sh.id, "rooms": sh.rooms},
+                text("DELETE FROM shared_queue_rooms WHERE "
+                     "(queue_id <> :id AND room_id = ANY(:rooms)) "
+                     "OR (queue_id = :id AND NOT (room_id = ANY(:members)))"),
+                {"id": sh.id, "rooms": sh.rooms, "members": list(sh.members)},
             )
             await s.execute(
                 text(
@@ -387,8 +412,10 @@ async def _persist(sh: Share, *, ended: bool = False) -> None:
             )
             for room in sh.members:
                 await s.execute(
-                    text("INSERT INTO shared_queue_rooms (queue_id, room_id) VALUES (:id, :r)"),
-                    {"id": sh.id, "r": room},
+                    text("INSERT INTO shared_queue_rooms (queue_id, room_id, joined_at) "
+                         "VALUES (:id, :r, :at) ON CONFLICT (queue_id, room_id) "
+                         "DO UPDATE SET joined_at = EXCLUDED.joined_at"),
+                    {"id": sh.id, "r": room, "at": sh.joined_at.get(room) or _joined_now(sh)},
                 )
     except Exception as e:  # noqa: BLE001 — memory decides; the mirror is best-effort
         log.warning("groups: couldn't save shared queue %s: %s", sh.id, e)
@@ -420,6 +447,8 @@ async def load() -> None:
             qrows = (await s.execute(text(
                 "SELECT q.id::text, q.host_room_id, q.group_id, q.everywhere, q.started_by_device, "
                 "coalesce(array_agg(r.room_id ORDER BY r.joined_at, r.room_id) "
+                "FILTER (WHERE r.room_id IS NOT NULL), '{}'), "
+                "coalesce(array_agg(r.joined_at ORDER BY r.joined_at, r.room_id) "
                 "FILTER (WHERE r.room_id IS NOT NULL), '{}') "
                 "FROM shared_queues q LEFT JOIN shared_queue_rooms r ON r.queue_id = q.id "
                 "WHERE q.ended_at IS NULL GROUP BY q.id"
@@ -432,13 +461,15 @@ async def load() -> None:
         _groups[int(gid)] = RoomGroup(id=int(gid), name=name, rooms=tuple(rooms or ()))
     _shares.clear()
     _by_room.clear()
-    for sid, host, gid, everywhere, dev, members in qrows:
+    for sid, host, gid, everywhere, dev, members, joined in qrows:
+        when = dict(zip(members or [], joined or []))
         members = [m for m in (members or []) if m != host and m not in _by_room]
         if not members or host in _by_room:
             await _persist(Share(id=sid, host=host), ended=True)
             continue
         sh = Share(id=sid, host=host, members=members, group_id=gid,
-                   everywhere=bool(everywhere), started_by=dev)
+                   everywhere=bool(everywhere), started_by=dev,
+                   joined_at={m: when[m] for m in members if when.get(m) is not None})
         _shares[sid] = sh
         for r in sh.rooms:
             _by_room[r] = sid
@@ -481,12 +512,56 @@ def _silence(app: Any, room_id: str) -> None:
     deliver_later(app, room_id, music_action="stop")
 
 
+def _paused_rooms(app: Any) -> set[str] | None:
+    """The raw set of rooms a person paused (domovoi/music_pause.py), by
+    each room's own id — not redirected to a host."""
+    from domovoi.music_pause import _rooms
+
+    return _rooms(app, create=False)
+
+
+def _forget_own_pause(app: Any, room_id: str) -> None:
+    """A room joining a shared queue drops a pause of its own from before:
+    while it is a member its flag would be the host's, and once it hosts
+    after a hand-off a stale flag would keep every room silent."""
+    rooms = _paused_rooms(app)
+    if rooms is not None:
+        rooms.discard(room_id)
+
+
+def _forget_resume(app: Any, room_id: str) -> None:
+    """A room that leaves stops meaning to play the host's stream: its
+    resume link goes, so neither the next turn's auto-resume nor a ready
+    signal brings back the group's music (or its own waiting queue)."""
+    state = getattr(app, "state", None) if app is not None else None
+    resumable = getattr(state, "resumable_music", None)
+    if resumable is not None:
+        resumable.pop(room_id, None)
+    pending = getattr(state, "pending_music_start", None)
+    if pending is not None:
+        entry = pending.pop(room_id, None)
+        task = entry.get("task") if isinstance(entry, dict) else None
+        if task is not None and hasattr(task, "done") and not task.done():
+            task.cancel()
+
+
+def has_own_player(room_id: str | None) -> bool:
+    """Whether ``room_id`` has a music player of its own (a room adopted
+    but never connected has none: it can listen to a host, never be one)."""
+    from domovoi.clients.mpd import own_player
+
+    return own_player(room_id) is not None
+
+
 async def _pause_own(room_id: str) -> None:
-    """A joining room's own player waits, paused, its queue kept."""
-    from domovoi.clients.mpd import own_mpd_client
+    """A joining room's own player waits, paused, its queue kept. A room
+    with no player of its own has nothing to pause (never another room's)."""
+    from domovoi.clients.mpd import own_player
 
     try:
-        client = own_mpd_client(room_id)
+        client = own_player(room_id)
+        if client is None:
+            return
         if await client.state() == "play":
             await client.pause()
     except Exception as e:  # noqa: BLE001 — a room without its own player
@@ -517,34 +592,54 @@ def _move_stamp(old: str, new: str) -> None:
         stamps[new] = dataclasses.replace(st, room_id=new)
 
 
-async def _hand_off(app: Any, old: str, new: str) -> str | None:
+@dataclass(frozen=True)
+class _HandOff:
+    """What a hand-off did: ``ok`` the new host took the queue (or there was
+    nothing to take); ``session_id`` the old host's Up next session, for the
+    caller to move once the new host is the host."""
+
+    ok: bool
+    session_id: str | None = None
+
+
+async def _hand_off(app: Any, old: str, new: str) -> _HandOff:
     """``old``'s queue continues on ``new``'s player: the same files from
     the same place, paused (the members' music_ready resumes it), a
-    person's pause kept. ``old``'s player stops. Returns ``old``'s Up next
-    session id, for the caller to move once ``new`` is the host."""
-    from domovoi.clients.mpd import own_mpd_client
-    from domovoi.music_pause import _rooms as paused_rooms
+    person's pause kept and ``new``'s own stale one dropped. Only once
+    ``new`` took at least one file does ``old``'s player stop and the
+    now-playing stamp move; a refusal (no player of its own, every file
+    refused, the player not answering) leaves ``old`` playing as it was
+    and answers ``ok=False``."""
+    from domovoi.clients.mpd import own_mpd_client, own_player
 
     src = own_mpd_client(old)
-    dst = own_mpd_client(new)
+    dst = own_player(new)
+    if dst is None:
+        log.warning("groups: hand-off %s -> %s: %s has no player of its own", old, new, new)
+        return _HandOff(ok=False)
     session_id: str | None = None
     try:
         snap = await src.playback_snapshot()
         entries = await src.queue_list()
     except Exception as e:  # noqa: BLE001
         log.warning("groups: hand-off %s -> %s: couldn't read %s's queue: %s", old, new, old, e)
-        return None
+        return _HandOff(ok=False)
     uris = [str(e.get("file") or "") for e in entries]
     state = snap.get("state") or "stop"
+    paused = _paused_rooms(app)
     if any(uris) and state in ("play", "pause"):
         pos = snap.get("pos") or 0
         try:
-            await dst.prepare_files(
+            taken = await dst.prepare_files(
                 uris, start_sec=float(snap.get("elapsed") or 0.0), start_index=int(pos),
             )
         except Exception as e:  # noqa: BLE001
             log.warning("groups: hand-off %s -> %s failed: %s", old, new, e)
-            return None
+            return _HandOff(ok=False)
+        if not taken:
+            log.warning("groups: hand-off %s -> %s: %s's player took none of the queue",
+                        old, new, new)
+            return _HandOff(ok=False)
         try:
             from domovoi.up_next import store as up_next_store
 
@@ -554,16 +649,18 @@ async def _hand_off(app: Any, old: str, new: str) -> str | None:
         except Exception as e:  # noqa: BLE001 — the music moved; the mix may not
             log.debug("groups: no Up next session read for room=%s: %s", old, e)
         _move_stamp(old, new)
-        rooms = paused_rooms(app, create=False)
-        if rooms is not None and old in rooms:
-            rooms.discard(old)
-            rooms.add(new)
+    if paused is not None:
+        was_paused = old in paused
+        paused.discard(old)
+        paused.discard(new)  # a pause of its own from before it joined
+        if was_paused:
+            paused.add(new)
     try:
         await src.stop()
     except Exception as e:  # noqa: BLE001
         log.debug("groups: %s's player didn't stop after the hand-off: %s", old, e)
     log.info("groups: shared queue handed from room=%s to room=%s", old, new)
-    return session_id
+    return _HandOff(ok=True, session_id=session_id)
 
 
 # ── changes ──
@@ -608,6 +705,8 @@ async def share(
             if other is not None:
                 await _leave_locked(app, room, silence=False)
             await _pause_own(room)
+            _forget_own_pause(app, room)
+            sh.joined_at[room] = _joined_now(sh)
             sh.members.append(room)
             _by_room[room] = sh.id
             joined.append(room)
@@ -644,7 +743,9 @@ async def _leave_locked(app: Any, room_id: str, *, silence: bool) -> Left | None
     if room_id != sh.host:
         sh.members.remove(room_id)
         sh.offline_since.pop(room_id, None)
+        sh.joined_at.pop(room_id, None)
         _by_room.pop(room_id, None)
+        _forget_resume(app, room_id)
         if silence:
             _silence(app, room_id)
         if not sh.members:
@@ -656,12 +757,38 @@ async def _leave_locked(app: Any, room_id: str, *, silence: bool) -> Left | None
         await _end_locked(app, sh, silence_members=False)
         return Left(share=sh, was_host=True, new_host=None, ended=True)
     old = sh.host
-    new = sh.members.pop(0)
+    # The earliest member that can take the queue hosts it now; one that
+    # can't (no player of its own, refused every file) is passed over.
+    new: str | None = None
+    handed = _HandOff(ok=False)
+    for candidate in list(sh.members):
+        handed = await _hand_off(app, old, candidate)
+        if handed.ok:
+            new = candidate
+            break
+    if new is None:
+        # Nobody could take it: the group ends cleanly — the members stop,
+        # and so does the room that left (its player too).
+        log.warning("groups: no room of %s's group could take its queue; it ends", old)
+        await _end_locked(app, sh, silence_members=True)
+        _forget_resume(app, old)
+        if silence:
+            _silence(app, old)
+        try:
+            from domovoi.clients.mpd import own_mpd_client
+
+            await own_mpd_client(old).stop()
+        except Exception as e:  # noqa: BLE001
+            log.debug("groups: %s's player didn't stop: %s", old, e)
+        return Left(share=sh, was_host=True, new_host=None, ended=True)
+    session_id = handed.session_id
+    sh.members.remove(new)
     sh.offline_since.pop(new, None)
-    session_id = await _hand_off(app, old, new)
+    sh.joined_at.pop(new, None)
     sh.host = new
     _by_room.pop(old, None)
     _by_room[new] = sh.id
+    _forget_resume(app, old)
     if session_id:
         from domovoi.clients.mpd import own_mpd_client
         from domovoi.up_next import rooms as up_next_rooms

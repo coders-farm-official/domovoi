@@ -22,8 +22,10 @@ no satellite update. A room in a group plays another room's MPD stream
   every room of the group; skip, back and queue edits are the group's;
   **pause and resume are the whole group's**; **stop stops only that
   room** (it leaves the group, the others play on; when the room whose
-  player it was stops, the queue moves to another room of the group, with
-  a second or two of gap there). A guest's skip or add reaches the group
+  player it was stops, the queue moves to the room that joined first and
+  can take it, with a second or two of gap there; when none can, the group
+  ends). A room whose speaker has never connected can't join. Podcasts and
+  audiobooks still play in one room: aimed at a group, Domovoi says so. A guest's skip or add reaches the group
   while the guest's room plays it. The group ends when its music runs out;
   a room offline for 30 minutes leaves; a restart keeps a group that
   changed in the last two hours.
