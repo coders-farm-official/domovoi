@@ -67,6 +67,13 @@ def test_permissions_are_declared_and_read_only(path: Path) -> None:
                 assert job.get("environment") in ("release", {"name": "release"}), \
                     "release.yml's writing job must run in the release environment"
                 continue
+            # And release.yml's `attest` job, the build provenance: an OIDC
+            # token for Sigstore and the attestation stored. It has no
+            # environment and no secret (test_release_provenance.py).
+            if (path.name, job_name, scope, level) in (("release.yml", "attest", "id-token", "write"),
+                                                       ("release.yml", "attest", "attestations", "write")):
+                assert "environment" not in job, "the attest job must stay outside the release environment"
+                continue
             assert level in ("read", "none"), f"{path.name}:{job_name} grants {scope}: {level}"
 
 

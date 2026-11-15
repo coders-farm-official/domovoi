@@ -22,6 +22,10 @@
 #   ios      ios/ (or a workflow) changed: the iPhone app's package tests on
 #            macOS and the app + UI-test target compiled for the Simulator,
 #            unsigned (the Simulator UI trains stay on the owner's Mac).
+#   sbom     any change beyond docs: the release's three SBOMs
+#            (scripts/release/sbom.py, the app's through Gradle), made the
+#            way release.yml makes them, so a release never finds them
+#            broken. An artifact (`domovoi-sboms`), never published.
 # A new job slots into `jobs:` beside these.
 #
 # No secrets anywhere, and none may be added: release signing and publishing
@@ -448,3 +452,39 @@ jobs:
           grep -E "(error|fatal error):" "$RUNNER_TEMP/build.log" | sort -u | head -n 80 || true
           tail -n 60 "$RUNNER_TEMP/build.log"
           exit "$rc"
+
+  # The release's SBOMs, made as release.yml's sbom job makes them (no
+  # cache, the runner's JDK 17, the wrapper's Gradle held to its SHA-256),
+  # so a broken generator shows up here and not on release day.
+  sbom:
+    name: sbom
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The server's and the web's SBOMs
+        run: |
+          mkdir -p "$RUNNER_TEMP/sboms"
+          python3 scripts/release/sbom.py server --out "$RUNNER_TEMP/sboms/domovoi-server.cdx.json"
+          python3 scripts/release/sbom.py web --out "$RUNNER_TEMP/sboms/domovoi-web.cdx.json"
+      - name: The app's SBOM
+        working-directory: android
+        run: |
+          set -euo pipefail
+          props=gradle/wrapper/gradle-wrapper.properties
+          grep -qF gradle-8.14.3-bin.zip "$props"             || { echo "::error::the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 here and in release.yml"; exit 1; }
+          grep -qF distributionSha256Sum "$props"             || echo 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' >>"$props"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          chmod +x gradlew
+          ./gradlew --no-daemon --no-configuration-cache --init-script ../scripts/release/sbom-android.init.gradle             -Pdomovoi.sbomDeps="$RUNNER_TEMP/gradle-deps.json" :app:domovoiSbomDeps
+          python3 ../scripts/release/sbom.py android --gradle-deps "$RUNNER_TEMP/gradle-deps.json"             --out "$RUNNER_TEMP/sboms/domovoi-android.cdx.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: domovoi-sboms
+          path: ${{ runner.temp }}/sboms/
+          if-no-files-found: error
+          retention-days: 14

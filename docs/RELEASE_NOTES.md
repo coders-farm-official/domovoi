@@ -4,6 +4,14 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — Release files you can check: SBOMs and build provenance
+
+Nothing to do. Each release on GitHub now carries software bills of
+materials (`domovoi-server.cdx.json`, `domovoi-web.cdx.json`, and
+`domovoi-android.cdx.json` when it carries the app), and every file on it
+has GitHub build provenance: `gh attestation verify <file> -R coders-farm-official/domovoi`
+([SECURITY.md, Verifying a release](../SECURITY.md#verifying-a-release)).
+
 ## 1.3.0 (unreleased) — Voice ID's model has a backup copy
 
 - **What changed.** A server now downloads voice ID's speaker model from

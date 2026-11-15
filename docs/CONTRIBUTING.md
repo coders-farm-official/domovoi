@@ -609,6 +609,17 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    (loaded into an `ssh-agent` for that one step: no key file, no prompt),
    publishes the files, checks them and moves `stable` (step 3 below). The
    job's summary links the release.
+7. Two jobs without secrets frame it. **sbom** (Linux, read-only, while
+   the run waits for approval) makes the software bills of materials with
+   `scripts/release/sbom.py`: the server's Python packages, the
+   dashboard's vendored libraries and, when the app changed, the app's
+   libraries; finish-release attaches them (`--sbom-dir`) and lists them in
+   `SHA256SUMS`. **attest** (Linux, after the release) records GitHub's
+   build provenance for every file in that `SHA256SUMS`, once the release
+   on GitHub holds exactly those files. If attest fails, the release is
+   already out: **Re-run failed jobs** runs it again, and nothing is
+   published twice. How a user checks a file:
+   [SECURITY.md, "Verifying a release"](../SECURITY.md#verifying-a-release).
 
 Every check the scripts make still runs; the workflow adds the plan, and a
 check that the release key's secrets load and are the key the commit pins

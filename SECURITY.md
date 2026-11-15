@@ -102,3 +102,41 @@ supported. What leaves the house is up to the household's internet answer
 The full threat model, what each credential protects, the outbound-fetch
 rules and the hardening deliberately deferred in v1 are in
 [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
+
+## Verifying a release
+
+From 1.3.0, every file on a Domovoi release on GitHub can be checked
+three ways. Releases made before it, or by the maintainers' local
+fallback scripts, have the first two only.
+
+- **`SHA256SUMS`** lists every file of the release with its SHA-256:
+  `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), or
+  compare `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) with the
+  file's line.
+- **Signatures.** `DomovoiSetup.exe` is signed with Domovoi's release key
+  (`DomovoiSetup.exe.sig`; a Windows install checks it before it updates),
+  and the APKs with the app's signing key, whose certificate SHA-256 the
+  release notes give (`apksigner verify --print-certs <file>`).
+- **Build provenance.** The release workflow
+  (`.github/workflows/release.yml`) records a GitHub artifact attestation
+  for each file: the file's SHA-256, the workflow that built it, the
+  commit and the run. With the [GitHub CLI](https://cli.github.com/):
+
+  ```bash
+  gh attestation verify <file> -R coders-farm-official/domovoi
+  ```
+
+  It passes only for a file with exactly the bytes the release workflow
+  published. To also hold it to the release workflow on `main`, add
+  `--signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml --source-ref refs/heads/main`.
+  An attestation says where and how a file was built; it says nothing
+  about whether the code in it is safe.
+
+Each release also carries **software bills of materials** (SBOMs,
+CycloneDX JSON), the third-party code it ships by name, version and
+SHA-256: `domovoi-server.cdx.json` (the Python packages a server
+installs), `domovoi-web.cdx.json` (the dashboard's bundled browser
+libraries) and, on a release that carries the Android app,
+`domovoi-android.cdx.json`. Any CycloneDX-aware scanner can check them
+against vulnerability databases. They are in `SHA256SUMS` and attested
+like every other file.
