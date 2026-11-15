@@ -208,9 +208,13 @@ jobs:
       # runs its embedding tests (the ONNX Runtime guard) instead of skipping.
       - name: Voice ID's speaker model (pinned), for the encoder's tests
         run: |
-          read -r url sha < <(python -c "from domovoi.clients import speaker_encoder as se; print(se.MODEL_URL, se.MODEL_SHA256)")
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/speaker.onnx" "$url"
-          echo "$sha  $RUNNER_TEMP/speaker.onnx" | sha256sum -c -
+          sha=$(python -c "from domovoi.clients import speaker_encoder as se; print(se.MODEL_SHA256)")
+          for url in $(python -c "from domovoi.clients import speaker_encoder as se; print(*se.MODEL_URLS)"); do
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/speaker.onnx" "$url"               && echo "$sha  $RUNNER_TEMP/speaker.onnx" | sha256sum -c - && break
+            echo "::warning::speaker model not fetched from $url"
+            rm -f "$RUNNER_TEMP/speaker.onnx"
+          done
+          test -s "$RUNNER_TEMP/speaker.onnx"
           echo "DOMOVOI_TEST_SPEAKER_MODEL=$RUNNER_TEMP/speaker.onnx" >>"$GITHUB_ENV"
       # The default 100 connections run out under pytest -n 4 (each worker
       # has its own database copy and the app's pools): raise it, then

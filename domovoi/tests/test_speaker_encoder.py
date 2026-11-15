@@ -85,7 +85,11 @@ def test_less_than_a_frame_is_no_features() -> None:
 def test_the_pin_is_a_sha256_of_a_github_release_asset() -> None:
     assert len(se.MODEL_SHA256) == 64 and int(se.MODEL_SHA256, 16) >= 0
     assert se.MODEL_URL.startswith("https://github.com/k2-fsa/sherpa-onnx/releases/download/")
-    assert se.MODEL_URL.endswith("/" + se.MODEL_FILE)
+    assert se.MODEL_MIRROR_URL.startswith(
+        "https://github.com/coders-farm-official/domovoi-models/releases/download/eres2net-vox-v1/")
+    assert se.MODEL_URLS == (se.MODEL_MIRROR_URL, se.MODEL_URL)    # our copy first
+    for url in se.MODEL_URLS:
+        assert url.endswith("/" + se.MODEL_FILE)
     assert 20_000_000 < se.MODEL_BYTES < 40_000_000
     assert se.EMBEDDING_DIM == 192 and se.MODEL_TAG == "eres2net-vox-v1"
 
@@ -122,7 +126,7 @@ def test_the_download_moves_only_a_verified_file_into_place(tmp_path, monkeypatc
     monkeypatch.setattr(se, "_last_failure", None)
     with egress.override_policy("always"), pytest.raises(se.ModelUnavailable, match="checksum"):
         se.download_model(tmp_path)
-    assert calls == [(se.MODEL_URL, se.MODEL_SHA256, se.MODEL_BYTES)]
+    assert calls == [(u, se.MODEL_SHA256, se.MODEL_BYTES) for u in se.MODEL_URLS]
     assert not (tmp_path / se.MODEL_FILE).exists()
     assert not se.may_retry_download()                          # not again for a while
     assert "couldn't download" in (se.model_problem() or "")
@@ -239,3 +243,40 @@ async def test_voice_id_end_to_end_with_the_real_encoder(db_session, monkeypatch
     assert her.runner_up_similarity < 0.2
     him = await voice_identifier.identify(pcm("norman_a.wav"))
     assert him.person_id == ids["Norman"] and him.best_similarity > 0.999
+
+
+def test_upstream_is_the_fallback_when_our_copy_fails(tmp_path, monkeypatch) -> None:
+    from domovoi import egress
+    from domovoi.satellite_media import fetchers
+
+    tried = []
+
+    def fetch(url, dest, *, sha256, size, progress=None):
+        tried.append(url)
+        if url == se.MODEL_MIRROR_URL:
+            raise OSError("404 from the copy")
+        dest.write_bytes(b"ok")
+
+    monkeypatch.setattr(fetchers, "_fetch_pinned", fetch)
+    monkeypatch.setattr(se, "_last_failure", None)
+    with egress.override_policy("always"):
+        assert se.download_model(tmp_path) == tmp_path / se.MODEL_FILE
+    assert tried == [se.MODEL_MIRROR_URL, se.MODEL_URL]
+    assert se.may_retry_download()
+
+
+def test_our_copy_answering_means_upstream_is_never_asked(tmp_path, monkeypatch) -> None:
+    from domovoi import egress
+    from domovoi.satellite_media import fetchers
+
+    tried = []
+
+    def fetch(url, dest, *, sha256, size, progress=None):
+        tried.append(url)
+        dest.write_bytes(b"ok")
+
+    monkeypatch.setattr(fetchers, "_fetch_pinned", fetch)
+    monkeypatch.setattr(se, "_last_failure", None)
+    with egress.override_policy("always"):
+        se.download_model(tmp_path)
+    assert tried == [se.MODEL_MIRROR_URL]
