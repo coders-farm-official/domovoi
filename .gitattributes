@@ -21,3 +21,6 @@ ios/Packages/DomovoiKit/Tests/DomovoiKitTests/Fixtures/** -text
 
 # Regenerated on any OS and compared byte for byte by CI: always LF.
 web/openapi.json text eol=lf
+
+# The Android release build's environment: its scripts run in Linux.
+android/build-env/** text eol=lf

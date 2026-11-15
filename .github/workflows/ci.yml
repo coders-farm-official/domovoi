@@ -326,8 +326,9 @@ jobs:
           distribution: temurin
           # 21, not 17: the unit tests load LiteRT-LM's classes on the JVM
           # (NoNetworkTest), and its jar is built for Java 21 (class files
-          # version 65). The app itself still targets Java 17.
-          java-version: "21"
+          # version 65). The app itself still targets Java 17. The exact
+          # Temurin the release build image has (android/build-env/Dockerfile).
+          java-version: "21.0.13+9"
       # Caches Gradle's downloads and validates the wrapper jar. The runner
       # image's Android SDK (ANDROID_HOME) has its licences accepted, so the
       # Android Gradle plugin fetches any platform it lacks by itself.

@@ -56,6 +56,10 @@ appAbis.forEach { abi ->
 android {
     namespace = "com.domovoi.app"
     compileSdk = 36
+    // Stated, not AGP's default: the release build's own build-tools, the
+    // ones android/build-env/Dockerfile pins (and the release scripts sign
+    // with), so a later AGP can't move it without a change here.
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.domovoi.app"
