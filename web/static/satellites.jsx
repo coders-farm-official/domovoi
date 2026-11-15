@@ -128,6 +128,32 @@ const SatRoomBattery = ({ s, online }) => {
  * here is live: no room can connect, and "offline" would say the
  * satellite is the problem. The card says "can't connect" and when the
  * room was last heard from instead. */
+/* Which word the room wakes on (GET /api/satellites `wakes_on`), by name
+ * only: its sensitivity is a separate setting (Settings tab). Display only.
+ * `source` says where the name came from; the tooltip says it in words. */
+const SAT_WAKES_ON_WHY = {
+  device: 'the wake word this room device reported loading',
+  assigned: 'the household’s wake word, given to this room; it hasn’t reported its word itself yet',
+  chosen: 'the word pushed to this room; it hasn’t reported its word itself yet',
+  pending: 'this room is waiting for this word’s model to reach the server; it wakes on its first word until then',
+  unknown: 'this room’s software doesn’t say which word it wakes on; upgrading it does',
+};
+const SatWakesOn = ({ s, style }) => {
+  const w = s && s.wakes_on;
+  if (!w || !w.text) return null;
+  const known = w.source !== 'unknown';
+  return (
+    <div className="sat-wakes-on" title={SAT_WAKES_ON_WHY[w.source] || undefined}
+         style={{ fontSize: 12, color: 'var(--fg-muted)', minWidth: 0, overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...style }}>
+      wakes on{' '}
+      <span style={{ color: known ? 'var(--fg)' : 'var(--fg-faint)', fontWeight: known ? 500 : 400 }}>
+        {known ? `“${w.text}”` : w.text}
+      </span>
+    </div>
+  );
+};
+
 const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
   const online = s.status === 'online' && !coreDown;
   const np = s.now_playing;
@@ -203,6 +229,7 @@ const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
         ) : (
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>no music</div>
         )}
+        <SatWakesOn s={s} style={{ marginTop: 8 }}/>
         {s.capture_commands && (
           <div style={{ marginTop: 8 }}><CaptureChip/></div>
         )}
@@ -2280,6 +2307,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           )}
           <div style={{ marginLeft: 'auto' }}><IconButton name="x" onClick={onClose}/></div>
         </div>
+        <SatWakesOn s={s} style={{ padding: '8px 16px', borderBottom: '1px solid var(--border-soft)' }}/>
         <Tabs tabs={tabs} value={tab} onChange={setTab} padX={16}/>
         {/* Its own scroller: a table header sticks to this edge, not to .main's padding. */}
         <div style={{ flex: 1, overflow: 'auto', '--tbl-stick-top': '0px' }}>

@@ -30206,6 +30206,76 @@
         "title": "RoomVoiceRequest",
         "description": "The room drawer's voice picker (POST /api/satellites/{room}/voice)."
       },
+      "RoomWakeWord": {
+        "properties": {
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "device",
+              "assigned",
+              "chosen",
+              "pending",
+              "unknown"
+            ],
+            "title": "Source",
+            "default": "unknown"
+          },
+          "pending_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Slug"
+          },
+          "pending_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Name"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "RoomWakeWord",
+        "description": "Which wake word a room answers to (domovoi/wake_default.py\n``room_word``). ``source``: ``device`` \u2014 the model the room device\nreported loading (its health sample, else its hello); ``assigned`` /\n``chosen`` \u2014 no report, the household default the server gave it / the\nword an admin pushed; ``pending`` \u2014 it is waiting for this word's model;\n``unknown`` \u2014 nothing says (a room older than the household default, on\nsoftware that doesn't report its word): ``name`` is null and ``text``\nsays so. ``pending_*``: the word a room that reports its own is still\nwaiting to be given. ``text``: the line the dashboard shows after\n\"Wakes on:\"."
+      },
       "SampleSources": {
         "properties": {
           "samples": {
@@ -30515,6 +30585,16 @@
               }
             ],
             "title": "Wake Phrase"
+          },
+          "wakes_on": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomWakeWord"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "battery": {
             "anyOf": [

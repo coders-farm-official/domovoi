@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — Each room says which word it wakes on
+
+No migration. Settings → Rooms shows **wakes on “Domovoi”** (or whichever
+word) on each room's card and at the top of its drawer: the name only, the
+sensitivity stays in the room's Settings tab. The word is the model the room
+device reports loading; a room on older software shows the word the server
+gave it, a room waiting for its word's model shows it as pending, and a room
+older than the household default that reports nothing reads **unknown until
+this room updates** (upgrading the room fixes it).
+
+- **Satellites:** Pi and PC rooms add `wake_word` (the loaded model's slug,
+  e.g. `domovoi_v1`, `hey_jarvis`) to their health sample. Phones in room
+  mode can send the same field; until they do, their hello's word is used.
+- **API:** each `GET /api/satellites` row carries `wakes_on` (`{slug, name,
+  source, pending_slug, pending_name, text}`; `source` is `device`,
+  `assigned`, `chosen`, `pending` or `unknown`).
+
 ## 1.3.0 (unreleased) — Groups: rooms that play one shared queue (V060)
 
 **Migration V060** (`room_groups`, `room_group_rooms`, `shared_queues`,
