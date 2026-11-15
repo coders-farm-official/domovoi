@@ -230,7 +230,7 @@ def test_a_tampered_or_unpinned_download_is_deleted(sat) -> None:
 @requires_bash
 def test_a_short_file_with_the_right_prefix_is_refused(sat) -> None:
     _fill(sat.cache, {**FILES, "a_v0.1.tflite": B[:-1]})
-    proc = sat.run()
+    sat.run()
     assert "a_v0.1.tflite" not in sat.names()
     assert not sat.done()
 

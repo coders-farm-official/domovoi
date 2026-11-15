@@ -18,7 +18,6 @@ Different bytes → uncorrelated random vectors. Tests reflect this.
 from __future__ import annotations
 
 import base64
-import json
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -29,14 +28,12 @@ from domovoi.clients.voice_embedder import EMBEDDING_DIM, StubVoiceEmbedder
 from domovoi.db.repositories import (
     PeopleRepository,
     SessionRepository,
-    VoiceProfilesRepository,
 )
 from domovoi.handlers.voice_profile import (
     THIRD_PARTY_EXPECTATION_KEY,
     VoiceProfileHandler,
     _THIRD_PARTY_INTRO_RE,
     buffer_unknown_voice_turn,
-    clear_third_party_expectation,
     load_third_party_expectation,
     maybe_inject_third_party_ask,
     save_third_party_expectation,

@@ -263,7 +263,7 @@ async def test_pending_confirmation_routes_yes_to_handler(db_session) -> None:
 
     import numpy as np
 
-    from domovoi.clients.voice_embedder import EMBEDDING_DIM, StubVoiceEmbedder
+    from domovoi.clients.voice_embedder import StubVoiceEmbedder
     from domovoi.db.repositories import SessionRepository
     from sqlalchemy import text as sql_text
 

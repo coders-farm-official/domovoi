@@ -1,0 +1,10 @@
+# The linter CI runs (the "ruff" job), hash-pinned so the install is
+# `pip install --require-hashes -r` (OpenSSF Scorecard's Pinned-Dependencies).
+# ruff (MIT): lint only, never `ruff format`; its rules live in
+# pyproject.toml's [tool.ruff]. Linux x86_64 runner wheels only (manylinux
+# and musllinux). The version is at least 14 days old. To bump: take the new
+# version's sha256 values from its PyPI page (Download files), and fix
+# whatever the new release newly reports.
+ruff==0.17.4 \
+    --hash=sha256:2cd025509b2e15721b426fc70fd946d71f43b3db3b08e946dfec2d696d911690 \
+    --hash=sha256:6007e7f3a0e55b0fbdb947af69cf24c21b4928df6be8ef3e767c69b5ccccf496

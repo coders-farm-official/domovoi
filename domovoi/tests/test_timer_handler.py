@@ -15,7 +15,7 @@ from domovoi.handlers.timer import (
     _STATUS_RE,
     spoken_label,
 )
-from domovoi.models import Context, Intent
+from domovoi.models import Context
 from domovoi.tests.conftest import fast_path_winner, requires_db
 
 

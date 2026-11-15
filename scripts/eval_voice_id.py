@@ -45,9 +45,12 @@ import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from domovoi.voice_prep import Prepared
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))

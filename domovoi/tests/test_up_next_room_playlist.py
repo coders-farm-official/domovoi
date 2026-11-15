@@ -20,6 +20,7 @@ Uses the P4 fixtures and the stub player (domovoi/tests/test_up_next_rooms.py).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlalchemy import text

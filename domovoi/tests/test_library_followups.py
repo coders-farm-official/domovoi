@@ -193,7 +193,7 @@ async def test_a_rescan_moves_the_version_only_when_the_art_changes(db_session, 
 
     monkeypatch.setattr("domovoi.library_playlists_import.sync_file_playlists", no_sync)
     music = tmp_path / "music"
-    a = mw.write_mp3(music / "Album" / "a.mp3", [mw.TIT2("A")])
+    mw.write_mp3(music / "Album" / "a.mp3", [mw.TIT2("A")])
     b = mw.write_mp3(music / "Other" / "b.mp3", [mw.TIT2("B")])
     monkeypatch.setattr(settings, "music_dir", str(music))
 

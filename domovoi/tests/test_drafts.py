@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from domovoi.drafts import (FONTS_DIR, TEMPLATES_DIR, ats, blocks, diff, docx_file, kinds, layout, metrics,
+from domovoi.drafts import (FONTS_DIR, ats, blocks, diff, docx_file, kinds, layout, metrics,
                             pdf_file, phrases, prompts, templates)
 
 CASES = json.loads((Path(layout.__file__).parent / "shared_cases.json").read_text(encoding="utf-8"))

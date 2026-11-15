@@ -20,7 +20,6 @@ mic-gain) sit behind the folded warning, exactly like the gear.
 from __future__ import annotations
 
 import dataclasses
-import re
 
 from domovoi.config_schema import FieldSpec
 from domovoi.config_schema import coerce_and_validate as _coerce_and_validate

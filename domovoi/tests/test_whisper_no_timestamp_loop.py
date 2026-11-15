@@ -95,7 +95,7 @@ def test_the_count_matches_the_library_tokenizer() -> None:
     for notimestamps, multilingual in ((50362, False), (50364, True)):
         vocab = _Vocab(notimestamps)
         vocab.token_to_id = lambda token, n=notimestamps: {  # noqa: E731
-            "<|notimestamps|>": n, "<|endoftext|>": 50256 if not multilingual else 50257,
+            "<|notimestamps|>": n, "<|endoftext|>": 50256 if not multilingual else 50257,  # noqa: B023 - called inside the iteration, never kept
         }.get(token, 0)
         ids = _client(_FakeModel(vocab))._suppress_tokens()
         lib = Tokenizer.__new__(Tokenizer)

@@ -121,7 +121,6 @@ class _Writer:
 
     # ── runs ──
     def _add_run(self, paragraph: Any, text: str, fmt: _Fmt) -> None:
-        from docx.shared import Pt, RGBColor
 
         if not text:
             return

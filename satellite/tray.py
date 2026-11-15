@@ -108,7 +108,7 @@ def connection_text(st: dict[str, Any] | None) -> str:
         return f"{server_host(st)} failed the identity check" + (f": {reason}" if reason else "")
     if conn == "refused":
         return "the Domovoi server refused this device" + (f": {reason}" if reason else "")
-    return f"offline" + (f": {reason}" if reason else "")
+    return "offline" + (f": {reason}" if reason else "")
 
 
 def tooltip(st: dict[str, Any] | None, code: str | None = None) -> tuple[str, str]:

@@ -105,3 +105,29 @@ def test_android_readme_explains_the_debug_signed_ci_apk() -> None:
     text = (REPO_ROOT / "android" / "README.md").read_text(encoding="utf-8")
     assert "debug-signed" in text
     assert "assembleRelease" in text and "apksigner" in text
+
+
+def test_the_ruff_job_lints_with_a_hash_pinned_ruff() -> None:
+    """OpenSSF's static-analysis criteria: CI runs a linter that fails on any
+    finding, installed from an exact, hash-checked pin, with a read-only token."""
+    doc = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    job = doc["jobs"]["ruff"]
+    assert job["permissions"] == {"contents": "read"}
+    assert "needs" not in job and "if" not in job, "the lint runs on every push"
+    runs = "\n".join(str(s.get("run", "")) for s in job["steps"])
+    assert "pip install --require-hashes -r .github/ci-ruff-requirements.txt" in runs
+    assert re.search(r"^\s*ruff check --no-fix \.\s*$", runs, re.M)
+    assert "ruff format" not in runs
+    pins = (REPO_ROOT / ".github" / "ci-ruff-requirements.txt").read_text(encoding="utf-8")
+    assert re.search(r"^ruff==\d+\.\d+\.\d+ \\$", pins, re.M)
+    assert re.search(r"--hash=sha256:[0-9a-f]{64}", pins)
+
+
+def test_pyproject_configures_ruff_without_style_rules() -> None:
+    import tomllib
+
+    cfg = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["ruff"]
+    selected = cfg["lint"]["select"]
+    assert "F" in selected and "E9" in selected
+    assert not any(code in ("E", "W", "I", "N", "D", "UP") for code in selected)
+    assert "web/static/vendor" in cfg["extend-exclude"]

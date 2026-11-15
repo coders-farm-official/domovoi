@@ -458,8 +458,9 @@ code uses mutagen and espeak-ng.
 
 ## Code style
 
-There is no formatter config in the repo; match the code around you. What
-the codebase actually does, consistently:
+There is no formatter config in the repo (never run `ruff format` or any
+other formatter over existing code); match the code around you. What the
+codebase actually does, consistently:
 
 * **Modern typed Python.** `from __future__ import annotations` at the top
   of every module; full type hints on public signatures; `X | None` over
@@ -494,6 +495,30 @@ the codebase actually does, consistently:
 * Frontend: the dashboard is no-build Babel React; plugin pages register
   only through `window.DomovoiPlugins.<slug>` — never bare globals. For UI
   styling, use the design tokens and component kit under `web/static/`.
+
+### Linting
+
+CI lints the Python with [ruff](https://docs.astral.sh/ruff/) (MIT) in the
+`ruff` job, and any finding fails it. The rules are only the ones that catch
+real mistakes, set in `pyproject.toml` under `[tool.ruff]`: pyflakes (`F`:
+undefined names, unused imports and variables, redefinitions), syntax errors
+(`E9`), and two bugbear checks (`B023`, a closure capturing a loop variable;
+`B018`, a useless expression). No style rules, and no formatter.
+
+```bash
+pip install --require-hashes -r .github/ci-ruff-requirements.txt   # the version CI runs
+ruff check .          # what CI runs
+ruff check --fix .    # also removes unused imports (read the diff)
+```
+
+Vendored code (`web/static/vendor`), `android/` and `ios/` are excluded. Fix
+a finding rather than silencing it. Where the code is right and the check is
+wrong (an import kept for its side effect or as a re-export, a closure called
+inside its own loop pass), add a targeted `# noqa: <code> - <reason>` on that
+line. A pytest fixture imported from a helper module and taken as a test
+parameter is fine (`F811` is off in `tests/`), but the import itself needs
+`# noqa: F401 - fixture`. To bump ruff, change the version and hashes in
+`.github/ci-ruff-requirements.txt` and fix what the new release reports.
 
 ---
 

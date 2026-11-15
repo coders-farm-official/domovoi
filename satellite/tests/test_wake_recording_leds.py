@@ -10,10 +10,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import queue
 import threading
-import types
 
 from satellite.tests._client_import import import_client
 from satellite import leds as leds_mod
@@ -93,3 +91,28 @@ def test_the_ring_has_a_recording_look_on_both_kinds_of_board():
               if isinstance(c, type) and isinstance(getattr(c, "_STATES", None), dict)]
     assert native and all("recording" in c._STATES for c in native)
     assert leds_mod.COLOR_RECORDING != leds_mod.COLOR_LISTENING
+
+
+def test_setup_main_lights_the_ring(monkeypatch) -> None:
+    """`_setup_main` once named a class that does not exist (LedConfig for
+    LEDConfig); its broad except swallowed the NameError and the setup LED
+    colour never showed. Found by ruff F821."""
+    from satellite import leds
+
+    shown = []
+
+    class _Fake:
+        def __init__(self, n, brightness):
+            self.pixels = []
+
+        def set_pixel(self, i, r, g, b):
+            self.pixels.append((i, r, g, b))
+
+        def show(self):
+            shown.append(self.pixels)
+
+    monkeypatch.setattr(leds, "_APA102Driver", _Fake)
+    assert leds._setup_main(["no-server"]) == 0
+    assert len(shown) == 1
+    assert len(shown[0]) == leds.LEDConfig.num_leds
+    assert shown[0][0][1:] == leds.SETUP_COLORS["no-server"]

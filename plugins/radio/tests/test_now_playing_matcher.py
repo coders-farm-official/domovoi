@@ -4,7 +4,6 @@ stream_url first (online), station-name-as-MPD-title fallback (FM/SDR
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 from domovoi.tests.conftest import requires_db

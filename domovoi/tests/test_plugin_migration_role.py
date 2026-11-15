@@ -32,7 +32,6 @@ from domovoi.plugins_runtime.migrations import (
     MigrationFile,
     MigrationSandboxError,
     PluginMigrationRunner,
-    SqlLintError,
     sql_lint,
 )
 from domovoi.tests.conftest import requires_db

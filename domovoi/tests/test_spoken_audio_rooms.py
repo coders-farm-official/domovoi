@@ -24,7 +24,7 @@ from domovoi.handlers import HANDLER_BY_NAME
 from domovoi.models import Context, Response
 from domovoi.room_music import drain
 from domovoi.router import normalize_transcript, plan_route, strip_leading_filler
-from domovoi.tests.test_music_rooms import HOUSE, PORTS, FakeDB, _app, _Result
+from domovoi.tests.test_music_rooms import PORTS, FakeDB, _app, _Result
 
 EPISODE = {"id": 31, "title": "The Morning Edition", "file_path": "/pod/daily/ep31.mp3",
            "duration_sec": 1500, "chapters": None, "download_status": "downloaded",
