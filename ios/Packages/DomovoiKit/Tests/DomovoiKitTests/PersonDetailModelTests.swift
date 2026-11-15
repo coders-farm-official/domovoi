@@ -236,7 +236,10 @@ final class PersonDetailModelTests: XCTestCase {
 
         // Filtered to this person's own reads, so an unrelated request the
         // client makes for its own reasons cannot make this a false failure.
-        XCTAssertEqual(paths().filter { $0.hasPrefix("/api/people/1/") }, [
+        // The rooms that know their voice are read on their own, alongside
+        // these five and in no fixed order with them
+        // (`PersonVoiceRoomsTests`), so they are left out here.
+        XCTAssertEqual(paths().filter { $0.hasPrefix("/api/people/1/") && !$0.hasSuffix("/voice-rooms") }, [
             "/api/people/1/sessions",
             "/api/people/1/conversations",
             "/api/people/1/memories",
@@ -261,20 +264,29 @@ final class PersonDetailModelTests: XCTestCase {
     /// Re-showing the person already on screen is not a reload — Android keys
     /// its state on `person.id` — but the **value** moves, because the
     /// roster's push may have changed their `last_seen_at`.
+    ///
+    /// Same sample count: a new count re-reads the rooms that know their
+    /// voice, which `PersonVoiceRoomsTests` covers.
     func testReShowingTheSamePersonTakesTheNewerRowAndAsksForNothing() async {
         let (model, _) = rig()
         await showing(model, jordan)
+        // The rooms' own read runs beside the five; counted only once it
+        // has left, so it cannot land after the mark and read as a re-read.
+        await settleUntil(
+            { StubURLProtocol.recorded.contains { $0.url?.path == "/api/people/1/voice-rooms" } },
+            "the rooms read"
+        )
         let asked = StubURLProtocol.recorded.count
 
         let newer = Person(
             id: 1, name: "Jordan", createdAt: jordan.createdAt,
             lastSeenAt: "2026-11-02T10:00:00Z", notes: jordan.notes,
-            voiceProfileCount: 4, presenceTier: "high"
+            voiceProfileCount: 3, presenceTier: "high"
         )
         model.show(newer)
         await nothingHappens()
 
-        XCTAssertEqual(model.person?.voiceProfileCount, 4)
+        XCTAssertEqual(model.person?.lastSeenAt, "2026-11-02T10:00:00Z")
         XCTAssertEqual(StubURLProtocol.recorded.count, asked)
     }
 

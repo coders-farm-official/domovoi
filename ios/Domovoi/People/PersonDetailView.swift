@@ -74,6 +74,13 @@ struct PersonDetailView: View {
             tab = .profile
             detail.show(person)
         }
+        // A room may just have learned their voice: the same person with a
+        // new sample count re-reads the rooms that know it
+        // (`LaunchedEffect(personId, tick, voiceSamples)`, `PeopleModels.kt:320`).
+        // ``PersonDetailModel/show(_:)`` re-reads only the rooms for that.
+        .onChange(of: person.voiceProfileCount) { _, _ in
+            detail.show(person)
+        }
     }
 
     // MARK: - who this is
@@ -132,6 +139,9 @@ struct PersonDetailView: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            // Rooms that know this voice (1.3.0), after the stats and before
+            // the notes (`PersonDetail.kt:278`). Hidden when there are none.
+            PersonVoiceRoomsSection(name: person.name, rooms: detail.voiceRooms)
             notes
             // Whose this phone is, and their listening history
             // (`PersonDetail.kt` ProfileTab, 2026-11-12).
@@ -370,5 +380,106 @@ struct PersonStatTile: View {
         // One stop per tile: "voice profiles, 3, enrolled" rather than three
         // stops whose middle one is a bare number.
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Rooms that know this voice (`VoiceRoomsSection`, `PersonDetail.kt:310-343`;
+/// the web People page's `PersonVoiceRooms`). **Read-only**: rooms never use a
+/// phone's samples, so the phone records nothing; the hint says how the
+/// person teaches a room themselves.
+///
+/// Draws nothing when the house has no rooms, or the server is older than the
+/// route.
+struct PersonVoiceRoomsSection: View {
+
+    let name: String
+    let rooms: [PersonVoiceRoom]
+
+    var body: some View {
+        if PersonVoiceRooms.shows(rooms) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(PeopleStrings.voiceRoomsLabel)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(PersonVoiceRooms.count(rooms))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                // Wrapping, not scrolling: a horizontal scroll hides what it
+                // cannot fit without saying so (Android's `FlowRow`).
+                PersonVoiceRoomsFlow(spacing: 6) {
+                    ForEach(rooms) { room in
+                        HomeTonePill(label: PersonVoiceRooms.chip(room), tone: room.known ? .ok : .idle)
+                    }
+                }
+                if let hint = PersonVoiceRooms.hint(name: name, rooms: rooms) {
+                    Text(hint)
+                        .font(.footnote)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Left-to-right rows that wrap, for the room chips (Compose's `FlowRow`).
+///
+/// A chip wider than the row gets the row's width and wraps its own text,
+/// so nothing is clipped at an accessibility size.
+struct PersonVoiceRoomsFlow: Layout {
+
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let frames = place(subviews, width: width)
+        let used = frames.reduce(CGSize.zero) { size, frame in
+            CGSize(width: max(size.width, frame.maxX), height: max(size.height, frame.maxY))
+        }
+        return CGSize(width: proposal.width ?? used.width, height: used.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let frames = place(subviews, width: bounds.width)
+        for (subview, frame) in zip(subviews, frames) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: frame.width, height: frame.height)
+            )
+        }
+    }
+
+    private func place(_ subviews: Subviews, width: CGFloat) -> [CGRect] {
+        var frames: [CGRect] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            var size: CGSize = subview.sizeThatFits(.unspecified)
+            if size.width > width {
+                size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+                size.width = min(size.width, width)
+            }
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return frames
     }
 }
