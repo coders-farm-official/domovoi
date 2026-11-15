@@ -142,7 +142,7 @@ class RoomProtocolTest {
                 procUptimeS = 5400, coreOk = true, micExpected = true, micFps = 0.0, idle = true, wsUp = true,
                 wsDownForS = 0, reconnects = 2, wifiRxMbits = 144.0, wifiSsid = null, wifiSignalDbm = -58,
                 batteryPercent = 64, batteryCharging = false, onPower = true, micBlocked = true,
-                wakeLoopAgeS = 0.1, threads = 31,
+                wakeLoopAgeS = 0.1, threads = 31, wakeWord = "hey_jarvis",
             ),
         )
         assertEquals("health", sample["type"]!!.jsonPrimitive.content)
@@ -158,6 +158,21 @@ class RoomProtocolTest {
         assertEquals(64, sample["battery"]!!.jsonObject["percent"]!!.jsonPrimitive.content.toInt())
         assertEquals(JsonPrimitive(true), sample["mic_blocked"])
         assertTrue(sample.toString().length < 4096)
+        // The loaded wake model, as the core keeps it ("wakes on").
+        assertEquals(device["health"]!!.jsonObject["stored"]!!.jsonObject["wake_word"], sample["wake_word"])
+    }
+
+    @Test
+    fun theHealthSampleLeavesOutTheWakeWordUntilAModelLoads() {
+        val f = HealthSample.Facts(
+            seq = 1, ts = 1.5, rssKb = null, cpuPct = null, tempC = null, uptimeS = 1, procUptimeS = 1, coreOk = true,
+            micExpected = true, micFps = 33.3, idle = true, wsUp = true, wsDownForS = 0, reconnects = 0,
+            wifiRxMbits = null, wifiSsid = null, wifiSignalDbm = null, batteryPercent = null, batteryCharging = null,
+            onPower = null, micBlocked = false, wakeLoopAgeS = null, threads = null,
+        )
+        assertEquals(null, HealthSample.build(f)["wake_word"])
+        assertEquals(null, HealthSample.build(f.copy(wakeWord = ""))["wake_word"])
+        assertEquals(JsonPrimitive("domovoi_v1"), HealthSample.build(f.copy(wakeWord = "domovoi_v1"))["wake_word"])
     }
 
     // -- batch 2 item 7: drop-in after the reply, the wake gate's report --

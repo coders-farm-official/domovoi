@@ -164,6 +164,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var callTrack = false
     @Volatile private var callPeer: String? = null
     @Volatile private var wantModels: RoomModels.Files? = null
+    /** The wake word whose model the listening thread has loaded, for the
+     *  health frame's `wake_word` (null until one loads, or after a load
+     *  failed). */
+    @Volatile private var loadedWake: String? = null
     @Volatile private var wakeWord = store.wakeWord
     @Volatile private var wakeThreshold = store.wakeThreshold
     /** The last turn went wrong (ignored as background talk, cut off at the
@@ -716,6 +720,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                         val nets = OrtWakeNets(want.melspectrogram, want.embedding, want.wake)
                         Ears(want, WakeDetector(nets), SileroVad(want.vad))
                     }.onFailure { Log.w(TAG, "could not load the wake word: ${it.message}") }.getOrNull()
+                    loadedWake = ears?.files?.wakeKey
                     update { it.copy(wakeReady = ears != null) }
                 }
                 if (muted) {
@@ -1170,6 +1175,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             micBlocked = _status.value.micBlocked,
             wakeLoopAgeS = if (lastFrameAt > 0) (now - lastFrameAt) / 1000.0 else null,
             threads = RoomDevice.threads(),
+            wakeWord = loadedWake,
         )
     }
 

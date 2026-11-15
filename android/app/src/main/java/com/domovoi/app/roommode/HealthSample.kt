@@ -47,6 +47,10 @@ object HealthSample {
         val threads: Int?,
         /** Which charger (`battery.plugged`: "ac", "usb", "wireless", "dock"). */
         val plugged: String? = null,
+        /** The wake model the detector loaded (its slug, e.g. "domovoi_v1"),
+         *  as a Pi reports it: the dashboard's "wakes on" reads it. Null
+         *  before a model has loaded. */
+        val wakeWord: String? = null,
     )
 
     fun build(f: Facts): JsonObject = buildJsonObject {
@@ -84,6 +88,7 @@ object HealthSample {
             })
         }
         put("mic_blocked", f.micBlocked)
+        f.wakeWord?.takeIf { it.isNotEmpty() }?.let { put("wake_word", it.take(64)) }
     }
 
     private fun round1(v: Double): Double = Math.round(v * 10.0) / 10.0
