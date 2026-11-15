@@ -210,7 +210,8 @@ def test_the_sbom_job_is_read_only_and_secret_free():
 def test_the_signing_job_attaches_the_sboms_through_finish_release():
     job = JOBS["release"]
     assert "sbom" in job["needs"]
-    (down,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/download-artifact@")]
+    (down,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/download-artifact@")
+               and (s.get("with") or {}).get("name") == "release-sboms"]
     assert down["with"] == {"name": "release-sboms", "path": "${{ runner.temp }}/sboms"}
     assert "env" not in down, "the download step is handed no secret"
     (finish,) = [s for s in job["steps"] if str(s.get("name", "")).startswith("Finish the release")]
