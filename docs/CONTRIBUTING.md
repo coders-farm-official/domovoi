@@ -355,12 +355,20 @@ SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
 
 **OpenSSF Scorecard** (`.github/workflows/scorecard.yml`) rates the
 repository's supply-chain practices on every push to `main`, weekly and
-when branch protection changes, publishes the score (the README's badge,
-[scorecard.dev](https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi))
-and lists its findings under Security → Code scanning. scorecard.dev only
+when branch protection changes, and lists its findings under Security →
+Code scanning. It doesn't publish yet: the score goes public on
+[scorecard.dev](https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi),
+with a README badge, once the cheap fixes are in (`publish_results` and
+the badge change together). scorecard.dev only
 takes a result from a workflow that keeps its rules (only its approved
 actions in that job, no `run` steps, no write permission at the top);
 `domovoi/tests/test_scorecard_workflow.py` holds them.
+
+**Dependabot** (`.github/dependabot.yml`) offers weekly update pull requests
+for the workflows' actions, the Python packages and the Android app's Gradle
+dependencies, grouped one per kind, each release at least 14 days old. They
+are the one exception to "no pull requests": review one like any change and
+merge it if CI is green.
 
 New code needs tests in the same PR. The house pattern is tiered: pure
 functions get plain unit tests, handler fast-paths get regex + behavior

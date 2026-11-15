@@ -59,11 +59,11 @@ def test_every_step_is_an_approved_action_pinned_by_sha():
             assert re.search(r"#\s*v\d+\.\d+\.\d+\s*$", line), line
 
 
-def test_it_publishes_and_uploads_the_sarif():
+def test_it_uploads_the_sarif():
     (job,) = DOC["jobs"].values()
     steps = {s["uses"].split("@")[0]: s for s in job["steps"]}
     sc = steps["ossf/scorecard-action"]["with"]
-    assert sc["publish_results"] is True and sc["results_format"] == "sarif"
+    assert sc["results_format"] == "sarif"
     assert steps["github/codeql-action/upload-sarif"]["with"]["sarif_file"] == sc["results_file"]
     assert steps["actions/checkout"]["with"]["persist-credentials"] is False
 
@@ -76,7 +76,11 @@ def test_the_publishing_rules_hold():
     assert str(job["runs-on"]).startswith("ubuntu-")
 
 
-def test_the_readme_shows_the_badge():
+def test_the_badge_and_publishing_go_together():
+    """Private first (owner, 2026-11-15): the score is published, and the
+    README shows its badge, in the same change, never one without the other."""
+    (job,) = DOC["jobs"].values()
+    sc = {s["uses"].split("@")[0]: s for s in job["steps"]}["ossf/scorecard-action"]["with"]
     text = (REPO / "README.md").read_text(encoding="utf-8")
-    assert 'href="https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi"' in text
-    assert "ossf-scorecard/github.com/coders-farm-official/domovoi" in text
+    shows_badge = "ossf-scorecard/github.com/coders-farm-official/domovoi" in text
+    assert sc["publish_results"] is shows_badge

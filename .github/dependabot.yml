@@ -1,0 +1,47 @@
+# Dependabot (owner decision 2026-11-15): weekly update pull requests for
+# the workflows' actions, the server's Python packages and the Android
+# app's Gradle dependencies. These bot pull requests are the one exception
+# to the repo's no-pull-requests rule; a person (or an agent the owner
+# asks) reviews and merges them.
+#
+# cooldown: a release is offered only once it is 14 days old, the same
+# rule the repo keeps for pinned actions and libraries. Updates of one
+# kind come grouped into a single pull request per ecosystem, so a week
+# brings at most a few. Security updates are not held by the cooldown.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      python:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      android:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
