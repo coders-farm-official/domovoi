@@ -86,6 +86,47 @@ public final class PeopleModel {
     /// three screens is up.
     public private(set) var denylistOpen = false
 
+    // ---- voice ID's state (V061) ------------------------------------------
+
+    /// The last voice-id answer, kept with the server it was read from. See
+    /// ``voiceId``.
+    private var voiceIdAnswer: PeopleVoiceIdAnswer?
+
+    /// Where the roster's read hands its voice-id answer. The read is built
+    /// in `init`, before `self` can be captured, so it captures this instead
+    /// and this is pointed at the model once there is one.
+    private let voiceIdRelay: PeopleVoiceIdRelay
+
+    /// Voice ID's state (`GET /api/people/voice-id`), or nil while unknown:
+    /// not read yet, a server older than the route, or the last answer was
+    /// another server's.
+    ///
+    /// **Read with the roster and refreshed with it** (`PeopleScreen.kt:79-83`):
+    /// the same fetch asks both, side by side, so every path that re-reads
+    /// the roster (``start()``, its push, a retry, the server key) re-reads
+    /// this too. Its own failures never fail the roster and never toast;
+    /// what to do with each is ``PeopleVoiceId/next(shown:read:)``.
+    ///
+    /// Handed out only while the answer's server is still the active one
+    /// (`remember(serverUrl)`, `PeopleScreen.kt:94`), so one house's state
+    /// never shows in another ([[read-after-await-wrong-key]]).
+    public var voiceId: VoiceIdStatus? {
+        guard
+            let answer = voiceIdAnswer,
+            ServerCredentials.normalize(answer.server)
+                == ServerCredentials.normalize(container.client.baseURL)
+        else { return nil }
+        return answer.status
+    }
+
+    /// The household notice above the list, or nil (``PeopleVoiceId/notice(_:)``).
+    public var voiceIdNotice: VoiceNotice? { PeopleVoiceId.notice(voiceId) }
+
+    /// Whether `person`'s row carries the relearn dot.
+    public func showsRelearnDot(_ person: Person) -> Bool {
+        PeopleVoiceId.showsRelearnDot(person, voiceId: voiceId)
+    }
+
     public init(
         in container: AppContainer,
         clock: @Sendable @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
@@ -93,12 +134,48 @@ public final class PeopleModel {
         self.container = container
         self.clock = clock
         let client = container.client
+        let relay = PeopleVoiceIdRelay()
+        self.voiceIdRelay = relay
         self.roster = ApiRead(in: container, eventTypes: Self.rosterEvents) {
-            try await client.get(PeoplePath.roster, as: [Person].self)
+            // The server both reads are for, read once, before either
+            // request: the voice-id answer is filed under it, and its request
+            // is held to it (`onlyTo`).
+            let server = client.baseURL
+            async let voice: VoiceIdRead = PeopleVoiceId.load {
+                try await client.raw(method: "GET", path: PeoplePath.voiceId, onlyTo: server)
+            }
+            // A roster failure throws here, which cancels and drops the
+            // voice-id read: the list failed, so nothing it read is used
+            // (Android's `coroutineScope`).
+            let rows = try await client.get(PeoplePath.roster, as: [Person].self)
+            let read: VoiceIdRead = await voice
+            await relay.landed(read, from: server)
+            return rows
         }
         self.denylist = ApiRead(in: container) {
             try await client.get(PeoplePath.denylist, as: [PeopleDenylistEntry].self)
         }
+        relay.model = self
+    }
+
+    /// One voice-id read came back (``PeopleVoiceIdRelay``).
+    ///
+    /// Checked **after** the await, on the main actor where the roster's
+    /// `refresh()` and the server switch also run: a read whose task was
+    /// cancelled (a newer read replaced it, or the screen stopped) is
+    /// dropped, and so is one whose server is no longer the active one.
+    /// What was shown is only carried over when it is that same server's.
+    fileprivate func voiceIdLanded(_ read: VoiceIdRead, from server: String) {
+        guard
+            !Task.isCancelled,
+            ServerCredentials.normalize(container.client.baseURL) == ServerCredentials.normalize(server)
+        else { return }
+        let shown: VoiceIdStatus? = voiceIdAnswer.flatMap { (answer: PeopleVoiceIdAnswer) -> VoiceIdStatus? in
+            ServerCredentials.normalize(answer.server) == ServerCredentials.normalize(server)
+                ? answer.status : nil
+        }
+        voiceIdAnswer = PeopleVoiceId.next(shown: shown, read: read)
+            .map { PeopleVoiceIdAnswer(server: server, status: $0) }
     }
 
     // MARK: - the household
@@ -238,6 +315,9 @@ public final class PeopleModel {
         selectedID = nil
         denylistOpen = false
         filter = ""
+        // The old house's voice ID state goes with it, even before the new
+        // house answers (`remember(serverUrl)`, `PeopleScreen.kt:94`).
+        voiceIdAnswer = nil
         roster.serverChanged()
         denylist.serverChanged()
     }
@@ -249,5 +329,16 @@ public final class PeopleModel {
         }
         roster.stop()
         denylist.stop()
+    }
+}
+
+/// Carries a voice-id answer from the roster's fetch, which runs off the main
+/// actor and is built before the model exists, to the model.
+@MainActor
+final class PeopleVoiceIdRelay {
+    weak var model: PeopleModel?
+
+    func landed(_ read: VoiceIdRead, from server: String) {
+        model?.voiceIdLanded(read, from: server)
     }
 }

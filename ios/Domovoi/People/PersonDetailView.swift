@@ -128,6 +128,12 @@ struct PersonDetailView: View {
             if let note = namesakeNote(person) {
                 namesake(note)
             }
+            // Not recognized by voice yet: between the same-name note and the
+            // stats, as Android and the web order it (`PersonDetail.kt:267-268`).
+            if let relearn = PeopleVoiceId.personNotice(person, voiceId: people.voiceId) {
+                PeopleVoiceNoticeView(notice: relearn, wash: .warn)
+                    .accessibilityIdentifier("person.voiceRelearnNotice")
+            }
             PersonStatGrid(person: person, detail: detail)
             // Where renaming and forgetting are done. Said once, under the
             // tiles, exactly where Android draws the two controls — so a
@@ -140,8 +146,9 @@ struct PersonDetailView: View {
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
             // Rooms that know this voice (1.3.0), after the stats and before
-            // the notes (`PersonDetail.kt:278`). Hidden when there are none.
-            PersonVoiceRoomsSection(name: person.name, rooms: detail.voiceRooms)
+            // the notes (`PersonDetail.kt:289`). Hidden when there are none,
+            // while they relearn, and while voice ID is off.
+            PersonVoiceRoomsSection(person: person, rooms: detail.voiceRooms, voiceId: people.voiceId)
             notes
             // Whose this phone is, and their listening history
             // (`PersonDetail.kt` ProfileTab, 2026-11-12).
@@ -388,15 +395,19 @@ struct PersonStatTile: View {
 /// phone's samples, so the phone records nothing; the hint says how the
 /// person teaches a room themselves.
 ///
-/// Draws nothing when the house has no rooms, or the server is older than the
-/// route.
+/// Draws nothing when the house has no rooms, the server is older than the
+/// route, the person has to introduce themselves again, or voice ID is off
+/// (``PersonVoiceRooms/shows(_:person:voiceId:)``).
 struct PersonVoiceRoomsSection: View {
 
-    let name: String
+    let person: Person
     let rooms: [PersonVoiceRoom]
+    let voiceId: VoiceIdStatus?
+
+    private var name: String { person.name }
 
     var body: some View {
-        if PersonVoiceRooms.shows(rooms) {
+        if PersonVoiceRooms.shows(rooms, person: person, voiceId: voiceId) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(PeopleStrings.voiceRoomsLabel)

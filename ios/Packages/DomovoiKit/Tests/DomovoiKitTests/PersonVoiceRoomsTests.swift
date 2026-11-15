@@ -14,8 +14,14 @@ import XCTest
 final class PersonVoiceRoomsTests: XCTestCase {
 
     private let kitchen = PersonVoiceRoom(roomID: "kitchen", current: true)
-    private let office = PersonVoiceRoom(roomID: "office", legacy: true)
+    private let office = PersonVoiceRoom(roomID: "office", current: true)
     private let garage = PersonVoiceRoom(roomID: "garage")
+
+    /// What a 1.3.0 build from before V061 (never released) sent for a room
+    /// whose only sample was pre-1.3.0; that server still used it.
+    private let oldBuildRoom = PersonVoiceRoom(roomID: "den", legacy: true)
+
+    private let priyaPerson = Person(id: 2, name: "Priya", voiceProfileCount: 2)
 
     private func rooms(_ json: String) -> [PersonVoiceRoom] {
         PersonVoiceRooms.read(Data(json.utf8))
@@ -42,18 +48,33 @@ final class PersonVoiceRoomsTests: XCTestCase {
         let parsed = rooms(
             """
             [
-              {"room_id":"kitchen","current":true,"legacy":false},
-              {"room_id":"office","legacy":true},
+              {"room_id":"kitchen","current":true},
+              {"room_id":"office","current":true,"extra":1},
               {"room_id":"garage"},
-              {"room_id":"den","current":null,"legacy":true,"extra":1}
+              {"room_id":"hall","current":null}
             ]
             """
         )
-        XCTAssertEqual(
-            parsed,
-            [kitchen, office, garage, PersonVoiceRoom(roomID: "den", legacy: true)]
-        )
-        XCTAssertEqual(parsed.map(\.known), [true, true, false, true])
+        XCTAssertEqual(parsed, [kitchen, office, garage, PersonVoiceRoom(roomID: "hall")])
+        XCTAssertEqual(parsed.map(\.known), [true, true, false, false])
+    }
+
+    /// Since V061 a room knows a voice only with a sample of the current
+    /// model: the server sends `current` alone, and false is "not yet".
+    func testARoomIsKnownOnlyWhenCurrent() {
+        let parsed = rooms(#"[{"room_id":"kitchen","current":true},{"room_id":"garage","current":false}]"#)
+        XCTAssertEqual(PersonVoiceRooms.count(parsed), "1/2")
+        XCTAssertEqual(parsed.map(PersonVoiceRooms.chip), ["kitchen", "garage \u{00B7} not yet"])
+        XCTAssertEqual(PersonVoiceRooms.hint(name: "Priya", rooms: parsed), Self.hintFor("Priya", "Priya"))
+    }
+
+    /// The legacy flag is still read and still counts (see ``PersonVoiceRoom``).
+    func testAPreV061BuildsLegacyRoomIsNotCalledNotYet() {
+        let parsed = rooms(#"[{"room_id":"den","current":false,"legacy":true}]"#)
+        XCTAssertEqual(parsed, [oldBuildRoom])
+        XCTAssertEqual(PersonVoiceRooms.count(parsed), "1/1")
+        XCTAssertEqual(parsed.map(PersonVoiceRooms.chip), ["den"])
+        XCTAssertNil(PersonVoiceRooms.hint(name: "Priya", rooms: parsed))
     }
 
     func testDropsRowsThatAreNotRooms() {
@@ -79,7 +100,7 @@ final class PersonVoiceRoomsTests: XCTestCase {
     /// The server's own order (it sorts by room name; a phone never re-sorts).
     func testKeepsTheServersOrder() {
         XCTAssertEqual(
-            rooms(#"[{"room_id":"office","legacy":true},{"room_id":"garage"},{"room_id":"kitchen","current":true}]"#)
+            rooms(#"[{"room_id":"office","current":true},{"room_id":"garage"},{"room_id":"kitchen","current":true}]"#)
                 .map(\.roomID),
             ["office", "garage", "kitchen"]
         )
@@ -119,8 +140,24 @@ final class PersonVoiceRoomsTests: XCTestCase {
     }
 
     func testHiddenWhenThereAreNoRooms() {
-        XCTAssertFalse(PersonVoiceRooms.shows([]))
-        XCTAssertTrue(PersonVoiceRooms.shows([garage]))
+        XCTAssertFalse(PersonVoiceRooms.shows([], person: priyaPerson, voiceId: nil))
+        XCTAssertTrue(PersonVoiceRooms.shows([garage], person: priyaPerson, voiceId: nil))
+    }
+
+    func testHiddenWhileThePersonHasToIntroduceThemselvesAgain() {
+        let relearning = Person(id: 2, name: "Priya", voiceProfileCount: 0, voiceRelearn: true)
+        XCTAssertFalse(PersonVoiceRooms.shows([kitchen, garage], person: relearning, voiceId: nil))
+        XCTAssertFalse(
+            PersonVoiceRooms.shows([kitchen, garage], person: relearning, voiceId: VoiceIdStatus(ready: true, relearn: 1))
+        )
+    }
+
+    func testHiddenWhileVoiceIdCannotRun() {
+        let off = VoiceIdStatus(ready: false, problem: "The voice model isn't on this server yet.")
+        XCTAssertFalse(PersonVoiceRooms.shows([kitchen, garage], person: priyaPerson, voiceId: off))
+        XCTAssertTrue(
+            PersonVoiceRooms.shows([kitchen, garage], person: priyaPerson, voiceId: VoiceIdStatus(ready: true))
+        )
     }
 
     func testAServerWithoutTheRouteHidesTheSectionQuietly() async {
@@ -165,7 +202,7 @@ final class PersonVoiceRoomsTests: XCTestCase {
         let roomsStatus = Shared<Int?>(nil)
 
         static let priyaRooms = #"[{"room_id":"kitchen","current":true},{"room_id":"garage"}]"#
-        static let jordanRooms = #"[{"room_id":"office","legacy":true}]"#
+        static let jordanRooms = #"[{"room_id":"office","current":true}]"#
 
         func answer(_ request: URLRequest) -> StubURLProtocol.Answer {
             guard

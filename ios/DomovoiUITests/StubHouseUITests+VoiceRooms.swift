@@ -7,7 +7,8 @@ import XCTest
 /// The stub's `voicerooms` fixture (`batch-2026-11-14/voicerooms/stubhouse.patch`)
 /// mirrors `people.py:401`: every satellite room (kitchen, study) for every
 /// person, plus a room with a sample and no satellite. Jordan knows kitchen
-/// (current) and porch (legacy) and not study, so `2/3` with one `not yet`
+/// and porch (both current; the server stopped sending `legacy` at V061) and
+/// not study, so `2/3` with one `not yet`
 /// and the hint; Alex knows both rooms, so `2/2` and no hint.
 /// `POST /api/_test/voice-rooms {"mode": "missing" | "empty"}` makes the route
 /// a 404 (a server before 1.3.0) or an empty list (a house with no rooms);
@@ -72,7 +73,7 @@ extension StubHouseUITests {
         XCTAssertTrue(app.staticTexts[VoiceRoomsUnderTest.kitchen].exists, "no kitchen chip")
         XCTAssertTrue(
             app.staticTexts[VoiceRoomsUnderTest.porch].exists,
-            "no porch chip — a legacy sample still counts, and a room with a sample but no "
+            "no porch chip — a room with a sample but no "
                 + "satellite is still listed"
         )
         XCTAssertFalse(

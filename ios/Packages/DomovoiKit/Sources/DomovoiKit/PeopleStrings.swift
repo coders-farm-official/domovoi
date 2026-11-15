@@ -170,6 +170,46 @@ public enum PeopleStrings {
     public static let voiceRoomsWhoUnnamed = "they"
     public static let voiceRoomsSaidUnnamed = "\u{2026}"
 
+    // MARK: - voice ID's state (V061)
+
+    /// `VOICE_ID_OFF_TITLE` (`PeopleModels.kt:240`).
+    public static let voiceIdOffTitle = "Voice recognition is off"
+
+    /// `VOICE_RELEARN_TITLE` (`PeopleModels.kt:241`).
+    public static let voiceRelearnTitle = "Domovoi needs to learn voices again"
+
+    /// `PERSON_RELEARN_TITLE` (`PeopleModels.kt:242`).
+    public static let personRelearnTitle = "Not recognized by voice yet"
+
+    /// `RELEARN_DOT_DESCRIPTION` (`PeopleModels.kt:243`): what the roster's
+    /// idle dot means, said to VoiceOver.
+    public static let relearnDotDescription =
+        "has to say \u{201C}my name is \u{2026}\u{201D} again to be recognized by voice"
+
+    /// The household notice's body (`voiceIdNotice`, `PeopleModels.kt:253-259`).
+    ///
+    /// Android's own characters, kept exactly: an ASCII apostrophe in
+    /// "can't", a curly one (U+2019) in "won’t", curly quotes and an ellipsis
+    /// (U+2026) around "my name is …".
+    public static func voiceRelearnBody(people: Int) -> String {
+        let left = people == 1 ? "1 person still has" : "\(people) people still have"
+        return "Voice recognition was upgraded, and voices it knew before can't be used. "
+            + "Until each person says \u{201C}my name is \u{2026}\u{201D} in a room and answers yes, Domovoi "
+            + "won\u{2019}t know who is speaking. \(left) to."
+    }
+
+    /// The profile's relearn notice body (`personVoiceRelearnNotice`,
+    /// `PeopleModels.kt:266-273`, with 2766a325's possessive). `name` is
+    /// already trimmed; a blank one says "their", "they" and "…".
+    public static func personRelearnBody(name: String) -> String {
+        let whose = name.isEmpty ? "their" : name + "\u{2019}s"
+        let who = name.isEmpty ? "they" : name
+        let said = name.isEmpty ? "\u{2026}" : name
+        return "Voice recognition was upgraded, so Domovoi has to learn \(whose) voice again. "
+            + "To be recognized again, \(who) can say \u{201C}my name is \(said)\u{201D} "
+            + "in a room and answer yes."
+    }
+
     // MARK: - the memory tab
 
     /// `PersonTabs.kt:163`.
