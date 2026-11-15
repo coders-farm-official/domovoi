@@ -93,6 +93,17 @@ def _bool(v: Any) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
+_WAKE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def wake_slug(v: Any) -> str | None:
+    """A wake model's slug ("domovoi_v1", "hey_jarvis", a trained word's),
+    the shape a hello's ``wake_word`` takes; None for anything else."""
+    if isinstance(v, str) and _WAKE_SLUG_RE.match(v.strip()):
+        return v.strip()
+    return None
+
+
 def _dbm(v: Any) -> float | int | None:
     n = _num(v)
     return n if n is not None and -120 <= n <= 0 else None
@@ -275,6 +286,11 @@ SAMPLE_FIELDS: dict[str, Any] = {
     # dashboard left its own threshold on the satellite; the room drawer
     # says so. An older satellite sends neither.
     "wake_threshold": _num, "wake_threshold_setting": _num,
+    # 2026-11-15: the wake model the detector loaded (its slug: the model
+    # file's stem or the built-in's name), so the dashboard can say which
+    # word the room answers to (GET /api/satellites `wakes_on`). A phone in
+    # room mode may send it the same way. Older software sends none.
+    "wake_word": wake_slug,
 }
 
 

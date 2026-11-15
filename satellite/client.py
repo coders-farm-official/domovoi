@@ -4396,19 +4396,26 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
     def _health_wake_facts(self) -> dict[str, Any]:
         """`wake_threshold` (in effect: what the running detector loaded, or
-        what it would load) and `wake_threshold_setting` ([wake] threshold).
-        Empty when they can't be read."""
+        what it would load) and `wake_threshold_setting` ([wake] threshold),
+        and `wake_word`: the wake model the detector actually loaded (its
+        slug, the stem of the model file, or the built-in's name, e.g.
+        "domovoi_v1", "hey_jarvis"), so the dashboard can say which word the
+        room answers to. `wake_word` is absent until a model has loaded; the
+        thresholds are absent when they can't be read."""
+        out: dict[str, Any] = {}
         try:
             setting = float(self.cfg.wake_threshold)
             in_effect = getattr(self, "_wake_threshold", None)
             if in_effect is None:
                 in_effect = _effective_wake_threshold(self.cfg)
-            return {
-                "wake_threshold": round(float(in_effect), 3),
-                "wake_threshold_setting": round(setting, 3),
-            }
+            out["wake_threshold"] = round(float(in_effect), 3)
+            out["wake_threshold_setting"] = round(setting, 3)
         except Exception:  # noqa: BLE001 — a health sample never fails on this
-            return {}
+            out = {}
+        loaded = getattr(self, "_wake_model_loaded", None)
+        if isinstance(loaded, str) and loaded:
+            out["wake_word"] = loaded[:64]
+        return out
 
     def _health_link_facts(self) -> dict[str, Any]:
         """The last sample's view of the network, for an offline_diag entry
@@ -5743,6 +5750,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 wakeword_models=[self._wake_word],
                 inference_framework="onnx",
             )
+        # What the health sample reports as this room's wake word: the model
+        # that loaded, by the name openWakeWord keys it on (the file's stem,
+        # or the built-in's name). Set only once the load succeeded.
+        self._wake_model_loaded = Path(model_path).stem if model_path else self._wake_word
         # Every reset from here on reuses the noise features this load just
         # computed (see _WAKE_RESET_NOISE_SAMPLES) — one of them runs
         # between the wake acknowledgement and the capture.

@@ -53,7 +53,14 @@ from domovoi.admin_auth import (
     require_device,
     require_device_read,
 )
-from domovoi import command_captures, egress, quiet_hours, room_battery
+from domovoi import (
+    command_captures,
+    egress,
+    quiet_hours,
+    room_battery,
+    satellite_health,
+    wake_default,
+)
 from domovoi.db.repositories import notify_timers_changed
 from domovoi.satellite_abilities import BOARDS_WITHOUT_VOICE
 
@@ -88,6 +95,7 @@ from web.backend.schemas import (
     RoomBatteryAlertsUpdate,
     RoomBatteryWarning,
     RoomBatteryWarnings,
+    RoomWakeWord,
     RoomQuietHours,
     RoomQuietHoursUpdate,
     RoomLabelRequest,
@@ -147,9 +155,11 @@ async def list_satellites() -> list[Satellite]:
     heard = await _last_heard_or_empty()
     wake_phrases = await _wake_phrases_or_empty()
     batteries = await _batteries_or_empty()
+    wake_facts = await _room_wake_facts_or_empty()
     return [
         await _satellite_for(r, snapshot, pairings, meta, captures, own_only=own_only, heard=heard,
-                             wake_phrases=wake_phrases, batteries=batteries)
+                             wake_phrases=wake_phrases, batteries=batteries,
+                             wake_facts=wake_facts)
         for r in rooms
     ]
 
@@ -870,7 +880,8 @@ async def get_satellite(room_id: str) -> Satellite:
     heard = await _last_heard_or_empty(room_id)
     return await _satellite_for(match, snapshot, pairings, meta, captures, own_only=own_only,
                                 heard=heard, wake_phrases=await _wake_phrases_or_empty(),
-                                batteries=await _batteries_or_empty(room_id))
+                                batteries=await _batteries_or_empty(room_id),
+                                wake_facts=await _room_wake_facts_or_empty(room_id))
 
 
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
@@ -2129,6 +2140,49 @@ async def _wake_phrases_or_empty() -> dict[str, str]:
         return {}
 
 
+async def _room_wake_facts_or_empty(room_id: str | None = None) -> dict[str, Any]:
+    """What each room's ``wakes_on`` is made from: ``names`` (trained words'
+    slug -> name), ``states`` (room -> its ``room_wake_words`` row) and
+    ``samples`` (room -> (``wake_word``, received_at) of its LATEST health
+    sample; the word is None when that sample didn't carry one). {} on any
+    failure: the roster must not fail over a wake word."""
+    try:
+        async with session_scope() as s:
+            names = await wake_default.word_names(s)
+            states = await wake_default.room_states(s, room_id)
+            where = "" if room_id is None else "WHERE room_id = :r "
+            rows = (await s.execute(text(
+                "SELECT DISTINCT ON (room_id) room_id, sample->>'wake_word', received_at "
+                f"FROM satellite_health {where}ORDER BY room_id, received_at DESC"),
+                {} if room_id is None else {"r": room_id})).all()
+        return {"names": names, "states": states,
+                "samples": {r[0]: (r[1], r[2]) for r in rows}}
+    except Exception as e:  # noqa: BLE001
+        log.debug("room wake words unavailable: %s", e)
+        return {}
+
+
+def _reported_wake_word(sample: tuple[Any, Any] | None, hello_word: str | None,
+                        connected_at: Any) -> str | None:
+    """The word the room device itself reported: its latest health
+    sample's (the model it loaded) when that sample came since it last
+    connected, else what its hello said, else an older sample's."""
+    word, at = sample if sample else (None, None)
+    word = satellite_health.wake_slug(word)
+    if word and (connected_at is None or (at is not None and at >= connected_at)):
+        return word
+    return hello_word or word
+
+
+def _wakes_on(room_id: str, hello_word: str | None, connected_at: Any,
+              facts: dict[str, Any] | None) -> RoomWakeWord:
+    facts = facts or {}
+    reported = _reported_wake_word((facts.get("samples") or {}).get(room_id), hello_word,
+                                   connected_at)
+    return RoomWakeWord(**wake_default.room_word(
+        reported, (facts.get("states") or {}).get(room_id), facts.get("names")))
+
+
 def _latest(*times: Any) -> Any:
     """The latest of the datetimes given (None ignored), or None."""
     known = [t for t in times if t is not None]
@@ -2190,6 +2244,7 @@ async def _satellite_for(
     heard: dict[str, Any] | None = None,
     wake_phrases: dict[str, str] | None = None,
     batteries: dict[str, Any] | None = None,
+    wake_facts: dict[str, Any] | None = None,
 ) -> Satellite:
     room_id = room["room_id"]
     active_rooms = set(snapshot.get("active_rooms") or [])
@@ -2345,6 +2400,7 @@ async def _satellite_for(
         settings_ignored=ignored,
         wake_word=wake_word,
         wake_phrase=(wake_phrases or {}).get(wake_word) if wake_word else None,
+        wakes_on=_wakes_on(room_id, wake_word, room["last_connected_at"], wake_facts),
         battery=_battery_for(room_id, board, online, batteries),
     )
 

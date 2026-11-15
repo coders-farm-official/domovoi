@@ -747,10 +747,33 @@ class Satellite(BaseModel):
     # registry (null for the built-in words). The user manual says these.
     wake_word: str | None = None
     wake_phrase: str | None = None
+    # Which word the room wakes on, by name, for the room's card and drawer
+    # ("Wakes on: Domovoi"): the model the room device reported loading, else
+    # the server's record of the word it gave the room (RoomWakeWord).
+    wakes_on: RoomWakeWord | None = None
     # A phone room's battery (domovoi/room_battery.py, V040): its last
     # report, kept after it goes offline. Null for every other room (a Pi
     # has no battery; a laptop's stays on its Health card).
     battery: RoomBattery | None = None
+
+
+class RoomWakeWord(BaseModel):
+    """Which wake word a room answers to (domovoi/wake_default.py
+    ``room_word``). ``source``: ``device`` — the model the room device
+    reported loading (its health sample, else its hello); ``assigned`` /
+    ``chosen`` — no report, the household default the server gave it / the
+    word an admin pushed; ``pending`` — it is waiting for this word's model;
+    ``unknown`` — nothing says (a room older than the household default, on
+    software that doesn't report its word): ``name`` is null and ``text``
+    says so. ``pending_*``: the word a room that reports its own is still
+    waiting to be given. ``text``: the line the dashboard shows after
+    "Wakes on:"."""
+    slug: str | None = None
+    name: str | None = None
+    source: Literal["device", "assigned", "chosen", "pending", "unknown"] = "unknown"
+    pending_slug: str | None = None
+    pending_name: str | None = None
+    text: str
 
 
 class RoomBattery(BaseModel):
