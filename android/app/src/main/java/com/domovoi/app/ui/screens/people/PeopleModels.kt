@@ -44,6 +44,10 @@ internal data class Person(
     /** How many phones and browsers are claimed as this person ("this is
      *  me", `PUT /api/devices/{id}/person`). */
     val device_count: Int = 0,
+    /** Their voice samples went with the speaker model 1.3.0 replaced (V061)
+     *  and they have none of the current one: nobody is named by a voice until
+     *  it says "my name is …" again. Absent (false) on an older server. */
+    val voice_relearn: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
@@ -99,9 +103,13 @@ internal fun renameFailureText(e: Throwable): String {
 // Read-only: rooms never use a phone's samples, so the phone records nothing.
 // ---------------------------------------------------------------------------
 
-/** One room and whether it has a satellite sample of this person's voice
- *  (server VoiceRoom): [current] one in the 1.3.0 embedding, [legacy] one
- *  from before 1.3.0 only, which still counts. */
+/** One room and whether it knows this person's voice (server VoiceRoom):
+ *  [current] a satellite sample of the current speaker model. Since V061 that
+ *  is the only kind that counts, and the server no longer sends [legacy]. It
+ *  is still read because a 1.3.0 build from before V061 (main between
+ *  67dea58a and 79acc157, never released) sent `legacy: true` for a room
+ *  whose only sample was pre-1.3.0, and on that server such a room did know
+ *  the voice; calling it "not yet" there would be wrong. */
 @Serializable
 internal data class VoiceRoom(
     val room_id: String = "",
@@ -141,8 +149,11 @@ internal suspend fun loadVoiceRooms(get: suspend () -> JsonElement): List<VoiceR
         null
     }
 
-/** Whether the section shows at all: not when the house has no rooms. */
-internal fun showVoiceRooms(rooms: List<VoiceRoom>): Boolean = rooms.isNotEmpty()
+/** Whether the section shows at all: not when the house has no rooms, not
+ *  while voice ID can't run ([voiceIdOff]), and not while the person has to
+ *  introduce themselves again (the relearn notice says so instead). */
+internal fun showVoiceRooms(person: Person, rooms: List<VoiceRoom>, voiceId: VoiceIdStatus?): Boolean =
+    rooms.isNotEmpty() && !person.voice_relearn && !voiceIdOff(voiceId)
 
 /** "known/total", e.g. "2/3". */
 internal fun voiceRoomsCount(rooms: List<VoiceRoom>): String = "${rooms.count { it.known }}/${rooms.size}"
@@ -159,6 +170,115 @@ internal fun voiceRoomsHint(name: String, rooms: List<VoiceRoom>): String? {
     return "Rooms recognize a voice best once they have heard it themselves. In each room " +
         "marked “not yet”, $who can say “my name is $said” and answer yes."
 }
+
+// ---------------------------------------------------------------------------
+// Voice ID's state (GET /api/people/voice-id, V061) — the web People page's
+// VoiceIdNotice and PersonVoiceRelearn. 1.3.0 changed the speaker model and
+// voices the old one learned can't be used, so nobody is recognized until
+// they say "my name is …" again. When voice ID can't run at all (its model
+// isn't on the server) that is all the page says: asking anyone to introduce
+// themselves then would be a control that can't do what it says.
+// ---------------------------------------------------------------------------
+
+/** Server VoiceIdStatus. [ready] defaults to true so an answer missing it
+ *  never claims voice ID is off; [problem] is the server's own words. */
+@Serializable
+internal data class VoiceIdStatus(
+    val ready: Boolean = true,
+    val problem: String? = null,
+    val relearn: Int = 0,
+)
+
+/** One read of the voice-id route. */
+internal sealed class VoiceIdRead {
+    data class Known(val status: VoiceIdStatus) : VoiceIdRead()
+
+    /** The server has no such route: show nothing. */
+    data object Absent : VoiceIdRead()
+
+    /** Anything else went wrong: keep what is shown. */
+    data object Failed : VoiceIdRead()
+}
+
+/** A voice-id answer, or null when it isn't an object. */
+internal fun parseVoiceIdStatus(json: JsonElement): VoiceIdStatus? =
+    (json as? JsonObject)?.let { obj ->
+        runCatching { DomovoiJson.decodeFromJsonElement(VoiceIdStatus.serializer(), obj) }.getOrNull()
+    }
+
+/**
+ * Reads voice ID's state with [get]. A server from before V061 has no such
+ * route: FastAPI answers 404, or 422 when `/api/people/{person_id}` takes
+ * "voice-id" for a person id that isn't a number. Either is
+ * [VoiceIdRead.Absent]: nothing new is shown. Any other failure is
+ * [VoiceIdRead.Failed]; the page keeps what it showed and raises no toast.
+ */
+internal suspend fun loadVoiceId(get: suspend () -> JsonElement): VoiceIdRead =
+    try {
+        parseVoiceIdStatus(get())?.let { VoiceIdRead.Known(it) } ?: VoiceIdRead.Failed
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: ApiException) {
+        if (e.status == 404 || e.status == 422) VoiceIdRead.Absent else VoiceIdRead.Failed
+    } catch (e: Exception) {
+        VoiceIdRead.Failed
+    }
+
+/** What to show after [read], given what was [shown] before it. */
+internal fun nextVoiceId(shown: VoiceIdStatus?, read: VoiceIdRead): VoiceIdStatus? = when (read) {
+    is VoiceIdRead.Known -> read.status
+    VoiceIdRead.Absent -> null
+    VoiceIdRead.Failed -> shown
+}
+
+/** Voice ID is known not to run on this server (unknown is not "off"). */
+internal fun voiceIdOff(voiceId: VoiceIdStatus?): Boolean = voiceId != null && !voiceId.ready
+
+/** A notice's bold line and, when there is one, the line under it. */
+internal data class VoiceNotice(val title: String, val body: String?)
+
+internal const val VOICE_ID_OFF_TITLE = "Voice recognition is off"
+internal const val VOICE_RELEARN_TITLE = "Domovoi needs to learn voices again"
+internal const val PERSON_RELEARN_TITLE = "Not recognized by voice yet"
+internal const val RELEARN_DOT_DESCRIPTION = "has to say “my name is …” again to be recognized by voice"
+
+/** The household notice at the top of the People list (web VoiceIdNotice),
+ *  or null when there is nothing to say. */
+internal fun voiceIdNotice(voiceId: VoiceIdStatus?): VoiceNotice? {
+    if (voiceId == null) return null
+    if (!voiceId.ready) {
+        return VoiceNotice(VOICE_ID_OFF_TITLE, voiceId.problem?.takeIf { it.isNotBlank() })
+    }
+    if (voiceId.relearn <= 0) return null
+    val left = if (voiceId.relearn == 1) "1 person still has" else "${voiceId.relearn} people still have"
+    return VoiceNotice(
+        VOICE_RELEARN_TITLE,
+        "Voice recognition was upgraded, and voices it knew before can't be used. " +
+            "Until each person says “my name is …” in a room and answers yes, Domovoi " +
+            "won’t know who is speaking. $left to.",
+    )
+}
+
+/** The profile's notice for someone who has to introduce themselves again
+ *  (web PersonVoiceRelearn), or null. */
+internal fun personVoiceRelearnNotice(person: Person, voiceId: VoiceIdStatus?): VoiceNotice? {
+    if (!person.voice_relearn || voiceIdOff(voiceId)) return null
+    val name = person.name.trim()
+    return VoiceNotice(
+        PERSON_RELEARN_TITLE,
+        "Voice recognition was upgraded, so Domovoi has to learn ${if (name.isEmpty()) "their" else "$name’s"} voice again. " +
+            "To be recognized again, ${name.ifEmpty { "they" }} can say “my name is ${name.ifEmpty { "…" }}” " +
+            "in a room and answer yes.",
+    )
+}
+
+/** The roster row's idle dot ([RELEARN_DOT_DESCRIPTION]); not while voice
+ *  ID is off, for the same reason as the notices. */
+internal fun showRelearnDot(person: Person, voiceId: VoiceIdStatus?): Boolean =
+    person.voice_relearn && !voiceIdOff(voiceId)
+
+/** The People list's answer: the people, and voice ID's state read with them. */
+internal data class PeoplePage(val people: List<Person>, val voiceId: VoiceIdRead)
 
 @Serializable
 internal data class PersonMemory(

@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,10 +38,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowWidthSizeClass
+import com.domovoi.app.LocalApp
 import com.domovoi.app.net.ApiState
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
@@ -56,6 +62,8 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.isLive
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 /**
  * People page — household roster + per-person profile / memory / sessions /
@@ -66,14 +74,27 @@ import com.domovoi.app.ui.theme.Domovoi
  */
 @Composable
 fun PeopleScreen(embedded: Boolean = false) {
+    // Voice ID's state is read with the list (alongside it) and refreshed
+    // with it; its own failures never fail the list (see [loadVoiceId]).
     val peopleState = rememberApi(eventTypes = setOf("people.last_seen.changed")) { app ->
-        app.api.get("/api/people").decode<List<Person>>()
+        coroutineScope {
+            val voiceId = async { loadVoiceId { app.api.get("/api/people/voice-id") } }
+            PeoplePage(app.api.get("/api/people").decode<List<Person>>(), voiceId.await())
+        }
     }
     val denylistState = rememberApi { app ->
         app.api.get("/api/denylist").decode<List<DenylistEntry>>()
     }
 
-    val people = peopleState.data ?: emptyList()
+    val people = peopleState.data?.people ?: emptyList()
+    // What the notices go by: the last answer, kept across a failed read and
+    // dropped when the server changes (one server's state never shows as
+    // another's).
+    val serverUrl = LocalApp.current.prefs.serverUrl.value
+    var voiceId by remember(serverUrl) { mutableStateOf<VoiceIdStatus?>(null) }
+    LaunchedEffect(peopleState.data) {
+        peopleState.data?.let { voiceId = nextVoiceId(voiceId, it.voiceId) }
+    }
     val denylistCount = denylistState.data?.size ?: 0
     val liveCount = people.count { isLive(it.last_seen_at) }
 
@@ -102,15 +123,18 @@ fun PeopleScreen(embedded: Boolean = false) {
                         onForgotten = { selectedId = null; peopleState.refresh() },
                         modifier = Modifier.fillMaxSize(),
                         onRenamed = { peopleState.refresh() },
+                        voiceId = voiceId,
                     )
                 }
                 else -> {
                     PeopleHeader(embedded, sub)
                     Spacer(Modifier.height(12.dp))
+                    VoiceIdNoticeBox(voiceId)
                     RosterPane(
                         state = peopleState,
                         search = search,
                         onSearch = { search = it },
+                        voiceId = voiceId,
                         selectedId = null,
                         denylistOpen = false,
                         denylistCount = denylistCount,
@@ -123,11 +147,13 @@ fun PeopleScreen(embedded: Boolean = false) {
         } else {
             PeopleHeader(embedded, sub)
             Spacer(Modifier.height(12.dp))
+            VoiceIdNoticeBox(voiceId)
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 RosterPane(
                     state = peopleState,
                     search = search,
                     onSearch = { search = it },
+                    voiceId = voiceId,
                     selectedId = selectedId,
                     denylistOpen = denylistOpen,
                     denylistCount = denylistCount,
@@ -145,6 +171,7 @@ fun PeopleScreen(embedded: Boolean = false) {
                             onForgotten = { selectedId = null; peopleState.refresh() },
                             modifier = Modifier.fillMaxSize(),
                             onRenamed = { peopleState.refresh() },
+                            voiceId = voiceId,
                         )
                         else -> DomovoiCard(Modifier.fillMaxSize()) {
                             EmptyState(
@@ -157,6 +184,19 @@ fun PeopleScreen(embedded: Boolean = false) {
             }
         }
     }
+}
+
+/** Voice ID's household notice (web VoiceIdNotice) above the list, with the
+ *  gap the web gives it; nothing when there is nothing to say. */
+@Composable
+private fun VoiceIdNoticeBox(voiceId: VoiceIdStatus?) {
+    val notice = voiceIdNotice(voiceId) ?: return
+    VoiceNoticeBox(
+        notice,
+        if (voiceIdOff(voiceId)) Domovoi.colors.warnSoft else Domovoi.colors.sunken,
+        Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
+    Spacer(Modifier.height(12.dp))
 }
 
 /** The page's header; under Settings' own ([embedded]) only the counts. */
@@ -175,7 +215,8 @@ private fun PeopleHeader(embedded: Boolean, sub: String) {
 
 @Composable
 private fun RosterPane(
-    state: ApiState<List<Person>>,
+    state: ApiState<PeoplePage>,
+    voiceId: VoiceIdStatus?,
     search: String,
     onSearch: (String) -> Unit,
     selectedId: Long?,
@@ -185,7 +226,7 @@ private fun RosterPane(
     onDenylist: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val people = state.data ?: emptyList()
+    val people = state.data?.people ?: emptyList()
     val filtered = people.filter { search.isBlank() || it.name.contains(search, ignoreCase = true) }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -228,6 +269,7 @@ private fun RosterPane(
                         RosterRow(
                             p = p,
                             active = !denylistOpen && selectedId == p.id,
+                            relearnDot = showRelearnDot(p, voiceId),
                             onClick = { onSelect(p.id) },
                         )
                         HorizontalDivider(color = Domovoi.colors.borderSoft)
@@ -270,7 +312,7 @@ private fun RosterPane(
 }
 
 @Composable
-private fun RosterRow(p: Person, active: Boolean, onClick: () -> Unit) {
+private fun RosterRow(p: Person, active: Boolean, relearnDot: Boolean, onClick: () -> Unit) {
     val live = isLive(p.last_seen_at)
     Row(
         Modifier
@@ -296,6 +338,12 @@ private fun RosterRow(p: Person, active: Boolean, onClick: () -> Unit) {
                 )
                 if (live) StatusDot(Tone.Ok, live = true)
                 if (p.namesakes > 0) StatusDot(Tone.Warn)
+                if (relearnDot) {
+                    StatusDot(
+                        Tone.Idle,
+                        modifier = Modifier.semantics { contentDescription = RELEARN_DOT_DESCRIPTION },
+                    )
+                }
             }
             Text(
                 "${rosterNameTag(p)}${relTime(p.last_seen_at)} · ${p.presence_tier ?: "high"}",
