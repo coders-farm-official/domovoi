@@ -227,6 +227,11 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
     public let autoplay: Bool?
     public let upNext: RoomUpNext?
 
+    /// The shared queue this room hears (groups, V060), or nil. A member
+    /// room's queue **is** its host's on the wire: the rows are not
+    /// recomputed here.
+    public let group: NowPlayingGroup?
+
     public init(
         roomID: String = "",
         items: [QueueItem] = [],
@@ -236,7 +241,8 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
         guest: Bool = false,
         sessionID: String? = nil,
         autoplay: Bool? = nil,
-        upNext: RoomUpNext? = nil
+        upNext: RoomUpNext? = nil,
+        group: NowPlayingGroup? = nil
     ) {
         self.roomID = roomID
         self.items = items
@@ -247,10 +253,11 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
         self.sessionID = sessionID
         self.autoplay = autoplay
         self.upNext = upNext
+        self.group = group
     }
 
     private enum CodingKeys: String, CodingKey {
-        case items, editable, guest, autoplay
+        case items, editable, guest, autoplay, group
         case sessionID = "session_id"
         case upNext = "up_next"
         case roomID = "room_id"
@@ -292,6 +299,7 @@ public struct RoomQueue: Equatable, Sendable, Decodable {
         sessionID = try? values.decodeIfPresent(String.self, forKey: .sessionID)
         autoplay = try? values.decodeIfPresent(Bool.self, forKey: .autoplay)
         upNext = try? values.decodeIfPresent(RoomUpNext.self, forKey: .upNext)
+        group = try? values.decodeIfPresent(NowPlayingGroup.self, forKey: .group)
     }
 
     /// Can this phone empty the whole queue?

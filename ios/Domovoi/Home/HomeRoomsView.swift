@@ -112,6 +112,16 @@ struct HomeRoomsView: View {
     /// A room's queue, one tap from its row (21b5ccfb, `HomeSections.kt:793`):
     /// nil draws no queue button.
     var tools: QueueTools?
+
+    /// Groups (V060): the household's named groups, whether this phone is
+    /// shown the share menu at all (household only: never a guest, never a
+    /// phone the server refused, never on a server older than groups), and
+    /// a choice picked. ``HomeView`` owns the request and the busy marks, as
+    /// it owns the transport's.
+    var groups: [MusicGroup] = []
+    var groupsShown = false
+    var onGroup: (HomeRoom, GroupChoice) -> Void = { _, _ in }
+
     @State private var queueRoom: RoomQueueSheetItem?
 
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -259,6 +269,7 @@ struct HomeRoomsView: View {
                     identity(room, pill: pill)
                     HStack(spacing: 4) {
                         queueButton(room)
+                        groupMenu(room)
                         if !verbs.isEmpty { transport(room, verbs: verbs) }
                     }
                 }
@@ -267,6 +278,7 @@ struct HomeRoomsView: View {
                     identity(room, pill: pill)
                     Spacer(minLength: 8)
                     queueButton(room)
+                    groupMenu(room)
                     if !verbs.isEmpty { transport(room, verbs: verbs) }
                 }
             }
@@ -283,6 +295,42 @@ struct HomeRoomsView: View {
         if room.online, !stale {
             RoomQueueButton(room: room.roomID, tools: tools) {
                 queueRoom = RoomQueueSheetItem(room: room.roomID)
+            }
+        }
+    }
+
+    /// The room's share menu (`HomeGroupMenu`, `home.jsx` ~:639): other rooms
+    /// (a named group, every room) hear what plays here, this room hears
+    /// another, or it leaves its group — ``groupChoices(_:rooms:groups:)``
+    /// decides which, so a quiet room gets only the joins and "leave" is
+    /// only ever a member's. Nothing at all when there is no choice, for a
+    /// room that is not connected, while the core is down, or when the
+    /// household's controls are not this phone's.
+    @ViewBuilder
+    private func groupMenu(_ room: HomeRoom) -> some View {
+        if groupsShown, room.online, !stale {
+            let choices = groupChoices(room, rooms: rooms, groups: groups)
+            if !choices.isEmpty {
+                Menu {
+                    ForEach(choices) { choice in
+                        Button {
+                            onGroup(room, choice)
+                        } label: {
+                            Text(choice.label)
+                            if let hint = choice.hint {
+                                Text(hint)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "person.2")
+                        .font(.body)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .foregroundStyle(Color.brandInk)
+                .disabled(busy(room.roomID))
+                .accessibilityLabel(GroupStrings.menuLabel(room.roomID))
             }
         }
     }
@@ -469,6 +517,7 @@ struct HomeRoomsView: View {
         case .inCall: return "phone.fill"
         case .screenStopped: return "tv.slash"
         case .weakWifi: return "wifi.slash"
+        case .group: return "hifispeaker.2"
         }
     }
 

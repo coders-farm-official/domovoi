@@ -68,6 +68,7 @@ struct MusicQueueView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier(Self.statusID)
                 }
+                groupHead
                 headControls
                 watchOnly
                 // Search to add, at the top: only where adding works;
@@ -174,6 +175,47 @@ struct MusicQueueView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
+
+    /// The room shares one queue with other rooms (groups, V060): an edit
+    /// here is everyone's. "Upstairs · shared with 2 other rooms (garage,
+    /// office)", and "leave" for a household phone (`music.jsx` ~:1796) —
+    /// this room stops, the others play on. The rows below are already the
+    /// host's: the server answers a member room with its host's queue.
+    @ViewBuilder
+    private var groupHead: some View {
+        if let line = queue.groupLine {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: "hifispeaker.2")
+                    .foregroundStyle(Color.fgMuted)
+                    .accessibilityHidden(true)
+                Text(line)
+                    .font(.footnote)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(Self.groupID)
+                Spacer(minLength: 8)
+                if queue.offersLeaveGroup {
+                    Button {
+                        queue.leaveGroup()
+                    } label: {
+                        Label(GroupStrings.leave, systemImage: "rectangle.portrait.and.arrow.right")
+                            .font(.subheadline)
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.brandInk)
+                    .disabled(queue.busy)
+                    .accessibilityLabel(GroupStrings.leaveTheGroup)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    static let groupID = "room-queue-group"
 
     /// Why the controls are not there, when the server said why.
     @ViewBuilder

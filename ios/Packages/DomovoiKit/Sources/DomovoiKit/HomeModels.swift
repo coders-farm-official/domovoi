@@ -186,14 +186,21 @@ public struct HomeNowPlaying: Equatable, Sendable, Decodable {
     public let song: HomeSong?
     public let elapsedSec: Double?
 
-    public init(state: String? = nil, song: HomeSong? = nil, elapsedSec: Double? = nil) {
+    /// The shared queue this room hears (groups, V060), or nil: absent, null,
+    /// or a server older than groups. A member room's `state`, `song` and
+    /// `elapsed_sec` are already its host's on the wire, so nothing here
+    /// recomputes them.
+    public let group: NowPlayingGroup?
+
+    public init(state: String? = nil, song: HomeSong? = nil, elapsedSec: Double? = nil, group: NowPlayingGroup? = nil) {
         self.state = state
         self.song = song
         self.elapsedSec = elapsedSec
+        self.group = group
     }
 
     enum CodingKeys: String, CodingKey {
-        case state, song
+        case state, song, group
         case elapsedSec = "elapsed_sec"
     }
 
@@ -202,6 +209,9 @@ public struct HomeNowPlaying: Equatable, Sendable, Decodable {
         state = try c.decodeIfPresent(String.self, forKey: .state)
         song = try c.decodeIfPresent(HomeSong.self, forKey: .song)
         elapsedSec = try c.decodeIfPresent(Double.self, forKey: .elapsedSec)
+        // Lenient: a group that will not decode is no group, never a rooms
+        // read thrown away.
+        group = try? c.decodeIfPresent(NowPlayingGroup.self, forKey: .group)
     }
 }
 
