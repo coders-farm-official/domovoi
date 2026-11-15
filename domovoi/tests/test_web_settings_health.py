@@ -107,6 +107,8 @@ APP_SETUP_SOON = {**GREEN, "phoneApp": {**APP_MISSING, "auto": {"state": "waitin
 APP_DOWNLOADING = {**GREEN, "phoneApp": {**APP_MISSING, "fetch": {"running": True}}}
 APP_NO_RELEASE = {**GREEN, "phoneApp": {"release": None, "ready": False}}
 APP_OLD_SERVER = {**GREEN, "phoneApp": APP_MISSING}
+APP_NEEDS_ANSWER = {**GREEN, "phoneApp": {**APP_MISSING, "auto": {"state": "waiting", "tries": 0, "setup": True,
+                                                                  "waiting_for_answer": True}}}
 
 _CHECKS = r"""
   const w = h.global('window');
@@ -261,7 +263,8 @@ SCENARIOS: dict[str, dict] = {
                                                    "mem_na": MEM_NA, "app_setup_soon": APP_SETUP_SOON,
                                                    "app_downloading": APP_DOWNLOADING,
                                                    "app_no_release": APP_NO_RELEASE,
-                                                   "app_old_server": APP_OLD_SERVER}) + ";",
+                                                   "app_old_server": APP_OLD_SERVER,
+                                                   "app_needs_answer": APP_NEEDS_ANSWER}) + ";",
         "script": _CHECKS,
     },
     "search": {
@@ -399,6 +402,9 @@ def test_home_reminds_until_the_phone_app_is_on_the_server(driven) -> None:
         by = {c["key"]: c for c in checks[case]["checks"]}
         assert by["phoneapp"]["tone"] == "idle" and by["phoneapp"]["text"] == text, case
         assert checks[case]["home"] == [], case
+    by = {c["key"]: c for c in checks["app_needs_answer"]["checks"]}
+    assert by["phoneapp"]["tone"] == "warn" and by["phoneapp"]["text"] == (
+        "the phone app isn't on this server yet · setup downloads it once you say whether this box has internet")
     green = {c["key"]: c for c in checks["green"]["checks"]}
     assert green["phoneapp"]["tone"] == "ok" and "phones can install Domovoi 1.2.0 from here" in green["phoneapp"]["text"]
     home = _src("home.jsx")

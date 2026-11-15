@@ -81,8 +81,12 @@ while no admin has claimed the server (domovoi/admin_auth.py
 installer's WSL distro and the Mac, starts its core that way, so the one
 hook in domovoi/main.py covers them all. :func:`auto_refresh` then runs with
 ``setup=True``: a first try soon after the start (:data:`SETUP_DELAYS`),
-retries with backoff while it fails, in the background, under any internet
-answer but "never", and never while the container guard's freeze is on.
+retries with backoff while it fails, in the background, only once the
+internet question is answered "always" or "sometimes" (never under "never";
+an unanswered question is not permission, since the person installing may
+answer "never" a minute later: that try waits, the answer is looked at
+every :data:`SETUP_ANSWER_POLL` seconds and read again before each try),
+and never while the container guard's freeze is on.
 When it can't (no internet, "never", a failed or partial download, a file
 :func:`check_apk` refuses) the dashboard says so and keeps saying it until
 the app is here: the server needs the internet once, at some point, or an
@@ -686,15 +690,22 @@ def start_fetch(manifest: dict[str, Any]) -> bool:
 # delay while it fails.
 #
 # First-run setup (owner decision 2026-11-15) is the one time it also makes
-# the FIRST download by itself: setup=True, under any internet answer but
-# "never" (the module docstring, "During setup").
+# the FIRST download by itself: setup=True, under "always" or "sometimes"
+# only; unanswered waits for the answer (the module docstring, "During
+# setup").
 
 AUTO_DELAYS = (120.0, 600.0, 3600.0, 6 * 3600.0, 24 * 3600.0)
 #: Setup's tries: the first soon after the start (whoever is installing is
 #: about to open the dashboard), then the same backoff.
 SETUP_DELAYS = (15.0, 120.0, 600.0, 3600.0, 6 * 3600.0)
+#: While setup waits for the internet question, how often the answer is
+#: looked at, so the download starts soon after it is answered.
+SETUP_ANSWER_POLL = 5.0
+#: Setup's word while the internet question is unanswered: no download yet.
+WAITING_FOR_ANSWER = "waiting for the internet question in setup (Settings → Internet)"
 
-_auto: dict[str, Any] = {"state": "idle", "reason": None, "tries": 0, "next_at": None, "setup": False}
+_auto: dict[str, Any] = {"state": "idle", "reason": None, "tries": 0, "next_at": None, "setup": False,
+                         "waiting_for_answer": False}
 
 
 def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None, *,
@@ -702,7 +713,9 @@ def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None, *,
     """Whether :func:`auto_refresh` may fetch this release now, and why
     (or why not), under the internet answer ``policy`` (default: the live
     one, domovoi/egress.py). ``setup``: this start is first-run setup,
-    which puts the app on the server under any answer but "never"."""
+    which puts the app on the server under "always" or "sometimes"; an
+    unanswered question is not permission (:data:`WAITING_FOR_ANSWER`:
+    the person installing may answer "never" a minute later)."""
     from domovoi import egress
 
     rel = manifest.get("release")
@@ -713,6 +726,8 @@ def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None, *,
     pol = egress.policy() if policy is None else policy
     if pol == "never":
         return False, "internet access is turned off for this box (Settings → Internet): upload the APKs instead"
+    if setup and pol not in ("always", "sometimes"):
+        return False, WAITING_FOR_ANSWER
     if setup:
         return True, (f"setting up: putting the phone app (Domovoi {rel['version_name']}) on this server, "
                       "so phones without internet can install it from here")
@@ -733,23 +748,42 @@ async def auto_refresh(load: Callable[[], dict[str, Any]] | None = None, *,
                        delays: tuple[float, ...] | None = None,
                        sleep: Callable[[float], Awaitable[Any]] | None = None,
                        frozen: Callable[[], Awaitable[bool]] | None = None,
-                       poll: float = 2.0, setup: bool = False) -> str:
+                       poll: float = 2.0, setup: bool = False,
+                       answer_poll: float = SETUP_ANSWER_POLL) -> str:
     """Fetch the manifest's release in the background when
     :func:`auto_fetch_decision` allows it: once, with a retry after each of
     ``delays`` (default :data:`AUTO_DELAYS`, or :data:`SETUP_DELAYS` during
     first-run ``setup``) while it fails. Returns the last word (also in
-    ``_auto``, which the admin card shows)."""
+    ``_auto``, which the admin card shows). During setup an unanswered
+    internet question skips that try (:data:`WAITING_FOR_ANSWER`), and the
+    wait for the next one ends early once it is answered (looked at every
+    ``answer_poll`` seconds); the answer is read again before every try."""
     import asyncio
+
+    from domovoi import egress
 
     sleep = sleep or asyncio.sleep
     load = load or load_manifest
     if delays is None:
         delays = SETUP_DELAYS if setup else AUTO_DELAYS
-    _auto["setup"] = setup
+    _auto.update(setup=setup, waiting_for_answer=False)
     why = "not tried"
+
+    async def wait(delay: float) -> None:
+        if not (setup and egress.policy() == ""):
+            await sleep(delay)
+            return
+        waited = 0.0
+        while waited < delay:
+            step = min(answer_poll, delay - waited)
+            await sleep(step)
+            waited += step
+            if egress.policy() != "":
+                return
+
     for i, delay in enumerate(delays):
         _auto.update(state="waiting", next_at=time.time() + delay)
-        await sleep(delay)
+        await wait(delay)
         _auto["next_at"] = None
         try:
             manifest = load()
@@ -757,6 +791,12 @@ async def auto_refresh(load: Callable[[], dict[str, Any]] | None = None, *,
             _auto.update(state="skipped", reason=str(e))
             return str(e)
         go, why = auto_fetch_decision(manifest, setup=setup)
+        _auto["waiting_for_answer"] = why == WAITING_FOR_ANSWER
+        if not go and why == WAITING_FOR_ANSWER:
+            # Not permission yet: the next step asks again.
+            _auto.update(state="waiting" if i + 1 < len(delays) else "skipped", reason=why)
+            log.info("Android app: %s", why)
+            continue
         if not go:
             _auto.update(state="done" if _complete(manifest) else "skipped", reason=why)
             log.info("Android app: no automatic download: %s", why)

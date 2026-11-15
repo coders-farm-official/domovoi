@@ -5,8 +5,11 @@ they'll need to have internet later at some point to download it one time."
 Setup is a core start while no admin has claimed the server
 (domovoi/main.py hands ``setup=True`` to android_app.schedule_auto_refresh).
 Then the first download happens by itself, in the background, through the
-same fetch and check_apk as an admin's press, under any internet answer but
-"never". When it can't (no internet, "never", a failed or partial download,
+same fetch and check_apk as an admin's press, once the internet question
+is answered "always" or "sometimes": never under "never", and an unanswered
+question is not permission (the person installing may answer "never" a
+minute later), so setup waits for the answer and tries promptly once it
+comes. When it can't (no internet, "never", a failed or partial download,
 a file check_apk refuses), the app is simply not here, and the dashboard's
 reminder stays until it is (test_web_spare_device_enrol.py,
 test_web_settings_health.py). After setup the old rules hold
@@ -42,9 +45,9 @@ async def _no_wait(_):
 @pytest.fixture
 def fresh_job():
     aa._job.update(running=False, ok=None, message=None, bytes_done=0, bytes_todo=0)
-    aa._auto.update(state="idle", reason=None, tries=0, next_at=None, setup=False)
+    aa._auto.update(state="idle", reason=None, tries=0, next_at=None, setup=False, waiting_for_answer=False)
     yield
-    aa._auto.update(state="idle", reason=None, tries=0, next_at=None, setup=False)
+    aa._auto.update(state="idle", reason=None, tries=0, next_at=None, setup=False, waiting_for_answer=False)
 
 
 # ─── the decision ─────────────────────────────────────────────────────────
@@ -52,15 +55,17 @@ def fresh_job():
 @pytest.mark.parametrize("policy,go", [
     ("always", True),
     ("sometimes", True),   # setup is the one time a big download goes ahead by itself
-    ("", True),            # not answered yet: setup still puts the app here
+    ("", False),           # not answered yet: not permission, setup waits for the answer
     ("never", False),      # the egress gate: never, setup or not
 ])
-def test_setup_downloads_the_first_app_under_any_answer_but_never(tmp_path, cache, policy, go):
+def test_setup_downloads_the_first_app_once_the_answer_allows_it(tmp_path, cache, policy, go):
     m = load(tmp_path, manifest_doc(GOOD))
     ok, why = aa.auto_fetch_decision(m, policy, setup=True)
     assert ok is go, why
     if go:
         assert "setting up" in why and VERSION in why and "without internet" in why
+    elif policy == "":
+        assert why == aa.WAITING_FOR_ANSWER and "internet question" in why
     else:
         assert "turned off" in why and "upload" in why
     # Not setup: the same server waits for an admin.
@@ -79,7 +84,7 @@ def test_setup_has_nothing_to_do_when_the_app_is_here_or_there_is_none(tmp_path,
 
 # ─── the download, in the background ──────────────────────────────────────
 
-@pytest.mark.parametrize("policy", ["always", "sometimes", ""])
+@pytest.mark.parametrize("policy", ["always", "sometimes"])
 def test_setup_puts_the_app_on_the_server(tmp_path, cache, github, fresh_job, policy):
     m = load(tmp_path, manifest_doc(GOOD))
     waits: list[float] = []
@@ -100,6 +105,75 @@ def test_setup_puts_the_app_on_the_server(tmp_path, cache, github, fresh_job, po
 def test_setup_starts_soon_but_not_in_the_middle_of_the_core_start():
     assert 5 <= aa.SETUP_DELAYS[0] < aa.AUTO_DELAYS[0]
     assert len(aa.SETUP_DELAYS) >= 3, "a house whose line comes up late still gets it"
+
+
+# ─── the internet question not answered yet ─────────────────────────────
+
+@pytest.fixture
+def answer(monkeypatch):
+    """The internet answer, changeable while setup runs (as the person
+    installing answers it in the dashboard)."""
+    holder = {"v": ""}
+    monkeypatch.setattr(egress, "policy", lambda: holder["v"])
+    return holder
+
+
+def test_unanswered_then_always_downloads_promptly(tmp_path, cache, github, fresh_job, answer):
+    m = load(tmp_path, manifest_doc(GOOD))
+    sleeps: list[float] = []
+    seen_while_waiting: list = []
+
+    async def sleep(d):
+        sleeps.append(d)
+        if len(sleeps) == 4:   # the first try has passed, unanswered
+            seen_while_waiting.append((dict(aa._auto), list(github.seen)))
+        if len(sleeps) == 5:   # answered during the wait for the second try
+            answer["v"] = "always"
+
+    why = _run(aa.auto_refresh(lambda: m, delays=(15.0, 120.0), sleep=sleep, poll=0.01, setup=True,
+                               answer_poll=5.0))
+    (auto, fetched), = seen_while_waiting
+    assert fetched == [], "nothing went out before the question was answered"
+    assert auto["reason"] == aa.WAITING_FOR_ANSWER and auto["waiting_for_answer"] is True
+    assert auto["state"] == "waiting" and auto["tries"] == 0
+    assert sleeps[:5] == [5.0] * 5, "the first try's 15 s, then 10 s of the next wait: not all 120 s"
+    assert "is on this server" in why and aa.status(m)["ready"] is True
+    assert aa._auto["waiting_for_answer"] is False and github.seen
+
+
+def test_unanswered_then_never_fetches_nothing(tmp_path, cache, github, fresh_job, answer):
+    m = load(tmp_path, manifest_doc(GOOD))
+    sleeps: list[float] = []
+
+    async def sleep(d):
+        sleeps.append(d)
+        if len(sleeps) == 5:
+            answer["v"] = "never"
+
+    why = _run(aa.auto_refresh(lambda: m, delays=(15.0, 120.0, 600.0), sleep=sleep, setup=True))
+    assert github.seen == [] and "turned off" in why
+    assert aa._auto["state"] == "skipped" and aa._auto["waiting_for_answer"] is False
+    assert aa.status(m)["ready"] is False
+
+
+def test_never_answered_never_downloads_and_says_why(tmp_path, cache, github, fresh_job, answer):
+    """Asked again before every try; still unanswered at the last one:
+    nothing fetched, and the card's reminder says what setup waits for."""
+    m = load(tmp_path, manifest_doc(GOOD))
+    decisions: list[str] = []
+    real = aa.auto_fetch_decision
+
+    def spy(manifest, policy=None, **kw):
+        out = real(manifest, policy, **kw)
+        decisions.append(out[1])
+        return out
+
+    import unittest.mock
+    with unittest.mock.patch.object(aa, "auto_fetch_decision", spy):
+        why = _run(aa.auto_refresh(lambda: m, delays=(1.0, 2.0, 3.0), sleep=_no_wait, setup=True))
+    assert decisions == [aa.WAITING_FOR_ANSWER] * 3, "the answer is read again before every try"
+    assert why == aa.WAITING_FOR_ANSWER and github.seen == []
+    assert aa._auto["state"] == "skipped" and aa._auto["waiting_for_answer"] is True
 
 
 def test_setup_with_internet_never_downloads_nothing_and_says_so(tmp_path, cache, github, fresh_job):

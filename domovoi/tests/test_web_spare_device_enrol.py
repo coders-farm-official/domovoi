@@ -789,6 +789,9 @@ def phone(tmp_path_factory) -> dict:
         "setup_missed": scenario(dict(APP_MISSING, fetch=dict(IDLE, ok=False, message="HTTP 503"),
                                       auto={"state": "waiting", "reason": "HTTP 503", "tries": 1,
                                             "next_at": None, "setup": True})),
+        "setup_unanswered": scenario(dict(APP_MISSING, auto={
+            "state": "waiting", "reason": "waiting for the internet question in setup (Settings → Internet)",
+            "tries": 0, "next_at": None, "setup": True, "waiting_for_answer": True})),
         "setup_never": scenario(dict(APP_MISSING, internet_off=True,
                                      auto={"state": "skipped", "reason": "internet access is turned off",
                                            "tries": 0, "next_at": None, "setup": True})),
@@ -913,6 +916,13 @@ def test_setup_about_to_download_is_not_called_a_failure(phone):
     assert "Setup is about to put the phone app on this server (about 127 MB)" in r["text"]
     assert "isn’t on this server yet" not in r["text"]
     assert any("Download the app to this server" in b for b in r["buttons"]), "the admin may start it now"
+
+
+def test_setup_waiting_for_the_internet_question_says_what_it_waits_for(phone):
+    r = phone["setup_unanswered"]
+    assert "The phone app isn’t on this server yet. " + REMINDER in r["text"]
+    assert "Setup downloads it once you say whether this server has internet (Settings → Internet)." in r["text"]
+    assert "Setup is about to put" not in r["text"] and "setup couldn’t download it" not in r["text"]
 
 
 def test_setup_that_could_not_download_says_so_and_keeps_trying(phone):

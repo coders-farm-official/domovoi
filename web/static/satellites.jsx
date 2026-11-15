@@ -3261,8 +3261,11 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
   // to come, or tried and not done. Its progress shows like any download.
   const auto = app.auto || {};
   const setupWaiting = !!auto.setup && auto.state === 'waiting';
-  const setupFirst = setupWaiting && !(auto.tries > 0);
-  const setupMissed = !!auto.setup && (auto.state === 'failed' || auto.state === 'skipped'
+  // The internet question isn't answered yet: setup doesn't take that as a
+  // yes, and downloads once it is answered (android_app.WAITING_FOR_ANSWER).
+  const needsAnswer = !!auto.setup && !!auto.waiting_for_answer;
+  const setupFirst = setupWaiting && !(auto.tries > 0) && !needsAnswer;
+  const setupMissed = !!auto.setup && !needsAnswer && (auto.state === 'failed' || auto.state === 'skipped'
     || (setupWaiting && auto.tries > 0));
   return (
     <div className={`spare-app ${app.ready ? 'spare-app-older' : 'spare-app-missing'}`}
@@ -3278,7 +3281,9 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
         <div role="note" className="spare-app-reminder" style={{ color: 'var(--warn-ink)' }}>
           {`The phone app isn’t on this server yet${setupMissed ? ': setup couldn’t download it' : ''}. `}
           {`To give the app to phones that have no internet, this server needs the internet once, at some point, to download it (about ${spareMb(remaining)}).`}
-          {setupWaiting ? ' Setup will try again by itself.' : ''}
+          {needsAnswer
+            ? ' Setup downloads it once you say whether this server has internet (Settings → Internet).'
+            : setupWaiting ? ' Setup will try again by itself.' : ''}
         </div>
       )}
       {app.ready && (

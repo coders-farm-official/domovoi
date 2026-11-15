@@ -309,7 +309,8 @@ needs something it can only download is usually the day the line is down.
       With the Linux units that is
       `sudo -u domovoi -H /opt/domovoi/.venv/bin/python -c "…"`.
 - [ ] **Put the phone app on this server.** Setup downloads it by itself
-      while the server is online (about 100 MB); check Settings → Phones &
+      while the server is online, once the internet question is answered
+      **Yes, always** or **Sometimes** (about 100 MB); check Settings → Phones &
       browsers → **Get the Domovoi app**, which shows the code to scan once
       the app is here. If it says the app isn't on this server yet, press
       **Download the app to this server** now. Without it, a phone with no
@@ -629,8 +630,9 @@ allowed, they send short text:
 And only if you choose them: downloads an admin starts (models, plugins,
 updates, the satellite cache). The Android app for phones is the exception:
 first-run setup downloads it onto the server by itself (from the project's
-GitHub release, in the background, with retries; under any answer but
-**No**), so the server can later hand it to phones that have no internet.
+GitHub release, in the background, with retries; once the internet question
+is answered **Yes, always** or **Sometimes**, never under **No** or before
+it is answered), so the server can later hand it to phones that have no internet.
 If setup couldn't, the dashboard keeps reminding you that the server needs
 the internet once to download it (or an admin uploads it). After that it
 stays current by itself: a box answered **Yes, always** fetches the newer

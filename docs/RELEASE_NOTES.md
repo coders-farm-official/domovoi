@@ -11,8 +11,9 @@ a way that would otherwise get reported as a bug.
   names, from the project's GitHub release, checked against the release
   key like an admin's download), in the background, so the server can
   later hand it to phones that have no internet. It runs while the server
-  is not yet claimed, on every kind of install (Linux, Windows, Mac), under
-  any internet answer except **No**, and tries again for a while if the
+  is not yet claimed, on every kind of install (Linux, Windows, Mac), once
+  the internet question is answered **Yes, always** or **Sometimes** (not
+  under **No**, and not before it is answered), and tries again for a while if the
   line isn't up yet. Until 1.3.0 the first download was always an admin's
   press of **Download the app to this server**.
 - **If setup couldn't** (no internet, internet set to **No**, a failed

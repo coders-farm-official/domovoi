@@ -394,7 +394,10 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     else if (!app) add(unread(c));
     else if (!app.release) add({ ...c, tone: 'idle', text: 'no app release yet' });
     else if (app.fetch && app.fetch.running) add({ ...c, tone: 'idle', text: 'downloading the phone app to this server…' });
-    else if (!app.ready && app.auto && app.auto.setup && app.auto.state === 'waiting' && !(app.auto.tries > 0)) {
+    else if (!app.ready && app.auto && app.auto.setup && app.auto.waiting_for_answer) {
+      add({ ...c, tone: 'warn',
+            text: "the phone app isn't on this server yet · setup downloads it once you say whether this box has internet" });
+    } else if (!app.ready && app.auto && app.auto.setup && app.auto.state === 'waiting' && !(app.auto.tries > 0)) {
       add({ ...c, tone: 'idle', text: 'setup is about to put the phone app on this server' });
     } else if (app.ready) {
       add({ ...c, tone: 'ok', text: `on this server · phones can install Domovoi ${app.release.version_name} from here` });
