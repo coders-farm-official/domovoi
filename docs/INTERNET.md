@@ -308,6 +308,15 @@ needs something it can only download is usually the day the line is down.
 
       With the Linux units that is
       `sudo -u domovoi -H /opt/domovoi/.venv/bin/python -c "…"`.
+- [ ] **Put the phone app on this server.** Setup downloads it by itself
+      while the server is online, once the internet question is answered
+      **Yes, always** or **Sometimes** (about 100 MB); check Settings → Phones &
+      browsers → **Get the Domovoi app**, which shows the code to scan once
+      the app is here. If it says the app isn't on this server yet, press
+      **Download the app to this server** now. Without it, a phone with no
+      internet can't install Domovoi from your server. A server that never
+      goes online can be given the app's files instead: download them on a
+      computer that has internet and use **upload an APK** on that card.
 - [ ] **Pull every Ollama model you'll want** (`ollama pull <model>`, or
       Settings → Models, which shows the model each role uses).
 - [ ] **The extra voices**, if you want them: `SEED_VOICE_CATALOG=true`
@@ -619,11 +628,17 @@ allowed, they send short text:
   station's audio to Shazam to name the song.
 
 And only if you choose them: downloads an admin starts (models, plugins,
-updates, the satellite cache). One of them stays current by itself: once an
-admin has put the Android app on the server for phones, a box answered
-**Yes, always** fetches the newer app an update names (from the project's
-GitHub release, once per start with retries); under **Sometimes** it waits
-for the admin's **Download the app to this server**, as big downloads do. On a Windows install that includes the
+updates, the satellite cache). The Android app for phones is the exception:
+first-run setup downloads it onto the server by itself (from the project's
+GitHub release, in the background, with retries; once the internet question
+is answered **Yes, always** or **Sometimes**, never under **No** or before
+it is answered), so the server can later hand it to phones that have no internet.
+If setup couldn't, the dashboard keeps reminding you that the server needs
+the internet once to download it (or an admin uploads it). After that it
+stays current by itself: a box answered **Yes, always** fetches the newer
+app an update names (once per start with retries); under **Sometimes** it
+waits for the admin's **Download the app to this server**, as big downloads
+do. On a Windows install that includes the
 Windows part of **Update Domovoi**: the tray on the PC downloads the
 release's `DomovoiSetup.exe`, its manifest and their signatures from
 github.com, after an admin asked for it in the dashboard or chose it in the
@@ -701,7 +716,7 @@ the download on to their own storage hosts, listed in the same row; under
 | `1.1.1.1` (TCP 443, no data) | core | The internet check, every 30 s (`CONNECTIVITY_PROBE_TARGET`) | on | on | off |
 | `huggingface.co` · `cdn-lfs.huggingface.co` · `cas-bridge.xethub.hf.co` | core | Whisper models (a size not on disk yet), Piper voices (a voice not on disk yet; the extra voices) | asked | asked | refused |
 | `registry.ollama.ai` · `ollama.com` | Ollama, at the core's request | Model pulls (Settings → Models). An Ollama `-cloud` model sends every question to `ollama.com` | asked | asked | pulls refused; a `-cloud` model is Ollama's own connection, which Settings → Internet warns about |
-| `github.com` · `objects.githubusercontent.com` · `release-assets.githubusercontent.com` | core, the update unit | **Update Domovoi** (`git fetch` of the project); the Android app for phones; the Windows satellite Setup; the Linux satellite's pinned Python (python-build-standalone); the wake-word models (openWakeWord's release, Domovoi's wake-word models repository); voice ID's speaker model (Domovoi's models repository, else sherpa-onnx's `speaker-recongition-models` release; once, when it isn't on the server); the fast lane's model (sherpa-onnx); the XVF3800 host tool for satellite cards | asked; the newer Android app an update names, and voice ID's speaker model, are fetched by themselves | asked; voice ID's speaker model is fetched by itself | refused |
+| `github.com` · `objects.githubusercontent.com` · `release-assets.githubusercontent.com` | core, the update unit | **Update Domovoi** (`git fetch` of the project); the Android app for phones; the Windows satellite Setup; the Linux satellite's pinned Python (python-build-standalone); the wake-word models (openWakeWord's release, Domovoi's wake-word models repository); voice ID's speaker model (Domovoi's models repository, else sherpa-onnx's `speaker-recongition-models` release; once, when it isn't on the server); the fast lane's model (sherpa-onnx); the XVF3800 host tool for satellite cards | asked; the Android app during first-run setup, the newer Android app an update names, and voice ID's speaker model, are fetched by themselves | asked; the Android app during first-run setup and voice ID's speaker model are fetched by themselves | refused |
 | `api.github.com` · `codeload.github.com` | core | Installing a plugin from GitHub | asked | asked | refused |
 | `api.github.com` · `raw.githubusercontent.com` | dashboard | Fonts: the font catalogue, and the files of a font you add (Documents) | asked | asked | refused |
 | `pypi.org` · `files.pythonhosted.org` · `download.pytorch.org` | core, the update unit | A plugin's Python packages; the update's dependency sync (PyTorch's index only when a rollback goes back before 1.3.0, whose voice ID needed torch); the satellites' wheels for **Refresh caches** | asked | asked | refused |

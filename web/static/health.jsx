@@ -146,7 +146,7 @@ const healthGuardCheck = (guard) => {
  * problem (it ranks err → warn, then by it). `fix` is the page that fixes
  * it; `items` the rooms or plugins a row is about. */
 const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
-                        approvals, pending, version, hardware, config, internet, guard, memory }) => {
+                        approvals, pending, version, hardware, config, internet, guard, memory, phoneApp }) => {
   const v = viewer || {};
   const out = [];
   const add = (c) => out.push(c);
@@ -379,6 +379,31 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
             text: approvals.length === 1
               ? `${approvals[0].room_id} is waiting for approval`
               : `${approvals.length} rooms are waiting for approval` });
+    }
+  }
+  {
+    // The phone app on this server (GET /api/satellites/android-app, an
+    // admin read). First-run setup puts it here while the server is online
+    // (owner decision 2026-11-15); until it is here, this stays a reminder
+    // that the server needs the internet once to download it. A server
+    // from before the app (no release) has nothing to say.
+    const c = { key: 'phoneapp', part: 'rooms', label: 'phone app', scope: 'admin', order: 11.5,
+                fix: '#settings/phones-and-browsers/get-the-app', fixLabel: 'get the app' };
+    const app = phoneApp;
+    if (waits) add(wait(c));
+    else if (!app) add(unread(c));
+    else if (!app.release) add({ ...c, tone: 'idle', text: 'no app release yet' });
+    else if (app.fetch && app.fetch.running) add({ ...c, tone: 'idle', text: 'downloading the phone app to this server…' });
+    else if (!app.ready && app.auto && app.auto.setup && app.auto.waiting_for_answer) {
+      add({ ...c, tone: 'warn',
+            text: "the phone app isn't on this server yet · setup downloads it once you say whether this box has internet" });
+    } else if (!app.ready && app.auto && app.auto.setup && app.auto.state === 'waiting' && !(app.auto.tries > 0)) {
+      add({ ...c, tone: 'idle', text: 'setup is about to put the phone app on this server' });
+    } else if (app.ready) {
+      add({ ...c, tone: 'ok', text: `on this server · phones can install Domovoi ${app.release.version_name} from here` });
+    } else {
+      add({ ...c, tone: 'warn',
+            text: "the phone app isn't on this server yet · it needs the internet once to download it" });
     }
   }
   {
@@ -805,6 +830,7 @@ const HealthPanel = ({ marks = [] }) => {
   // Read once per visit, not polled: the core looks at Docker and every
   // process for it (bounded, cached 15 s there).
   const memory = useApiObject(admin ? '/api/models/memory' : null, HEALTH_QUIET);
+  const phoneApp = useApiObject(admin ? '/api/satellites/android-app' : null, HEALTH_QUIET);
   const m = useCtrModel();
 
   // Browser-side plugin errors (index.html's pipeline): re-render on news.
@@ -827,7 +853,7 @@ const HealthPanel = ({ marks = [] }) => {
     pluginErrors: (window.DomovoiPluginErrors && window.DomovoiPluginErrors._bySlug) || {},
     acq: acq.data, approvals: approvals.data, pending: pending.data,
     version: version.data, hardware: hardware.data, config: cfg.data, internet: internet.data,
-    guard: m.s, memory: memory.data,
+    guard: m.s, memory: memory.data, phoneApp: phoneApp.data,
   });
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   const audience = (!admin && !cfg.data && !cfg.error) ? 'none' : healthAudience({ viewer, visibility, shared });
