@@ -232,6 +232,12 @@ async def purge_preview(slug: str) -> dict[str, Any]:
 
     from web.backend.db import session_scope
 
+    # The table names are the plugin's (its migrations chose them): quoted
+    # as identifiers (a '"' doubled), so one with a '"' in it is a name,
+    # never SQL; its colons escaped, so text() reads no ":x" parameter in it.
+    def quote(name: str) -> str:
+        return '"' + name.replace('"', '""').replace(":", r"\:") + '"'
+
     schema = f"plugin_{slug}"
     tables: list[dict[str, Any]] = []
     async with session_scope() as s:
@@ -249,7 +255,7 @@ async def purge_preview(slug: str) -> dict[str, Any]:
                 continue
             count = (
                 await s.execute(
-                    text(f'SELECT COUNT(*) FROM "{schema}"."{name}"')
+                    text(f"SELECT COUNT(*) FROM {quote(schema)}.{quote(name)}")
                 )
             ).scalar_one()
             tables.append({"table": name, "rows": int(count)})
