@@ -3887,6 +3887,315 @@
         }
       }
     },
+    "/api/music/groups": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Groups",
+        "description": "The named groups (``groups``: id, name, rooms) and the shared queues\nplaying now (``shared``: id, name, host_room, rooms, group_id,\neverywhere).",
+        "operationId": "list_groups_api_music_groups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Create Group",
+        "description": "Make a named group of two or more rooms. 400 says why a name can't\nbe used, in words.",
+        "operationId": "create_group_api_music_groups_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/{group_id}": {
+      "patch": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Update Group",
+        "description": "Rename a group, or pick its rooms.",
+        "operationId": "update_group_api_music_groups__group_id__patch",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Delete Group",
+        "description": "Delete a named group (music playing in its rooms plays on).",
+        "operationId": "delete_group_api_music_groups__group_id__delete",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Start Shared",
+        "description": "Other rooms hear ``host_room``'s music: ``rooms``, a named group's\nconnected rooms (``group_id``) or every connected room\n(``everywhere``). 409 when nothing plays in ``host_room``.",
+        "operationId": "start_shared_api_music_groups_shared_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared/join": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Join Shared",
+        "description": "``room_id`` hears ``host_room``'s music.",
+        "operationId": "join_shared_api_music_groups_shared_join_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared/leave": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Leave Shared",
+        "description": "``room_id`` leaves its group and goes quiet; the others play on.",
+        "operationId": "leave_shared_api_music_groups_shared_leave_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared/{share_id}/end": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "End Shared",
+        "description": "End a shared queue: the other rooms stop, the host plays on.",
+        "operationId": "end_shared_api_music_groups_shared__share_id__end_post",
+        "parameters": [
+          {
+            "name": "share_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Share Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -24478,6 +24787,66 @@
         "type": "object",
         "title": "GreetingPatch"
       },
+      "GroupBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "minItems": 2,
+            "title": "Rooms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "rooms"
+        ],
+        "title": "GroupBody"
+      },
+      "GroupPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "rooms": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 64,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rooms"
+          }
+        },
+        "type": "object",
+        "title": "GroupPatch"
+      },
       "GuestBan": {
         "properties": {
           "id": {
@@ -25043,6 +25412,40 @@
         ],
         "title": "ImportResponse"
       },
+      "JoinBody": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Room Id"
+          },
+          "host_room": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Host Room"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "host_room"
+        ],
+        "title": "JoinBody"
+      },
       "KeepBothBody": {
         "properties": {
           "member_ids": {
@@ -25107,6 +25510,21 @@
         },
         "type": "object",
         "title": "LanNameRequest"
+      },
+      "LeaveBody": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Room Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id"
+        ],
+        "title": "LeaveBody"
       },
       "LibraryAlias": {
         "properties": {
@@ -27028,6 +27446,16 @@
               }
             ],
             "title": "Added By"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NowPlayingGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -27036,6 +27464,60 @@
           "state"
         ],
         "title": "NowPlaying"
+      },
+      "NowPlayingGroup": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "host_room": {
+            "type": "string",
+            "title": "Host Room"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rooms"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "everywhere": {
+            "type": "boolean",
+            "title": "Everywhere",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "host_room",
+          "rooms"
+        ],
+        "title": "NowPlayingGroup",
+        "description": "The shared queue a room hears (a group, V060): its player is the\nhost's (``host_room``), heard in every room of ``rooms`` (host first).\n``name`` is the named group's (\"Upstairs\"), \"Everywhere\", or null for\nrooms joined one by one. ``id`` is the shared queue's (for\n``POST /api/music/groups/shared/{id}/end``)."
       },
       "NowPlayingSong": {
         "properties": {
@@ -29537,6 +30019,18 @@
               }
             ],
             "title": "Up Next"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
           }
         },
         "type": "object",
@@ -30589,6 +31083,58 @@
           "password"
         ],
         "title": "SetupRequest"
+      },
+      "ShareBody": {
+        "properties": {
+          "host_room": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Host Room"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Rooms"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "everywhere": {
+            "type": "boolean",
+            "title": "Everywhere",
+            "default": false
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "host_room"
+        ],
+        "title": "ShareBody"
       },
       "SheetCell": {
         "properties": {

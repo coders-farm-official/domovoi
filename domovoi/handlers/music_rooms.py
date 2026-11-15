@@ -43,8 +43,17 @@ What it does with one, in order:
    to ITS satellite (``domovoi/room_music.py``), and the reply is said
    where it was asked: "Playing Weezer in the garage, shuffled."
 
-"Everywhere": a play is answered "I can only play music in one room at a
-time"; a stop or a pause applies to every room that is playing.
+Groups (1.3.0, domovoi/music_groups.py): rooms can share one music queue.
+"Play jazz everywhere" plays here and every connected room hears it; "play
+jazz upstairs" / "... in the north wing" does the same for a named group (a
+group's name needs no "in"); "play this everywhere", "play this in the
+office too", "share this with the garage" let other rooms hear what plays
+here; "join the kitchen" / "play the kitchen's music in here" makes this
+room hear the kitchen's; "leave the group" leaves (as "stop" in a room of a
+group does: only that room stops); "just in here" keeps the music here and
+stops the others; "which rooms are playing this" names them. A stop or a
+pause "everywhere" or "upstairs" applies to every such room that plays.
+Bringing music into other rooms needs a paired satellite (CORE-11).
 
 The language model's ``music`` tool takes the same place as its ``room``
 argument (:meth:`MusicRoomsMixin.room_tool_call`).
@@ -127,6 +136,95 @@ def control_room_patterns(
     )
 
 
+# ─── Groups' fast paths (shared queues, domovoi/music_groups.py) ─────────
+
+#: What "play <these> everywhere" means when it is the music playing now.
+THIS_WORDS = frozenset({
+    "this", "it", "this song", "this music", "the music", "what's playing",
+    "what is playing", "this one", "that", "the same", "the same music",
+})
+_THIS = r"(?:this(?: song| music| one)?|it|the (?:same )?music|what(?:'s| is) playing|that|the same)"
+
+#: "share this with the garage", "play this in the office too", "play it
+#: upstairs as well".
+GROUP_SHARE_RE = re.compile(
+    r"^(?:share " + _THIS + r" with (?P<with>.+)"
+    r"|(?:play|put) " + _THIS + r" (?:on )?(?P<too>.+?) (?:too|as well))$"
+)
+#: "join the kitchen", "join the music in the kitchen", "play the kitchen's
+#: music in here", "listen to what's playing in the kitchen".
+GROUP_JOIN_RE = re.compile(
+    r"^(?:join (?:the music (?:in|from) )?(?P<j>.+?)(?:'s music| music)?"
+    r"|(?:play|put on|listen to) (?P<p>.+?)'s music(?: in here| here| too)?"
+    r"|(?:play|put on|listen to) (?:the music|what(?:'s| is) playing) (?:in|from) (?P<w>.+?)"
+    r"(?: in here| here| too)?)$"
+)
+#: "leave the group", "stop sharing", "just in here".
+GROUP_LEAVE_RE = re.compile(
+    r"^(?:leave (?:the |this )?(?:group|shared (?:queue|music))"
+    r"|stop sharing(?: (?:the music|this|it))?(?: with (?:the )?other rooms)?"
+    r"|(?:play (?:it|this|the music) )?(?:just|only) (?:in )?(?:here|this room)"
+    r"|keep (?:it|the music|this) (?:just |only )?(?:in )?here)$"
+)
+#: "which rooms are playing this", "where is this playing".
+GROUP_WHICH_RE = re.compile(
+    r"^(?:(?:which|what) rooms? (?:are|is) (?:playing|hearing|listening to) " + _THIS + r"(?: too)?"
+    r"|where (?:is|'s) " + _THIS + r" playing"
+    r"|(?:is|are) (?:this|it|the music) (?:shared|playing anywhere else))$"
+)
+
+#: A command that ends in a named group's bare name: see GroupPlacePattern.
+_BARE_GROUP_SRC = r"^(?P<head>.+) (?P<place>[a-z0-9' ]+)$"
+
+
+class GroupPlacePattern:
+    """A fast-path pattern (``match`` and ``pattern`` like ``re.Pattern``,
+    as documents.py's ``_ClaimingPattern``) that matches a command ending
+    in a named group's name with no preposition before it ("play jazz
+    upstairs", "stop the music downstairs") only when the house has a
+    group of that name. With no groups it matches nothing, so it takes no
+    command from anyone; "play the jazz station" is never a group's (a
+    group's name can't hold "station": music_groups.check_name)."""
+
+    def __init__(self) -> None:
+        self.pattern = _BARE_GROUP_SRC
+        self._re = re.compile(_BARE_GROUP_SRC)
+        self.flags = self._re.flags
+        self.groupindex = self._re.groupindex
+
+    def match(self, text_: str, *args):
+        from domovoi import music_groups
+
+        if self._re.match(text_, *args) is None:
+            return None
+        words = text_.split()
+        for phrase in music_groups.group_phrases():
+            n = len(phrase)
+            if len(words) > n and tuple(words[-n:]) == phrase:
+                head = " ".join(words[:-n])
+                return re.match(
+                    r"^(?P<head>" + re.escape(head) + r") (?P<place>"
+                    + re.escape(" ".join(phrase)) + r")$",
+                    text_,
+                )
+        return None
+
+    def search(self, text_: str, *args):
+        return self._re.search(text_, *args)
+
+    def __repr__(self) -> str:
+        return f"GroupPlacePattern({self.pattern!r})"
+
+
+GROUP_PLACE_RE = GroupPlacePattern()
+
+#: Places a reply says bare ("Playing jazz upstairs."); any other group's
+#: is said "in the north wing".
+_BARE_REPLY_PLACES = frozenset({
+    "upstairs", "downstairs", "outside", "inside", "outdoors", "indoors",
+})
+
+
 #: What "play <these> in the garage" asks for: any song of the library's.
 RANDOM_WORDS = frozenset({
     "music", "some music", "any music", "random music", "some random music",
@@ -163,9 +261,6 @@ def _play_parts(words: list[str]) -> tuple[str, int] | None:
     return None
 
 
-_EVERYWHERE_PLAY_TEXT = (
-    "I can only play music in one room at a time. Ask again with the room's name."
-)
 
 # MusicHandler's fast-path methods, by the command each is (see _action_of).
 _ACTION_BY_METHOD = {
@@ -210,6 +305,8 @@ class MusicRoomsMixin(RoomCommandsMixin):
 
     ROOM_PATH_METHODS = (
         "_room_play_from_match", "_room_control_from_match", "_room_first_from_match",
+        "_room_group_from_match", "_group_share_from_match", "_group_join_from_match",
+        "_group_leave_from_match", "_group_which_from_match",
     )
 
     # ── the fast paths ──
@@ -232,6 +329,43 @@ class MusicRoomsMixin(RoomCommandsMixin):
         return await self._room_command(
             f"{cmd} in {place}", ctx, session, family, name_checked=True,
         )
+
+    async def _room_group_from_match(self, m, ctx, session):
+        """A command ending in a named group's bare name: "play jazz
+        upstairs", "pause the music downstairs"."""
+        family = "play" if _play_parts(m.group("head").split()) is not None else "control"
+        return await self._room_command(m.string, ctx, session, family)
+
+    async def _group_share_from_match(self, m, ctx, session):
+        said = (m.group("with") or m.group("too") or "").strip()
+        rooms = await rooms_mod.household_rooms(session, ctx.app)
+        first = said.split()[0] if said.split() else ""
+        place = rooms_mod.read_place(
+            said if first in rooms_mod.PLACE_PREPOSITIONS or said == "everywhere" else f"in {said}",
+            rooms,
+        )
+        if place is None:
+            return await self._as_without_place(m.string, ctx, session)
+        if place.kind == "unknown":
+            return self._room_reply(ctx, unknown_room_text(place.said, rooms))
+        if place.kind == "here":
+            return self._room_reply(ctx, "That's already playing here.")
+        return await self._share_here(place, rooms, ctx)
+
+    async def _group_join_from_match(self, m, ctx, session):
+        said = (m.group("j") or m.group("p") or m.group("w") or "").strip()
+        rooms = await rooms_mod.household_rooms(session, ctx.app)
+        place = rooms_mod.read_place(f"in {said}", rooms)
+        if place is None or place.kind not in ("rooms", "group"):
+            # "play mozart's music": not a room — the command as before.
+            return await self._as_without_place(m.string, ctx, session)
+        return await self._join(place, ctx, session)
+
+    async def _group_leave_from_match(self, m, ctx, session):
+        return await self._leave_or_keep(m.string, ctx)
+
+    async def _group_which_from_match(self, m, ctx, session):
+        return await self._which_rooms(ctx, session)
 
     def _action_of(self, text_: str) -> str | None:
         hit = self._own_path(CONTROL_ALIASES.get(text_, text_))
@@ -341,6 +475,8 @@ class MusicRoomsMixin(RoomCommandsMixin):
         place = ask.place
         if place.kind == "everywhere":
             return await self._everywhere(ask, action, rooms, ctx, session)
+        if place.kind == "group":
+            return await self._in_group(ask, action, place, ctx, session)
         if place.kind == "here" or any(r.room_id == ctx.room_id for r in place.rooms):
             return await self._here(ask, transcript, ctx, session)
         room = self._pick_room(place.rooms)
@@ -456,26 +592,58 @@ class MusicRoomsMixin(RoomCommandsMixin):
 
     async def _everywhere(
         self, ask: _Ask, action: str, rooms: list[Room], ctx: Context, session: AsyncSession,
+        *, place: Place | None = None, run_play: Any = None,
     ) -> Response:
-        """A stop or a pause in every room that is playing; anything else is
-        one room at a time."""
-        from domovoi import guest_queue
+        """Every room (or, with ``place``, a named group's rooms): a play
+        here — or in one of them — that every connected one hears (a
+        shared queue, domovoi/music_groups.py); a stop or a pause in each
+        of them that is playing."""
+        from domovoi import guest_queue, music_groups
         from domovoi.dropin_common import room_may_reach_other_rooms
         from domovoi.room_music import deliver_later
 
+        where = self._place_phrase(place)
         if action == "play":
-            return self._room_reply(ctx, _EVERYWHERE_PLAY_TEXT)
+            return await self._play_shared(ask, rooms, place, ctx, session, run_play=run_play)
         if action not in ("stop", "pause"):
             return self._room_reply(ctx, EVERYWHERE_OTHER_TEXT)
         if ctx.app is None:
             return self._room_reply(ctx, NO_APP_TEXT)
         if action == "stop" and not room_may_reach_other_rooms(ctx.app, ctx.room_id):
             return self._room_reply(ctx, UNPAIRED_TEXT)
+        # A room hearing a shared queue plays from its host's player: a stop
+        # ends the shared queue first, so each room is stopped once and no
+        # queue is handed from room to room on the way out.
+        listening: set[str] = set()
+        if action == "stop":
+            ids = {r.room_id for r in rooms}
+            for sh in music_groups.shares():
+                if set(sh.rooms) <= ids:
+                    listening |= set(sh.members)
+                    await music_groups.end(ctx.app, sh.id, silence_members=False)
+                else:
+                    for member in [m for m in sh.members if m in ids]:
+                        listening.add(member)
+                        await music_groups.leave(ctx.app, member)
         done: list[Room] = []
         own_action = None
+        paused_hosts: set[str] = set()
         for room in rooms:
+            if room.room_id in listening:
+                done.append(room)
+                if room.room_id == ctx.room_id:
+                    own_action = "stop"
+                else:
+                    deliver_later(ctx.app, room.room_id, music_action="stop")
+                continue
             if not room.has_player or not (await guest_queue.room_activity(room.room_id)).active:
                 continue
+            if action == "pause":
+                host = music_groups.host_of(room.room_id) or room.room_id
+                if host in paused_hosts:
+                    done.append(room)  # its group's player is paused already
+                    continue
+                paused_hosts.add(host)
             there = ctx.model_copy(update={
                 "room_id": room.room_id, "device_kind": None, "device_player": {},
                 "session_id": None,
@@ -490,15 +658,234 @@ class MusicRoomsMixin(RoomCommandsMixin):
             else:
                 deliver_later(ctx.app, room.room_id, music_action=response.music_action)
         if not done:
-            reply = self._room_reply(ctx, "Nothing is playing anywhere right now.")
+            text_ = (
+                "Nothing is playing anywhere right now." if place is None
+                else f"Nothing is playing {where} right now."
+            )
+            reply = self._room_reply(ctx, text_)
         else:
             verb = "Stopped" if action == "stop" else "Paused"
-            reply = self._room_reply(
-                ctx, f"{verb} the music in {rooms_mod.say_rooms(done, limit=99)}.",
-            )
+            if place is None:
+                text_ = f"{verb} the music in {rooms_mod.say_rooms(done, limit=99)}."
+            else:
+                text_ = f"{verb} the music {where}."
+            reply = self._room_reply(ctx, text_)
         reply.music_action = own_action
         reply.data = {"rooms": [r.room_id for r in done]}
         return reply
+
+    # ── groups: rooms sharing one queue (domovoi/music_groups.py) ──
+    @staticmethod
+    def _place_phrase(place: Place | None) -> str:
+        """How a reply says the place: "everywhere", "upstairs", "in the
+        north wing"."""
+        if place is None or place.kind == "everywhere":
+            return "everywhere"
+        said = " ".join(place.said.split())
+        if rooms_mod.room_key(said) in {rooms_mod.room_key(w) for w in _BARE_REPLY_PLACES}:
+            return said
+        return f"in {said}"
+
+    @staticmethod
+    def _said_at(text_: str, phrase: str) -> str:
+        """A reply the play gave here, said for the place ("Playing jazz."
+        becomes "Playing jazz upstairs.")."""
+        marker = "\x00"
+        t = say_in_room(text_, marker)
+        return t.replace(f"in {marker}", phrase).replace(marker, phrase)
+
+    async def _in_group(
+        self, ask: _Ask, action: str, place: Place, ctx: Context, session: AsyncSession,
+        *, run_play: Any = None,
+    ) -> Response | None:
+        """A command for a named group ("play jazz upstairs", "stop the
+        music in the north wing")."""
+        rooms = list(place.rooms)
+        if not rooms:
+            name = place.group.name if place.group is not None else place.said
+            return self._room_reply(ctx, f"None of the rooms in {name} are set up yet.")
+        if action in ("play", "stop", "pause"):
+            return await self._everywhere(
+                ask, action, rooms, ctx, session, place=place, run_play=run_play,
+            )
+        # Another control: the group's music, through a room of it that plays.
+        from domovoi import guest_queue
+
+        for room in sorted(rooms, key=lambda r: (not r.online, r.room_id)):
+            if room.has_player and (await guest_queue.room_activity(room.room_id)).active:
+                if room.room_id == ctx.room_id:
+                    return await self._here(ask, ask.head, ctx, session)
+                return await self._in_room(ask, action, room, ctx, session)
+        return self._room_reply(ctx, f"Nothing is playing {self._place_phrase(place)} right now.")
+
+    def _shared_allowed(self, ctx: Context) -> Response | None:
+        """Bringing music into other rooms is for a paired satellite or the
+        household's app (CORE-11)."""
+        from domovoi.dropin_common import room_may_reach_other_rooms
+
+        if ctx.app is None:
+            return self._room_reply(ctx, NO_APP_TEXT)
+        if not room_may_reach_other_rooms(ctx.app, ctx.room_id):
+            return self._room_reply(ctx, UNPAIRED_TEXT)
+        return None
+
+    async def _play_shared(
+        self, ask: _Ask, rooms: list[Room], place: Place | None, ctx: Context,
+        session: AsyncSession, *, run_play: Any = None,
+    ) -> Response:
+        """Play in several rooms at once: here when this room is one of
+        them, else in one of them; every other connected one hears it."""
+        from domovoi import music_groups
+
+        refused = self._shared_allowed(ctx)
+        if refused is not None:
+            return refused
+        phrase = self._place_phrase(place)
+        if run_play is None and ask.obj in THIS_WORDS:
+            return await self._share_here(place or Place("everywhere", "everywhere"), rooms, ctx)
+        online = [r for r in rooms if r.online]
+        here = next((r for r in rooms if r.room_id == ctx.room_id), None)
+        host_room = here or (self._pick_room(online) if online else None)
+        if host_room is None:
+            return self._room_reply(ctx, f"None of the speakers {phrase} are online right now.")
+        if music_groups.is_member(host_room.room_id):
+            # It plays its own music now, which the others will hear.
+            await music_groups.leave(ctx.app, host_room.room_id)
+        response: Response | None
+        started = False
+        if host_room.room_id == ctx.room_id:
+            if run_play is not None:
+                response = await run_play(ctx)
+            elif ask.obj in RANDOM_WORDS:
+                response = await self._play_random(ctx, session)  # type: ignore[attr-defined]
+            else:
+                response = await self._here(ask, ask.head, ctx, session)
+            started = response is not None and response.music_action == "start"
+        else:
+            target = await self._target(host_room, "play", ctx)
+            if isinstance(target, Response):
+                return target
+            if run_play is not None:
+                response = await run_play(target)
+            elif ask.obj in RANDOM_WORDS:
+                response = await self._play_random(target, session)  # type: ignore[attr-defined]
+            else:
+                response = await self._play_there(ask, target, session)
+            started = response is not None and response.music_action == "start"
+            response = self._finish_in_room(response, host_room, ctx)
+        if response is None:
+            return self._room_reply(ctx, "I couldn't play that.")
+        if response.failure or not started:
+            return response
+        others = [r.room_id for r in online if r.room_id != host_room.room_id]
+        if others:
+            await music_groups.share(
+                ctx.app, host_room.room_id, others,
+                group_id=place.group.id if place is not None and place.group is not None else None,
+                everywhere=place is None or place.kind == "everywhere",
+            )
+        if host_room.room_id == ctx.room_id:
+            response.text = self._said_at(response.text, phrase)
+        else:
+            # _finish_in_room said it "in the garage": say the place instead.
+            response.text = response.text.replace(f"in {host_room.spoken}", phrase)
+        response.data = {**(response.data or {}), "group_rooms": [host_room.room_id, *others]}
+        return response
+
+    async def _share_here(self, place: Place, rooms: list[Room], ctx: Context) -> Response:
+        """Other rooms hear what plays here ("play this everywhere", "share
+        this with the garage")."""
+        from domovoi import guest_queue, music_groups
+        from domovoi.handlers.room_commands import offline_text
+
+        refused = self._shared_allowed(ctx)
+        if refused is not None:
+            return refused
+        host = music_groups.host_of(ctx.room_id) or ctx.room_id
+        if not host or not (await guest_queue.room_activity(ctx.room_id)).active:
+            return self._room_reply(ctx, "Nothing is playing here to share.")
+        wanted = rooms if place.kind == "everywhere" else list(place.rooms)
+        others = [r for r in wanted if r.online and r.room_id != host and r.room_id != ctx.room_id]
+        if place.kind == "rooms" and others:
+            others = [self._pick_room(others)]
+        if not others:
+            if place.kind == "rooms" and place.rooms:
+                room = self._pick_room(place.rooms)
+                if room.room_id in (host, ctx.room_id):
+                    return self._room_reply(ctx, "That's already playing there.")
+                return self._room_reply(ctx, offline_text(room, "play music there"))
+            return self._room_reply(ctx, "No other room is connected right now.")
+        await music_groups.share(
+            ctx.app, host, [r.room_id for r in others],
+            group_id=place.group.id if place.group is not None else None,
+            everywhere=place.kind == "everywhere",
+        )
+        where = f"in {others[0].spoken}" if place.kind == "rooms" else self._place_phrase(place)
+        return self._room_reply(ctx, f"Playing this {where} too.")
+
+    async def _join(self, place: Place, ctx: Context, session: AsyncSession) -> Response:
+        """This room hears another room's music ("join the kitchen")."""
+        from domovoi import guest_queue, music_groups
+
+        refused = self._shared_allowed(ctx)
+        if refused is not None:
+            return refused
+        if ctx.from_phone or not ctx.room_id:
+            return self._room_reply(ctx, "Only a room's speaker can join another room's music.")
+        candidates = [r for r in place.rooms if r.room_id != ctx.room_id]
+        if not candidates:
+            return self._room_reply(ctx, "That's this room.")
+        source = None
+        for room in sorted(candidates, key=lambda r: (not r.online, r.room_id)):
+            if room.has_player and (await guest_queue.room_activity(room.room_id)).active:
+                source = room
+                break
+        if source is None:
+            where = (
+                self._place_phrase(place) if place.kind == "group"
+                else f"in {self._pick_room(candidates).spoken}"
+            )
+            return self._room_reply(ctx, f"Nothing is playing {where} right now.")
+        host = music_groups.host_of(source.room_id) or source.room_id
+        if host == (music_groups.host_of(ctx.room_id) or ctx.room_id):
+            return self._room_reply(ctx, "This room is already playing that.")
+        await music_groups.share(ctx.app, host, [ctx.room_id])
+        return self._room_reply(ctx, f"Playing the music from {source.spoken} here too.")
+
+    async def _leave_or_keep(self, transcript: str, ctx: Context) -> Response:
+        """ "Leave the group": this room stops, the others play on. "Just in
+        here" / "stop sharing": this room keeps the music, the others stop."""
+        from domovoi import music_groups
+
+        if music_groups.share_of(ctx.room_id) is None:
+            return self._room_reply(ctx, "This room isn't sharing music with any other room.")
+        if transcript.startswith("leave"):
+            response = await self._leave_group(ctx)  # type: ignore[attr-defined]
+            return response or self._room_reply(ctx, "OK.")
+        refused = self._shared_allowed(ctx)
+        if refused is not None:
+            return refused
+        await music_groups.keep_only(ctx.app, ctx.room_id)
+        return self._room_reply(ctx, "Just in here now. The other rooms have stopped.")
+
+    async def _which_rooms(self, ctx: Context, session: AsyncSession) -> Response:
+        """ "Which rooms are playing this?" """
+        from domovoi import guest_queue, music_groups
+
+        sh = music_groups.share_of(ctx.room_id)
+        if sh is None:
+            if ctx.room_id and (await guest_queue.room_activity(ctx.room_id)).active:
+                return self._room_reply(ctx, "Just this room.")
+            return self._room_reply(ctx, "Nothing is playing here right now.")
+        house = {r.room_id: r for r in await rooms_mod.household_rooms(session, ctx.app)}
+        others = [house.get(r) or Room(room_id=r) for r in sh.rooms if r != ctx.room_id]
+        names = sorted(
+            {r.spoken for r in others},
+            key=lambda n: (n[4:] if n.lower().startswith("the ") else n).lower(),
+        )
+        names.append("here")
+        said = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        return self._room_reply(ctx, f"{said[:1].upper()}{said[1:]}.")
 
     # ── song or room: the question ──
     async def _ask_room_or_title(
@@ -616,9 +1003,15 @@ class MusicRoomsMixin(RoomCommandsMixin):
             return self._room_reply(ctx, unknown_room_text(said, rooms))
         if place.kind == "here" or any(r.room_id == ctx.room_id for r in place.rooms):
             return await self.execute_from_tool(rest, ctx, session)  # type: ignore[attr-defined]
-        if place.kind == "everywhere":
+        if place.kind in ("everywhere", "group"):
             ask = _Ask(family="control", head=action, obj="", whole="", verb="", place=place)
-            return await self._everywhere(ask, action, rooms, ctx, session)
+
+            async def _run(target: Context) -> Response | None:
+                return await self.execute_from_tool(rest, target, session)  # type: ignore[attr-defined]
+
+            if place.kind == "group":
+                return await self._in_group(ask, action, place, ctx, session, run_play=_run)
+            return await self._everywhere(ask, action, rooms, ctx, session, run_play=_run)
         room = self._pick_room(place.rooms)
         target = await self._target(room, action, ctx)
         if isinstance(target, Response):
@@ -628,6 +1021,12 @@ class MusicRoomsMixin(RoomCommandsMixin):
 
 __all__ = [
     "CONTROL_ALIASES",
+    "GROUP_JOIN_RE",
+    "GROUP_LEAVE_RE",
+    "GROUP_PLACE_RE",
+    "GROUP_SHARE_RE",
+    "GROUP_WHICH_RE",
+    "THIS_WORDS",
     "MusicRoomsMixin",
     "RANDOM_WORDS",
     "ROOM_OR_TITLE_KIND",

@@ -1101,6 +1101,13 @@ async def consume_music_failed(app: Any, room_id: str, ctrl: dict[str, Any]) -> 
     resumable: dict[str, str] = app.state.resumable_music
     if not url or resumable.get(room_id) != url:
         return
+    from domovoi import music_groups
+
+    if music_groups.share_of(room_id) is not None:
+        # One room of a shared queue (a group) failing pauses nobody: the
+        # player is the host's and the other rooms are listening to it.
+        log.info("music: room=%s is in a shared queue; its player plays on", room_id)
+        return
     from domovoi.clients.mpd import get_mpd_client_for
 
     try:

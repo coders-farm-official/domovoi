@@ -138,7 +138,8 @@ def test_fast_paths_are_normalized_and_compiled() -> None:
             # a regex whose match also asks the cached title index whether
             # the turn is a document's (handlers/documents.py, D7 review).
             assert isinstance(fp.pattern, re.Pattern) or (
-                h.plugin_slug is None and type(fp.pattern).__name__ == "_ClaimingPattern"
+                h.plugin_slug is None
+                and type(fp.pattern).__name__ in ("_ClaimingPattern", "GroupPlacePattern")
                 and isinstance(fp.pattern.pattern, str)
             ), (h.name, fp.pattern)
             assert callable(fp.method)

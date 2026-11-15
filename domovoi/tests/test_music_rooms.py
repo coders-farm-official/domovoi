@@ -490,11 +490,22 @@ async def test_a_satellite_that_shares_a_label_with_the_asker_is_here(house) -> 
     assert resp.music_action == "start"
 
 
-async def test_everywhere_is_one_room_at_a_time_for_a_play(house) -> None:
+async def test_a_play_everywhere_is_heard_in_every_connected_room(house) -> None:
+    """1.3.0 groups (was: "one room at a time"): it plays here, and every
+    other connected room hears this room's player (music_groups.py)."""
+    from domovoi import music_groups
+
     ctx = _ctx()
     resp = await _say("play some music everywhere", ctx)
-    assert resp.text == "I can only play music in one room at a time. Ask again with the room's name."
-    assert house.lib.played == [] and all(not s.started for s in ctx.app.state.active_sessions.values())
+    assert resp.text.startswith("Playing ") and resp.text.endswith(" everywhere.")
+    assert resp.music_action == "start"
+    sh = music_groups.share_of("dining_room")
+    assert sh is not None and sh.host == "dining_room" and sh.everywhere
+    assert set(sh.members) == set(ONLINE) - {"dining_room"}
+    url = mpd_module.own_stream_url_for("dining_room")
+    for room in sh.members:
+        assert _sat(ctx, room).started == [url], room
+    assert _sat(ctx, "dining_room").started == []  # its own start rides its reply
 
 
 async def test_stop_everywhere_stops_every_playing_room(house) -> None:
@@ -763,7 +774,7 @@ async def test_the_tool_takes_a_room(house) -> None:
     assert resp.text.startswith("I don't have a room called the attic.")
     resp = await music.execute_from_tool({"action": "play", "title": "x", "room": "everywhere"},
                                          ctx, FakeDB())
-    assert resp.text.startswith("I can only play music in one room at a time")
+    assert resp.text.startswith("Playing x") and resp.text.endswith("everywhere.")
 
 
 def test_the_tool_schema_offers_the_room() -> None:

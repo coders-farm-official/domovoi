@@ -76,7 +76,11 @@ LOADING: set[str] = set()
 
 
 def target_for(room_id: str) -> str:
-    return f"room:{room_id}"
+    """The Up next target of the music ``room_id`` hears: a room in a shared
+    queue (domovoi/music_groups.py) shares its host's session."""
+    from domovoi import music_groups
+
+    return f"room:{music_groups.host_of(room_id) or room_id}"
 
 
 # ─── In-memory notes (core process only) ──────────────────────────────────

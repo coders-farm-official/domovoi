@@ -585,6 +585,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import wake_trainer_setup
 
         wake_trainer_setup.on_internet_answer()
+    # Groups (domovoi/music_groups.py): the named groups, and the shared
+    # queues that were playing before the restart (best-effort).
+    from domovoi import music_groups
+
+    await music_groups.load()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")
@@ -1076,6 +1081,12 @@ app.include_router(plugins_admin_router)
 from domovoi.printing.routes import router as printing_router  # noqa: E402
 
 app.include_router(printing_router)
+
+# Groups: named sets of rooms and the shared queues (domovoi/music_groups.py,
+# domovoi/music_groups_routes.py).
+from domovoi.music_groups_routes import router as music_groups_router  # noqa: E402
+
+app.include_router(music_groups_router)
 
 
 @app.get("/v1/voice/activity", dependencies=[Depends(require_device)])
@@ -5912,6 +5923,7 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
     room has already been refused (403) by the gate, which never says
     which of the two it was."""
     from domovoi.clients.mpd import get_mpd_client_for
+    from domovoi.music_groups import describe as music_groups_describe
 
     await _ensure_room_mpd_unless_guest(request, room_id)
     mpd = get_mpd_client_for(room_id)
@@ -5934,6 +5946,10 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
         # whenever the core says so (review finding 2) — it cannot tell
         # from what it forwarded alone.
         "guest": guest_activity(request) is not None,
+        # The shared queue this room hears (a group, domovoi/music_groups.py):
+        # {id, name, host_room, rooms, group_id, everywhere}, or null. A
+        # member's queue IS its host's.
+        "group": music_groups_describe(room_id),
         **view,
     }
 

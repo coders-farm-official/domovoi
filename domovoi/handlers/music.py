@@ -24,6 +24,11 @@ from domovoi.handlers.music_choice import MUSIC_CHOICE_KIND, MusicChoiceMixin
 from domovoi.handlers.music_queue_voice import ROOM_SUFFIXABLE as _QUEUE_ROOM_PATTERNS
 from domovoi.handlers.music_queue_voice import MusicQueueMixin
 from domovoi.handlers.music_rooms import (
+    GROUP_JOIN_RE,
+    GROUP_LEAVE_RE,
+    GROUP_PLACE_RE,
+    GROUP_SHARE_RE,
+    GROUP_WHICH_RE,
     ROOM_OR_TITLE_KIND,
     ROOM_PLAY_RE,
     MusicRoomsMixin,
@@ -470,9 +475,21 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             # "by" split and the catch-all, which would search for "jazz in
             # the garage". A place that isn't one ("the boys in the band")
             # runs the paths below unchanged. Open slots: never early.
+            # Groups (rooms sharing one queue, music_rooms.py): "share this
+            # with the garage", "play this in the office too", "join the
+            # kitchen", "leave the group", "which rooms are playing this" —
+            # closed phrasings, before the place paths would read "the
+            # office too" as a room.
+            FastPath(GROUP_SHARE_RE, MusicHandler._group_share_from_match),
+            FastPath(GROUP_JOIN_RE, MusicHandler._group_join_from_match),
+            FastPath(GROUP_LEAVE_RE, MusicHandler._group_leave_from_match),
+            FastPath(GROUP_WHICH_RE, MusicHandler._group_which_from_match),
             FastPath(ROOM_PLAY_RE, MusicHandler._room_play_from_match),
             FastPath(_ROOM_CONTROL_RE, MusicHandler._room_control_from_match),
             FastPath(_ROOM_FIRST_RE, MusicHandler._room_first_from_match),
+            # A named group said with no "in": "play jazz upstairs". Matches
+            # only when the house has a group of that name.
+            FastPath(GROUP_PLACE_RE, MusicHandler._room_group_from_match),
             # The room's queue and Up next (music_queue_voice.py, plan §7):
             # before the "by" split and the catch-all, so "play jazz next"
             # isn't a search for "jazz next", nor "play something like
@@ -1874,6 +1891,10 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
     async def _simple_ack(self, action: str, ctx: Context) -> Response:
         if ctx.from_phone:
             return phone_play.phone_transport(self.name, ctx, action)
+        if action == "stop":
+            left = await self._leave_group(ctx)
+            if left is not None:
+                return left
         mpd = get_mpd_client_for(ctx.room_id)
         try:
             if action == "pause":
@@ -1926,6 +1947,33 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             session_id=ctx.session_id,
             matched_handler=self.name,
             music_action=music_action,
+        )
+
+    async def _leave_group(self, ctx: Context) -> Response | None:
+        """ "Stop" in a room that shares a queue (a group): only this room
+        stops — it leaves the group, the others play on (owner,
+        2026-11-14; domovoi/music_groups.py). None when the room shares
+        nothing (an ordinary stop)."""
+        from domovoi import music_groups
+        from domovoi.handlers.shared.rooms import say_rooms_by_id
+
+        if music_groups.share_of(ctx.room_id) is None:
+            return None
+        left = await music_groups.leave(ctx.app, ctx.room_id)  # type: ignore[arg-type]
+        if left is None:
+            return None
+        note_paused_by_person(ctx.app, ctx.room_id, False)
+        others = [r for r in left.share.rooms if r != ctx.room_id]
+        where = say_rooms_by_id(others)
+        text = "Stopped."
+        if where and not ctx.asked_from_room:
+            text = f"Stopped here. The music plays on in {where}."
+        return Response(
+            text=text,
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            music_action="stop",
+            data={"left_group": left.share.id},
         )
 
     async def _now_playing(self, ctx: Context) -> Response:

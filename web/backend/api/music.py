@@ -948,7 +948,12 @@ async def _attach_queue_provenance(cards: list[NowPlaying]) -> None:
     a cheap readout turns into a query flood. Silently leaves ``added_by``
     null on any failure; it's a nicety, never a reason to fail the readout.
     """
-    wanted = {(c.room_id, c.song_id) for c in cards if c.song_id is not None}
+    # A room in a group plays its host's queue: who added a song is kept
+    # under the host (V060).
+    def _queue_room(c: NowPlaying) -> str:
+        return c.group.host_room if c.group is not None else c.room_id
+
+    wanted = {(_queue_room(c), c.song_id) for c in cards if c.song_id is not None}
     if not wanted:
         return
     rooms = sorted({room for room, _ in wanted})
@@ -981,7 +986,7 @@ async def _attach_queue_provenance(cards: list[NowPlaying]) -> None:
         return
     for card in cards:
         if card.song_id is not None:
-            card.added_by = by_key.get((card.room_id, card.song_id))
+            card.added_by = by_key.get((_queue_room(card), card.song_id))
 
 
 @router.post(
@@ -2078,10 +2083,37 @@ async def _list_provisioned_rooms() -> list[tuple[str, int, int]]:
         return [(r[0], int(r[1]), int(r[2])) for r in rows.all()]
 
 
+async def _host_ports(room_id: str) -> tuple[int, int] | None:
+    """The ``mpd_rooms`` ports of ``room_id``, or None."""
+    try:
+        async with session_scope() as s:
+            row = (await s.execute(
+                text("SELECT control_port, http_port FROM mpd_rooms WHERE room_id = :r"),
+                {"r": room_id},
+            )).first()
+    except Exception as e:  # noqa: BLE001
+        log.debug("now-playing: no ports for host %s: %s", room_id, e)
+        return None
+    if row is None or row[0] is None or row[1] is None:
+        return None
+    return int(row[0]), int(row[1])
+
+
 async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
     room_id, control_port, http_port = room
     from domovoi import lan_address
     from domovoi.config import settings as core_settings
+    from web.backend.api.music_groups import live_groups
+
+    # A room in a shared queue (a group) hears its host's player: the card
+    # is the host's song, with the group named (V060).
+    group = (await live_groups()).get(room_id)
+    stamp_room = room_id
+    if group is not None and group["host_room"] != room_id:
+        ports = await _host_ports(group["host_room"])
+        if ports is not None:
+            control_port, http_port = ports
+            stamp_room = group["host_room"]
 
     # Built the way the core builds the URL it hands the satellite
     # (clients/mpd.py:mpd_stream_url_for), so MPD_HTTP_BASE=auto shows the
@@ -2118,7 +2150,7 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
             duration_sec=duration_sec,
         )
         favorited, track_id = await _lookup_library_row(song_model)
-        source, source_url, source_ref = _lookup_source_stamp(room_id, song_model)
+        source, source_url, source_ref = _lookup_source_stamp(stamp_room, song_model)
 
     return NowPlaying(
         room_id=room_id,
@@ -2132,6 +2164,7 @@ async def _now_playing_for(room: tuple[str, int, int]) -> NowPlaying:
         source_url=source_url,
         source_ref=source_ref,
         song_id=song_id,
+        group=group,
     )
 
 
