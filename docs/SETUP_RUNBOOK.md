@@ -169,11 +169,11 @@ pip install -e ".[cuda]"
 pip install --no-deps -r requirements-no-deps.in
 ```
 
-That last line is a Windows quirk, not a typo — `resemblyzer` (speaker
-identification) pins a `webrtcvad` with no Windows wheels. Details in
-[`domovoi/README.md`](../domovoi/README.md); on Linux a plain `pip install
-resemblyzer` works. Skip the `voice-profile` extra entirely if you don't
-want per-person voice profiles; it drops torch and saves a couple of GB.
+That last line installs `faster-whisper` without PyAV, which it declares
+but Domovoi never uses ([`requirements-no-deps.in`](../requirements-no-deps.in)
+says why). Voice identification needs nothing more: since 1.3.0 it runs a
+25 MB ONNX model that the core downloads on its first start (pinned, into
+`~/.domovoi/piper_voices`), with no torch.
 
 Now the one-shot bootstrap — Postgres, migrations, and the core service:
 

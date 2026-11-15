@@ -48,23 +48,16 @@ against the person's OWN samples (:func:`is_own_voice`) before it deletes
 a person, and otherwise removes only that voice's claims
 (:func:`claims_by_this_voice`).
 
-Two embeddings (1.3.0). A recording's voice is embedded twice
-(:class:`~domovoi.clients.voice_embedder.VoicePrint`): *current* — the
-speech alone, at one loudness (domovoi/voice_prep.py) — and *legacy* — the
-whole recording, the quiet tail and all, as every sample before 1.3.0 was
-made. The tail carries the room, not the person: two people's samples from
-one room looked alike through it, and the same person sounded different in
-each room partly through its loudness (scripts/eval_voice_id.py). Every new
-sample is kept in the current embedding (``EMBEDDING_MODEL_TAG``). A person
-with any current satellite sample is scored with the current embedding
-(:func:`room_person_scores`); a person with only legacy samples by the
-legacy one, exactly as before 1.3.0 — so nobody enrolled before it stops
-being recognized. A legacy person's confident matches in a room
-(job 4) save a *current* sample there, and from then on they are matched by
-the current embedding. A legacy denylist entry hit by a voice gets a
-current twin the same way.
+The speaker model (1.3.0). Every sample is an embedding made by one model,
+3D-Speaker's ERes2Net (domovoi/clients/speaker_encoder.py), and is stored
+with its tag (``EMBEDDING_MODEL_TAG``). Embeddings from different models
+can't be compared, so a sample with any other tag (Resemblyzer's, from
+before 1.3.0: V061 removed them) is never read, and a person with no
+current sample isn't recognized until they say "my name is …" again. Every
+cosine setting (the threshold, the margins, the confident band) is on this
+model's scale (domovoi/config.py says how each was chosen).
 
-Rooms (job 3, current samples). A person with a sample from the turn's room
+Rooms (job 3). A person with a sample from the turn's room
 is scored against their samples from that room alone, anyone else against
 all of theirs (:func:`room_person_scores`): each room's mic, distance and
 echo colour a voice their own way. The room's colour is in everybody's
@@ -145,10 +138,6 @@ class IdentificationResult:
     outcome: str | None = None
     best_person_id: int | None = None
     runner_up_person_id: int | None = None
-    #: The recording's legacy embedding (see "Two embeddings"), for what
-    #: still holds a person's pre-1.3.0 samples against a voice ("forget
-    #: me", handlers/voice_profile.py). None when it couldn't be made.
-    legacy_embedding: np.ndarray | None = None
 
 
 # ─── A turn's identification, as kept and shown (V049) ────────────────────
@@ -326,8 +315,9 @@ def _serialize_embedding(emb: np.ndarray) -> bytes:
 def _deserialize_embedding(b: bytes) -> np.ndarray:
     arr = np.frombuffer(b, dtype=np.float32)
     if arr.size != EMBEDDING_DIM:
-        # Older / wrong-model embeddings — skip the comparison rather
-        # than blow up the cosine math with mismatched shapes.
+        # Another model's embedding (only current-model rows are read, so
+        # this is a damaged row): an all-zero vector, which every caller
+        # skips, rather than mismatched shapes in the cosine math.
         return np.zeros(EMBEDDING_DIM, dtype=np.float32)
     return arr
 
@@ -349,8 +339,8 @@ def _person_scores(
     """``{person_id: score}`` for ``(person_id, embedding_bytes)`` samples.
 
     A person's score is the cosine against the mean of their unit-norm
-    samples — Resemblyzer's own way of building a speaker embedding from
-    several utterances. Scoring each sample separately and taking the
+    samples (the usual way to build one speaker embedding from several
+    utterances). Scoring each sample separately and taking the
     max (the old way) gave whoever had the most samples the most chances
     to win, and let one stray sample decide. Unusable rows (wrong size,
     all zeros) are skipped; a person with none left isn't scored."""
@@ -432,8 +422,7 @@ def own_voice_blobs(samples: list[Any], *, phone: bool) -> list[bytes]:
 def is_own_voice(embedding: np.ndarray, samples: list[Any], *, phone: bool) -> bool:
     """Whether ``embedding`` matches the person's OWN voice at the match
     threshold (:func:`own_voice_blobs`) — what "forget me" asks before it
-    deletes a person. ``embedding`` and ``samples`` are in one embedding,
-    current or legacy ("Two embeddings")."""
+    deletes a person."""
     score = centroid_score(embedding, own_voice_blobs(samples, phone=phone))
     return score is not None and score >= settings.voice_profile_match_threshold
 
@@ -561,9 +550,8 @@ def _presence_tier_from_last_seen(last_seen) -> str:
 
 
 async def embed_print(pcm_int16: bytes) -> VoicePrint | None:
-    """Job 1 alone: the utterance's :class:`VoicePrint` (both embeddings
-    and how clear the speech was), or None when the embedder can't make
-    one. Pure — no database, no learning counter, no last_seen — so it can
+    """Job 1 alone: the utterance's :class:`VoicePrint` (its embedding and
+    how clear the speech was), or None when the embedder can't make one. Pure — no database, no learning counter, no last_seen — so it can
     run on a speculative copy of a capture that the turn may never use
     (``domovoi/streaming.py``, "Speculative transcription"). The rest of
     :func:`identify` has side effects and runs once per turn.
@@ -574,21 +562,21 @@ async def embed_print(pcm_int16: bytes) -> VoicePrint | None:
         if whole is not None:
             return await whole(pcm_int16)
         emb = await embedder.embed(pcm_int16)
-        return None if emb is None else VoicePrint(current=emb, legacy=emb)
+        return None if emb is None else VoicePrint(current=emb)
     except Exception as e:
         log.warning("voice embedder threw: %s", e)
         return None
 
 
 async def embed_voice(pcm_int16: bytes) -> np.ndarray | None:
-    """The utterance's current embedding alone (:func:`embed_print`)."""
+    """The utterance's embedding alone (:func:`embed_print`)."""
     voice = await embed_print(pcm_int16)
     return None if voice is None else voice.current
 
 
 def _as_print(embedding: Any) -> VoicePrint | None:
     """``identify(embedding=...)`` takes a :class:`VoicePrint`, or a bare
-    current embedding (no legacy one, clarity unknown)."""
+    embedding (clarity unknown)."""
     if embedding is None or isinstance(embedding, VoicePrint):
         return embedding
     return VoicePrint(current=embedding)
@@ -600,48 +588,37 @@ _EMBED_HERE: Any = object()
 
 @dataclass(frozen=True)
 class _Scored:
-    """Who a turn was scored against and how (see "Two embeddings")."""
+    """Who a turn was scored against and how."""
 
     scores: dict[int, float]
     bars: dict[int, float]
-    #: People scored with the legacy embedding (no current sample yet).
-    legacy: frozenset[int]
-    #: Rooms each person has a current satellite sample from.
+    #: Rooms each person has a satellite sample from.
     current_rooms: dict[int, set[str]]
 
 
 def _score_turn(
     voice: VoicePrint,
-    current_rows: list[tuple[int, bytes, str | None]],
-    legacy_rows: list[tuple[int, bytes, str | None]],
+    rows: list[tuple[int, bytes, str | None]],
     *,
     room_id: str | None,
 ) -> _Scored:
-    """Score every person in the embedding they're held in: the current
-    embedding against current samples (room-aware: a person held to this
-    room's samples has to clear ``voice_profile_same_room_margin`` more),
-    and — for a person with no current sample — the legacy embedding
-    against their legacy samples, as before 1.3.0. Pure."""
-    held_current = {p for p, _b, _r in current_rows}
+    """Score every person against their samples (room-aware: a person held
+    to this room's samples has to clear ``voice_profile_same_room_margin``
+    more). Pure."""
     in_room = (
-        {p for p, _b, r in current_rows if r == room_id} if room_id is not None else set()
+        {p for p, _b, r in rows if r == room_id} if room_id is not None else set()
     )
-    scores = room_person_scores(voice.current, current_rows, room_id=room_id)
-    legacy_only = [(p, b) for p, b, _r in legacy_rows if p not in held_current]
-    legacy_scores: dict[int, float] = {}
-    if legacy_only and voice.legacy is not None:
-        legacy_scores = _person_scores(voice.legacy, legacy_only)
-    scores.update(legacy_scores)
+    scores = room_person_scores(voice.current, rows, room_id=room_id)
     bars = {
         p: settings.voice_profile_match_threshold
         + (settings.voice_profile_same_room_margin if p in in_room else 0.0)
         for p in scores
     }
     rooms: dict[int, set[str]] = {}
-    for p, _b, r in current_rows:
+    for p, _b, r in rows:
         if r is not None:
             rooms.setdefault(p, set()).add(r)
-    return _Scored(scores, bars, frozenset(legacy_scores), rooms)
+    return _Scored(scores, bars, rooms)
 
 
 async def _learn_room(
@@ -650,21 +627,14 @@ async def _learn_room(
     voice: VoicePrint | np.ndarray,
     rooms_with_sample: set[str],
     decision: _Decision,
-    *,
-    legacy: bool = False,
 ) -> None:
     """Job 4: count a match towards learning ``person_id``'s voice in
-    ``room_id``, and save the clip — in the current embedding — once the
-    count is reached.
+    ``room_id``, and save the clip once the count is reached.
 
     Only a confident match counts; any other match of this person in
     this room resets the run, so "in a row" means in a row. Nothing is
     learned without a room, or in a room the person already has a
-    current sample from. ``legacy``: the person was matched by their
-    legacy samples (they have no current one yet); the saved sample is
-    their first current one, and from the next turn on they are matched
-    by it — unless the voice was recognized only through somebody's name
-    claim, which is never carried into the current embedding by itself."""
+    sample from."""
     if room_id is None or room_id in rooms_with_sample:
         return
     voice = _as_print(voice)
@@ -678,25 +648,13 @@ async def _learn_room(
     try:
         async with session_scope() as s:
             repo = VoiceProfilesRepository(s)
-            if legacy:
-                old = await repo.person_samples(person_id, repo.LEGACY_MODEL_TAG)
-                if voice.legacy is None or learned_through_claim(voice.legacy, old) is not None:
-                    log.info(
-                        "voice sample for a new room: person_id=%d is held in "
-                        "legacy samples and this voice matches only a name claim "
-                        "of theirs; nothing saved", person_id,
-                    )
-                    _CONFIDENT_HITS.pop(key, None)
-                    return
-                claim_of = None
-            else:
-                # A voice recognized only through somebody's name claim (V029)
-                # is not this person's own: the room learns it as part of that
-                # claim, so "forget me" from that voice takes it away too.
-                claim_of = learned_through_claim(
-                    voice.current,
-                    await repo.person_samples(person_id, repo.EMBEDDING_MODEL_TAG),
-                )
+            # A voice recognized only through somebody's name claim (V029)
+            # is not this person's own: the room learns it as part of that
+            # claim, so "forget me" from that voice takes it away too.
+            claim_of = learned_through_claim(
+                voice.current,
+                await repo.person_samples(person_id, repo.EMBEDDING_MODEL_TAG),
+            )
             await repo.add(
                 person_id=person_id,
                 embedding=_serialize_embedding(voice.current),
@@ -712,39 +670,23 @@ async def _learn_room(
         return
     log.info(
         "voice sample for a new room: saved person_id=%d's voice in "
-        "room=%s after %d confident matches (latest %.3f, runner-up %s)%s",
+        "room=%s after %d confident matches (latest %.3f, runner-up %s)",
         person_id, room_id, _CONFIDENT_HITS[key], decision.best,
         "none" if decision.runner_up is None else f"{decision.runner_up:.3f}",
-        "; their first sample in the current embedding" if legacy else "",
     )
     _CONFIDENT_HITS.pop(key, None)
 
 
 async def _denylisted(voice: VoicePrint) -> float | None:
-    """The similarity of the opt-out this voice matches, or None.
-
-    Current entries are held against the current embedding, legacy ones
-    against the legacy embedding; a legacy hit adds the voice's current
-    embedding to the denylist, so the opt-out carries over. The bar is the
-    match threshold: a borderline match is a hit, biasing toward respecting
-    the opt-out on noisy embeddings."""
+    """The similarity of the opt-out this voice matches, or None. The bar
+    is the match threshold: a borderline match is a hit, biasing toward
+    respecting the opt-out on noisy embeddings."""
     bar = settings.voice_profile_match_threshold
     async with session_scope() as s:
         repo = VoiceDenylistRepository(s)
         for _id, blob in await repo.all_for_model(repo.EMBEDDING_MODEL_TAG):
             sim = _cosine(voice.current, _deserialize_embedding(blob))
             if sim >= bar:
-                return sim
-        if voice.legacy is None:
-            return None
-        for _id, blob in await repo.all_for_model(repo.LEGACY_MODEL_TAG):
-            sim = _cosine(voice.legacy, _deserialize_embedding(blob))
-            if sim >= bar:
-                await repo.add(
-                    embedding=_serialize_embedding(voice.current),
-                    model=repo.EMBEDDING_MODEL_TAG,
-                    notes="carried over from a pre-1.3.0 opt-out",
-                )
                 return sim
     return None
 
@@ -821,7 +763,6 @@ async def identify(
                 best_similarity=sim,
                 denylisted=True,
                 outcome=OUTCOME_DENYLIST,
-                legacy_embedding=voice.legacy,
             )
     except Exception as e:
         log.warning("voice denylist lookup failed: %s", e)
@@ -838,28 +779,18 @@ async def identify(
         async with session_scope() as s:
             repo = VoiceProfilesRepository(s)
             if phone:
-                current_rows = [
+                rows = [
                     (p, b, None) for p, b in phone_matching_samples(
                         await repo.phone_matching_rows(repo.EMBEDDING_MODEL_TAG))
                 ]
-                legacy_rows = [
-                    (p, b, None) for p, b in phone_matching_samples(
-                        await repo.phone_matching_rows(repo.LEGACY_MODEL_TAG))
-                ]
             else:
-                current_rows = [
+                rows = [
                     (p, b, r)
                     for _id, p, b, r in await repo.all_for_model(repo.EMBEDDING_MODEL_TAG)
                 ]
-                legacy_rows = [
-                    (p, b, r)
-                    for _id, p, b, r in await repo.all_for_model(repo.LEGACY_MODEL_TAG)
-                ]
             last_seen = await PeopleRepository(s).latest_seen()
 
-        scored = _score_turn(
-            voice, current_rows, legacy_rows, room_id=None if phone else room_id,
-        )
+        scored = _score_turn(voice, rows, room_id=None if phone else room_id)
         decision = _decide(scored.scores, scored.bars)
         if noisy and decision.best_person is not None:
             # Scored, kept and shown — but nobody is named from it, and
@@ -909,7 +840,6 @@ async def identify(
                     voice,
                     scored.current_rooms.get(matched_person, set()),
                     decision,
-                    legacy=matched_person in scored.legacy,
                 )
         elif decision.best_person is not None and room_id is not None and not phone:
             # Top candidate but not named: a run of confident matches
@@ -939,7 +869,6 @@ async def identify(
         outcome=outcome,
         best_person_id=decision.best_person,
         runner_up_person_id=decision.runner_up_person,
-        legacy_embedding=voice.legacy,
     )
 
 

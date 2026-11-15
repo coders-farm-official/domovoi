@@ -51,42 +51,67 @@ no satellite update. A room in a group plays another room's MPD stream
 - **Licences:** MPD (GPL-2.0-or-later, its own container) is now listed
   in docs/LICENSES.md.
 
-## 1.3.0 — Rooms tell voices apart better; what an update changes for voice ID
+## 1.3.0 — Voice ID: a new speaker model; everyone says "my name is …" once more (V061)
 
-Voice identification now embeds **the speech alone, at one loudness**: the
-quiet room before a command and the second of silence after it are cut off,
-and a far-off voice is brought to the same level as a near one. That quiet
-tail carried the room rather than the person, so two people's samples from
-one room used to look alike through it, and a person sounded different in
-each room partly by how loud they were. A room also now holds a person to
-the samples it heard itself when it has one (each room's mic, distance and
-echo colour a voice), with a slightly higher bar for those
-(`VOICE_PROFILE_SAME_ROOM_MARGIN`, 0.03: the room is in everybody's voice
-there). And a command with music or a TV under it is scored
-but names nobody (`noisy` in the room's history, "too noisy to tell"):
-under music the right person and the wrong one score alike.
+**What to do after updating:** each person says **"my name is …"** once,
+in any room, and answers yes. Until they do, Domovoi doesn't know who is
+speaking: it answers everyone, it just names nobody. The People page shows
+who still has to ("Not recognized by voice yet"), and the household notice
+at its top says how many. Someone who once asked Domovoi **never to save
+their voice** should say that again too: that opt-out was kept in the old
+model and is gone.
 
-**What an update changes: nobody has to enrol again.** Samples from before
-1.3.0 are kept and still used: a person who has only those is matched
-exactly as before, and after a few clear matches in a room (three in a row,
-as rooms have always learned) Domovoi saves a new sample of them there and
-moves them over by itself. From then on they are named less often by
-mistake, but a far-off room that has no sample of them yet names them less
-often too — which is what the next paragraph fixes. An opt-out ("never save
-my voice") carries over the first time that voice is heard.
+**Why:** voice identification now runs **3D-Speaker's ERes2Net** model
+(Apache-2.0, 192 numbers per voice) instead of Resemblyzer. On the same
+simulated house (`scripts/eval_voice_id.py`: 32 people in 16 two-person
+households, each introduced once in the office, 16 guests, seven rooms)
+and the same rule (no room may name the wrong person more than 1 % of
+the time), it names the speaker about twice as often as Resemblyzer did:
+66 % of commands in the office, 51 % in the kitchen, 34 % across the dining
+room, 19 % in the garage (Resemblyzer: about 62, 14, 4 and 0 %), with the
+wrong person named in 0.04 % of office commands and none in the others.
+Voices learned by one model can't be compared with the other's, and
+Domovoi keeps only those voice fingerprints, never recordings, so nothing
+could be carried over: migration **V061** deletes the old samples and
+opt-outs and marks who had one (`people.voice_relearn_since`).
 
-**What to do for rooms that never recognize someone** (a garage, a dining
-room far from the satellite): the People page now shows, for each person,
-**rooms that know this voice**. In a room marked "not yet", the person says
-"my name is …" there and answers yes; that room then has their voice. A
-room only learns a voice by itself from matches it is already sure of, so
-a room that has never heard someone clearly enough needs this once.
+**Smaller install, less memory:** voice ID no longer needs **torch**. An
+update removes torch (about 550 MB of CPU wheels on a Linux server) and
+resemblyzer from the server's Python environment; the model is a 25 MB
+file. Measured: about 75 ms per command on two cores of a mini-PC-class
+CPU (140 ms on one), on the speech workers right after the command's
+transcription; Resemblyzer's two passes took about 60 ms on one core.
 
-`scripts/eval_voice_id.py` measures all this on synthetic speakers in
-simulated rooms (near and far, echo, music, a TV): how often each room
-names the right person, the wrong one, and the equal error rate.
-`VOICE_PROFILE_NOISY_SNR_DB` (10) is how far the speech must stand above
-the rest of the recording to be scored for a name.
+**The model download:** the core fetches the model once, on its first
+start after the update (a Linux install fetches it with the voices), from
+the sherpa-onnx project's GitHub release, checked against a pinned size and
+SHA-256, into `~/.domovoi/piper_voices`. With internet access **No** it is
+never fetched: copy the file there by hand (docs/INTERNET.md), or voice ID
+stays off and the People page says so. Until it is there, "my name is …"
+answers that voices can't be recognized right now, instead of pretending.
+
+**Settings that changed** (a value from before 1.3.0 in your `domovoi/.env`
+is on the old model's scale: delete these lines to get the new defaults):
+`VOICE_PROFILE_MATCH_THRESHOLD` 0.75 → **0.58**,
+`VOICE_PROFILE_SAME_ROOM_MARGIN` 0.03 → **0.01**,
+`THIRD_PARTY_CLUSTER_MERGE_THRESHOLD` 0.7 → **0.5**; unchanged:
+`VOICE_PROFILE_MATCH_MARGIN` 0.05, `VOICE_PROFILE_DRIFT_NEAR_THRESHOLD_MARGIN`
+0.05, `VOICE_PROFILE_NOISY_SNR_DB` 10. New: `VOICE_PROFILE_ENCODER_THREADS`
+(2). `domovoi/config.py` says how each was chosen.
+
+Also in 1.3.0's voice ID: what is embedded is **the speech alone, at one
+loudness** (the quiet room before a command and the second of silence
+after it are cut off; measured again for the new model: at the 1 % ceiling
+it names more than the whole recording does). A room holds a person to the
+samples it heard itself when it has one, and the People page shows
+**rooms that know this voice**: in a room marked "not yet", the person says
+"my name is …" there and answers yes. A command with music under it is
+scored but names nobody (`noisy` in the room's history, "too noisy to
+tell").
+
+**Phone apps:** nothing to update. A person's voice-sample count reads 0
+until they introduce themselves again; `GET /api/people` rows gain
+`voice_relearn`, and `GET /api/people/voice-id` is new (docs/API_REFERENCE.md).
 
 ## 1.3.0 (unreleased) — Library tools: duplicates, needs review, cover art written into files (V058, V059)
 

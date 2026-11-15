@@ -58,7 +58,7 @@ an existing `.env` is never touched:
 
 ```powershell
 pip install -e ".[dev,real-clients,voice-profile]"
-pip install --no-deps -r requirements-no-deps.in   # faster-whisper, resemblyzer (see below)
+pip install --no-deps -r requirements-no-deps.in   # faster-whisper (see below)
 python -m domovoi.env_bootstrap           # creates domovoi/.env on a fresh checkout
 python -m domovoi.env_bootstrap --repair  # adds the two secrets to an older .env
 cd domovoi
@@ -84,7 +84,7 @@ pip install --no-deps -e .
 ```
 
 `requirements-linux-py314.lock` is what a Linux server installs: core,
-`real-clients`, `voice-profile`, `resemblyzer` and CPU torch, for CPython
+`real-clients` and `voice-profile` (no torch since 1.3.0), for CPython
 3.14 on x86_64 ([LINUX_HOST.md, Install](LINUX_HOST.md#install); the
 update unit's re-sync uses it on a box that opts in with
 `DOMOVOI_USE_LOCK=1`). Regenerate it with
@@ -101,9 +101,12 @@ together. The floors on `starlette`,
 `python-multipart`, `requests` and `pillow` are one-way — raise freely,
 never lower; `domovoi/tests/test_ops_dependency_floors.py` holds the line.
 
-**The resemblyzer quirk**: Resemblyzer pins `webrtcvad`, which has no Windows
-binary wheels. Our code path never calls the part that needs it, so install
-the voice-profile extras first and Resemblyzer with `--no-deps`. Details in
+**Voice ID's model**: voice identification runs 3D-Speaker's ERes2Net on
+ONNX Runtime (`domovoi/clients/speaker_encoder.py`); its model file isn't
+a package but a 25 MB download the server fetches once, pinned by size and
+SHA-256, into the voice-models directory. The suite runs on the stub
+embedder; the encoder's own tests want the file, named by
+`DOMOVOI_TEST_SPEAKER_MODEL` (CI fetches it). Details in
 [`domovoi/README.md`](../domovoi/README.md).
 
 Databases: `domovoi` (prod) and `domovoi_test` (tests), both owned by
@@ -417,11 +420,11 @@ Apache-2.0) runs only in the printing test harness, never shipped.
 
 Installed without their declared dependencies (`requirements-no-deps.in`,
 since 2026-10-15): faster-whisper, which declares PyAV (`av`, FFmpeg's
-LGPL libraries inside) though Domovoi hands it arrays and never a file,
-and resemblyzer, which declares librosa (with soxr and soundfile:
-libsoxr and libsndfile, LGPL) though Domovoi computes the one mel
-spectrogram it needs with numpy (`domovoi/clients/speaker_encoder.py`).
-So none of PyAV, librosa, soxr or soundfile is installed. The wake-word trainer
+LGPL libraries inside) though Domovoi hands it arrays and never a file.
+Until 1.3.0 resemblyzer was installed this way too, for its weights alone
+(it declares librosa, with soxr and soundfile: LGPL); voice ID now runs an
+ONNX model with a numpy front end and needs neither it nor torch. So none
+of PyAV, librosa, soxr or soundfile is installed. The wake-word trainer
 image (`scripts/wake_word/docker`) is a separate tool built on the server
 when training is turned on, not part of an install; its upstream training
 code uses mutagen and espeak-ng.

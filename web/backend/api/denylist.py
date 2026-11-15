@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation
+from domovoi.db.repositories import VoiceDenylistRepository
 from web.backend.db import session_scope
 from web.backend.schemas import DenylistEntry
 
@@ -27,9 +28,12 @@ async def list_denylist() -> list[DenylistEntry]:
                 """
                 SELECT id, denylisted_at, notes
                 FROM voice_denylist
+                WHERE model = :model
                 ORDER BY denylisted_at DESC
                 """
-            )
+            ),
+            # Only the current speaker model's opt-outs are ever matched.
+            {"model": VoiceDenylistRepository.EMBEDDING_MODEL_TAG},
         )
         return [
             DenylistEntry(id=int(r[0]), denylisted_at=r[1], notes=r[2])

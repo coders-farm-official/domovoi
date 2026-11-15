@@ -802,7 +802,7 @@ async def test_the_app_reaches_the_core_through_its_own_server(
     db_session, web_to_core, whisper, heard_as,
 ) -> None:
     ana = await _person("Ana")
-    heard_as.person, heard_as.score = ana, 0.77
+    heard_as.person, heard_as.score = ana, 0.60   # over 0.58, under the 0.63 learning bar
     whisper.texts = ["what time is it"]
     tid = await _thread()
     async with _web() as web:
@@ -821,7 +821,7 @@ async def test_the_app_reaches_the_core_through_its_own_server(
     user, assistant = listed
     assert user["source"] == "voice" and assistant["source"] == "voice"
     assert user["speaker_person_id"] == ana and user["speaker_name"] == "Ana"
-    assert user["speaker_confidence"] == pytest.approx(0.77)
+    assert user["speaker_confidence"] == pytest.approx(0.60)
     assert user["speaker_confident"] is False
     assert assistant["speaker_person_id"] is None and assistant["speaker_confident"] is False
 

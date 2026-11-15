@@ -1,8 +1,8 @@
 """The voice encoder and the Piper voices load before the first turn, off
 the event loop.
 
-The first turn after a restart used to pay two loads: Resemblyzer's voice
-encoder inside voice identification (identify_ms 633 against ~35 warm) and
+The first turn after a restart used to pay two loads: the voice encoder
+(Resemblyzer's, then) inside voice identification (identify_ms 633 against ~35 warm) and
 the room's Piper voice inside the first reply (tts_first_ms 638 against
 44-99). Worse, the encoder loaded synchronously ON THE EVENT LOOP
 (``RealVoiceEmbedder._ensure_encoder`` ran before the worker thread), so
@@ -10,7 +10,9 @@ every room's socket stood still for it. Pinned here, with doubles for
 the speaker encoder and piper and no database:
 
 * the encoder loads in a worker thread, on an embed as on a preload, and
-  once between a preload and a turn racing it;
+  once between a preload and a turn racing it; without its model file a
+  turn gets no embedding at once, and the file is fetched in the
+  background (never under ``INTERNET_ACCESS=never``);
 * a Piper voice loads once between a preload and a turn racing it;
 * the boot warm-up loads the encoder and the default voice (only a Piper
   one), off the loop, and does nothing under stubs;
@@ -22,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import threading
 import time
 import types
@@ -42,30 +43,32 @@ PCM_2S = np.full(32_000, 800, dtype=np.int16).tobytes()
 
 
 @pytest.fixture
-def fake_resemblyzer(monkeypatch):
-    """A speaker encoder (domovoi/clients/speaker_encoder.py, Resemblyzer's
-    network) that records the thread it was built on and takes a while to
+def fake_encoder(monkeypatch):
+    """A speaker encoder (domovoi/clients/speaker_encoder.py) whose model is
+    on disk, that records the thread it was built on and takes a while to
     build, like the real one."""
     from domovoi.clients import speaker_encoder
 
-    seen: dict = {"built_on": [], "embedded": 0}
+    seen: dict = {"built_on": [], "embedded": 0, "threads": []}
 
     class VoiceEncoder:
-        def __init__(self) -> None:
+        def __init__(self, path=None, threads=2) -> None:
             seen["built_on"].append(threading.get_ident())
+            seen["threads"].append(threads)
             time.sleep(0.2)
 
         def embed_utterance(self, wav):
             seen["embedded"] += 1
-            v = np.ones(256, dtype=np.float32)
+            v = np.ones(speaker_encoder.EMBEDDING_DIM, dtype=np.float32)
             return v / np.linalg.norm(v)
 
     monkeypatch.setattr(speaker_encoder, "SpeakerEncoder", VoiceEncoder)
+    monkeypatch.setattr(speaker_encoder, "model_on_disk", lambda path=None: True)
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
     return seen
 
 
-def test_the_first_embed_loads_the_encoder_off_the_event_loop(fake_resemblyzer) -> None:
+def test_the_first_embed_loads_the_encoder_off_the_event_loop(fake_encoder) -> None:
     emb = RealVoiceEmbedder()
 
     async def _turn():
@@ -85,12 +88,12 @@ def test_the_first_embed_loads_the_encoder_off_the_event_loop(fake_resemblyzer) 
         return loop_thread, vec, ticks
 
     loop_thread, vec, ticks = asyncio.run(_turn())
-    assert vec is not None and vec.shape == (256,)
-    assert fake_resemblyzer["built_on"] and loop_thread not in fake_resemblyzer["built_on"]
+    assert vec is not None and vec.shape == (192,)
+    assert fake_encoder["built_on"] and loop_thread not in fake_encoder["built_on"]
     assert ticks >= 3          # 200 ms of load, and the loop kept turning through it
 
 
-def test_a_preload_and_a_racing_turn_load_the_encoder_once(fake_resemblyzer) -> None:
+def test_a_preload_and_a_racing_turn_load_the_encoder_once(fake_encoder) -> None:
     emb = RealVoiceEmbedder()
 
     async def _race():
@@ -98,26 +101,76 @@ def test_a_preload_and_a_racing_turn_load_the_encoder_once(fake_resemblyzer) -> 
 
     ready, a, b = asyncio.run(_race())
     assert ready is True and a is not None and b is not None
-    assert len(fake_resemblyzer["built_on"]) == 1
+    assert len(fake_encoder["built_on"]) == 1
     # The preload ran one forward pass of its own (the warm-up); each embed
-    # runs two (1.3.0: the speech alone, and the whole recording for voices
-    # enrolled before it; domovoi/clients/voice_embedder.py, VoicePrint).
-    assert fake_resemblyzer["embedded"] == 5
+    # runs one.
+    assert fake_encoder["embedded"] == 3
+    assert fake_encoder["threads"] == [settings.voice_profile_encoder_threads]
 
 
-def test_a_missing_resemblyzer_degrades_to_no_embedding(monkeypatch) -> None:
+def test_without_its_model_a_turn_gets_no_embedding_and_the_model_is_fetched_behind_it(monkeypatch) -> None:
+    """No model file: the turn isn't held for a 25 MB download. It gets no
+    embedding at once (voice ID names nobody), and one fetch starts on the
+    downloads executor; a second turn meanwhile starts no other."""
+    from domovoi import egress
     from domovoi.clients import speaker_encoder
 
-    def no_weights():
-        raise FileNotFoundError("Resemblyzer's voice encoder weights are not installed")
+    fetched: list[int] = []
+    gate = threading.Event()
 
-    monkeypatch.setattr(speaker_encoder, "weights_path", no_weights)
+    def download(dest_dir=None):
+        fetched.append(threading.get_ident())
+        gate.wait(5)
+        raise speaker_encoder.ModelUnavailable("fixture: no network")
+
+    monkeypatch.setattr(speaker_encoder, "model_on_disk", lambda path=None: False)
+    monkeypatch.setattr(speaker_encoder, "download_model", download)
+    monkeypatch.setattr(speaker_encoder, "_last_failure", None)
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: False)
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
-    assert asyncio.run(RealVoiceEmbedder().embed(PCM_2S)) is None
+    emb = RealVoiceEmbedder()
+
+    async def _turns():
+        loop_thread = threading.get_ident()
+        first = await emb.embed(PCM_2S)
+        second = await emb.embed(PCM_2S)
+        task = emb._fetching
+        gate.set()
+        ok = await task
+        return loop_thread, first, second, ok
+
+    loop_thread, first, second, ok = asyncio.run(_turns())
+    assert first is None and second is None
+    assert len(fetched) == 1 and fetched[0] != loop_thread
+    assert ok is False
 
 
-def test_a_missing_torch_degrades_to_no_embedding(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "torch", None)          # import fails
+def test_without_its_model_and_with_the_internet_off_nothing_is_fetched(monkeypatch) -> None:
+    from domovoi import egress
+    from domovoi.clients import speaker_encoder
+
+    def download(dest_dir=None):
+        raise AssertionError("fetched with the internet turned off")
+
+    monkeypatch.setattr(speaker_encoder, "model_on_disk", lambda path=None: False)
+    monkeypatch.setattr(speaker_encoder, "download_model", download)
+    monkeypatch.setattr(egress, "internet_turned_off", lambda: True)
+    monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
+    emb = RealVoiceEmbedder()
+    assert asyncio.run(emb.embed(PCM_2S)) is None
+    assert emb._fetching is None
+    assert asyncio.run(emb.preload()) is False
+
+
+def test_an_encoder_that_fails_to_load_degrades_to_no_embedding(monkeypatch) -> None:
+    from domovoi.clients import speaker_encoder
+
+    class Broken:
+        def __init__(self, *a, **k) -> None:
+            raise speaker_encoder.ModelUnavailable("the speaker model gives 512 numbers, not 192")
+
+    monkeypatch.setattr(speaker_encoder, "SpeakerEncoder", Broken)
+    monkeypatch.setattr(speaker_encoder, "model_on_disk", lambda path=None: True)
     monkeypatch.setattr(settings, "voice_profile_min_utterance_sec", 1.0)
     assert asyncio.run(RealVoiceEmbedder().embed(PCM_2S)) is None
 
@@ -163,9 +216,9 @@ def test_a_voice_loads_once_between_a_preload_and_a_racing_reply(fake_piper) -> 
 
 
 @pytest.fixture
-def real_mode(monkeypatch, fake_piper, fake_resemblyzer):
+def real_mode(monkeypatch, fake_piper, fake_encoder):
     """Out of stub mode for the warm-up only: the real embedder class over
-    the fake resemblyzer, and a voice registry that says what it's told."""
+    the fake encoder, and a voice registry that says what it's told."""
     from domovoi.clients import voice_embedder
 
     monkeypatch.setattr(settings, "use_stubs", False)
@@ -178,7 +231,7 @@ def real_mode(monkeypatch, fake_piper, fake_resemblyzer):
 
     monkeypatch.setattr("domovoi.streaming.resolve_voice", _resolve)
     return types.SimpleNamespace(embedder=emb, registry=registry, piper=fake_piper,
-                                 encoder=fake_resemblyzer)
+                                 encoder=fake_encoder)
 
 
 def test_the_boot_warm_up_loads_the_encoder_and_the_default_voice_off_the_loop(real_mode) -> None:

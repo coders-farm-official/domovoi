@@ -30,6 +30,14 @@ def _manifest() -> dict[str, str]:
     return out
 
 
+def test_the_voice_id_model_is_named() -> None:
+    from domovoi.clients import speaker_encoder
+
+    text = DOC.read_text(encoding="utf-8")
+    assert f"`{speaker_encoder.MODEL_FILE}`" in text, "voice ID's speaker model is not in docs/LICENSES.md"
+    assert "speaker-recongition-models" in text and "3D-Speaker" in text
+
+
 def test_every_model_provision_installs_is_in_the_table():
     conf, text = _manifest(), _doc()
     models = {v for k, v in conf.items() if k.startswith("tier_") and k.endswith("_model")}

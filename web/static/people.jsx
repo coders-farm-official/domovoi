@@ -172,12 +172,13 @@ const PersonVoiceSamples = ({ samples, onDelete }) => (
  * heard only in another room (each room's mic, distance and echo colour a
  * voice), so the household sees which rooms don't know a person yet and
  * how to fix it: "my name is …" said in that room, then "yes", adds a
- * sample there. A room with only a sample from before 1.3.0 still counts
- * until a newer one replaces it.
+ * sample there. Hidden while voice ID can't run, or while the person has
+ * to introduce themselves again (PersonVoiceRelearn says so instead).
  */
-const PersonVoiceRooms = ({ person, rooms }) => {
+const PersonVoiceRooms = ({ person, rooms, voiceId }) => {
   if (!rooms || rooms.length === 0) return null;
-  const missing = rooms.filter(r => !r.current && !r.legacy);
+  if (person.voice_relearn || (voiceId && !voiceId.ready)) return null;
+  const missing = rooms.filter(r => !r.current);
   return (
     <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -188,8 +189,8 @@ const PersonVoiceRooms = ({ person, rooms }) => {
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
         {rooms.map(r => (
-          <Pill key={r.room_id} tone={r.current || r.legacy ? 'ok' : 'idle'}>
-            {r.room_id}{r.current || r.legacy ? '' : ' · not yet'}
+          <Pill key={r.room_id} tone={r.current ? 'ok' : 'idle'}>
+            {r.room_id}{r.current ? '' : ' · not yet'}
           </Pill>
         ))}
       </div>
@@ -199,6 +200,64 @@ const PersonVoiceRooms = ({ person, rooms }) => {
           “not yet”, {person.name || 'they'} can say “my name is {person.name || '…'}” and answer yes.
         </div>
       )}
+    </div>
+  );
+};
+
+/* ---- Voice ID's state (GET /api/people/voice-id) ---------- */
+/*
+ * 1.3.0 changed the speaker model, and voices learned by the old one can't
+ * be used (V061), so nobody is recognized until they say "my name is …"
+ * again. The household notice says so once, plainly; a person who still
+ * has to is marked in the list and on their profile. When voice ID can't
+ * run at all (its model isn't on the server), that is all the page says:
+ * asking anyone to introduce themselves then would be a control that
+ * can't do what it says.
+ */
+const VoiceIdNotice = ({ status }) => {
+  if (!status) return null;
+  if (!status.ready) {
+    return (
+      <div className="voice-id-notice" role="status"
+           style={{ padding: '10px 14px', marginBottom: 12, borderRadius: 'var(--r-md)',
+                    background: 'var(--warn-soft, var(--sunken))', fontSize: 13, lineHeight: 1.5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+          <Icon name="mic-off" size={14}/> Voice recognition is off
+        </div>
+        <div style={{ color: 'var(--fg-muted)', marginTop: 2 }}>{status.problem}</div>
+      </div>
+    );
+  }
+  if (!status.relearn) return null;
+  return (
+    <div className="voice-id-notice" role="status"
+         style={{ padding: '10px 14px', marginBottom: 12, borderRadius: 'var(--r-md)',
+                  background: 'var(--sunken)', fontSize: 13, lineHeight: 1.5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+        <Icon name="mic" size={14}/> Domovoi needs to learn voices again
+      </div>
+      <div style={{ color: 'var(--fg-muted)', marginTop: 2 }}>
+        Voice recognition was upgraded, and voices it knew before can't be used.
+        Until each person says “my name is …” in a room and answers yes, Domovoi
+        won’t know who is speaking. {status.relearn === 1 ? '1 person still has' : `${status.relearn} people still have`} to.
+      </div>
+    </div>
+  );
+};
+
+const PersonVoiceRelearn = ({ person, voiceId }) => {
+  if (!person.voice_relearn || (voiceId && !voiceId.ready)) return null;
+  const name = person.name || '…';
+  return (
+    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
+                  background: 'var(--warn-soft, var(--sunken))', fontSize: 13, lineHeight: 1.5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+        <Icon name="mic" size={14}/> Not recognized by voice yet
+      </div>
+      <div style={{ color: 'var(--fg-muted)', marginTop: 4 }}>
+        Voice recognition was upgraded, so Domovoi has to learn {person.name || 'their'} voice again.
+        To be recognized again, {person.name || 'they'} can say “my name is {name}” in a room and answer yes.
+      </div>
     </div>
   );
 };
@@ -589,7 +648,7 @@ const ListeningHistoryPanel = () => {
 
 window.ListeningHistoryPanel = ListeningHistoryPanel;
 
-const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceRooms, voiceMatches, onDeleteSample, onForget, onRenamed, fire, listens, onDeviceChanged }) => {
+const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceRooms, voiceMatches, voiceId, onDeleteSample, onForget, onRenamed, fire, listens, onDeviceChanged }) => {
   // Rename: PATCH /api/people/{id}, admin tier. A name somebody else has
   // is refused (409) with the server's reason, and the box stays open.
   const [editing, setEditing] = React.useState(false);
@@ -646,6 +705,8 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceRooms, voic
 
       {person.namesakes > 0 && <PersonNamesakes person={person}/>}
 
+      <PersonVoiceRelearn person={person} voiceId={voiceId}/>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', borderBottom: '1px solid var(--border-soft)' }}>
         <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
           <div className="label">last heard</div>
@@ -671,7 +732,7 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceRooms, voic
         </div>
       </div>
 
-      <PersonVoiceRooms person={person} rooms={voiceRooms}/>
+      <PersonVoiceRooms person={person} rooms={voiceRooms} voiceId={voiceId}/>
 
       <PersonVoiceSamples samples={samples} onDelete={onDeleteSample}/>
 
@@ -1294,6 +1355,8 @@ const PeoplePage = ({ embedded = false } = {}) => {
   const voiceHistory = useApiObject('/api/voice-history', { quiet: true, refetchOnAuth: true });
   // The listening history's counts per person (Profile tab), quiet too.
   const listens = useApiObject('/api/music/listens/summary', { quiet: true, refetchOnAuth: true });
+  // Whether voice ID can run, and who has to introduce themselves again.
+  const voiceId = useApiObject('/api/people/voice-id', { quiet: true, refetchOnAuth: true });
 
   // Per-person fetches; refetch when the selection changes OR when
   // a memory/favorite mutation bumps the tick.
@@ -1406,6 +1469,8 @@ const PeoplePage = ({ embedded = false } = {}) => {
             sub={`${people.length} enrolled · ${liveCount} heard in the last 5 min`}
           />}
 
+      <VoiceIdNotice status={voiceId.data}/>
+
       <div className="people-layout">
         {/* Left rail */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -1448,6 +1513,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
                                            color: active ? 'var(--brand-ink)' : 'var(--fg)' }}>{p.name}</span>
                             {live && <StatusDot tone="ok" live/>}
                             {p.namesakes > 0 && <span title="someone else has this name too"><StatusDot tone="warn"/></span>}
+                            {p.voice_relearn && <span title="has to say “my name is …” again to be recognized by voice"><StatusDot tone="idle"/></span>}
                           </div>
                           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
                             {p.namesakes > 0 && <>#{p.id} · same name · </>}
@@ -1524,6 +1590,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
                           samples={samples}
                           voiceRooms={voiceRooms}
                           voiceMatches={voiceMatches}
+                          voiceId={voiceId.data}
                           onDeleteSample={onDeleteSample}
                           onForget={() => setConfirmFor(selected)}
                           onRenamed={refreshPeople}

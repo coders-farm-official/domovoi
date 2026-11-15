@@ -64,10 +64,6 @@ class Context(BaseModel):
     person_id: int | None = None
     presence_tier: str | None = None  # "low" | "medium" | "high"
     embedding_bytes: bytes | None = None
-    # The same recording's legacy embedding (pre-1.3.0 samples are held in
-    # it: domovoi/voice_identifier.py, "Two embeddings") — what "forget me"
-    # holds a person with no current sample against. Never enrolled.
-    legacy_embedding_bytes: bytes | None = None
     # The people this voice was too close to tell apart (the identifier's
     # "ambiguous", best first), so ``person_id`` is None although the voice
     # is someone known. Empty otherwise. "Who am I" reads it to say when

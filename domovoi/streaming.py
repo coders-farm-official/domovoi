@@ -2257,7 +2257,7 @@ class StreamSession:
         # while it decoded (`_spec_wanted`), so there was speech after it
         # and no turn can use it, or a new utterance has started — and its
         # embedding, in the decode slot, would only hold up the next copy's
-        # decode (10-30 ms; seconds while the voice encoder is still
+        # decode (~75 ms on two small-CPU cores; seconds while the voice encoder is still
         # loading after a boot). (A copy the turn is waiting for is no
         # longer `self._spec` — utterance_end hands it over — so that is
         # not a sign of anything.)
@@ -2287,7 +2287,7 @@ class StreamSession:
 
     async def _copy_embedding(self, heard: _Heard) -> None:
         """Wait for a speculative copy's embedding (usually long done: it
-        takes ~10 ms after the decode) and put it on ``heard``. Shielded:
+        takes ~40-140 ms after the decode, by CPU) and put it on ``heard``. Shielded:
         a barge-in cancelling the turn must not cancel the embedding, which
         holds the room's decode slot until its thread ends."""
         task = heard.embed_task
@@ -4812,10 +4812,6 @@ class StreamSession:
                 embedding_bytes: bytes | None = None
                 if ident is not None and ident.embedding is not None:
                     embedding_bytes = ident.embedding.astype("float32").tobytes()
-                legacy = getattr(ident, "legacy_embedding", None)
-                legacy_embedding_bytes = (
-                    legacy.astype("float32").tobytes() if legacy is not None else None
-                )
 
                 # Stamp the most-recent WiFi self-report from this room's Pi
                 # into the Context so WifiHandler's diagnostic path can
@@ -4842,7 +4838,6 @@ class StreamSession:
                     person_id=person_id,
                     presence_tier=presence_tier,
                     embedding_bytes=embedding_bytes,
-                    legacy_embedding_bytes=legacy_embedding_bytes,
                     voice_candidates=list(getattr(ident, "candidates", ()) or ()),
                     trigger=trigger,
                     wifi_status=wifi_status,

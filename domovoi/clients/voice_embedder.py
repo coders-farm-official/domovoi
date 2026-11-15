@@ -1,31 +1,31 @@
 """Speaker-embedding client.
 
-Real path: Resemblyzer's pretrained ``VoiceEncoder`` produces 256-dim
-float32 embeddings from 16 kHz mono PCM. Sub-100 ms per utterance on
-modern CPUs; we don't need GPU here since the model is tiny and the
-call frequency is bounded by user speech (a few per minute, not per
-second).
+Real path: 3D-Speaker's ERes2Net on ONNX Runtime
+(domovoi/clients/speaker_encoder.py) makes a unit-norm 192-dim float32
+embedding of each utterance's voice, from 16 kHz mono PCM: about 75 ms
+for a three-second command on two threads (``voice_profile_encoder_threads``)
+of a mini-PC-class core (measured on Gracemont E-cores, 2026-11; 140 ms on
+one, 42 ms on four), on the speech executor beside Whisper. Its model file (25 MB) is fetched once into the
+voice-models directory; until it is there, the embedder makes nothing and
+voice ID names nobody (``speaker_encoder.model_problem`` says why).
 
 Stub path: deterministic vector derived from a SHA-256 hash of the PCM
 bytes, projected onto the unit sphere. Same input → same vector, so
 tests that want "the same speaker said two things" reuse the same PCM
 bytes; tests that want "two different speakers" use different bytes.
 
-Two embeddings per recording (1.3.0, :class:`VoicePrint`): the *current*
-one, of the speech alone at one loudness (domovoi/voice_prep.py), which
-every new sample is kept in (``resemblyzer-v2``), and the *legacy* one, of
-the whole recording as it came (``resemblyzer-v1``), which voices enrolled
-before 1.3.0 are still matched with until a room saves a current sample of
-theirs (domovoi/voice_identifier.py, "Two embeddings"). Each is one pass of
-the small encoder (~25 ms on a CPU).
+What is embedded is the recording's speech alone, at one level
+(domovoi/voice_prep.py, :func:`~domovoi.voice_prep.for_embedding`, which
+says why, measured), and with it comes how clear that speech was
+(:class:`VoicePrint`), which voice ID's music gate reads.
 
-Both paths are async-fronted (Resemblyzer is sync C-extension code; we
-push it to a worker thread so it doesn't pin the event loop during
-inference).
+Both paths are async-fronted: the network runs in a worker thread so it
+doesn't pin the event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import threading
@@ -34,35 +34,34 @@ from typing import Protocol
 
 import numpy as np
 
+from domovoi.clients.speaker_encoder import EMBEDDING_DIM
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
 
-EMBEDDING_DIM = 256  # Resemblyzer's output dimension. Stub matches it.
+__all__ = ["EMBEDDING_DIM", "VoicePrint", "VoiceEmbedder", "get_voice_embedder"]
 
 
 @dataclass(frozen=True)
 class VoicePrint:
     """One recording's voice. ``current``: the unit-norm embedding of its
-    speech alone, at one loudness; ``legacy``: of the whole recording as it
-    came (None when it couldn't be made); ``snr_db``: how far the speech
-    stood above the rest of the recording (None: not measured — the stub);
-    ``speech_sec``: how much speech was found."""
+    speech; ``snr_db``: how far the speech stood above the rest of the
+    recording (None: not measured — the stub); ``speech_sec``: how much
+    speech was found."""
 
     current: np.ndarray
-    legacy: np.ndarray | None = None
     snr_db: float | None = None
     speech_sec: float | None = None
 
 
 class VoiceEmbedder(Protocol):
     async def embed(self, pcm_int16: bytes) -> np.ndarray | None:
-        """Return the unit-norm float32 *current* embedding, or None if the
-        clip is too short / silent / otherwise unembeddable."""
+        """Return the unit-norm float32 embedding, or None if the clip is
+        too short / silent / otherwise unembeddable."""
         ...
 
     async def embed_print(self, pcm_int16: bytes) -> VoicePrint | None:
-        """Both embeddings and the speech's clarity, or None as above."""
+        """The embedding and the speech's clarity, or None as above."""
         ...
 
 
@@ -80,8 +79,7 @@ class StubVoiceEmbedder:
         return None if voice is None else voice.current
 
     async def embed_print(self, pcm_int16: bytes) -> VoicePrint | None:
-        """The same hash vector as both embeddings (a stub voice sounds the
-        same either way), clarity unmeasured."""
+        """The hash vector, clarity unmeasured."""
         if not pcm_int16:
             return None
         # SHA-256 → 64 hex chars → seed an RNG → standard normal vector.
@@ -92,50 +90,84 @@ class StubVoiceEmbedder:
         v = rng.standard_normal(EMBEDDING_DIM).astype(np.float32)
         norm = float(np.linalg.norm(v))
         v = v / norm if norm > 0 else v
-        return VoicePrint(current=v, legacy=v, snr_db=None,
-                          speech_sec=len(pcm_int16) / (16_000 * 2))
+        return VoicePrint(current=v, snr_db=None, speech_sec=len(pcm_int16) / (16_000 * 2))
 
 
 class RealVoiceEmbedder:
-    """Resemblyzer wrapper. The model loads once, in a worker thread: at
-    boot (:meth:`preload`, from ``domovoi/speech_warmup.py``), or on the
-    first embed if that hasn't happened yet.
+    """The ERes2Net encoder. The model loads once, in a worker thread: at
+    boot (:meth:`preload`, from ``domovoi/speech_warmup.py``, which also
+    fetches the model file when it isn't on disk yet), or on the first
+    embed if that hasn't happened.
 
-    Never on the event loop: the load is ~600 ms of torch on a CPU host,
-    and the loop serves every room's socket — a load there (as the first
-    turn after a restart used to do) froze them all for that long."""
+    A turn never waits for the download: without the model file an embed
+    starts a fetch in the background (on the ``downloads`` executor, at
+    most once every ``speaker_encoder.RETRY_AFTER_SEC`` after a failure,
+    never with internet access turned off) and returns None at once."""
 
     def __init__(self) -> None:
         self._encoder = None
         self._load_lock = threading.Lock()
+        self._fetching: asyncio.Task | None = None
 
-    def _ensure_encoder(self) -> None:
-        """Load the encoder if it isn't. Blocking — worker threads only.
-        The lock makes a boot preload and a first turn racing it load the
-        model once between them."""
+    def _load(self) -> bool:
+        """Load the encoder if it isn't, when its model is on disk.
+        Blocking — worker threads only. The lock makes a boot preload and
+        a first turn racing it load the model once between them."""
         if self._encoder is not None:
-            return
+            return True
         with self._load_lock:
             if self._encoder is not None:
-                return
-            # Imported lazily so USE_STUBS=true can run without torch.
-            # Resemblyzer's encoder and weights, without librosa (soxr,
-            # soundfile): domovoi/clients/speaker_encoder.py, 2026-10-15.
-            from domovoi.clients.speaker_encoder import SpeakerEncoder
+                return True
+            from domovoi.clients import speaker_encoder as se
 
-            log.info("loading Resemblyzer VoiceEncoder (one-time)")
-            self._encoder = SpeakerEncoder()
+            if not se.model_on_disk():
+                return False
+            log.info("loading the voice ID speaker model (one-time)")
+            self._encoder = se.SpeakerEncoder(threads=settings.voice_profile_encoder_threads)
+            return True
+
+    async def _fetch(self) -> bool:
+        """Download the model on the ``downloads`` executor. False (logged)
+        when it can't be had now."""
+        from domovoi import egress, executors
+        from domovoi.clients import speaker_encoder as se
+
+        if egress.internet_turned_off():
+            log.warning("voice ID: the speaker model isn't on this server and internet access "
+                        "is turned off; nobody will be recognized by voice")
+            return False
+        try:
+            await executors.run("downloads", se.download_model)
+            return True
+        except Exception as e:  # noqa: BLE001 — logged; voice ID stays off until it works
+            log.warning("voice ID: the speaker model could not be downloaded (%s); nobody will "
+                        "be recognized by voice until it is", e)
+            return False
+
+    def _start_fetch(self) -> None:
+        from domovoi import egress
+        from domovoi.clients import speaker_encoder as se
+
+        if self._fetching is not None and not self._fetching.done():
+            return
+        if egress.internet_turned_off() or not se.may_retry_download():
+            return
+        self._fetching = asyncio.get_running_loop().create_task(self._fetch())
 
     async def preload(self) -> bool:
-        """Load the encoder and run it once on a short silence, in a worker
-        thread, so the first turn after a boot pays neither the load nor
-        the first forward pass. True when the encoder is ready."""
+        """Fetch the model if it isn't on disk, then load the encoder and
+        run it once on a second of silence, in worker threads, so the first
+        turn after a boot pays neither. True when the encoder is ready."""
         from domovoi import executors
+        from domovoi.clients import speaker_encoder as se
 
+        if not se.model_on_disk() and not await self._fetch():
+            return False
         return await executors.run("speech", self._preload_sync)
 
     def _preload_sync(self) -> bool:
-        self._ensure_encoder()
+        if not self._load():
+            return False
         assert self._encoder is not None
         self._encoder.embed_utterance(np.zeros(16_000, dtype=np.float32))
         return True
@@ -147,38 +179,37 @@ class RealVoiceEmbedder:
     async def embed_print(self, pcm_int16: bytes) -> VoicePrint | None:
         if not pcm_int16:
             return None
-        # Resemblyzer expects float32 in [-1, 1] at 16 kHz. The Pi sends
-        # int16 PCM at exactly 16 kHz. Below the configured minimum length
-        # we bail rather than emit a noisy embedding.
-        sample_count = len(pcm_int16) // 2
-        seconds = sample_count / 16_000.0
+        # Below the configured minimum length we bail rather than emit a
+        # noisy embedding.
+        seconds = (len(pcm_int16) // 2) / 16_000.0
         if seconds < settings.voice_profile_min_utterance_sec:
             return None
+        if self._encoder is None:
+            from domovoi.clients import speaker_encoder as se
 
-        # The load (when the boot preload hasn't done it) and the NN
-        # forward passes run in a worker thread — synchronous torch code
-        # that would otherwise block the event loop.
+            if not se.model_on_disk():
+                self._start_fetch()
+                return None
         from domovoi import executors
 
         return await executors.run("speech", self._embed_sync, pcm_int16)
 
     def _embed_sync(self, pcm_int16: bytes) -> VoicePrint | None:
-        from domovoi.voice_prep import prepare
+        from domovoi.voice_prep import for_embedding
 
         try:
-            self._ensure_encoder()
+            if not self._load():
+                return None
             assert self._encoder is not None
             wav = np.frombuffer(pcm_int16, dtype=np.int16).astype(np.float32) / 32768.0
-            legacy = _unit(self._encoder.embed_utterance(wav))
-            speech = prepare(wav)
+            speech = for_embedding(wav)
             if speech.speech_sec < settings.voice_profile_min_utterance_sec:
-                # Too little speech once the silence around it is gone: no
-                # current embedding, so nothing is named or saved from it.
+                # Too little speech in it: no embedding, so nothing is named
+                # or saved from it.
                 log.debug("voice embedding: %.2f s of speech, too short", speech.speech_sec)
                 return None
             current = _unit(self._encoder.embed_utterance(speech.audio))
-            return VoicePrint(current=current, legacy=legacy,
-                              snr_db=speech.snr_db, speech_sec=speech.speech_sec)
+            return VoicePrint(current=current, snr_db=speech.snr_db, speech_sec=speech.speech_sec)
         except Exception as e:
             log.warning("voice embedding failed: %s", e)
             return None
@@ -190,6 +221,25 @@ def _unit(emb: np.ndarray) -> np.ndarray:
     emb = np.asarray(emb, dtype=np.float32)
     norm = float(np.linalg.norm(emb))
     return emb / norm if norm > 0 else emb
+
+
+#: What voice replies say when voice ID can't run on this server
+#: (:func:`voice_id_unavailable`): never a promise to recognize anyone.
+UNAVAILABLE_SPOKEN = (
+    "I can't recognize voices right now: my voice recognition model isn't on the server. "
+    "The People page in the dashboard says why."
+)
+
+
+def voice_id_unavailable() -> bool:
+    """Whether voice ID can't make an embedding on this server at all: the
+    real embedder without its model file (domovoi/clients/speaker_encoder.py).
+    The stub always can."""
+    if not isinstance(get_voice_embedder(), RealVoiceEmbedder):
+        return False
+    from domovoi.clients.speaker_encoder import model_on_disk
+
+    return not model_on_disk()
 
 
 _client: VoiceEmbedder | None = None

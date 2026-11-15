@@ -73,7 +73,9 @@
 #                beside it (config.json, tokenizer.json, vocabulary.*) come
 #                from that revision but are not hashed  (--skip-models: no)
 #   piper        the three Piper voices (SHIPPED_VOICES), each checked against
-#                PIPER_PINS; a configured voice outside them is left to the core
+#                PIPER_PINS; a configured voice outside them is left to the core;
+#                and voice ID's speaker model (domovoi/clients/speaker_encoder.py,
+#                MODEL_URL), checked against MODEL_SHA256, into the same folder
 #   images       the database images the compose file pins, and docker build of
 #                domovoi-mpd exactly as the core builds it: only when the tag
 #                names no image, or this script built the image it names and
@@ -517,8 +519,8 @@ OLLAMA_API=http://127.0.0.1:11434
 CORE_HEALTH_URL=http://127.0.0.1:6370/v1/health
 WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
 LOCK_NAME=requirements-linux-py314.lock
-# faster-whisper and resemblyzer, installed without their declared
-# dependencies (requirements-no-deps.in says why).
+# faster-whisper, installed without its declared dependencies
+# (requirements-no-deps.in says why).
 NODEPS_LOCK_NAME=requirements-linux-py314-no-deps.lock
 
 # ─── Options ─────────────────────────────────────────────────────────────
@@ -2763,7 +2765,7 @@ import importlib, sys
 mods = ["fastapi", "uvicorn", "sqlalchemy", "asyncpg", "pydantic_settings", "ollama",
         "argon2", "PIL", "psutil", "httpx", "ctranslate2",
         "onnxruntime", "domovoi.phonemizer", "acoustid",
-        "feedparser", "torch", "scipy", "domovoi.config",
+        "feedparser", "scipy", "domovoi.config",
         "domovoi.clients.whisper", "domovoi.clients.speaker_encoder"]
 bad = []
 for m in mods:
@@ -2771,25 +2773,17 @@ for m in mods:
         importlib.import_module(m)
     except Exception as e:
         bad.append("%s: %s" % (m, e))
-# faster-whisper, without PyAV; the speaker encoder weights, without
-# importing resemblyzer (whose package imports librosa).
+# faster-whisper, without PyAV. (The voice ID speaker model is a file the
+# piper step fetches, not a package.)
 try:
     from domovoi.clients.whisper import import_faster_whisper
     import_faster_whisper().WhisperModel
 except Exception as e:
     bad.append("faster_whisper: %s" % e)
-try:
-    from domovoi.clients.speaker_encoder import weights_path
-    weights_path()
-except Exception as e:
-    bad.append("speaker encoder weights: %s" % e)
-import torch
-if torch.version.cuda is not None:
-    bad.append("torch is a CUDA build; the lock pins the +cpu wheel")
 if bad:
     print("import failures:\n  " + "\n  ".join(bad))
     sys.exit(1)
-print("imports OK: %d modules, torch %s" % (len(mods), torch.__version__))'
+print("imports OK: %d modules" % len(mods))'
 
 do_venv() {
   local want have tools reqs
@@ -2826,10 +2820,10 @@ do_venv() {
     die "pip install of the build tools from $LOCK_NAME failed"
   fi
   rm -f "$reqs"
-  emit_frac 100 "Installing the locked packages (CPU torch, Whisper, ONNX Runtime, ...)"
+  emit_frac 100 "Installing the locked packages (Whisper, ONNX Runtime, ...)"
   pip_svc install --require-hashes --no-build-isolation -r "$LOCK_NAME" || die "pip install -r $LOCK_NAME failed"
-  # faster-whisper and resemblyzer, pinned and hashed, without what they
-  # declare (PyAV, librosa: requirements-no-deps.in).
+  # faster-whisper, pinned and hashed, without what it declares (PyAV:
+  # requirements-no-deps.in).
   [ -f "$CHECKOUT/$NODEPS_LOCK_NAME" ] || die "the checkout has no $NODEPS_LOCK_NAME"
   pip_svc install --require-hashes --no-deps -r "$NODEPS_LOCK_NAME" || die "pip install --no-deps -r $NODEPS_LOCK_NAME failed"
   emit_frac 900 "Installing Domovoi"
@@ -3586,6 +3580,32 @@ d.mkdir(parents=True, exist_ok=True)
 with egress.override_policy("always"):
     print(tts._piper_download(sys.argv[1], d))'
 
+# Voice ID's speaker model, beside the voices: its file name, SHA-256 and
+# size (domovoi/clients/speaker_encoder.py), and the fetch, held open like
+# the voices' (download_model checks the size and digest before it moves
+# the file into place).
+PY_SPEAKER_INFO='#provision:speaker-info
+from domovoi.clients import speaker_encoder as se
+print(se.MODEL_FILE)
+print(se.MODEL_SHA256)
+print(se.MODEL_BYTES)'
+PY_SPEAKER_DOWNLOAD='#provision:speaker-download
+import sys
+from pathlib import Path
+from domovoi import egress
+from domovoi.clients import speaker_encoder as se
+with egress.override_policy("always"):
+    print(se.download_model(Path(sys.argv[1])))'
+SPEAKER_FILE="" SPEAKER_SHA="" SPEAKER_SIZE=0
+speaker_info() {
+  local -a lines
+  mapfile -t lines < <(svc_py -c "$PY_SPEAKER_INFO") || return 1
+  SPEAKER_FILE=${lines[0]:-} SPEAKER_SHA=${lines[1]:-} SPEAKER_SIZE=${lines[2]:-0}
+  [[ $SPEAKER_SIZE =~ ^[0-9]+$ ]] || SPEAKER_SIZE=0
+  [ -n "$SPEAKER_FILE" ] && [ -n "$SPEAKER_SHA" ]
+}
+speaker_ok() { sha_ok "$ROOT$PIPER_DIR/$SPEAKER_FILE" "$SPEAKER_SHA"; }
+
 # piper_info: PIPER_DIR, and per voice (the configured one first, then the
 # three Domovoi offers) PIPER_VOICES / PIPER_SHAS ("-": no pin) / PIPER_SIZES.
 # One value per line, three lines a voice, so a name with spaces (the path
@@ -3607,7 +3627,11 @@ piper_info() {
   done
   [ -n "$PIPER_DIR" ] && [ ${#PIPER_VOICES[@]} -gt 0 ]
 }
-inputs_piper() { piper_info || return 1; printf '%s\n' "$PIPER_DIR" "${PIPER_VOICES[@]}" "${PIPER_SHAS[@]}"; }
+inputs_piper() {
+  piper_info || return 1
+  speaker_info || return 1
+  printf '%s\n' "$PIPER_DIR" "${PIPER_VOICES[@]}" "${PIPER_SHAS[@]}" "$SPEAKER_SHA"
+}
 piper_voice_ok() {  # piper_voice_ok I: voice I is on disk and matches its pin
   sha_ok "$ROOT$PIPER_DIR/${PIPER_VOICES[$1]}.onnx" "${PIPER_SHAS[$1]}" \
     && [ -f "$ROOT$PIPER_DIR/${PIPER_VOICES[$1]}.onnx.json" ]
@@ -3619,11 +3643,14 @@ check_piper() {
     [ "${PIPER_SHAS[$i]}" = - ] && continue
     piper_voice_ok "$i" || return 1
   done
+  speaker_info && speaker_ok
 }
 do_piper() {
   local i v total=0 done_bytes=0 got=()
   piper_info || die "could not read the Piper voice setting"
+  speaker_info || die "could not read voice ID's speaker model pin"
   for i in "${!PIPER_VOICES[@]}"; do total=$((total + PIPER_SIZES[i])); done
+  total=$((total + SPEAKER_SIZE))
   for i in "${!PIPER_VOICES[@]}"; do
     v=${PIPER_VOICES[$i]}
     if [ "${PIPER_SHAS[$i]}" = - ]; then
@@ -3640,6 +3667,13 @@ do_piper() {
     emit_bytes "$done_bytes" "$total" "Downloaded the voice $v"
     got+=("$v")
   done
+  if ! speaker_ok; then
+    start_watch "$ROOT$PIPER_DIR/.$SPEAKER_FILE.part" "$SPEAKER_SIZE" "Downloading the voice ID model"
+    svc_py -c "$PY_SPEAKER_DOWNLOAD" "$PIPER_DIR" >/dev/null || { stop_watch; die "the voice ID model download failed"; }
+    stop_watch
+  fi
+  speaker_ok || die "$SPEAKER_FILE does not match its pin $SPEAKER_SHA"
+  emit_bytes "$((done_bytes + SPEAKER_SIZE))" "$total" "Downloaded the voice ID model"
   if [ ${#got[@]} -eq 0 ]; then
     STEP_DONE_MSG="Voice ${PIPER_VOICES[0]} left to the core"
   else

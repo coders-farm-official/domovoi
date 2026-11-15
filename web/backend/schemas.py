@@ -367,6 +367,20 @@ class Person(BaseModel):
     # (devices.owner_person_id; claimed on the People page or in the app).
     # Their listens, and later their favourites, are this person's.
     device_count: int = 0
+    # Their voice samples went with the speaker model 1.3.0 replaced (V061)
+    # and they have none of the current one: nobody is named by a voice
+    # until it says "my name is …" again, and the People page asks them to.
+    voice_relearn: bool = False
+
+
+class VoiceIdStatus(BaseModel):
+    """``GET /api/people/voice-id``: whether voice ID can recognize anyone
+    on this server. ``problem``: why not, in words for the household
+    (None when ``ready``). ``relearn``: how many people need to say "my
+    name is …" again after the 1.3.0 speaker-model change."""
+    ready: bool
+    problem: str | None = None
+    relearn: int = 0
 
 
 class PersonRename(BaseModel):
@@ -379,12 +393,10 @@ class VoiceRoom(BaseModel):
     """Whether one room knows a person's voice (``GET /api/people/{id}/
     voice-rooms``). A room recognizes a voice best from a sample heard in
     that room (domovoi/voice_identifier.py, ``room_person_scores``).
-    ``current``: a satellite sample from this room in the current embedding
-    (1.3.0); ``legacy``: one from before 1.3.0 only, which is used until a
-    current sample of the person exists."""
+    ``current``: a satellite sample from this room, of the current speaker
+    model."""
     room_id: str
     current: bool = False
-    legacy: bool = False
 
 
 class VoiceProfile(BaseModel):
