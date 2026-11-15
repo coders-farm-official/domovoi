@@ -591,6 +591,17 @@ def _gradle_app(text: str) -> tuple[str | None, int | None]:
     return (names[0] if len(names) == 1 else None), (int(codes[0]) if len(codes) == 1 else None)
 
 
+def _released_base(rel: dict[str, Any]) -> int:
+    """The base versionCode (build.gradle.kts's ``versionCode``) a manifest's
+    release was built from. Since per-ABI versionCodes (2026-11-14) each
+    APK entry names its own code, base*10 + its ABI's digit, and the
+    release's ``version_code`` is base*10; before, it was the base itself."""
+    code = int(rel.get("version_code") or 0)
+    apks = rel.get("apks") or []
+    per_abi = bool(apks) and all(isinstance(e, dict) and "version_code" in e for e in apks)
+    return code // 10 if per_abi else code
+
+
 def _manifest_at(t: "Tools", rev: str) -> dict[str, Any]:
     """The ``release`` object of ``android/release.json`` at ``rev`` ({} when
     there is none or it is unreadable)."""
@@ -920,9 +931,10 @@ def plan(t: Tools, repo: Path, tag_arg: str | None = None) -> dict[str, Any]:
         name, code = _gradle_app(gradle.decode("utf-8") if gradle is not None else "")
         if name is None or code is None:
             die("android/app/build.gradle.kts doesn't set versionName and versionCode exactly once each")
-        app_changed = (name, code) != (rel.get("version_name"), rel.get("version_code"))
-        if app_changed and not code > int(rel.get("version_code") or 0):
-            die(f"the app's versionCode {code} is not above the last release's ({rel.get('version_code')}): "
+        released = _released_base(rel)
+        app_changed = (name, code) != (rel.get("version_name"), released)
+        if app_changed and not code > released:
+            die(f"the app's versionCode {code} is not above the last release's ({released}): "
                 "raise it with versionName, or put both back")
         doc.update(path="app" if app_changed else "server", sign_app=app_changed, finish_at=head)
         if app_changed:
@@ -1103,9 +1115,9 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
                 "is made by android/scripts/release.ps1 (path a)")
         gradle = t.git_bytes("show", f"{tag_commit}:android/app/build.gradle.kts")
         name, code = _gradle_app(gradle.decode("utf-8") if gradle is not None else "")
-        if (name, code) != (rel.get("version_name"), rel.get("version_code")):
+        if (name, code) != (rel.get("version_name"), _released_base(rel)):
             die(f"the app at {tag} is {name or '?'} ({code or '?'}), but android/release.json hands phones "
-                f"{rel.get('version_name')} ({rel.get('version_code')}) from {app_tag}: the app changed, so release it "
+                f"{rel.get('version_name')} ({_released_base(rel)}) from {app_tag}: the app changed, so release it "
                 "first with android/scripts/release.ps1 (path a), or put its versionName and versionCode back")
         app_from = {"version_name": rel.get("version_name"), "version_code": rel.get("version_code"), "tag": app_tag}
         app_release = _release_json(t, app_tag) if (publish or t.gh_cmd) else None

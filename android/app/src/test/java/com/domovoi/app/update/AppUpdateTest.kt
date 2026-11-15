@@ -91,6 +91,57 @@ class AppUpdateTest {
         assertTrue(AppUpdate.decide(final, offer(code = 26102001, name = "1.0.0-rc3")) is UpdateState.UpToDate)
     }
 
+    // ── per-ABI versionCodes (base*10 + digit), reproducible builds ─────
+
+    private fun perAbiOffer(base: Long, name: String, ready64: Boolean = true) = AppOffer(
+        joinUrl = joinUrl,
+        release = OfferedRelease(versionName = name, versionCode = base * 10, certSha256 = releaseCert),
+        apks = listOf(
+            OfferedApk("arm64-v8a", "domovoi-$name-arm64-v8a.apk", 80_000_000, ready64, base * 10 + 2),
+            OfferedApk("armeabi-v7a", "domovoi-$name-armeabi-v7a.apk", 48_000_000, true, base * 10 + 1),
+        ),
+    )
+
+    @Test fun thePhonesOnTheLastEightDigitReleaseSeeTheFirstPerAbiOne() {
+        // 1.2.0 (26111301) to the first release with per-ABI codes.
+        val old = install(code = 26111301, name = "1.2.0")
+        assertEquals(
+            UpdateState.Available("1.3.0", 261201012, "arm64-v8a", "$joinUrl?abi=arm64-v8a&update=1"),
+            AppUpdate.decide(old, perAbiOffer(26120101, "1.3.0")),
+        )
+        val old32 = install(code = 26111301, name = "1.2.0", abis = listOf("armeabi-v7a", "armeabi"))
+        assertEquals(261201011, (AppUpdate.decide(old32, perAbiOffer(26120101, "1.3.0")) as UpdateState.Available).versionCode)
+    }
+
+    @Test fun thePickedApksOwnCodeDecides() {
+        val arm64 = install(code = 261201012, name = "1.3.0")
+        assertTrue(AppUpdate.decide(arm64, perAbiOffer(26120101, "1.3.0")) is UpdateState.UpToDate)
+        assertTrue(AppUpdate.decide(arm64, perAbiOffer(26112001, "1.2.5")) is UpdateState.UpToDate)
+        assertEquals(
+            UpdateState.Available("1.3.1", 261203012, "arm64-v8a", "$joinUrl?abi=arm64-v8a&update=1"),
+            AppUpdate.decide(arm64, perAbiOffer(26120301, "1.3.1")),
+        )
+        // Not on the server yet: the notice carries the APK's own code too.
+        assertEquals(
+            UpdateState.NotOnServer("1.3.1", 261203012),
+            AppUpdate.decide(arm64, perAbiOffer(26120301, "1.3.1", ready64 = false)),
+        )
+    }
+
+    @Test fun thirtyTwoBitAppOnASixtyFourBitPhoneIsNotToldItsOwnReleaseIsNew() {
+        // Someone installed the 32-bit APK of 1.3.0 on a 64-bit phone: the
+        // 64-bit APK of the same release is one higher, not an update.
+        val armeabi = install(code = 261201011, name = "1.3.0")
+        assertTrue(AppUpdate.decide(armeabi, perAbiOffer(26120101, "1.3.0")) is UpdateState.UpToDate)
+        assertTrue(AppUpdate.decide(armeabi, perAbiOffer(26120301, "1.3.1")) is UpdateState.Available)
+    }
+
+    @Test fun aServerOnAnEightDigitReleaseIsStillComparedByItsReleaseCode() {
+        // A per-ABI install, a server that still offers 1.2.0: up to date.
+        val arm64 = install(code = 261201012, name = "1.3.0")
+        assertTrue(AppUpdate.decide(arm64, offer(code = 26111301, name = "1.2.0")) is UpdateState.UpToDate)
+    }
+
     @Test fun aNewerReleaseOnTheServerIsAvailableWithItsJoinPage() {
         val state = AppUpdate.decide(install(), offer())
         assertEquals(

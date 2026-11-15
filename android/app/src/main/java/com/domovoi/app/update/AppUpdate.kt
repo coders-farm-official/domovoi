@@ -22,7 +22,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  *   debug build, and never when the release is signed by a key this install
  *   isn't (it couldn't install over it anyway: a self-built or Play-signed
  *   copy).
- * - Newer is the release's `version_code` above this install's.
+ * - Newer is the offered APK's own `version_code` above this install's:
+ *   since per-ABI versionCodes (reproducible builds, 2026-11-14) each APK
+ *   of a release has its own, base*10 + its ABI's digit, and the release's
+ *   `version_code` is base*10. An answer without per-APK codes (a server
+ *   on an older release) is compared by the release's code, as before.
  * - The APK offered is the first of this phone's own ABIs, in Android's
  *   order of preference, that the release carries; never a lesser one (a
  *   64-bit phone isn't moved to the 32-bit app, which has no on-device
@@ -42,13 +46,16 @@ data class OfferedRelease(
     @SerialName("cert_sha256") val certSha256: String? = null,
 )
 
-/** One APK of it, and whether the server holds a checked copy. */
+/** One APK of it, and whether the server holds a checked copy.
+ *  [versionCode] is its own (0 when the server names none: a release from
+ *  before per-ABI codes). */
 @Serializable
 data class OfferedApk(
     val abi: String = "",
     val file: String = "",
     val size: Long = 0,
     val ready: Boolean = false,
+    @SerialName("version_code") val versionCode: Long = 0,
 )
 
 /** A server's answer: the dashboard's `/api/devices/android-app`, or the
@@ -128,6 +135,11 @@ object AppUpdate {
 
     fun isNewer(offered: Long, installed: Long): Boolean = offered > installed
 
+    /** Two per-ABI codes (base*10 + digit, 9 digits) of one release: a phone
+     *  on that release's 32-bit APK isn't told the 64-bit one is an update. */
+    fun sameRelease(offered: Long, installed: Long): Boolean =
+        offered >= 100_000_000 && installed >= 100_000_000 && offered / 10 == installed / 10
+
     /** The APK for this phone: the first of [supportedAbis] (Android's
      *  order of preference) that [apks] carries; null when none. */
     fun pickApk(supportedAbis: List<String>, apks: List<OfferedApk>): OfferedApk? =
@@ -155,16 +167,20 @@ object AppUpdate {
         if (offer == null) return UpdateState.Unknown
         val rel = offer.release ?: return UpdateState.NoRelease
         if (rel.versionName.isBlank() || rel.versionCode <= 0) return UpdateState.Unknown
-        if (!isNewer(rel.versionCode, install.versionCode)) {
+        val apk = pickApk(install.supportedAbis, offer.apks)
+        // The APK this phone would get, by its own code when the server
+        // names one (per-ABI codes), else by the release's.
+        val offered = apk?.versionCode?.takeIf { it > 0 } ?: rel.versionCode
+        if (!isNewer(offered, install.versionCode) || sameRelease(offered, install.versionCode)) {
             return UpdateState.UpToDate(rel.versionName, install.versionName)
         }
         val cert = rel.certSha256?.trim()?.lowercase()
         if (!cert.isNullOrEmpty() && install.signerSha256.isNotEmpty() && cert !in install.signerSha256) {
             return UpdateState.OtherKey(rel.versionName)
         }
-        val apk = pickApk(install.supportedAbis, offer.apks) ?: return UpdateState.NoApkForThisPhone(rel.versionName)
-        if (!apk.ready) return UpdateState.NotOnServer(rel.versionName, rel.versionCode)
-        return UpdateState.Available(rel.versionName, rel.versionCode, apk.abi, joinLink(offer.joinUrl, apk.abi))
+        if (apk == null) return UpdateState.NoApkForThisPhone(rel.versionName)
+        if (!apk.ready) return UpdateState.NotOnServer(rel.versionName, offered)
+        return UpdateState.Available(rel.versionName, offered, apk.abi, joinLink(offer.joinUrl, apk.abi))
     }
 
     /** Whether [state] is a notice to show, given what was dismissed. */

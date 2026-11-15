@@ -1,4 +1,5 @@
 import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.variant.FilterConfiguration
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.result.ResolvedArtifactResult
 import org.gradle.maven.MavenModule
@@ -65,11 +66,18 @@ android {
         applicationId = "com.domovoi.app"
         minSdk = 26
         targetSdk = 36
-        // One sequence for GitHub releases and Google Play: YYMMDDNN, the
-        // build's date and that day's number (the assistant plan's M4).
-        // Play refuses an upload whose versionCode is not above the last
-        // one, and a phone refuses an update that goes down, so it only
-        // ever goes up; release.ps1 and play-bundle.ps1 both read it here.
+        // The BASE versionCode, YYMMDDNN: the build's date and that day's
+        // number (the assistant plan's M4), one sequence for GitHub releases
+        // and Google Play. Each output's own code is base*10 + a digit
+        // (androidComponents below): 1 armeabi-v7a, 2 arm64-v8a, 3 x86,
+        // 4 x86_64 for a per-ABI APK, 0 for the App Bundle and an APK
+        // carrying several ABIs. So the APKs of one release have different
+        // codes, as F-Droid needs (its VercodeOperation 10*%c+d), and a
+        // 64-bit phone ranks arm64 above armeabi. Play refuses an upload
+        // whose versionCode is not above the last one, and a phone refuses
+        // an update that goes down, so it only ever goes up; the release
+        // scripts, play-bundle and scripts/release/finish_release.py read
+        // this line.
         versionCode = 26111301
         versionName = "1.2.0"
         // The ABIs above. One APK per ABI filters by splits (below)
@@ -659,8 +667,20 @@ fun pomChains(coords: Collection<String>): Map<String, List<String>> {
     }
 }
 
+/** The last digit of each output's versionCode, base*10 + this (see
+ *  defaultConfig.versionCode); 0 for an output with no ABI of its own. */
+val abiVersionDigit = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86" to 3, "x86_64" to 4)
+
 androidComponents {
     onVariants { variant ->
+        // Each output's versionCode: base*10 + its ABI's digit (0 for the
+        // App Bundle, or an APK carrying several ABIs).
+        val base = android.defaultConfig.versionCode ?: throw GradleException("defaultConfig sets no versionCode")
+        variant.outputs.forEach { output ->
+            val abi = output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
+            val digit = if (abi == null) 0 else abiVersionDigit[abi] ?: throw GradleException("no versionCode digit for ABI $abi")
+            output.versionCode.set(base * 10 + digit)
+        }
         variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
         variant.sources.assets?.addGeneratedSourceDirectory(manualAssets, ManualAssetsTask::outputDir)
         variant.sources.assets?.addGeneratedSourceDirectory(draftAssets, DraftAssetsTask::outputDir)
