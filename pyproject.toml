@@ -15,32 +15,32 @@ requires-python = ">=3.11"
 # `requirements.lock` is the test suite's set (Python 3.12, with `dev`), not a
 # deployment's; both locks are regenerated as docs/CONTRIBUTING.md says.
 dependencies = [
-    "fastapi>=0.115",
+    "fastapi>=0.162.0",
     # Direct floor on the ASGI toolkit fastapi builds on (fastapi's own
     # floor is lower): multipart and form parsing live here.
-    "starlette>=0.40",
-    "uvicorn[standard]>=0.32",
-    "sqlalchemy[asyncio]>=2.0",
-    "asyncpg>=0.29",
-    "pydantic>=2.9",
-    "pydantic-settings>=2.6",
+    "starlette>=1.10.0",
+    "uvicorn[standard]>=0.54.0",
+    "sqlalchemy[asyncio]>=2.1.6",
+    "asyncpg>=0.32.0",
+    "pydantic>=2.14.2",
+    "pydantic-settings>=2.16.2",
     # Lightweight clients — kept in core so the real-clients extra only
     # carries the heavy ML/audio deps.
-    "ollama>=0.3",
+    "ollama>=0.6.3",
     # The MPD control protocol is spoken by domovoi/clients/mpd_protocol.py
     # (no python-mpd2, LGPL-3.0, since 2026-10-15).
     # Multipart form parsing for the web dashboard's file uploads (Voices
     # page uploads Piper .onnx models). Required by FastAPI's UploadFile.
-    "python-multipart>=0.0.18",
+    "python-multipart>=0.0.33",
     # CalculatorHandler uses simpleeval for arithmetic — sandboxed AST
     # evaluation, never builtin eval/exec. Tiny pure-Python dep, kept
     # in core so the handler doesn't gate on an optional extra.
-    "simpleeval>=0.9",
+    "simpleeval>=1.0.8",
     # Documents suite (web/backend/api/documents.py) homegrown editors:
     # .xlsx round-trip for the spreadsheet grid and .docx export from
     # markdown docs. Both pure-Python with wheels everywhere.
-    "openpyxl>=3.1",
-    "python-docx>=1.1",
+    "openpyxl>=3.1.5",
+    "python-docx>=1.2.0",
     # Documents in Chat (domovoi/doc_extract): pypdfium2 (Apache-2.0 or
     # BSD-3-Clause; its PDFium is BSD-style, with FreeType under the
     # FreeType licence) reads a PDF's text page by page, in a capped worker
@@ -50,10 +50,10 @@ dependencies = [
     # load, RAM, and model-storage disk free. GPUs come from nvidia-smi
     # (no dep). Small, pure-wheel on Windows; in core so the hardware
     # endpoint imports cleanly. Degrades gracefully if somehow absent.
-    "psutil>=5.9",
+    "psutil>=7.2.2",
     # requests: small and pure-Python, so it lives in core rather than an
     # extra (the satellite sync clients and the feed paths use it).
-    "requests>=2.32",
+    "requests>=2.34.2",
     # Direct floor on the HTTP library requests builds on (requests' own
     # floor is lower): 2.8.0 fixes the streaming-decompression and
     # proxy-TLS advisories of 2026 (PYSEC-2026-4175/4176/4177). requests
@@ -63,11 +63,11 @@ dependencies = [
     # core from 1.0.0 even though the auth endpoints land after the DB
     # baseline — the dependency and the schema arrive together so no
     # intermediate install is ever missing it.
-    "argon2-cffi>=23.1",
+    "argon2-cffi>=25.1.0",
     # Library-image thumbnails (web/backend/api/images.py): Pillow resize →
     # WebP cache in S–XL buckets. Pure-wheel on Windows; the endpoint
     # degrades to 204/no-thumbs if it were somehow absent.
-    "pillow>=10.4",
+    "pillow>=13.0.0",
     # Co-editing (web/backend/collab): pycrdt (MIT), the Python binding of
     # the Yrs CRDT, speaks the same Yjs update format as the browsers.
     # abi3 wheels from CPython 3.11 (cp314 included), x86_64 and aarch64.
@@ -79,10 +79,10 @@ dependencies = [
     # (BSD) draws the test page, text/markdown and table printouts and the
     # scan PDFs. Binary wheels for every platform incl. cp314 / pure Python.
     "pypdfium2>=5.14",
-    "reportlab>=5.0",
+    "reportlab>=5.1.0",
     # Direct dependency for the chat-stream helper (clients/ollama.py) and
     # other httpx call sites (was already transitive via the ollama client).
-    "httpx>=0.27",
+    "httpx>=0.28.1",
     # Spoken-name matching for music (handlers/shared/spoken_names.py and
     # library_match.py: "play suicide boys" finds $uicideboy$). rapidfuzz
     # (MIT; binary wheels for every CPython incl. cp314 manylinux) scores
@@ -91,7 +91,7 @@ dependencies = [
     # as an sdist only) gives Double Metaphone sounds-alike keys. Number
     # words are written by hand (spoken_names.int_to_words), not num2words
     # (LGPL).
-    "rapidfuzz>=3.14",
+    "rapidfuzz>=3.14.6",
     "anyascii>=0.3.3",
     "Metaphone>=0.6",
 ]
@@ -112,9 +112,9 @@ real-clients = [
     # which bundles FFmpeg's LGPL libraries, and Domovoi never has it
     # decode a file). These are the dependencies it does use, with its own
     # bounds (faster-whisper 1.x); onnxruntime is below.
-    "ctranslate2>=4.0,<5",
-    "huggingface-hub>=0.21",
-    "tokenizers>=0.13,<1",
+    "ctranslate2>=4.8.4,<5",
+    "huggingface-hub>=2.4.0",
+    "tokenizers>=0.23.3,<1",
     "tqdm",
     # No edge-tts (LGPL-3.0) or miniaudio (its MP3 decoding) since
     # 2026-10-12: the Microsoft Edge online voices were dropped, and the
@@ -128,8 +128,8 @@ real-clients = [
     # floor, not 1.20 (which runs it): the out-of-dictionary model's near
     # ties come out the same on 1.28 and newer, the phone's runtime, and
     # can differ on 1.24 (domovoi/phonemizer/README.md, the golden fixture).
-    "onnxruntime>=1.28",
-    "numpy>=1.26",
+    "onnxruntime>=1.31.1",
+    "numpy>=2.4.6",
     # No lameenc (LGPL-3.0, carrying LAME) since 2026-10-15: the satellite
     # clips (canned_sounds.py) are encoded to MP3 by the system ffmpeg, run
     # as its own program, as ffprobe and fpcalc already are.
@@ -141,12 +141,12 @@ real-clients = [
     # domovoi/README.md "Library enrichment setup"). Pure Python.
     # NOTE: shazamio — the second-stage fallback — is deliberately NOT
     # here; see the `shazam` extra below.
-    "pyacoustid>=1.3",
+    "pyacoustid>=1.3.1",
     # Podcast RSS parsing for the feed poller (workers/podcast_feed_poller.py).
     # Pure-Python, no build step. Only the (network) feed-poll path imports it
     # — downloaded-episode playback works without it, matching the handler's
     # `degraded` contract.
-    "feedparser>=6.0",
+    "feedparser>=6.0.14",
 ]
 # Shazam fallback for the library enricher — the second stage, used only for
 # tracks AcoustID's catalog doesn't cover. Its own extra, and NOT part of
@@ -168,7 +168,7 @@ real-clients = [
 #
 #   pip install -e ".[shazam]"
 shazam = [
-    "shazamio>=0.7",
+    "shazamio>=0.9.0",
 ]
 # CUDA runtime for Whisper. Split out of `real-clients` so a CPU-only or
 # non-NVIDIA host (see docs/CPU_HOST.md) doesn't pull ~2-3 GB of wheels it
@@ -212,8 +212,8 @@ voice-profile = []
 # it brought soxr and soundfile, LGPL libraries); `numpy` and `scipy` run
 # the algorithm.
 fingerprint = [
-    "numpy>=1.26",
-    "scipy>=1.11",
+    "numpy>=2.4.6",
+    "scipy>=1.17.1",
 ]
 # Conversational chat mode (#8). The Letta SDK client used by
 # domovoi/clients/letta.py to drive the self-hosted Letta agent.
@@ -226,7 +226,7 @@ fingerprint = [
 chat = [
     # Lower bound = a known-good baseline; pin the exact version validated
     # during the live Letta+Ollama spike. <1 guards the 0.x SDK's API drift.
-    "letta-client>=0.1,<1",
+    "letta-client>=1.12.1,<2",
 ]
 # Ed25519 for the per-install server identity satellites pin
 # (domovoi/server_identity.py): the signed /v1/health challenge and the
@@ -242,29 +242,29 @@ chat = [
 #
 #   pip install -e ".[signing]"
 signing = [
-    "cryptography>=42.0",
+    "cryptography>=50.0.2",
 ]
 dev = [
-    "pytest>=8.3",
-    "pytest-asyncio>=0.24",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
     # `pytest -n N` (pytest-xdist, MIT; its execnet is MIT too): the suite
     # on N worker processes, each on its own copy of the test database
     # (domovoi/tests/xdist_db.py). requirements.lock pins the exact version.
     "pytest-xdist>=3.8",
-    "httpx>=0.27",
+    "httpx>=0.28.1",
     # The suite imports these directly (library enricher + identify-chain
     # tests exercise the real modules with stubbed I/O), so a plain
     # `pip install -e ".[dev]"` must be enough to run pytest.
-    "numpy>=1.26",
-    "pyacoustid>=1.3",
+    "numpy>=2.4.6",
+    "pyacoustid>=1.3.1",
     # The phonemizer's golden fixture runs its out-of-dictionary model
     # (domovoi/tests/test_phonemizer_golden.py), on the runtime a server and
     # the phone run (the real-clients floor, below).
-    "onnxruntime>=1.28",
+    "onnxruntime>=1.31.1",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

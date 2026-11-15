@@ -14,7 +14,7 @@
 # arrays and never a file (domovoi/clients/whisper.py), so PyAV is not
 # installed. Its other dependencies (ctranslate2, huggingface-hub,
 # tokenizers, onnxruntime, tqdm) are in pyproject's real-clients extra.
-faster-whisper>=1.0,<2
+faster-whisper>=1.2.1,<2
 
 # Voice ID needed resemblyzer here (for its weights) until 1.3.0; its
 # speaker model is now fetched as a pinned file (domovoi/clients/

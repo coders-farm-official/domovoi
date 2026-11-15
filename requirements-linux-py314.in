@@ -19,7 +19,7 @@
 # The bundled radio plugin's fingerprinter (pyproject's fingerprint extra:
 # numpy and scipy). librosa brought scipy until 2026-10-15; listed here so
 # a Linux server keeps fingerprinting radio samples.
-scipy>=1.11
+scipy>=1.17.1
 
 # The build backend: of this project (pip install --no-deps -e .) and of the
 # few pins that publish only an sdist. The install builds them with
@@ -27,5 +27,5 @@ scipy>=1.11
 # downloads an unchecked setuptools of its own. Below 82: webrtcvad, which
 # imports pkg_resources (gone in setuptools 82), was built this way until
 # 2026-10-15; the bound stays until a lock is tested with 82.
-setuptools>=68,<82
-wheel>=0.43
+setuptools>=84.2.1,<85
+wheel>=0.48.0
