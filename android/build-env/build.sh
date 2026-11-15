@@ -19,7 +19,9 @@
 #
 # Runs on Linux, macOS or Git Bash with Docker (a Linux engine). Environment:
 #   DOMOVOI_BUILD_CPUS           --cpuset-cpus for the container (default: 16-31 on
-#                                a machine with 32 or more, the owner's E-cores; else all)
+#                                a machine with 32 or more, a cap of 16 of the CPUs
+#                                Docker's VM has, so half stays free; not the host's
+#                                E-cores, which the VM doesn't see; else all)
 #   DOMOVOI_BUILD_GRADLE_VOLUME  a Docker volume for Gradle's downloads between runs
 #                                (default domovoi-android-gradle; "none" for a fresh one;
 #                                gradle/verification-metadata.xml checks them either way)
@@ -67,7 +69,8 @@ tree="$(git rev-parse --verify --quiet "$sha:android/build-env")" \
 image="domovoi-android-build-env:${tree:0:12}"
 if ! docker image inspect "$image" >/dev/null 2>&1; then
   echo "build.sh: building the image $image (once per android/build-env)…" >&2
-  git archive --format=tar "$sha:android/build-env" | docker build -q -t "$image" - >/dev/null \
+  # No line-ending conversion: the image's scripts run in Linux.
+  git -c core.autocrlf=false archive --format=tar "$sha:android/build-env" | docker build -q -t "$image" - >/dev/null \
     || die "building the image failed"
 fi
 if [ "$image_only" = 1 ]; then echo "$image"; exit 0; fi
@@ -82,7 +85,10 @@ volume="${DOMOVOI_BUILD_GRADLE_VOLUME:-domovoi-android-gradle}"
 gradle=()
 [ "$volume" = none ] || gradle=(-v "$volume:/gradle" -e GRADLE_USER_HOME=/gradle)
 
-work="$(mktemp -d)"
+# The folder Docker mounts is under android/app/build, not the temp folder:
+# a packaged app's redirected temp folder is one Docker can't see.
+mkdir -p android/app/build
+work="$(mktemp -d "$repo/android/app/build/build-env-XXXXXX")"
 name="domovoi-android-build-$$"
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
@@ -101,5 +107,7 @@ if [ "$default_out" = 1 ]; then
   cp "$work/mapping.txt" android/app/build/outputs/mapping/release/mapping.txt
 fi
 cp -R "$work"/. "$out"/
+# Which commit these are, for release.sh --skip-build's check.
+printf '%s\n' "$sha" > "$out/COMMIT"
 echo "build.sh: done: $out"
 (cd "$out" && ls -l -- *.apk 2>/dev/null || true)

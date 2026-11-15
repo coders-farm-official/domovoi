@@ -118,14 +118,20 @@ if [ -f android/release.json ]; then
   prev="$("$py" - <<'PY'
 import json
 rel = json.load(open("android/release.json", encoding="utf-8")).get("release") or {}
-print(rel.get("version_code") or 0, rel.get("cert_sha256") or "-")
+code = int(rel.get("version_code") or 0)
+apks = rel.get("apks") or []
+# The base it was built from: version_code / 10 for a release with per-ABI
+# codes (each APK entry names its own), else version_code.
+if apks and all(isinstance(e, dict) and "version_code" in e for e in apks):
+    code //= 10
+print(code, rel.get("cert_sha256") or "-")
 PY
 )" || die "android/release.json can't be read"
   prev="${prev//$'\r'/}"
   prev_code="${prev%% *}"; prev_cert="${prev##* }"
 fi
-if [ "$prev_code" -gt 0 ] && [ "$version_code" -lt "$prev_code" ]; then
-  die "versionCode $base_code (x10: $version_code) is below the last GitHub release's ($prev_code): one sequence for both (YYMMDDNN), raise it"
+if [ "$prev_code" -gt 0 ] && [ "$base_code" -lt "$prev_code" ]; then
+  die "versionCode $base_code is below the last GitHub release's ($prev_code): one sequence for both (YYMMDDNN), raise it"
 fi
 
 # ─── build ───────────────────────────────────────────────────────────────

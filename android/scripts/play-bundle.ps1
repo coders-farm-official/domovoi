@@ -154,11 +154,19 @@ $prevCode = 0; $prevCert = $null
 if (Test-Path 'android\release.json') {
     try {
         $prev = (Get-Content -Raw -Encoding UTF8 'android\release.json' | ConvertFrom-Json).release
-        if ($prev) { $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
+        if ($prev) {
+            # The base it was built from: version_code / 10 for a release with
+            # per-ABI codes (each APK entry names its own), else version_code.
+            $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256
+            $apks = @($prev.apks)
+            if ($apks.Count -gt 0 -and @($apks | Where-Object { -not $_.PSObject.Properties['version_code'] }).Count -eq 0) {
+                $prevCode = [long][math]::Floor($prevCode / 10)
+            }
+        }
     } catch { Die "android\release.json can't be read: $($_.Exception.Message)" }
 }
-if ($prevCode -gt 0 -and $versionCode -lt $prevCode) {
-    Die "versionCode $baseCode (x10: $versionCode) is below the last GitHub release's ($prevCode): one sequence for both (YYMMDDNN), raise it"
+if ($prevCode -gt 0 -and $baseCode -lt $prevCode) {
+    Die "versionCode $baseCode is below the last GitHub release's ($prevCode): one sequence for both (YYMMDDNN), raise it"
 }
 
 # --- build ---------------------------------------------------------------

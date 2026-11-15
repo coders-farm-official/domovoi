@@ -18,8 +18,9 @@ from the commit before it, which differs only by that file). The commit
 they are built from gets the lightweight tag app-<versionName>, which
 F-Droid builds. Last it downloads each file back by the manifest's URL.
 
-When Docker isn't running (docker info fails), or with -NoContainer, it
-builds with gradlew.bat on this PC instead, as before, and says loudly
+When Docker isn't running (docker info fails) it stops: start Docker
+Desktop and run it again. Only -NoContainer builds with gradlew.bat on
+this PC instead, as releases up to 1.2.0 were built, and it says loudly
 that those APKs are not the reproducible ones.
 
 Run it only for a release that changes the app (its versionName and
@@ -59,8 +60,13 @@ Sign what the last build left (after a failed signing).
 
 .PARAMETER NoContainer
 Build with gradlew.bat on this PC, not in the pinned Linux image. The APKs
-then won't match F-Droid's or CI's build of the commit. The fallback when
-Docker isn't running.
+then won't match F-Droid's or CI's build of the commit. Without it, a run
+with Docker not running stops instead.
+
+.PARAMETER NoCopyCheck
+Skip the apksigcopier check (the signature copies onto the unsigned APK
+unchanged, which is how F-Droid checks a release). Without it, a run that
+can't make the check (no Docker, no apksigcopier on PATH) stops.
 
 .PARAMETER Prerelease
 Mark the GitHub release a pre-release. Off by default: every release is a
@@ -88,6 +94,7 @@ param(
     [switch]$NoPublish,
     [switch]$SkipBuild,
     [switch]$NoContainer,
+    [switch]$NoCopyCheck,
     [switch]$Prerelease,
     [string]$Keystore,
     [string]$Alias,
@@ -207,6 +214,19 @@ if (-not $NoPublish) {
             if (-not $ok) { Die "origin is $url, not github.com/$RepoSlug`: the release commit and its tag go there, the release to GitHub" }
         }
     }
+}
+
+# The base versionCode (build.gradle.kts's) a manifest's release was built
+# from: its version_code / 10 when every APK entry names its own code
+# (per-ABI codes), else its version_code (releases before them).
+function Get-ReleasedBase($rel) {
+    if (-not $rel) { return [long]0 }
+    $code = [long]$rel.version_code
+    $apks = @($rel.apks)
+    if ($apks.Count -gt 0 -and @($apks | Where-Object { -not $_.PSObject.Properties['version_code'] }).Count -eq 0) {
+        return [long][math]::Floor($code / 10)
+    }
+    return $code
 }
 
 function Get-Sha256([string]$path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() }
@@ -389,15 +409,16 @@ if ($resume) {
     $isPrerelease = [bool]$Prerelease
     Say "the Android app $versionName (versionCode $versionCode), release $($tag): HEAD $($commit.Substring(0, 12)) is its release commit (android/release.json on top of $($resume.commit.Substring(0, 12)), which the APKs were built from), so this run carries on from there; nothing is built or signed again"
     # The first run's checks against the release before it, on what is committed.
-    $prevCode = 0; $prevCert = $null
+    $prevBase = 0; $prevCert = $null
     $prevText = Invoke-Tool $Git @('show', "$($resume.commit):android/release.json")
     if ($null -ne $prevText) {
         try {
             $prev = (($prevText -join "`n") | ConvertFrom-Json).release
-            if ($prev) { $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
+            if ($prev) { $prevBase = Get-ReleasedBase $prev; $prevCert = [string]$prev.cert_sha256 }
         } catch { }
     }
-    if ($versionCode -le $prevCode) { Die "android/release.json at HEAD names versionCode $versionCode, not above the last release's ($prevCode)" }
+    $headBase = Get-ReleasedBase $resume
+    if ($headBase -le $prevBase) { Die "android/release.json at HEAD names versionCode $headBase (its base), not above the last release's ($prevBase)" }
     if ($prevCert -and $prevCert -ne [string]$resume.cert_sha256) { Die "android/release.json at HEAD names another key ($($resume.cert_sha256)) than the last release's ($prevCert)" }
     $exists = (-not $NoPublish) -and ((Test-Tool $Gh @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0)
     if (-not $exists) {
@@ -425,9 +446,10 @@ if (-not $SkipBuild) {
         Say "building the release APKs ($($Abis -join ', ')) in the pinned Linux image (android\build-env)..."
         & $buildEnv -Commit $commit -Abis $Abis
         if ($LASTEXITCODE -ne 0) { Die 'the build failed' }
+    } elseif (-not $NoContainer) {
+        Die 'Docker is not running (docker info fails, or its engine is not a Linux one): start Docker Desktop (Linux containers) and run this again. The release APKs are built in the pinned Linux image, so they are the same bytes F-Droid and CI build; -NoContainer builds them with gradlew.bat here instead (not reproducible).'
     } else {
-        $why = if ($NoContainer) { '-NoContainer' } else { 'Docker is not running (docker info fails, or no Linux engine)' }
-        Write-Host "release: WARNING: $why, so these APKs are built with gradlew.bat on this PC, NOT in the pinned Linux image. They will not match CI's or F-Droid's build of this commit (not reproducible). Start Docker Desktop and run again unless you mean it." -ForegroundColor Yellow
+        Write-Host "release: WARNING: -NoContainer, so these APKs are built with gradlew.bat on this PC, NOT in the pinned Linux image. They will not match CI's or F-Droid's build of this commit (not reproducible)." -ForegroundColor Yellow
         $notReproducible = $true
         Say "building the release APKs ($($Abis -join ', '))..."
         Push-Location android
@@ -438,8 +460,17 @@ if (-not $SkipBuild) {
             $ErrorActionPreference = 'Stop'
             if ($built -ne 0) { Die 'the build failed' }
         } finally { Pop-Location }
+        [IO.File]::WriteAllText((Join-Path $repo (Join-Path $outUnsigned 'COMMIT')), "$commit`n", (New-Object Text.UTF8Encoding $false))
     }
 }
+
+# The APKs must be this commit's: build.ps1 (and the gradlew build above, and
+# release.yml's build-app job) write the commit they built to COMMIT beside
+# them, so -SkipBuild never signs an older checkout's build.
+$commitFile = Join-Path $outUnsigned 'COMMIT'
+if (-not (Test-Path -LiteralPath $commitFile)) { Die "no $commitFile`: these APKs don't say which commit they were built from: build again (drop -SkipBuild)" }
+$builtCommit = (Get-Content -Raw -LiteralPath $commitFile).Trim()
+if ($builtCommit -ne $commit) { Die "the APKs in $outUnsigned were built from $builtCommit, not HEAD $commit`: build again (drop -SkipBuild)" }
 
 # Each APK has its own versionCode, base*10 + its ABI's digit
 # (android\app\build.gradle.kts; F-Droid's VercodeOperation needs them
@@ -485,13 +516,13 @@ if ("$baseCode" -notmatch '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-
     Die "versionCode $baseCode is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in android\app\build.gradle.kts, commit, and run again"
 }
 
-$prevCode = 0; $prevCert = $null
+$prevBase = 0; $prevCert = $null
 try {
     $prev = (Get-Content -Raw -Encoding UTF8 'android\release.json' | ConvertFrom-Json).release
-    if ($prev) { $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
+    if ($prev) { $prevBase = Get-ReleasedBase $prev; $prevCert = [string]$prev.cert_sha256 }
 } catch { }
-if ($versionCode -le $prevCode) {
-    Die "versionCode $baseCode (x10: $versionCode) is not above the last release's ($prevCode): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android\app\build.gradle.kts, commit, and run again"
+if ($baseCode -le $prevBase) {
+    Die "versionCode $baseCode is not above the last release's ($prevBase): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android\app\build.gradle.kts, commit, and run again"
 }
 $appTag = "app-$versionName"
 if (-not $NoPublish) {
@@ -583,32 +614,52 @@ Say "signed by certificate SHA-256 $cert"
 # run here only, never shipped). It fails if signing moved anything (an
 # apksigner without --alignment-preserved re-pads the native libraries).
 $copier = $null
-if ($haveDocker) {
-    $img = & $buildEnv -Commit $commit -ImageOnly
-    $img = "$(@($img) | Select-Object -Last 1)".Trim()
-    if ($img) { $copier = 'docker' }
-}
-if (-not $copier) {
-    $cmd = Get-Command apksigcopier -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cmd) { $copier = $cmd.Source }
-}
-if (-not $copier) {
-    Write-Host 'release: WARNING: no Docker and no apksigcopier on PATH, so the check that this signature copies onto an unsigned build (what F-Droid does) was skipped.' -ForegroundColor Yellow
+if ($NoCopyCheck) {
+    Write-Host 'release: WARNING: -NoCopyCheck, so the check that this signature copies onto an unsigned build (what F-Droid does) was skipped.' -ForegroundColor Yellow
 } else {
+    if ($haveDocker) {
+        $img = & $buildEnv -Commit $commit -ImageOnly
+        $img = "$(@($img) | Select-Object -Last 1)".Trim()
+        if ($img) { $copier = 'docker' }
+    }
+    $verifyCmd = $null
+    if (-not $copier) {
+        $cmd = Get-Command apksigcopier -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $cmd) {
+            Die 'apksigcopier compare (how F-Droid checks a release) can''t run here: no Docker with Linux containers, and no apksigcopier on PATH (python -m pip install apksigcopier==1.1.1). Start Docker Desktop, or install it, and run again; -NoCopyCheck skips the check.'
+        }
+        $copier = $cmd.Source
+        # apksigcopier runs `apksigner verify`, which the Windows SDK has only
+        # as apksigner.bat, so it is named here. apksigcopier splits the
+        # command on spaces: a path with a space can't be one of its words.
+        $candidates = @()
+        $bat = Join-Path $bt 'apksigner.bat'
+        if (Test-Path -LiteralPath $bat) { $candidates += , @($bat, 'verify') }
+        $candidates += , @($java, '-jar', $apksignerJar, 'verify')
+        foreach ($c in $candidates) {
+            if (@($c | Where-Object { $_ -match '\s' }).Count -eq 0) { $verifyCmd = $c -join ' '; break }
+        }
+        if (-not $verifyCmd) {
+            Die "apksigcopier needs apksigner by a path without spaces (it splits its verify command on them), and both $bat and $java have one: install the SDK or a JDK under a path without spaces, or run with Docker"
+        }
+    }
     foreach ($abi in $Abis) {
         $name = "domovoi-$versionName-$abi.apk"
         $unsignedName = "app-$abi-release-unsigned.apk"
         if ($copier -eq 'docker') {
             $sMount = (Resolve-Path $signed).Path -replace '\\', '/'
             $uMount = (Resolve-Path $outUnsigned).Path -replace '\\', '/'
-            $ok = Test-Tool 'docker' @('run', '--rm', '--network', 'none',
+            $out = Invoke-Tool 'docker' @('run', '--rm', '--network', 'none',
                 '--mount', "type=bind,source=$sMount,target=/signed,readonly",
                 '--mount', "type=bind,source=$uMount,target=/unsigned,readonly",
                 $img, 'apksigcopier', 'compare', "/signed/$name", '--unsigned', "/unsigned/$unsignedName")
         } else {
-            $ok = Test-Tool $copier @('compare', (Join-Path $signed $name), '--unsigned', (Join-Path $outUnsigned $unsignedName))
+            $out = Invoke-Tool $copier @('compare', '--verify-cmd', $verifyCmd, (Join-Path $signed $name), '--unsigned', (Join-Path $outUnsigned $unsignedName))
         }
-        if ($ok -ne 0) { Die "apksigcopier compare: the signature of $name does not copy onto $unsignedName unchanged (signed without --alignment-preserved?)" }
+        if ($null -eq $out) {
+            $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
+            Die "apksigcopier compare refuses $name against $unsignedName (its words above): if it says DOES NOT VERIFY, the signing moved something (apksigner without --alignment-preserved?)"
+        }
     }
     Say 'apksigcopier: each signature copies onto its unsigned APK unchanged'
 }

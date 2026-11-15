@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Publish a release of the Domovoi Android app: build the per-ABI release
 # APKs in the pinned Linux build image (android/build-env/build.sh, through
-# Docker: the same bytes CI and F-Droid build from that commit; without
-# Docker, or with --no-container, ./gradlew here, said loudly), sign them
+# Docker: the same bytes CI and F-Droid build from that commit; it stops
+# when Docker isn't running, and only --no-container builds with ./gradlew
+# here instead, said loudly), sign them
 # with YOUR release key (apksigner --alignment-preserved), check the
 # signature copies onto the unsigned build unchanged (apksigcopier compare,
 # what F-Droid does) and check them the way a Domovoi server will, write
@@ -33,6 +34,7 @@
 #   bash android/scripts/release.sh --no-publish     # build, sign, check; stop before git and GitHub
 #   bash android/scripts/release.sh --skip-build     # sign what the last build left (after a failed signing)
 #   bash android/scripts/release.sh --no-container   # build with ./gradlew here, not in the pinned image (not reproducible)
+#   bash android/scripts/release.sh --no-copy-check  # skip the apksigcopier check (else a run that can't make it stops)
 #   bash android/scripts/release.sh --prerelease     # a pre-release (off: every release is a full one, rc's included)
 #   bash android/scripts/release.sh --keystore ~/domovoi-release.jks --alias domovoi
 #
@@ -50,6 +52,7 @@ PACKAGE="com.domovoi.app"
 publish=1
 build=1
 container=1
+copy_check=1
 prerelease=0
 keystore=""
 alias_name=""
@@ -58,10 +61,11 @@ while [ $# -gt 0 ]; do
     --no-publish) publish=0 ;;
     --skip-build) build=0 ;;
     --no-container) container=0 ;;
+    --no-copy-check) copy_check=0 ;;
     --prerelease) prerelease=1 ;;
     --keystore) keystore="${2:?--keystore needs a path}"; shift ;;
     --alias) alias_name="${2:?--alias needs a name}"; shift ;;
-    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 64 ;;
   esac
   shift
@@ -155,6 +159,20 @@ except (OSError, ValueError):
     rel = {}
 print(" ".join(str(rel.get(k) or "-") for k in sys.argv[2:]))'
 release_fields() { "$python" -c "$read_release" "$@" | tr -d '\r'; }
+
+# The base versionCode (build.gradle.kts's) a manifest's release (a file, or
+# - for stdin) was built from: version_code / 10 when every APK entry names
+# its own code (per-ABI codes), else version_code; 0 for none.
+released_base_py='import json, sys
+try:
+    text = sys.stdin.read() if sys.argv[1] == "-" else open(sys.argv[1], encoding="utf-8").read()
+    rel = json.loads(text).get("release") or {}
+except (OSError, ValueError):
+    rel = {}
+code = int(rel.get("version_code") or 0)
+apks = rel.get("apks") or []
+print(code // 10 if apks and all(isinstance(e, dict) and "version_code" in e for e in apks) else code)'
+released_base() { "$python" -c "$released_base_py" "$@" | tr -d '\r'; }
 
 # A release commit at HEAD: android/release.json, committed on top of the
 # commit its APKs were built from (and nothing else changed), by an earlier
@@ -308,9 +326,10 @@ if [ "$resume" = 1 ]; then
   is_prerelease="$prerelease"
   say "the Android app $version_name (versionCode $version_code), release $tag: HEAD ${commit:0:12} is its release commit (android/release.json on top of ${built_from:0:12}, which the APKs were built from), so this run carries on from there; nothing is built or signed again"
   # The first run's checks against the release before it, on what is committed.
-  read -r prev_code prev_cert <<<"$(git show "$built_from:android/release.json" 2>/dev/null | release_fields - version_code cert_sha256 || true)"
-  [ "${prev_code:--}" != "-" ] || prev_code=0
-  [ "$version_code" -gt "$prev_code" ] || die "android/release.json at HEAD names versionCode $version_code, not above the last release's ($prev_code)"
+  read -r prev_cert <<<"$(git show "$built_from:android/release.json" 2>/dev/null | release_fields - cert_sha256 || true)"
+  prev_base="$(git show "$built_from:android/release.json" 2>/dev/null | released_base - || echo 0)"
+  head_base="$(released_base android/release.json)"
+  [ "$head_base" -gt "${prev_base:-0}" ] || die "android/release.json at HEAD names versionCode $head_base (its base), not above the last release's ($prev_base)"
   [ "${prev_cert:--}" = "-" ] || [ "$prev_cert" = "$head_cert" ] || die "android/release.json at HEAD names another key ($head_cert) than the last release's ($prev_cert)"
   exists=0
   if [ "$publish" = 1 ] && gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1; then exists=1; fi
@@ -334,16 +353,25 @@ if [ "$build" = 1 ]; then
     # The reproducible build: this commit, clean, in the pinned image.
     say "building the release APKs (${ABIS[*]}) in the pinned Linux image (android/build-env)…"
     bash "$build_env" --commit "$commit" "${ABIS[@]}" || die "the build failed"
+  elif [ "$container" = 1 ]; then
+    die "Docker is not running (docker info fails, or its engine is not a Linux one): start Docker and run this again. The release APKs are built in the pinned Linux image, so they are the same bytes F-Droid and CI build; --no-container builds them with ./gradlew here instead (not reproducible)."
   else
-    why="Docker is not running (docker info fails, or no Linux engine)"; [ "$container" = 1 ] || why="--no-container"
-    echo "release: WARNING: $why, so these APKs are built with ./gradlew here, NOT in the pinned Linux image. They will not match CI's or F-Droid's build of this commit (not reproducible). Start Docker and run again unless you mean it." >&2
+    echo "release: WARNING: --no-container, so these APKs are built with ./gradlew here, NOT in the pinned Linux image. They will not match CI's or F-Droid's build of this commit (not reproducible)." >&2
     not_reproducible=1
     say "building the release APKs (${ABIS[*]})…"
     gradlew="./gradlew"; [ -f android/gradlew.bat ] && [ -n "${WINDIR:-}" ] && gradlew="./gradlew.bat"
     (cd android && "$gradlew" :app:assembleRelease -Pdomovoi.apkPerAbi "-Pdomovoi.abis=$(IFS=,; echo "${ABIS[*]}")") \
       || die "the build failed"
+    printf '%s\n' "$commit" > "$out_unsigned/COMMIT"
   fi
 fi
+
+# The APKs must be this commit's: build.sh (and the ./gradlew build above,
+# and release.yml's build-app job) write the commit they built to COMMIT
+# beside them, so --skip-build never signs an older checkout's build.
+[ -f "$out_unsigned/COMMIT" ] || die "no $out_unsigned/COMMIT: these APKs don't say which commit they were built from: build again (drop --skip-build)"
+built_commit="$(tr -d '\r\n ' < "$out_unsigned/COMMIT")"
+[ "$built_commit" = "$commit" ] || die "the APKs in $out_unsigned were built from $built_commit, not HEAD $commit: build again (drop --skip-build)"
 
 # Each APK has its own versionCode, base*10 + its ABI's digit
 # (android/app/build.gradle.kts; F-Droid's VercodeOperation needs them
@@ -392,12 +420,12 @@ try:
     rel = json.load(open("android/release.json", encoding="utf-8")).get("release") or {}
 except (OSError, ValueError):
     rel = {}
-print(rel.get("version_code") or 0, rel.get("cert_sha256") or "-")
+print(rel.get("cert_sha256") or "-")
 PY
 )"
-prev="${prev//$'\r'/}"
-prev_code="${prev%% *}"; prev_cert="${prev##* }"
-[ "$version_code" -gt "$prev_code" ] || die "versionCode $base_code (x10: $version_code) is not above the last release's ($prev_code): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android/app/build.gradle.kts, commit, and run again"
+prev_cert="${prev//$'\r'/}"
+prev_base="$(released_base android/release.json)"
+[ "$base_code" -gt "$prev_base" ] || die "versionCode $base_code is not above the last release's ($prev_base): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android/app/build.gradle.kts, commit, and run again"
 if [ "$publish" = 1 ]; then
   ! gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1 || die "a release $tag already exists on $REPO_SLUG"
   remote_app="$(git ls-remote --tags origin "refs/tags/app-$version_name")" || die "git ls-remote origin failed"
@@ -485,26 +513,45 @@ say "signed by certificate SHA-256 $cert"
 # run here only, never shipped). It fails if signing moved anything (an
 # apksigner without --alignment-preserved re-pads the native libraries).
 hostpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
-copier=""
-if [ "$have_docker" = 1 ] && img="$(bash "$build_env" --commit "$commit" --image-only)" && [ -n "$img" ]; then
-  copier=docker
-elif command -v apksigcopier >/dev/null 2>&1; then
-  copier="$(command -v apksigcopier)"
-fi
-if [ -z "$copier" ]; then
-  echo "release: WARNING: no Docker and no apksigcopier on PATH, so the check that this signature copies onto an unsigned build (what F-Droid does) was skipped." >&2
+winpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+copier=""; verify_cmd=""
+if [ "$copy_check" = 0 ]; then
+  echo "release: WARNING: --no-copy-check, so the check that this signature copies onto an unsigned build (what F-Droid does) was skipped." >&2
 else
+  if [ "$have_docker" = 1 ] && img="$(bash "$build_env" --commit "$commit" --image-only)" && [ -n "$img" ]; then
+    copier=docker
+  elif command -v apksigcopier >/dev/null 2>&1; then
+    copier="$(command -v apksigcopier)"
+    # apksigcopier runs `apksigner verify`; name it (the Windows SDK has only
+    # apksigner.bat). It splits the command on spaces, so no path in it may
+    # have one; on Windows it takes Windows paths.
+    for candidate in "$bt/apksigner.bat" "$bt/apksigner"; do
+      [ -f "$candidate" ] || continue
+      [ "${candidate##*.}" = bat ] && candidate="$(winpath "$candidate")"
+      case "$candidate" in *[[:space:]]*) continue ;; esac
+      verify_cmd="$candidate verify"; break
+    done
+    if [ -z "$verify_cmd" ]; then
+      j="$java"; jar="$apksigner_jar"
+      if [ -n "${WINDIR:-}" ]; then j="$(winpath "$j")"; jar="$(winpath "$jar")"; fi
+      case "$j $jar" in *[[:space:]]*[[:space:]]*) ;; *) verify_cmd="$j -jar $jar verify" ;; esac
+    fi
+    [ -n "$verify_cmd" ] || die "apksigcopier needs apksigner by a path without spaces (it splits its verify command on them): install the SDK or a JDK under one, or run with Docker"
+  else
+    die "apksigcopier compare (how F-Droid checks a release) can't run here: no Docker with a Linux engine, and no apksigcopier on PATH (python3 -m pip install apksigcopier==1.1.1). Start Docker, or install it, and run again; --no-copy-check skips the check."
+  fi
   for abi in "${ABIS[@]}"; do
     name="domovoi-$version_name-$abi.apk"; unsigned_name="app-$abi-release-unsigned.apk"
+    # Its own words go to the terminal either way (DOES NOT VERIFY, or why it couldn't run).
     if [ "$copier" = docker ]; then
       MSYS_NO_PATHCONV=1 docker run --rm --network none \
         --mount "type=bind,source=$(hostpath "$repo/$signed"),target=/signed,readonly" \
         --mount "type=bind,source=$(hostpath "$repo/$out_unsigned"),target=/unsigned,readonly" \
         "$img" apksigcopier compare "/signed/$name" --unsigned "/unsigned/$unsigned_name" \
-        || die "apksigcopier compare: the signature of $name does not copy onto $unsigned_name unchanged (signed without --alignment-preserved?)"
+        || die "apksigcopier compare refuses $name against $unsigned_name (its words above): if it says DOES NOT VERIFY, the signing moved something (apksigner without --alignment-preserved?)"
     else
-      "$copier" compare "$signed/$name" --unsigned "$out_unsigned/$unsigned_name" \
-        || die "apksigcopier compare: the signature of $name does not copy onto $unsigned_name unchanged (signed without --alignment-preserved?)"
+      "$copier" compare --verify-cmd "$verify_cmd" "$signed/$name" --unsigned "$out_unsigned/$unsigned_name" \
+        || die "apksigcopier compare refuses $name against $unsigned_name (its words above): if it says DOES NOT VERIFY, the signing moved something (apksigner without --alignment-preserved?)"
     fi
   done
   say "apksigcopier: each signature copies onto its unsigned APK unchanged"

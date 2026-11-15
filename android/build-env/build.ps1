@@ -18,7 +18,9 @@ BUILD-ENV.txt; with the default -Out, mapping.txt also goes where Gradle puts
 it (android\app\build\outputs\mapping\release\).
 
 Needs Docker Desktop running Linux containers. On a PC with 32 or more
-logical processors the build runs on 16-31 (the E-cores of the owner's PC);
+logical processors the container gets --cpuset-cpus 16-31, which caps it at
+16 of the CPUs Docker's Linux VM has (half the PC stays free; the VM numbers
+its CPUs itself, so this is not a choice of the host's E-cores);
 $env:DOMOVOI_BUILD_CPUS overrides that (a --cpuset-cpus value). Gradle's
 downloads are kept between runs in the Docker volume domovoi-android-gradle
 ($env:DOMOVOI_BUILD_GRADLE_VOLUME, or 'none' for a fresh one each time);
@@ -89,8 +91,11 @@ if (-not $ImageOnly) {
     $Out = (Resolve-Path $Out).Path
 }
 
-$work = Join-Path ([IO.Path]::GetTempPath()) ('domovoi-android-build-' + [guid]::NewGuid().ToString('N'))
-$null = New-Item -ItemType Directory -Path $work
+# The folder Docker mounts is under androidppuild, not %TEMP%: an app
+# whose %TEMP% is redirected (a packaged app's) would hand Docker a folder it
+# can't see.
+$work = Join-Path $repo ('androidppuilduild-env-' + [guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Force -Path $work
 $name = "domovoi-android-build-$PID"
 try {
     # The image, from the commit's own android/build-env, named by its tree.
@@ -103,7 +108,8 @@ try {
         $ctx = Join-Path $work 'context'
         $null = New-Item -ItemType Directory -Path $ctx
         $tar = Join-Path $work 'context.tar'
-        & git archive --format=tar -o $tar "$($sha):android/build-env"
+        # No line-ending conversion: the image's scripts run in Linux.
+        & git -c core.autocrlf=false archive --format=tar -o $tar "$($sha):android/build-env"
         if ($LASTEXITCODE -ne 0) { Die 'git archive failed' }
         & tar.exe -xf $tar -C $ctx
         if ($LASTEXITCODE -ne 0) { Die 'unpacking the image context failed' }
@@ -142,6 +148,8 @@ try {
         Copy-Item -LiteralPath (Join-Path $result 'mapping.txt') -Destination (Join-Path $mapDir 'mapping.txt') -Force
     }
     Copy-Item -Path (Join-Path $result '*') -Destination $Out -Recurse -Force
+    # Which commit these are, for release.ps1 -SkipBuild's check.
+    [IO.File]::WriteAllText((Join-Path $Out 'COMMIT'), "$sha`n", (New-Object Text.UTF8Encoding $false))
     Say "done: $Out"
     Get-ChildItem -LiteralPath $Out -Filter '*.apk' | ForEach-Object { Write-Host "  $($_.Name)  $($_.Length) bytes" }
 } finally {
