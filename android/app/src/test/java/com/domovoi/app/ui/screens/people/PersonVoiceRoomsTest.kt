@@ -19,25 +19,47 @@ class PersonVoiceRoomsTest {
     private fun rooms(json: String) = parseVoiceRooms(DomovoiJson.parseToJsonElement(json))
 
     private val kitchen = VoiceRoom("kitchen", current = true)
-    private val office = VoiceRoom("office", legacy = true)
+    private val office = VoiceRoom("office", current = true)
     private val garage = VoiceRoom("garage")
+
+    /** What a 1.3.0 build from before V061 (never released) sent for a room
+     *  whose only sample was pre-1.3.0; that server still used it. */
+    private val oldBuildRoom = VoiceRoom("den", legacy = true)
+
+    private val priya = Person(id = 2, name = "Priya", voice_profile_count = 2)
 
     @Test fun parsesEveryRoomWithMissingFlagsAsFalse() {
         val parsed = rooms(
             """[
-              {"room_id":"kitchen","current":true,"legacy":false},
-              {"room_id":"office","legacy":true},
+              {"room_id":"kitchen","current":true},
+              {"room_id":"office","current":true,"extra":1},
               {"room_id":"garage"},
-              {"room_id":"den","current":null,"legacy":true,"extra":1}
+              {"room_id":"hall","current":null}
             ]""",
         )
+        assertEquals(listOf(kitchen, office, garage, VoiceRoom("hall")), parsed)
+        assertEquals(listOf(true, true, false, false), parsed.map { it.known })
+    }
+
+    /** Since V061 a room knows a voice only with a sample of the current
+     *  model: the server sends `current` alone, and false is "not yet". */
+    @Test fun aRoomIsKnownOnlyWhenCurrent() {
+        val parsed = rooms("""[{"room_id":"kitchen","current":true},{"room_id":"garage","current":false}]""")
+        assertEquals("1/2", voiceRoomsCount(parsed))
+        assertEquals(listOf("kitchen", "garage · not yet"), parsed.map(::voiceRoomChip))
         assertEquals(
-            listOf(kitchen, office, garage, VoiceRoom("den", legacy = true)),
-            parsed,
+            "Rooms recognize a voice best once they have heard it themselves. In each room " +
+                "marked “not yet”, Priya can say “my name is Priya” and answer yes.",
+            voiceRoomsHint("Priya", parsed),
         )
-        assertTrue(parsed[0].known)
-        assertTrue(parsed[1].known)
-        assertFalse(parsed[2].known)
+    }
+
+    @Test fun aPreV061BuildsLegacyRoomIsNotCalledNotYet() {
+        val parsed = rooms("""[{"room_id":"den","current":false,"legacy":true}]""")
+        assertEquals(listOf(oldBuildRoom), parsed)
+        assertEquals("1/1", voiceRoomsCount(parsed))
+        assertEquals("den", voiceRoomChip(parsed.single()))
+        assertNull(voiceRoomsHint("Priya", parsed))
     }
 
     @Test fun dropsRowsThatAreNotRooms() {
@@ -80,14 +102,26 @@ class PersonVoiceRoomsTest {
     }
 
     @Test fun hiddenWhenThereAreNoRooms() {
-        assertFalse(showVoiceRooms(emptyList()))
-        assertTrue(showVoiceRooms(listOf(garage)))
+        assertFalse(showVoiceRooms(priya, emptyList(), null))
+        assertTrue(showVoiceRooms(priya, listOf(garage), null))
+    }
+
+    @Test fun hiddenWhileThePersonHasToIntroduceThemselvesAgain() {
+        val relearning = priya.copy(voice_relearn = true, voice_profile_count = 0)
+        assertFalse(showVoiceRooms(relearning, listOf(kitchen, garage), null))
+        assertFalse(showVoiceRooms(relearning, listOf(kitchen, garage), VoiceIdStatus(ready = true, relearn = 1)))
+    }
+
+    @Test fun hiddenWhileVoiceIdCannotRun() {
+        val off = VoiceIdStatus(ready = false, problem = "The voice model isn't on this server yet.")
+        assertFalse(showVoiceRooms(priya, listOf(kitchen, garage), off))
+        assertTrue(showVoiceRooms(priya, listOf(kitchen, garage), VoiceIdStatus(ready = true)))
     }
 
     @Test fun aServerWithoutTheRouteHidesTheSectionQuietly() = runBlocking {
         val loaded = loadVoiceRooms { throw ApiException(404, """404 Not Found: {"detail":"Not Found"}""") }
         assertEquals(emptyList<VoiceRoom>(), loaded)
-        assertFalse(showVoiceRooms(loaded!!))
+        assertFalse(showVoiceRooms(priya, loaded!!, null))
     }
 
     @Test fun otherFailuresKeepWhatIsShown() = runBlocking {

@@ -10,10 +10,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -39,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
@@ -72,6 +76,8 @@ internal fun PersonDetail(
     onForgotten: () -> Unit,
     modifier: Modifier = Modifier,
     onRenamed: () -> Unit = {},
+    /** Voice ID's state, read with the People list; null when unknown. */
+    voiceId: VoiceIdStatus? = null,
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -143,6 +149,7 @@ internal fun PersonDetail(
                     sessionCount = detail.sessions.size,
                     turnCount = detail.conversations.size,
                     voiceRooms = detail.voiceRooms,
+                    voiceId = voiceId,
                     onForget = { confirmForget = true },
                     onRename = { renaming = true },
                     onPeopleChanged = onRenamed,
@@ -205,6 +212,7 @@ private fun ProfileTab(
     sessionCount: Int,
     turnCount: Int,
     voiceRooms: List<VoiceRoom>,
+    voiceId: VoiceIdStatus?,
     onForget: () -> Unit,
     onRename: () -> Unit,
     onPeopleChanged: () -> Unit,
@@ -256,6 +264,9 @@ private fun ProfileTab(
             )
         }
 
+        // Web order: namesakes, then this, then the stats.
+        personVoiceRelearnNotice(person, voiceId)?.let { VoiceNoticeBox(it, Domovoi.colors.warnSoft) }
+
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Stat(
                 "last heard",
@@ -275,7 +286,7 @@ private fun ProfileTab(
             Stat("turns", "$turnCount", "conversation_log rows", Modifier.weight(1f))
         }
 
-        VoiceRoomsSection(person, voiceRooms)
+        VoiceRoomsSection(person, voiceRooms, voiceId)
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             SectionLabel("notes")
@@ -313,8 +324,8 @@ private fun ProfileTab(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun VoiceRoomsSection(person: Person, rooms: List<VoiceRoom>) {
-    if (!showVoiceRooms(rooms)) return
+private fun VoiceRoomsSection(person: Person, rooms: List<VoiceRoom>, voiceId: VoiceIdStatus?) {
+    if (!showVoiceRooms(person, rooms, voiceId)) return
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -337,6 +348,45 @@ private fun VoiceRoomsSection(person: Person, rooms: List<VoiceRoom>) {
         }
         voiceRoomsHint(person.name, rooms)?.let { hint ->
             Text(hint, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Voice ID notices (web VoiceIdNotice / PersonVoiceRelearn): a mic icon and a
+// bold line, the details muted under it. Announced as a whole to TalkBack.
+// ---------------------------------------------------------------------------
+
+@Composable
+internal fun VoiceNoticeBox(notice: VoiceNotice, background: Color, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.small)
+            .background(background)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .semantics(mergeDescendants = true) {},
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                if (notice.title == VOICE_ID_OFF_TITLE) Icons.Filled.MicOff else Icons.Filled.Mic,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = Domovoi.colors.fg,
+            )
+            Text(
+                notice.title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Domovoi.colors.fg,
+            )
+        }
+        notice.body?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
         }
     }
 }
