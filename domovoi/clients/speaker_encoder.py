@@ -59,12 +59,23 @@ MODEL_TAG = "eres2net-vox-v1"
 # the file the 2026-11 comparison measured (design notes, outside the repo).
 # A new export means a new pin, a new MODEL_TAG and re-enrolment, never a
 # looser check.
+#
+# Coders Farm keeps a byte-for-byte copy in its own release
+# (coders-farm-official/domovoi-models, tag ``eres2net-vox-v1``) so a server
+# can still get the model if upstream moves or removes it. The copy is tried
+# first and upstream second; both must match the same size and SHA-256.
 
 MODEL_FILE = "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"
 MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
     + MODEL_FILE
 )
+MODEL_MIRROR_URL = (
+    "https://github.com/coders-farm-official/domovoi-models/releases/download/eres2net-vox-v1/"
+    + MODEL_FILE
+)
+#: Where the model is fetched from, in order: Coders Farm's copy, then upstream.
+MODEL_URLS = (MODEL_MIRROR_URL, MODEL_URL)
 MODEL_SHA256 = "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"
 MODEL_BYTES = 26_485_263
 
@@ -138,22 +149,31 @@ def download_model(dest_dir: Path | None = None) -> Path:
     with _download_lock:
         if model_on_disk(target):
             return target
-        egress.require_destination(MODEL_URL)
+        allowed = [u for u in MODEL_URLS if egress.check_destination(u) is None]
+        if not allowed:
+            egress.require_destination(MODEL_URLS[0])       # raises, and logs the refusal
         dest_dir.mkdir(parents=True, exist_ok=True)
         from domovoi.satellite_media.fetchers import _fetch_pinned
 
-        log.info("voice ID: downloading the speaker model (%.0f MB, one-time) from %s",
-                 MODEL_BYTES / 1e6, MODEL_URL)
-        try:
-            _fetch_pinned(MODEL_URL, target, sha256=MODEL_SHA256, size=MODEL_BYTES)
-        except egress.InternetTurnedOff:
-            raise
-        except Exception as e:
-            _last_failure = (time.monotonic(), str(e) or e.__class__.__name__)
-            raise ModelUnavailable(f"the speaker model could not be downloaded: {e}") from e
-        _last_failure = None
-        log.info("voice ID: speaker model verified, in %s", target)
-        return target
+        errors: list[str] = []
+        for url in allowed:
+            log.info("voice ID: downloading the speaker model (%.0f MB, one-time) from %s",
+                     MODEL_BYTES / 1e6, url)
+            try:
+                _fetch_pinned(url, target, sha256=MODEL_SHA256, size=MODEL_BYTES)
+            except egress.InternetTurnedOff:
+                raise
+            except Exception as e:
+                why = str(e) or e.__class__.__name__
+                log.warning("voice ID: speaker model download from %s failed: %s", url, why)
+                errors.append(why)
+                continue
+            _last_failure = None
+            log.info("voice ID: speaker model verified, in %s", target)
+            return target
+        why = "; ".join(errors)
+        _last_failure = (time.monotonic(), why)
+        raise ModelUnavailable(f"the speaker model could not be downloaded: {why}")
 
 
 def may_retry_download() -> bool:

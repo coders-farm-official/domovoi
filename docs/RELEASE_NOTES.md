@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — Voice ID's model has a backup copy
+
+- **What changed.** A server now downloads voice ID's speaker model from
+  Coders Farm's own copy first ([domovoi-models](https://github.com/coders-farm-official/domovoi-models),
+  release `eres2net-vox-v1`) and from the sherpa-onnx project's release only
+  if that fails. Both are checked against the same size and SHA-256, so a
+  changed file is refused wherever it came from. If upstream ever moves or
+  removes the file, new installs still get it.
+- **Nothing to do.** A server that already has the model never downloads it again.
+
 ## 1.3.0 (unreleased) — Each room says which word it wakes on
 
 No migration. Settings → Rooms shows **wakes on “Domovoi”** (or whichever
