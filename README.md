@@ -720,6 +720,7 @@ Want to write one? Start at the
 | [Setup runbook](docs/SETUP_RUNBOOK.md) | Day-one bring-up in order — server, first satellite, fleet, verification gates |
 | [Will your Domovoi have internet?](docs/INTERNET.md) | The internet question: what Yes, Sometimes and No each switch, what's left to set up, and what to download before a server goes without |
 | [FAQ](docs/FAQ.md) | Quick answers — privacy, hardware, common "can it…?" questions |
+| [Screenshots](docs/screenshots/README.md) | The web dashboard page by page, from a demo house with made-up content |
 | [Glossary](docs/GLOSSARY.md) | The words we use (satellite, handler, capability, band…) |
 | [Architecture](docs/ARCHITECTURE.md) | How the system works, for the curious and the contributing |
 | [API reference](docs/API_REFERENCE.md) | HTTP + WebSocket endpoints on :6370 and :6369 |
