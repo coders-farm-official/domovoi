@@ -112,7 +112,7 @@ class VoiceIdNoticeTest {
         assertEquals(
             VoiceNotice(
                 "Not recognized by voice yet",
-                "Voice recognition was upgraded, so Domovoi has to learn Alex voice again. " +
+                "Voice recognition was upgraded, so Domovoi has to learn Alex’s voice again. " +
                     "To be recognized again, Alex can say “my name is Alex” in a room and answer yes.",
             ),
             personVoiceRelearnNotice(alex, ready),

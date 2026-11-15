@@ -266,7 +266,7 @@ internal fun personVoiceRelearnNotice(person: Person, voiceId: VoiceIdStatus?): 
     val name = person.name.trim()
     return VoiceNotice(
         PERSON_RELEARN_TITLE,
-        "Voice recognition was upgraded, so Domovoi has to learn ${name.ifEmpty { "their" }} voice again. " +
+        "Voice recognition was upgraded, so Domovoi has to learn ${if (name.isEmpty()) "their" else "$name’s"} voice again. " +
             "To be recognized again, ${name.ifEmpty { "they" }} can say “my name is ${name.ifEmpty { "…" }}” " +
             "in a room and answer yes.",
     )
