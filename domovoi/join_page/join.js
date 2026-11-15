@@ -49,7 +49,12 @@
   function readCode(raw) {
     if (!raw) return null;
     if (raw.length > MAX_CODE) return { bad: true };
-    var m = /^domovoi-room:1\?(.+)$/i.exec(raw);
+    // Only what satellite/enrolment.py's parser takes raw (RFC 3986 query
+    // characters, %-escapes, = and &): the code goes into the intent link
+    // below as written, and a "#" there would end it early, so a crafted
+    // link could put its own #Intent;…;end (another app, another fallback
+    // address) ahead of ours (CodeQL, 2026-11).
+    var m = /^domovoi-room:1\?([A-Za-z0-9\-._~!$'()*+,;:@\/?%=&]+)$/i.exec(raw);
     if (!m) return { bad: true };
     var fields = {};
     var pairs = m[1].split('&');
