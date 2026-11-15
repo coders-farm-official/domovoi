@@ -546,7 +546,14 @@ Keep to fewer than ten release candidates (`rc10` sorts before `rc2`).
 **The Android app has its own version** (owner decision 2026-11-14):
 `versionName` and `versionCode` (its `YYMMDDNN` counter, which only goes
 up) in `android/app/build.gradle.kts`, raised only when the app changes,
-and never ahead of the release it ships with. The app is published only
+and never ahead of the release it ships with. That `versionCode` is the
+base: each APK's own code is base\*10 + its ABI's digit and the Play
+bundle's base\*10, and `android/release.json` names base\*10 for the
+release and each APK's own code
+([android/README.md, "ABIs and APKs"](../android/README.md#abis-and-apks)).
+The release APKs are built in the pinned Linux image so they are
+reproducible, and F-Droid can publish them as they are
+([android/README.md, "Reproducible builds"](../android/README.md#reproducible-builds)). The app is published only
 with a release that changes it, under that release's tag; a release that
 doesn't change it ships no APKs and leaves `android/release.json` as it
 is, still naming the earlier release that holds them, so servers keep
@@ -593,13 +600,18 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    it is `v` + `pyproject.toml`'s version).
 4. The **plan** job (no secrets) checks the commit and says which path it
    is: the app changed when its `versionName`/`versionCode` differ from the
-   ones `android/release.json` names. Its summary shows the plan.
+   ones `android/release.json` names (for a release with per-ABI codes, its
+   `version_code` divided by ten). Its summary shows the plan.
 5. GitHub then asks for the `release` environment's approval: **Review
    deployments → release → Approve and deploy**. Nothing is signed or
    published before that.
-6. The **release** job (Windows): when the app changed, it builds the
-   APKs, then `android/scripts/release.ps1 -SkipBuild` signs them with the
-   keystore from the environment's secrets, commits `android/release.json`
+6. When the app changed, the **build-app** job (Linux, no secrets) has
+   built the unsigned APKs from that commit in the pinned image
+   (`android/build-env`; the same bytes CI's reproducibility check and
+   F-Droid build). The **release** job (Windows) takes them, and
+   `android/scripts/release.ps1 -SkipBuild` signs them with the
+   keystore from the environment's secrets (`--alignment-preserved`, then
+   `apksigcopier compare`), commits `android/release.json`
    on `main`, pushes it with its tag and publishes the release with the
    APKs (step 2 below). Then, always, `finish_release.py --signing-agent` (what
    `finish-release.sh` runs) builds the Windows Setup from the tag, signs it with the release key
@@ -646,10 +658,15 @@ workflow runs the same scripts. In order:
    too; when it didn't, `android/` stays as it is (`android/release.json`
    above all).
 2. **Only when the app changed: `android/scripts/release.ps1`** (or `.sh`)
-   from a clean, pushed checkout of `main`: builds and signs the APKs with
-   the release key, commits `android/release.json` on the commit they
-   were built from (it refuses if anything else was committed meanwhile),
-   pushes that commit and its tag `v<pyproject version>` together, and
+   from a clean, pushed checkout of `main`, **with Docker Desktop running**:
+   builds the APKs in the pinned Linux image (`android/build-env`; without
+   Docker it builds with `gradlew.bat` and warns that the APKs aren't
+   reproducible), signs them with the release key
+   (`--alignment-preserved`) and checks the signature copies onto the
+   unsigned build (`apksigcopier compare`), commits `android/release.json`
+   on the commit they were built from (it refuses if anything else was
+   committed meanwhile), pushes that commit, its tag `v<pyproject version>`
+   and the app tag `app-<versionName>` on the build commit together, and
    publishes the release on that tag with the APKs, as a full release
    marked Latest (release candidates too; `-Prerelease` makes it a
    pre-release). `-NoPublish` is its dry run.

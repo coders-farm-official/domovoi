@@ -104,8 +104,13 @@ What a build carries (`app/build.gradle.kts`):
 - **One APK per ABI** is what a GitHub release attaches (the two phone
   ABIs, arm64-v8a and armeabi-v7a: *Publishing a release*, below); each
   carries only its own ABI's libraries, and the armeabi-v7a and x86 ones
-  carry no LiteRT-LM. They share one `versionCode`, so a phone can move from one to
-  another with an ordinary update (same signing key).
+  carry no LiteRT-LM. Each has its own `versionCode`, base\*10 + its ABI's
+  digit (1 armeabi-v7a, 2 arm64-v8a, 3 x86, 4 x86_64; the base is
+  `versionCode` in `app/build.gradle.kts`), as F-Droid needs, and arm64-v8a
+  ranks above armeabi-v7a, so a 64-bit phone that can take either is
+  offered the 64-bit one. An App Bundle, and an APK carrying several ABIs,
+  is base\*10. A phone moves between them with an ordinary update (same
+  signing key, a code that doesn't go down).
 - An **App Bundle** (any `bundle*` task) carries all four ABIs unless
   `domovoi.abis` says otherwise, and keeps Play's default split by ABI
   (`bundle { abi { enableSplit = true } }`): Play builds one APK per ABI
@@ -127,12 +132,10 @@ one over another (uninstalling to upgrade loses the saved servers and the
 household token), and nothing ties it to this project. What the build
 itself trusts: the workflow's actions are pinned by commit SHA and run with
 a read-only token, and `gradle/actions/setup-gradle` validates the wrapper
-jar; the Gradle distribution the wrapper then downloads
-(`gradle-8.14.3-bin.zip` from services.gradle.org, over HTTPS) is not yet
-checked against a digest, because `gradle/wrapper/gradle-wrapper.properties`
-has no `distributionSha256Sum` (Gradle publishes the value beside the zip,
-as `gradle-8.14.3-bin.zip.sha256`). For a phone that keeps the app, use a
-release build signed with a key you keep: the next section.
+jar; the wrapper holds the Gradle distribution it downloads to the
+SHA-256 Gradle publishes for it (`distributionSha256Sum` in
+`gradle/wrapper/gradle-wrapper.properties`). For a phone that keeps the
+app, use a release build signed with a key you keep: the next section.
 
 ## Publishing a release (the app every Domovoi server hands out)
 
@@ -179,12 +182,14 @@ APKs, so servers keep fetching them from there ([docs/CONTRIBUTING.md,
 
 1. Raise `versionCode` (and `versionName`) in `app/build.gradle.kts`, and
    the Domovoi version in the release commit (the tag must be new),
-   commit, and push. `versionCode` is `YYMMDDNN`: the build's date and
-   that day's number (`26101501` is the first build of 2026-10-15), one
-   sequence for the GitHub releases and Google Play. The script refuses a
-   `versionCode` of another shape, one that is not above the last
+   commit, and push. `versionCode` is the **base**, `YYMMDDNN`: the
+   build's date and that day's number (`26101501` is the first build of
+   2026-10-15), one sequence for the GitHub releases and Google Play; each
+   APK's own code is base\*10 + its ABI's digit (*ABIs and APKs*). The
+   script refuses a base of another shape, one that is not above the last
    release's, and a checkout that is not its branch's tip on GitHub (pull
-   or push first: the release is committed on top of it).
+   or push first: the release is committed on top of it). Start Docker
+   Desktop (Linux containers) first: the build runs in it.
 2. Run the script from a clean checkout of that branch (it says what it
    does as it goes):
 
@@ -196,21 +201,28 @@ APKs, so servers keep fetching them from there ([docs/CONTRIBUTING.md,
    bash android/scripts/release.sh          # Linux, macOS, Git Bash
    ```
 
-   It builds `:app:assembleRelease -Pdomovoi.apkPerAbi -Pdomovoi.abis=arm64-v8a,armeabi-v7a`,
-   asks for the keystore file, the alias and the passwords (typed, not
-   shown; never written anywhere: apksigner reads them from the script's
-   environment for that one call), signs
-   `domovoi-<versionName>-arm64-v8a.apk` and `-armeabi-v7a.apk`, and checks
-   them: `apksigner verify` (v2 present, one RSA signer, not a debug key,
-   the same key as the last release), 16 KB page alignment, and the
+   It builds `:app:assembleRelease -Pdomovoi.apkPerAbi -Pdomovoi.abis=arm64-v8a,armeabi-v7a`
+   **in the pinned Linux image** (`android/build-env/build.ps1` / `build.sh`:
+   a clean checkout of the commit, *Reproducible builds* below), asks for
+   the keystore file, the alias and the passwords (typed, not shown; never
+   written anywhere: apksigner reads them from the script's environment
+   for that one call), signs `domovoi-<versionName>-arm64-v8a.apk` and
+   `-armeabi-v7a.apk` with `apksigner sign --alignment-preserved`, and
+   checks them: `apksigner verify` (v2 present, one RSA signer, not a
+   debug key, the same key as the last release), 16 KB page alignment,
+   `apksigcopier compare` (the signature copies onto the unsigned APK
+   unchanged, which is what F-Droid does with its own build), and the
    server's own check (`python -m domovoi.android_app check`). Then it
-   writes `android/release.json`, commits it (`android: release <v> [skip
-   ci]`) and pushes it, and publishes the GitHub release `v<Domovoi's
-   version>` (from `pyproject.toml`, e.g. `v1.3.0` or `v1.0.0-rc3`; not the
-   app's `versionName`) on `coders-farm-official/domovoi` with `gh`,
-   **tagged at that commit**: the tag holds the manifest naming its own
-   APKs, so a server installed at the tag hands them out, and so does
-   every later release until the app changes again. The release carries the two APKs and an
+   writes `android/release.json` (with each APK's own `version_code`),
+   commits it (`android: release <v> [skip ci]`) and pushes it, and
+   publishes the GitHub release `v<Domovoi's version>` (from
+   `pyproject.toml`, e.g. `v1.3.0` or `v1.0.0-rc3`; not the app's
+   `versionName`) on `coders-farm-official/domovoi` with `gh`, **tagged at
+   that commit**: the tag holds the manifest naming its own APKs, so a
+   server installed at the tag hands them out, and so does every later
+   release until the app changes again. The same push puts the lightweight
+   tag **`app-<versionName>` on the commit the APKs were built from** (the
+   one before), which is the commit F-Droid builds. The release carries the two APKs and an
    APK-only `SHA256SUMS`, with the certificate's SHA-256 in the notes.
    Every release is a full one, marked Latest, release candidates
    (`1.0.0-rc3`) included: the suffix says what it is. `-Prerelease` / `--prerelease` makes one a pre-release.
@@ -229,18 +241,32 @@ APKs, so servers keep fetching them from there ([docs/CONTRIBUTING.md,
 `-NoPublish` (`--no-publish`) stops after the checks (nothing is
 committed, pushed or published), leaving the signed APKs, `SHA256SUMS` and
 the manifest it would commit in `app/build/outputs/apk/release-signed/`;
-`-SkipBuild` (`--skip-build`) signs what the last build left. Needs a JDK,
-the SDK's build-tools 35.0.0, Python 3.11+, git with push access and `gh
-auth login` with permission to publish releases.
+`-SkipBuild` (`--skip-build`) signs what the last build left. Needs Docker
+Desktop (Linux containers) for the build, a JDK and the SDK's build-tools
+35.0.0 for signing, Python 3.11+, git with push access and `gh auth login`
+with permission to publish releases.
+
+**Without Docker.** When `docker info` fails (Docker Desktop not
+running), or with `-NoContainer` (`--no-container`), the script builds
+with `gradlew.bat` (`./gradlew`) on this machine, as releases up to 1.2.0
+were built, and warns, before the build and again at the end, that these
+APKs are **not the reproducible ones**: F-Droid's build of the commit, and
+CI's, won't match them. Such a release still installs and updates as
+before; F-Droid just can't publish it. The `apksigcopier` check runs in
+the image, else with an `apksigcopier` on `PATH`, else is skipped with a
+warning.
 
 **Google Play:** `android/scripts/play-bundle.ps1` (or `.sh`) builds the
 App Bundle and signs it with the same key (jarsigner; its prompts and
 checks are the release scripts'), and `android/play/PUBLISH-CHECKLIST.md`
 walks through the Play Console, Play App Signing with this key (PEPK)
-included. It reads the same `versionCode` (`YYMMDDNN`, the same shape
-check) and refuses one below the last GitHub release's in
-`android/release.json`: the bundle of a build already released on GitHub
-keeps that release's `versionCode`.
+included. It reads the same base `versionCode` (`YYMMDDNN`, the same shape
+check); the bundle's own code is base\*10, and the script refuses one below
+the last GitHub release's in `android/release.json`: the bundle of a build
+already released on GitHub keeps that release's code (base\*10, one below
+its arm64 APK, which is harmless: same code, same key). **The first release
+with per-ABI codes (nine digits) is one-way on Play**: Play accepts only
+increasing codes, so no bundle with an 8-digit code can follow it.
 
 Keep the key and its password safe and backed up: every later release has
 to be signed with the same key, or phones refuse the upgrade.
@@ -251,6 +277,72 @@ ones included, from some date in 2027. Register the publisher and
 `com.domovoi.app` with this key's certificate SHA-256 (the `cert_sha256` in
 `release.json`) well before then.
 
+## Reproducible builds
+
+The release APKs are **reproducible**: anyone who builds the commit a
+release names gets the same bytes as the GitHub APK, apart from the
+signature. That is what lets F-Droid publish the owner-signed APK itself
+(its build of the commit must match, then it copies the signature over
+with apksigcopier and serves our file), and what lets anyone check an APK
+is that commit's code.
+
+**The build environment** is `android/build-env/Dockerfile`: Ubuntu 24.04
+by digest, apt packages at exact versions from one snapshot, Temurin
+21.0.13+9 and the SDK's platform 36 r02 and build-tools 35.0.0 by SHA-256.
+`BUILD-ENV.txt` beside it is what the image records it installed; CI fails
+when the two differ, so a pin moves in both, in one commit. JDK 21 runs
+the build (LiteRT-LM's classes are Java 21 class files), and the app still
+compiles to Java 17 bytecode. Gradle comes from the wrapper (held to its
+published SHA-256) and every Maven artifact is held to
+`gradle/verification-metadata.xml`.
+
+```bash
+bash android/build-env/build.sh                    # HEAD's unsigned release APKs, into app/build/outputs/apk/release/
+bash android/build-env/build.sh --commit <sha> --out /tmp/x
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File android\build-env\build.ps1
+```
+
+They need Docker with a Linux engine (Docker Desktop). The build is a
+clean, shallow checkout of exactly that commit, fetched from this
+checkout's `.git` (read-only) inside the container, so only committed files
+are built and no line ending, path, locale or SDK of the machine reaches
+the APK. Gradle's downloads stay in the Docker volume
+`domovoi-android-gradle` between runs. On a machine with 32 or more logical
+processors the container runs on 16-31 (`DOMOVOI_BUILD_CPUS` overrides).
+
+**What the build does about it** (`app/build.gradle.kts`): no
+dependency-information block in the APK (`dependenciesInfo`), native
+libraries never re-stripped (`keepDebugSymbols`), PNGs not crunched, the
+draft templates listed in order, the licence list failing loudly when a
+POM can't be found, and the files from outside `android/` that go into the
+APK kept LF by `.gitattributes`. The APK keeps AGP's
+`META-INF/version-control-info.textproto` (the commit it was built from):
+the release scripts tag that commit `app-<versionName>`, and F-Droid builds
+it.
+
+**CI checks it** on every change to the app (`.github/workflows/ci.yml`,
+`android-repro-build` and `android-repro-compare`): two builds in the
+image, one with its defaults and one with another time zone, locale,
+umask, core count, JDK and checkout path (and each ABI built alone, as
+F-Droid builds them), must give byte-identical unsigned APKs; when they
+don't, the job fails with the differing zip entries and a diffoscope
+report as an artifact. `.github/workflows/android-release-verify.yml`
+(weekly, and by hand) checks the release `android/release.json` names: its
+published APKs against an unsigned build of its commit, with `apksigcopier
+compare`, as F-Droid does. It checks nothing until the first release built
+this way (per-ABI `version_code`s in the manifest).
+
+**Checking a release by hand:** build its commit (`release.json`'s
+`commit`, tagged `app-<versionName>`) with `build.sh --commit`, then
+`apksigcopier compare domovoi-<v>-arm64-v8a.apk --unsigned app-arm64-v8a-release-unsigned.apk`
+(apksigcopier is in the image: `docker run --rm -v "$PWD:/w" <image> apksigcopier …`).
+
+apksigcopier and diffoscope are GPL-3.0 tools that run in CI or the build
+image only; nothing of them is in the app.
+
 ### "A newer app is available from your server"
 
 The app tells its person when the server it is connected to hands out a
@@ -260,8 +352,12 @@ newer release than the one installed (`update/AppUpdate.kt`). It asks
 `join_url`), at most every half hour; a room-mode phone asks the core it
 proved, after connecting and then every six hours.
 
-- **Newer** means the release's `version_code` is above the installed
-  `versionCode`.
+- **Newer** means the offered APK's own `version_code` (per-ABI codes;
+  else the release's) is above the installed `versionCode`. Two codes of one
+  release (base\*10 + 1 and + 2) are never an update: a 32-bit install on a
+  64-bit phone isn't told its own release is new. A phone on an app from
+  before per-ABI codes compares the release's `version_code`, base\*10, which
+  is above every 8-digit code, so it still hears about the update.
 - **Never for a Google Play install** (installer `com.android.vending`,
   from `getInstallSourceInfo`): Play updates it. **Never for a debug
   build** (`FLAG_DEBUGGABLE`): Settings → About & updates says "Debug build" and the
