@@ -126,10 +126,15 @@ class SpokenAudioRoomsMixin(RoomCommandsMixin):
         if found is None:
             return self._room_reply(ctx, unknown_room_text(unknown[2].said, rooms))
         head, (fp, hm), place = found
-        if place.kind == "everywhere":
+        if place.kind in ("everywhere", "group"):
+            # A podcast or a book keeps one place per listener: it plays in
+            # one room, never a group's (said so, rather than one room of
+            # the group picked silently).
             return self._room_reply(ctx, _EVERYWHERE_TEXT)
         if place.kind == "here" or any(r.room_id == ctx.room_id for r in place.rooms):
             return await fp.method(self, hm, ctx, session)
+        if not place.rooms:
+            return self._room_reply(ctx, unknown_room_text(place.said, rooms))
         room = self._pick_room(place.rooms)
         target = await self._target(room, "play", ctx, keep_session=False)
         if isinstance(target, Response):
@@ -183,10 +188,12 @@ class SpokenAudioRoomsMixin(RoomCommandsMixin):
         place = rooms_mod.read_place(said, rooms) or Place("unknown", said)
         if place.kind == "unknown":
             return self._room_reply(ctx, unknown_room_text(said, rooms))
+        if place.kind in ("everywhere", "group"):
+            return self._room_reply(ctx, _EVERYWHERE_TEXT)
         if place.kind == "here" or any(r.room_id == ctx.room_id for r in place.rooms):
             return await self.execute_from_tool(rest, ctx, session)  # type: ignore[attr-defined]
-        if place.kind == "everywhere":
-            return self._room_reply(ctx, _EVERYWHERE_TEXT)
+        if not place.rooms:
+            return self._room_reply(ctx, unknown_room_text(said, rooms))
         if str(args.get("action") or "") not in _TOOL_PLAY_ACTIONS:
             return self._room_reply(ctx, _TOOL_OTHER_TEXT)
         room = self._pick_room(place.rooms)

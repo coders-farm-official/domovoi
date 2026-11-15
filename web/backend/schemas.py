@@ -272,6 +272,20 @@ class NowPlayingSong(BaseModel):
     duration_sec: int | None = None
 
 
+class NowPlayingGroup(BaseModel):
+    """The shared queue a room hears (a group, V060): its player is the
+    host's (``host_room``), heard in every room of ``rooms`` (host first).
+    ``name`` is the named group's ("Upstairs"), "Everywhere", or null for
+    rooms joined one by one. ``id`` is the shared queue's (for
+    ``POST /api/music/groups/shared/{id}/end``)."""
+    id: str
+    name: str | None = None
+    host_room: str
+    rooms: list[str]
+    group_id: int | None = None
+    everywhere: bool = False
+
+
 class NowPlaying(BaseModel):
     room_id: str
     state: Literal["play", "pause", "stop"]
@@ -307,6 +321,9 @@ class NowPlaying(BaseModel):
     # the feature, and anything that reached MPD from outside Domovoi — the
     # UI renders nothing rather than guessing.
     added_by: str | None = None
+    # The shared queue this room hears, or null. A member room's card is
+    # its host's song (state, song, elapsed, stream_url are the host's).
+    group: NowPlayingGroup | None = None
 
 
 class FavoriteNowPlayingResult(BaseModel):

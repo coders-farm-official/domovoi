@@ -776,7 +776,8 @@ only).
 
 A music command may end with a place: "play jazz in the garage", "put
 Weezer on in the office", "stop / pause / skip / turn it up in the
-garage", "what's playing in the garage", "… in here", "… everywhere", or
+garage", "what's playing in the garage", "… in here", "… everywhere"
+(a shared queue, see Groups below), a named group ("… upstairs"), or
 say it first: "in the garage, play jazz". Three of `MusicHandler`'s fast
 paths read them, after the lyric paths (a lyric is read whole) and before
 "play X by Y" and the `^play (.+)` catch-all, so the catch-all no longer
@@ -823,6 +824,29 @@ garage, stop the music").
   where it was asked ("Playing Weezer in the garage, shuffled."). The
   asking room's own music resumes after the turn as after any other.
   Playlists go through too ("play my road trip playlist in the garage").
+* **Groups** (1.3.0, `music_groups.py`, V060): rooms that share one
+  queue. Model A of SHARED-QUEUES-PLAN: one room's MPD is the HOST, and
+  each MEMBER's satellite plays the host's stream (no new container, no
+  satellite change). `clients/mpd.get_mpd_client_for` and
+  `mpd_stream_url_for` route a member to its host, so "play X", skip,
+  queue edits, pause and resume in any room are the group's; NOW_PLAYING
+  stamps, `music_pause` and Up next's target are kept by the host;
+  `own_mpd_client` / `iter_mpd_clients` see each player once (rescans,
+  the listen logger and Up next's extender, which skip members). Joining
+  pauses the member's own player (its queue kept). "Stop" in a room leaves
+  the group (`MusicHandler._leave_group`; `sdk.playback.stop` too); the
+  host leaving hands the queue (files, place, Up next session, a person's
+  pause) to the earliest member. A member's `music_failed` never pauses
+  the host. The sweeper ends a group whose host's player stopped (two
+  looks) and drops a member offline 30 minutes. Named groups (lasting
+  sets of rooms) are places for `rooms.read_place` (kind `group`; a
+  room's name wins) and need no "in" (`music_rooms.GroupPlacePattern`,
+  which matches only a group the house has). Voice: "play X everywhere /
+  upstairs / in the north wing", "play this in the office too", "share
+  this with …", "join the kitchen", "leave the group", "just in here",
+  "which rooms are playing this". Memory is the truth; the tables mirror
+  it for the web process (now-playing and the queue show `group`) and for
+  a restart.
 * **Podcasts and audiobooks** (`handlers/spoken_audio_rooms.py`, the
   first fast path of `spoken_audio` at band 270, which would otherwise
   read the place as part of a show's or a book's name): "play the latest

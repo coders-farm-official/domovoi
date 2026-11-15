@@ -2400,6 +2400,143 @@ const Broadcast = ({ onlineCount, fire, compact = false }) => {
   );
 };
 
+/* ---- Groups (V060) ------------------------------------------------
+ * Named sets of rooms the household makes ("upstairs", "the north wing"),
+ * so "play jazz upstairs" plays in all of them at once: one shared queue,
+ * the same music in each. Made, renamed, re-roomed and deleted here (no
+ * screen of its own). "Everywhere" needs no group. */
+
+const groupInputStyle = {
+  width: '100%', font: 'inherit', fontSize: 13, height: 32, padding: '0 10px',
+  borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+  background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)',
+  boxSizing: 'border-box',
+};
+
+const MusicGroupForm = ({ initial, roomIds, busy, onSave, onCancel }) => {
+  const [name, setName] = React.useState(initial ? initial.name : '');
+  const [picked, setPicked] = React.useState(() => new Set(initial ? initial.rooms : []));
+  const toggle = (r) => setPicked((p) => {
+    const next = new Set(p);
+    if (next.has(r)) next.delete(r); else next.add(r);
+    return next;
+  });
+  const ready = name.trim().length > 0 && picked.size >= 2 && !busy;
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); if (ready) onSave(name.trim(), [...picked]); }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 16px',
+                   background: 'var(--sunken)', borderBottom: '1px solid var(--border-soft)' }}>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg-muted)' }}>
+        name
+        <input value={name} maxLength={40} onChange={(e) => setName(e.target.value)}
+               placeholder="upstairs" aria-label="group name" style={groupInputStyle}/>
+      </label>
+      <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+        <legend style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>rooms (two or more)</legend>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {roomIds.map((r) => (
+            <label key={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13,
+                                    padding: '6px 10px', borderRadius: 'var(--r-sm)', minHeight: 32,
+                                    border: '1px solid var(--border)', background: 'var(--card)' }}>
+              <input type="checkbox" checked={picked.has(r)} onChange={() => toggle(r)}/>
+              {r}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <Button type="button" onClick={onCancel} disabled={busy}>cancel</Button>
+        <Button type="submit" variant="primary" icon="check" disabled={!ready}>save</Button>
+      </div>
+    </form>
+  );
+};
+
+const MusicGroupsCard = ({ sats, fire }) => {
+  const { data, error, refresh } = useApiObject('/api/music/groups',
+                                                { eventTypes: ['music.now_playing.changed'], quiet: true });
+  const [editing, setEditing] = React.useState(null);   // 'new' | group id | null
+  const [busy, setBusy] = React.useState(false);
+  const groups = (data && data.groups) || [];
+  const roomIds = [...new Set(sats.map((s) => s.room_id))].sort();
+  if (error && error.status === 401) return null;   // not the household's view
+
+  const save = async (name, rooms) => {
+    setBusy(true);
+    try {
+      if (editing === 'new') await apiPost('/api/music/groups', { name, rooms });
+      else await apiPatch(`/api/music/groups/${editing}`, { name, rooms });
+      fire(editing === 'new' ? `group ${name} made` : `group ${name} saved`);
+      setEditing(null);
+    } catch (e) {
+      // The server says why a name can't be used, in words.
+      if (e && e.status === 400) fire(apiErrorText(e));
+      else reportMutationFailure(fire, 'save the group', e);
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+  const remove = async (g) => {
+    if (!window.confirm(`Delete the group ${g.name}?\n\nMusic playing in its rooms keeps playing.`)) return;
+    setBusy(true);
+    try {
+      await apiDelete(`/api/music/groups/${g.id}`);
+      fire(`group ${g.name} deleted`);
+    } catch (e) {
+      reportMutationFailure(fire, 'delete the group', e);
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
+  return (
+    <Card>
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-soft)',
+                    display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Icon name="speaker" size={15}/>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Groups</div>
+        <span style={{ flex: 1 }}/>
+        {editing === null && roomIds.length >= 2 && (
+          <Button icon="plus" disabled={busy} onClick={() => setEditing('new')}>new group</Button>
+        )}
+      </div>
+      <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--fg-muted)',
+                    borderBottom: '1px solid var(--border-soft)' }}>
+        Rooms in a group play the same music together: say "play jazz upstairs", or use a room's
+        share button on Home. "Everywhere" needs no group. Each room keeps its own volume. Speakers
+        you can hear from the same spot may sound a little out of step.
+      </div>
+      {editing === 'new' && (
+        <MusicGroupForm roomIds={roomIds} busy={busy} onSave={save} onCancel={() => setEditing(null)}/>
+      )}
+      {groups.length === 0 && editing !== 'new' && (
+        <div style={{ padding: '14px 16px', fontSize: 13, color: 'var(--fg-faint)' }}>
+          {roomIds.length >= 2 ? 'no groups yet' : 'set up two rooms to make a group'}
+        </div>
+      )}
+      {groups.map((g) => (editing === g.id ? (
+        <MusicGroupForm key={g.id} initial={g} roomIds={[...new Set([...roomIds, ...g.rooms])].sort()}
+                        busy={busy} onSave={save} onCancel={() => setEditing(null)}/>
+      ) : (
+        <div key={g.id} className="music-group-row"
+             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px',
+                      borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+            <span style={{ fontSize: 14, fontWeight: 500 }}>{g.name}</span>
+            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{g.rooms.join(', ')}</span>
+          </div>
+          <IconButton name="pencil" title={`rename ${g.name} or pick its rooms`} aria-label={`edit ${g.name}`}
+                      disabled={busy || editing !== null} onClick={() => setEditing(g.id)}/>
+          <IconButton name="trash-2" title={`delete ${g.name}`} aria-label={`delete ${g.name}`}
+                      disabled={busy || editing !== null} onClick={() => remove(g)}/>
+        </div>
+      )))}
+    </Card>
+  );
+};
+
 /* ---- Page ------------------------------------------------- */
 /* ---- USB adoption: pending devices + adopt modal -------------------
  * An unprovisioned satellite plugged into the server's USB port shows up
@@ -3760,6 +3897,8 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       )}
 
       <Broadcast onlineCount={onlineCount} fire={fire}/>
+
+      <MusicGroupsCard sats={sats} fire={fire}/>
 
       <PrepareMediaCard fire={fire}/>
 

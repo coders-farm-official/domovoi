@@ -16,6 +16,10 @@ such a room paused: the satellite's player still comes back (it rejoins
 the paused stream, so a later "resume" is heard at once), MPD stays where
 the person left it. Resume, stop, and starting something new clear it.
 
+A room in a shared queue (domovoi/music_groups.py) shares its host's
+record: pause is the whole group's (owner, 2026-11-14), so a member's turn
+must not un-pause the music the group hears.
+
 In memory, like ``resumable_music``: a core restart forgets it, and MPD's
 own paused state is kept anyway.
 """
@@ -38,10 +42,18 @@ def _rooms(app: Any, *, create: bool) -> set[str] | None:
     return rooms
 
 
+def _key(room_id: str) -> str:
+    from domovoi import music_groups
+
+    return music_groups.host_of(room_id) or room_id
+
+
 def note_paused_by_person(app: Any, room_id: str | None, paused: bool) -> None:
-    """Record (``paused=True``) or forget a person's pause in ``room_id``."""
+    """Record (``paused=True``) or forget a person's pause in ``room_id``
+    (in its shared queue's host, for a room in one)."""
     if not room_id:
         return
+    room_id = _key(room_id)
     rooms = _rooms(app, create=paused)
     if rooms is None:
         return
@@ -55,4 +67,4 @@ def paused_by_person(app: Any, room_id: str) -> bool:
     """Whether a person paused ``room_id``'s music and nobody resumed,
     stopped or replaced it since."""
     rooms = _rooms(app, create=False)
-    return bool(rooms) and room_id in rooms
+    return bool(rooms) and _key(room_id) in rooms

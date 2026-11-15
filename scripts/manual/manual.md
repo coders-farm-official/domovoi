@@ -285,6 +285,11 @@ it.
 - "in the garage, stop the music" (say the room first to stop, pause or
   skip somewhere else)
 - "what's playing in the office"
+- "play some music everywhere" · "play this in the office too" (the rooms
+  play the same music together)
+- "play jazz upstairs" (a group of rooms you named in Settings → Rooms)
+- "join the kitchen" · "leave the group" · "which rooms are playing this"
+  (stop in a room of a group stops only that room; pause pauses them all)
 - "play the song that goes …" (needs lyrics; see [Lyrics](#node:lyrics))
 - "when I say Gramps I mean Hearth Ensemble" (a nickname for an artist in
   your library)

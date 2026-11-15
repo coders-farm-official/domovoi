@@ -4,6 +4,53 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — Groups: rooms that play one shared queue (V060)
+
+**Migration V060** (`room_groups`, `room_group_rooms`, `shared_queues`,
+`shared_queue_rooms`), after V059. Nothing else to do: no new container,
+no satellite update. A room in a group plays another room's MPD stream
+(the host's), which every satellite and room-mode phone already can.
+
+- **Say it:** "play jazz everywhere" (was refused: "one room at a time"),
+  "play jazz upstairs" / "... in the north wing" (a named group; its name
+  needs no "in"), "play this in the office too", "share this with the
+  garage", "join the kitchen", "play the kitchen's music in here", "leave
+  the group", "just in here", "which rooms are playing this", "stop the
+  music upstairs". Bringing music into other rooms needs a paired
+  satellite or the household's app, as before (CORE-11).
+- **What a room in a group does:** "play X" there changes the music in
+  every room of the group; skip, back and queue edits are the group's;
+  **pause and resume are the whole group's**; **stop stops only that
+  room** (it leaves the group, the others play on; when the room whose
+  player it was stops, the queue moves to the room that joined first and
+  can take it, with a second or two of gap there; when none can, the group
+  ends). A room whose speaker has never connected can't join. Podcasts and
+  audiobooks still play in one room: aimed at a group, Domovoi says so. A guest's skip or add reaches the group
+  while the guest's room plays it. The group ends when its music runs out;
+  a room offline for 30 minutes leaves; a restart keeps a group that
+  changed in the last two hours.
+- **Named groups** are made in **Settings → Rooms → Groups** (two or more
+  rooms; a name can't be a room's, "everywhere", or hold radio words such
+  as "station", so "play the jazz station" stays the radio's).
+  **Everywhere** is every connected room, no setup.
+- **Home:** a room in a group shows a chip ("Upstairs · with garage,
+  office"); its share button offers "play in upstairs too", "play
+  everywhere", "play in garage too", "join kitchen" and "leave the group".
+  The Music page's room queue says "shared with 2 other rooms" with
+  **leave**.
+- **Sync** is "separate rooms" grade: rooms start within a fraction of a
+  second of each other, so two speakers heard from one spot may sound out
+  of step. Volume stays per room.
+- **API (answers clients may notice):** `GET /api/music/now-playing` and
+  `GET /api/music/queue/{room}` carry `group` (`{id, name, host_room,
+  rooms, group_id, everywhere}`, null outside a group); a member room's
+  now-playing card is its host's song. New: `GET/POST /api/music/groups`,
+  `PATCH/DELETE /api/music/groups/{id}`, `POST /api/music/groups/shared`,
+  `.../shared/join`, `.../shared/leave`, `.../shared/{id}/end` (household
+  tier; core `/v1/admin/music/groups…` and `/v1/admin/music/shared…`).
+- **Licences:** MPD (GPL-2.0-or-later, its own container) is now listed
+  in docs/LICENSES.md.
+
 ## 1.3.0 — Rooms tell voices apart better; what an update changes for voice ID
 
 Voice identification now embeds **the speech alone, at one loudness**: the

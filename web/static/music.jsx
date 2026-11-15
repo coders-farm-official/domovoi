@@ -1747,6 +1747,22 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
     return `${next ? 'Playing next' : 'Added'} in ${room}: ${label}${n > 1 ? ` (${n} songs)` : ''}`;
   };
 
+  // Groups (V060): this room hears one shared queue with other rooms; a
+  // change here is everyone's. "leave": this room stops, the others play on.
+  const leaveGroup = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await apiPost('/api/music/groups/shared/leave', { room_id: room });
+      fire(`${room} left the group`);
+    } catch (e) {
+      reportMutationFailure(fire, 'leave the group', e);
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
   // The rows drawn: QUEUE_ROWS_STEP at a time, "show more" for the rest.
   // Deep into a long queue the songs already played fold away (one press
   // shows them) so the song playing is near the top.
@@ -1776,6 +1792,23 @@ const QueueTab = ({ rooms, nowPlaying, npError, npLoading = false, fire, room: p
           <Button icon="trash-2" disabled={busy} onClick={clearQueue}>clear</Button>
         )}
       </div>
+
+      {queue?.group && (
+        <div className="rq-group" role="status"
+             style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                      fontSize: 12, borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
+          <Icon name="speaker" size={13}/>
+          <span style={{ color: 'var(--fg)' }}>
+            {queue.group.name ? `${queue.group.name} · ` : ''}
+            shared with {queue.group.rooms.length - 1} other room{queue.group.rooms.length === 2 ? '' : 's'}
+            {' '}({queue.group.rooms.filter((r) => r !== room).join(', ')})
+          </span>
+          <span style={{ flex: 1 }}/>
+          {!guest && (
+            <Button variant="ghost" icon="log-out" disabled={busy} onClick={leaveGroup}>leave</Button>
+          )}
+        </div>
+      )}
 
       {canAdd && (
         <div className="mp-q-save rq-add" key={`add-${room}`}>

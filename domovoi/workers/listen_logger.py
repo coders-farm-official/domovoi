@@ -132,8 +132,16 @@ class ListenLogger(Worker):
 
     async def tick(self) -> int:
         """One look at every room. Returns the listens written."""
+        from domovoi import music_groups
+
         written = 0
         for room_id, client in iter_mpd_clients():
+            if music_groups.is_member(room_id):
+                # Its own player waits, paused, while the room hears a
+                # shared queue (domovoi/music_groups.py): the host's player
+                # is the one looked at, once, and its listens are the
+                # host's. Up next's target for this room is the host's.
+                continue
             try:
                 written += await self._look(room_id, client)
             except Exception as e:  # noqa: BLE001 — one room never stops the rest

@@ -593,13 +593,114 @@ const HomeRoomSong = (s) => {
   return np.state === 'play' || np.state === 'pause' ? np.song : null;
 };
 
+/* Groups (V060): rooms sharing one queue. What a room's card offers:
+ * other rooms (or a named group, or every room) hear what plays here; this
+ * room hears what plays in another; it leaves the group it is in. Built from
+ * the rooms read and /api/music/groups; the server says no (409) when the
+ * music stopped meanwhile. A quiet room only gets the joins. */
+const HomeGroupChoices = (s, rooms, groups) => {
+  const np = s.now_playing || {};
+  const g = np.group || null;
+  const inMine = new Set(g ? g.rooms : [s.room_id]);
+  const playingHere = !!HomeRoomSong(s);
+  const others = rooms.filter((r) => r.room_id !== s.room_id && r.status === 'online');
+  const out = [];
+  if (playingHere) {
+    (groups || []).forEach((gr) => {
+      const missing = gr.rooms.filter((r) => !inMine.has(r) && others.some((o) => o.room_id === r));
+      if (missing.length) {
+        out.push({ key: `group:${gr.id}`, icon: 'speaker', label: `play in ${gr.name} too`,
+                   body: { host_room: s.room_id, group_id: gr.id }, path: 'shared' });
+      }
+    });
+    if (others.some((o) => !inMine.has(o.room_id))) {
+      out.push({ key: 'everywhere', icon: 'speaker', label: 'play everywhere',
+                 hint: 'every connected room hears it',
+                 body: { host_room: s.room_id, everywhere: true }, path: 'shared' });
+    }
+    others.filter((o) => !inMine.has(o.room_id)).forEach((o) => {
+      out.push({ key: `share:${o.room_id}`, icon: 'plus', label: `play in ${o.room_id} too`,
+                 body: { host_room: s.room_id, rooms: [o.room_id] }, path: 'shared' });
+    });
+  }
+  others.filter((o) => !inMine.has(o.room_id) && HomeRoomSong(o)).forEach((o) => {
+    out.push({ key: `join:${o.room_id}`, icon: 'log-in', label: `join ${o.room_id}`,
+               hint: `hear what plays in ${o.room_id}`,
+               body: { room_id: s.room_id, host_room: o.room_id }, path: 'shared/join' });
+  });
+  if (g) {
+    out.push({ key: 'leave', icon: 'log-out', label: 'leave the group',
+               hint: 'this room stops, the others play on',
+               body: { room_id: s.room_id }, path: 'shared/leave' });
+  }
+  return out;
+};
+
+const HomeGroupMenu = ({ room, items, disabled, onPick }) => {
+  const [open, setOpen] = React.useState(false);
+  const wrapRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  if (!items.length) return null;
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <IconButton name="users" title={`${room}: other rooms`} aria-label={`play ${room}'s music in other rooms, or join another room`}
+                  aria-haspopup="menu" aria-expanded={open} disabled={disabled}
+                  onClick={() => setOpen((o) => !o)}/>
+      {open && (
+        <div role="menu" aria-label={`${room} and other rooms`} className="home-group-menu"
+             style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50,
+                      minWidth: 220, maxWidth: 'calc(100vw - 32px)', background: 'var(--card)',
+                      border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
+                      boxShadow: 'var(--shadow-md), var(--inner-highlight)', padding: 6,
+                      display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {items.map((it) => (
+            <button key={it.key} role="menuitem" type="button"
+                    onClick={() => { setOpen(false); onPick(it); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 10px',
+                             minHeight: 40, background: 'transparent', border: 'none',
+                             borderRadius: 'var(--r-sm)', cursor: 'pointer', textAlign: 'left',
+                             font: 'inherit', color: 'var(--fg)' }}>
+              <Icon name={it.icon} size={16}/>
+              <span style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: 13, fontWeight: 500 }}>{it.label}</span>
+                {it.hint && <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{it.hint}</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* The chip on a room in a group: the group's name, or the rooms it plays
+ * with. */
+const HomeGroupChipText = (s) => {
+  const g = s.now_playing && s.now_playing.group;
+  if (!g) return null;
+  const others = g.rooms.filter((r) => r !== s.room_id);
+  const withText = others.length ? `with ${others.join(', ')}` : '';
+  return g.name ? `${g.name}${withText ? ` · ${withText}` : ''}` : withText;
+};
+
 /* One room. Not SatCard: that is a single <button>, and a button can't
  * hold the transport buttons. The left part is a link to Settings →
  * Satellites (#settings/rooms, which opens that tab); the buttons sit apart on
  * the right edge, in thumb reach on a phone, while something is playing or
  * paused. A quiet room has none: starting something in a room belongs to
  * the Music page, which picks the room and the track together. */
-const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) => {
+const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct,
+                       rooms = [], groups = null, onGroup = null }) => {
   const online = s.status === 'online';
   const np = s.now_playing;
   const song = HomeRoomSong(s);
@@ -664,6 +765,17 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
   // Opt-in command recording (V016): shown to everyone, on every screen —
   // a room that records says so where people look at it.
   if (s.capture_commands) chips.push(<CaptureChip key="capture"/>);
+  // A room in a group hears one shared queue with other rooms (V060).
+  const groupText = online ? HomeGroupChipText(s) : null;
+  if (groupText) {
+    chips.push(<span key="group" className="home-chip" title="these rooms play one shared queue">
+      <Icon name="speaker" size={12}/>{groupText}</span>);
+  }
+  const groupItems = onGroup && online && !stale ? HomeGroupChoices(s, rooms, groups) : [];
+  const groupMenu = groupItems.length > 0 && (
+    <HomeGroupMenu room={s.room_id} items={groupItems} disabled={!canAct}
+                   onPick={(it) => onGroup(s.room_id, it)}/>
+  );
 
   let actions = null;
   if (online && !stale) {
@@ -674,6 +786,7 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
           <IconButton name="square" title={`stop ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
           <IconButton name="list-music" title={`${s.room_id}'s queue`} aria-label={`open ${s.room_id}'s queue`}
                       onClick={() => { HomeOpenQueue(s.room_id); }}/>
+          {groupMenu}
         </>
       );
     } else if (paused) {
@@ -683,8 +796,12 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
           <IconButton name="square" title={`stop ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
           <IconButton name="list-music" title={`${s.room_id}'s queue`} aria-label={`open ${s.room_id}'s queue`}
                       onClick={() => { HomeOpenQueue(s.room_id); }}/>
+          {groupMenu}
         </>
       );
+    } else if (groupMenu) {
+      // A quiet room: only the joins ("hear what plays in the kitchen").
+      actions = groupMenu;
     }
   }
 
@@ -726,7 +843,7 @@ const HomeStopAll = ({ count, busy, onConfirm }) => {
 };
 
 const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLeftByRoom, busy, stoppingAll,
-                     onAct, onStopAll }) => {
+                     onAct, onStopAll, groups = null, onGroup = null }) => {
   const playing = stale ? [] : rooms.filter((s) => HomeRoomRank(s) === 0);
   const head = (
     <div className="home-sec-head">
@@ -768,7 +885,8 @@ const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLef
         {list.map((s) => (
           <HomeRoomRow key={s.room_id} s={s} stale={stale} sinceFetchSec={since}
                        nextTimerLeft={timerLeftByRoom[s.room_id]}
-                       busy={!!busy[s.room_id]} onAct={onAct}/>
+                       busy={!!busy[s.room_id]} onAct={onAct}
+                       rooms={rooms} groups={groups} onGroup={onGroup}/>
         ))}
       </div>
     );
@@ -1083,6 +1201,10 @@ const HomePage = ({ counts, badges }) => {
   const timers = useApiObject('/api/timers', { eventTypes: ['timers.changed', 'timer_fires.changed'], quiet: true,
                                                refetchOnAuth: true });
   const plugins = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'], quiet: true });
+  // Named groups (V060) for the rooms' "play in upstairs too": a household
+  // read, never issued for a guest.
+  const musicGroups = useApiObject(guest ? null : '/api/music/groups',
+                                   { eventTypes: ['music.now_playing.changed'], quiet: true });
   const acq = useApiObject('/api/acquisitions?status=pending&limit=100',
                            { eventTypes: ['acquisitions.changed'], quiet: true });
   const dayStart = HomeDayStart(Date.now());
@@ -1274,6 +1396,23 @@ const HomePage = ({ counts, badges }) => {
     }
   };
 
+  // Groups (V060): another room hears this one, this one joins another, or
+  // it leaves its group. Every room it touches is busy meanwhile.
+  const onGroup = async (room, it) => {
+    const touched = [room, ...((it.body && it.body.rooms) || [])];
+    setRoomsBusy(touched, true);
+    try {
+      await apiPost(`/api/music/groups/${it.path}`, it.body);
+      fire(it.key === 'leave' ? `${room} left the group` : `${it.label} · done`);
+    } catch (e) {
+      reportMutationFailure(fire, it.key === 'leave' ? 'leave the group' : 'share', e);
+    } finally {
+      setRoomsBusy(touched, false);
+      musicGroups.refresh();
+      refetchRooms();
+    }
+  };
+
   // A guest's pause / resume (HomeGuestRooms): sent without the pairing
   // prompt — the server decides, and a refusal is said in words.
   const onGuestAct = async (room, verb) => {
@@ -1366,7 +1505,8 @@ const HomePage = ({ counts, badges }) => {
             <HomeRooms rooms={rooms} answered={HomeAnswered(sats)} failed={HomeAnswered(sats) && !HomeOk(sats)}
                        dbDown={dbDown} stale={coreDown} fetchedAt={satsAt} timerLeftByRoom={timerLeftByRoom}
                        busy={busy} stoppingAll={stoppingAll}
-                       onAct={onAct} onStopAll={onStopAll}/>
+                       onAct={onAct} onStopAll={onStopAll}
+                       groups={musicGroups.data ? musicGroups.data.groups : null} onGroup={onGroup}/>
           )}
           <div className="home-pair">
             <HomeTimers active={active} done={done} now={now} shared={shared}

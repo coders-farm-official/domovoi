@@ -61,6 +61,14 @@ class PlaybackStateSweeper(Worker):
         pruned = 0
         pruned += await self._sweep_stamps()
         await self._sweep_pi_music()
+        # Groups (domovoi/music_groups.py): a shared queue whose host's
+        # player ran dry ends, and a member offline 30 minutes leaves.
+        from domovoi import music_groups
+
+        try:
+            await music_groups.upkeep(self.app)
+        except Exception as e:  # noqa: BLE001 — never stops the sweep
+            log.warning("sweeper: groups upkeep failed: %s", e)
         return pruned
 
     async def _sweep_stamps(self) -> int:

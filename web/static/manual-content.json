@@ -1297,6 +1297,39 @@
        "path": "fast"
       },
       {
+       "text": "play some music everywhere",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "play this in the office too",
+       "handler": "music",
+       "path": "fast",
+       "note": "the rooms play the same music together"
+      },
+      {
+       "text": "play jazz upstairs",
+       "handler": "music",
+       "path": "fast",
+       "note": "a group of rooms you named in Settings → Rooms"
+      },
+      {
+       "text": "join the kitchen",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "leave the group",
+       "handler": "music",
+       "path": "fast"
+      },
+      {
+       "text": "which rooms are playing this",
+       "handler": "music",
+       "path": "fast",
+       "note": "stop in a room of a group stops only that room; pause pauses them all"
+      },
+      {
        "text": "play the song that goes …",
        "handler": "music",
        "path": "fast",

@@ -73,6 +73,15 @@ DEVICE_TIER = [
     # ADD-3: the queue route the device blocks are about. Clear stops the
     # room, so it is never a guest's.
     ("POST", "/v1/admin/music/queue/{room_id}/clear"),
+    # Groups (V060): making and changing named groups, and pulling music
+    # into other rooms, are the household's — never a guest's (CORE-11).
+    ("POST", "/v1/admin/music/groups"),
+    ("PATCH", "/v1/admin/music/groups/{group_id}"),
+    ("DELETE", "/v1/admin/music/groups/{group_id}"),
+    ("POST", "/v1/admin/music/shared"),
+    ("POST", "/v1/admin/music/shared/join"),
+    ("POST", "/v1/admin/music/shared/leave"),
+    ("POST", "/v1/admin/music/shared/{share_id}/end"),
 ]
 
 # The device tier AND a guest on a playing room (owner decisions
@@ -124,6 +133,13 @@ SECURITY_TIER = [
 ADMIN_READ_TIER = [
     ("GET", "/v1/admin/satellite/{room_id}/logs"),
 ]
+
+# The groups list (V060) is a household read: the cookie may render it.
+def test_the_groups_list_is_a_device_read() -> None:
+    gates = _gates_for("GET", "/v1/admin/music/groups")
+    assert admin_auth.require_device_read in gates
+    assert admin_auth.require_admin_mutation not in gates
+
 
 # Device-tier reads (household token or admin Bearer).
 DEVICE_READS = [

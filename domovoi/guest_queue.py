@@ -122,6 +122,11 @@ def _running_player(room_id: str) -> Any | None:
     connection and starts nothing."""
     from domovoi.clients import mpd as mpd_module
 
+    # A room in a shared queue (a group) plays its host's player: a guest
+    # there reaches the group while it plays (owner, 2026-11-14).
+    from domovoi import music_groups
+
+    room_id = music_groups.host_of(room_id) or room_id
     if settings.use_stubs:
         # Stub mode: a room "has a player" when a test (or USE_STUBS
         # dev) seeded one; get_mpd_client_for would invent a fresh stub.

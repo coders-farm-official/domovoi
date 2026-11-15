@@ -60,6 +60,7 @@ from web.backend.api import music_genres as music_genres_api
 from web.backend.api import lyrics as lyrics_api
 from web.backend.api import lists as lists_api
 from web.backend.api import music_queue as music_queue_api
+from web.backend.api import music_groups as music_groups_api
 from web.backend.api import library_tools as library_tools_api
 from web.backend.api import nav_layout as nav_layout_api
 from web.backend.api import news as news_api
@@ -422,6 +423,9 @@ app.include_router(library_tools_api.router)
 app.include_router(music_listens_api.router)
 app.include_router(up_next_api.router)
 app.include_router(music_mix_api.router)
+# Groups (V060): /api/music/groups — named sets of rooms and the shared
+# queues; its own literal prefix, proxied to the core.
+app.include_router(music_groups_api.router)
 # Lyrics (V021): the household tier's synced-lyrics reads. Its own module,
 # like the names above, so /api/music/lyrics/* and the /lyrics leaves stay
 # clear of music_api's /library/{track_id} matchers.

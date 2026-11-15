@@ -41,6 +41,14 @@ log = logging.getLogger(__name__)
 NowPlayingMatcher = Callable[..., Any]
 
 
+def _host_of(room_id: str) -> str:
+    """Stamps are kept by the room whose player plays: a room in a shared
+    queue (domovoi/music_groups.py) reads and writes its host's."""
+    from domovoi import music_groups
+
+    return music_groups.host_of(room_id) or room_id
+
+
 @dataclass
 class NowPlayingStamp:
     room_id: str
@@ -108,18 +116,20 @@ class NowPlayingRegistry:
                 f"register_source() inside register() (design §4.7). "
                 f"Registered: {sorted(self._sources)}"
             )
+        room_id = _host_of(room_id)
         st = NowPlayingStamp(room_id=room_id, source=source, data=dict(data))
         self._stamps[room_id] = st          # one stamp per room (replace)
         EVENTS.emit("core.now_playing_stamped", {"room_id": room_id, "source": source})
         return st
 
     def get(self, room_id: str) -> NowPlayingStamp | None:
-        return self._stamps.get(room_id)
+        return self._stamps.get(_host_of(room_id))
 
     def clear(self, room_id: str, source: str | None = None) -> bool:
         """Drop the room's stamp. ``source`` filters: only clear when the
         current stamp carries that source (so a provider's own pruning
         can't evict a successor's stamp). Returns True when cleared."""
+        room_id = _host_of(room_id)
         st = self._stamps.get(room_id)
         if st is None:
             return False

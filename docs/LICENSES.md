@@ -31,6 +31,11 @@ is what counts.
   a permissive licence exists for either yet.
 - **Everything else a server downloads by default** is under MIT or
   Apache-2.0, or is public domain.
+- **The rooms' music player, MPD, is GPL-2.0-or-later.** The server
+  builds it from the Linux distribution's own package and runs it as a
+  separate program, one container per room
+  ([below](#programs-the-server-runs-in-their-own-containers)); Domovoi
+  only talks to it.
 - **AI is optional.** If you leave AI chat and questions out when you set
   up a server, the Llama, Qwen and picture-describing models below are not
   downloaded at all.
@@ -124,6 +129,12 @@ server does (the tables above). The installer itself is built with
 inside `DomovoiSetup.exe` under the
 [Inno Setup License](https://jrsoftware.org/files/is/license.txt)
 (permissive).
+
+## Programs the server runs in their own containers
+
+| What | What it's for | Where it comes from | Licence |
+|---|---|---|---|
+| MPD (Music Player Daemon) | Each room's music player: one container per room, built from `domovoi/Dockerfile.mpd`. Rooms in a group hear one room's player | The Linux distribution's own `mpd` package, installed when the server builds the image | [GPL-2.0-or-later](https://github.com/MusicPlayerDaemon/MPD/blob/master/COPYING). It runs as a separate program in its own container; Domovoi talks to it over its network protocol and doesn't include or link it |
 
 ## Plugins
 

@@ -257,6 +257,11 @@ TABLES_TO_TRUNCATE = [
     # Library tools (V058): duplicates kept, copies moved to the trash.
     "library_duplicate_keeps",
     "library_trash",
+    # Groups (V060): named groups and the shared queues.
+    "room_group_rooms",
+    "room_groups",
+    "shared_queue_rooms",
+    "shared_queues",
 ]
 
 
@@ -378,6 +383,25 @@ def _not_shutting_down():
     lifecycle.reset()
     yield
     lifecycle.reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_groups():
+    """No test starts with another test's groups or shared queues
+    (domovoi/music_groups.py keeps them in memory, as the core does)."""
+    from domovoi import music_groups
+
+    def _reset() -> None:
+        # Not mirrored to the database unless a test turns it back on
+        # (music_groups.PERSIST): unit tests share one test database.
+        music_groups.reset(persist=False)
+        web_groups = sys.modules.get("web.backend.api.music_groups")
+        if web_groups is not None:
+            web_groups.forget()
+
+    _reset()
+    yield
+    _reset()
 
 
 def _armed_loop_watchdog() -> bool:
