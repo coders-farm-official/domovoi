@@ -54,6 +54,11 @@ def test_permissions_are_declared_and_read_only(path: Path) -> None:
     # per job; every other workflow declares a read-only block at the top.
     if path.name == "release.yml":
         assert perms == {}, "release.yml must grant nothing at the top level"
+    elif path.name == "scorecard.yml":
+        # Scorecard's documented minimum: read-all at the top (no write
+        # there, which publishing refuses), the job's two writes below.
+        assert perms == "read-all", "scorecard.yml reads at the top level and writes nowhere there"
+        perms = {}
     else:
         assert isinstance(perms, dict) and perms, f"{path.name} has no top-level permissions block"
     for job_name, job in doc.get("jobs", {}).items():
@@ -73,6 +78,12 @@ def test_permissions_are_declared_and_read_only(path: Path) -> None:
             if (path.name, job_name, scope, level) in (("release.yml", "attest", "id-token", "write"),
                                                        ("release.yml", "attest", "attestations", "write")):
                 assert "environment" not in job, "the attest job must stay outside the release environment"
+                continue
+            # And scorecard.yml's one job: code scanning upload, and the OIDC
+            # token scorecard.dev checks a published result against.
+            if (path.name, job_name, scope, level) in (("scorecard.yml", "analysis", "security-events", "write"),
+                                                       ("scorecard.yml", "analysis", "id-token", "write")):
+                assert "environment" not in job
                 continue
             assert level in ("read", "none"), f"{path.name}:{job_name} grants {scope}: {level}"
 

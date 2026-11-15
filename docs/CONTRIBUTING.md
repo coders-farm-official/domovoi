@@ -353,6 +353,15 @@ No workflow uses a secret, and none may: release signing and publishing
 stay on the owner's PC ("Releasing", below). Actions are pinned by commit
 SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
 
+**OpenSSF Scorecard** (`.github/workflows/scorecard.yml`) rates the
+repository's supply-chain practices on every push to `main`, weekly and
+when branch protection changes, publishes the score (the README's badge,
+[scorecard.dev](https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi))
+and lists its findings under Security → Code scanning. scorecard.dev only
+takes a result from a workflow that keeps its rules (only its approved
+actions in that job, no `run` steps, no write permission at the top);
+`domovoi/tests/test_scorecard_workflow.py` holds them.
+
 New code needs tests in the same PR. The house pattern is tiered: pure
 functions get plain unit tests, handler fast-paths get regex + behavior
 tests, worker `tick()`s run against recording doubles
