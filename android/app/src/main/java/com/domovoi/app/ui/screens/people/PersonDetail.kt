@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -74,7 +76,7 @@ internal fun PersonDetail(
     val app = LocalApp.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
-    val detail = rememberPersonDetail(person.id)
+    val detail = rememberPersonDetail(person.id, person.voice_profile_count)
     var tab by remember(person.id) { mutableIntStateOf(0) }
     var confirmForget by remember(person.id) { mutableStateOf(false) }
     var renaming by remember(person.id) { mutableStateOf(false) }
@@ -140,6 +142,7 @@ internal fun PersonDetail(
                     person = person,
                     sessionCount = detail.sessions.size,
                     turnCount = detail.conversations.size,
+                    voiceRooms = detail.voiceRooms,
                     onForget = { confirmForget = true },
                     onRename = { renaming = true },
                     onPeopleChanged = onRenamed,
@@ -201,6 +204,7 @@ private fun ProfileTab(
     person: Person,
     sessionCount: Int,
     turnCount: Int,
+    voiceRooms: List<VoiceRoom>,
     onForget: () -> Unit,
     onRename: () -> Unit,
     onPeopleChanged: () -> Unit,
@@ -271,6 +275,8 @@ private fun ProfileTab(
             Stat("turns", "$turnCount", "conversation_log rows", Modifier.weight(1f))
         }
 
+        VoiceRoomsSection(person, voiceRooms)
+
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             SectionLabel("notes")
             val notes = person.notes?.takeIf { it.isNotBlank() }
@@ -297,6 +303,40 @@ private fun ProfileTab(
                     contentColor = Domovoi.colors.err,
                 ),
             ) { Text("forget person") }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rooms that know this voice (web PersonVoiceRooms) — read-only.
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VoiceRoomsSection(person: Person, rooms: List<VoiceRoom>) {
+    if (!showVoiceRooms(rooms)) return
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SectionLabel(VOICE_ROOMS_LABEL)
+            Text(
+                voiceRoomsCount(rooms),
+                style = MaterialTheme.typography.labelSmall,
+                color = Domovoi.colors.fgFaint,
+            )
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            rooms.forEach { room ->
+                Pill(voiceRoomChip(room), if (room.known) Tone.Ok else Tone.Idle)
+            }
+        }
+        voiceRoomsHint(person.name, rooms)?.let { hint ->
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
         }
     }
 }
