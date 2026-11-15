@@ -83,10 +83,14 @@ pushes. Fix the secret and run the workflow again.
 - **Settings → Actions → General → Workflow permissions**: nothing to
   change. The default *Read repository contents* is fine: the workflow asks
   for `contents: write` itself, in the one job that tags, publishes and
-  pushes, and nothing else.
+  pushes, and for `id-token: write` and `attestations: write` in the
+  `attest` job alone (the build provenance; it has no secret), and nothing
+  else. Artifact attestations need no other setup on a public repository.
 - **Actions permissions**: if you ever restrict which actions may run,
-  allow `actions/checkout` (the only action the workflow uses, pinned by
-  commit SHA).
+  allow the ones the workflow uses, each pinned by commit SHA:
+  `actions/checkout`, `actions/upload-artifact` and
+  `actions/download-artifact` (the SBOMs), and
+  `actions/attest-build-provenance` with the `actions/attest` it runs.
 - **Pushes by the workflow.** It pushes with the run's own `GITHUB_TOKEN`
   (the `github-actions[bot]` account): the tag `v<version>`, `stable`
   (fast-forward only, never forced) and, when the Android app changed, the

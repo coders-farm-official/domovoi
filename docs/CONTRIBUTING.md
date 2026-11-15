@@ -353,6 +353,23 @@ No workflow uses a secret, and none may: release signing and publishing
 stay on the owner's PC ("Releasing", below). Actions are pinned by commit
 SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
 
+**OpenSSF Scorecard** (`.github/workflows/scorecard.yml`) rates the
+repository's supply-chain practices on every push to `main`, weekly and
+when branch protection changes, and lists its findings under Security →
+Code scanning. It doesn't publish yet: the score goes public on
+[scorecard.dev](https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi),
+with a README badge, once the cheap fixes are in (`publish_results` and
+the badge change together). scorecard.dev only
+takes a result from a workflow that keeps its rules (only its approved
+actions in that job, no `run` steps, no write permission at the top);
+`domovoi/tests/test_scorecard_workflow.py` holds them.
+
+**Dependabot** (`.github/dependabot.yml`) offers weekly update pull requests
+for the workflows' actions, the Python packages and the Android app's Gradle
+dependencies, grouped one per kind, each release at least 14 days old. They
+are the one exception to "no pull requests": review one like any change and
+merge it if CI is green.
+
 New code needs tests in the same PR. The house pattern is tiered: pure
 functions get plain unit tests, handler fast-paths get regex + behavior
 tests, worker `tick()`s run against recording doubles
@@ -609,6 +626,17 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    (loaded into an `ssh-agent` for that one step: no key file, no prompt),
    publishes the files, checks them and moves `stable` (step 3 below). The
    job's summary links the release.
+7. Two jobs without secrets frame it. **sbom** (Linux, read-only, while
+   the run waits for approval) makes the software bills of materials with
+   `scripts/release/sbom.py`: the server's Python packages, the
+   dashboard's vendored libraries and, when the app changed, the app's
+   libraries; finish-release attaches them (`--sbom-dir`) and lists them in
+   `SHA256SUMS`. **attest** (Linux, after the release) records GitHub's
+   build provenance for every file in that `SHA256SUMS`, once the release
+   on GitHub holds exactly those files. If attest fails, the release is
+   already out: **Re-run failed jobs** runs it again, and nothing is
+   published twice. How a user checks a file:
+   [SECURITY.md, "Verifying a release"](../SECURITY.md#verifying-a-release).
 
 Every check the scripts make still runs; the workflow adds the plan, and a
 check that the release key's secrets load and are the key the commit pins

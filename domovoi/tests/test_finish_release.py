@@ -1379,3 +1379,103 @@ def test_plan_refuses_a_tag_on_github_elsewhere_or_a_finished_release(tmp_path, 
     _git(w.work, "push", "--quiet", "origin", f"{w.tag_commit}:refs/tags/v1.0.1")
     with pytest.raises(fr.Refused, match="neither HEAD"):
         _plan(w)
+
+
+# ─── the SBOMs (--sbom-dir) and the provenance line (--provenance) ───────
+
+def _sboms(d: Path, version: str, app: str | None = None, *, extra: dict[str, bytes] | None = None) -> Path:
+    """What release.yml's sbom job hands finish-release: CycloneDX JSON
+    naming the release (the app's: its versionName)."""
+    d.mkdir(parents=True, exist_ok=True)
+    named = {fr.SERVER_SBOM_ASSET: version, fr.WEB_SBOM_ASSET: version}
+    if app is not None:
+        named[fr.ANDROID_SBOM_ASSET] = app
+    for name, v in named.items():
+        doc = {"bomFormat": "CycloneDX", "specVersion": "1.6", "metadata": {"component": {"name": name, "version": v}}}
+        (d / name).write_text(json.dumps(doc) + "\n", encoding="utf-8")
+    for name, data in (extra or {}).items():
+        (d / name).write_bytes(data)
+    return d
+
+
+@requires_git
+def test_the_sboms_are_attached_summed_and_listed(tmp_path, monkeypatch):
+    """Path a: the server's, the web's and the app's SBOM go up before
+    SHA256SUMS, which lists them; the notes name them and, with
+    --provenance, how to check where a file was built. A re-run finds them
+    on the release and takes them as its own."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    d = _sboms(tmp_path / "sboms", "1.0.0", app="1.0.0")
+    assert w.run("--sbom-dir", str(d), "--provenance") == 0
+    sha = {n: hashlib.sha256((d / n).read_bytes()).hexdigest() for n in fr.SBOM_ASSETS}
+    sums = (w.stage / "SHA256SUMS").read_text(encoding="ascii").splitlines()
+    assert sums[-3:] == [f"{sha[n]}  {n}" for n in fr.SBOM_ASSETS]
+    (upload,) = w.calls("upload")
+    assert [Path(a).name for a in upload[3:8]] == ["DomovoiSetup.exe", *fr.SBOM_ASSETS, "SHA256SUMS"]
+    rel = w.load()["releases"][w.tag]
+    assert set(fr.SBOM_ASSETS) <= {a["name"] for a in rel["assets"]}
+    for n in fr.SBOM_ASSETS:
+        assert f"| {n} |" in rel["body"] and sha[n] in rel["body"]
+    assert "`gh attestation verify <file> -R coders-farm-official/domovoi`" in rel["body"]
+    assert "SECURITY.md#verifying-a-release" in rel["body"]
+    assert w.run("--sbom-dir", str(d), "--provenance") == 0
+
+
+@requires_git
+def test_without_provenance_the_notes_promise_none(tmp_path, monkeypatch):
+    """A local run (the fallback) makes no attestation, so its notes don't
+    say there is one, and it has no SBOMs to attach."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    assert w.run() == 0
+    rel = w.load()["releases"][w.tag]
+    assert "gh attestation" not in rel["body"] and ".cdx.json" not in rel["body"]
+    assert not any(n.endswith(".cdx.json") for n in (w.stage / "SHA256SUMS").read_text(encoding="ascii").split())
+
+
+@requires_git
+def test_a_server_only_release_takes_the_server_and_web_sboms_only(tmp_path, monkeypatch):
+    """Path b carries no APKs, so no app SBOM: its APKs' release has it."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _server_only(w)
+    with pytest.raises(fr.Refused, match="carries no APKs, so no app SBOM"):
+        w.run("--sbom-dir", str(_sboms(tmp_path / "three", "1.0.1", app="1.0.0")))
+    assert w.calls("create") == [] and w.calls("upload") == []
+    assert w.run("--sbom-dir", str(_sboms(tmp_path / "two", "1.0.1"))) == 0
+    rel = w.load()["releases"]["v1.0.1"]
+    assert sorted(a["name"] for a in rel["assets"]) == sorted(
+        ["DomovoiSetup.exe", "SHA256SUMS", fr.SERVER_SBOM_ASSET, fr.WEB_SBOM_ASSET])
+
+
+@pytest.mark.parametrize("make, why", [
+    (lambda d: _sboms(d, "1.0.0"), "takes exactly"),                                   # no app SBOM on path a
+    (lambda d: _sboms(d, "1.0.0", app="1.0.0", extra={"x.json": b"{}"}), "takes exactly"),
+    (lambda d: _sboms(d, "0.9.9", app="1.0.0"), "another release"),
+    (lambda d: _sboms(d, "1.0.0", app="0.9.9"), "another release"),
+    (lambda d: _sboms(d, "1.0.0", app="1.0.0", extra={fr.WEB_SBOM_ASSET: b"not json"}), "is not JSON"),
+    (lambda d: _sboms(d, "1.0.0", app="1.0.0", extra={fr.WEB_SBOM_ASSET: b'{"spdxVersion": "SPDX-2.3"}'}),
+     "not a CycloneDX SBOM"),
+])
+@requires_git
+def test_sboms_that_are_not_this_release_s_are_refused_before_github(tmp_path, monkeypatch, make, why):
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    with pytest.raises(fr.Refused, match=why):
+        w.run("--sbom-dir", str(make(tmp_path / "sboms")))
+    assert w.calls("upload") == [] and w.calls("edit") == []
+    with pytest.raises(fr.Refused, match="no folder"):
+        w.run("--sbom-dir", str(tmp_path / "missing"))
+
+
+def test_the_sboms_are_known_to_the_release_check_the_app_s_only_with_apks():
+    apk = [{"file": "a.apk", "size": 1, "sha256": "1" * 64}]
+    both = {"assets": [{"name": n} for n in (fr.SERVER_SBOM_ASSET, fr.WEB_SBOM_ASSET, fr.ANDROID_SBOM_ASSET)]}
+    with pytest.raises(fr.Refused, match="has no a.apk"):
+        fr._check_published_apks(both, apk)
+    with pytest.raises(fr.Refused, match="doesn't know: domovoi-android.cdx.json"):
+        fr._check_published_apks(both, [])
+
+
+def test_the_sbom_names_are_the_generator_s():
+    spec = importlib.util.spec_from_file_location("release_sbom", REPO / "scripts" / "release" / "sbom.py")
+    sbom = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sbom)
+    assert (sbom.ASSET_NAMES["server"], sbom.ASSET_NAMES["web"], sbom.ASSET_NAMES["android"]) == fr.SBOM_ASSETS
