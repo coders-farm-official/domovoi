@@ -255,7 +255,7 @@ const PersonVoiceRelearn = ({ person, voiceId }) => {
         <Icon name="mic" size={14}/> Not recognized by voice yet
       </div>
       <div style={{ color: 'var(--fg-muted)', marginTop: 4 }}>
-        Voice recognition was upgraded, so Domovoi has to learn {person.name || 'their'} voice again.
+        Voice recognition was upgraded, so Domovoi has to learn {person.name ? `${person.name}’s` : 'their'} voice again.
         To be recognized again, {person.name || 'they'} can say “my name is {name}” in a room and answer yes.
       </div>
     </div>
@@ -1513,7 +1513,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
                                            color: active ? 'var(--brand-ink)' : 'var(--fg)' }}>{p.name}</span>
                             {live && <StatusDot tone="ok" live/>}
                             {p.namesakes > 0 && <span title="someone else has this name too"><StatusDot tone="warn"/></span>}
-                            {p.voice_relearn && <span title="has to say “my name is …” again to be recognized by voice"><StatusDot tone="idle"/></span>}
+                            {p.voice_relearn && !(voiceId.data && !voiceId.data.ready) && <span title="has to say “my name is …” again to be recognized by voice"><StatusDot tone="idle"/></span>}
                           </div>
                           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
                             {p.namesakes > 0 && <>#{p.id} · same name · </>}
