@@ -297,6 +297,7 @@ public final class MusicQueueModel {
     }
 
     private func resetRoomState() {
+        groupRefused = false
         shown = RoomQueueWindow.rowsStep
         earlier = false
         watch.reset()
@@ -401,6 +402,56 @@ public final class MusicQueueModel {
                 .plus(removed + [seq])
             return RoomUpNextStrings.lessLikeNote(artist, removed: removed.count)
         })
+    }
+
+    // MARK: - the group (V060)
+
+    /// The shared queue this room hears, from this room's answer on this
+    /// server, or nil.
+    public var group: NowPlayingGroup? { answer?.group }
+
+    /// The line over a shared queue (`music.jsx` ~:1796): "Upstairs · shared
+    /// with 2 other rooms (garage, office)". Shown to everybody who sees the
+    /// queue, as the web shows it.
+    public var groupLine: String? {
+        guard let group, let room else { return nil }
+        return groupQueueLine(group, room: room)
+    }
+
+    /// A write about this room's group was refused (401/403) on this server:
+    /// the phone is not a household device, and "leave" goes.
+    private var groupRefused = false
+
+    /// "leave" is drawn — the household's, never a guest's, and only on a
+    /// room that is in a group (no misleading controls). Disabled, not
+    /// hidden, while an edit is out.
+    public var offersLeaveGroup: Bool {
+        guard let answer, answer.group != nil else { return false }
+        return !answer.guest && !groupRefused
+    }
+
+    /// This room leaves its group and goes quiet; the others play on
+    /// (`POST /api/music/groups/shared/leave`). Said, and the queue re-read,
+    /// only while the app still talks to the server and room it was for.
+    public func leaveGroup() {
+        guard offersLeaveGroup, !busy, let room else { return }
+        let server = container.store.serverURL
+        let groups = MusicGroupsApi(client: container.client)
+        busy = true
+        Task { @MainActor [weak self] in
+            defer { self?.busy = false }
+            do throws(DomovoiError) {
+                try await groups.leave(room)
+                guard let self, self.container.store.serverURL == server, self.room == room else { return }
+                self.speak(GroupStrings.leftTheGroup(room), failed: false)
+                self.read.refresh()
+            } catch let trouble {
+                guard let self, self.container.store.serverURL == server, self.room == room else { return }
+                if groupsRefused(trouble) { self.groupRefused = true }
+                self.speak(groupFailureText(GroupStrings.leaveVerb, trouble), failed: true)
+                self.read.refresh()
+            }
+        }
     }
 
     /// Save the room's queue as a playlist, under the name the flow asked for.

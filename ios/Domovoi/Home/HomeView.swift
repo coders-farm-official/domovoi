@@ -128,6 +128,10 @@ struct HomeView: View {
     /// the whole batch.
     @State private var busyRooms: Set<String> = []
 
+    /// The household's groups (V060), for the rooms' share menus. Built in
+    /// `.task` for ``home``'s reason; asks nothing on an unpaired phone.
+    @State private var groups: MusicGroupsModel?
+
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
     ///
     /// Not a nicety: Home is a `NavigationStack` root, so it is still in the
@@ -169,6 +173,10 @@ struct HomeView: View {
                 home = HomeModel(in: model.container)
             }
             home?.start()
+            if groups == nil {
+                groups = MusicGroupsModel(container: model.container)
+            }
+            groups?.start(paired: model.isPaired)
         }
         .onAppear { visible = true }
         // `repeatOnLifecycle(STARTED)` on Android: the loops stop with the
@@ -176,6 +184,7 @@ struct HomeView: View {
         .onDisappear {
             visible = false
             home?.stop()
+            groups?.stop()
             // **The announce send is deliberately NOT cancelled here**, and
             // that is a named divergence: Android's runs in the composable's
             // scope and dies with the screen. The toast it produces is the
@@ -327,7 +336,10 @@ struct HomeView: View {
             onTransport: { transport($0, verb: $1, in: home) },
             busy: busyRooms.contains,
             onOpenRooms: { model.navigate(.satellites) },
-            tools: model.queueTools()
+            tools: model.queueTools(),
+            groups: groups?.groups ?? [],
+            groupsShown: groups?.access(paired: model.isPaired).showsControls ?? false,
+            onGroup: { _, choice in group(choice, in: home) }
         )
 
         HomeAnnounceView(
@@ -532,6 +544,23 @@ struct HomeView: View {
                 verb: verb
             )
             busyRooms.remove(room.roomID)
+            home.rooms.refresh()
+        }
+    }
+
+    /// A room card's share menu: share, join or leave (`onGroup`,
+    /// `home.jsx` ~:1401). Every room it touches is busy meanwhile; the
+    /// sentence is the model's, said only for the server it went to, and
+    /// the rooms are re-read either way.
+    private func group(_ choice: GroupChoice, in home: HomeModel) {
+        guard let groups else { return }
+        let touched = choice.touched
+        guard busyRooms.isDisjoint(with: touched) else { return }
+        busyRooms.formUnion(touched)
+        Task { @MainActor in
+            let said = await groups.perform(choice)
+            busyRooms.subtract(touched)
+            if let said { model.showToast(said.text) }
             home.rooms.refresh()
         }
     }
