@@ -192,6 +192,26 @@ def test_the_web_sbom_hashes_each_shipped_file_and_lists_what_bundles_carry():
         lic for c in by["@excalidraw/excalidraw"]["components"] for lic in c.get("licenses") or []]
 
 
+# CycloneDX takes only SPDX ids in "id" (and SPDX terms in an expression).
+# These are the ones the vendored bundles declare today; a new one fails
+# here so someone checks it is an SPDX id (and a licence Domovoi takes).
+SPDX_SEEN = {"0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "Zlib"}
+
+
+def test_the_web_sbom_s_licences_are_spdx_ids_it_knows():
+    doc = sbom.web_bom(REPO, "v9.9.9")
+    terms = set()
+
+    def walk(comps):
+        for c in comps:
+            for lic in c.get("licenses") or []:
+                text = lic["license"]["id"] if "license" in lic else lic["expression"]
+                terms.update(t for t in re.split(r"[\s()]+", text) if t and t not in ("AND", "OR", "WITH"))
+            walk(c.get("components") or [])
+    walk(doc["components"])
+    assert terms <= SPDX_SEEN, sorted(terms - SPDX_SEEN)
+
+
 # ─── android ─────────────────────────────────────────────────────────────
 
 GRADLE_DEPS = {
