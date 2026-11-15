@@ -36,7 +36,9 @@ TINY_PNG = _tiny_png()
 
 # Nothing a user reads may carry these (the owner's 2026-10-11 report: a
 # raw httpx error naming http://localhost:11434/api/chat and a help URL).
-_LEAKS = ("localhost", "127.0.0.1", "11434", "http", "mozilla", "api/chat", "Client error")
+# The port with its colon: bare digits also turn up in timestamps
+# ("…28:44.114344"), which made this fail one run in a few hundred.
+_LEAKS = ("localhost", "127.0.0.1", ":11434", "http", "mozilla", "api/chat", "Client error")
 
 
 def _client():
