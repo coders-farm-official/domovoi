@@ -15,6 +15,7 @@ import com.domovoi.app.net.decode
 import com.domovoi.app.net.failureText
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -88,6 +89,75 @@ internal fun renameFailureText(e: Throwable): String {
         if (!detail.isNullOrBlank()) return detail
     }
     return failureText("rename", e)
+}
+
+// ---------------------------------------------------------------------------
+// Rooms that know this voice (GET /api/people/{id}/voice-rooms, 1.3.0) — the
+// web People page's PersonVoiceRooms. A room recognizes a voice best from a
+// sample heard in that room, so the household sees which rooms don't know a
+// person yet and how to fix it ("my name is …" said there, then "yes").
+// Read-only: rooms never use a phone's samples, so the phone records nothing.
+// ---------------------------------------------------------------------------
+
+/** One room and whether it has a satellite sample of this person's voice
+ *  (server VoiceRoom): [current] one in the 1.3.0 embedding, [legacy] one
+ *  from before 1.3.0 only, which still counts. */
+@Serializable
+internal data class VoiceRoom(
+    val room_id: String = "",
+    val current: Boolean = false,
+    val legacy: Boolean = false,
+) {
+    val known: Boolean get() = current || legacy
+}
+
+internal const val VOICE_ROOMS_LABEL = "rooms that know this voice"
+internal const val VOICE_ROOM_NOT_YET = " · not yet"
+
+/** The rows of a voice-rooms answer: anything that isn't a room (not an
+ *  object, no room name) is dropped; a missing flag is false. */
+internal fun parseVoiceRooms(json: JsonElement): List<VoiceRoom> =
+    ((json as? JsonArray) ?: return emptyList()).mapNotNull { row ->
+        if (row !is JsonObject) return@mapNotNull null
+        runCatching { DomovoiJson.decodeFromJsonElement(VoiceRoom.serializer(), row) }
+            .getOrNull()
+            ?.takeIf { it.room_id.isNotBlank() }
+    }
+
+/**
+ * Reads the rooms with [get]. A server from before 1.3.0 has no such route
+ * (404): no rooms, so the section stays hidden and nothing is said. Any other
+ * failure is null — keep what is shown (nothing, on a first load) rather than
+ * flash the section away; it is a hint, so it raises no toast of its own.
+ */
+internal suspend fun loadVoiceRooms(get: suspend () -> JsonElement): List<VoiceRoom>? =
+    try {
+        parseVoiceRooms(get())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: ApiException) {
+        if (e.status == 404) emptyList() else null
+    } catch (e: Exception) {
+        null
+    }
+
+/** Whether the section shows at all: not when the house has no rooms. */
+internal fun showVoiceRooms(rooms: List<VoiceRoom>): Boolean = rooms.isNotEmpty()
+
+/** "known/total", e.g. "2/3". */
+internal fun voiceRoomsCount(rooms: List<VoiceRoom>): String = "${rooms.count { it.known }}/${rooms.size}"
+
+/** A room's chip text: its name, plus " · not yet" when it has no sample. */
+internal fun voiceRoomChip(room: VoiceRoom): String =
+    room.room_id + if (room.known) "" else VOICE_ROOM_NOT_YET
+
+/** How to teach the missing rooms, or null when every room knows the voice. */
+internal fun voiceRoomsHint(name: String, rooms: List<VoiceRoom>): String? {
+    if (rooms.all { it.known }) return null
+    val who = name.trim().ifEmpty { "they" }
+    val said = name.trim().ifEmpty { "…" }
+    return "Rooms recognize a voice best once they have heard it themselves. In each room " +
+        "marked “not yet”, $who can say “my name is $said” and answer yes."
 }
 
 @Serializable
@@ -223,11 +293,14 @@ internal class PersonDetailData(
     val preferences: Map<String, JsonElement>,
     val errors: PersonDetailErrors,
     val loading: Boolean,
+    /** Rooms that know this voice; empty (section hidden) until read, on a
+     *  server without the route, or in a house with no rooms. */
+    val voiceRooms: List<VoiceRoom>,
     val refresh: () -> Unit,
 )
 
 @Composable
-internal fun rememberPersonDetail(personId: Long): PersonDetailData {
+internal fun rememberPersonDetail(personId: Long, voiceSamples: Int = 0): PersonDetailData {
     val app = LocalApp.current
     val toast = LocalToast.current
     var tick by remember(personId) { mutableIntStateOf(0) }
@@ -239,6 +312,14 @@ internal fun rememberPersonDetail(personId: Long): PersonDetailData {
         mutableStateOf<Fetched<Map<String, JsonElement>>>(Fetched.Ok(emptyMap()))
     }
     var loading by remember(personId) { mutableStateOf(true) }
+    var voiceRooms by remember(personId) { mutableStateOf<List<VoiceRoom>>(emptyList()) }
+
+    // Its own effect so the other lists don't wait on it, re-read on every
+    // refresh and when the person's sample count changes (a room just
+    // learned them). Not part of the failure toast: see [loadVoiceRooms].
+    LaunchedEffect(personId, tick, voiceSamples) {
+        loadVoiceRooms { app.api.get("/api/people/$personId/voice-rooms") }?.let { voiceRooms = it }
+    }
 
     LaunchedEffect(personId, tick) {
         loading = true
@@ -281,6 +362,7 @@ internal fun rememberPersonDetail(personId: Long): PersonDetailData {
         preferences = preferences.orElse(emptyMap()),
         errors = errors,
         loading = loading,
+        voiceRooms = voiceRooms,
     ) { tick++ }
 }
 
