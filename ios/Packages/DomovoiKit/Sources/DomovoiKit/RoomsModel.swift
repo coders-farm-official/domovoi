@@ -490,6 +490,14 @@ public final class RoomsModel {
     /// tier exists to prevent.
     public func stop() {
         onScreen = false
+        // **First**, as in ``serverChanged()``: a write still in flight when
+        // the screen goes (a timer's DELETE, an announce) must fail
+        // ``stillHome(_:)`` when it lands. Otherwise its follow-up re-read
+        // runs on a screen nobody is looking at, and `reads(for:)` rebuilds
+        // the room `byRoom` just dropped, with live reads joined to the
+        // container, all for a stopped model. Android's write runs in the
+        // screen's `rememberCoroutineScope`, which dies with it.
+        houseEpoch += 1
         // ``DropInCallModel/abandon()`` and **not** `reset()`: the room is
         // told the call is over. `reset()` drops the socket silently, and the
         // room's end then stays open until the core's silence timeout — which
