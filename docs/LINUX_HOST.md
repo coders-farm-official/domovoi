@@ -29,7 +29,7 @@ the ledger flips:
 | **CUDA DLL preloading** | `domovoi/bootstrap.py` preloads cuBLAS/cuDNN by hand because the Windows loader ignores `add_dll_directory()` for dependent DLLs. The plugin loader asserts it ran. | The whole module is `if sys.platform != "win32": return ()`. Dead code. It's the single biggest piece of Windows-specific engineering in the repo, and you skip it. |
 | **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so it runs in a Linux container under Docker Desktop. | On the server itself, in a container on its own Docker Engine, switched on from the dashboard (Settings → Voice → Wake words); an NVIDIA GPU gets its container runtime from the install and the update unit. See [Wake-word training](#wake-word-training). |
 | **External binaries** (`ffmpeg`, `fpcalc`/Chromaprint, `mpg123`) | Download, unzip, put on PATH by hand. | `apt install`. |
-| **`faster-whisper` and `resemblyzer` install** | `pip install --no-deps -r requirements-no-deps.in`: without the dependencies they declare (PyAV, librosa, webrtcvad), which Domovoi doesn't use. | The same, from the hash-pinned `requirements-linux-py314-no-deps.lock`. |
+| **`faster-whisper` install** | `pip install --no-deps -r requirements-no-deps.in`: without the dependencies it declares (PyAV), which Domovoi doesn't use. | The same, from the hash-pinned `requirements-linux-py314-no-deps.lock`. |
 | **Docker** | Docker Desktop — a whole application, its own RAM overhead, its own licensing question. | Native Docker Engine. The core drives containers through the `docker` CLI (`mpd_provisioner.py`), so nothing else changes. |
 | **Autostart** | Scheduled task at boot, or a service wrapper. Fiddly. | systemd. Units below. |
 | **Ollama on an AMD/Intel iGPU** | ROCm support on Windows is thin. | Better supported, if you ever want to experiment. Still optional — see [CPU_HOST.md](CPU_HOST.md#what-about-the-integrated-gpu). |
@@ -185,9 +185,9 @@ error that has nothing to do with Domovoi.
 
 So the rule is: **before committing to a release, check that this repo's
 compiled dependencies publish wheels for the Python it ships.** The
-long poles are `torch` and `ctranslate2` (the engine under
-`faster-whisper`); `numba`, the slowest of all to land, left with
-`librosa` on 2026-10-15, and the check below still lists it for older
+long pole is `ctranslate2` (the engine under `faster-whisper`); `torch`
+left with Resemblyzer in 1.3.0 and `numba`, the slowest of all to land,
+with `librosa` on 2026-10-15; the check below still lists both for older
 checkouts.
 
 ```bash
@@ -211,8 +211,8 @@ about because **neither shows up if you only check the packages named in
 `pyproject.toml`** — they are transitive:
 
 - **`webrtcvad`** (via `resemblyzer`) — sdist-only on *every* Python
-  version. Since 2026-10-15 it isn't installed: `resemblyzer` goes in
-  without its dependencies (`requirements-no-deps.in`).
+  version. It hasn't been installed since 2026-10-15, and `resemblyzer`
+  itself left in 1.3.0 (voice ID runs an ONNX model now).
 - **`shazamio-core`** (via `shazamio`, the library-enricher fallback) — a
   Rust/pyo3 extension binding ALSA. `shazamio` itself is pure Python, which
   makes this easy to miss. When its prebuilt wheel is absent for your
@@ -482,13 +482,13 @@ python3 -m venv .venv && source .venv/bin/activate
 
 **Install from the hash-pinned lock.** `requirements-linux-py314.lock` at
 the repo root is the whole production set (the core, the dashboard, the
-`real-clients` and `voice-profile` extras, and CPU-only `torch` from
-PyTorch's CPU index), every package at an exact version with its
-SHA-256s, so a substituted or tampered download fails the install instead
-of running. Beside it, `requirements-linux-py314-no-deps.lock` pins and
-hashes `faster-whisper` and `resemblyzer`, which go in without the
-dependencies they declare (`requirements-no-deps.in` says why: PyAV and
-librosa carry LGPL libraries Domovoi doesn't use). They were compiled for
+`real-clients` and `voice-profile` extras; no torch since 1.3.0), every
+package at an exact version with its SHA-256s, so a substituted or
+tampered download fails the install instead of running. Beside it,
+`requirements-linux-py314-no-deps.lock` pins and hashes `faster-whisper`,
+which goes in without the dependencies it declares
+(`requirements-no-deps.in` says why: PyAV carries LGPL libraries Domovoi
+doesn't use). They were compiled for
 CPython 3.14 on x86_64, which is what Ubuntu 26.04's `python3` is
 (`python3 --version`). Four installs, in this order:
 
@@ -515,26 +515,26 @@ is built here, with those checked tools rather than a fresh, unchecked
 `setuptools` that pip would otherwise download for each build (that is
 what `--no-build-isolation` is for, and why the `python3-dev` and
 `build-essential` prerequisites are there). The third installs
-`faster-whisper` and `resemblyzer` alone, hash-checked; everything they
-use is already in from the second. The fourth installs Domovoi itself and
+`faster-whisper` alone, hash-checked; everything it uses is already in
+from the second. The fourth installs Domovoi itself and
 nothing else. No `dev` extra: a server doesn't run the test suite.
 
-PyPI's default Linux `torch` build bundles its own CUDA runtime — cuBLAS,
-cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it.
-The lock pins the `+cpu` build from PyTorch's CPU index (it names that
-index itself), so none of that arrives. That is entirely separate from the
-`cuda` extra below, which only covers the wheels `ctranslate2` wants.
+Nothing in the lock is a CUDA runtime, and since 1.3.0 there is no torch
+at all (voice ID ran Resemblyzer on CPU torch, about 550 MB of it, until
+then). The `cuda` extra below only covers the wheels `ctranslate2` wants.
 
-Check speech recognition and the voice encoder load:
+Check speech recognition loads, and fetch voice ID's speaker model (a
+25 MB file the core would otherwise fetch on its first start; pinned by
+size and SHA-256, into the voice-models directory beside the Piper voices,
+and refused when internet access is turned off):
 
 ```bash
 python -c "from domovoi.clients.whisper import import_faster_whisper; import_faster_whisper()"
-python -c "from domovoi.clients.speaker_encoder import SpeakerEncoder; SpeakerEncoder()"
+python -c "from domovoi.clients.speaker_encoder import download_model, SpeakerEncoder; SpeakerEncoder(download_model())"
 ```
 
-Both print nothing when they work. (Not `from resemblyzer import
-VoiceEncoder`: that package imports librosa, which isn't installed;
-Domovoi runs Resemblyzer's network itself, `domovoi/clients/speaker_encoder.py`.)
+Both print nothing when they work. (`provision.sh` fetches the model in
+its `piper` step.)
 
 **No lock for your Python?** On anything but CPython 3.14 (the
 [`uv venv --python 3.13`](#if-the-wheels-arent-there-yet) route, an arm64
@@ -543,9 +543,8 @@ no hashes and installs whatever the index serves that day within the
 floors in `pyproject.toml`:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -e ".[real-clients,voice-profile]"
-pip install --no-deps -r requirements-no-deps.in    # faster-whisper, resemblyzer
+pip install --no-deps -r requirements-no-deps.in    # faster-whisper
 ```
 
 The [update unit](#updates-from-the-dashboard) re-syncs this way too
@@ -1424,7 +1423,7 @@ does this:
    changed: re-sync the venv. A change to `pyproject.toml` that only moves
    `[project]`'s `version` line (every release's bump) is not a dependency
    change: no re-sync, and a box answered **No** still takes the release. By default that is pip's resolver, as it
-   was before the lock existed: CPU torch first, then
+   was before the lock existed (without its CPU torch step since 1.3.0):
    `pip install -e ".[real-clients,voice-profile]"` from the index; when
    the checkout has `requirements-linux-py314.lock`, the step's detail
    says it is there to opt into. With `DOMOVOI_USE_LOCK=1`
@@ -1833,7 +1832,8 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_USE_LOCK=1
 # The hash-pinned lock the re-sync installs from, relative to the checkout. Empty: never use one.
 # DOMOVOI_DEPS_LOCK=requirements-linux-py314.lock
-# CPU torch index, for the resolver path only (the lock names its own). Empty: skip that step.
+# PyTorch's CPU index: nothing 1.3.0 installs uses it; a rollback to an older release
+# restores that release's CPU torch from it. Empty: never ask it.
 # DOMOVOI_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 # DOMOVOI_UPDATE_DIR=/var/lib/domovoi-update
 # DOMOVOI_UPDATE_KEEP_BACKUPS=5

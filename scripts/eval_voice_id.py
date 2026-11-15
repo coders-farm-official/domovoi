@@ -19,14 +19,18 @@ second person") enrolled with one introduction in the office; guests are
 speakers nobody enrolled.
 
 The encoder is the one voice ID runs (domovoi/clients/speaker_encoder.py,
-Resemblyzer's weights), so the torch extra and the resemblyzer weights must
-be installed. Decisions go through voice_identifier's own scoring and
-:func:`voice_identifier._decide`.
+3D-Speaker's ERes2Net on ONNX Runtime; ``--model`` names its file when it
+isn't in the voice-models directory). Decisions go through voice_identifier's
+own scoring and :func:`voice_identifier._decide`. ``--tune`` runs the sweeps
+every 1.3.0 setting was chosen from (what is embedded, the threshold, the
+margins, the music gate, the confident band, the clustering threshold).
+``--encoder ort:PATH`` scores a candidate ONNX model through the same rooms;
+compare encoders with ``--op-point``, as thresholds are not portable.
 
 Usage:
     python scripts/voice_id_corpus.py --piper-model PATH/en_US-libritts-high.onnx --out WORK/corpus
     python scripts/eval_voice_id.py --corpus WORK/corpus --cache WORK/emb.npz
-    python scripts/eval_voice_id.py --corpus WORK/corpus --cache WORK/emb.npz --experiments --op-point
+    python scripts/eval_voice_id.py --corpus WORK/corpus --cache WORK/emb.npz --tune --op-point
 
 ``--cache`` keeps the embeddings (the slow part) between runs.
 """
@@ -189,27 +193,137 @@ def _timer(label: str) -> Iterator[None]:
     print(f"  {label}: {time.perf_counter() - t:.1f} s", file=sys.stderr)
 
 
-PIPELINES = ("raw", "prep")
+# What voice ID could embed of a recording: "raw" the whole recording;
+# "prep" the speech frames joined and levelled (domovoi/voice_prep.py
+# prepare, what voice ID embeds: for_embedding); "edges"/"edges3" the
+# recording trimmed to 0.1 s / 0.3 s before its first speech and after its
+# last, pauses kept (trim_edges below).
+PIPELINES = ("raw", "prep", "edges", "edges3")
 
 
-def embed_all(corpus: Path, cache: Path | None) -> dict:
+def trim_edges(wav: np.ndarray, keep_sec: float = 0.1) -> Prepared:
+    """The recording from just before its first speech to just after its
+    last (``keep_sec`` of room either side), as it was: pauses between
+    words stay and the level isn't touched. ``speech_sec`` and ``snr_db``
+    are :func:`prepare`'s (the speech frames alone and how clear they were)."""
+    from domovoi.voice_prep import FRAME, Prepared, _frame_db, prepare, speech_mask
+
+    wav = np.asarray(wav, dtype=np.float32)
+    db = _frame_db(wav)
+    mask = speech_mask(db)
+    full = prepare(wav)
+    if not mask.any():
+        return Prepared(audio=wav, speech_sec=full.speech_sec, snr_db=full.snr_db)
+    idx = np.flatnonzero(mask)
+    keep = int(round(keep_sec * SR))
+    start = max(0, int(idx[0]) * FRAME - keep)
+    stop = min(len(wav), (int(idx[-1]) + 1) * FRAME + keep)
+    return Prepared(audio=wav[start:stop], speech_sec=full.speech_sec, snr_db=full.snr_db)
+
+
+# ─── encoders ────────────────────────────────────────────────────────────
+#
+# ``--encoder`` picks what embeds the recordings:
+#
+# * ``eres2net`` (default): domovoi/clients/speaker_encoder.py, what voice ID
+#   runs (``--model`` names the ONNX file when it isn't in the voice-models
+#   directory);
+# * ``ort:PATH``: another 3D-Speaker or WeSpeaker-style ONNX export (80-band
+#   Kaldi fbank in, one embedding out) through the same front end, to
+#   measure a candidate before anything changes in domovoi/.
+#
+# Resemblyzer, the encoder before 1.3.0, and the other candidates the 1.3.0
+# choice was made from are in this file's history.
+
+
+class Encoder:
+    """One utterance (16 kHz float32) in, one embedding out."""
+
+    name = "?"
+    dim = 0
+    model_bytes = 0
+
+    def embed(self, wav: np.ndarray) -> np.ndarray:
+        raise NotImplementedError
+
+
+class OrtEncoder(Encoder):
+    def __init__(self, path: Path | None, threads: int) -> None:
+        from domovoi.clients import speaker_encoder as se
+
+        if path is not None and path.name == se.MODEL_FILE:
+            self._enc = se.SpeakerEncoder(path, threads=threads)
+            self.name = se.MODEL_TAG
+        elif path is None:
+            self._enc = se.SpeakerEncoder(threads=threads)
+            self.name = se.MODEL_TAG
+            path = se.model_path()
+        else:
+            self._enc = _AnyOrt(path, threads)
+            self.name = path.stem
+        self.dim = se.EMBEDDING_DIM if isinstance(self._enc, se.SpeakerEncoder) else self._enc.dim
+        self.model_bytes = path.stat().st_size
+
+    def embed(self, wav: np.ndarray) -> np.ndarray:
+        return self._enc.embed_utterance(wav)
+
+
+class _AnyOrt:
+    def __init__(self, path: Path, threads: int) -> None:
+        import onnxruntime as ort
+
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = threads
+        self._s = ort.InferenceSession(str(path), so, providers=["CPUExecutionProvider"])
+        self._in = self._s.get_inputs()[0].name
+        self.dim = int(self._s.get_outputs()[0].shape[-1])
+
+    def embed_utterance(self, wav: np.ndarray) -> np.ndarray:
+        from domovoi.clients.speaker_encoder import features
+
+        e = self._s.run(None, {self._in: features(wav)[None]})[0].reshape(-1)
+        return (e / np.linalg.norm(e)).astype(np.float32)
+
+
+def load_encoder(spec: str, threads: int = 1, model: Path | None = None) -> Encoder:
+    if spec == "eres2net":
+        return OrtEncoder(model, threads)
+    kind, _, where = spec.partition(":")
+    if kind == "ort":
+        return OrtEncoder(Path(where), threads)
+    raise SystemExit(f"unknown encoder {spec!r}: eres2net or ort:PATH")
+
+
+def _rss() -> int:
+    try:
+        import psutil
+    except ImportError:
+        return 0
+    return int(psutil.Process().memory_info().rss)
+
+
+def embed_all(corpus: Path, cache: Path | None, encoder: str = "eres2net",
+              threads: int = 1, model: Path | None = None) -> dict:
     """``{"speakers": [...], "lines": n, "rooms": [...], "emb": {pipeline: array
-    (speaker, line, room, 256)}, "snr": (speaker, line, room), "ms": {...}}``."""
+    (speaker, line, room, dim)}, "snr": (speaker, line, room), "ms": {...}}``."""
     if cache is not None and cache.is_file():
         z = np.load(cache, allow_pickle=True)
         return z["data"].item()
-    from domovoi.clients.speaker_encoder import SpeakerEncoder
     from domovoi.voice_prep import prepare
 
-    enc = SpeakerEncoder(device="cpu")
+    rss0 = _rss()
+    enc = load_encoder(encoder, threads, model)
+    rss_loaded = _rss()
     index = json.loads((corpus / "corpus.json").read_text(encoding="utf-8"))["speakers"]
     speakers = sorted(index)
     lines = min(len(v) for v in index.values())
     clean = {s: [_read(corpus / p) for p in sorted(index[s])[:lines]] for s in speakers}
-    out = {p: np.zeros((len(speakers), lines, len(ROOMS), 256), np.float32) for p in PIPELINES}
+    out = {p: np.zeros((len(speakers), lines, len(ROOMS), enc.dim), np.float32) for p in PIPELINES}
     snr = np.zeros((len(speakers), lines, len(ROOMS)), np.float32)
     secs = np.zeros((len(speakers), lines, len(ROOMS)), np.float32)
     ms = {p: [] for p in PIPELINES}
+    enc_ms, enc_sec = [], []
+    peak = rss_loaded
     for si, s in enumerate(speakers):
         other = clean[speakers[(si + 7) % len(speakers)]]
         babble = np.concatenate(other) * 0.5
@@ -217,20 +331,41 @@ def embed_all(corpus: Path, cache: Path | None) -> dict:
             for ri, room in enumerate(ROOMS):
                 rng = np.random.default_rng(hash((si, li, ri)) & 0xFFFFFFFF)
                 rec = in_room(clean[s][li], room, rng, babble)
-                t = time.perf_counter()
-                out["raw"][si, li, ri] = enc.embed_utterance(rec)
-                ms["raw"].append(time.perf_counter() - t)
-                t = time.perf_counter()
+                cut = {
+                    "raw": lambda r: r,
+                    "prep": lambda r: prepare(r).audio,
+                    "edges": lambda r: trim_edges(r, 0.1).audio,
+                    "edges3": lambda r: trim_edges(r, 0.3).audio,
+                }
+                for p in PIPELINES:
+                    t = time.perf_counter()
+                    audio = cut[p](rec)
+                    t2 = time.perf_counter()
+                    out[p][si, li, ri] = enc.embed(audio)
+                    t3 = time.perf_counter()
+                    ms[p].append(t3 - t)
+                    if p == "prep":
+                        enc_ms.append(t3 - t2)
+                        enc_sec.append(len(audio) / SR)
                 prep = prepare(rec)
-                out["prep"][si, li, ri] = enc.embed_utterance(prep.audio)
-                ms["prep"].append(time.perf_counter() - t)
                 snr[si, li, ri] = prep.snr_db
                 secs[si, li, ri] = prep.speech_sec
+        peak = max(peak, _rss())
         print(f"  embedded {s} ({si + 1}/{len(speakers)})", file=sys.stderr)
     data = {
         "speakers": speakers, "lines": lines, "rooms": [r.name for r in ROOMS],
         "emb": out, "snr": snr, "speech_sec": secs,
         "ms": {p: float(np.median(v) * 1000) for p, v in ms.items()},
+        "encoder": {
+            "name": enc.name, "spec": encoder, "dim": enc.dim, "threads": threads,
+            "model_bytes": enc.model_bytes,
+            # the encoder alone on the audio voice ID embeds ("prep")
+            "ms_median": float(np.median(enc_ms) * 1000),
+            "ms_p95": float(np.percentile(enc_ms, 95) * 1000),
+            "audio_sec_median": float(np.median(enc_sec)),
+            "rss_load_mb": (rss_loaded - rss0) / 2 ** 20,
+            "rss_peak_mb": (peak - rss0) / 2 ** 20,
+        },
     }
     if cache is not None:
         np.savez_compressed(cache, data=np.array(data, dtype=object))
@@ -242,27 +377,25 @@ def embed_all(corpus: Path, cache: Path | None) -> dict:
 ENROLL_LINES = (0,)        # one introduction, as "my name is …" makes
 ROOM_LINE = 1              # the line said in a room for that room's own sample
 TEST_LINES_FROM = 2
+MUSIC_ROOMS = ("garage+music", "garage+loud music", "dining+tv")
 
 
 @dataclass
 class Variant:
     name: str
-    pipeline: str                    # embeddings of "raw" or "prep" audio
-    enroll_pipeline: str | None = None   # samples enrolled under another pipeline (legacy)
+    pipeline: str                    # embeddings of "raw", "prep", "edges" or "edges3" audio
     room_samples: bool = False       # each person also has one sample from each room
     room_scoring: bool = False       # score against the room's samples when there are any
-    threshold: float = 0.75
-    margin: float = 0.05
+    threshold: float = 0.75          # voice_profile_match_threshold
+    margin: float = 0.05             # voice_profile_match_margin
     same_room_margin: float = 0.0    # voice_profile_same_room_margin
     noisy_snr: float | None = None   # below this SNR: name nobody (voice_profile_noisy_snr_db)
-    compensate: str | None = None    # "global" | "room-pop" | "room-house": subtract a mean voice
-
-
-def _unit(v: np.ndarray) -> np.ndarray:
-    return v / np.linalg.norm(v, axis=-1, keepdims=True)
+    confident_margin: float = 0.05   # voice_profile_drift_near_threshold_margin
 
 
 def run(data: dict, v: Variant) -> dict[str, dict[str, float]]:
+    """Every room's rates for ``v``, through voice_identifier's own
+    scoring (``_score_turn``) and decision (``_decide``)."""
     from domovoi.config import settings
     from domovoi import voice_identifier as vi
 
@@ -271,10 +404,11 @@ def run(data: dict, v: Variant) -> dict[str, dict[str, float]]:
     settings.voice_profile_match_threshold = v.threshold
     settings.voice_profile_match_margin = v.margin
     settings.voice_profile_same_room_margin = v.same_room_margin
+    settings.voice_profile_drift_near_threshold_margin = v.confident_margin
+    vi.EMBEDDING_DIM = data["emb"][v.pipeline].shape[-1]
     rooms = data["rooms"]
     enroll_ri = rooms.index(ENROLL_ROOM)
     emb = data["emb"][v.pipeline]
-    enr = data["emb"][v.enroll_pipeline or v.pipeline]
     snr = data["snr"]
     n = len(data["speakers"])
     enrolled = list(range(0, n - n // 3))
@@ -282,40 +416,12 @@ def run(data: dict, v: Variant) -> dict[str, dict[str, float]]:
     households = [(enrolled[i], enrolled[i + 1]) for i in range(0, len(enrolled) - 1, 2)]
 
     def samples_for(person: int) -> list[tuple[int, bytes, str | None]]:
-        out = [(person, enr[person, li, enroll_ri].tobytes(), ENROLL_ROOM) for li in ENROLL_LINES]
+        out = [(person, emb[person, li, enroll_ri].tobytes(), ENROLL_ROOM) for li in ENROLL_LINES]
         if v.room_samples:
             for ri, room in enumerate(rooms):
                 base = room.split("+")[0]
                 if base != ENROLL_ROOM and "+" not in room:
-                    out.append((person, enr[person, ROOM_LINE, ri].tobytes(), base))
-        return out
-
-    def comp(e: np.ndarray, mean: np.ndarray | None) -> np.ndarray:
-        if mean is None:
-            return e
-        d = e - mean
-        return (d / np.linalg.norm(d)).astype(np.float32)
-
-    glob_mean = None
-    if v.compensate == "global":
-        glob_mean = np.mean(_unit(emb[guests][:, :, :, :].reshape(-1, emb.shape[-1])), axis=0)
-
-    def room_mean(ri: int, hh: tuple[int, int]) -> np.ndarray | None:
-        if v.compensate == "global":
-            return glob_mean
-        if v.compensate == "room-pop":
-            return np.mean(_unit(emb[guests, ROOM_LINE, ri]), axis=0)
-        if v.compensate == "room-house":
-            return np.mean(_unit(emb[list(hh), :TEST_LINES_FROM, ri].reshape(-1, emb.shape[-1])), axis=0)
-        return None
-
-    def samples_comp(hh: tuple[int, int]) -> list[tuple[int, bytes, str | None]]:
-        if v.compensate is None:
-            return samples_for(hh[0]) + samples_for(hh[1])
-        out = []
-        for p, blob, r in samples_for(hh[0]) + samples_for(hh[1]):
-            e = np.frombuffer(blob, dtype=np.float32)
-            out.append((p, comp(e, room_mean(rooms.index(r), hh)).tobytes(), r))
+                    out.append((person, emb[person, ROOM_LINE, ri].tobytes(), base))
         return out
 
     results: dict[str, dict[str, float]] = {}
@@ -323,18 +429,14 @@ def run(data: dict, v: Variant) -> dict[str, dict[str, float]]:
         base_room = room.split("+")[0]
         named_right = named_wrong = trials = 0
         g_wrong = g_trials = 0
+        conf_right = conf_wrong = 0
         target, nontarget = [], []
         for hh in households:
-            samples = samples_comp(hh)
-            mean_here = room_mean(ri, hh)
-            speakers = list(hh) + guests
-            for spk in speakers:
+            samples = samples_for(hh[0]) + samples_for(hh[1])
+            for spk in list(hh) + guests:
                 for li in range(TEST_LINES_FROM, data["lines"]):
-                    e = comp(emb[spk, li, ri], mean_here)
-                    # voice_identifier's own scoring: with no room (or no
-                    # sample from it) it is the pre-1.3.0 centroid score.
                     scored = vi._score_turn(
-                        VoicePrint(current=e), samples, [],
+                        VoicePrint(current=emb[spk, li, ri]), samples,
                         room_id=base_room if v.room_scoring else None,
                     )
                     scores = scored.scores
@@ -345,6 +447,9 @@ def run(data: dict, v: Variant) -> dict[str, dict[str, float]]:
                     pid = d.person_id
                     if pid is not None and v.noisy_snr is not None and snr[spk, li, ri] < v.noisy_snr:
                         pid = None
+                    if pid is not None and d.confident:
+                        conf_right += pid == spk
+                        conf_wrong += pid != spk
                     if spk in hh:
                         trials += 1
                         named_right += pid == spk
@@ -354,9 +459,12 @@ def run(data: dict, v: Variant) -> dict[str, dict[str, float]]:
                         g_wrong += pid is not None
         results[room] = {
             "correct": named_right / trials,
+            "none": (trials - named_right - named_wrong) / trials,   # a member, nobody named
             "wrong": (named_wrong + g_wrong) / (trials + g_trials),
             "wrong_member": named_wrong / trials,
             "wrong_guest": g_wrong / g_trials,
+            "confident_right": conf_right / trials,
+            "confident_wrong": conf_wrong,
             "eer": eer(np.array(target), np.array(nontarget)),
             "target_mean": float(np.mean(target)),
             "nontarget_mean": float(np.mean(nontarget)),
@@ -375,16 +483,26 @@ def eer(target: np.ndarray, nontarget: np.ndarray) -> float:
 
 
 def table(name: str, res: dict[str, dict[str, float]]) -> str:
-    rows = [f"{name}", f"  {'room':<18} {'correct':>8} {'wrong':>7} {'EER':>6} {'own':>6} {'other':>6}"]
+    rows = [f"{name}", f"  {'room':<18} {'correct':>8} {'wrong':>7} {'none':>7} {'EER':>6} "
+                       f"{'own':>6} {'other':>6}"]
     for room, r in res.items():
         rows.append(
             f"  {room:<18} {r['correct'] * 100:7.1f}% {r['wrong'] * 100:6.2f}% "
+            f"{r['none'] * 100:6.1f}% "
             f"{r['eer'] * 100:5.1f}% {r['target_mean']:6.3f} {r['nontarget_mean']:6.3f}"
         )
-    allc = np.mean([r["correct"] for r in res.values()]) * 100
-    allw = np.mean([r["wrong"] for r in res.values()]) * 100
-    rows.append(f"  {'mean':<18} {allc:7.1f}% {allw:6.2f}%")
+    allc, allw, alln, alle = _means(res)
+    rows.append(f"  {'mean':<18} {allc:7.1f}% {allw:6.2f}% {alln:6.1f}% {alle:5.1f}%")
     return "\n".join(rows)
+
+
+def _means(res: dict[str, dict[str, float]]) -> tuple[float, float, float, float]:
+    return tuple(float(np.mean([r[k] for r in res.values()]) * 100)
+                 for k in ("correct", "wrong", "none", "eer"))
+
+
+def _worst_wrong(res: dict[str, dict[str, float]]) -> float:
+    return max(x["wrong"] for x in res.values())
 
 
 def operating_point(data: dict, v: Variant, max_wrong: float) -> tuple[Variant, dict]:
@@ -392,42 +510,109 @@ def operating_point(data: dict, v: Variant, max_wrong: float) -> tuple[Variant, 
     names the wrong person more than ``max_wrong`` of the time."""
     from dataclasses import replace
 
-    best = None
-    for th in np.arange(0.40, 0.96, 0.01):
+    for th in np.arange(0.30, 0.96, 0.01):
         vv = replace(v, threshold=round(float(th), 2))
         r = run(data, vv)
-        if max(x["wrong"] for x in r.values()) <= max_wrong:
-            best = (vv, r)
-            break
-    if best is None:
-        vv = replace(v, threshold=0.99)
-        best = (vv, run(data, vv))
-    return best
+        if _worst_wrong(r) <= max_wrong:
+            return vv, r
+    vv = replace(v, threshold=0.99)
+    return vv, run(data, vv)
 
 
-# What main did before 1.3.0, and what it does now. The rest are the
-# experiments the choice was made from (docs: the 1.3.0 release note).
-BEFORE = Variant("before 1.3.0: whole recording, office enrolment", "raw")
-AFTER_UPDATE = Variant("1.3.0 just updated: legacy samples, music gate", "raw", noisy_snr=10.0)
-AFTER_MOVE = Variant("1.3.0 moved over: speech only, office sample only, music gate", "prep",
-                     noisy_snr=10.0)
-AFTER_ROOMS = Variant("1.3.0 + a sample in each room: room-first, +0.03 there, music gate",
-                      "prep", room_samples=True, room_scoring=True, same_room_margin=0.03,
-                      noisy_snr=10.0)
-SHIPPED = [BEFORE, AFTER_UPDATE, AFTER_MOVE, AFTER_ROOMS]
-
-EXPERIMENTS = [
-    Variant("B  speech trimmed + levelled (re-enrolled)", "prep"),
-    Variant("B' trimmed live, legacy raw enrolment", "prep", enroll_pipeline="raw"),
-    Variant("C  raw + a sample per room, centroid of all", "raw", room_samples=True),
-    Variant("D  raw + a sample per room, room-first scoring", "raw", room_samples=True, room_scoring=True),
-    Variant("E  trimmed + a sample per room, room-first", "prep", room_samples=True, room_scoring=True),
-    Variant("F  raw, global mean voice removed", "raw", compensate="global"),
-    Variant("G  raw, room's population mean removed", "raw", compensate="room-pop"),
-    Variant("H  raw, room's household mean removed", "raw", compensate="room-house"),
-    Variant("J  trimmed + room samples, room-first, global mean removed", "prep", room_samples=True,
-            room_scoring=True, compensate="global"),
+# What 1.3.0 ships (domovoi/config.py, domovoi/voice_prep.py): what voice ID
+# embeds, one introduction in the office, the music gate; and the same once
+# every room has learned a sample of each person.
+SHIPPED_PIPELINE = "prep"
+SHIPPED = [
+    Variant("1.3.0: office introduction, music gate", SHIPPED_PIPELINE,
+            threshold=0.58, margin=0.05, noisy_snr=10.0, confident_margin=0.05),
+    Variant("1.3.0 + a sample in each room: room-first, same-room margin, music gate",
+            SHIPPED_PIPELINE, room_samples=True, room_scoring=True, threshold=0.58, margin=0.05,
+            same_room_margin=0.01, noisy_snr=10.0, confident_margin=0.05),
 ]
+
+
+def tune(data: dict, max_wrong: float) -> dict:
+    """The sweeps every 1.3.0 setting was chosen from (docs/RELEASE_NOTES.md,
+    1.3.0, and the comments in domovoi/config.py): printed, and returned."""
+    out: dict = {}
+    print("\n== 1. what is embedded (office introduction, music gate 10 dB, margin 0.05) ==")
+    best_p = None
+    for p in PIPELINES:
+        v, r = operating_point(data, Variant(p, p, noisy_snr=10.0), max_wrong)
+        c, _w, _n, e = _means(r)
+        print(f"  {p:<7} threshold {v.threshold:.2f}: mean right {c:5.1f}%  worst wrong "
+              f"{_worst_wrong(r) * 100:4.2f}%  mean EER {e:4.1f}%  "
+              + " ".join(f"{k}={x['correct'] * 100:.0f}" for k, x in r.items()))
+        out[f"pipeline {p}"] = {"threshold": v.threshold, "rooms": r}
+        if best_p is None or c > best_p[1]:
+            best_p = (p, c, v.threshold)
+    p, _c, th = best_p
+    print(f"  -> {p} (most named at the ceiling)")
+
+    print(f"\n== 2. the margin between the best two ({p}) ==")
+    for m in (0.0, 0.02, 0.03, 0.05, 0.08, 0.10):
+        v, r = operating_point(data, Variant("m", p, margin=m, noisy_snr=10.0), max_wrong)
+        c, _w, _n, _e = _means(r)
+        print(f"  margin {m:.2f}: threshold {v.threshold:.2f}, mean right {c:5.1f}%, worst wrong "
+              f"{_worst_wrong(r) * 100:4.2f}%")
+        out[f"margin {m}"] = {"threshold": v.threshold, "mean_right": c}
+
+    print(f"\n== 3. the same-room margin (a sample in each room, room-first, threshold {th:.2f}) ==")
+    for srm in (0.0, 0.01, 0.02, 0.03, 0.05, 0.08):
+        r = run(data, Variant("r", p, room_samples=True, room_scoring=True, threshold=th,
+                              same_room_margin=srm, noisy_snr=10.0))
+        c, _w, _n, _e = _means(r)
+        print(f"  +{srm:.2f}: mean right {c:5.1f}%  worst wrong {_worst_wrong(r) * 100:4.2f}%  "
+              + " ".join(f"{k}={x['correct'] * 100:.0f}/{x['wrong'] * 100:.1f}" for k, x in r.items()))
+        out[f"same-room {srm}"] = r
+
+    print(f"\n== 4. the noisy gate (threshold {th:.2f}) ==")
+    for g in (None, 4.0, 6.0, 8.0, 10.0, 12.0):
+        r = run(data, Variant("g", p, threshold=th, noisy_snr=g))
+        music = {k: r[k] for k in MUSIC_ROOMS}
+        quiet = {k: x for k, x in r.items() if k not in MUSIC_ROOMS}
+        print(f"  gate {g}: music/TV rooms right/wrong "
+              + " ".join(f"{k}={x['correct'] * 100:.0f}/{x['wrong'] * 100:.1f}" for k, x in music.items())
+              + f"; other rooms mean right {np.mean([x['correct'] for x in quiet.values()]) * 100:.1f}%")
+        out[f"gate {g}"] = r
+    snr = data["snr"]
+    rooms = data["rooms"]
+    print("  speech SNR by room (median dB): " + ", ".join(
+        f"{room}={float(np.median(snr[:, :, i])):.1f}" for i, room in enumerate(rooms)))
+
+    print(f"\n== 5. the confident band (learning a room; threshold {th:.2f}) ==")
+    for cm in (0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.12):
+        a = run(data, Variant("c", p, threshold=th, noisy_snr=10.0, confident_margin=cm))
+        b = run(data, Variant("c", p, room_samples=True, room_scoring=True, threshold=th,
+                              noisy_snr=10.0, confident_margin=cm))
+        cw = sum(x["confident_wrong"] for x in a.values()) + sum(x["confident_wrong"] for x in b.values())
+        cr = np.mean([x["confident_right"] for x in a.values()]) * 100
+        print(f"  +{cm:.2f}: confident wrong names {cw} (office-only + every-room runs), "
+              f"confident right {cr:4.1f}% of members' commands")
+        out[f"confident {cm}"] = {"wrong": cw, "right": cr}
+
+    print("\n== 6. clustering unknown voices (one utterance against another, quiet rooms) ==")
+    emb = data["emb"][p]
+    same, diff = [], []
+    n = len(data["speakers"])
+    for i, room in enumerate(rooms):
+        if room in MUSIC_ROOMS:
+            continue
+        e = emb[:, TEST_LINES_FROM:, i]
+        flat = e.reshape(-1, e.shape[-1])
+        who = np.repeat(np.arange(n), e.shape[1])
+        sims = flat @ flat.T
+        iu = np.triu_indices(len(flat), 1)
+        s, same_mask = sims[iu], who[iu[0]] == who[iu[1]]
+        same.append(s[same_mask])
+        diff.append(s[~same_mask])
+    same, diff = np.concatenate(same), np.concatenate(diff)
+    for t in (0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7):
+        print(f"  merge at {t:.2f}: same voice merged {np.mean(same >= t) * 100:5.1f}%, "
+              f"two voices merged {np.mean(diff >= t) * 100:5.2f}%")
+    out["cluster"] = {"same_p50": float(np.median(same)), "diff_p99": float(np.percentile(diff, 99))}
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -436,28 +621,45 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cache", type=Path)
     ap.add_argument("--max-wrong", type=float, default=0.01,
                     help="the operating point: the worst room's wrong-name rate allowed (default 1%%)")
-    ap.add_argument("--experiments", action="store_true",
-                    help="also run the experiments the 1.3.0 choice was made from")
     ap.add_argument("--op-point", action="store_true",
                     help="also find each variant's operating point (slow)")
+    ap.add_argument("--tune", action="store_true",
+                    help="run the sweeps the 1.3.0 settings were chosen from (slow)")
     ap.add_argument("--json", type=Path, help="write every result here")
+    ap.add_argument("--encoder", default="eres2net",
+                    help="eres2net (default, what voice ID runs) or ort:PATH (see 'encoders' "
+                         "in this file); give each its own --cache")
+    ap.add_argument("--model", type=Path,
+                    help="the ERes2Net ONNX file, when it isn't in the voice-models directory")
+    ap.add_argument("--threads", type=int, default=1,
+                    help="CPU threads the encoder may use (default 1: the timing a small server sees)")
     args = ap.parse_args(argv)
     with _timer("embeddings"):
-        data = embed_all(args.corpus, args.cache)
+        data = embed_all(args.corpus, args.cache, args.encoder, args.threads, args.model)
     print(f"{len(data['speakers'])} speakers x {data['lines']} lines x {len(data['rooms'])} rooms; "
-          f"encoder median {data['ms']['raw']:.0f} ms raw, {data['ms']['prep']:.0f} ms trimmed")
-    everything = {}
-    for v in SHIPPED + (EXPERIMENTS if args.experiments else []):
+          + ", ".join(f"{p} {ms:.0f} ms" for p, ms in data["ms"].items()))
+    e = data.get("encoder")
+    if e:
+        print(f"encoder {e['name']}: {e['dim']}-dim, model {e['model_bytes'] / 2 ** 20:.1f} MB, "
+              f"{e['ms_median']:.0f} ms median / {e['ms_p95']:.0f} ms p95 per embedding "
+              f"({e['audio_sec_median']:.1f} s of audio, {e['threads']} thread(s)), "
+              f"RAM +{e['rss_load_mb']:.0f} MB loaded, +{e['rss_peak_mb']:.0f} MB peak")
+    everything: dict = {"_encoder": e} if e else {}
+    for v in SHIPPED:
         res = run(data, v)
         everything[v.name] = res
         print(table(f"{v.name} (threshold {v.threshold}, margin {v.margin}, "
-                    f"same room +{v.same_room_margin})", res))
+                    f"same room +{v.same_room_margin}, gate {v.noisy_snr} dB)", res))
+        conf_wrong = sum(x["confident_wrong"] for x in res.values())
+        print(f"  confident (learning) matches that named the wrong person: {conf_wrong}")
         if args.op_point:
             vv, r = operating_point(data, v, args.max_wrong)
             everything[f"{v.name} @ {vv.threshold}"] = r
             print(table(f"   at threshold {vv.threshold} (worst room wrong <= {args.max_wrong:.0%})", r))
+    if args.tune:
+        everything["tune"] = tune(data, args.max_wrong)
     if args.json:
-        args.json.write_text(json.dumps(everything, indent=1), encoding="utf-8")
+        args.json.write_text(json.dumps(everything, indent=1, default=float), encoding="utf-8")
     return 0
 
 

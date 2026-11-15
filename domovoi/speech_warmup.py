@@ -4,9 +4,11 @@ Whisper loads at boot (``domovoi/clients/whisper.py``) and the language
 models are warmed in the background (``domovoi/llm_warmup.py``), but two
 more loads used to land inside the first voice turn after every restart:
 
-* the Resemblyzer voice encoder, loaded on the first embed — and loaded ON
-  THE EVENT LOOP, so for its ~600 ms every room's socket stood still
-  (``identify_ms`` 633 on the first turn after a restart, ~35 warm);
+* the voice encoder (Resemblyzer's then; 3D-Speaker's ERes2Net since
+  1.3.0, whose model file the warm-up also fetches once when it isn't on
+  disk), loaded on the first embed — and loaded ON THE EVENT LOOP, so for
+  its ~600 ms every room's socket stood still (``identify_ms`` 633 on the
+  first turn after a restart, ~35 warm);
 * the room's Piper voice, loaded (and run for the first time) on the first
   reply in it (``tts_first_ms`` 638, against 44-99 warm).
 

@@ -3,7 +3,7 @@
 # hash-pinned dependency set a Linux server installs (docs/LINUX_HOST.md,
 # "Install"; apply-update.sh sync_deps), and beside it
 # requirements-linux-py314-no-deps.lock: the packages of
-# requirements-no-deps.in (faster-whisper, resemblyzer), pinned and hashed
+# requirements-no-deps.in (faster-whisper), pinned and hashed
 # but installed without their declared dependencies (pip install --no-deps),
 # at versions that agree with the main lock.
 #
@@ -37,7 +37,6 @@ NODEPS_LOCK=requirements-linux-py314-no-deps.lock
 IMAGE=${DOMOVOI_LOCK_IMAGE:-python:3.14-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2}
 # pip-tools 7.6.0 imports pip internals that pip 26.2 removed: pin the pair.
 PIP_TOOLS="pip==26.1 pip-tools==7.6.0"
-TORCH_INDEX=https://download.pytorch.org/whl/cpu
 EXTRAS=(real-clients voice-profile)
 SPLIT='#### compile-linux-lock: no-deps lock follows ####'
 
@@ -70,7 +69,6 @@ docker run --rm \
   -e CUSTOM_COMPILE_COMMAND="bash scripts/linux/compile-linux-lock.sh" \
   -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
   -e PIP_TOOLS="$PIP_TOOLS" \
-  -e TORCH_INDEX="$TORCH_INDEX" \
   -e SPLIT="$SPLIT" \
   "$IMAGE" sh -euc '
     lock=$1; nodeps=$2; shift 2
@@ -82,7 +80,6 @@ docker run --rm \
     if [ -f /seed.txt ]; then cp /seed.txt "$lock"
     elif [ -f "/src/$lock" ]; then cp "/src/$lock" .; fi
     pip-compile --quiet --generate-hashes --allow-unsafe --strip-extras \
-      --extra-index-url "$TORCH_INDEX" \
       --output-file "$lock" "$@" pyproject.toml requirements-linux-py314.in >&2
     # The no-deps packages, resolved against the main lock (its pins as
     # constraints) so what they do use agrees with it; then only their own
@@ -91,7 +88,7 @@ docker run --rm \
     sed -n "s/^\([A-Za-z0-9._-]*==[^ ]*\).*/\1/p" "$lock" >constraints.txt
     if [ -f "/src/$nodeps" ]; then cp "/src/$nodeps" nodeps.full; fi
     pip-compile --quiet --generate-hashes --allow-unsafe --strip-extras \
-      --extra-index-url "$TORCH_INDEX" -c constraints.txt \
+      -c constraints.txt \
       --output-file nodeps.full requirements-no-deps.in >&2
     python3 - requirements-no-deps.in nodeps.full >"$nodeps" <<"PY"
 import re, sys

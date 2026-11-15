@@ -28,7 +28,7 @@ from domovoi.admin_auth import (
 )
 from domovoi.config import settings as core_settings
 from domovoi import voice_history
-from domovoi.db.repositories import PeopleRepository
+from domovoi.db.repositories import PeopleRepository, VoiceProfilesRepository
 from web.backend import voice_match
 from web.backend.db import session_scope
 from web.backend.schemas import (
@@ -43,6 +43,7 @@ from web.backend.schemas import (
     PreferencesPatch,
     Session,
     VoiceNote,
+    VoiceIdStatus,
     VoiceProfile,
     VoiceRoom,
 )
@@ -90,9 +91,12 @@ READ = [Depends(require_device_read)]
 async def list_people() -> list[Person]:
     """All known speakers, sorted by most-recently-seen.
 
-    Each row carries the count of voice-profile samples and the
-    presence tier — same low/medium/high ladder
-    VoiceProfileHandler uses to decide identity-prompt urgency.
+    Each row carries the count of voice-profile samples (of the current
+    speaker model only: older ones are never used) and the presence tier —
+    same low/medium/high ladder VoiceProfileHandler uses to decide
+    identity-prompt urgency — and ``voice_relearn``: their samples went
+    with the speaker model 1.3.0 replaced (V061) and they haven't said
+    "my name is …" since.
     """
     async with session_scope() as s:
         rows = await s.execute(
@@ -104,18 +108,50 @@ async def list_people() -> list[Person]:
                          WHERE o.id <> p.id
                            AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes,
                        (SELECT COUNT(*) FROM devices d
-                         WHERE d.owner_person_id = p.id) AS device_count
+                         WHERE d.owner_person_id = p.id) AS device_count,
+                       p.voice_relearn_since
                 FROM people p
                 LEFT JOIN (
                     SELECT person_id, COUNT(*) AS profile_count
-                    FROM voice_profiles
+                    FROM voice_profiles WHERE model = :model
                     GROUP BY person_id
                 ) vc ON vc.person_id = p.id
                 ORDER BY p.last_seen_at DESC NULLS LAST, p.id DESC
                 """
-            )
+            ),
+            {"model": VoiceProfilesRepository.EMBEDDING_MODEL_TAG},
         )
         return [_row_to_person(r) for r in rows.all()]
+
+
+@router.get("/voice-id", response_model=VoiceIdStatus, dependencies=READ)
+async def voice_id_status() -> VoiceIdStatus:
+    """Whether voice ID can recognize anyone on this server, for the
+    People page's household notice: ``ready`` when the speaker model is on
+    disk (domovoi/clients/speaker_encoder.py), else ``problem`` says why in
+    words for the household (internet access off, a failed download, not
+    fetched yet); ``relearn``: how many people lost their voice samples to
+    the 1.3.0 model change (V061) and haven't said "my name is …" since.
+
+    The core fetches the model; this process only looks at the disk (both
+    read the same voice-models directory), so a failed download's own
+    reason shows in the core's log, and here as "not on this server yet"."""
+    from domovoi.clients import speaker_encoder
+
+    async with session_scope() as s:
+        relearn = (await s.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM people p
+                 WHERE p.voice_relearn_since IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM voice_profiles v
+                                    WHERE v.person_id = p.id AND v.model = :model)
+                """
+            ),
+            {"model": VoiceProfilesRepository.EMBEDDING_MODEL_TAG},
+        )).scalar_one()
+    problem = speaker_encoder.model_problem()
+    return VoiceIdStatus(ready=problem is None, problem=problem, relearn=int(relearn))
 
 
 @router.get("/{person_id}", response_model=Person, dependencies=READ)
@@ -130,17 +166,18 @@ async def get_person(person_id: int) -> Person:
                          WHERE o.id <> p.id
                            AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes,
                        (SELECT COUNT(*) FROM devices d
-                         WHERE d.owner_person_id = p.id) AS device_count
+                         WHERE d.owner_person_id = p.id) AS device_count,
+                       p.voice_relearn_since
                 FROM people p
                 LEFT JOIN (
                     SELECT person_id, COUNT(*) AS profile_count
-                    FROM voice_profiles WHERE person_id = :id
+                    FROM voice_profiles WHERE person_id = :id AND model = :model
                     GROUP BY person_id
                 ) vc ON vc.person_id = p.id
                 WHERE p.id = :id
                 """
             ),
-            {"id": person_id},
+            {"id": person_id, "model": VoiceProfilesRepository.EMBEDDING_MODEL_TAG},
         )
         result = row.first()
     if result is None:
@@ -370,11 +407,11 @@ async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
                   FROM voice_profiles v
                   LEFT JOIN voice_profiles root ON root.id = v.claim_of
                   LEFT JOIN people claimer ON claimer.id = v.claimed_by_person_id
-                 WHERE v.person_id = :pid
+                 WHERE v.person_id = :pid AND v.model = :model
                  ORDER BY v.enrolled_at DESC, v.id DESC
                 """
             ),
-            {"pid": person_id},
+            {"pid": person_id, "model": VoiceProfilesRepository.EMBEDDING_MODEL_TAG},
         )
         out = []
         for r in rows.all():
@@ -405,38 +442,28 @@ async def list_voice_rooms(person_id: int) -> list[VoiceRoom]:
     know them yet: a far-off room recognizes a voice it has heard there far
     better than one heard only elsewhere. The People page says how to fix a
     gap — "my name is …" said in that room adds one. Rooms that have a
-    sample but no satellite any more are listed too. Satellite samples
-    only; a phone's are never used by a room."""
-    from domovoi.db.repositories import VoiceProfilesRepository
-
+    sample but no satellite any more are listed too. Satellite samples of
+    the current speaker model only; a phone's are never used by a room."""
     async with session_scope() as s:
         rows = await s.execute(
             text(
                 """
-                SELECT r.room_id,
-                       bool_or(v.model = :current) AS current,
-                       bool_or(v.model = :legacy) AS legacy
+                SELECT r.room_id, bool_or(v.id IS NOT NULL) AS current
                   FROM (SELECT room_id FROM satellites
                         UNION
                         SELECT room_id FROM voice_profiles
                          WHERE person_id = :pid AND source = 'satellite'
-                           AND room_id IS NOT NULL) r
+                           AND model = :current AND room_id IS NOT NULL) r
                   LEFT JOIN voice_profiles v
-                    ON v.room_id = r.room_id AND v.person_id = :pid AND v.source = 'satellite'
+                    ON v.room_id = r.room_id AND v.person_id = :pid
+                   AND v.source = 'satellite' AND v.model = :current
                  GROUP BY r.room_id
                  ORDER BY r.room_id
                 """
             ),
-            {
-                "pid": person_id,
-                "current": VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
-                "legacy": VoiceProfilesRepository.LEGACY_MODEL_TAG,
-            },
+            {"pid": person_id, "current": VoiceProfilesRepository.EMBEDDING_MODEL_TAG},
         )
-        return [
-            VoiceRoom(room_id=r[0], current=bool(r[1]), legacy=bool(r[2]))
-            for r in rows.all()
-        ]
+        return [VoiceRoom(room_id=r[0], current=bool(r[1])) for r in rows.all()]
 
 
 # ─── Destructive ───────────────────────────────────────────────────────────
@@ -843,6 +870,7 @@ def _row_to_person(r: Any) -> Person:
         presence_tier=_presence_tier_for(r[3]),
         namesakes=int(r[6]) if len(r) > 6 else 0,
         device_count=int(r[7] or 0) if len(r) > 7 else 0,
+        voice_relearn=len(r) > 8 and r[8] is not None and int(r[5]) == 0,
     )
 
 

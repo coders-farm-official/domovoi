@@ -12,6 +12,8 @@ import secrets
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi.clients.speaker_encoder import MODEL_TAG
+
 log = logging.getLogger(__name__)
 
 # Whether conversation_log has V011's `utterance_trigger` column. Probed once
@@ -568,6 +570,24 @@ class PeopleRepository:
         result = row.scalar()
         return result  # may be None when the people table is empty
 
+    async def relearn_pending(self, model: str) -> int:
+        """How many people lost their voice samples to the 1.3.0 speaker
+        model change (V061, ``voice_relearn_since``) and have no sample of
+        ``model`` since: they aren't recognized until they say "my name is
+        …" again."""
+        row = await self.s.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM people p
+                 WHERE p.voice_relearn_since IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM voice_profiles v
+                                    WHERE v.person_id = p.id AND v.model = :model)
+                """
+            ),
+            {"model": model},
+        )
+        return int(row.scalar_one())
+
     async def delete(self, person_id: int) -> int:
         """Cascades through voice_profiles via FK; intents_log.person_id
         becomes NULL via the FK's ON DELETE SET NULL. Forgetting a person
@@ -1096,12 +1116,11 @@ class VoiceProfilesRepository:
     own voice. :meth:`person_samples` reads them for "forget me".
     """
 
-    #: Every new sample is kept in the current embedding (the speech alone,
-    #: at one loudness: domovoi/voice_prep.py, 1.3.0); samples from before
-    #: it stay in the legacy one, and a person with no current sample yet is
-    #: matched by those (domovoi/voice_identifier.py, "Two embeddings").
-    EMBEDDING_MODEL_TAG = "resemblyzer-v2"
-    LEGACY_MODEL_TAG = "resemblyzer-v1"
+    #: The speaker model every sample is made with (1.3.0: 3D-Speaker's
+    #: ERes2Net, domovoi/clients/speaker_encoder.py). Rows with another tag
+    #: can't be compared with its embeddings and are never read (V061
+    #: removed Resemblyzer's).
+    EMBEDDING_MODEL_TAG = MODEL_TAG
     SATELLITE = "satellite"
     PHONE = "phone"
 
@@ -1288,8 +1307,7 @@ class VoiceDenylistRepository:
     a denylisted user has explicitly opted out of being a person row.
     """
 
-    EMBEDDING_MODEL_TAG = "resemblyzer-v2"
-    LEGACY_MODEL_TAG = "resemblyzer-v1"
+    EMBEDDING_MODEL_TAG = MODEL_TAG
 
     def __init__(self, session: AsyncSession) -> None:
         self.s = session

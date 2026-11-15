@@ -418,7 +418,7 @@ def test_the_listing_marks_claims_and_keeps_who_and_where_for_an_admin(monkeypat
                 await conn.execute(
                     text(
                         "INSERT INTO voice_profiles (person_id, embedding, model, room_id, source, "
-                        "claimed_at, claim_room, claimed_by_person_id) VALUES (:p, :e, 'resemblyzer-v1', "
+                        "claimed_at, claim_room, claimed_by_person_id) VALUES (:p, :e, 'eres2net-vox-v1', "
                         ":r, :s, CASE WHEN :c THEN NOW() END, CASE WHEN :c THEN :r END, :b)"
                     ),
                     {"p": priya, "e": b"\0" * 1024, "r": room, "s": source, "c": claimed, "b": by},

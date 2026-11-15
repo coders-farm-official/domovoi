@@ -1,5 +1,6 @@
 """Voice ID 1.3.0: what is embedded (the speech alone, at one loudness),
-which rooms know a voice, and "forget me" for a voice from before 1.3.0.
+which rooms know a voice, and the move to a new speaker model (V061: the
+old samples go, their people are asked to introduce themselves again).
 
 domovoi/voice_prep.py is pure numpy; the rest runs on the lane's database
 with the stub embedder (domovoi/tests/test_voice_identifier.py has the
@@ -17,11 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from domovoi.clients.voice_embedder import EMBEDDING_DIM
 from domovoi.db.repositories import VoiceProfilesRepository
-from domovoi.db.session import SessionLocal
-from domovoi.handlers.voice_profile import VoiceProfileHandler
-from domovoi.models import Context
 from domovoi.tests.conftest import requires_db
 from domovoi.voice_prep import TARGET_DBFS, prepare
 
@@ -99,7 +96,7 @@ def test_voice_rooms_lists_every_room_and_whether_it_knows_the_voice() -> None:
             )).scalar_one())
             for room, model, source in (
                 ("office", VoiceProfilesRepository.EMBEDDING_MODEL_TAG, "satellite"),
-                ("dining", VoiceProfilesRepository.LEGACY_MODEL_TAG, "satellite"),
+                ("dining", "resemblyzer-v1", "satellite"),    # the old model: never counted
                 ("attic", VoiceProfilesRepository.EMBEDDING_MODEL_TAG, "satellite"),  # no satellite now
                 ("phone-android-1a2b", VoiceProfilesRepository.EMBEDDING_MODEL_TAG, "phone"),
             ):
@@ -117,50 +114,88 @@ def test_voice_rooms_lists_every_room_and_whether_it_knows_the_voice() -> None:
         got = c.get(f"/api/people/{pid}/voice-rooms")
         assert got.status_code == 200, got.text
         assert got.json() == [
-            {"room_id": "attic", "current": True, "legacy": False},
-            {"room_id": "dining", "current": False, "legacy": True},
-            {"room_id": "garage", "current": False, "legacy": False},
-            {"room_id": "office", "current": True, "legacy": False},
+            {"room_id": "attic", "current": True},
+            {"room_id": "dining", "current": False},
+            {"room_id": "garage", "current": False},
+            {"room_id": "office", "current": True},
         ]
 
 
-# ─── "forget me" for a voice from before 1.3.0 ────────────────────────────
+# ─── the move to a new speaker model (V061) ──────────────────────────────
+
+MIGRATION = Path(__file__).resolve().parents[1] / "db" / "migrations" / "V061__voice_id_eres2net.sql"
 
 
-def _unit(seed: int) -> np.ndarray:
-    v = np.random.default_rng(seed).standard_normal(EMBEDDING_DIM).astype(np.float32)
-    return v / np.linalg.norm(v)
+def _statements(path: Path) -> list[str]:
+    body = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                     if not line.lstrip().startswith("--"))
+    return [part for part in (p.strip() for p in body.split(";")) if part]
 
 
 @requires_db
-@pytest.mark.asyncio
-async def test_forget_me_holds_a_legacy_person_to_their_legacy_samples(db_session) -> None:
-    """A person with only pre-1.3.0 samples, one of them a name claim: the
-    turn's LEGACY embedding decides whether this is them (not the current
-    one, which their samples were never made with, and not "no samples at
-    all, so delete" — the review S1 hole a fresh embedding would open)."""
-    own, stranger = _unit(1), _unit(2)
-    async with SessionLocal() as s:
-        await s.execute(text("TRUNCATE people RESTART IDENTITY CASCADE"))
-        pid = int((await s.execute(
-            text("INSERT INTO people (name) VALUES ('Priya') RETURNING id"))).scalar_one())
-        repo = VoiceProfilesRepository(s)
-        await repo.add(person_id=pid, embedding=own.tobytes(), model=repo.LEGACY_MODEL_TAG,
-                       room_id="office", sample_seconds=None)
-        await repo.add(person_id=pid, embedding=stranger.tobytes(), model=repo.LEGACY_MODEL_TAG,
-                       room_id="garage", sample_seconds=None, claimed=True, claim_room="garage")
-        await s.commit()
+def test_v061_drops_old_samples_and_asks_their_people_to_introduce_themselves() -> None:
+    """The migration, run again on the lane (it is idempotent): every sample
+    and opt-out of another model goes, the people who had one are marked,
+    and the People page says who has to say "my name is …" again until a
+    sample of the new model arrives. Someone who never had a voice is not
+    asked."""
+    from domovoi.db.session import engine
+    from web.backend.main import app as web_app
 
-    handler = VoiceProfileHandler()
+    tag = VoiceProfilesRepository.EMBEDDING_MODEL_TAG
 
-    async def scope(current: np.ndarray, legacy: np.ndarray | None) -> tuple[str, list[int]]:
-        ctx = Context(session_id=None, room_id="office", online=True, person_id=pid,
-                      embedding_bytes=current.tobytes(),
-                      legacy_embedding_bytes=None if legacy is None else legacy.tobytes())
-        async with SessionLocal() as s:
-            return await handler._forget_scope(ctx, s)
+    async def _seed() -> tuple[int, int, int]:
+        async with engine.begin() as conn:
+            await conn.execute(text("TRUNCATE people RESTART IDENTITY CASCADE"))
+            await conn.execute(text("DELETE FROM voice_denylist"))
+            ids = []
+            for name in ("Priya", "Sam", "Noor"):
+                ids.append(int((await conn.execute(
+                    text("INSERT INTO people (name) VALUES (:n) RETURNING id"), {"n": name},
+                )).scalar_one()))
+            priya, sam, _noor = ids
+            for pid, model in ((priya, "resemblyzer-v1"), (priya, "resemblyzer-v2"),
+                               (sam, "resemblyzer-v1"), (sam, tag)):
+                await conn.execute(
+                    text("INSERT INTO voice_profiles (person_id, embedding, model, room_id) "
+                         "VALUES (:p, :e, :m, 'office')"),
+                    {"p": pid, "e": b"\0" * 1024, "m": model},
+                )
+            for model in ("resemblyzer-v1", tag):
+                await conn.execute(
+                    text("INSERT INTO voice_denylist (embedding, model) VALUES (:e, :m)"),
+                    {"e": b"\0" * 768, "m": model},
+                )
+            for _ in range(2):                                    # twice: idempotent
+                for statement in _statements(MIGRATION):
+                    await conn.execute(text(statement))
+            left = (await conn.execute(text("SELECT DISTINCT model FROM voice_profiles"))).scalars().all()
+            assert left == [tag]
+            deny = (await conn.execute(text("SELECT model FROM voice_denylist"))).scalars().all()
+            assert deny == [tag]
+            return tuple(ids)
 
-    assert (await scope(_unit(9), own))[0] == "person"
-    kind, ids = await scope(_unit(9), stranger)
-    assert kind == "claims" and len(ids) == 1
-    assert (await scope(own, None))[0] == "unheard"
+    priya, sam, noor = asyncio.run(_seed())
+    with TestClient(web_app) as c:
+        people = {p["id"]: p for p in c.get("/api/people").json()}
+        assert people[priya]["voice_relearn"] is True and people[priya]["voice_profile_count"] == 0
+        # Sam had a sample of the new model too: recognized as before.
+        assert people[sam]["voice_relearn"] is False and people[sam]["voice_profile_count"] == 1
+        assert people[noor]["voice_relearn"] is False
+        assert c.get(f"/api/people/{priya}").json()["voice_relearn"] is True
+        status = c.get("/api/people/voice-id").json()
+        assert status["relearn"] == 1
+        assert c.get(f"/api/people/{priya}/profiles").json() == []
+
+    async def _reintroduce() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("INSERT INTO voice_profiles (person_id, embedding, model, room_id) "
+                     "VALUES (:p, :e, :m, 'office')"),
+                {"p": priya, "e": b"\0" * 768, "m": tag},
+            )
+
+    asyncio.run(_reintroduce())
+    with TestClient(web_app) as c:
+        assert c.get(f"/api/people/{priya}").json()["voice_relearn"] is False
+        assert c.get("/api/people/voice-id").json()["relearn"] == 0

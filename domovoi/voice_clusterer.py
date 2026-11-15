@@ -15,7 +15,7 @@ transcript.
 The on-disk shape is JSON-serializable for sessions.context storage:
 
     {
-      "centroid_b64": "<256 float32, base64>",
+      "centroid_b64": "<192 float32 (EMBEDDING_DIM), base64>",
       "samples": [
         {"embedding_b64": "...", "transcript": "...", "audio_seconds": 1.4},
         ...
@@ -62,7 +62,7 @@ def add_to_clusters(
     embedding: np.ndarray,
     transcript: str,
     audio_seconds: float,
-    merge_threshold: float = 0.7,
+    merge_threshold: float = 0.5,
 ) -> list[dict]:
     """Mutate ``clusters`` to include the new sample, then return it.
 
@@ -73,7 +73,7 @@ def add_to_clusters(
     single-sample cluster is created.
 
     ``merge_threshold`` is intentionally looser than
-    ``voice_profile_match_threshold`` (0.75) — at this stage we're
+    ``voice_profile_match_threshold`` (0.58) — at this stage we're
     deciding "are these the same unknown person" not "do they match a
     known profile," and we'd rather accidentally merge two members of
     the same family than split one person across two clusters.

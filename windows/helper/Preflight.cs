@@ -34,7 +34,7 @@ namespace Domovoi.Windows.Helper
         {
             "github.com", "raw.githubusercontent.com", "releases.ubuntu.com", "archive.ubuntu.com",
             "security.ubuntu.com", "download.docker.com", "registry-1.docker.io", "pypi.org",
-            "files.pythonhosted.org", "download.pytorch.org", "huggingface.co", "registry.ollama.ai",
+            "files.pythonhosted.org", "huggingface.co", "registry.ollama.ai",
         };
 
         // The pinned Ubuntu image's only source. An update over an install
