@@ -199,13 +199,14 @@ jobs:
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --no-deps -e .
       # Two imports the suite makes that requirements.lock (core + dev)
-      # doesn't carry, from their own floors through pip's resolver:
-      # scipy (BSD) for the satellite's resampler (satellite/requirements.txt),
-      # feedparser (BSD) for the podcast and news feed readers (the
-      # real-clients extra). The rest of real-clients (Whisper, ONNX voices)
-      # stays out: the suite runs on stubs.
+      # doesn't carry: scipy (BSD) for the satellite's resampler
+      # (satellite/requirements.txt), feedparser (BSD, with its sgmllib3k)
+      # for the podcast and news feed readers (the real-clients extra).
+      # Exact versions and hashes in .github/ci-extra-requirements.txt.
+      # The rest of real-clients (Whisper, ONNX voices) stays out: the
+      # suite runs on stubs.
       - name: Install what the tests import beyond the lock (scipy, feedparser)
-        run: python -m pip install "scipy>=1.11,<2" "feedparser>=6.0"
+        run: python -m pip install --require-hashes -r .github/ci-extra-requirements.txt
       # Voice ID's speaker model (25 MB), from the pinned URL and checked
       # against the pinned SHA-256 the server uses
       # (domovoi/clients/speaker_encoder.py), so test_speaker_encoder.py
