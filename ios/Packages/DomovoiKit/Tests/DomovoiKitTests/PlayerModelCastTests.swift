@@ -287,9 +287,16 @@ final class PlayerModelCastTests: XCTestCase {
 
         // Both picked before either has finished, which is what the cast menu
         // closing on a tap makes easy.
-        async let first = h.model.cast(to: "office")
-        async let second = h.model.cast(to: "den")
-        let outcomes = await [first, second]
+        //
+        // Two main-actor tasks and **not** `async let`: an `async let` child
+        // runs off the main actor and hops back to it, and which of two hops
+        // lands first is up to the scheduler. On the Mac at `c2c4d040` den's
+        // won, so den was cast first and the case failed over a tap order the
+        // test never set. Main-actor tasks start in the order they were made,
+        // which is the order of the two taps.
+        let first = Task { await h.model.cast(to: "office") }
+        let second = Task { await h.model.cast(to: "den") }
+        let outcomes = [await first.value, await second.value]
 
         XCTAssertEqual(
             h.model.target, .room("den"),

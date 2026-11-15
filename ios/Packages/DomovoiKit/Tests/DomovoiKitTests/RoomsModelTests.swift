@@ -22,9 +22,62 @@ final class RoomsModelTests: XCTestCase {
         StubURLProtocol.reset()
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
+        await closeEverything()
         StubURLProtocol.reset()
-        super.tearDown()
+        try await super.tearDown()
+    }
+
+    /// Every model a case built, with its container, so ``closeEverything()``
+    /// can take them down when the case ends.
+    private var built: [(model: RoomsModel, container: AppContainer)] = []
+
+    /// What the screen going away does — ``RoomsModel/stop()`` — for every
+    /// model this case built, and then a wait until neither of its sessions
+    /// has a request left.
+    ///
+    /// **This is the cure for `testEachTabIsReadWhenItIsShownAndNotBefore`'s
+    /// flake.** ``StubURLProtocol``'s log is process-global, and a case that
+    /// ended on a write left that write's re-read running: the timer cancel
+    /// in `testCancellingATimerThatHasAlreadyGoneIsNotAFailure` ends on its
+    /// toast, and the same turn that set the toast had started
+    /// `reads.timers.refresh()`. Its `GET .../kitchen/timers` reached the
+    /// stub after the next case's `setUp` had reset the log — CI's red at
+    /// `dbe3e6a4` printed it as request `[0]`, before that case's own
+    /// identity probe. A real screen is stopped when it goes; these models
+    /// were not, so this does it.
+    ///
+    /// The drain is bounded (two seconds, over a session whose own timeout is
+    /// one), and a request still outstanding after it fails the case that
+    /// left it rather than the case that happens to run next.
+    private func closeEverything(file: StaticString = #filePath, line: UInt = #line) async {
+        let all = built
+        built = []
+        for (model, _) in all { model.stop() }
+        // A write task already queued gets its turn before the sessions are
+        // counted, so a request it makes is waited for rather than missed.
+        for _ in 0..<200 { await Task.yield() }
+        for (_, container) in all {
+            for session in [container.client.session, container.probeClient.session] {
+                var left = await session.allTasks.filter { $0.state != .completed }.count
+                var spins = 0
+                while left > 0, spins < 1_000 {
+                    try? await Task.sleep(for: .milliseconds(2))
+                    left = await session.allTasks.filter { $0.state != .completed }.count
+                    spins += 1
+                }
+                if left > 0 {
+                    XCTFail("\(left) request(s) still outstanding after the case closed its models",
+                            file: file, line: line)
+                }
+            }
+        }
+    }
+
+    /// Hand a model built outside ``rig(house:waits:address:)`` to
+    /// ``closeEverything()``.
+    private func keep(_ model: RoomsModel, _ container: AppContainer) {
+        built.append((model, container))
     }
 
     // MARK: - the rig
@@ -301,6 +354,7 @@ final class RoomsModelTests: XCTestCase {
             configuration: StubURLProtocol.session(timeout: 1)
         )
         let model = RoomsModel(in: container, nowMs: { 0 }, wait: waits.sleeper)
+        keep(model, container)
         return (model, house, waits, store)
     }
 
@@ -358,11 +412,13 @@ final class RoomsModelTests: XCTestCase {
     /// `requests(to:).count` assertions, and no run of this file alone has
     /// ever reproduced it.
     ///
-    /// The cure is cancelling the read when its model goes away, which is
-    /// `ApiRead`'s and not this file's. Until then this prints the whole log
-    /// beside the number, so the next red names the request rather than the
-    /// count: a path this case never asks for is a leak from another case, and
-    /// one it does ask for is a real double read.
+    /// CI's red at `dbe3e6a4` named it: `GET .../kitchen/timers` as request
+    /// `[0]`, the re-read `testCancellingATimerThatHasAlreadyGoneIsNotAFailure`
+    /// queued in the turn it returned. The cure is ``closeEverything()`` in
+    /// `tearDown` and ``ApiRead``'s cancelled-before-it-ran check. This still
+    /// prints the whole log beside the number, so a next red names the
+    /// request rather than the count: a path this case never asks for is a
+    /// leak from another case, and one it does ask for is a real double read.
     private func printTheWholeLog(_ why: String) {
         print("ROOMS REQUEST LOG (\(why)) — \(StubURLProtocol.requestCount) in all:")
         for (index, made) in StubURLProtocol.recorded.enumerated() {
@@ -465,6 +521,7 @@ final class RoomsModelTests: XCTestCase {
         )
         let waits = Waits()
         let model = RoomsModel(in: container, nowMs: { clock.current }, wait: waits.sleeper)
+        keep(model, container)
         await loaded(model)
         XCTAssertEqual(0, model.extraSec)
 
@@ -1039,6 +1096,59 @@ final class RoomsModelTests: XCTestCase {
         model.received(StateEvent(type: "satellites.presence.changed", frame: "{}"))
         await nothingHappens()
         XCTAssertEqual(after, StubURLProtocol.requestCount, "a push after stop() asks for nothing")
+    }
+
+    /// A timer's DELETE that comes back **after the screen went away** says
+    /// nothing and re-reads nothing. Android's write runs in the screen's
+    /// coroutine scope, which dies with it; here the answer used to land on
+    /// a stopped model, rebuild the room `stop()` had dropped, and send that
+    /// room's timers read to nobody.
+    func testATimerCancelAnsweredAfterTheScreenWentAwayReadsNothing() async {
+        let house = House()
+        let (model, _, _, _) = rig(house: house)
+        await loaded(model)
+        let kitchen = model.rooms.first { $0.roomID == "kitchen" } ?? RoomsSatellite(roomID: "kitchen", status: "online")
+        let park = parkRequest(
+            to: "/api/satellites/kitchen/timers/1",
+            answering: { .json("", status: 204) },
+            otherwise: Self.plain(house)
+        )
+        model.cancelTimer(kitchen, RoomsTimer(id: 1, label: "pasta", expiresAt: "2026-11-02T19:35:00Z"))
+        await settle(for: park.arrived, what: "the DELETE")
+
+        model.stop()
+        park.release.set(true)
+        await nothingHappens()
+        await everythingLands()
+        XCTAssertFalse(park.ranOut.current, "the park was released rather than timing out")
+        assertAsked(0, "/api/satellites/kitchen/timers", "a stopped screen re-read the timers after its DELETE")
+        XCTAssertNil(model.toast, "and a screen that has gone says nothing")
+    }
+
+    /// **The leak behind `testEachTabIsReadWhenItIsShownAndNotBefore`'s
+    /// flake, pinned:** a case that ends the moment its write's toast lands
+    /// still has that write's re-read queued, and once the case's models are
+    /// closed (``closeEverything()``, which every `tearDown` runs) nothing
+    /// more may reach the stub. Before the cure that re-read went out after
+    /// the case had returned and was recorded in the next case's log.
+    func testACaseThatEndsOnAWriteLeavesNothingBehindOnceClosed() async {
+        let house = House()
+        let (model, _, _, _) = rig(house: house)
+        await loaded(model)
+        let kitchen = model.rooms.first { $0.roomID == "kitchen" } ?? RoomsSatellite(roomID: "kitchen", status: "online")
+        model.cancelTimer(kitchen, RoomsTimer(id: 1, label: "pasta", expiresAt: "2026-11-02T19:35:00Z"))
+        // The same turn that sets the toast queues `reads.timers.refresh()`,
+        // which is exactly where `testCancellingATimerThatHasAlreadyGoneIsNotAFailure`
+        // returns.
+        await settleUntil({ model.toast != nil }, "the DELETE")
+        let before = StubURLProtocol.requestCount
+        await closeEverything()
+        await nothingHappens()
+        await everythingLands()
+        if StubURLProtocol.requestCount != before {
+            printTheWholeLog("after closing: wanted \(before), got \(StubURLProtocol.requestCount)")
+        }
+        XCTAssertEqual(before, StubURLProtocol.requestCount, "a request left the phone after its case closed")
     }
 
     /// A push re-reads the roster, and the open room's timers and health —

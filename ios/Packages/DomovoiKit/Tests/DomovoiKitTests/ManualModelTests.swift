@@ -403,7 +403,18 @@ final class ManualModelTests: XCTestCase {
         house.stats.set(#"{"total_tracks":412}"#)
         house.sessions.set(["kitchen": "[]"])
         model.start()
-        await settleUntil({ model.roomHeard != nil }, "the sessions read")
+        // **Every read the checklist is drawn from**, not the sessions read
+        // alone: the document and the people and stats reads are independent
+        // requests, and on CI's slower runner (run 43669420249) the sessions
+        // answer landed first, so `checklist` was still `[]` (no document)
+        // and every line below compared against nil.
+        await settleUntil(
+            {
+                model.doc != nil && model.roomHeard != nil
+                    && model.live.signals.people != nil && model.live.signals.tracks != nil
+            },
+            "the document and every read the checklist uses"
+        )
 
         let lines = model.checklist
         XCTAssertEqual(
