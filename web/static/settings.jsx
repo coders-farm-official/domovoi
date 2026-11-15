@@ -3823,9 +3823,9 @@ const AboutCard = () => (
       </div>
       <div>
         Domovoi's code is MIT. The models, voices and wake words this server downloads have their
-        own licences; two defaults are not permissive: the wake word <code>hey_jarvis</code> (CC
-        BY-NC-SA 4.0, non-commercial) and the answer model <code>llama3.2:3b</code> (the Llama 3.2
-        Community License). Fine at home; the list says what each means for anyone passing them
+        own licences; two defaults are not permissive: the wake word <code>domovoi_v1</code> (CC
+        BY-NC-SA 4.0, non-commercial, like <code>hey_jarvis</code> that older rooms may still use)
+        and the answer model <code>llama3.2:3b</code> (the Llama 3.2 Community License). Fine at home; the list says what each means for anyone passing them
         on: <a href={LICENCES_DOC_URL} target="_blank" rel="noopener noreferrer"
                style={{ color: 'var(--brand-ink)' }}>licences of what Domovoi downloads</a>.
       </div>
