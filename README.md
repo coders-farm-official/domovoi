@@ -81,10 +81,24 @@ installed from the dashboard as a zip upload or a GitHub URL.
 > dashboard is the house spirit itself, minding your home from inside your
 > network — never someone else's cloud.
 
+## Install on Linux
+
+On a computer running Ubuntu 26.04 (other versions may work), open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
+```
+
+It asks whether the server will have internet after setup, its time zone, and whether to include AI chat,
+checks that it downloaded a signed release, installs everything, and ends with the address to open from your phone.
+To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
+On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md).
+
 ---
 
 ## Table of contents
 
+- [Install on Linux](#install-on-linux)
 - [Status and roadmap](#status-and-roadmap)
 - [Who it's for](#who-its-for)
 - [First install](#first-install)
@@ -379,12 +393,14 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 
 Three ways in:
 
-- **Ubuntu 26.04, one script.** `scripts/linux/provision.sh` installs the
-  server, its services and the models in one unattended run, at the latest
-  release, and the server then follows the `stable` channel: releases only
+- **Ubuntu 26.04, one command:** [Install on Linux](#install-on-linux)
+  above. It checks the latest release and runs `scripts/linux/provision.sh`,
+  which installs the server, its services and the models in one run, and
+  the server then follows the `stable` channel: releases only
   ([Release channels](docs/LINUX_HOST.md#release-channels); before the
   first release, `main`):
-  [Or let the script do it](docs/LINUX_HOST.md#or-let-the-script-do-it).
+  [One command](docs/LINUX_HOST.md#one-command), or
+  [run the install script yourself](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
 - **Windows 11, the installer (preview).** `DomovoiSetup.exe` runs that
   same script inside a private WSL2 distro. It is unsigned; download it from
   the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest),

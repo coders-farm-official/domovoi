@@ -253,15 +253,76 @@ you're not using that.)
 
 ## Install
 
-### Or let the script do it
+### One command
+
+On a fresh Ubuntu 26.04 computer (x86_64; other Ubuntu versions may work,
+and it says so), open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
+```
+
+It asks two questions: **will this server have internet after setup**
+(yes always, sometimes, or no: [what each means](#will-your-domovoi-have-internet);
+you can change it later in Settings → Privacy → Internet), and its **time
+zone** (Enter keeps the one the computer already has). Then it downloads
+the latest release, checks it, shows what it is about to install and asks
+before it starts. The install itself is the script below, `provision.sh`,
+which asks one more question: whether to include AI chat. Expect half an
+hour or more, most of it downloads. At the end it prints the address to
+open from a phone or computer on your network, `http://<server>:6369`,
+and how to read the setup code to claim it with
+([SETUP_RUNBOOK.md, Step 3](SETUP_RUNBOOK.md#step-3--claim-admin-and-configure-for-your-hardware)).
+If it stops, run the same command again: finished steps are skipped.
+
+**How it checks the download, before running any of it.** The commit it
+downloaded must be the one GitHub names for the branch, and on `stable`
+it must be a signed release's: the release's
+`DomovoiSetup.manifest.json`, which names the release and its commit, must
+carry a valid signature by Domovoi's release key (the key the Windows
+programs pin, `windows/installer/release-signing.pub`, which the script
+carries too), and name that same commit. Only then does it run
+`provision.sh` from that download, telling it that exact commit, so the
+copy it installs into `/opt/domovoi` is the one that was checked. It never
+pipes anything else into a shell. Before the first release it installs
+`main` and follows it, as the script below does; `main` has no release
+signature, and it says so.
+
+**Read it before you run it.** Piping a script from the internet into
+`sudo bash` means trusting it unseen. To look first, download it, read it,
+then run your copy:
+
+```bash
+curl -fsSL -o install.sh https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh
+less install.sh
+sudo bash install.sh
+```
+
+**Without questions** (a script, or a session with no terminal), give the
+answers instead; `--yes` skips the questions and the "Start now?" check:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash -s -- --internet never --timezone Europe/Berlin --yes
+```
+
+Every `provision.sh` option below passes through (`--no-ai-models`,
+`--media music=/srv/music`, `--dry-run` to see what it would do, ...).
+`--channel main` installs the newest code instead of the latest release.
+`--ref`, `--track-branch` and `--repo-url` are not accepted: the one
+command installs only what it has checked, so for anything else run the
+script yourself, next. With no terminal to ask at and no `--internet`, it
+stops and says what to add.
+
+### Or run the install script yourself
 
 On a fresh Ubuntu 26.04 box, `scripts/linux/provision.sh` runs this
 section, [Make it an appliance](#make-it-an-appliance) and the
 [update unit](#one-time-upgrade-for-existing-installs) for you,
 unattended (run from a terminal, it asks one question first: whether to
-include AI chat, below). It is the same script the Windows installer runs inside its
-WSL distro. Read it, or ask it what it would do, before it changes
-anything:
+include AI chat, below). It is what the one command runs, and the same
+script the Windows installer runs inside its WSL distro. Run it by hand to
+read the whole of it first, or to install something the one command
+doesn't (`--ref`). Ask it what it would do before it changes anything:
 
 ```bash
 git clone https://github.com/coders-farm-official/domovoi /tmp/domovoi

@@ -16,8 +16,10 @@ learn the quirks of your particular mic board; the rest are repetition.
 **Three ways to bring up the server.** On a **Windows 11 PC**, run
 `DomovoiSetup.exe` ([the Windows installer](WINDOWS_HOST.md), a preview): it
 installs the whole server for you and ends with a setup code. On an
-**Ubuntu 26.04 box**, `scripts/linux/provision.sh` does Steps 1 and 2 in one
-unattended run ([LINUX_HOST.md, Or let the script do it](LINUX_HOST.md#or-let-the-script-do-it)).
+**Ubuntu 26.04 box**, one command does Steps 1 and 2 in one run
+([LINUX_HOST.md, One command](LINUX_HOST.md#one-command); it runs
+`scripts/linux/provision.sh`, which you can also
+[run yourself](LINUX_HOST.md#or-run-the-install-script-yourself)).
 Either way, skip to [Step 3](#step-3--claim-admin-and-configure-for-your-hardware):
 both already set the CPU values from [CPU_HOST.md](CPU_HOST.md), start the
 services at boot, and update from **Settings → System → About & updates**. Steps 1 and

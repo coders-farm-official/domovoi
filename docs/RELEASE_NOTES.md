@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — Install on Linux with one command
+
+- **What changed.** On Ubuntu 26.04 the server now installs with one command:
+  `curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash`.
+  It asks whether the server will have internet and its time zone, checks
+  what it downloaded (the commit GitHub names for `stable`, and that
+  release's manifest signed with the release key the Windows programs
+  pin), then runs `scripts/linux/provision.sh` from that copy at that exact
+  commit, which asks about AI chat as before. It ends with the address to
+  open and how to read the setup code. Answers can be given on the command
+  line instead (`... | sudo bash -s -- --internet never --timezone Europe/Berlin --yes`),
+  and every `provision.sh` option passes through. Before the first release
+  it installs `main`, unsigned, and says so; `--channel main` asks for
+  `main` on purpose.
+- **Nothing to do** on a server that is already installed, and
+  `provision.sh` itself is unchanged: its options, its output and the
+  Windows installer's use of it stay as they were. Cloning and running
+  `provision.sh` yourself still works
+  ([LINUX_HOST.md, Install](LINUX_HOST.md#install), which also shows how to
+  read the one-command script before running it). The section that
+  described it is now **Or run the install script yourself**; the old
+  `#or-let-the-script-do-it` link lands on the page without the jump.
+
 ## 1.3.0 (unreleased) — Setup puts the phone app on the server
 
 - **What changed.** First-run setup now downloads the Android app onto the
