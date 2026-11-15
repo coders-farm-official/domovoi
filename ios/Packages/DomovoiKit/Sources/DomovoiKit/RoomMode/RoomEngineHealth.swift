@@ -118,7 +118,8 @@ extension RoomEngine {
                 micBlocked: micBlocked,
                 wakeLoopAgeS: s.lastFrameAt > 0 ? Double(now - s.lastFrameAt) / 1000 : nil,
                 threads: device.threads(),
-                plugged: battery.plugged
+                plugged: battery.plugged,
+                wakeWord: s.loadedWake
             )
         }
     }

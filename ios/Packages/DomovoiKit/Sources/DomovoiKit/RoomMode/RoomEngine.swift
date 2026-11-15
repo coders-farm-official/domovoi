@@ -82,6 +82,10 @@ public final class RoomEngine: RoomEngineControl, @unchecked Sendable {
         var callTrack = false
         var callPeer: String?
         var wantModels: (gen: Int, files: RoomModelFiles)?
+        /// The wake word whose model the listening thread has loaded, for the
+        /// health frame's `wake_word` (nil until one loads, or after a load
+        /// failed). `RoomEngine.kt` `loadedWake`.
+        var loadedWake: String?
         var modelsGen = 0
         var wakeWord = RoomWakeSettings.defaultWakeWord
         var wakeThreshold = RoomWakeSettings.defaultThreshold
