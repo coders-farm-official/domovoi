@@ -330,7 +330,13 @@ final class ListsModelTests: XCTestCase {
         // read 404s.
         house.goneDetail.set([2])
         container.stateEventArrived(StateEvent(type: "lists.changed", frame: "{}"))
-        await settleUntil({ model.selectedID == 1 && model.openDetail?.list.id == 1 }, "the drop back")
+        // Wait for all three: the drop back and the lists re-read are separate
+        // requests, and on a slow runner the re-read can reach the stub after
+        // the drop back has settled (CI run 43769295693).
+        await settleUntil({
+            model.selectedID == 1 && model.openDetail?.list.id == 1
+                && house.count("GET /api/lists") >= 3
+        }, "the drop back and the lists read again after the 404")
         XCTAssertNil(selection.read(server: server), "the gone list is still this phone's choice")
         XCTAssertGreaterThanOrEqual(house.count("GET /api/lists"), 3, "the lists were not read again after the 404")
     }
