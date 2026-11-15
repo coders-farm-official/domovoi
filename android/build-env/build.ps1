@@ -31,8 +31,9 @@ The commit to build (default HEAD).
 The folder the APKs go to.
 
 .PARAMETER Abis
-Each item is one Gradle run (default 'arm64-v8a,armeabi-v7a', a release's
-two APKs); see build-apks.sh.
+The ABIs, each built alone in its own Gradle run, as F-Droid builds them
+(default arm64-v8a and armeabi-v7a, a release's two APKs); see
+build-apks.sh.
 
 .PARAMETER ImageOnly
 Only make sure the commit's image exists, and write its name (release.ps1

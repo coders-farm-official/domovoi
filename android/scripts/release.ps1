@@ -423,7 +423,7 @@ if (-not $SkipBuild) {
     if ($useContainer) {
         # The reproducible build: commit $commit, clean, in the pinned image.
         Say "building the release APKs ($($Abis -join ', ')) in the pinned Linux image (android\build-env)..."
-        & $buildEnv -Commit $commit -Abis @($Abis -join ',')
+        & $buildEnv -Commit $commit -Abis $Abis
         if ($LASTEXITCODE -ne 0) { Die 'the build failed' }
     } else {
         $why = if ($NoContainer) { '-NoContainer' } else { 'Docker is not running (docker info fails, or no Linux engine)' }

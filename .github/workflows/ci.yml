@@ -374,8 +374,9 @@ jobs:
   #      the checkout at /build/domovoi.
   #   b  Pacific/Kiritimati (UTC+14), tr_TR.UTF-8 (dotted/dotless i), umask
   #      077, two cores, Ubuntu's OpenJDK 21 instead of Temurin, the checkout
-  #      at /tmp/x/y/src; and each ABI built alone too, as F-Droid builds
-  #      them (one build per versionCode).
+  #      at /tmp/x/y/src.
+  # Each leg builds each ABI alone, as F-Droid does and as the release does
+  # (build-apks.sh).
   # Each leg has a fresh Gradle home and no build cache. No secrets: these
   # APKs are unsigned and stay CI artifacts.
   android-repro-build:
@@ -420,8 +421,11 @@ jobs:
               -e JAVA_HOME="$jdk" -e PATH="$jdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
               -v "$PWD/src-b:/tmp/x/y/src" -v "$PWD/out:/out" \
               domovoi-android-build-env \
-              bash -c 'umask 077; exec bash /tmp/x/y/src/android/build-env/build-apks.sh /tmp/x/y/src /out arm64-v8a,armeabi-v7a arm64-v8a armeabi-v7a'
+              bash -c 'umask 077; exec bash /tmp/x/y/src/android/build-env/build-apks.sh /tmp/x/y/src /out'
           fi
+          # The container wrote as root (leg b with umask 077): the runner's
+          # user uploads them.
+          sudo chown -R "$(id -u):$(id -g)" out
           {
             echo "### Unsigned release APKs, leg $LEG"
             echo '```'
@@ -454,27 +458,26 @@ jobs:
           : >"$RUNNER_TEMP/pairs.txt"
           {
             echo "### Reproducible build: leg a against leg b"
-            echo '| APK | leg b build | same |'
+            echo '| APK | SHA-256 | same |'
             echo '|---|---|---|'
           } >>"$GITHUB_STEP_SUMMARY"
           for abi in arm64-v8a armeabi-v7a; do
             f="app-$abi-release-unsigned.apk"
-            for b in "arm64-v8a+armeabi-v7a" "$abi"; do
-              left="android-repro-a/$f"; right="android-repro-b/$b/$f"
-              if [ -f "$left" ] && [ -f "$right" ] && cmp -s "$left" "$right"; then
-                echo "| $f | $b | yes |" >>"$GITHUB_STEP_SUMMARY"
-              else
-                echo "| $f | $b | **NO** |" >>"$GITHUB_STEP_SUMMARY"
-                echo "::error::$f differs between leg a and leg b ($b)"
-                echo "$left $right" >>"$RUNNER_TEMP/pairs.txt"
-                bad=1
-              fi
-            done
+            left="android-repro-a/$f"; right="android-repro-b/$f"
+            if [ -f "$left" ] && [ -f "$right" ] && cmp -s "$left" "$right"; then
+              echo "| $f | \`$(sha256sum "$left" | cut -c1-64)\` | yes |" >>"$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $f | | **NO** |" >>"$GITHUB_STEP_SUMMARY"
+              echo "::error::$f differs between leg a and leg b"
+              echo "$left $right" >>"$RUNNER_TEMP/pairs.txt"
+              bad=1
+            fi
+            if ! cmp -s "android-repro-a/mapping-$abi.txt" "android-repro-b/mapping-$abi.txt"; then
+              echo "::warning::R8's mapping-$abi.txt differs between the legs (it is not in the APK)"
+            fi
           done
-          if cmp -s android-repro-a/mapping.txt "android-repro-b/arm64-v8a+armeabi-v7a/mapping.txt"; then
-            echo "R8's mapping.txt is the same too." >>"$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::R8's mapping.txt differs between the legs (not in the APK)"
+          if cmp -s android-repro-a/mapping-arm64-v8a.txt android-repro-a/mapping-armeabi-v7a.txt; then
+            echo "R8's mapping is the same for both ABIs." >>"$GITHUB_STEP_SUMMARY"
           fi
           echo "bad=$bad" >>"$GITHUB_OUTPUT"
       - name: What differs (zip entries, then diffoscope)

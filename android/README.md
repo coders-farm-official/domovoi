@@ -327,10 +327,12 @@ APKs are built from `app-<versionName>`, and that is what F-Droid builds.
 **CI checks it** on every change to the app (`.github/workflows/ci.yml`,
 `android-repro-build` and `android-repro-compare`): two builds in the
 image, one with its defaults and one with another time zone, locale,
-umask, core count, JDK and checkout path (and each ABI built alone, as
-F-Droid builds them), must give byte-identical unsigned APKs; when they
-don't, the job fails with the differing zip entries and a diffoscope
-report as an artifact. `.github/workflows/android-release-verify.yml`
+umask, core count, JDK and checkout path, must give byte-identical
+unsigned APKs; when they don't, the job fails with the differing zip
+entries and a diffoscope report as an artifact. Each ABI is built alone, in
+its own Gradle run, as F-Droid builds them (one build per versionCode), by
+CI and by the release alike: one run for both ABIs gives an arm64-v8a APK
+whose manifest records other source line numbers. `.github/workflows/android-release-verify.yml`
 (weekly, and by hand) checks the release `android/release.json` names: its
 published APKs against an unsigned build of its commit, with `apksigcopier
 compare`, as F-Droid does. It checks nothing until the first release built

@@ -2,14 +2,19 @@
 # Runs INSIDE the build-env image (android/build-env/Dockerfile), never on a
 # host: builds the app's unsigned release APKs from the checkout SRC into OUT.
 #
-#   build-apks.sh SRC OUT [ABIS ...]
+#   build-apks.sh SRC OUT [ABI ...]
 #
-# Each ABIS argument is one Gradle run, from clean, with a fresh output:
-#   arm64-v8a,armeabi-v7a   what a release publishes (the default): one APK per ABI
-#   arm64-v8a               one ABI alone, how F-Droid builds each of them
-# With one ABIS argument the APKs land in OUT itself; with several, each run's
-# in OUT/<abis with + for ,>/. Beside them: mapping.txt (R8's, for stack
-# traces) and BUILD-ENV.txt (what this image is, /etc/domovoi-build-env.txt).
+# Each ABI is its own Gradle run, from clean (default: arm64-v8a, then
+# armeabi-v7a, a release's two APKs), with -Pdomovoi.apkPerAbi
+# -Pdomovoi.abis=<that ABI>: exactly how F-Droid builds each of them, one
+# build per versionCode. One run for both ABIs would not do: the manifest
+# AGP merges for several ABIs is one line longer, so the arm64-v8a APK's
+# binary manifest records other source line numbers than the one built
+# alone (CI's first double build, 2026-11-14).
+#
+# Into OUT: app-<abi>-release-unsigned.apk for each, mapping-<abi>.txt (R8's,
+# for stack traces), mapping.txt (the first ABI's) and BUILD-ENV.txt (what
+# this image is, /etc/domovoi-build-env.txt).
 #
 # The environment decides nothing about the output: that is what CI's two
 # builds check (.github/workflows/ci.yml, android-repro-build), one with the
@@ -19,10 +24,10 @@
 # used.
 set -euo pipefail
 
-src=${1:?usage: build-apks.sh SRC OUT [ABIS ...]}
-out=${2:?usage: build-apks.sh SRC OUT [ABIS ...]}
+src=${1:?usage: build-apks.sh SRC OUT [ABI ...]}
+out=${2:?usage: build-apks.sh SRC OUT [ABI ...]}
 shift 2
-[ $# -gt 0 ] || set -- arm64-v8a,armeabi-v7a
+[ $# -gt 0 ] || set -- arm64-v8a armeabi-v7a
 
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$(mktemp -d /tmp/gradle-home.XXXXXX)}"
 [ -f "$src/android/gradlew" ] || { echo "build-apks: $src is not a checkout of the repo" >&2; exit 2; }
@@ -35,17 +40,17 @@ echo "TZ=${TZ:-} LANG=${LANG:-} LC_ALL=${LC_ALL:-} umask $(umask) cpus $(nproc)"
 echo "source: $src at $(git -C "$src" rev-parse HEAD 2>/dev/null || echo '(no git)')"
 
 cd "$src/android"
-several=0; [ $# -gt 1 ] && several=1
-for abis in "$@"; do
-  dest="$out"
-  [ "$several" = 0 ] || dest="$out/${abis//,/+}"
-  echo "== :app:assembleRelease, ABIs $abis"
+first=""
+for abi in "$@"; do
+  case "$abi" in *,*) echo "build-apks: one ABI per run, not $abi" >&2; exit 2 ;; esac
+  echo "== :app:assembleRelease, ABI $abi"
   bash ./gradlew --no-daemon --no-build-cache --no-configuration-cache --console=plain --warning-mode=summary \
-    clean :app:assembleRelease -Pdomovoi.apkPerAbi "-Pdomovoi.abis=$abis"
-  mkdir -p "$dest"
-  cp app/build/outputs/apk/release/*-release-unsigned.apk "$dest/"
-  cp app/build/outputs/mapping/release/mapping.txt "$dest/"
-  (cd "$dest" && sha256sum -- *.apk)
+    clean :app:assembleRelease -Pdomovoi.apkPerAbi "-Pdomovoi.abis=$abi"
+  cp "app/build/outputs/apk/release/app-$abi-release-unsigned.apk" "$out/"
+  cp app/build/outputs/mapping/release/mapping.txt "$out/mapping-$abi.txt"
+  [ -n "$first" ] || first="$abi"
+  sha256sum -- "$out/app-$abi-release-unsigned.apk"
 done
+cp "$out/mapping-$first.txt" "$out/mapping.txt"
 cp /etc/domovoi-build-env.txt "$out/BUILD-ENV.txt"
 echo "== done"

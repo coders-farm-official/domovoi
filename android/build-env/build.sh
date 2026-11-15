@@ -7,7 +7,7 @@
 #
 #   bash android/build-env/build.sh                    HEAD, both release ABIs
 #   bash android/build-env/build.sh --commit SHA       another commit
-#   bash android/build-env/build.sh --out DIR [ABIS ...]
+#   bash android/build-env/build.sh --out DIR [ABI ...]   (each ABI its own Gradle run)
 #   bash android/build-env/build.sh --image-only       only make sure the image exists;
 #                                                      print its name
 #

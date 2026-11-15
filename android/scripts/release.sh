@@ -333,7 +333,7 @@ if [ "$build" = 1 ]; then
   if [ "$have_docker" = 1 ] && [ "$container" = 1 ]; then
     # The reproducible build: this commit, clean, in the pinned image.
     say "building the release APKs (${ABIS[*]}) in the pinned Linux image (android/build-env)…"
-    bash "$build_env" --commit "$commit" "$(IFS=,; echo "${ABIS[*]}")" || die "the build failed"
+    bash "$build_env" --commit "$commit" "${ABIS[@]}" || die "the build failed"
   else
     why="Docker is not running (docker info fails, or no Linux engine)"; [ "$container" = 1 ] || why="--no-container"
     echo "release: WARNING: $why, so these APKs are built with ./gradlew here, NOT in the pinned Linux image. They will not match CI's or F-Droid's build of this commit (not reproducible). Start Docker and run again unless you mean it." >&2
