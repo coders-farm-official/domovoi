@@ -146,6 +146,30 @@ public enum PeopleStrings {
     public static let namesakeFixIsOnTheDashboard =
         "If they are different people, rename one of them on the dashboard."
 
+    // MARK: - rooms that know this voice (1.3.0)
+
+    /// `VOICE_ROOMS_LABEL` (`PeopleModels.kt:114`).
+    public static let voiceRoomsLabel = "rooms that know this voice"
+
+    /// `VOICE_ROOM_NOT_YET` (`PeopleModels.kt:115`): what a room's chip adds
+    /// when it has no sample of the voice. U+00B7, as everywhere else here.
+    public static let voiceRoomNotYet = " \u{00B7} not yet"
+
+    /// `"known/total"`, e.g. `"2/3"` (`voiceRoomsCount`, `PeopleModels.kt:148`).
+    public static func voiceRoomsCount(known: Int, total: Int) -> String { "\(known)/\(total)" }
+
+    /// How to teach the rooms marked not yet (`voiceRoomsHint`,
+    /// `PeopleModels.kt:155-161`). `who` and `said` are already the trimmed
+    /// name or its stand-in (`they`, `…`); see ``PersonVoiceRooms/hint(name:rooms:)``.
+    public static func voiceRoomsHint(who: String, said: String) -> String {
+        "Rooms recognize a voice best once they have heard it themselves. In each room "
+            + "marked \u{201C}not yet\u{201D}, \(who) can say \u{201C}my name is \(said)\u{201D} and answer yes."
+    }
+
+    /// The stand-ins for a blank name (`PeopleModels.kt:157-158`).
+    public static let voiceRoomsWhoUnnamed = "they"
+    public static let voiceRoomsSaidUnnamed = "\u{2026}"
+
     // MARK: - the memory tab
 
     /// `PersonTabs.kt:163`.
