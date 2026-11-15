@@ -1828,7 +1828,25 @@ class DocWriteRequest(BaseModel):
 
 # Elements that are content even with no text in them.
 _CONTENT_TAGS = re.compile(r"<\s*(img|figure|table|hr|video|audio|svg|object|embed|iframe)\b", re.I)
-_TAGS = re.compile(r"<[^>]*>")
+
+
+def _strip_tags(html: str) -> str:
+    """``html`` with each tag replaced by a space: exactly
+    ``re.sub(r"<[^>]*>", " ", html)``, in one pass. The pattern is
+    quadratic: from every "<" it reads on to the next ">", so 32 MB of "<"
+    with no ">" (what a save may carry) held the web process for hours
+    (CodeQL py/polynomial-redos, 2026-11)."""
+    out: list[str] = []
+    done = 0
+    while (start := html.find("<", done)) >= 0:
+        end = html.find(">", start + 1)
+        if end < 0:
+            break  # no ">" after this "<", so none after any later one
+        out.append(html[done:start])
+        out.append(" ")
+        done = end + 1
+    out.append(html[done:])
+    return "".join(out)
 
 
 def _blank_html(html: str) -> bool:
@@ -1838,7 +1856,7 @@ def _blank_html(html: str) -> bool:
 
     if _CONTENT_TAGS.search(html or ""):
         return False
-    text = htmllib.unescape(_TAGS.sub(" ", html or ""))
+    text = htmllib.unescape(_strip_tags(html or ""))
     return not text.replace("\u00a0", " ").replace("\u200b", "").strip()
 
 

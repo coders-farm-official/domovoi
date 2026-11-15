@@ -140,11 +140,15 @@ _ORDINAL_RE = re.compile(
     r"(?: one| song| track| album| artist| band)?(?:,? please)?$"
     r"|^(?:number|option) (one|two|three|1|2|3)(?:,? please)?$"
 )
-# Said after a yes-word: nothing that changes the answer.
+# Said after a yes-word: nothing that changes the answer. Each phrase must
+# be readable ONE way: "sure thing" is "sure" then "thing", never also a
+# phrase of its own, or a run of them ("sure thing sure thing ... x") has
+# 2^n readings to try before it fails (CodeQL py/redos, 2026-11: forty of
+# them held the core for days). test_hostile_input_time.py times it.
 _ACCEPT_TAIL_RE = re.compile(
     r"^(?:(?:please|thanks|thank you(?: very much| so much)?|cheers|go ahead|please do|do it"
     r"|that's it|that's the one|that one|exactly|correct|right|that's right|i did|i do"
-    r"|yes|yeah|yep|yup|sure|sure thing|thing|of course|definitely|absolutely|ok|okay"
+    r"|yes|yeah|yep|yup|sure|thing|of course|definitely|absolutely|ok|okay"
     r"|sir|ma'am|mate|buddy"
     r"|(?:play|put on) (?:it|that|that one|this|this one|them|those))"
     r"(?:[,.!]?\s+|$))+$"

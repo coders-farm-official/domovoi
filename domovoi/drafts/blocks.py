@@ -19,7 +19,6 @@ _BULLET = re.compile(r"^\s*(?:[-*+]|\u2022)\s+(.*)$")
 _WHOLE_BOLD = re.compile(r"^(?:\*\*|__)(.+?)(?:\*\*|__)$")
 _RULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 _FENCE = re.compile(r"^\s*```")
-_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _BOLD = re.compile(r"(\*\*|__)(.+?)\1")
 _ITALIC = re.compile(r"(?<![A-Za-z0-9_*])([*_])(?![ \t])(.+?)(?<![ \t])\1(?![A-Za-z0-9_*])")
 _CODE = re.compile(r"`([^`]*)`")
@@ -46,9 +45,40 @@ def _xml_ok(c: int) -> bool:
     return (c in (0x9, 0xA, 0xD) or 0x20 <= c <= 0xD7FF or 0xE000 <= c <= 0xFFFD or 0x10000 <= c <= 0x10FFFF)
 
 
+def strip_links(text: str) -> str:
+    """``text`` with each ``[label](target)`` replaced by its label: exactly
+    ``re.sub(r"\\[([^\\]]*)\\]\\([^)]*\\)", r"\\1", text)``, in one pass.
+
+    The pattern itself is quadratic: from every "[" it reads on to the next
+    "]" (and that "]"'s "(" to the next ")"), so a line of "[" with no "]"
+    is read once per "[" — a 200,000-character draft took half a minute
+    (CodeQL py/polynomial-redos, 2026-11). Every "[" before the same "]"
+    shares that "]", so it is looked up once."""
+    out: list[str] = []
+    done = pos = 0  # copied up to ``done``; next "[" searched from ``pos``
+    close = paren = -1  # the "]" / ")" last found (each the first after where it was looked for)
+    while (start := text.find("[", pos)) >= 0:
+        if close < start:
+            close = text.find("]", start + 1)
+            if close < 0:
+                break  # no "]" after this "[", so none after any later one
+        if text.startswith("(", close + 1):
+            if paren < close + 2:
+                paren = text.find(")", close + 2)
+                if paren < 0:
+                    break  # no ")" after this "](", so none after any later one
+            out.append(text[done:start])
+            out.append(text[start + 1:close])
+            done = pos = paren + 1
+        else:
+            pos = start + 1
+    out.append(text[done:])
+    return "".join(out)
+
+
 def inline(text: str) -> str:
     """``text`` without markdown's inline marks, its spaces collapsed."""
-    s = _LINK.sub(r"\1", text)
+    s = strip_links(text)
     s = _CODE.sub(r"\1", s)
     for _ in range(2):
         s = _BOLD.sub(r"\2", s)
