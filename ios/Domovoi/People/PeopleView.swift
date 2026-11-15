@@ -211,6 +211,13 @@ struct PeopleView: View {
         PeopleScroll(embedded: embedded) {
             LazyVStack(alignment: .leading, spacing: 12) {
                 header(people)
+                // Voice ID's household notice, between the header and the
+                // list as Android draws it (`PeopleScreen.kt:132`, `:150`);
+                // nothing when there is nothing to say.
+                if let notice = people.voiceIdNotice {
+                    PeopleVoiceNoticeView(notice: notice, wash: notice.isOff ? .warn : .sunken)
+                        .accessibilityIdentifier("people.voiceIdNotice")
+                }
                 filterField(people)
                 rows(people)
                 PeopleDenylistCard(people: people)
