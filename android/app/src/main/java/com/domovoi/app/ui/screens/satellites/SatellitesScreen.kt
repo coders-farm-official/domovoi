@@ -164,6 +164,10 @@ fun SatellitesScreen(embedded: Boolean = false) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     BroadcastComposer(onlineCount)
                 }
+                // Groups (V060): named sets of rooms that play one shared queue.
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    MusicGroupsCard(sats)
+                }
                 // "Use this device as a room" (roommode/).
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     com.domovoi.app.roommode.RoomModeEntryCard()

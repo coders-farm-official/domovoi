@@ -3887,6 +3887,315 @@
         }
       }
     },
+    "/api/music/groups": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Groups",
+        "description": "The named groups (``groups``: id, name, rooms) and the shared queues\nplaying now (``shared``: id, name, host_room, rooms, group_id,\neverywhere).",
+        "operationId": "list_groups_api_music_groups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Create Group",
+        "description": "Make a named group of two or more rooms. 400 says why a name can't\nbe used, in words.",
+        "operationId": "create_group_api_music_groups_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/{group_id}": {
+      "patch": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Update Group",
+        "description": "Rename a group, or pick its rooms.",
+        "operationId": "update_group_api_music_groups__group_id__patch",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Delete Group",
+        "description": "Delete a named group (music playing in its rooms plays on).",
+        "operationId": "delete_group_api_music_groups__group_id__delete",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Start Shared",
+        "description": "Other rooms hear ``host_room``'s music: ``rooms``, a named group's\nconnected rooms (``group_id``) or every connected room\n(``everywhere``). 409 when nothing plays in ``host_room``.",
+        "operationId": "start_shared_api_music_groups_shared_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared/join": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Join Shared",
+        "description": "``room_id`` hears ``host_room``'s music.",
+        "operationId": "join_shared_api_music_groups_shared_join_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared/leave": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Leave Shared",
+        "description": "``room_id`` leaves its group and goes quiet; the others play on.",
+        "operationId": "leave_shared_api_music_groups_shared_leave_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/groups/shared/{share_id}/end": {
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "End Shared",
+        "description": "End a shared queue: the other rooms stop, the host plays on.",
+        "operationId": "end_shared_api_music_groups_shared__share_id__end_post",
+        "parameters": [
+          {
+            "name": "share_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Share Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/music/library/{track_id}/lyrics": {
       "get": {
         "tags": [
@@ -4868,7 +5177,7 @@
           "people"
         ],
         "summary": "List People",
-        "description": "All known speakers, sorted by most-recently-seen.\n\nEach row carries the count of voice-profile samples and the\npresence tier \u2014 same low/medium/high ladder\nVoiceProfileHandler uses to decide identity-prompt urgency.",
+        "description": "All known speakers, sorted by most-recently-seen.\n\nEach row carries the count of voice-profile samples (of the current\nspeaker model only: older ones are never used) and the presence tier \u2014\nsame low/medium/high ladder VoiceProfileHandler uses to decide\nidentity-prompt urgency \u2014 and ``voice_relearn``: their samples went\nwith the speaker model 1.3.0 replaced (V061) and they haven't said\n\"my name is \u2026\" since.",
         "operationId": "list_people_api_people_get",
         "responses": {
           "200": {
@@ -4881,6 +5190,28 @@
                   },
                   "type": "array",
                   "title": "Response List People Api People Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/people/voice-id": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "Voice Id Status",
+        "description": "Whether voice ID can recognize anyone on this server, for the\nPeople page's household notice: ``ready`` when the speaker model is on\ndisk (domovoi/clients/speaker_encoder.py), else ``problem`` says why in\nwords for the household (internet access off, a failed download, not\nfetched yet); ``relearn``: how many people lost their voice samples to\nthe 1.3.0 model change (V061) and haven't said \"my name is \u2026\" since.\n\nThe core fetches the model; this process only looks at the disk (both\nread the same voice-models directory), so a failed download's own\nreason shows in the core's log, and here as \"not on this server yet\".",
+        "operationId": "voice_id_status_api_people_voice_id_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceIdStatus"
                 }
               }
             }
@@ -5292,7 +5623,7 @@
           "people"
         ],
         "summary": "List Voice Rooms",
-        "description": "Every room of the house (its satellites) and whether it has a sample\nof this person's voice, so the household can see where Domovoi doesn't\nknow them yet: a far-off room recognizes a voice it has heard there far\nbetter than one heard only elsewhere. The People page says how to fix a\ngap \u2014 \"my name is \u2026\" said in that room adds one. Rooms that have a\nsample but no satellite any more are listed too. Satellite samples\nonly; a phone's are never used by a room.",
+        "description": "Every room of the house (its satellites) and whether it has a sample\nof this person's voice, so the household can see where Domovoi doesn't\nknow them yet: a far-off room recognizes a voice it has heard there far\nbetter than one heard only elsewhere. The People page says how to fix a\ngap \u2014 \"my name is \u2026\" said in that room adds one. Rooms that have a\nsample but no satellite any more are listed too. Satellite samples of\nthe current speaker model only; a phone's are never used by a room.",
         "operationId": "list_voice_rooms_api_people__person_id__voice_rooms_get",
         "parameters": [
           {
@@ -24478,6 +24809,66 @@
         "type": "object",
         "title": "GreetingPatch"
       },
+      "GroupBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "minItems": 2,
+            "title": "Rooms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "rooms"
+        ],
+        "title": "GroupBody"
+      },
+      "GroupPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "rooms": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 64,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rooms"
+          }
+        },
+        "type": "object",
+        "title": "GroupPatch"
+      },
       "GuestBan": {
         "properties": {
           "id": {
@@ -25043,6 +25434,40 @@
         ],
         "title": "ImportResponse"
       },
+      "JoinBody": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Room Id"
+          },
+          "host_room": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Host Room"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id",
+          "host_room"
+        ],
+        "title": "JoinBody"
+      },
       "KeepBothBody": {
         "properties": {
           "member_ids": {
@@ -25107,6 +25532,21 @@
         },
         "type": "object",
         "title": "LanNameRequest"
+      },
+      "LeaveBody": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Room Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id"
+        ],
+        "title": "LeaveBody"
       },
       "LibraryAlias": {
         "properties": {
@@ -27028,6 +27468,16 @@
               }
             ],
             "title": "Added By"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NowPlayingGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -27036,6 +27486,60 @@
           "state"
         ],
         "title": "NowPlaying"
+      },
+      "NowPlayingGroup": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "host_room": {
+            "type": "string",
+            "title": "Host Room"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rooms"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "everywhere": {
+            "type": "boolean",
+            "title": "Everywhere",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "host_room",
+          "rooms"
+        ],
+        "title": "NowPlayingGroup",
+        "description": "The shared queue a room hears (a group, V060): its player is the\nhost's (``host_room``), heard in every room of ``rooms`` (host first).\n``name`` is the named group's (\"Upstairs\"), \"Everywhere\", or null for\nrooms joined one by one. ``id`` is the shared queue's (for\n``POST /api/music/groups/shared/{id}/end``)."
       },
       "NowPlayingSong": {
         "properties": {
@@ -27403,6 +27907,11 @@
             "type": "integer",
             "title": "Device Count",
             "default": 0
+          },
+          "voice_relearn": {
+            "type": "boolean",
+            "title": "Voice Relearn",
+            "default": false
           }
         },
         "type": "object",
@@ -29537,6 +30046,18 @@
               }
             ],
             "title": "Up Next"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
           }
         },
         "type": "object",
@@ -29684,6 +30205,76 @@
         "type": "object",
         "title": "RoomVoiceRequest",
         "description": "The room drawer's voice picker (POST /api/satellites/{room}/voice)."
+      },
+      "RoomWakeWord": {
+        "properties": {
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "device",
+              "assigned",
+              "chosen",
+              "pending",
+              "unknown"
+            ],
+            "title": "Source",
+            "default": "unknown"
+          },
+          "pending_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Slug"
+          },
+          "pending_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Name"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "RoomWakeWord",
+        "description": "Which wake word a room answers to (domovoi/wake_default.py\n``room_word``). ``source``: ``device`` \u2014 the model the room device\nreported loading (its health sample, else its hello); ``assigned`` /\n``chosen`` \u2014 no report, the household default the server gave it / the\nword an admin pushed; ``pending`` \u2014 it is waiting for this word's model;\n``unknown`` \u2014 nothing says (a room older than the household default, on\nsoftware that doesn't report its word): ``name`` is null and ``text``\nsays so. ``pending_*``: the word a room that reports its own is still\nwaiting to be given. ``text``: the line the dashboard shows after\n\"Wakes on:\"."
       },
       "SampleSources": {
         "properties": {
@@ -29994,6 +30585,16 @@
               }
             ],
             "title": "Wake Phrase"
+          },
+          "wakes_on": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomWakeWord"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "battery": {
             "anyOf": [
@@ -30589,6 +31190,58 @@
           "password"
         ],
         "title": "SetupRequest"
+      },
+      "ShareBody": {
+        "properties": {
+          "host_room": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Host Room"
+          },
+          "rooms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Rooms"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "everywhere": {
+            "type": "boolean",
+            "title": "Everywhere",
+            "default": false
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "host_room"
+        ],
+        "title": "ShareBody"
       },
       "SheetCell": {
         "properties": {
@@ -31936,6 +32589,36 @@
         ],
         "title": "Voice"
       },
+      "VoiceIdStatus": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "relearn": {
+            "type": "integer",
+            "title": "Relearn",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready"
+        ],
+        "title": "VoiceIdStatus",
+        "description": "``GET /api/people/voice-id``: whether voice ID can recognize anyone\non this server. ``problem``: why not, in words for the household\n(None when ``ready``). ``relearn``: how many people need to say \"my\nname is \u2026\" again after the 1.3.0 speaker-model change."
+      },
       "VoiceInfo": {
         "properties": {
           "id": {
@@ -32246,11 +32929,6 @@
             "type": "boolean",
             "title": "Current",
             "default": false
-          },
-          "legacy": {
-            "type": "boolean",
-            "title": "Legacy",
-            "default": false
           }
         },
         "type": "object",
@@ -32258,7 +32936,7 @@
           "room_id"
         ],
         "title": "VoiceRoom",
-        "description": "Whether one room knows a person's voice (``GET /api/people/{id}/\nvoice-rooms``). A room recognizes a voice best from a sample heard in\nthat room (domovoi/voice_identifier.py, ``room_person_scores``).\n``current``: a satellite sample from this room in the current embedding\n(1.3.0); ``legacy``: one from before 1.3.0 only, which is used until a\ncurrent sample of the person exists."
+        "description": "Whether one room knows a person's voice (``GET /api/people/{id}/\nvoice-rooms``). A room recognizes a voice best from a sample heard in\nthat room (domovoi/voice_identifier.py, ``room_person_scores``).\n``current``: a satellite sample from this room, of the current speaker\nmodel."
       },
       "VoiceSettings": {
         "properties": {

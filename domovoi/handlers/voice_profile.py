@@ -100,7 +100,11 @@ from datetime import datetime, timezone
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.clients.voice_embedder import EMBEDDING_DIM
+from domovoi.clients.voice_embedder import (
+    EMBEDDING_DIM,
+    UNAVAILABLE_SPOKEN,
+    voice_id_unavailable,
+)
 from domovoi.config import settings
 from domovoi.db.repositories import (
     PeopleRepository,
@@ -1061,13 +1065,21 @@ class VoiceProfileHandler(Handler):
           enrolling.
         * No embedding (sub-second clip, embedder unavailable) — same
           deal: acknowledge without enrolling. The user can re-introduce
-          on the next utterance once a usable embedding lands.
+          on the next utterance once a usable embedding lands; when the
+          speaker model isn't on the server at all, saying it again won't
+          help, and the answer says so instead.
         """
         if (
             ctx.session_id is None
             or ctx.embedding_bytes is None
             or len(ctx.embedding_bytes) != EMBEDDING_DIM * 4
         ):
+            if ctx.session_id is not None and voice_id_unavailable():
+                return Response(
+                    text=f"Hi {name}, nice to meet you. {UNAVAILABLE_SPOKEN}",
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
             return Response(
                 text=(
                     f"Hi {name}, nice to meet you. I couldn't quite save "
@@ -2003,8 +2015,18 @@ class VoiceProfileHandler(Handler):
                     "Your voice is close to two people I know, so I won't guess "
                     "which one you are. Tell me your name, and I'll learn your voice better."
                 )
+            elif voice_id_unavailable():
+                text = UNAVAILABLE_SPOKEN
             else:
                 text = "I don't recognize your voice yet."
+                if await self._relearn_pending(session):
+                    # 1.3.0's new speaker model can't use the voices the
+                    # old one learned (V061): a person known before is
+                    # unknown until they introduce themselves again.
+                    text += (
+                        " My voice recognition was upgraded, so if we've met before, "
+                        "say \"my name is\" and your name, and I'll learn your voice again."
+                    )
             return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
         people = PeopleRepository(session)
         try:
@@ -2025,6 +2047,15 @@ class VoiceProfileHandler(Handler):
             # can't tell which of the two that is.
             text += f" I know more than one {row[1]}, though. {_SORT_IT_OUT}"
         return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _relearn_pending(self, session: AsyncSession) -> bool:
+        try:
+            return await PeopleRepository(session).relearn_pending(
+                VoiceProfilesRepository.EMBEDDING_MODEL_TAG
+            ) > 0
+        except Exception as e:  # noqa: BLE001 — the plain answer stands
+            log.warning("whoami: reading who has to re-introduce failed: %s", e)
+            return False
 
     async def _forget(self, ctx: Context, session: AsyncSession) -> Response:
         if ctx.person_id is None:
@@ -2221,12 +2252,6 @@ class VoiceProfileHandler(Handler):
         repo = VoiceProfilesRepository(session)
         samples = await repo.person_samples(ctx.person_id, repo.EMBEDDING_MODEL_TAG)
         heard = ctx.embedding_bytes
-        if not samples:
-            # Nothing in the current embedding yet: a voice enrolled before
-            # 1.3.0 is held in its legacy samples, against the turn's legacy
-            # embedding (voice_identifier, "Two embeddings").
-            samples = await repo.person_samples(ctx.person_id, repo.LEGACY_MODEL_TAG)
-            heard = ctx.legacy_embedding_bytes
         if all(s.own for s in samples):
             return "person", []
         if heard is None or len(heard) != EMBEDDING_DIM * 4:
@@ -2298,6 +2323,18 @@ class VoiceProfileHandler(Handler):
             ctx.embedding_bytes is None
             or len(ctx.embedding_bytes) != EMBEDDING_DIM * 4
         ):
+            if voice_id_unavailable():
+                # Nothing is recognized or saved, so there is nothing to
+                # opt out of yet; saying it again wouldn't change that.
+                return Response(
+                    text=(
+                        "I can't recognize or save anyone's voice right now, so yours isn't "
+                        "saved. Once voice recognition works again, say it once more and I'll "
+                        "opt you out."
+                    ),
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
             return Response(
                 text=(
                     "I couldn't quite capture your voice this time — "

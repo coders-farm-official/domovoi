@@ -658,7 +658,63 @@
       "handler": "music",
       "path": "fast",
       "tags": ["action", "rooms"],
-      "note": "2026-10-14 music in another room: everywhere (answered one room at a time)"
+      "note": "2026-10-14 music in another room: everywhere; since 1.3.0 a shared queue every connected room hears (groups)"
+    },
+    {
+      "utterance": "play the jazz station",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups", "radio"],
+      "note": "1.3.0 groups radio bait: a group's name never takes it (no group may be called '... station'); it stays the play it was (the radio's tool on a live core with the radio plugin)"
+    },
+    {
+      "utterance": "play jazz upstairs",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups"],
+      "note": "1.3.0 groups: a named group said with no 'in' (the group path matches only when the house has a group of that name)"
+    },
+    {
+      "utterance": "play this in the office too",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups"],
+      "note": "1.3.0 groups: the office hears what plays here (before the place path would read 'the office too')"
+    },
+    {
+      "utterance": "share this with the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups"],
+      "note": "1.3.0 groups: share what plays here"
+    },
+    {
+      "utterance": "join the kitchen",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups"],
+      "note": "1.3.0 groups: this room hears the kitchen's music"
+    },
+    {
+      "utterance": "play the kitchen's music in here",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups"],
+      "note": "1.3.0 groups: join, said as a play"
+    },
+    {
+      "utterance": "leave the group",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups"],
+      "note": "1.3.0 groups: this room stops, the others play on"
+    },
+    {
+      "utterance": "which rooms are playing this",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms", "groups"],
+      "note": "1.3.0 groups: names the rooms sharing this queue"
     },
     {
       "utterance": "play in the garage",

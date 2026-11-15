@@ -26,6 +26,19 @@
 #            Windows Setup from the tag, signs it with the release key held
 #            only by an ssh-agent for that one step, publishes the release
 #            files and fast-forwards stable.
+#   sbom     no secrets, read-only, beside the wait for approval: the
+#            software bills of materials (scripts/release/sbom.py, CycloneDX):
+#            the server's Python packages, the dashboard's vendored browser
+#            libraries and, when the release carries the APKs, the app's
+#            libraries (Gradle's resolved release classpath). An artifact
+#            for the release job, whose finish-release attaches them beside
+#            the other files and lists them in SHA256SUMS.
+#   attest   no secrets, no checkout, after the release: GitHub's build
+#            provenance (actions/attest-build-provenance) for every file of
+#            the release, from the SHA256SUMS the release job made, once the
+#            release on GitHub holds exactly those files. The only job with
+#            id-token and attestations write; the signing job has neither.
+#            Checking one: SECURITY.md, "Verifying a release".
 #
 # The owner's one-time setup (the environment, its reviewers, its secrets):
 # docs/release/ACTIONS-SETUP.md. The release itself, and the local scripts
@@ -42,6 +55,12 @@
 # written into the workspace; the keystore is written to RUNNER_TEMP for
 # apksigner and deleted in the same step and again at the end, whatever
 # happened.
+#
+# The SBOMs and the provenance add three actions, pinned the same way:
+# upload-artifact (sbom) and download-artifact (release, a step that is
+# handed no secret; the SBOMs go to RUNNER_TEMP) carry the SBOMs, and
+# attest-build-provenance runs in attest alone, with the SHA256SUMS the
+# release job made as its only input.
 name: release
 
 on:
@@ -79,7 +98,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -143,11 +162,13 @@ jobs:
 
   release:
     name: sign and publish (approval)
-    needs: [plan, build-app]
+    needs: [plan, build-app, sbom]
     # build-app is skipped for a release that doesn't change the app; with
-    # !cancelled(), not always(), a cancelled run stops this job too.
+    # !cancelled(), not always(), a cancelled run stops this job too. The sbom
+    # check matters: !cancelled() would otherwise sign after a failed SBOM.
     if: >-
       !cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success'
+      && needs.sbom.result == 'success'
       && (needs.build-app.result == 'success' || needs.build-app.result == 'skipped')
     runs-on: windows-2025
     environment: release
@@ -160,11 +181,14 @@ jobs:
     env:
       TAG: ${{ needs.plan.outputs.tag }}
       DISPATCHED: ${{ github.sha }}
+    outputs:
+      # The SHA256SUMS finish-release published (base64): the attest job's subjects.
+      sums: ${{ steps.published.outputs.sums }}
     steps:
       - name: Check out without line-ending conversion
         run: git config --global core.autocrlf false
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -368,6 +392,13 @@ jobs:
             || { echo "::error::$FINISH_AT is more than android/release.json on the dispatched commit"; exit 1; }
           git checkout --quiet --detach "$FINISH_AT"
 
+      # The sbom job's SBOMs, outside the checkout (finish-release wants it
+      # clean); finish-release checks each names this release.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-sboms
+          path: ${{ runner.temp }}/sboms
+
       # ── always: the Windows Setup, signed by the key in an ssh-agent ────
       - name: Finish the release (finish-release, the key in ssh-agent only)
         env:
@@ -405,11 +436,22 @@ jobs:
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           # finish-release.sh's Python, named (the tool cache's, put on PATH above).
-          python scripts/release/finish_release.py --tag "$TAG" --signing-agent
+          python scripts/release/finish_release.py --tag "$TAG" --signing-agent \
+            --sbom-dir "$RUNNER_TEMP/sboms" --provenance
           {
             echo "### Released $TAG"
             echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
           } >>"$GITHUB_STEP_SUMMARY"
+
+      # What finish-release published, for the attest job (no secret in it:
+      # file names and their SHA-256).
+      - name: SHA256SUMS, for the provenance job
+        id: published
+        run: |
+          set -euo pipefail
+          sums="windows/build/release/$TAG/SHA256SUMS"
+          [ -s "$sums" ] || { echo "::error::finish-release left no $sums"; exit 1; }
+          echo "sums=$(base64 -w0 "$sums")" >>"$GITHUB_OUTPUT"
 
       - name: Clean up (whatever happened)
         if: always()
@@ -419,3 +461,133 @@ jobs:
           Remove-Item -Force -Path (Join-Path $env:RUNNER_TEMP 'release-askpass.sh*') -ErrorAction SilentlyContinue
           Get-Process ssh-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           exit 0
+
+  # The software bills of materials, made from the dispatched commit while
+  # the release waits for approval: no secrets, a read-only token, no
+  # cache. Standard library Python and Gradle's own API (no SBOM tool is
+  # downloaded); the app's only when this release carries the APKs.
+  sbom:
+    name: SBOMs (no secrets)
+    needs: plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: The server's and the web's SBOMs
+        run: |
+          mkdir -p "$RUNNER_TEMP/sboms"
+          python3 scripts/release/sbom.py server --tag "$TAG" --out "$RUNNER_TEMP/sboms/domovoi-server.cdx.json"
+          python3 scripts/release/sbom.py web --tag "$TAG" --out "$RUNNER_TEMP/sboms/domovoi-web.cdx.json"
+
+      - name: The app's SBOM (a release that carries the APKs)
+        if: needs.plan.outputs.path == 'app'
+        working-directory: android
+        run: |
+          set -euo pipefail
+          # The Gradle the wrapper downloads, held to Gradle's published
+          # SHA-256, as in the release job.
+          props=gradle/wrapper/gradle-wrapper.properties
+          grep -qF gradle-8.14.3-bin.zip "$props" \
+            || { echo "::error::the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 in release.yml"; exit 1; }
+          grep -qF distributionSha256Sum "$props" \
+            || echo 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' >>"$props"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          chmod +x gradlew
+          ./gradlew --no-daemon --no-configuration-cache --init-script ../scripts/release/sbom-android.init.gradle \
+            -Pdomovoi.sbomDeps="$RUNNER_TEMP/gradle-deps.json" :app:domovoiSbomDeps
+          python3 ../scripts/release/sbom.py android --tag "$TAG" --gradle-deps "$RUNNER_TEMP/gradle-deps.json" \
+            --out "$RUNNER_TEMP/sboms/domovoi-android.cdx.json"
+
+      - name: Summary
+        run: |
+          {
+            echo "### SBOMs for $TAG"
+            echo '```'
+            (cd "$RUNNER_TEMP/sboms" && sha256sum -- *.cdx.json)
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-sboms
+          path: ${{ runner.temp }}/sboms/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Build provenance for every file of the release: one attestation, signed
+  # through Sigstore with this run's identity (release.yml on main, this
+  # commit), naming each file by its SHA-256. No checkout, no secrets, no
+  # code from the repository runs here. The subjects are the SHA256SUMS the
+  # release job made (and SHA256SUMS itself), and only once the release on
+  # GitHub holds exactly those files with those digests. A user checks a
+  # file with `gh attestation verify <file> -R coders-farm-official/domovoi`
+  # (SECURITY.md, "Verifying a release").
+  attest:
+    name: provenance (no secrets)
+    needs: [plan, release]
+    # !cancelled() and the results named: a job skipped further up (the
+    # app's build, on a server-only release) must not skip this one.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.release.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read       # read the release back (gh release view / download)
+      id-token: write      # the OIDC token Sigstore signs the attestation for
+      attestations: write  # store the attestation on the repository
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      SUMS_B64: ${{ needs.release.outputs.sums }}
+    steps:
+      - name: The subjects, held to the release on GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/attest"
+          mkdir -p "$dir"
+          [ -n "$SUMS_B64" ] || { echo "::error::the release job handed on no SHA256SUMS"; exit 1; }
+          printf '%s' "$SUMS_B64" | base64 -d >"$dir/SHA256SUMS"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets >"$dir/release.json"
+          python3 - "$dir" <<'PY'
+          import hashlib, json, os, re, subprocess, sys
+          from pathlib import Path
+          d = Path(sys.argv[1])
+          sums = (d / "SHA256SUMS").read_bytes()
+          want = {}
+          for line in sums.decode("ascii").splitlines():
+              m = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+-]*)", line)
+              if not m:
+                  sys.exit(f"::error::a SHA256SUMS line this job doesn't take: {line!r}")
+              want[m.group(2)] = m.group(1)
+          for name in ("DomovoiSetup.exe", "domovoi-server.cdx.json", "domovoi-web.cdx.json"):
+              if name not in want:
+                  sys.exit(f"::error::SHA256SUMS names no {name}")
+          want["SHA256SUMS"] = hashlib.sha256(sums).hexdigest()
+          assets = {a["name"]: a for a in json.loads((d / "release.json").read_text())["assets"]}
+          if set(assets) != set(want):
+              sys.exit(f"::error::the release holds {sorted(assets)}, SHA256SUMS names {sorted(want)}")
+          for name, sha in want.items():
+              got = (assets[name].get("digest") or "").removeprefix("sha256:")
+              if not got:  # GitHub gave no digest: download it and hash it
+                  data = subprocess.run(["gh", "release", "download", os.environ["TAG"], "--repo",
+                                         os.environ["GITHUB_REPOSITORY"], "--pattern", name, "--output", "-"],
+                                        check=True, capture_output=True).stdout
+                  got = hashlib.sha256(data).hexdigest()
+              if got != sha:
+                  sys.exit(f"::error::{name} on the release is {got}, not the {sha} the release job made")
+          (d / "subjects.txt").write_text("".join(f"{sha}  {name}\n" for name, sha in sorted(want.items())), encoding="ascii")
+          print(f"{len(want)} files to attest:", ", ".join(sorted(want)))
+          PY
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/attest/subjects.txt

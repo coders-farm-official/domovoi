@@ -123,8 +123,10 @@ extension RoomEngine {
         l.gate = nil
         do {
             l.ears = try parts.ears.load(want.files)
+            shared.withLock { $0.loadedWake = want.files.wakeKey }
             update { $0.wakeReady = true }
         } catch {
+            shared.withLock { $0.loadedWake = nil }
             let why = (error as? OnnxModel.Failure)?.note ?? RoomIdentity.describe(error)
             update {
                 $0.wakeReady = false

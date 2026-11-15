@@ -1,0 +1,61 @@
+# Dependabot (owner decision 2026-11-15): weekly update pull requests for
+# the workflows' actions, the server's Python packages and the Android
+# app's Gradle dependencies. These bot pull requests are the one exception
+# to the repo's no-pull-requests rule; a person (or an agent the owner
+# asks) reviews and merges them.
+#
+# cooldown: a release is offered only once it is 14 days old, the same
+# rule the repo keeps for pinned actions and libraries. Updates of one
+# kind come grouped into a single pull request per ecosystem, so a week
+# brings at most a few. Security updates are not held by the cooldown.
+#
+# Major versions are never offered (ignore semver-major): Gradle 9, AGP 9,
+# OkHttp 5 and the like are migrations, done deliberately on a branch with
+# the full suite, not merged from a weekly bot PR. Python: the installs use
+# hash-pinned lock files our own tooling regenerates, which Dependabot
+# can't, so pip gets security alerts only (no version-update PRs). Gradle
+# bumps also need android/gradle/verification-metadata.xml regenerated
+# once that lands.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      python:
+        patterns: ["*"]
+    open-pull-requests-limit: 0 # security alerts only; see the top
+
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      android:
+        patterns: ["*"]
+    open-pull-requests-limit: 3

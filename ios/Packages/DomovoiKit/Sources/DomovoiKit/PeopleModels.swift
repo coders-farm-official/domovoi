@@ -46,6 +46,13 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
     /// Zero from a server older than claims.
     public let deviceCount: Int
 
+    /// Their voice samples went with the speaker model 1.3.0 replaced (V061)
+    /// and they have none of the current one, so no room names them by voice
+    /// until they say "my name is …" again (`voice_relearn`,
+    /// `PeopleModels.kt:50`; `people.py` `_row_to_person`). False when
+    /// missing or `null`, which is what an older server sends.
+    public let voiceRelearn: Bool
+
     public init(
         id: Int = 0,
         name: String = "",
@@ -55,7 +62,8 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         voiceProfileCount: Int = 0,
         presenceTier: String? = nil,
         namesakes: Int = 0,
-        deviceCount: Int = 0
+        deviceCount: Int = 0,
+        voiceRelearn: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -66,6 +74,7 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         self.presenceTier = presenceTier
         self.namesakes = namesakes
         self.deviceCount = deviceCount
+        self.voiceRelearn = voiceRelearn
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -75,6 +84,7 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         case voiceProfileCount = "voice_profile_count"
         case presenceTier = "presence_tier"
         case deviceCount = "device_count"
+        case voiceRelearn = "voice_relearn"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -88,6 +98,7 @@ public struct Person: Equatable, Sendable, Decodable, Identifiable {
         presenceTier = try values.decodeIfPresent(String.self, forKey: .presenceTier)
         namesakes = try values.decodeIfPresent(Int.self, forKey: .namesakes) ?? 0
         deviceCount = (try? values.decodeIfPresent(Int.self, forKey: .deviceCount)) ?? 0
+        voiceRelearn = (try? values.decodeIfPresent(Bool.self, forKey: .voiceRelearn)) ?? false
     }
 }
 
@@ -511,6 +522,133 @@ public func prettyPersonPref(_ value: Any) -> String {
     return String(decoding: json, as: UTF8.self)
 }
 
+// MARK: - rooms that know this voice (1.3.0)
+
+/// One room and whether it knows this person's voice (`VoiceRoom`,
+/// `PeopleModels.kt:106-121`; server `schemas.py` `VoiceRoom`).
+///
+/// `current` is a satellite sample of the current speaker model. Since V061
+/// that is the only kind that counts, and the server sends `current` alone.
+/// `legacy` is still read, and still counts, because a 1.3.0 build from
+/// before V061 (never released) sent `legacy: true` for a room whose only
+/// sample was pre-1.3.0, and on that server such a room did know the voice:
+/// calling it "not yet" there would be wrong. **Read-only**: a room never
+/// uses a phone's samples, so this screen records nothing.
+public struct PersonVoiceRoom: Equatable, Sendable, Identifiable {
+    public let roomID: String
+    public let current: Bool
+    public let legacy: Bool
+
+    public var id: String { roomID }
+
+    /// Either sample: the room knows the voice.
+    public var known: Bool { current || legacy }
+
+    public init(roomID: String, current: Bool = false, legacy: Bool = false) {
+        self.roomID = roomID
+        self.current = current
+        self.legacy = legacy
+    }
+}
+
+/// The section's rules (`PeopleModels.kt:117-161`).
+public enum PersonVoiceRooms {
+
+    /// The rows of a voice-rooms answer, in the server's order
+    /// (`parseVoiceRooms`, `PeopleModels.kt:119`).
+    ///
+    /// Anything that isn't a room is dropped: a row that is not an object, or
+    /// has no room name, or a blank one. A missing or `null` flag is false.
+    /// A flag that is neither a boolean nor null drops its row, which is what
+    /// Android's decoder does with it (the row fails to decode). An answer
+    /// that is not an array is no rooms.
+    public static func read(_ data: Data) -> [PersonVoiceRoom] {
+        guard
+            let any = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+            let rows = any as? [Any]
+        else { return [] }
+        return rows.compactMap { room($0) }
+    }
+
+    private static func room(_ row: Any) -> PersonVoiceRoom? {
+        guard
+            let object = row as? [String: Any],
+            let roomID = object["room_id"] as? String,
+            !roomID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let current = flag(object["current"]),
+            let legacy = flag(object["legacy"])
+        else { return nil }
+        return PersonVoiceRoom(roomID: roomID, current: current, legacy: legacy)
+    }
+
+    /// False for a missing or `null` flag, the boolean for a boolean, nil
+    /// (drop the row) for anything else. `CFBooleanGetTypeID`, not `as? Bool`:
+    /// see ``prettyPersonPref(_:)`` for the `1`-is-`true` trap.
+    private static func flag(_ value: Any?) -> Bool? {
+        guard let value, !(value is NSNull) else { return false }
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            return nil
+        }
+        return number.boolValue
+    }
+
+    /// Reads the rooms with `get` (`loadVoiceRooms`, `PeopleModels.kt:133`).
+    ///
+    /// A server from before 1.3.0 has no such route (404): no rooms, so the
+    /// section stays hidden and nothing is said. Any other failure is nil:
+    /// keep what is shown. It is a hint, so it never raises a toast.
+    public static func load(_ get: @Sendable () async throws -> Data) async -> [PersonVoiceRoom]? {
+        do {
+            return read(try await get())
+        } catch let error as DomovoiError {
+            return error.failure?.status == 404 ? [] : nil
+        } catch {
+            return nil
+        }
+    }
+
+    /// Whether the section shows at all (`showVoiceRooms`,
+    /// `PeopleModels.kt:152-156`): not when the house has no rooms, not while
+    /// voice ID can't run (``PeopleVoiceId/isOff(_:)``), and not while the
+    /// person has to introduce themselves again, which the profile's relearn
+    /// notice says instead.
+    public static func shows(_ rooms: [PersonVoiceRoom], person: Person, voiceId: VoiceIdStatus?) -> Bool {
+        !rooms.isEmpty && !person.voiceRelearn && !PeopleVoiceId.isOff(voiceId)
+    }
+
+    /// `"known/total"`, e.g. `"2/3"`.
+    public static func count(_ rooms: [PersonVoiceRoom]) -> String {
+        PeopleStrings.voiceRoomsCount(known: rooms.filter(\.known).count, total: rooms.count)
+    }
+
+    /// A room's chip: its name, plus `" · not yet"` when it has no sample
+    /// (`voiceRoomChip`, `PeopleModels.kt:151`).
+    public static func chip(_ room: PersonVoiceRoom) -> String {
+        room.roomID + (room.known ? "" : PeopleStrings.voiceRoomNotYet)
+    }
+
+    /// How to teach the missing rooms, or nil when every room knows the voice
+    /// (`voiceRoomsHint`, `PeopleModels.kt:155`).
+    public static func hint(name: String, rooms: [PersonVoiceRoom]) -> String? {
+        guard rooms.contains(where: { !$0.known }) else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return PeopleStrings.voiceRoomsHint(
+            who: trimmed.isEmpty ? PeopleStrings.voiceRoomsWhoUnnamed : trimmed,
+            said: trimmed.isEmpty ? PeopleStrings.voiceRoomsSaidUnnamed : trimmed
+        )
+    }
+}
+
+/// A voice-rooms answer and whom it is for: the server it was asked of and
+/// the person it was asked about, both captured before the request.
+/// ``PersonDetailModel/voiceRooms`` hands the rows out only while both still
+/// match ([[read-after-await-wrong-key]]).
+struct PersonVoiceRoomsAnswer: Equatable, Sendable {
+    let server: String
+    let personID: Int
+    let rooms: [PersonVoiceRoom]
+}
+
 // MARK: - the routes
 
 /// Every path this screen asks for, in one place, with the auth tier the
@@ -575,6 +713,17 @@ public enum PeoplePath {
     /// `people.py:679`. A **bare JSON object**; see ``PeoplePreferences``.
     public static func preferences(_ personID: Int) -> String {
         "/api/people/\(personID)/preferences"
+    }
+
+    /// `people.py:127` (V061) — `READ`. One ``VoiceIdStatus`` object. Before
+    /// V061 there is no such route: 404, or 422 from `/{person_id}`, which
+    /// takes `voice-id` for an id that isn't a number.
+    public static let voiceId = "/api/people/voice-id"
+
+    /// `people.py:438` (1.3.0) — `READ`. A bare array of ``PersonVoiceRoom``;
+    /// a server from before 1.3.0 answers 404.
+    public static func voiceRooms(_ personID: Int) -> String {
+        "/api/people/\(personID)/voice-rooms"
     }
 
     // ---- the bodies --------------------------------------------------------

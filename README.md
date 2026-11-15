@@ -334,9 +334,9 @@ dominated by the two Ollama models:
 | Ollama `llama3.2:3b` (Q&A) | ~2 GB |
 | Ollama `qwen3-vl:2b-instruct-q4_K_M` (pictures in chat, optional) | ~1.9 GB |
 | Whisper `large-v3` (STT, fp16) | ~1.5 GB |
-| Python env — mostly the NVIDIA cuBLAS/cuDNN wheels + torch | ~2.5–4 GB |
+| Python env — mostly the NVIDIA cuBLAS/cuDNN wheels | ~2–3.5 GB |
 | Docker images (Postgres, Flyway, per-room MPD) | ~1 GB |
-| Piper voice + wake-word model + sound cache | ~0.3 GB |
+| Piper voice + voice ID model + wake-word model + sound cache | ~0.3 GB |
 
 **On top of that** sits your own **music/podcast/audiobook library** (your
 files, any size) — so provision ~20 GB for Domovoi itself and add whatever
@@ -348,8 +348,8 @@ asks for 40 GB free on the system drive
 
 **Shrink it:** swap the tool model to `qwen2.5:7b` (~4.7 GB) to save ~4 GB —
 the biggest single win; use a smaller Whisper (`medium` ~0.8 GB, `small`
-~0.5 GB) at some accuracy cost; or skip the `voice-profile` extra (drops
-torch, loses speaker identification) to save up to ~2.5 GB.
+~0.5 GB) at some accuracy cost. (Voice ID costs a 25 MB model since 1.3.0;
+it no longer needs torch.)
 
 ### Will your Domovoi have internet?
 
@@ -401,8 +401,8 @@ cd domovoi                          # --branch stable for releases only, from v1
 # docs/LINUX_HOST.md#install. Add `dev` to the extras only to run the tests.
 pip install -e ".[real-clients,voice-profile]"
 pip install -e ".[cuda]"            # NVIDIA hosts only — CUDA runtime wheels
-pip install --no-deps -r requirements-no-deps.in   # faster-whisper, resemblyzer, without
-                                    # their declared deps (PyAV, librosa: the file says why)
+pip install --no-deps -r requirements-no-deps.in   # faster-whisper, without its
+                                    # declared deps (PyAV: the file says why)
 
 # One-shot bootstrap: starts Postgres, runs migrations (and the search
 # helper, when the internet question is answered Yes or Sometimes), then
@@ -720,6 +720,7 @@ Want to write one? Start at the
 | [Setup runbook](docs/SETUP_RUNBOOK.md) | Day-one bring-up in order — server, first satellite, fleet, verification gates |
 | [Will your Domovoi have internet?](docs/INTERNET.md) | The internet question: what Yes, Sometimes and No each switch, what's left to set up, and what to download before a server goes without |
 | [FAQ](docs/FAQ.md) | Quick answers — privacy, hardware, common "can it…?" questions |
+| [Screenshots](docs/screenshots/README.md) | The web dashboard page by page, from a demo house with made-up content |
 | [Glossary](docs/GLOSSARY.md) | The words we use (satellite, handler, capability, band…) |
 | [Architecture](docs/ARCHITECTURE.md) | How the system works, for the curious and the contributing |
 | [API reference](docs/API_REFERENCE.md) | HTTP + WebSocket endpoints on :6370 and :6369 |

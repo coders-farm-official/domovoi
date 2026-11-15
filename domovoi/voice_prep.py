@@ -4,13 +4,21 @@ A room's recording is not only the command. It starts with a little of the
 room before the person spoke and ends with the silence the satellite waited
 through to know they had finished (``listen.silence_timeout``, about a
 second), and a far-field mic hears a person 10–20 dB quieter than one they
-stand next to. Resemblyzer's encoder (domovoi/clients/speaker_encoder.py)
-feeds a *linear* power mel spectrogram to its network, so both reach the
-voice embedding: the quiet tail is averaged in as if it were voice, and the
-same person at two loudnesses gives two different vectors. Resemblyzer's own
-``preprocess_wav`` trims long silences and sets the level before it embeds;
-:func:`prepare` does the same with numpy alone (webrtcvad, which Resemblyzer
-uses, needs a compiler to install).
+stand next to. Both reach the voice embedding: the quiet tail is averaged
+in as if it were voice, and the same person at two loudnesses can give two
+different vectors. :func:`prepare` keeps the speech alone, at one level,
+with numpy (a 30 ms energy VAD).
+
+Written for Resemblyzer in 1.3.0's first builds, it was measured again for
+the ERes2Net model that replaced it (scripts/eval_voice_id.py --tune, step
+1): the whole recording separates voices a little better (equal error rate
+11.0 % against 15.2 % over the seven simulated rooms), but at the house's
+ceiling of 1 % wrong names in every room, embedding the speech alone names
+the speaker more often (24.2 % of commands against 20.5 %; trimming only
+the silent edges, 0.1 or 0.3 s kept, 17.9 % and 18.4 %), because the room
+that sets the ceiling, a TV talking under the command, needs a higher
+threshold for the untrimmed recordings. So :func:`for_embedding` is
+:func:`prepare`.
 
 It also measures how much of what was heard is the room rather than the
 person (:attr:`Prepared.snr_db`): music or a TV under a command colours the
@@ -28,7 +36,7 @@ import numpy as np
 
 SAMPLE_RATE = 16_000
 FRAME = 480                # 30 ms analysis frames
-TARGET_DBFS = -30.0        # Resemblyzer's audio_norm_target_dBFS
+TARGET_DBFS = -30.0        # the level the speech is set to (Resemblyzer's, kept)
 _FLOOR_PCT = 10            # the quietest tenth of a recording is "the room"
 _PEAK_PCT = 95
 _ABOVE_FLOOR_DB = 6.0      # speech: this far above the room...
@@ -119,3 +127,10 @@ def prepare(wav: np.ndarray) -> Prepared:
         gain = 10.0 ** ((TARGET_DBFS - 20.0 * np.log10(rms)) / 20.0)
         speech = np.clip(speech * gain, -1.0, 1.0).astype(np.float32)
     return Prepared(audio=speech, speech_sec=speech.size / SAMPLE_RATE, snr_db=snr)
+
+
+def for_embedding(wav: np.ndarray) -> Prepared:
+    """What voice ID embeds of a recording (domovoi/clients/voice_embedder.py):
+    :func:`prepare`'s speech alone, at one level (the module docstring says
+    why, measured)."""
+    return prepare(wav)

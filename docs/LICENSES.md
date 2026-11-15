@@ -31,6 +31,11 @@ is what counts.
   a permissive licence exists for either yet.
 - **Everything else a server downloads by default** is under MIT or
   Apache-2.0, or is public domain.
+- **The rooms' music player, MPD, is GPL-2.0-or-later.** The server
+  builds it from the Linux distribution's own package and runs it as a
+  separate program, one container per room
+  ([below](#programs-the-server-runs-in-their-own-containers)); Domovoi
+  only talks to it.
 - **AI is optional.** If you leave AI chat and questions out when you set
   up a server, the Llama, Qwen and picture-describing models below are not
   downloaded at all.
@@ -59,6 +64,7 @@ a server fetches and when.
 | `llama3.2:3b-instruct-q4_K_M` | Answers questions (both sizes of server) | Meta, from the [Ollama library](https://ollama.com/library/llama3.2) | [Llama 3.2 Community License](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/LICENSE) and its [acceptable use policy](https://github.com/meta-llama/llama-models/blob/main/models/llama3_2/USE_POLICY.md) | At install |
 | `qwen3:4b-instruct-2507-q4_K_M` (smaller servers) or `qwen3:8b-q4_K_M` (22 GB of memory or more) | Turns a command into the right action | Alibaba's Qwen team, from the [Ollama library](https://ollama.com/library/qwen3) | [Apache-2.0](https://huggingface.co/Qwen/Qwen3-8B) | At install |
 | `qwen3-vl:2b-instruct-q4_K_M` | Describes pictures in chat | Qwen, from the [Ollama library](https://ollama.com/library/qwen3-vl) | Apache-2.0 | At install |
+| 3D-Speaker ERes2Net, English (VoxCeleb), `3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx` | Voice ID: tells the household's voices apart (since 1.3.0) | Alibaba's 3D-Speaker project ([`iic/speech_eres2net_sv_en_voxceleb_16k`](https://www.modelscope.cn/models/iic/speech_eres2net_sv_en_voxceleb_16k) on ModelScope, trained on VoxCeleb2), converted to ONNX by sherpa-onnx, from [its `speaker-recongition-models` release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models). Downloaded first from Coders Farm's unchanged copy ([`domovoi-models` release `eres2net-vox-v1`](https://github.com/coders-farm-official/domovoi-models/releases/tag/eres2net-vox-v1)), then from upstream; pinned by size and SHA-256 | [Apache-2.0](https://github.com/modelscope/3D-Speaker/blob/main/LICENSE), code and weights. (VoxCeleb itself, the recordings it learned from, is CC BY 4.0) | At install, or on the core's first start; never under internet access "never" |
 | Piper voices Kristin (the default), Norman and Linda | The house voice | Bryce Beattie, from [`rhasspy/piper-voices`](https://huggingface.co/rhasspy/piper-voices) on Hugging Face | [Public domain](https://brycebeattie.com/files/tts/): trained from scratch on LibriVox and LJ Speech recordings, both public domain | At install |
 | Domovoi's published wake word, **Domovoi** (`domovoi_v1.onnx`) | The wake word a new install's rooms are given (the household's wake word, Settings → Voice → Wake words) | Coders Farm, from the [`domovoi-v1` release](https://github.com/coders-farm-official/domovoi-wake-word-models/releases/tag/domovoi-v1) of [domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models), which never moves. Its model card there names every dataset it was trained on, with their licences | [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), because of its training data ([below](#the-wake-word-trainer)). Not part of Domovoi, which stays MIT | When a new install starts, or when an admin picks it; never under internet access "never". Satellites, spare computers and phones get it from your server |
 | openWakeWord's pre-trained wake words: `hey_jarvis` (an older install's default, and every room's word until its server gives it one), `alexa`, `hey_mycroft`, `hey_rhasspy`, `timer`, `weather` | The wake word on satellites, spare computers and phones in room mode | David Scripka, from [openWakeWord's v0.5.1 release](https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1) on GitHub | [CC BY-NC-SA 4.0](https://github.com/dscripka/openWakeWord#license) | When the satellite media cache is refreshed; a spare computer's installer fetches the ones it needs itself |
@@ -125,6 +131,12 @@ inside `DomovoiSetup.exe` under the
 [Inno Setup License](https://jrsoftware.org/files/is/license.txt)
 (permissive).
 
+## Programs the server runs in their own containers
+
+| What | What it's for | Where it comes from | Licence |
+|---|---|---|---|
+| MPD (Music Player Daemon) | Each room's music player: one container per room, built from `domovoi/Dockerfile.mpd`. Rooms in a group hear one room's player | The Linux distribution's own `mpd` package, installed when the server builds the image | [GPL-2.0-or-later](https://github.com/MusicPlayerDaemon/MPD/blob/master/COPYING). It runs as a separate program in its own container; Domovoi talks to it over its network protocol and doesn't include or link it |
+
 ## Plugins
 
 A plugin, Coders Farm's or anyone else's, may download its own models,
@@ -161,8 +173,10 @@ those voices shaped it; **Synthetic voices only** avoids that.
 - The text-to-phoneme converter's model is Domovoi's own (MIT). Its
   dictionary is the Carnegie Mellon Pronouncing Dictionary (BSD-2-Clause
   style), and its licence is in `domovoi/phonemizer/data/cmudict/LICENSE`.
-- Resemblyzer's speaker-encoder weights, for voice profiles, come inside
-  its Python package (Apache-2.0), which is installed with the server.
+- Voice ID's front end (the Kaldi filter bank its model takes) is
+  Domovoi's own numpy code (`domovoi/clients/speaker_encoder.py`, MIT).
+  Before 1.3.0, voice ID used Resemblyzer's weights (Apache-2.0), from its
+  Python package; neither it nor torch is installed any more.
 - The Windows tray icon's QR code ("Show a code for your phone",
   `windows/tray/Qr.cs`) is adapted from Project Nayuki's
   [QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library)

@@ -97,6 +97,35 @@ public final class PersonDetailModel {
 
     public private(set) var toast: String?
 
+    // ---- rooms that know this voice (1.3.0) -------------------------------
+
+    /// The last voice-rooms answer, kept with the server and person it was
+    /// asked for. See ``voiceRooms``.
+    private var voiceRoomsAnswer: PersonVoiceRoomsAnswer?
+
+    /// Bumped by every voice-rooms read, so only the newest one publishes.
+    /// Its own counter rather than ``generation``: a read started because the
+    /// voice-sample count moved must not cancel the five lists' load.
+    private var voiceRoomsAsk = 0
+    private var voiceRoomsLoad: Task<Void, Never>?
+
+    /// Rooms that know this voice (`PersonDetailData.voiceRooms`,
+    /// `PeopleModels.kt:298`): empty, and the section hidden, until read, on a
+    /// server without the route, or in a house with no rooms.
+    ///
+    /// Handed out only while the answer's server is still the active one and
+    /// its person is still the one on screen, so a read that landed late can
+    /// never show one person's (or one house's) rooms under another.
+    public var voiceRooms: [PersonVoiceRoom] {
+        guard
+            let answer = voiceRoomsAnswer,
+            answer.personID == person?.id,
+            ServerCredentials.normalize(answer.server)
+                == ServerCredentials.normalize(container.client.baseURL)
+        else { return [] }
+        return answer.rooms
+    }
+
     // ---- what is typed into the memory tab --------------------------------
 
     public private(set) var newMemory = ""
@@ -140,7 +169,12 @@ public final class PersonDetailModel {
     /// roster's push may have moved their `last_seen_at`.
     public func show(_ next: Person) {
         guard person?.id != next.id else {
+            let samplesMoved = person?.voiceProfileCount != next.voiceProfileCount
             person = next
+            // A room may just have learned them: re-read the rooms, and only
+            // the rooms (`LaunchedEffect(personId, tick, voiceSamples)`,
+            // `PeopleModels.kt:320`).
+            if samplesMoved { readVoiceRooms() }
             return
         }
         generation += 1
@@ -158,7 +192,9 @@ public final class PersonDetailModel {
         query = ""
         busy = nil
         toast = nil
+        voiceRoomsAnswer = nil
         reload()
+        readVoiceRooms()
     }
 
     /// The detail closed. The in-flight reads are dropped, and so is their
@@ -169,6 +205,10 @@ public final class PersonDetailModel {
         load = nil
         person = nil
         busy = nil
+        voiceRoomsAsk += 1
+        voiceRoomsLoad?.cancel()
+        voiceRoomsLoad = nil
+        voiceRoomsAnswer = nil
     }
 
     /// `refresh()` — `tick++` (`PeopleModels.kt:277`), which re-runs all
@@ -182,6 +222,38 @@ public final class PersonDetailModel {
         // outlives the generation that owns it.
         busy = nil
         reload()
+        readVoiceRooms()
+    }
+
+    /// The rooms' own read, alongside the five rather than in their queue, so
+    /// the lists never wait on it (`PeopleModels.kt:317-322`).
+    ///
+    /// The person, the server and the ask are all captured **before** the
+    /// request and checked after it; the request itself is held to that
+    /// server (`onlyTo`). A failure other than 404 publishes nothing, so what
+    /// is shown stays; nothing here ever toasts.
+    private func readVoiceRooms() {
+        guard let id = person?.id else { return }
+        voiceRoomsAsk += 1
+        let ask = voiceRoomsAsk
+        let mine = generation
+        let client = container.client
+        let server = client.baseURL
+        voiceRoomsLoad?.cancel()
+        voiceRoomsLoad = Task { @MainActor [weak self] in
+            let got: [PersonVoiceRoom]? = await PersonVoiceRooms.load {
+                try await client.raw(method: "GET", path: PeoplePath.voiceRooms(id), onlyTo: server)
+            }
+            guard
+                let self,
+                self.voiceRoomsAsk == ask,
+                self.generation == mine,
+                self.person?.id == id,
+                ServerCredentials.normalize(client.baseURL) == ServerCredentials.normalize(server),
+                let got
+            else { return }
+            self.voiceRoomsAnswer = PersonVoiceRoomsAnswer(server: server, personID: id, rooms: got)
+        }
     }
 
     private func reload() {

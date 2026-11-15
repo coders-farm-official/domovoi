@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+import XCTest
 @testable import DomovoiKit
 
 /// A server that is not a server: a `URLProtocol` the test session loads
@@ -55,6 +56,51 @@ final class StubURLProtocol: URLProtocol {
 
     private static let script = Mutex(Script())
 
+    // ---- which case a request belongs to ----------------------------------
+
+    /// The case now running, counted by ``CaseBoundary`` as each one starts.
+    ///
+    /// **Why this exists.** The script above is process-global, and a case's
+    /// work can outlive the case: a write's re-read queued in the turn the
+    /// case returned, a request the slower CI runner had not yet handed to
+    /// `startLoading`. Such a request used to be recorded in the **next**
+    /// case's log and answered by the next case's dispatcher — CI's red at
+    /// `dbe3e6a4` was `GET .../kitchen/timers` as request `[0]` of
+    /// `RoomsModelTests.testEachTabIsReadWhenItIsShownAndNotBefore`.
+    ///
+    /// So every session ``session(timeout:_:)`` builds is stamped with the
+    /// case it was built in, and a request stamped with an earlier case is
+    /// refused here: not recorded, not dispatched, failed as cancelled. A
+    /// reset **inside** a case (fifty-odd cases do one) does not move this,
+    /// because it is the case boundary that matters, not the script's.
+    private static let currentCase = Atomic<Int>(0)
+
+    /// The header the stamp travels in. Stripped from what is recorded and
+    /// from what a dispatcher sees, so no test's header assertion sees it.
+    static let caseHeader = "X-Stub-Case"
+
+    /// A case started. Called by ``CaseBoundary``, and by the test that pins
+    /// the boundary to stand in for one.
+    static func caseStarted() {
+        currentCase.add(1, ordering: .sequentiallyConsistent)
+    }
+
+    /// Whether a request was made by a session built in an earlier case.
+    /// A request with no stamp (a configuration whose headers were replaced
+    /// after ``session(timeout:_:)``) is taken as this case's.
+    static func isFromAnEarlierCase(_ request: URLRequest) -> Bool {
+        guard
+            let stamp = request.value(forHTTPHeaderField: caseHeader),
+            let made = Int(stamp)
+        else { return false }
+        return made != currentCase.load(ordering: .sequentiallyConsistent)
+    }
+
+    /// How many requests from an earlier case were refused — for the test
+    /// that pins the boundary.
+    static var refusedFromEarlierCases: Int { refused.load(ordering: .sequentiallyConsistent) }
+    private static let refused = Atomic<Int>(0)
+
     // ---- what a test says --------------------------------------------------
 
     static func reset() {
@@ -94,8 +140,12 @@ final class StubURLProtocol: URLProtocol {
         timeout: TimeInterval? = nil,
         _ configure: (URLSessionConfiguration) -> Void = { _ in }
     ) -> URLSessionConfiguration {
+        CaseBoundary.install()
         let configuration = DomovoiClient.defaultConfiguration()
         configuration.protocolClasses = [StubURLProtocol.self]
+        var headers = configuration.httpAdditionalHeaders ?? [:]
+        headers[caseHeader] = String(currentCase.load(ordering: .sequentiallyConsistent))
+        configuration.httpAdditionalHeaders = headers
         if let timeout { configuration.timeoutIntervalForRequest = timeout }
         configure(configuration)
         return configuration
@@ -129,7 +179,13 @@ final class StubURLProtocol: URLProtocol {
     }
 
     override func startLoading() {
-        let request = self.request
+        if Self.isFromAnEarlierCase(self.request) {
+            Self.refused.add(1, ordering: .sequentiallyConsistent)
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
+        var request = self.request
+        request.setValue(nil, forHTTPHeaderField: Self.caseHeader)
         var recordedCopy = request
         recordedCopy.httpBody = Self.body(of: request)
         // The dispatcher is called **outside** the lock, and the recording is
@@ -199,4 +255,36 @@ final class StubURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+/// Counts each test case as it starts, for ``StubURLProtocol``'s case stamp.
+///
+/// Registered the first time any stub session is built, which is inside a
+/// case: that case keeps stamp 0 until the next one starts, and every case
+/// after it is counted before its `setUp` runs.
+private final class CaseBoundary: NSObject, XCTestObservation, @unchecked Sendable {
+
+    private static let installed = Mutex(false)
+
+    static func install() {
+        let first = installed.withLock { done -> Bool in
+            defer { done = true }
+            return !done
+        }
+        guard first else { return }
+        let observer = CaseBoundary()
+        // Every rig builds its session on the main actor; one that did not
+        // registers a hop later rather than blocking on the main thread.
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { XCTestObservationCenter.shared.addTestObserver(observer) }
+        } else {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { XCTestObservationCenter.shared.addTestObserver(observer) }
+            }
+        }
+    }
+
+    func testCaseWillStart(_ testCase: XCTestCase) {
+        StubURLProtocol.caseStarted()
+    }
 }

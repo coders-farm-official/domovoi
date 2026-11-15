@@ -217,11 +217,16 @@ class Place:
     (``rooms`` holds every room those words name: one, or several
     satellites sharing a label), "unknown" (words that sound like a room
     the house doesn't have). ``said``: the words as said, without the
-    preposition ("the garage")."""
+    preposition ("the garage"). "group": a named group of rooms the
+    household made ("upstairs", "the north wing"; domovoi/music_groups.py)
+    — a room's own name wins over a group's."""
 
-    kind: Literal["here", "everywhere", "rooms", "unknown"]
+    kind: Literal["here", "everywhere", "rooms", "group", "unknown"]
     said: str
     rooms: tuple[Room, ...] = ()
+    #: For kind "group": the named group (domovoi/music_groups.RoomGroup);
+    #: ``rooms`` then holds those of its rooms the house has.
+    group: Any = None
 
 
 def _strip_preposition(words: list[str]) -> list[str]:
@@ -252,6 +257,12 @@ def read_place(phrase: str, rooms: Iterable[Room]) -> Place | None:
         hits = tuple(r for r in rooms if order_free in r.order_free_keys())
     if hits:
         return Place("rooms", said, hits)
+    from domovoi import music_groups
+
+    g = music_groups.group_by_words(said)
+    if g is not None:
+        members = tuple(r for r in rooms if r.room_id in g.rooms)
+        return Place("group", said, members, group=g)
     if looks_like_a_room(said):
         return Place("unknown", said)
     return None
@@ -271,15 +282,19 @@ def looks_like_a_room(said: str) -> bool:
 def place_splits(words: list[str], start: int = 1) -> list[tuple[int, str]]:
     """Where a place may begin in ``words`` (from index ``start``): every
     place preposition, and the place phrases that need none ("everywhere",
-    "all over the house"). Earliest first — the longest place first. Each
+    "all over the house", a named group's name). Earliest first — the longest place first. Each
     item is (index, the place words joined)."""
+    from domovoi import music_groups
+
     out: list[tuple[int, str]] = []
     n = len(words)
+    # A named group needs no preposition either: "play jazz upstairs".
+    bare_places = _BARE_PLACES + tuple(music_groups.group_phrases())
     for i in range(max(start, 0), n):
         if words[i] in PLACE_PREPOSITIONS and i < n - 1:
             out.append((i, " ".join(words[i:])))
             continue
-        for bare in _BARE_PLACES:
+        for bare in bare_places:
             if tuple(words[i:]) == bare:
                 out.append((i, " ".join(words[i:])))
                 break
@@ -304,6 +319,11 @@ def say_rooms(rooms: Iterable[Room], *, limit: int = 6) -> str:
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
+def say_rooms_by_id(room_ids: Iterable[str], *, limit: int = 6) -> str:
+    """:func:`say_rooms` for bare room ids (no labels at hand)."""
+    return say_rooms([Room(room_id=r) for r in room_ids if r], limit=limit)
+
+
 __all__ = [
     "PLACE_PREPOSITIONS",
     "Place",
@@ -315,5 +335,6 @@ __all__ = [
     "read_place",
     "room_key",
     "say_rooms",
+    "say_rooms_by_id",
     "spoken_room",
 ]

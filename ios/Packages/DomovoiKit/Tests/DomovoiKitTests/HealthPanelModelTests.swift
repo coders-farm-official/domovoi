@@ -163,7 +163,13 @@ final class HealthPanelModelTests: XCTestCase {
         let (model, _, _, _) = rig(token: nil)
         model.start()
         defer { model.stop() }
-        await settleUntil { model.guardRead.data?.tier == .open }
+        // The guard read **and the other five**: the panel is `.loading`
+        // until the config read lands (`settingKnown`), and on CI's slower
+        // runner (run 43669420249) the guard answered first, so the panel
+        // below was still loading.
+        await settleUntil {
+            model.guardRead.data?.tier == .open && self.allSix(model).allSatisfy(\.answered)
+        }
         XCTAssertTrue(seen.current.contains("/api/containers/summary"))
         let panel = model.panel(shared: false)
         guard case .rows(let rows) = panel.body else { return XCTFail("\(panel.body)") }

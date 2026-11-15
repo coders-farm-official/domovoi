@@ -106,6 +106,7 @@ check() { local what=$1; shift; if ! "$@"; then fail "$what"; fi; }
 
 WHISPER_CONTENT="fake whisper model.bin"
 PIPER_CONTENT="fake piper voice"
+SPEAKER_CONTENT="fake voice ID speaker model"
 OLLAMA_CONTENT="fake ollama 0.34.4 tarball"
 
 sha_of_text() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
@@ -954,6 +955,12 @@ if [ "${1-}" = -c ]; then
     "#provision:piper-download")
       d=$SHIM_ROOT$4; mkdir -p "$d"
       cat "$SHIM_STATE/piper-content" >"$d/$3.onnx"; echo '{}' >"$d/$3.onnx.json"; echo "$d/$3.onnx"; exit 0 ;;
+    "#provision:speaker-info")
+      echo speaker.onnx; cat "$SHIM_STATE/speaker-pin"; echo 27; exit 0 ;;
+    "#provision:speaker-download")
+      [ ! -f "$SHIM_STATE/speaker-fail" ] || { echo "ModelUnavailable: fixture" >&2; exit 1; }
+      d=$SHIM_ROOT$3; mkdir -p "$d"
+      cat "$SHIM_STATE/speaker-content" >"$d/speaker.onnx"; echo "$d/speaker.onnx"; exit 0 ;;
     "#provision:whisper-download")
       d=$SHIM_ROOT$HOME/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/$4
       mkdir -p "$d"; cat "$SHIM_STATE/whisper-content" >"$d/model.bin"; echo "$d"; exit 0 ;;
@@ -1013,6 +1020,8 @@ new_case() {
   printf '%s' "$WHISPER_CONTENT" >"$STATE/whisper-content"
   printf '%s' "$PIPER_CONTENT" >"$STATE/piper-content"
   sha_of_text "$PIPER_CONTENT" >"$STATE/piper-pin"
+  printf '%s' "$SPEAKER_CONTENT" >"$STATE/speaker-content"
+  sha_of_text "$SPEAKER_CONTENT" >"$STATE/speaker-pin"
   # What the registry serves for each tag: the manifest's digests.
   sed -n 's/^tier_[a-z]*_\(tool\|qa\|vision\)_model=\(.*\)$/\2/p' "$ORIGIN/scripts/linux/provision-manifest.conf" >"$CASE/tags"
   : >"$STATE/registry"
@@ -1179,6 +1188,7 @@ case_import_check_names_no_dropped_package() {
   check "no mutagen" eq "$(grep -c 'mutagen' <<<"$mods")" 0
   check "no librosa" eq "$(grep -c 'librosa' <<<"$mods")" 0
   check "resemblyzer is not imported (its package imports librosa)" eq "$(grep -c '"resemblyzer"' <<<"$mods")" 0
+  check "no torch (voice ID runs on onnxruntime since 1.3.0)" eq "$(grep -c '"torch"' <<<"$mods")" 0
   check "faster-whisper only through Domovoi's import (no PyAV)" eq "$(grep -c '"faster_whisper"' <<<"$mods")" 0
   check "no python-mpd2" eq "$(grep -c '"mpd"' <<<"$mods")" 0
   check "no lameenc" eq "$(grep -c 'lameenc' <<<"$mods")" 0
@@ -1342,7 +1352,7 @@ case_full_run_wsl() {
   check "no install option before the subcommand" not_called "--progress-bar off install"
   check "pip's progress bar off through the environment" called "PIP_PROGRESS_BAR=off"
   check "every pin, hash-checked" called "install --require-hashes --no-build-isolation -r requirements-linux-py314.lock"
-  check "faster-whisper and resemblyzer hash-checked, without their deps" \
+  check "faster-whisper hash-checked, without its deps" \
     called "install --require-hashes --no-deps -r requirements-linux-py314-no-deps.lock"
   check "after the lock" before "--no-build-isolation -r requirements-linux-py314.lock" "--no-deps -r requirements-linux-py314-no-deps.lock"
   check "domovoi itself, no deps" called "install --no-deps --no-build-isolation -e ."
@@ -1378,6 +1388,7 @@ case_full_run_wsl() {
   check "Whisper at the pinned revision" test -f "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/d1d751a5f8271d482d14ca55d9e2deeebbae577f/model.bin"
   check "Piper voice" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
   check "and the other two" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-ljspeech-medium.onnx"
+  check "voice ID's speaker model, beside them" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/speaker.onnx"
   check "no espeak-ng installed" not_called "espeak-ng"
   # images, search helper
   check "database images pulled as compose pins them" called "docker compose pull postgres flyway"
@@ -1819,6 +1830,19 @@ case_piper_empty_configured_voice() {
   check "no warning about a nameless voice" not_said "the Piper voice '' has no pin"
   check "no voice named -" not_said "the Piper voice '-'"
   check "Kristin fetched" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-kristin-medium.onnx"
+  end_case
+}
+
+# The voice ID model is fetched in the piper step, after the voices; a
+# failed fetch stops the step like a voice's would.
+case_piper_speaker_model_failure_stops() {
+  new_case piper_speaker_model_failure_stops
+  : >"$STATE/speaker-fail"
+  run_prov "${wsl_args[@]}"
+  check "exit 1" eq "$RC" 1
+  check "piper failed" eq "$(state_of piper)" fail
+  check "the voices were fetched first" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
+  check "says what failed" said "the voice ID model download failed"
   end_case
 }
 
@@ -4801,6 +4825,7 @@ CASES=(
   case_changed_input_reruns_its_step
   case_ollama_sha_mismatch_stops
   case_whisper_sha_mismatch_stops
+  case_piper_speaker_model_failure_stops
   case_piper_sha_mismatch_stops
   case_piper_unpinned_voice_with_a_space
   case_piper_empty_configured_voice

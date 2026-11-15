@@ -113,6 +113,23 @@ final class ApiReadTests: XCTestCase {
         XCTAssertEqual("second", read.data, "the cancelled fetch does not publish over the live one")
     }
 
+    /// A read stopped in the same turn it was asked **asks for nothing**: its
+    /// task had not run yet, and a request made then is made for a reader
+    /// that has gone. This is the re-read a write queues as its screen goes
+    /// away, and it is what leaked from one RoomsModelTests case into the
+    /// next case's request log.
+    func testAReadStoppedBeforeItRanAsksForNothing() async {
+        let base = Shared(server)
+        let answer = Shared<Result<String, DomovoiError>>(.success("rooms"))
+        let calls = Shared(0)
+        let read = read(base: base, answer: answer, calls: calls)
+        read.refresh()
+        read.stop()
+        for _ in 0..<settleYieldLimit { await Task.yield() }
+        XCTAssertEqual(0, calls.current, "a stopped read went to the server anyway")
+        XCTAssertNil(read.data)
+    }
+
     /// 1: the server URL is an implicit key, and only a **change** re-reads.
     /// A caller that shouted "the server changed" on every redraw would
     /// otherwise re-read seven endpoints a frame.

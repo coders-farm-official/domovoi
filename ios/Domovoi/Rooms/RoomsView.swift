@@ -118,6 +118,11 @@ struct RoomsView: View {
 
     @State private var rooms: RoomsModel?
 
+    /// The household's groups (V060), for the Groups card under the
+    /// broadcast card. Built and started with the screen; asks nothing on an
+    /// unpaired phone.
+    @State private var groups: MusicGroupsModel?
+
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
     /// ``HomeView``'s guard, for its reason: this is inside the workspace's
     /// `NavigationStack`, so a pushed destination fires `onDisappear` while
@@ -163,12 +168,17 @@ struct RoomsView: View {
                 if rooms == nil {
                     rooms = RoomsModel(in: model.container)
                 }
+                if groups == nil {
+                    groups = MusicGroupsModel(container: model.container)
+                }
+                groups?.start(paired: model.isPaired)
                 guard !held else { return }
                 held = true
                 rooms?.hold()
             }
             .onDisappear {
                 visible = false
+                groups?.stop()
                 guard held else { return }
                 held = false
                 rooms?.release()
@@ -337,6 +347,13 @@ struct RoomsView: View {
                     .buttonStyle(.plain)
                 }
                 RoomsBroadcastCard(model: rooms)
+                if let groups {
+                    RoomsGroupsCard(
+                        shell: model,
+                        groups: groups,
+                        roomIDs: Array(Set(list.map(\.roomID))).sorted()
+                    )
+                }
             }
         }
     }

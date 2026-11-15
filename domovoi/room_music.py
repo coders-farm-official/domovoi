@@ -167,6 +167,23 @@ def deliver_later(
     return task
 
 
+def run_later(coro: Any, *, name: str) -> asyncio.Task:
+    """Run ``coro`` beside the turn, kept referenced until it ends (and
+    waited on by :func:`drain`); a failure is logged. The groups' joins and
+    hand-offs (domovoi/music_groups.py) point satellites with it."""
+
+    async def _run() -> None:
+        try:
+            await coro
+        except Exception as e:  # noqa: BLE001 — logged; the turn has answered
+            log.warning("room music: %s failed: %s", name, e)
+
+    task = asyncio.create_task(_run(), name=name)
+    _DELIVERIES.add(task)
+    task.add_done_callback(_DELIVERIES.discard)
+    return task
+
+
 async def drain() -> None:
     """Wait for every delivery started so far (tests)."""
     while _DELIVERIES:

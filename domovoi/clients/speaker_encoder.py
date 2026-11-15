@@ -1,179 +1,295 @@
-"""Resemblyzer's speaker encoder, without librosa.
+"""Voice ID's speaker encoder: 3D-Speaker's ERes2Net on ONNX Runtime.
 
-Voice ID embeds each utterance with Resemblyzer's pretrained encoder
-(resemble-ai/Resemblyzer, Apache License 2.0, Copyright 2019 Resemble AI).
-Importing the ``resemblyzer`` package imports its audio helpers, which
-import librosa, and librosa imports soxr and soundfile (both carrying LGPL
-libraries) and numba when it loads. The encoder needs one thing from them:
-a 40-band mel spectrogram. So this module computes that spectrogram with
-numpy (the same STFT and Slaney mel filter bank: within 3e-7 of librosa's)
-and runs Resemblyzer's network — a 3-layer LSTM and a linear layer, as in
-its ``VoiceEncoder`` — with the weights the package ships
-(``resemblyzer/pretrained.pt``), found with :func:`importlib.util.find_spec`
-so the package itself is never imported. The partial-utterance slicing
-and averaging follow ``VoiceEncoder.embed_utterance``. The embeddings are
-Resemblyzer's (``domovoi/tests/test_speaker_encoder.py`` holds them to
-ones it computed), so enrolled voices keep matching.
+Each utterance becomes one 192-number voice embedding, made by the
+ERes2Net speaker-verification model of Alibaba's 3D-Speaker project
+(``iic/speech_eres2net_sv_en_voxceleb_16k``, trained on VoxCeleb2; code and
+weights Apache License 2.0), as exported to ONNX by the sherpa-onnx
+project. It replaced Resemblyzer (and with it torch) in 1.3.0: on the same
+simulated rooms it tells voices apart about twice as often at the same
+wrong-name ceiling, and it needs only ONNX Runtime, which Domovoi already
+runs for Piper (scripts/eval_voice_id.py; the numbers are in
+docs/RELEASE_NOTES.md, 1.3.0).
 
-``resemblyzer`` is installed without its dependencies (``pip install
---no-deps``) for the weights alone; librosa, webrtcvad and scipy are not
-needed.
+The front end is the one the model was trained with, in numpy:
+:func:`kaldi_fbank` is Kaldi's 80-band log mel filter bank exactly as
+3D-Speaker calls ``torchaudio.compliance.kaldi.fbank`` (samples in [-1, 1],
+25 ms Povey windows every 10 ms, no dither), and the utterance's mean is
+taken off every band (the model's ``feature_normalize_type: global-mean``).
+``domovoi/tests/test_speaker_encoder.py`` holds it to torchaudio's output
+and the embeddings to ones recorded on the ONNX Runtime the server runs.
+
+The model file is not in the repo: it is fetched once into the voice-models
+directory (``settings.voice_models_dir``, beside the Piper voices) from a
+pinned URL and held to a pinned size and SHA-256 (:func:`download_model`),
+through the egress gate, so under ``INTERNET_ACCESS=never`` nothing is
+fetched. Without it voice ID names nobody (:func:`model_problem` says why,
+and the People page shows it).
 """
 
 from __future__ import annotations
 
-import importlib.util
+import hashlib
+import logging
+import threading
+import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
+log = logging.getLogger(__name__)
+
 SAMPLE_RATE = 16_000
-N_FFT = 400            # 25 ms windows
-HOP = 160              # 10 ms steps
-N_MELS = 40
-PARTIAL_FRAMES = 160   # 1.6 s of frames per partial utterance
-HIDDEN = 256
-EMBEDDING = 256
-LAYERS = 3
+N_MELS = 80
+FRAME = 400            # 25 ms
+SHIFT = 160            # 10 ms
+N_FFT = 512            # the frame rounded up to a power of two (Kaldi)
+EMBEDDING_DIM = 192
+
+#: What a voice sample made by this encoder is stored as
+#: (``voice_profiles.model``, ``voice_denylist.model``). A sample with any
+#: other tag (Resemblyzer's ``resemblyzer-v1``/``-v2`` from before 1.3.0)
+#: can't be compared with this model's embeddings and is never used.
+MODEL_TAG = "eres2net-vox-v1"
+
+# ─── the pinned model file ────────────────────────────────────────────────
+#
+# The sherpa-onnx project's ONNX export of 3D-Speaker's English ERes2Net,
+# from its ``speaker-recongition-models`` release (the tag's spelling is
+# upstream's). The digest is the one in that release's checksum.txt and of
+# the file the 2026-11 comparison measured (design notes, outside the repo).
+# A new export means a new pin, a new MODEL_TAG and re-enrolment, never a
+# looser check.
+#
+# Coders Farm keeps a byte-for-byte copy in its own release
+# (coders-farm-official/domovoi-models, tag ``eres2net-vox-v1``) so a server
+# can still get the model if upstream moves or removes it. The copy is tried
+# first and upstream second; both must match the same size and SHA-256.
+
+MODEL_FILE = "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"
+MODEL_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
+    + MODEL_FILE
+)
+MODEL_MIRROR_URL = (
+    "https://github.com/coders-farm-official/domovoi-models/releases/download/eres2net-vox-v1/"
+    + MODEL_FILE
+)
+#: Where the model is fetched from, in order: Coders Farm's copy, then upstream.
+MODEL_URLS = (MODEL_MIRROR_URL, MODEL_URL)
+MODEL_SHA256 = "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"
+MODEL_BYTES = 26_485_263
 
 
-# ─── the mel spectrogram ─────────────────────────────────────────────────
+class ModelUnavailable(RuntimeError):
+    """The speaker model isn't on disk and couldn't be fetched."""
 
 
-def _hz_to_mel(f: np.ndarray) -> np.ndarray:
-    """Slaney's mel scale: linear to 1 kHz, logarithmic above."""
-    f = np.asanyarray(f, dtype=np.float64)
-    f_sp = 200.0 / 3
-    min_log_hz, min_log_mel, logstep = 1000.0, 1000.0 / f_sp, np.log(6.4) / 27.0
-    return np.where(f >= min_log_hz,
-                    min_log_mel + np.log(np.maximum(f, 1e-10) / min_log_hz) / logstep,
-                    f / f_sp)
+def models_dir() -> Path:
+    from domovoi.config import settings
+
+    return Path(settings.voice_models_dir)
 
 
-def _mel_to_hz(m: np.ndarray) -> np.ndarray:
-    m = np.asanyarray(m, dtype=np.float64)
-    f_sp = 200.0 / 3
-    min_log_hz, min_log_mel, logstep = 1000.0, 1000.0 / f_sp, np.log(6.4) / 27.0
-    return np.where(m >= min_log_mel, min_log_hz * np.exp(logstep * (m - min_log_mel)), f_sp * m)
+def model_path() -> Path:
+    return models_dir() / MODEL_FILE
 
 
-def mel_filters(sr: int = SAMPLE_RATE, n_fft: int = N_FFT, n_mels: int = N_MELS) -> np.ndarray:
-    """Triangular filters from 0 Hz to Nyquist, each normalised to unit
-    area (Slaney): shape ``(n_mels, 1 + n_fft // 2)``."""
-    fft_freqs = np.linspace(0, sr / 2, 1 + n_fft // 2)
-    mel_f = _mel_to_hz(np.linspace(_hz_to_mel(0.0), _hz_to_mel(sr / 2.0), n_mels + 2))
-    fdiff = np.diff(mel_f)
-    ramps = np.subtract.outer(mel_f, fft_freqs)
-    weights = np.zeros((n_mels, len(fft_freqs)))
-    for i in range(n_mels):
-        lower = -ramps[i] / fdiff[i]
-        upper = ramps[i + 2] / fdiff[i + 1]
-        weights[i] = np.maximum(0, np.minimum(lower, upper))
-    weights *= (2.0 / (mel_f[2:n_mels + 2] - mel_f[:n_mels]))[:, None]
-    return weights.astype(np.float32)
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
-_FILTERS: np.ndarray | None = None
+# (path, size, mtime_ns) -> the digest matched; checking 25 MB takes ~0.1 s,
+# so a file is hashed once per change rather than on every question.
+_verified: tuple[str, int, int] | None = None
 
 
-def mel_spectrogram(wav: np.ndarray) -> np.ndarray:
-    """Power mel spectrogram of 16 kHz float audio, ``(frames, 40)``
-    float32: periodic Hann windows of 400 samples every 160, centred (the
-    signal zero-padded by half a window each side), |FFT|², the filter
-    bank. Not a log-mel: the encoder takes it as it is."""
-    global _FILTERS
-    if _FILTERS is None:
-        _FILTERS = mel_filters()
-    y = np.ascontiguousarray(wav, dtype=np.float32)
-    window = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(N_FFT) / N_FFT)).astype(np.float32)
-    y = np.pad(y, N_FFT // 2, mode="constant")
-    n = 1 + (len(y) - N_FFT) // HOP
-    frames = np.lib.stride_tricks.as_strided(y, (n, N_FFT), (y.strides[0] * HOP, y.strides[0]))
-    power = np.abs(np.fft.rfft(frames * window, axis=1)) ** 2
-    return (power.astype(np.float32) @ _FILTERS.T).astype(np.float32)
+def model_on_disk(path: Path | None = None) -> bool:
+    """Whether the pinned model is on disk: its size, and its SHA-256 once
+    per change of the file."""
+    global _verified
+    path = path or model_path()
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    if st.st_size != MODEL_BYTES:
+        return False
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if _verified == key:
+        return True
+    if _sha256_file(path) != MODEL_SHA256:
+        return False
+    _verified = key
+    return True
 
 
-# ─── partial utterances ──────────────────────────────────────────────────
+_download_lock = threading.Lock()
+#: The last fetch that failed: (when, why). The embedder retries no sooner
+#: than :data:`RETRY_AFTER_SEC` after it, so a house without internet isn't
+#: asked to fetch on every turn.
+_last_failure: tuple[float, str] | None = None
+RETRY_AFTER_SEC = 600.0
 
 
-def partial_slices(n_samples: int, rate: float = 1.3, min_coverage: float = 0.75) -> tuple[list[slice], list[slice]]:
-    """Where to cut an utterance into overlapping 1.6 s partials, about
-    ``rate`` a second: (waveform slices, mel-frame slices). The last
-    partial is dropped when less than ``min_coverage`` of it is audio,
-    unless it is the only one."""
-    samples_per_frame = SAMPLE_RATE * 10 // 1000
-    n_frames = int(np.ceil((n_samples + 1) / samples_per_frame))
-    frame_step = int(np.round((SAMPLE_RATE / rate) / samples_per_frame))
-    wav_slices, mel_slices = [], []
-    steps = max(1, n_frames - PARTIAL_FRAMES + frame_step + 1)
-    for i in range(0, steps, frame_step):
-        mel_slices.append(slice(i, i + PARTIAL_FRAMES))
-        wav_slices.append(slice(i * samples_per_frame, (i + PARTIAL_FRAMES) * samples_per_frame))
-    last = wav_slices[-1]
-    coverage = (n_samples - last.start) / (last.stop - last.start)
-    if coverage < min_coverage and len(mel_slices) > 1:
-        mel_slices, wav_slices = mel_slices[:-1], wav_slices[:-1]
-    return wav_slices, mel_slices
+def download_model(dest_dir: Path | None = None) -> Path:
+    """Fetch the pinned model into ``dest_dir`` (the voice-models directory)
+    unless it is there already: through the egress gate and net_safety,
+    reading at most :data:`MODEL_BYTES`, moved into place only once its
+    size and SHA-256 match. Raises ``egress.InternetTurnedOff`` under
+    ``never`` (before any request), :class:`ModelUnavailable` otherwise."""
+    global _last_failure
+    from domovoi import egress
+
+    dest_dir = dest_dir or models_dir()
+    target = dest_dir / MODEL_FILE
+    with _download_lock:
+        if model_on_disk(target):
+            return target
+        allowed = [u for u in MODEL_URLS if egress.check_destination(u) is None]
+        if not allowed:
+            egress.require_destination(MODEL_URLS[0])       # raises, and logs the refusal
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        from domovoi.satellite_media.fetchers import _fetch_pinned
+
+        errors: list[str] = []
+        for url in allowed:
+            log.info("voice ID: downloading the speaker model (%.0f MB, one-time) from %s",
+                     MODEL_BYTES / 1e6, url)
+            try:
+                _fetch_pinned(url, target, sha256=MODEL_SHA256, size=MODEL_BYTES)
+            except egress.InternetTurnedOff:
+                raise
+            except Exception as e:
+                why = str(e) or e.__class__.__name__
+                log.warning("voice ID: speaker model download from %s failed: %s", url, why)
+                errors.append(why)
+                continue
+            _last_failure = None
+            log.info("voice ID: speaker model verified, in %s", target)
+            return target
+        why = "; ".join(errors)
+        _last_failure = (time.monotonic(), why)
+        raise ModelUnavailable(f"the speaker model could not be downloaded: {why}")
 
 
-# ─── the network ─────────────────────────────────────────────────────────
+def may_retry_download() -> bool:
+    """Whether a fetch may be tried now (none failed in the last
+    :data:`RETRY_AFTER_SEC`)."""
+    return _last_failure is None or time.monotonic() - _last_failure[0] >= RETRY_AFTER_SEC
 
 
-def weights_path() -> Path:
-    """``pretrained.pt`` inside the installed resemblyzer package, found
-    without importing it. FileNotFoundError says how to install it."""
-    spec = importlib.util.find_spec("resemblyzer")
-    locations = list(spec.submodule_search_locations or []) if spec is not None else []
-    for location in locations:
-        path = Path(location) / "pretrained.pt"
-        if path.is_file():
-            return path
-    raise FileNotFoundError(
-        "Resemblyzer's voice encoder weights are not installed "
-        "(pip install --no-deps resemblyzer, or -r requirements-no-deps.in)"
+def model_problem() -> str | None:
+    """Why voice ID can't run, in words for the household; None when the
+    model is on disk."""
+    from domovoi import egress
+
+    if model_on_disk():
+        return None
+    if egress.internet_turned_off():
+        return (
+            "Voice recognition needs a 25 MB model that isn't on this server yet, and internet "
+            "access is turned off (Settings → Privacy → Internet), so Domovoi can't download it. "
+            "Until it can, nobody is recognized by voice."
+        )
+    if _last_failure is not None:
+        return (
+            "Voice recognition needs a 25 MB model that Domovoi couldn't download "
+            f"({_last_failure[1]}). It tries again every few minutes; until then nobody is "
+            "recognized by voice."
+        )
+    return (
+        "Voice recognition needs a 25 MB model that isn't on this server yet. Domovoi "
+        "downloads it when it starts; until then nobody is recognized by voice."
     )
 
 
+# ─── the front end ────────────────────────────────────────────────────────
+
+
+def _mel(f: np.ndarray) -> np.ndarray:
+    return 1127.0 * np.log(1.0 + np.asarray(f, dtype=np.float64) / 700.0)
+
+
+def mel_banks(n_mels: int = N_MELS) -> np.ndarray:
+    """Kaldi's triangular mel filters, 20 Hz to Nyquist, on the FFT's
+    ``N_FFT // 2 + 1`` bins (the Nyquist bin unweighted):
+    ``(n_mels, N_FFT // 2 + 1)``."""
+    lo, hi = _mel(20.0), _mel(SAMPLE_RATE / 2)
+    centers = np.linspace(lo, hi, n_mels + 2)
+    bins = _mel(np.arange(N_FFT // 2) * SAMPLE_RATE / N_FFT)
+    left, mid, right = centers[:-2, None], centers[1:-1, None], centers[2:, None]
+    w = np.maximum(0.0, np.minimum((bins - left) / (mid - left), (right - bins) / (right - mid)))
+    return np.concatenate([w, np.zeros((n_mels, 1))], axis=1)
+
+
+_BANKS: np.ndarray | None = None
+_WINDOW = (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(FRAME) / (FRAME - 1))) ** 0.85   # Povey
+
+
+def kaldi_fbank(wav: np.ndarray) -> np.ndarray:
+    """``torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80, dither=0)``
+    in numpy, as 3D-Speaker computes its features: 16 kHz samples in
+    [-1, 1]; 25 ms frames every 10 ms, only whole ones (``snip_edges``);
+    each frame's DC removed, pre-emphasis 0.97, Povey window, 512-point
+    power spectrum, 80 mel bands, natural log floored at float32's epsilon.
+    ``(frames, 80)`` float32; no frames for less than 25 ms of audio."""
+    global _BANKS
+    if _BANKS is None:
+        _BANKS = mel_banks()
+    x = np.asarray(wav, dtype=np.float64)
+    if x.size < FRAME:
+        return np.zeros((0, N_MELS), dtype=np.float32)
+    n = 1 + (x.size - FRAME) // SHIFT
+    frames = np.lib.stride_tricks.as_strided(x, (n, FRAME), (x.strides[0] * SHIFT, x.strides[0]))
+    fr = frames - frames.mean(axis=1, keepdims=True)
+    fr = np.concatenate([fr[:, :1] - 0.97 * fr[:, :1], fr[:, 1:] - 0.97 * fr[:, :-1]], axis=1)
+    power = np.abs(np.fft.rfft(fr * _WINDOW, N_FFT)) ** 2
+    return np.log(np.maximum(power @ _BANKS.T, np.finfo(np.float32).eps)).astype(np.float32)
+
+
+def features(wav: np.ndarray) -> np.ndarray:
+    """The model's input for one utterance: :func:`kaldi_fbank` with the
+    utterance's mean taken off each band, ``(frames, 80)``."""
+    f = kaldi_fbank(wav)
+    return f - f.mean(axis=0, keepdims=True) if len(f) else f
+
+
+# ─── the network ──────────────────────────────────────────────────────────
+
+
 class SpeakerEncoder:
-    """Resemblyzer's encoder on torch. ``embed_utterance`` takes 16 kHz
-    float32 audio in [-1, 1] and returns a unit-norm 256-dim float32
-    vector."""
+    """The ERes2Net session. :meth:`embed_utterance` takes 16 kHz float32
+    audio in [-1, 1] and returns a unit-norm 192-dim float32 vector.
 
-    def __init__(self, device: str | None = None, weights: Path | None = None) -> None:
-        import torch
-        from torch import nn
+    ``threads``: ONNX Runtime's intra-op threads. The embedding runs on
+    the speech executor beside Whisper; two threads keep it well under a
+    decode's time on a small CPU without taking every core from it."""
 
-        class _Net(nn.Module):
-            def __init__(self) -> None:
-                super().__init__()
-                self.lstm = nn.LSTM(N_MELS, HIDDEN, LAYERS, batch_first=True)
-                self.linear = nn.Linear(HIDDEN, EMBEDDING)
-                self.relu = nn.ReLU()
+    def __init__(self, path: Path | None = None, threads: int = 2) -> None:
+        import onnxruntime as ort
 
-            def forward(self, mels: Any) -> Any:
-                _, (hidden, _) = self.lstm(mels)
-                raw = self.relu(self.linear(hidden[-1]))
-                return raw / torch.norm(raw, dim=1, keepdim=True)
+        path = path or model_path()
+        if not model_on_disk(path):
+            raise ModelUnavailable(f"the speaker model is not at {path}")
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = max(1, int(threads))
+        so.inter_op_num_threads = 1
+        so.log_severity_level = 3
+        self._session = ort.InferenceSession(str(path), so, providers=["CPUExecutionProvider"])
+        self._input = self._session.get_inputs()[0].name
+        dim = self._session.get_outputs()[0].shape[-1]
+        if dim != EMBEDDING_DIM:
+            raise ModelUnavailable(f"the speaker model gives {dim} numbers, not {EMBEDDING_DIM}")
 
-        self._torch = torch
-        self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        net = _Net()
-        checkpoint = torch.load(str(weights or weights_path()), map_location="cpu")
-        # The checkpoint also holds the training-time similarity scale and
-        # bias, which inference doesn't use (Resemblyzer loads it the same way).
-        net.load_state_dict(checkpoint["model_state"], strict=False)
-        net.eval()
-        self._net = net.to(self.device)
-
-    def embed_utterance(self, wav: np.ndarray, rate: float = 1.3, min_coverage: float = 0.75) -> np.ndarray:
-        wav_slices, mel_slices = partial_slices(len(wav), rate, min_coverage)
-        longest = wav_slices[-1].stop
-        if longest >= len(wav):
-            wav = np.pad(wav, (0, longest - len(wav)), "constant")
-        mel = mel_spectrogram(wav)
-        mels = np.array([mel[s] for s in mel_slices])
-        with self._torch.no_grad():
-            partials = self._net(self._torch.from_numpy(mels).to(self.device)).cpu().numpy()
-        raw = np.mean(partials, axis=0)
-        return raw / np.linalg.norm(raw, 2)
+    def embed_utterance(self, wav: np.ndarray) -> np.ndarray:
+        feats = features(wav)
+        if len(feats) == 0:
+            raise ValueError("too little audio to embed")
+        out = self._session.run(None, {self._input: feats[None]})[0].reshape(-1)
+        out = out.astype(np.float32)
+        norm = float(np.linalg.norm(out))
+        return out / norm if norm > 0 else out

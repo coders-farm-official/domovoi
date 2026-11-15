@@ -45,13 +45,17 @@ public enum RoomHealthSample {
         public var threads: Int?
         /// Which charger (`battery.plugged`), when a phone can say.
         public var plugged: String?
+        /// The wake model the detector loaded (its slug, e.g. "domovoi_v1"),
+        /// as a Pi reports it: the dashboard's "wakes on" reads it. Nil
+        /// before a model has loaded.
+        public var wakeWord: String?
 
         public init(
             seq: Int, ts: Double, rssKB: Int64?, cpuPct: Double?, tempC: Double?, uptimeS: Int64,
             procUptimeS: Int64, coreOK: Bool, micExpected: Bool, micFPS: Double, idle: Bool, wsUp: Bool,
             wsDownForS: Int64, reconnects: Int, wifiRxMbits: Double?, wifiSSID: String?, wifiSignalDBM: Int?,
             batteryPercent: Int?, batteryCharging: Bool?, onPower: Bool?, micBlocked: Bool,
-            wakeLoopAgeS: Double?, threads: Int?, plugged: String? = nil
+            wakeLoopAgeS: Double?, threads: Int?, plugged: String? = nil, wakeWord: String? = nil
         ) {
             self.seq = seq
             self.ts = ts
@@ -77,6 +81,7 @@ public enum RoomHealthSample {
             self.wakeLoopAgeS = wakeLoopAgeS
             self.threads = threads
             self.plugged = plugged
+            self.wakeWord = wakeWord
         }
 
         /// The battery these facts carry.
@@ -123,6 +128,7 @@ public enum RoomHealthSample {
             if let v = f.plugged { battery["plugged"] = .string(v) }
             o["battery"] = .object(battery)
         }
+        if let v = f.wakeWord, !v.isEmpty { o["wake_word"] = .string(String(v.prefix(64))) }
         return o
     }
 

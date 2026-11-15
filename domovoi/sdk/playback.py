@@ -180,7 +180,17 @@ class PlaybackAPI:
     async def stop(self, room_id: str) -> Response:
         """Stop the room's MPD + clear its now-playing stamp; the returned
         Response's ``music_action="stop"`` makes the streaming layer send
-        the Pi its ``music_stop`` frame and drop ``resumable_music``."""
+        the Pi its ``music_stop`` frame and drop ``resumable_music``.
+
+        A room that shares a queue (a group, domovoi/music_groups.py) stops
+        alone: it leaves the group and the other rooms play on."""
+        from domovoi import music_groups
+
+        if music_groups.share_of(room_id) is not None:
+            from domovoi.plugins_runtime.loader import LOADER
+
+            await music_groups.leave(LOADER.app, room_id)
+            return Response(text="Stopped.", music_action="stop")
         try:
             await get_mpd_client_for(room_id).stop()
         except Exception as e:

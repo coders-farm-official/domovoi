@@ -1059,15 +1059,14 @@ case_deps_changed_as_root() {
   check "backs up through the postgres container" called "docker exec domovoi-postgres pg_dump -Fc -U domovoi domovoi"
   check "verifies the dump" called "pg_restore --list"
   check "backup before stopping anything" before "pg_dump" "systemctl stop"
-  check "stops before syncing" before "systemctl stop" "install torch"
+  check "stops before syncing" before "systemctl stop" "install -e"
   check "snapshots the venv" called "pip --disable-pip-version-check --no-input freeze --exclude-editable"
-  check "CPU torch first" called "pip --disable-pip-version-check --no-input install torch --index-url https://download.pytorch.org/whl/cpu"
+  check "no torch step since 1.3.0" not_called "install torch"
   check "then the production extras" called "pip --disable-pip-version-check --no-input install -e .[real-clients,voice-profile]"
   check "no dev extra on a server" not_called "dev,"
   check "the lock is opt-in: the step has no detail, as before it existed" \
     grep -qE '\{"name": "sync-deps", "status": "ok", "duration_sec": [0-9.]+, "detail": null\}' "$RESULT"
   check "nothing asks which Python the venv runs" not_called "python -c import sys; print"
-  check "torch before extras" before "install torch" "install -e"
   check "syncs before migrating" before "install -e" "systemctl restart domovoi-db.service"
   check "migrates before starting" before "systemctl restart domovoi-db.service" "systemctl start domovoi-core.service"
   check "git runs as the service user" called "runuser -u tester -- git -C $REPO"
@@ -1332,6 +1331,23 @@ case_retired_packages_include_edge_tts() {
   check "after the re-sync" before "install -e" "uninstall -y piper-tts piper-phonemize edge-tts"
   check "before the services start" before "uninstall -y piper-tts piper-phonemize edge-tts" "systemctl start domovoi-core.service"
   check "the step names edge-tts" grep -qF '"detail": "uninstalled edge-tts-7.2.8 (no longer used)"' "$RESULT"
+  end_case
+}
+
+# torch and resemblyzer joined the list in 1.3.0, when voice ID moved to an
+# ONNX speaker model: uninstalled with the others, the same way.
+case_retired_packages_include_torch() {
+  new_case retired_packages_include_torch
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps without torch" >/dev/null
+  printf 'Found existing installation: torch 2.14.1+cpu\nUninstalling torch-2.14.1+cpu:\n  Successfully uninstalled torch-2.14.1+cpu\nFound existing installation: Resemblyzer 0.1.4\nUninstalling Resemblyzer-0.1.4:\n  Successfully uninstalled Resemblyzer-0.1.4\n' \
+    >"$STATE/pip-uninstall-output"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "asks pip for torch and resemblyzer too" called "uninstall -y piper-tts piper-phonemize edge-tts torch resemblyzer"
+  check "after the re-sync" before "install -e" "uninstall -y piper-tts"
+  check "the step names both" grep -qF '"detail": "uninstalled torch-2.14.1+cpu Resemblyzer-0.1.4 (no longer used)"' "$RESULT"
   end_case
 }
 
@@ -3198,7 +3214,7 @@ case_lock_for_another_python_falls_back_loudly() {
   USE_LOCK=1 run_update "$CASE/rootbin"
   check "status ok" eq "$(field status)" '"ok"'
   check "no hash-checked install" not_called "--require-hashes"
-  check "resolver, CPU torch first" called "$PIP_RUN torch --index-url https://download.pytorch.org/whl/cpu"
+  check "resolver, no torch step" not_called "$PIP_RUN torch"
   check "the production extras" called "$PIP_RUN -e .[real-clients,voice-profile]"
   check "warns in the journal" grep -qF \
     "WARNING: not installing from a hash-pinned lock (requirements-linux-py314.lock is for Python 3.14 and the venv runs Python 3.13)" \
@@ -3331,9 +3347,8 @@ case_lock_is_opt_in_and_off_by_default() {
   check "a dependency change, as before" eq "$(field deps_changed)" true
   check "no hash-checked install" not_called "--require-hashes"
   check "the lock is not read for its Python" not_called "python -c import sys; print"
-  check "CPU torch first, as before" called "$PIP_RUN torch --index-url https://download.pytorch.org/whl/cpu"
+  check "no torch step since 1.3.0" not_called "$PIP_RUN torch"
   check "then the production extras, as before" called "$PIP_RUN -e .[real-clients,voice-profile]"
-  check "torch before extras" before "install torch" "install -e"
   check "no fallback warning: nothing was asked of the lock" not_said "WARNING: not installing from a hash-pinned lock"
   check "an ok step, not a warn: the owner did not opt in" step_is sync-deps ok
   check "the step says the lock is there to opt into" grep -qF \
@@ -5255,6 +5270,7 @@ CASES=(
   case_deps_changed_as_root
   case_retired_packages_uninstalled
   case_retired_packages_include_edge_tts
+  case_retired_packages_include_torch
   case_retired_packages_absent_leave_no_step
   case_retired_packages_failure_is_a_warning
   case_retired_packages_kept_through_a_rollback

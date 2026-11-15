@@ -265,6 +265,13 @@ public final class ApiRead<Value: Sendable> {
     }
 
     private func run() async {
+        // A read cancelled **before its task ever ran** asks for nothing.
+        // `refresh()` then `stop()` in one turn of the main actor (a write's
+        // re-read as its screen goes away) used to start the request anyway:
+        // nothing between here and the session looks at cancellation, so it
+        // went on the wire for a reader that was already gone, and in the
+        // tests it landed in the next case's request log.
+        guard !Task.isCancelled else { return }
         do {
             let value = try await fetch()
             // A cancelled fetch must not publish: `refresh()` cancels the

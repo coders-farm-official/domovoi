@@ -246,7 +246,7 @@ async def _keepers(now: datetime) -> None:
     await _exec("INSERT INTO memories (person_id, body, source, created_at) "
                 "VALUES (:p, 'likes jazz', 'implicit', :t)", p=pid, t=long_ago)
     await _exec("INSERT INTO voice_profiles (person_id, embedding, model, enrolled_at) "
-                "VALUES (:p, :e, 'resemblyzer-v1', :t)", p=pid, e=b"\x00" * 1024, t=long_ago)
+                "VALUES (:p, :e, 'eres2net-vox-v1', :t)", p=pid, e=b"\x00" * 1024, t=long_ago)
     await _exec("INSERT INTO voice_notes (room_id, text, created_at) VALUES ('kitchen', 'buy milk', :t)",
                 t=long_ago)
     await _exec("INSERT INTO media_plays (room_id, source, title, started_at) "

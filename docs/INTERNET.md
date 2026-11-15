@@ -284,9 +284,18 @@ needs something it can only download is usually the day the line is down.
 - [ ] **Start the core once and let it finish booting.** That builds the
       music container image (check: `docker image inspect domovoi-mpd:latest`),
       downloads the Whisper model you configured, and downloads the default
-      Piper voice (the log says `speech warm-up: Piper voice … ready`). The
-      first `docker compose up -d postgres` and `docker compose run --rm
-      flyway` pulled the database images.
+      Piper voice (the log says `speech warm-up: Piper voice … ready`) and
+      voice ID's speaker model (`speech warm-up: voice encoder ready`; a
+      25 MB file in `~/.domovoi/piper_voices`, which `provision.sh` already
+      fetched on a Linux install). The first `docker compose up -d postgres`
+      and `docker compose run --rm flyway` pulled the database images.
+      Without the speaker model nobody is recognized by voice, and the
+      People page says so. A server that never goes online can be given it
+      by hand: download `3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx`
+      elsewhere (the URLs, size and SHA-256 are `MODEL_URLS`, `MODEL_BYTES`
+      and `MODEL_SHA256` in `domovoi/clients/speaker_encoder.py`) and copy
+      it into `~/.domovoi/piper_voices` of the user the core runs as; a file
+      whose digest doesn't match is ignored.
 - [ ] **Download the Whisper fallback model too.** The core falls back to
       `WHISPER_CPU_FALLBACK_MODEL` (default `small.en`) when the configured
       model can't load, and it only downloads it then. Skip this if
@@ -629,7 +638,7 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | Feature | What goes out | Where | How to disable |
 |---|---|---|---|
 | Connectivity probe | A TCP connection, no payload | `1.1.1.1:443` every 30 s | Answer **No** in Settings → Privacy → Internet: the probe stops dialing and the dashboard says "Turned off for this box". Otherwise **leave `CONNECTIVITY_PROBE_TARGET` on an internet address**: the failing dial is how Domovoi knows the line is down. Pointed at a LAN host (your router), it reports online when the internet isn't there, and online features fail slowly instead of saying they can't. If your network blocks `1.1.1.1`, use another public `host:443` (e.g. `9.9.9.9:443`) |
-| Model downloads | Model files, once | Hugging Face (Whisper models, Piper voices), Ollama model pulls, the fast lane's model (GitHub, only once `fastlane_mode` is `shadow`) | One-time each. Whisper loads its model from the server's own cache first and asks Hugging Face only for a model that isn't downloaded yet; under **No** it never asks (and `HF_HUB_OFFLINE=1` is set for the core), so download every model you'll use before you disconnect ([how](#before-you-disconnect)) |
+| Model downloads | Model files, once | Hugging Face (Whisper models, Piper voices), Ollama model pulls, voice ID's speaker model (GitHub: Coders Farm's copy in the domovoi-models repository, else the sherpa-onnx project's release; 25 MB, pinned by SHA-256; on the core's first start, or at install), the fast lane's model (GitHub, only once `fastlane_mode` is `shadow`) | One-time each. Whisper loads its model from the server's own cache first and asks Hugging Face only for a model that isn't downloaded yet; under **No** it never asks (and `HF_HUB_OFFLINE=1` is set for the core), so download every model you'll use before you disconnect ([how](#before-you-disconnect)) |
 | News briefings | RSS feed fetches; topic feed discovery via your local SearXNG | The feeds you configure | `NEWS_ENABLED=false` kills all background fetching (it follows the internet answer: off for **No**); `NEWS_AUTO_FETCH` (topic feeds) is already off by default |
 | "Double-check that" / web answers (weather, scores, "check that online") | Search queries; and, every time the container starts, its own fetches of the ClearURLs rule lists, a Wikidata query and the radio-browser server list | Your own SearXNG container (localhost-only, port 6888), which queries public search engines | It follows the internet answer: saving **Yes** or **Sometimes** starts it, **No** stops it (no search is sent even if it runs, but its startup fetches would be, which is why it is stopped). Not answered: it runs only if you started it (`docker compose up -d searxng`). When it isn't running Domovoi says so — "I can't search the web right now — my search helper isn't running" — instead of claiming it searched |
 | Chat lookups — **only after you allow each one** (or "Always allow internet", off by default) | A chat's search words, or the address of a page you name | Your local SearXNG (Wikipedia and Wikidata first), Wikipedia, your own SearXNG or Brave Search (with your key); the page itself when you name one (the server reads it: HTTPS only, no cookies, 2 MB); a phone away from home asks Wikipedia, and reads a page you name, itself | Answer **Not now** on the card, leave Settings → Chat & AI → Search → **Always allow internet** off, or answer **No** in Settings → Privacy → Internet (then only the manual and an offline library are searched) |
@@ -692,10 +701,10 @@ the download on to their own storage hosts, listed in the same row; under
 | `1.1.1.1` (TCP 443, no data) | core | The internet check, every 30 s (`CONNECTIVITY_PROBE_TARGET`) | on | on | off |
 | `huggingface.co` · `cdn-lfs.huggingface.co` · `cas-bridge.xethub.hf.co` | core | Whisper models (a size not on disk yet), Piper voices (a voice not on disk yet; the extra voices) | asked | asked | refused |
 | `registry.ollama.ai` · `ollama.com` | Ollama, at the core's request | Model pulls (Settings → Models). An Ollama `-cloud` model sends every question to `ollama.com` | asked | asked | pulls refused; a `-cloud` model is Ollama's own connection, which Settings → Internet warns about |
-| `github.com` · `objects.githubusercontent.com` · `release-assets.githubusercontent.com` | core, the update unit | **Update Domovoi** (`git fetch` of the project); the Android app for phones; the Windows satellite Setup; the Linux satellite's pinned Python (python-build-standalone); the wake-word models (openWakeWord's release, Domovoi's wake-word models repository); the fast lane's model (sherpa-onnx); the XVF3800 host tool for satellite cards | asked; the newer Android app an update names is fetched by itself | asked | refused |
+| `github.com` · `objects.githubusercontent.com` · `release-assets.githubusercontent.com` | core, the update unit | **Update Domovoi** (`git fetch` of the project); the Android app for phones; the Windows satellite Setup; the Linux satellite's pinned Python (python-build-standalone); the wake-word models (openWakeWord's release, Domovoi's wake-word models repository); voice ID's speaker model (Domovoi's models repository, else sherpa-onnx's `speaker-recongition-models` release; once, when it isn't on the server); the fast lane's model (sherpa-onnx); the XVF3800 host tool for satellite cards | asked; the newer Android app an update names, and voice ID's speaker model, are fetched by themselves | asked; voice ID's speaker model is fetched by itself | refused |
 | `api.github.com` · `codeload.github.com` | core | Installing a plugin from GitHub | asked | asked | refused |
 | `api.github.com` · `raw.githubusercontent.com` | dashboard | Fonts: the font catalogue, and the files of a font you add (Documents) | asked | asked | refused |
-| `pypi.org` · `files.pythonhosted.org` · `download.pytorch.org` | core, the update unit | A plugin's Python packages; the update's dependency sync; the satellites' wheels for **Refresh caches** | asked | asked | refused |
+| `pypi.org` · `files.pythonhosted.org` · `download.pytorch.org` | core, the update unit | A plugin's Python packages; the update's dependency sync (PyTorch's index only when a rollback goes back before 1.3.0, whose voice ID needed torch); the satellites' wheels for **Refresh caches** | asked | asked | refused |
 | `www.python.org` | core | The Windows satellite's embeddable Python, for **Refresh caches** | asked | asked | refused |
 | `registry-1.docker.io` · `auth.docker.io` · `production.cloudflare.docker.com` · `deb.debian.org` | Docker on the server, at Domovoi's request | Container images (Postgres, Flyway, the search helper, Letta, the music player's Debian base), and Debian packages for the music image and the satellite cards | asked (an update, a first start, **Refresh caches**) | asked | refused: the update unit refuses an update that would download |
 | `musicbrainz.org` | core | Other names for artists; song recognition's metadata and genres | on | on | off |

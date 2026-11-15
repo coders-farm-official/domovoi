@@ -562,7 +562,7 @@ async def test_v026_applies_again_cleanly_and_files_old_phone_rows_as_phone(db_s
             await s.execute(
                 text(
                     "INSERT INTO voice_profiles (person_id, embedding, model, room_id) "
-                    "VALUES (:p, :e, 'resemblyzer-v1', :r)"
+                    "VALUES (:p, :e, 'eres2net-vox-v1', :r)"
                 ),
                 {"p": pid, "e": await _vec(PRIYA_ROOM), "r": room},
             )
@@ -580,7 +580,7 @@ async def test_v026_applies_again_cleanly_and_files_old_phone_rows_as_phone(db_s
             await s.execute(
                 text(
                     "INSERT INTO voice_profiles (person_id, embedding, model, source) "
-                    "VALUES (:p, :e, 'resemblyzer-v1', 'tablet')"
+                    "VALUES (:p, :e, 'eres2net-vox-v1', 'tablet')"
                 ),
                 {"p": pid, "e": await _vec(PRIYA_ROOM)},
             )
@@ -606,7 +606,7 @@ def test_the_profiles_listing_says_which_set_and_an_admin_deletes_a_phone_sample
                 await conn.execute(
                     text(
                         "INSERT INTO voice_profiles (person_id, embedding, model, room_id, source) "
-                        "VALUES (:p, :e, 'resemblyzer-v1', :r, :s)"
+                        "VALUES (:p, :e, 'eres2net-vox-v1', :r, :s)"
                     ),
                     {"p": pid, "e": b"\0" * 1024, "r": room, "s": source},
                 )

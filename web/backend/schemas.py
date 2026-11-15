@@ -272,6 +272,20 @@ class NowPlayingSong(BaseModel):
     duration_sec: int | None = None
 
 
+class NowPlayingGroup(BaseModel):
+    """The shared queue a room hears (a group, V060): its player is the
+    host's (``host_room``), heard in every room of ``rooms`` (host first).
+    ``name`` is the named group's ("Upstairs"), "Everywhere", or null for
+    rooms joined one by one. ``id`` is the shared queue's (for
+    ``POST /api/music/groups/shared/{id}/end``)."""
+    id: str
+    name: str | None = None
+    host_room: str
+    rooms: list[str]
+    group_id: int | None = None
+    everywhere: bool = False
+
+
 class NowPlaying(BaseModel):
     room_id: str
     state: Literal["play", "pause", "stop"]
@@ -307,6 +321,9 @@ class NowPlaying(BaseModel):
     # the feature, and anything that reached MPD from outside Domovoi — the
     # UI renders nothing rather than guessing.
     added_by: str | None = None
+    # The shared queue this room hears, or null. A member room's card is
+    # its host's song (state, song, elapsed, stream_url are the host's).
+    group: NowPlayingGroup | None = None
 
 
 class FavoriteNowPlayingResult(BaseModel):
@@ -350,6 +367,20 @@ class Person(BaseModel):
     # (devices.owner_person_id; claimed on the People page or in the app).
     # Their listens, and later their favourites, are this person's.
     device_count: int = 0
+    # Their voice samples went with the speaker model 1.3.0 replaced (V061)
+    # and they have none of the current one: nobody is named by a voice
+    # until it says "my name is …" again, and the People page asks them to.
+    voice_relearn: bool = False
+
+
+class VoiceIdStatus(BaseModel):
+    """``GET /api/people/voice-id``: whether voice ID can recognize anyone
+    on this server. ``problem``: why not, in words for the household
+    (None when ``ready``). ``relearn``: how many people need to say "my
+    name is …" again after the 1.3.0 speaker-model change."""
+    ready: bool
+    problem: str | None = None
+    relearn: int = 0
 
 
 class PersonRename(BaseModel):
@@ -362,12 +393,10 @@ class VoiceRoom(BaseModel):
     """Whether one room knows a person's voice (``GET /api/people/{id}/
     voice-rooms``). A room recognizes a voice best from a sample heard in
     that room (domovoi/voice_identifier.py, ``room_person_scores``).
-    ``current``: a satellite sample from this room in the current embedding
-    (1.3.0); ``legacy``: one from before 1.3.0 only, which is used until a
-    current sample of the person exists."""
+    ``current``: a satellite sample from this room, of the current speaker
+    model."""
     room_id: str
     current: bool = False
-    legacy: bool = False
 
 
 class VoiceProfile(BaseModel):
@@ -718,10 +747,33 @@ class Satellite(BaseModel):
     # registry (null for the built-in words). The user manual says these.
     wake_word: str | None = None
     wake_phrase: str | None = None
+    # Which word the room wakes on, by name, for the room's card and drawer
+    # ("Wakes on: Domovoi"): the model the room device reported loading, else
+    # the server's record of the word it gave the room (RoomWakeWord).
+    wakes_on: RoomWakeWord | None = None
     # A phone room's battery (domovoi/room_battery.py, V040): its last
     # report, kept after it goes offline. Null for every other room (a Pi
     # has no battery; a laptop's stays on its Health card).
     battery: RoomBattery | None = None
+
+
+class RoomWakeWord(BaseModel):
+    """Which wake word a room answers to (domovoi/wake_default.py
+    ``room_word``). ``source``: ``device`` — the model the room device
+    reported loading (its health sample, else its hello); ``assigned`` /
+    ``chosen`` — no report, the household default the server gave it / the
+    word an admin pushed; ``pending`` — it is waiting for this word's model;
+    ``unknown`` — nothing says (a room older than the household default, on
+    software that doesn't report its word): ``name`` is null and ``text``
+    says so. ``pending_*``: the word a room that reports its own is still
+    waiting to be given. ``text``: the line the dashboard shows after
+    "Wakes on:"."""
+    slug: str | None = None
+    name: str | None = None
+    source: Literal["device", "assigned", "chosen", "pending", "unknown"] = "unknown"
+    pending_slug: str | None = None
+    pending_name: str | None = None
+    text: str
 
 
 class RoomBattery(BaseModel):

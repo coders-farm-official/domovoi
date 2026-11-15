@@ -83,9 +83,16 @@ every check has passed):
    the tag's pinned public key before anything is published. A tag that
    pins a key is refused without one; a tag that pins none is released
    without signatures, and the Windows side then has no update step.
+   Then, with ``--sbom-dir DIR`` (the release workflow's ``sbom`` job makes
+   them with scripts/release/sbom.py), the software bills of materials,
+   CycloneDX JSON: ``domovoi-server.cdx.json`` and ``domovoi-web.cdx.json``
+   always, ``domovoi-android.cdx.json`` exactly when the release carries
+   the APKs (path a). Each must name this release (the app's: the
+   versionName android/release.json names). Without ``--sbom-dir`` (a
+   local run) the release has none.
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
-   the manifest; path a only), the Setup and its signatures and manifest, the tray and
-   the satellite Setup.
+   the manifest; path a only), the Setup and its signatures and manifest, the tray,
+   the satellite Setup and the SBOMs.
 4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
    one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
    since the previous tag (a release candidate counts from the tag before
@@ -95,7 +102,7 @@ every check has passed):
    20 KB, and never over GitHub's 125,000-character cap.
 5. Path b, a tag made here: push it (never forced), then create the
    GitHub release with the files (``--prerelease`` marks it one).
-   Otherwise: upload the Setup, the tray, the satellite Setup and ``SHA256SUMS`` (``--clobber``, so a second run
+   Otherwise: upload the Setup, the tray, the satellite Setup, the SBOMs and ``SHA256SUMS`` (``--clobber``, so a second run
    replaces them), set the title and the notes, and keep a pre-release one
    (only one GitHub already marks so: every release is a full one by
    default, release candidates included, owner decision 2026-10-15) or
@@ -122,6 +129,9 @@ to run to FILE as JSON (see :func:`plan`), changing nothing.
 ``--signing-agent`` signs with the release key an ssh-agent holds
 (``SSH_AUTH_SOCK``) instead of a key file: ssh-keygen is handed the tag's
 public key and asks the agent, so nothing prompts and no key is on disk.
+``--sbom-dir DIR`` attaches the SBOMs (step 2), and ``--provenance`` says
+in the notes how to check each file's build provenance, which the
+workflow's ``attest`` job records once this script has published them.
 
 git, gh and Windows PowerShell are run by their absolute paths, never from
 the checkout (Windows would look in the current folder first). Standard
@@ -166,6 +176,12 @@ SETUP_SIG_ASSET = "DomovoiSetup.exe.sig"
 MANIFEST_ASSET = "DomovoiSetup.manifest.json"
 MANIFEST_SIG_ASSET = "DomovoiSetup.manifest.json.sig"
 SIGNATURE_ASSETS = (SETUP_SIG_ASSET, MANIFEST_ASSET, MANIFEST_SIG_ASSET)
+#: The software bills of materials (scripts/release/sbom.py ASSET_NAMES),
+#: CycloneDX JSON, attached by --sbom-dir; the app's only with its APKs.
+SERVER_SBOM_ASSET = "domovoi-server.cdx.json"
+WEB_SBOM_ASSET = "domovoi-web.cdx.json"
+ANDROID_SBOM_ASSET = "domovoi-android.cdx.json"
+SBOM_ASSETS = (SERVER_SBOM_ASSET, WEB_SBOM_ASSET, ANDROID_SBOM_ASSET)
 #: The public half of Domovoi's release key, at the tag (build.ps1 embeds it).
 RELEASE_KEY = "windows/installer/release-signing.pub"
 SETUP_NAMESPACE = "domovoi-windows-setup"
@@ -354,6 +370,8 @@ class Release:
     #: Path b: the app this release hands phones, released earlier
     #: (version_name, version_code, tag); its APKs are not in ``apks``.
     app_from: dict[str, Any] | None = None
+    sboms: dict[str, str] | None = None  # the SBOMs attached -> their SHA-256
+    provenance: bool = False  # the release workflow attests every file (--provenance)
 
 
 def _who(abi: str) -> str:
@@ -384,6 +402,11 @@ def body(rel: Release) -> str:
     if rel.satellite_setup_sha256:
         files.append(f"| {SATELLITE_SETUP_ASSET} | makes a spare Windows PC a room (preview, not code-signed) | "
                      f"`{rel.satellite_setup_sha256}` |")
+    for name, what in ((SERVER_SBOM_ASSET, "the Python packages a server installs (SBOM, CycloneDX)"),
+                       (WEB_SBOM_ASSET, "the dashboard's bundled browser libraries (SBOM, CycloneDX)"),
+                       (ANDROID_SBOM_ASSET, "the libraries inside the Android app (SBOM, CycloneDX)")):
+        if rel.sboms and name in rel.sboms:
+            files.append(f"| {name} | {what} | `{rel.sboms[name]}` |")
     if rel.setup_built:
         how = (f"It was built from the tag's own files by `windows/build.ps1 -Pin {rel.tag}`, which sets its pins "
                "(`windows/installer/pins.iss`) to that commit; nothing else differs from the tag.")
@@ -412,6 +435,9 @@ def body(rel: Release) -> str:
         f"- The Android app's signing certificate SHA-256: `{rel.cert}` (check with `apksigner verify --print-certs <file>`).",
         "- Check a download: `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), "
         "or `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) against the line in `SHA256SUMS`.",
+        *([f"- Check that a file was built by Domovoi's release workflow: `gh attestation verify <file> -R {REPO_SLUG}` "
+           f"([SECURITY.md, Verifying a release]({REPO_URL}/blob/{rel.tag}/SECURITY.md#verifying-a-release))."]
+          if rel.provenance else []),
     ]
     install = [
         "## Install or update",
@@ -447,6 +473,9 @@ def sums_text(rel: Release) -> str:
         lines.append(f"{rel.tray_sha256}  {TRAY_ASSET}")
     if rel.satellite_setup_sha256:
         lines.append(f"{rel.satellite_setup_sha256}  {SATELLITE_SETUP_ASSET}")
+    for name in SBOM_ASSETS:
+        if rel.sboms and name in rel.sboms:
+            lines.append(f"{rel.sboms[name]}  {name}")
     return "\n".join(lines) + "\n"
 
 
@@ -689,7 +718,8 @@ def _digest(asset: dict[str, Any]) -> str | None:
 
 def _check_published_apks(release: dict[str, Any], apks: list[dict[str, Any]]) -> None:
     assets = {a["name"]: a for a in release.get("assets") or []}
-    allowed = {e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SATELLITE_SETUP_ASSET, SUMS_ASSET, *SIGNATURE_ASSETS}
+    allowed = ({e["file"] for e in apks} | {SETUP_ASSET, TRAY_ASSET, SATELLITE_SETUP_ASSET, SUMS_ASSET, *SIGNATURE_ASSETS}
+               | {SERVER_SBOM_ASSET, WEB_SBOM_ASSET} | ({ANDROID_SBOM_ASSET} if apks else set()))
     unknown = sorted(set(assets) - allowed)
     if unknown:
         die(f"the release has files finish-release doesn't know: {', '.join(unknown)} "
@@ -749,6 +779,36 @@ def _verify_published(t: Tools, tag: str, sums: str) -> None:
             got = t.download_sha256(a["url"])
         if got != sha:
             die(f"{name} on GitHub is not the file finish-release made (SHA-256 {got}, not {sha})")
+
+
+def _stage_sboms(src: Path, stage: Path, *, version: str, app: dict[str, Any], with_apks: bool) -> dict[str, str]:
+    """--sbom-dir: the server's and the web's SBOM always, the app's exactly
+    when the release carries the APKs, each CycloneDX JSON naming this
+    release (the app's: the versionName android/release.json names),
+    copied into the stage. Name -> SHA-256."""
+    if not src.is_dir():
+        die(f"no folder {src} (--sbom-dir)")
+    want = sorted([SERVER_SBOM_ASSET, WEB_SBOM_ASSET, *([ANDROID_SBOM_ASSET] if with_apks else [])])
+    there = sorted(p.name for p in src.iterdir() if p.is_file())
+    if want != there:
+        die(f"--sbom-dir holds {', '.join(there) or 'nothing'}; this release takes exactly {', '.join(want)}"
+            + ("" if with_apks else " (it carries no APKs, so no app SBOM)"))
+    out = {}
+    for name in [n for n in SBOM_ASSETS if n in want]:
+        data = (src / name).read_bytes()
+        try:
+            doc = json.loads(data.decode("utf-8"))
+        except ValueError:
+            die(f"{name} is not JSON")
+        if not isinstance(doc, dict) or doc.get("bomFormat") != "CycloneDX":
+            die(f"{name} is not a CycloneDX SBOM")
+        named = ((doc.get("metadata") or {}).get("component") or {}).get("version")
+        expect = str(app.get("version_name")) if name == ANDROID_SBOM_ASSET else version
+        if named != expect:
+            die(f"{name} describes version {named!r}, not {expect!r}: an SBOM from another release?")
+        (stage / name).write_bytes(data)
+        out[name] = sha256_bytes(data)
+    return out
 
 
 def _check_pinned_worktree(t: Tools, src: Path, tag_commit: str, provision: bytes) -> None:
@@ -991,6 +1051,11 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
     ap.add_argument("--signing-agent", action="store_true",
                     help="sign with the release key an ssh-agent holds (SSH_AUTH_SOCK) instead of a key file: "
                     "the release workflow's way, which never prompts")
+    ap.add_argument("--sbom-dir", metavar="DIR",
+                    help="attach the SBOMs in DIR (scripts/release/sbom.py): the server's and the web's, and the "
+                    "app's exactly when this release carries the APKs")
+    ap.add_argument("--provenance", action="store_true",
+                    help="the release workflow attests every file after this run: say how to check it in the notes")
     ap.add_argument("--plan", metavar="FILE",
                     help="the release workflow's gate: check that HEAD is a release to make (or one to finish), "
                     "write what to run as JSON to FILE, and change nothing")
@@ -1253,6 +1318,12 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
         say(f"no Windows update signatures: the tag pins no release key ({RELEASE_KEY}), so its Windows side has "
             "no update step")
 
+    # The SBOMs the release workflow made (--sbom-dir), checked to be this release's.
+    sboms = (_stage_sboms(Path(args.sbom_dir), stage, version=version, app=rel, with_apks=bool(apks))
+             if args.sbom_dir else None)
+    if sboms:
+        say(f"the SBOMs: {', '.join(sboms)}")
+
     # 3 and 4. SHA256SUMS and the notes. --------------------------------------
     if args.since and not t.git_ok("rev-parse", "--verify", "--quiet", f"refs/tags/{args.since}"):
         die(f"no tag {args.since} (--since)")
@@ -1262,7 +1333,8 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
                    setup_sha256=sha256_file(staged_setup), setup_built=not args.setup, previous_tag=since,
                    tray_sha256=sha256_file(staged_tray) if staged_tray.is_file() else None,
                    satellite_setup_sha256=sha256_file(staged_sat) if staged_sat.is_file() else None,
-                   signatures=signatures, candidate_of=m.group(1) if by_name else None, app_from=app_from)
+                   signatures=signatures, candidate_of=m.group(1) if by_name else None, app_from=app_from,
+                   sboms=sboms, provenance=args.provenance)
     if hand is not None:
         info.notes = hand.decode("utf-8")
         say(f"the notes: docs/release/{tag}.md at the tag")
@@ -1292,7 +1364,8 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
         say(f"no {SATELLITE_SETUP_ASSET}: this tag's build makes none (it predates the satellite Setup)")
     uploads = [staged_setup, *([stage / n for n in SIGNATURE_ASSETS] if signatures else []),
                *([staged_tray] if info.tray_sha256 else []),
-               *([staged_sat] if info.satellite_setup_sha256 else []), stage / SUMS_ASSET]
+               *([staged_sat] if info.satellite_setup_sha256 else []),
+               *(stage / n for n in SBOM_ASSETS if sboms and n in sboms), stage / SUMS_ASSET]
 
     stable_push = f"{tag_commit}:refs/heads/stable"
     if not publish:

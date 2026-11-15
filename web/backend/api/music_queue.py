@@ -258,6 +258,10 @@ class RoomQueue(BaseModel):
     session_id: str | None = None
     autoplay: bool | None = None
     up_next: dict[str, Any] | None = None
+    # The shared queue this room hears (a group, V060), or null: then the
+    # queue shown IS the host's (``group.host_room``), heard in every room of
+    # ``group.rooms``. The same object as now-playing's ``group``.
+    group: dict[str, Any] | None = None
 
 
 # `device_id` is REQUIRED on every edit, optional only on the read.
@@ -456,6 +460,11 @@ async def read_queue(
     current = payload.get("current_song_id")
     song_ids = [int(i["song_id"]) for i in raw_items if i.get("song_id") is not None]
 
+    group = payload.get("group") if isinstance(payload.get("group"), dict) else None
+    # Who added a song is kept under the room whose player plays it: a
+    # group's host (V060).
+    prov_room = str(group.get("host_room") or room_id) if group else room_id
+
     guest_ids: dict[int, tuple[str | None, str | None]] = {}
     async with session_scope() as s:
         # Prefer the device's CURRENT name (a rename relabels the queue) and
@@ -473,7 +482,7 @@ async def read_queue(
                 WHERE q.room_id = :room_id
                 """
             ),
-            {"room_id": room_id},
+            {"room_id": prov_room},
         )
         provenance = {
             int(r[0]): (r[1], r[2], r[3]) for r in rows.all()
@@ -489,7 +498,7 @@ async def read_queue(
                     "DELETE FROM room_queue_items "
                     "WHERE room_id = :room_id AND song_id = ANY(:ids)"
                 ),
-                {"room_id": room_id, "ids": stale},
+                {"room_id": prov_room, "ids": stale},
             )
 
         device_name = await _device_name_for(s, device_id)
@@ -506,7 +515,7 @@ async def read_queue(
                     "FROM room_queue_items WHERE room_id = :room_id "
                     "AND device_id IS NULL AND device_name = :guest"
                 ),
-                {"room_id": room_id, "guest": GUEST_ADDED_BY},
+                {"room_id": prov_room, "guest": GUEST_ADDED_BY},
             )
             guest_ids = {int(r[0]): (r[1], r[2]) for r in found.all()}
 
@@ -602,6 +611,7 @@ async def read_queue(
         session_id=payload.get("session_id"),
         autoplay=payload.get("autoplay"),
         up_next=payload.get("up_next") if isinstance(payload.get("up_next"), dict) else None,
+        group=group,
     )
 
 
@@ -649,7 +659,11 @@ async def _stamp_provenance(
     songid only after a very long wrap, but a provenance row for a songid
     that has since been removed and re-issued must not collide. ``guest``
     is (the device id it sent, its address) for a guest's entries; only
-    then are V023's guest columns written."""
+    then are V023's guest columns written. Kept under the room whose
+    player plays them: a group's host (V060)."""
+    from web.backend.api.music_groups import host_room_for
+
+    room_id = await host_room_for(room_id)
     async with session_scope() as s:
         for song_id in song_ids:
             params = {
@@ -707,6 +721,9 @@ async def remove_from_queue(room_id: str, request: Request, body: QueueRemoveReq
     if status == 200 and isinstance(payload, dict):
         removed = [int(sid) for sid in (payload.get("removed") or [])]
         if removed:
+            from web.backend.api.music_groups import host_room_for
+
+            room_id = await host_room_for(room_id)
             async with session_scope() as s:
                 await s.execute(
                     text(
@@ -837,6 +854,9 @@ async def clear_queue(room_id: str, request: Request, body: QueueClearRequest):
         headers=auth_forward_headers(request),
     )
     if status == 200:
+        from web.backend.api.music_groups import host_room_for
+
+        room_id = await host_room_for(room_id)
         async with session_scope() as s:
             await s.execute(
                 text("DELETE FROM room_queue_items WHERE room_id = :room_id"),

@@ -252,9 +252,13 @@ VERIFIER_INSTALLED=$TEST_ROOT/usr/local/lib/domovoi-update/verify-update.sh
 UPDATE_UNIT_FILE=$TEST_ROOT/etc/systemd/system/domovoi-update.service
 # Without DOMOVOI_VENV, resolve_venv may move this to the core unit's venv.
 VENV_DIR=${DOMOVOI_VENV:-$REPO_DIR/.venv}
-# `-` rather than `:-`: an explicitly empty value is honoured (no extras; no
-# CPU-torch step). No `dev`: a server does not run the test suite.
+# `-` rather than `:-`: an explicitly empty value is honoured (no extras).
+# No `dev`: a server does not run the test suite. (voice-profile is empty
+# since 1.3.0; it stays in the list so a rollback's older pyproject gets it.)
 PIP_EXTRAS=${DOMOVOI_PIP_EXTRAS-real-clients,voice-profile}
+# PyTorch's CPU index. Nothing a 1.3.0 checkout installs comes from it (voice
+# ID dropped torch); a rollback to an older release still restores its
+# snapshot's CPU torch from here (restore_pins).
 TORCH_INDEX_URL=${DOMOVOI_TORCH_INDEX_URL-https://download.pytorch.org/whl/cpu}
 # Install from the hash-pinned lock only when this is 1. Off by default, so
 # a box re-syncs the way it always has until its owner has re-seeded the
@@ -266,7 +270,7 @@ USE_LOCK=${DOMOVOI_USE_LOCK:-0}
 # (sync_deps_locked). Empty: never use one, always the resolver.
 DEPS_LOCK=${DOMOVOI_DEPS_LOCK-requirements-linux-py314.lock}
 # Beside it, the packages installed without their declared dependencies
-# (faster-whisper, resemblyzer: requirements-no-deps.in says why), pinned
+# (faster-whisper: requirements-no-deps.in says why), pinned
 # and hashed by the same compile. A checkout from before 2026-10-15 has
 # neither file; then that step is skipped.
 DEPS_NODEPS_LOCK=${DOMOVOI_DEPS_NODEPS_LOCK-requirements-linux-py314-no-deps.lock}
@@ -1950,8 +1954,7 @@ END {
 # as that user). Then every pin with --require-hashes, the sdist-only ones
 # built against those tools rather than in an isolated build env that
 # would fetch an unchecked setuptools; then the checkout itself, adding
-# nothing. The lock names its own CPU torch index, so there is no torch
-# step. Extras the lock does not cover (DOMOVOI_PIP_EXTRAS beyond
+# nothing. Extras the lock does not cover (DOMOVOI_PIP_EXTRAS beyond
 # LOCK_EXTRAS: cuda, fastlane, ...) go through the resolver afterwards, and
 # the step says so.
 sync_deps_locked() {
@@ -1982,16 +1985,12 @@ sync_deps_locked() {
   fi
 }
 
-# Without a usable lock: CPU torch first when the extras pull torch in (so
-# pip never fetches the CUDA build), then the editable install with the
-# extras, then (with real-clients or voice-profile) faster-whisper and
-# resemblyzer without their declared dependencies, as requirements-no-deps.in
-# lists them.
+# Without a usable lock: the editable install with the extras, then (with
+# real-clients or voice-profile) faster-whisper without its declared
+# dependencies, as requirements-no-deps.in lists it. No torch step since
+# 1.3.0: nothing Domovoi installs needs torch any more.
 sync_deps_resolved() {
   local target=.
-  if [ -n "$TORCH_INDEX_URL" ] && [[ ",$PIP_EXTRAS," == *,voice-profile,* ]]; then
-    (cd "$REPO_DIR" && pip_as install torch --index-url "$TORCH_INDEX_URL") || return 1
-  fi
   if [ -n "$PIP_EXTRAS" ]; then target=".[$PIP_EXTRAS]"; fi
   (cd "$REPO_DIR" && pip_as install -e "$target") || return 1
   if [[ ",$PIP_EXTRAS," == *,real-clients,* || ",$PIP_EXTRAS," == *,voice-profile,* ]] \
@@ -2009,10 +2008,12 @@ sync_deps_resolved() {
 # with espeak-ng (GPL-3.0) inside, which Domovoi's own text-to-phoneme
 # converter and ONNX Runtime replaced in 2026-10 (domovoi/phonemizer), and
 # piper-phonemize, its older espeak-ng wrapper; edge-tts (LGPL-3.0), the
-# Microsoft Edge online voices, dropped on 2026-10-12. A step is recorded
+# Microsoft Edge online voices, dropped on 2026-10-12; torch (~550 MB of
+# CPU wheels) and resemblyzer, which voice ID ran on until 1.3.0 replaced
+# them with an ONNX model (domovoi/clients/speaker_encoder.py). A step is recorded
 # only when something was removed; a failure is a `warn` and the update
 # stands (nothing imports them any more).
-RETIRED_PACKAGES=(piper-tts piper-phonemize edge-tts)
+RETIRED_PACKAGES=(piper-tts piper-phonemize edge-tts torch resemblyzer)
 drop_retired_packages() {
   local t0 out rc=0 gone
   t0=$(now_ms)

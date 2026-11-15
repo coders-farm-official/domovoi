@@ -139,7 +139,7 @@ final class RoomProtocolTests: XCTestCase {
             procUptimeS: 5_400, coreOK: true, micExpected: true, micFPS: 0.0, idle: true, wsUp: true,
             wsDownForS: 0, reconnects: 2, wifiRxMbits: 144.0, wifiSSID: nil, wifiSignalDBM: -58,
             batteryPercent: 64, batteryCharging: false, onPower: true, micBlocked: true,
-            wakeLoopAgeS: 0.1, threads: 31
+            wakeLoopAgeS: 0.1, threads: 31, wakeWord: "hey_jarvis"
         ))
         XCTAssertEqual(.string("health"), sample["type"])
         XCTAssertEqual([], Set(sample.keys).subtracting(stored).subtracting(["type"]))
@@ -148,6 +148,22 @@ final class RoomProtocolTests: XCTestCase {
         XCTAssertEqual(d["health"]?["frame"]?["battery"], sample["battery"])
         XCTAssertEqual(.bool(true), sample["mic_blocked"])
         XCTAssertLessThan(RoomProtocol.text(sample).utf8.count, 4_096)
+        // The loaded wake model, as the core keeps it ("wakes on").
+        XCTAssertEqual(d["health"]?["stored"]?["wake_word"], sample["wake_word"])
+    }
+
+    func testTheHealthSampleLeavesOutTheWakeWordUntilAModelLoads() {
+        var f = RoomHealthSample.Facts(
+            seq: 1, ts: 1.5, rssKB: nil, cpuPct: nil, tempC: nil, uptimeS: 1, procUptimeS: 1, coreOK: true,
+            micExpected: true, micFPS: 33.3, idle: true, wsUp: true, wsDownForS: 0, reconnects: 0,
+            wifiRxMbits: nil, wifiSSID: nil, wifiSignalDBM: nil, batteryPercent: nil, batteryCharging: nil,
+            onPower: nil, micBlocked: false, wakeLoopAgeS: nil, threads: nil
+        )
+        XCTAssertNil(RoomHealthSample.build(f)["wake_word"])
+        f.wakeWord = ""
+        XCTAssertNil(RoomHealthSample.build(f)["wake_word"])
+        f.wakeWord = "domovoi_v1"
+        XCTAssertEqual(.string("domovoi_v1"), RoomHealthSample.build(f)["wake_word"])
     }
 
     func testAnIPhonesFrameLeavesOutWhatIOSWillNotSay() {

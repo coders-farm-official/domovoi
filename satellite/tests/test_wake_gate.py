@@ -551,3 +551,68 @@ def test_a_low_threshold_never_has_a_floor_above_it():
     nm = wake_gate.NearMiss(0.4)
     assert nm.floor == 0.4
     assert [nm.feed(s, float(i)) for i, s in enumerate([0.39, 0.1])] == [None, None]
+
+
+# ─── which wake model loaded (2026-11-15) ────────────────────────────────
+# The health sample names the model the detector loaded, so the dashboard
+# can say which word the room answers to ("wakes on “Domovoi”").
+
+
+def _load_with_fake_oww(monkeypatch, sat) -> list:
+    import sys
+    import types
+
+    loaded: list = []
+
+    class FakeModel:
+        def __init__(self, wakeword_models, inference_framework):
+            loaded.append(list(wakeword_models))
+
+    pkg = types.ModuleType("openwakeword")
+    mod = types.ModuleType("openwakeword.model")
+    mod.Model = FakeModel
+    pkg.model = mod
+    monkeypatch.setitem(sys.modules, "openwakeword", pkg)
+    monkeypatch.setitem(sys.modules, "openwakeword.model", mod)
+    monkeypatch.setattr(client, "_lighten_wake_streaming", lambda oww: True)
+    monkeypatch.setattr(client, "_prime_wake_reset", lambda oww: True)
+    sat._load_wake_model()
+    return loaded
+
+
+def test_health_names_no_wake_word_before_a_model_has_loaded() -> None:
+    sat = object.__new__(client.Satellite)
+    sat.cfg = client.Config.from_toml({"wake": {"threshold": 0.8}})
+    sat._wake_threshold = 0.8
+    assert "wake_word" not in sat._health_wake_facts()
+
+
+def test_health_names_the_built_in_word_it_loaded(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(client, "WAKE_SIDECAR", tmp_path / "wake")
+    monkeypatch.setattr(client, "WAKE_THRESHOLD_SIDECAR", tmp_path / "wake_threshold")
+    sat = object.__new__(client.Satellite)
+    sat.cfg = client.Config.from_toml({"wake": {"threshold": 0.7}})
+    assert _load_with_fake_oww(monkeypatch, sat) == [["hey_jarvis"]]
+    assert sat._health_wake_facts() == {
+        "wake_threshold": 0.7, "wake_threshold_setting": 0.7, "wake_word": "hey_jarvis"}
+
+
+def test_health_names_a_pushed_word_by_the_model_file_it_loaded(monkeypatch, tmp_path) -> None:
+    models = tmp_path / "wake_models"
+    models.mkdir()
+    (models / "domovoi_v1.onnx").write_bytes(b"onnx")
+    (tmp_path / "wake").write_text("domovoi_v1\n", encoding="utf-8")
+    monkeypatch.setattr(client, "WAKE_SIDECAR", tmp_path / "wake")
+    monkeypatch.setattr(client, "WAKE_MODELS_DIR", models)
+    monkeypatch.setattr(client, "WAKE_THRESHOLD_SIDECAR", tmp_path / "wake_threshold")
+    sat = object.__new__(client.Satellite)
+    sat.cfg = client.Config.from_toml({})
+    assert _load_with_fake_oww(monkeypatch, sat) == [[str(models / "domovoi_v1.onnx")]]
+    assert sat._health_wake_facts()["wake_word"] == "domovoi_v1"
+
+
+def test_the_word_survives_a_threshold_that_cannot_be_read() -> None:
+    sat = object.__new__(client.Satellite)
+    sat.cfg = object()                    # no wake_threshold at all
+    sat._wake_model_loaded = "domovoi_v1"
+    assert sat._health_wake_facts() == {"wake_word": "domovoi_v1"}

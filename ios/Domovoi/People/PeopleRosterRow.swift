@@ -11,7 +11,7 @@ import SwiftUI
 ///
 /// **The row reads as one stop.** The name is its label and the subtitle its
 /// value, as ``FileRowView`` does: a VoiceOver pass over four people should
-/// be four stops, not twelve, and the two dots carry nothing the subtitle
+/// be four stops, not twelve, and the three dots carry nothing the value
 /// does not already say in words.
 struct PersonRosterRow: View {
 
@@ -40,7 +40,17 @@ struct PersonRosterRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(person.name)
-        .accessibilityValue(people.subtitle(for: person))
+        .accessibilityValue(value)
+    }
+
+    /// The subtitle, and what the relearn dot means when it is drawn: the row
+    /// is one stop, so the dot's description (Android's `contentDescription`,
+    /// `PeopleScreen.kt:344`) is said in it rather than lost with the hidden
+    /// dot.
+    private var value: String {
+        let subtitle = people.subtitle(for: person)
+        guard people.showsRelearnDot(person) else { return subtitle }
+        return subtitle + ", " + PeopleStrings.relearnDotDescription
     }
 
     @ViewBuilder private var rowBody: some View {
@@ -79,6 +89,9 @@ struct PersonRosterRow: View {
             // neither dot is the only carrier of its meaning.
             if people.isLive(person) { ToneDot(tone: .ok) }
             if person.namesakes > 0 { ToneDot(tone: .warn) }
+            // Has to say "my name is …" again before voice ID knows them
+            // (`PeopleScreen.kt:341-346`); said in words in the row's value.
+            if people.showsRelearnDot(person) { ToneDot(tone: .idle) }
         }
     }
 

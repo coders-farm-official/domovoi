@@ -99,39 +99,33 @@ can't do CUDA logs a message naming the fix and starts on
 `whisper_cpu_fallback_model` (`small.en`, cpu, int8) instead; the Models
 page shows a banner until the settings are fixed.
 
-### Voice-profile install (Windows quirk)
+### Voice ID's speaker model
 
-Resemblyzer pins `webrtcvad>=2.0.10`, which has no Windows binary
-wheels — pip would try to compile it from source and fail without MSVC
-build tools installed. Our code path doesn't use webrtcvad (we pass a
-numpy array directly to `embed_utterance`, which skips Resemblyzer's
-preprocess pipeline), so the workaround is to install the rest of the
-voice-profile deps via the extra and Resemblyzer with `--no-deps`:
+Voice identification embeds each utterance with 3D-Speaker's ERes2Net
+(VoxCeleb, 192 numbers; Apache-2.0 code and weights) on ONNX Runtime, with
+a numpy Kaldi filter bank in front (`domovoi/clients/speaker_encoder.py`).
+No torch and no extra package since 1.3.0 (Resemblyzer before): the
+`voice-profile` extra is empty, kept so older install commands still work.
 
-```bash
-pip install -e ".[real-clients,voice-profile]"
-pip install --no-deps -r requirements-no-deps.in
-```
+The model is a 25 MB file, not in the repo. The core fetches it once, on
+its first start, from a pinned URL (the sherpa-onnx project's release),
+checked against a pinned size and SHA-256, into the voice-models directory
+(`VOICE_MODELS_DIR`, `~/.domovoi/piper_voices`, beside the Piper voices).
+`provision.sh` fetches it ahead with the voices. Under
+`INTERNET_ACCESS=never` nothing is fetched: copy the file there by hand,
+or voice ID names nobody, and the People page says why.
 
-Since 2026-10-15 that is how every host installs it, Linux included, and
-for more than webrtcvad: Domovoi uses only Resemblyzer's pretrained
-weights and runs the network itself (`domovoi/clients/speaker_encoder.py`,
-on `torch` from the extra), so librosa (which brings soxr and soundfile,
-LGPL libraries) isn't installed either. The same file installs
-`faster-whisper` without PyAV. A Linux server installs both from the
-hash-pinned lock instead ([docs/LINUX_HOST.md](../docs/LINUX_HOST.md)).
-
-Verify it's all there:
+Fetch it and check it loads:
 
 ```bash
-python -c "from domovoi.clients.speaker_encoder import SpeakerEncoder; SpeakerEncoder()"
-# Prints nothing when the weights and torch are there.
+python -c "from domovoi.clients.speaker_encoder import download_model, SpeakerEncoder; SpeakerEncoder(download_model())"
+# Prints nothing when the model is there and loads.
 ```
 
 ### Voice-profile command vocabulary
 
 Local speaker identification + enrollment. The pre-router hook in
-`streaming.py` runs a Resemblyzer embedding (256-dim float32) on every
+`streaming.py` runs a speaker embedding (ERes2Net, 192-dim float32) on every
 utterance, matches it against `voice_profiles` rows, and stamps
 `person_id` + `presence_tier` onto the Context (and into `intents_log`
 for the audit trail). The handler covers the user-facing parts.
@@ -148,7 +142,10 @@ Enrollment requires:
   context can't park `pending_confirmation`, so they get a friendly
   "couldn't quite save your voice" response and skip enrollment);
 * an embedding (clips below `VOICE_PROFILE_MIN_UTTERANCE_SEC` produce
-  no vector — Resemblyzer needs ~1 s of voiced audio).
+  no vector — a second of speech is the least a stable voice embedding
+  needs) and the speaker model on the server (without it, "my name is …"
+  says that voices can't be recognized right now, and why to look on the
+  People page).
 
 The handler intentionally does *not* fast-path on `i'm hungry` /
 `i'm tired` and similar "I'm <adjective>" false positives — the

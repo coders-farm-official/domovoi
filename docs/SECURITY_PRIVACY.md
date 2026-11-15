@@ -1303,7 +1303,7 @@ network (`starlette`, `python-multipart`, `requests`, `urllib3`,
 
 A Linux server installs its Python packages from
 `requirements-linux-py314.lock`: the core, the dashboard, the
-`real-clients` and `voice-profile` extras, `resemblyzer` and CPU torch,
+`real-clients` and `voice-profile` extras (no torch since 1.3.0),
 each at an exact version with its SHA-256s, for CPython 3.14 on x86_64
 ([LINUX_HOST.md, Install](LINUX_HOST.md#install)). pip refuses a download
 that doesn't match its hash, and the packages that publish only source are

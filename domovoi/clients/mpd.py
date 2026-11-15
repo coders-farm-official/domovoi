@@ -1313,10 +1313,26 @@ class MPDNotProvisioned(RuntimeError):
     """
 
 
-def get_mpd_client_for(room_id: str | None) -> MPDClient:
-    """Return the MPD client bound to ``room_id``'s daemon.
+def _host_of(room_id: str | None) -> str | None:
+    """The room whose player ``room_id`` hears: the host of its shared
+    queue (domovoi/music_groups.py), else ``room_id`` itself."""
+    if not room_id:
+        return room_id
+    from domovoi import music_groups
 
-    Resolution order:
+    return music_groups.host_of(room_id)
+
+
+def get_mpd_client_for(room_id: str | None) -> MPDClient:
+    """Return the MPD client that plays ``room_id``'s music.
+
+    A room in a shared queue (a group, domovoi/music_groups.py) is answered
+    with its HOST's player: "play X", a skip, a pause or a queue edit in any
+    room of the group is the group's. :func:`own_mpd_client` is the room's
+    own daemon, for what must see each player once (rescans, the listen
+    logger, the provisioner).
+
+    Resolution order (of the routed room):
       1. ``room_id`` if it's been provisioned.
       2. The first provisioned room (programmatic / fan-out callers).
       3. A throwaway stub when ``USE_STUBS=true`` (test ergonomics — the
@@ -1324,6 +1340,12 @@ def get_mpd_client_for(room_id: str | None) -> MPDClient:
       4. Raise — handlers in production should never reach this; satellite
          connect provisions before any handler runs.
     """
+    return own_mpd_client(_host_of(room_id))
+
+
+def own_mpd_client(room_id: str | None) -> MPDClient:
+    """The MPD client bound to ``room_id``'s OWN daemon, whatever shared
+    queue the room is in (see :func:`get_mpd_client_for`)."""
     if settings.use_stubs:
         # Tests: per-room stub if seeded, otherwise auto-create one. Keeps
         # the `_clients["kitchen"] = stub` pattern in tests working without
@@ -1354,8 +1376,27 @@ def get_mpd_client_for(room_id: str | None) -> MPDClient:
     return client
 
 
+def own_player(room_id: str | None) -> MPDClient | None:
+    """``room_id``'s OWN player when it has one, else None — never another
+    room's (``own_mpd_client`` falls back to the first provisioned room for
+    room-agnostic callers) and never a new one. What the groups use
+    (domovoi/music_groups.py): pausing a joining room's player, or handing
+    a queue to a room, must touch that room's daemon or nothing."""
+    if not room_id or is_phone_room(room_id):
+        return None
+    if settings.use_stubs:
+        cached = _clients.get(room_id)
+        if cached is not None:
+            return cached
+        return own_mpd_client(room_id) if room_id in _room_ports else None
+    if room_id not in _room_ports:
+        return None
+    return own_mpd_client(room_id)
+
+
 def iter_mpd_clients() -> list[tuple[str, MPDClient]]:
-    """Return ``(room_id, client)`` for every provisioned room.
+    """Return ``(room_id, client)`` for every provisioned room — each room's
+    OWN daemon, once, whatever shared queue it is in.
 
     Empty when no satellite has ever connected. Used by fan-out helpers
     (post-download rescan, voice "rescan library") that need to
@@ -1365,14 +1406,21 @@ def iter_mpd_clients() -> list[tuple[str, MPDClient]]:
     if settings.use_stubs:
         # In stub mode, return whatever stubs the tests have seeded.
         return list(_clients.items())
-    return [(room, get_mpd_client_for(room)) for room in _room_ports.keys()]
+    return [(room, own_mpd_client(room)) for room in _room_ports.keys()]
 
 
 def mpd_stream_url_for(room_id: str | None) -> str | None:
-    """Per-room HTTP stream URL the satellite consumes. ``None`` when unprovisioned.
+    """The HTTP stream the room's satellite plays: its own player's, or its
+    shared queue's host's (:func:`get_mpd_client_for`). ``None`` when
+    unprovisioned.
 
     The host part comes from ``MPD_HTTP_BASE``; its default, ``auto``, is
     this host's LAN address as of now (see domovoi/lan_address.py)."""
+    return own_stream_url_for(_host_of(room_id))
+
+
+def own_stream_url_for(room_id: str | None) -> str | None:
+    """``room_id``'s OWN player's stream URL (see :func:`mpd_stream_url_for`)."""
     key = _resolve_room(room_id)
     if key is None:
         return None

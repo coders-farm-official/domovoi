@@ -182,7 +182,7 @@ async def test_handle_confirmation_affirmative_enrolls(db_session) -> None:
     ).all()
     assert len(profile_rows) == 1
     assert profile_rows[0][0] == people_rows[0][0]
-    # 256 floats × 4 bytes
+    # EMBEDDING_DIM floats × 4 bytes
     assert profile_rows[0][1] == EMBEDDING_DIM * 4
 
 
@@ -218,6 +218,49 @@ async def test_whoami_unknown(db_session) -> None:
     ctx = Context(session_id=None, room_id="kitchen", online=True, person_id=None)
     response = await handler._whoami(ctx, db_session)
     assert "don't recognize" in response.text.lower()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_whoami_unknown_after_the_model_change_says_how_to_be_known_again(db_session) -> None:
+    """1.3.0's new speaker model can't use the old samples (V061): while
+    someone still has to introduce themselves again, an unknown voice is
+    told why it may not be recognized, never that it is."""
+    handler = VoiceProfileHandler()
+    ctx = Context(session_id=None, room_id="kitchen", online=True, person_id=None)
+    pid = await PeopleRepository(db_session).create(name="Sarah")
+    await db_session.execute(
+        text("UPDATE people SET voice_relearn_since = NOW() WHERE id = :id"), {"id": pid}
+    )
+    await db_session.commit()
+    text_ = (await handler._whoami(ctx, db_session)).text
+    assert text_.startswith("I don't recognize your voice yet.")
+    assert "upgraded" in text_ and '"my name is"' in text_
+    # Once they have, the plain answer again.
+    await VoiceProfilesRepository(db_session).add(
+        person_id=pid, embedding=b"\0" * (EMBEDDING_DIM * 4),
+        model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG, room_id="kitchen", sample_seconds=1.5,
+    )
+    await db_session.commit()
+    assert (await handler._whoami(ctx, db_session)).text == "I don't recognize your voice yet."
+
+
+@pytest.mark.asyncio
+async def test_without_the_speaker_model_voice_replies_say_so(monkeypatch) -> None:
+    """No speaker model on the server: "my name is …" and "who am I" say
+    voices can't be recognized right now, not "try again in a moment" (it
+    wouldn't help) and never a name."""
+    from domovoi.handlers import voice_profile as vp
+
+    monkeypatch.setattr(vp, "voice_id_unavailable", lambda: True)
+    handler = VoiceProfileHandler()
+    ctx = Context(session_id="11111111-1111-1111-1111-111111111111", room_id="kitchen",
+                  online=True, person_id=None)
+    hello = await handler._start_self_intro("Sarah", ctx, None)
+    assert hello.text.startswith("Hi Sarah, nice to meet you.")
+    assert "can't recognize voices right now" in hello.text
+    who = await handler._whoami(Context(session_id=None, room_id="kitchen", online=True), None)
+    assert "can't recognize voices right now" in who.text
 
 
 @requires_db

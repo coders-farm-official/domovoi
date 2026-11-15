@@ -31,6 +31,10 @@
 #   ios      ios/ (or a workflow) changed: the iPhone app's package tests on
 #            macOS and the app + UI-test target compiled for the Simulator,
 #            unsigned (the Simulator UI trains stay on the owner's Mac).
+#   sbom     any change beyond docs: the release's three SBOMs
+#            (scripts/release/sbom.py, the app's through Gradle), made the
+#            way release.yml makes them, so a release never finds them
+#            broken. An artifact (`domovoi-sboms`), never published.
 # A new job slots into `jobs:` beside these.
 #
 # No secrets anywhere, and none may be added: release signing and publishing
@@ -210,13 +214,28 @@ jobs:
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --no-deps -e .
       # Two imports the suite makes that requirements.lock (core + dev)
-      # doesn't carry, from their own floors through pip's resolver:
-      # scipy (BSD) for the satellite's resampler (satellite/requirements.txt),
-      # feedparser (BSD) for the podcast and news feed readers (the
-      # real-clients extra). The rest of real-clients (Whisper, ONNX voices)
-      # stays out: the suite runs on stubs.
+      # doesn't carry: scipy (BSD) for the satellite's resampler
+      # (satellite/requirements.txt), feedparser (BSD, with its sgmllib3k)
+      # for the podcast and news feed readers (the real-clients extra).
+      # Exact versions and hashes in .github/ci-extra-requirements.txt.
+      # The rest of real-clients (Whisper, ONNX voices) stays out: the
+      # suite runs on stubs.
       - name: Install what the tests import beyond the lock (scipy, feedparser)
-        run: python -m pip install "scipy>=1.11,<2" "feedparser>=6.0"
+        run: python -m pip install --require-hashes -r .github/ci-extra-requirements.txt
+      # Voice ID's speaker model (25 MB), from the pinned URL and checked
+      # against the pinned SHA-256 the server uses
+      # (domovoi/clients/speaker_encoder.py), so test_speaker_encoder.py
+      # runs its embedding tests (the ONNX Runtime guard) instead of skipping.
+      - name: Voice ID's speaker model (pinned), for the encoder's tests
+        run: |
+          sha=$(python -c "from domovoi.clients import speaker_encoder as se; print(se.MODEL_SHA256)")
+          for url in $(python -c "from domovoi.clients import speaker_encoder as se; print(*se.MODEL_URLS)"); do
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/speaker.onnx" "$url"               && echo "$sha  $RUNNER_TEMP/speaker.onnx" | sha256sum -c - && break
+            echo "::warning::speaker model not fetched from $url"
+            rm -f "$RUNNER_TEMP/speaker.onnx"
+          done
+          test -s "$RUNNER_TEMP/speaker.onnx"
+          echo "DOMOVOI_TEST_SPEAKER_MODEL=$RUNNER_TEMP/speaker.onnx" >>"$GITHUB_ENV"
       # The default 100 connections run out under pytest -n 4 (each worker
       # has its own database copy and the app's pools): raise it, then
       # restart the service container so the setting takes.
@@ -686,3 +705,39 @@ jobs:
           grep -E "(error|fatal error):" "$RUNNER_TEMP/build.log" | sort -u | head -n 80 || true
           tail -n 60 "$RUNNER_TEMP/build.log"
           exit "$rc"
+
+  # The release's SBOMs, made as release.yml's sbom job makes them (no
+  # cache, the runner's JDK 17, the wrapper's Gradle held to its SHA-256),
+  # so a broken generator shows up here and not on release day.
+  sbom:
+    name: sbom
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The server's and the web's SBOMs
+        run: |
+          mkdir -p "$RUNNER_TEMP/sboms"
+          python3 scripts/release/sbom.py server --out "$RUNNER_TEMP/sboms/domovoi-server.cdx.json"
+          python3 scripts/release/sbom.py web --out "$RUNNER_TEMP/sboms/domovoi-web.cdx.json"
+      - name: The app's SBOM
+        working-directory: android
+        run: |
+          set -euo pipefail
+          props=gradle/wrapper/gradle-wrapper.properties
+          grep -qF gradle-8.14.3-bin.zip "$props"             || { echo "::error::the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 here and in release.yml"; exit 1; }
+          grep -qF distributionSha256Sum "$props"             || echo 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' >>"$props"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          chmod +x gradlew
+          ./gradlew --no-daemon --no-configuration-cache --init-script ../scripts/release/sbom-android.init.gradle             -Pdomovoi.sbomDeps="$RUNNER_TEMP/gradle-deps.json" :app:domovoiSbomDeps
+          python3 ../scripts/release/sbom.py android --gradle-deps "$RUNNER_TEMP/gradle-deps.json"             --out "$RUNNER_TEMP/sboms/domovoi-android.cdx.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: domovoi-sboms
+          path: ${{ runner.temp }}/sboms/
+          if-no-files-found: error
+          retention-days: 14

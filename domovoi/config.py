@@ -1611,25 +1611,47 @@ class Settings(BaseSettings):
     voice_profile_soft_tier_sec: int = 3600       # below → LOW urgency
     voice_profile_hard_tier_sec: int = 14400      # above → HIGH urgency
 
+    # Every cosine setting below is on the scale of voice ID's speaker
+    # model (3D-Speaker's ERes2Net since 1.3.0; Resemblyzer's scores sat
+    # around 0.6-0.85, this model's around 0.1-0.75, so the old values
+    # don't carry over). Each was chosen with scripts/eval_voice_id.py
+    # --tune (48 synthetic speakers, 16 two-person households enrolled with
+    # one introduction, 16 guests, 7 simulated rooms: near, far, music, a
+    # TV; 2026-11-14), by the house rule that a wrong name is worse than
+    # none: no room may name the wrong person more than 1 % of the time.
+    #
     # Cosine-similarity threshold for "this embedding matches a known
-    # person." Resemblyzer's authors recommend ~0.75 for same-speaker
-    # acceptance — lower lets cousins / siblings collide, higher rejects
-    # the same person on a cold or distant mic. Tunable per-household.
-    voice_profile_match_threshold: float = 0.75
+    # person": the lowest at which no room named the wrong person more
+    # than 1 % of the time (0.58; the TV room, another voice talking under
+    # the command, is the one that sets it). There it names the speaker in
+    # 66 % of office commands, 51 % kitchen, 34 % dining, 19 % garage.
+    # Lower lets similar voices collide, higher rejects the same person on a
+    # distant mic. Tunable per household.
+    voice_profile_match_threshold: float = 0.58
 
     # Added to the threshold for a person scored against samples from the
     # turn's own room (domovoi/voice_identifier.py, ``room_person_scores``).
     # A room's mic and echo are in every sample it keeps, so anyone heard
-    # there scores a little closer to them: in scripts/eval_voice_id.py's
-    # simulated rooms, room samples at 0.75 named the wrong person up to
-    # 9 % of the time, at 0.78 no more often than before 1.3.0 (2026-11).
-    voice_profile_same_room_margin: float = 0.03
+    # there scores a little closer to them. With Resemblyzer that named the
+    # wrong person up to 9 % of the time (hence 0.03 then). With ERes2Net
+    # the quiet rooms named nobody wrongly at any margin from 0 to 0.08
+    # (eval --tune, step 3), and only the TV room moved: 1.00 % wrong at
+    # +0, exactly on the ceiling, 0.87 % at +0.01. So 0.01, the least that
+    # keeps a little room under the ceiling (each 0.01 costs about 1.5
+    # points of commands named).
+    voice_profile_same_room_margin: float = 0.01
 
     # A turn whose speech stands less than this far (dB) above the rest of
     # the recording — music, a TV, a running machine under the command — is
     # scored but nobody is named from it, and no room learns from it
     # (outcome ``noisy``). The voice under music is coloured by it: in the
     # simulated garage the right person and the wrong one score alike.
+    # Kept at 10 for ERes2Net (eval --tune, step 4): below it the simulated
+    # music rooms named nobody wrongly at any gate, and a gate of 8 or less
+    # let 3 % of commands under moderate music be named, but that music
+    # has no singing, and a voice under the command (the TV room, scored at
+    # ~22 dB, which no gate reaches) is the hardest case there is, so the
+    # gain isn't worth trusting songs with vocals to the threshold.
     voice_profile_noisy_snr_db: float = 10.0
 
     # How far ahead of the next-closest person the best one must score
@@ -1637,14 +1659,24 @@ class Settings(BaseSettings):
     # "ambiguous" and nobody is named — two similar voices (same-sex
     # adults on a far-field mic, single short enrollment clips) otherwise
     # get a coin flip that can land on the wrong person every time.
+    # Kept at 0.05: on the eval corpus any margin from 0 to 0.10 gave the
+    # same results at 0.58 (eval --tune, step 2: two members both clearing
+    # the threshold never happened there), so the guard stays as it was.
     voice_profile_match_margin: float = 0.05
 
     # Minimum utterance length (in seconds of int16 PCM @ 16 kHz) before
     # we even attempt embedding — and of the speech left once the silence
-    # around it is trimmed (domovoi/voice_prep.py). Resemblyzer needs ~1 s of voiced audio
-    # to produce a stable vector; sub-second clips are mostly noise and
+    # around it is trimmed (domovoi/voice_prep.py). A speaker embedding needs
+    # about a second of voice to be stable (kept at 1.0 for the ERes2Net
+    # model in 1.3.0: the eval corpus's commands are 1.5-3 s, so it can't
+    # say a shorter floor is safe); sub-second clips are mostly noise and
     # produce embeddings that match nobody, polluting the audit trail.
     voice_profile_min_utterance_sec: float = 1.0
+
+    # ONNX Runtime threads for one voice embedding (the speaker model,
+    # domovoi/clients/speaker_encoder.py), on the speech executor beside
+    # Whisper.
+    voice_profile_encoder_threads: int = 2
 
     # ─── Learning a voice room by room ─────────────────────────────
     # Each satellite's mic and room colour a voice differently, and a
@@ -1660,6 +1692,14 @@ class Settings(BaseSettings):
     # mix-up saved one voice into another person's profile and made the
     # mix-up permanent. The setting names are kept so existing .env
     # overrides still apply.
+    #
+    # For ERes2Net (eval --tune, step 5): from +0.04 up, no confident match
+    # in any room but the TV one named the wrong person (2 in the office at
+    # +0, none at +0.04); 0.05 keeps that with a little headroom, while
+    # still counting about 45 % of office and 15 % of dining commands
+    # towards learning. In the TV room, a voice under the command, some
+    # confident wrong names remain at any band short of +0.20; three in a
+    # row of one person in one room is what it takes to learn there.
     voice_profile_drift_near_threshold_margin: float = 0.05
     voice_profile_drift_reenroll_after: int = 3
 
@@ -1682,14 +1722,18 @@ class Settings(BaseSettings):
     third_party_intro_ttl_sec: int = 600  # 10 minutes
     # Cosine similarity above which two unknown-voice samples merge
     # into the same cluster. Looser than the match threshold because
-    # we'd rather pool same-speaker samples than split them.
-    third_party_cluster_merge_threshold: float = 0.7
+    # we'd rather pool same-speaker samples than split them. For ERes2Net
+    # (eval --tune, step 6, one utterance against another in the quiet
+    # rooms): at 0.50 two commands of one voice merge 65 % of the time and
+    # two different voices 0.26 % (0.45: 78 % / 0.88 %; 0.70, near
+    # Resemblyzer's old value: 7 % / 0 %, which would split nearly everyone).
+    third_party_cluster_merge_threshold: float = 0.5
     # Minimum classifier confidence to surface a "was that Alex?" ask.
     # Below this, the cluster stays buffered for the next introducer
     # turn; the TTL eventually drops it if nothing materializes.
     third_party_classifier_threshold: float = 0.6
     # Minimum total audio across a cluster before we even bother running
-    # the classifier — Resemblyzer-grade enrollment needs ~1.5 s.
+    # the classifier: about one and a half commands' worth of voice.
     third_party_min_cluster_audio_sec: float = 1.2
 
     # ─── Implicit memory extraction ────────────────────────

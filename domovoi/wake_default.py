@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -389,6 +390,83 @@ async def on_hello(room_id: str, reported: str | None, can_push: bool, push: Pus
     except Exception as e:  # noqa: BLE001 - a hello never fails over this
         log.warning("wake default: room %s not handled: %s", room_id, e)
         return "error"
+
+
+# ─── which word a room answers to, by name ───────────────────────────────
+
+#: What the dashboard says when nothing tells the server a room's word: a
+#: room that existed before V054 (``kept``) on software that doesn't report
+#: the model it loaded.
+UNKNOWN_WORD_TEXT = "unknown until this room updates"
+
+_STOCK_VERSION_RE = re.compile(r"^(?P<base>[a-z_]+)_v\d+(?:\.\d+)+$")
+
+
+def word_name(slug: str, names: dict[str, str] | None = None) -> str:
+    """A wake word's display name: a trained word's name (``names``, from
+    the registry), Domovoi's published and built-in words' names, else the
+    slug in words ("hey_mycroft" -> "Hey Mycroft"). A stock model file's
+    stem ("hey_jarvis_v0.1") reads as its word."""
+    names = names or {}
+    if slug not in names and (m := _STOCK_VERSION_RE.match(slug)) and m.group("base") in STOCK_SLUGS:
+        slug = m.group("base")
+    if names.get(slug):
+        return names[slug]
+    if slug in PUBLISHED:
+        return PUBLISHED[slug].name
+    if slug in BUILTIN_WORDS:
+        return BUILTIN_WORDS[slug][0]
+    return " ".join(w.capitalize() for w in re.split(r"[_\-.\s]+", slug) if w) or slug
+
+
+def room_word(reported: str | None, row: dict | None,
+              names: dict[str, str] | None = None) -> dict[str, Any]:
+    """Which word a room wakes on, for the dashboard: ``{slug, name,
+    source, pending_slug, pending_name}``.
+
+    The word the room device reports (``source`` "device") wins: it is the
+    model it loaded. Without one, the server's own record: the household
+    default it was given (``assigned``) or the word an admin pushed
+    (``chosen``); a room waiting for its word (``pending``) shows that word,
+    as pending. Otherwise (a ``kept`` room on older software, or no record
+    at all) the word is ``unknown``. ``pending_*`` names the word a room
+    that reports its own is still waiting to be given. ``text`` is the
+    line after "Wakes on:"."""
+    state = (row or {}).get("state")
+    slug = (row or {}).get("slug") or None
+    out: dict[str, Any] = {"slug": None, "name": None, "source": "unknown",
+                           "pending_slug": None, "pending_name": None,
+                           "text": UNKNOWN_WORD_TEXT}
+    if reported:
+        name = word_name(reported, names)
+        out.update(slug=reported, name=name, source="device", text=name)
+        if state == "pending" and slug and slug != reported:
+            waiting = word_name(slug, names)
+            out.update(pending_slug=slug, pending_name=waiting,
+                       text=f"{name} (waiting to switch to {waiting})")
+        return out
+    if state in ("assigned", "chosen", "pending") and slug:
+        name = word_name(slug, names)
+        out.update(slug=slug, name=name, source=state,
+                   text=f"{name} (pending)" if state == "pending" else name)
+    return out
+
+
+async def word_names(s) -> dict[str, str]:
+    """slug -> name of the household's trained words (the registry)."""
+    rows = (await s.execute(text("SELECT slug, name FROM wake_words"))).all()
+    return {r[0]: r[1] for r in rows if r[0] and r[1]}
+
+
+async def room_states(s, room_id: str | None = None) -> dict[str, dict]:
+    """room -> ``{state, slug}`` from ``room_wake_words`` (one room, or all)."""
+    if room_id is None:
+        rows = (await s.execute(text("SELECT room_id, state, slug FROM room_wake_words"))).all()
+    else:
+        rows = (await s.execute(
+            text("SELECT room_id, state, slug FROM room_wake_words WHERE room_id = :r"),
+            {"r": room_id})).all()
+    return {r[0]: {"state": r[1], "slug": r[2]} for r in rows}
 
 
 async def pending_rooms(s) -> list[dict[str, Any]]:

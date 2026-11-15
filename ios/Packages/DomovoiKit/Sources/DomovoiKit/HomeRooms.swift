@@ -459,6 +459,9 @@ public enum RoomChip: Equatable, Sendable {
     case inCall(String)
     case screenStopped
     case weakWifi
+    /// The room plays one shared queue with others (groups, V060):
+    /// ``groupChipText(_:)``'s "Upstairs · with garage, office".
+    case group(String)
 
     /// The chip's words. The glyph beside them is never the only carrier.
     public var label: String {
@@ -467,6 +470,7 @@ public enum RoomChip: Equatable, Sendable {
         case .inCall(let words): return words
         case .screenStopped: return HomeRoomStrings.screenStopped
         case .weakWifi: return HomeRoomStrings.weakWifi
+        case .group(let words): return words
         }
     }
 
@@ -477,7 +481,7 @@ public enum RoomChip: Equatable, Sendable {
     /// wi-fi is idle here too, not a second fault.
     public var tone: HealthTone {
         switch self {
-        case .timer, .inCall, .weakWifi: return .idle
+        case .timer, .inCall, .weakWifi, .group: return .idle
         case .screenStopped: return .warn
         }
     }
@@ -491,6 +495,8 @@ public func roomChips(_ room: HomeRoom, timerLeftSec: Int64?) -> [RoomChip] {
     if let call = inCallChip(room) { chips.append(.inCall(call)) }
     if kioskDead(room) { chips.append(.screenStopped) }
     if weakWifi(room) { chips.append(.weakWifi) }
+    // Last, as the web draws it (`home.jsx` ~:768): a room in a group.
+    if let group = groupChipText(room) { chips.append(.group(group)) }
     return chips
 }
 
