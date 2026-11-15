@@ -16,10 +16,12 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.FilterChip
@@ -149,6 +151,8 @@ internal class RoomQueueModel(
     val saveQueue: () -> Unit = {},
     val setAutoplay: (Boolean) -> Unit = {},
     val lessLike: (QueueItem) -> Unit = {},
+    /** "leave": this room leaves its group (V060); null where it isn't offered. */
+    val leaveGroup: (() -> Unit)? = null,
     /** [queue] is the server's answer for this room (not a placeholder while
      *  the read is out): adding waits for it ([roomCanAdd]). */
     val answered: Boolean = true,
@@ -188,6 +192,7 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
     }
 
     val rq = remember(app) { RoomQueueApi(app.api) { app.prefs.deviceId } }
+    val groupsApi = remember(app) { MusicGroupsApi(app.api) }
     val room = sel.room
     // Each read carries the server and room it was asked of: the answer is
     // shown only while they are still the ones on screen ([roomQueueFor]).
@@ -292,6 +297,10 @@ internal fun rememberRoomQueue(rooms: List<String>, playingRoom: String?): RoomQ
                 sel.dropped = (prev ?: DroppedPicks(at, r, sessionId, emptySet())).plus(removed + seq)
                 lessLikeNote(item.artist, removed.size)
             }
+        },
+        // The room on show leaves its group: it stops, the others play on.
+        leaveGroup = if (!controls.leave) null else {
+            { edit(GROUP_LEAVE_VERB, { r -> groupsApi.send(MusicGroupsApi.LEAVE, MusicGroupsApi.leaveBody(r)); r }) { groupLeftToast(it) } }
         },
     )
 }
@@ -485,6 +494,45 @@ private fun RoomQueueHeader(rooms: List<String>, rq: RoomQueueModel, picker: Boo
                     canSave = flow.canSaveRoom(),
                     onSave = rq.saveQueue,
                 )
+            }
+        }
+
+        // Groups (V060): this room hears one shared queue with other rooms;
+        // a change here is everyone's. "leave": this room stops, the others
+        // play on (never a guest's).
+        queueGroupLine(rq.sel.room.orEmpty(), rq.queue.group)?.let { line ->
+            Row(
+                Modifier.fillMaxWidth().background(Domovoi.colors.sunken)
+                    .padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
+                    .heightIn(min = 48.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Speaker, contentDescription = null,
+                    tint = Domovoi.colors.fgMuted, modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fg,
+                    modifier = Modifier.weight(1f),
+                )
+                rq.leaveGroup?.let { leave ->
+                    TextButton(
+                        onClick = leave,
+                        enabled = !rq.sel.busy,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Logout, contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.size(4.dp))
+                        Text("leave")
+                    }
+                }
             }
         }
 

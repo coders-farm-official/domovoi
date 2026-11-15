@@ -52,7 +52,10 @@ import com.domovoi.app.update.AppUpdateCard
 import com.domovoi.app.update.rememberAppUpdateNotice
 import com.domovoi.app.ui.screens.manual.ManualRepository
 import com.domovoi.app.ui.screens.manual.startPhrase
+import com.domovoi.app.ui.screens.music.MusicGroupsApi
 import com.domovoi.app.ui.screens.music.RoomQueueSheet
+import com.domovoi.app.ui.screens.music.groupsFor
+import com.domovoi.app.ui.screens.music.rememberMusicGroups
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -143,6 +146,11 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     // under way drops out of it. The push only says "re-read".
     val dayStart = dayStartMs(nowMs, zone)
     val cal = rememberApi(dayStart, eventTypes = CAL_EVENTS) { HomeApi.calendar(it.api, dayStart, zone) }
+    // Named groups (V060) for the rooms' share menus: a household read,
+    // never asked by an unpaired phone. A refusal or an older server hides
+    // the menus without a word.
+    val musicGroups = rememberMusicGroups()
+    val groupsNow = groupsFor(musicGroups.data, serverUrl, paired)
 
     // When the rooms and the timers were last read (each read is a new object).
     val satsAt = remember(sats.data) { System.currentTimeMillis() }
@@ -328,6 +336,30 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             }
         }
     }
+    // Groups (V060): another room hears this one, this one joins another, or
+    // it leaves its group. Every room it touches is busy meanwhile. The
+    // answer is said only while the app still talks to the server it went
+    // to (read-after-await).
+    val onGroup: (String, GroupChoice) -> Unit = { room, c ->
+        if (c.touched.none { busy[it] == true }) {
+            val at = app.prefs.serverUrl.value
+            c.touched.forEach { busy[it] = true }
+            scope.launch {
+                try {
+                    MusicGroupsApi(app.api).send(c.path, c.body)
+                    if (app.prefs.serverUrl.value == at) toast(groupChoiceDoneToast(room, c))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (app.prefs.serverUrl.value == at) toast(groupChoiceFailedToast(c, e))
+                } finally {
+                    c.touched.forEach { busy.remove(it) }
+                    musicGroups.refresh()
+                    refetchRooms()
+                }
+            }
+        }
+    }
     // One DELETE per timer at a time: a double tap must not send a second
     // one and toast "that one already finished" over "cancelled".
     val onCancel: (HomeTimer) -> Unit = { t ->
@@ -432,6 +464,8 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             onAct = onAct,
             onStopAll = onStopAll,
             onOpenQueue = { queueRoom = it },
+            musicGroups = groupsNow?.groups,
+            onGroup = onGroup,
         )
     }
     val announceSec: @Composable () -> Unit = {

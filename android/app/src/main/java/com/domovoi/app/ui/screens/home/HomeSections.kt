@@ -26,7 +26,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Phone
@@ -36,6 +41,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -77,7 +84,9 @@ import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
+import com.domovoi.app.ui.screens.music.MusicGroup
 import com.domovoi.app.ui.screens.music.RoomQueueButton
+import com.domovoi.app.ui.screens.music.groupChipText
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.delay
 import java.time.ZoneId
@@ -564,6 +573,10 @@ internal fun HomeRooms(
     onStopAll: (List<String>) -> Unit,
     /** The room's queue button ([RoomQueueSheet], batch 2 §2). */
     onOpenQueue: (String) -> Unit = {},
+    /** The household's named groups (V060); null hides every share menu
+     *  (an unpaired phone, not the household's view, an older server). */
+    musicGroups: List<MusicGroup>? = null,
+    onGroup: (String, GroupChoice) -> Unit = { _, _ -> },
 ) {
     val playing = if (stale) emptyList() else rooms.filter { roomRank(it) == 0 }.map { it.room_id }
     Column(Modifier.fillMaxWidth()) {
@@ -610,6 +623,10 @@ internal fun HomeRooms(
                             nextTimerLeft = timerLeftByRoom[r.room_id], busy = busy[r.room_id] == true,
                             tile = tile, onOpen = { onOpenRoom(r.room_id) }, onAct = onAct,
                             onQueue = { onOpenQueue(r.room_id) },
+                            groupChoices = if (musicGroups != null && r.online && !stale) {
+                                homeGroupChoices(r, rooms, musicGroups)
+                            } else emptyList(),
+                            onGroup = { onGroup(r.room_id, it) },
                         )
                     }
                     if (compact) {
@@ -699,6 +716,8 @@ private fun HomeRoomRow(
     onOpen: () -> Unit,
     onAct: (String, String) -> Unit,
     onQueue: () -> Unit,
+    groupChoices: List<GroupChoice> = emptyList(),
+    onGroup: (GroupChoice) -> Unit = {},
 ) {
     val online = r.online
     val np = r.now_playing
@@ -779,12 +798,15 @@ private fun HomeRoomRow(
                 }
                 val weak = weakWifi(r)
                 val call = online && r.in_call_with != null
-                if (nextTimerLeft != null || call || kioskDead(r) || weak) {
+                // A room in a group hears one shared queue with other rooms (V060).
+                val groupText = if (online) groupChipText(r.room_id, np?.group) else null
+                if (nextTimerLeft != null || call || kioskDead(r) || weak || groupText != null) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         nextTimerLeft?.let { HomeChip(Icons.Filled.Timer, fmtLeft(it)) }
                         if (call) HomeChip(Icons.Filled.Phone, "in call with ${r.in_call_with}")
                         if (kioskDead(r)) Pill("screen stopped", Tone.Warn)
                         if (weak) HomeChip(Icons.Filled.WifiOff, "weak wi-fi")
+                        groupText?.let { HomeChip(Icons.Filled.Speaker, it) }
                     }
                 }
             }
@@ -802,6 +824,7 @@ private fun HomeRoomRow(
                             TransportButton(Icons.Filled.Stop, "stop ${r.room_id}", canAct) { onAct(r.room_id, "stop") }
                         }
                     }
+                    if (groupChoices.isNotEmpty()) GroupMenu(r.room_id, groupChoices, canAct, onGroup)
                 }
             }
         }
@@ -818,6 +841,47 @@ private fun HomeRoomRow(
     } else {
         Box(Modifier.fillMaxWidth().then(dim)) { body() }
     }
+}
+
+/** A room's share menu (home.jsx HomeGroupMenu): one button, its choices in a menu. */
+@Composable
+private fun GroupMenu(room: String, items: List<GroupChoice>, enabled: Boolean, onPick: (GroupChoice) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, enabled = enabled) {
+            Icon(
+                Icons.Filled.Groups, contentDescription = groupMenuLabel(room),
+                tint = if (enabled) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = Domovoi.colors.raised) {
+            items.forEach { c ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(c.label, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
+                            c.hint?.let { h ->
+                                Text(h, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint)
+                            }
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(groupChoiceIcon(c.kind), contentDescription = null, tint = Domovoi.colors.fgMuted, modifier = Modifier.size(18.dp))
+                    },
+                    onClick = { open = false; onPick(c) },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                )
+            }
+        }
+    }
+}
+
+private fun groupChoiceIcon(kind: GroupChoiceKind): androidx.compose.ui.graphics.vector.ImageVector = when (kind) {
+    GroupChoiceKind.Group, GroupChoiceKind.Everywhere -> Icons.Filled.Speaker
+    GroupChoiceKind.ShareRoom -> Icons.Filled.Add
+    GroupChoiceKind.Join -> Icons.AutoMirrored.Filled.Login
+    GroupChoiceKind.Leave -> Icons.AutoMirrored.Filled.Logout
 }
 
 @Composable
