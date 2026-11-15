@@ -1233,11 +1233,21 @@ def test_a_payload_without_clips_says_so():
 def test_the_core_renders_them_synchronously():
     """Prepare has to COPY the result, so this one cannot be the existing
     fire-and-forget background regenerate."""
-    import inspect
+    # Read the function from main.py itself, not through inspect.getsource:
+    # that goes through linecache and co_firstlineno, and in CI it once
+    # returned the function above this one (run 43773285395) when the
+    # cached lines and the loaded code disagreed.
+    import ast
+    from pathlib import Path
 
     from domovoi import main
 
-    src = inspect.getsource(main.admin_render_setup_clips)
+    path = Path(main.__file__)
+    text = path.read_text(encoding="utf-8")
+    node = next(n for n in ast.walk(ast.parse(text))
+                if isinstance(n, ast.AsyncFunctionDef) and n.name == "admin_render_setup_clips")
+    src = ast.get_source_segment(text, node)
+    assert src and src.startswith("async def admin_render_setup_clips")
     assert "await render_setup_clips()" in src
     assert "create_task" not in src
 
