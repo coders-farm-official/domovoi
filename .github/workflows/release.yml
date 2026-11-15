@@ -32,9 +32,11 @@
 # that remain the fallback: docs/CONTRIBUTING.md, "Releasing".
 #
 # Hardening: every action is pinned by commit SHA (the comment names its
-# release); the only action is actions/checkout, with no credentials left
-# behind. Tools come from the runner image or are downloaded at a pinned
-# version and checked against a pinned SHA-256. Secrets live only in the
+# release); the actions are actions/checkout (no credentials left behind)
+# and upload-artifact/download-artifact, which carry build-app's unsigned
+# APKs to the release job (no token, no secret). Tools come from the runner
+# image or are downloaded at a pinned version and checked against a pinned
+# SHA-256 (apksigcopier and click by pip's hash check). Secrets live only in the
 # `release` environment and reach only the step that needs each; GITHUB_TOKEN
 # is handed to git per step (never written to .git/config). No secret is
 # written into the workspace; the keystore is written to RUNNER_TEMP for
@@ -142,9 +144,10 @@ jobs:
   release:
     name: sign and publish (approval)
     needs: [plan, build-app]
-    # build-app is skipped for a release that doesn't change the app.
+    # build-app is skipped for a release that doesn't change the app; with
+    # !cancelled(), not always(), a cancelled run stops this job too.
     if: >-
-      always() && github.ref == 'refs/heads/main' && needs.plan.result == 'success'
+      !cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success'
       && (needs.build-app.result == 'success' || needs.build-app.result == 'skipped')
     runs-on: windows-2025
     environment: release
