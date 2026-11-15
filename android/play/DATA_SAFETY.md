@@ -242,6 +242,9 @@ differently from the others would be inconsistent.
 
 **Recommended Data safety entries.**
 
+* **Owner decision (2026-11-14): Option A.** The owner first leaned to
+  declaring calendars, then chose not declared once he saw it would turn the
+  listing's "encrypted in transit" answer to No.
 * Option A (recommended, matches the rest of the form): **Calendar →
   Calendar events: not declared** (not collected, not shared). The privacy
   policy must say it (owner: add to `docs/PRIVACY_POLICY.md`, "What goes
