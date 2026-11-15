@@ -164,9 +164,12 @@ android {
             keepDebugSymbols += "**/*.so"
         }
     }
-    // - The APK keeps META-INF/version-control-info.textproto (the commit it
-    //   was built from): F-Droid builds that same commit, which the release
-    //   scripts tag app-<versionName>.
+    // - vcsInfo stays AGP's default, and its
+    //   META-INF/version-control-info.textproto holds no commit: AGP looks
+    //   for .git in Gradle's root (android/), and the repository's is one
+    //   level up, so every build, F-Droid's included, writes the same
+    //   NO_SUPPORTED_VCS_FOUND. The commit is the app-<versionName> tag the
+    //   release scripts put on it instead.
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

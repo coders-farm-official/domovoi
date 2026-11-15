@@ -225,7 +225,7 @@ publish_release() {  # publish_release RELEASE_COMMIT BUILT_FROM EXISTS(0|1)
   [ -z "$local_tag" ] || [ "$local_tag" = "$release_commit" ] \
     || die "this checkout has a tag $tag at ${local_tag:0:12} that GitHub doesn't: delete it (git tag -d $tag) and run again"
   # The app tag: app-<versionName>, lightweight, on the commit the APKs were
-  # built from (F-Droid builds that commit; the APK records it).
+  # built from (F-Droid builds that commit).
   m_version="$(git show "$release_commit:android/release.json" | release_fields - version_name)"
   app_tag="app-$m_version"
   remote_app="$(git ls-remote origin "refs/tags/$app_tag")" || die "git ls-remote origin failed"

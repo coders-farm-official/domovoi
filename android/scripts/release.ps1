@@ -301,7 +301,7 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
         Die "this checkout has a tag $tag at $($localTag[0].Trim().Substring(0, 12)) that GitHub doesn't: delete it (git tag -d $tag) and run again"
     }
     # The app tag: app-<versionName>, lightweight, on the commit the APKs were
-    # built from (F-Droid builds that commit; the APK records it).
+    # built from (F-Droid builds that commit).
     $appTag = "app-$($manifest.version_name)"
     $remoteApp = Invoke-Tool $Git @('ls-remote', 'origin', "refs/tags/$appTag")
     if ($null -eq $remoteApp) { Die 'git ls-remote origin failed' }

@@ -318,10 +318,11 @@ dependency-information block in the APK (`dependenciesInfo`), native
 libraries never re-stripped (`keepDebugSymbols`), PNGs not crunched, the
 draft templates listed in order, the licence list failing loudly when a
 POM can't be found, and the files from outside `android/` that go into the
-APK kept LF by `.gitattributes`. The APK keeps AGP's
-`META-INF/version-control-info.textproto` (the commit it was built from):
-the release scripts tag that commit `app-<versionName>`, and F-Droid builds
-it.
+APK kept LF by `.gitattributes`. AGP's
+`META-INF/version-control-info.textproto` holds no commit (AGP looks for
+`.git` in Gradle's root, `android/`, and the repository's is one level up),
+so it is the same in every build; the release scripts tag the commit the
+APKs are built from `app-<versionName>`, and that is what F-Droid builds.
 
 **CI checks it** on every change to the app (`.github/workflows/ci.yml`,
 `android-repro-build` and `android-repro-compare`): two builds in the
