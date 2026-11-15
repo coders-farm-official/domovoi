@@ -3,15 +3,24 @@
 Publish a release of the Domovoi Android app.
 
 .DESCRIPTION
-Builds the per-ABI release APKs (arm64-v8a, armeabi-v7a), signs them with
-YOUR release key, checks them the way a Domovoi server will, writes
-android/release.json, commits it ("android: release <v> [skip ci]") and
-pushes it to the branch's upstream, then publishes the GitHub release
+Builds the per-ABI release APKs (arm64-v8a, armeabi-v7a) in the pinned
+Linux build image (android\build-env, through Docker Desktop: the same
+bytes CI and F-Droid build from that commit), signs them with YOUR release
+key (apksigner --alignment-preserved, so the signature can be copied onto
+anyone's unsigned build of the commit), checks that copy works
+(apksigcopier compare) and checks them the way a Domovoi server will,
+writes android/release.json, commits it ("android: release <v> [skip ci]")
+and pushes it to the branch's upstream, then publishes the GitHub release
 v<Domovoi's version> (pyproject.toml's, NOT the app's versionName: owner
 decision 2026-11-14) on coders-farm-official/domovoi with gh, tagged at
 THAT commit: the tag holds the manifest naming its own APKs (they are built
-from the commit before it, which differs only by that file). Last it
-downloads each file back by the manifest's URL.
+from the commit before it, which differs only by that file). The commit
+they are built from gets the lightweight tag app-<versionName>, which
+F-Droid builds. Last it downloads each file back by the manifest's URL.
+
+When Docker isn't running (docker info fails), or with -NoContainer, it
+builds with gradlew.bat on this PC instead, as before, and says loudly
+that those APKs are not the reproducible ones.
 
 Run it only for a release that changes the app (its versionName and
 versionCode raised). A release that doesn't is
@@ -35,9 +44,10 @@ script's environment for the one call that needs them, and they are
 removed right after. The bash twin is release.sh beside it;
 android/README.md, "Publishing a release", walks through a run.
 
-Needs: a JDK (JAVA_HOME or java on PATH), the Android SDK with build-tools
-35.0.0, Python 3.11+ (the server's own check), git with push access, and gh
-signed in to an account that may publish releases on the repository.
+Needs: Docker Desktop (Linux containers) for the build, a JDK (JAVA_HOME
+or java on PATH) and the Android SDK with build-tools 35.0.0 for signing,
+Python 3.11+ (the server's own check), git with push access, and gh signed
+in to an account that may publish releases on the repository.
 
 .PARAMETER NoPublish
 Build, sign and check; stop before GitHub (nothing is committed, pushed
@@ -45,6 +55,11 @@ or published, and android/release.json is not touched).
 
 .PARAMETER SkipBuild
 Sign what the last build left (after a failed signing).
+
+.PARAMETER NoContainer
+Build with gradlew.bat on this PC, not in the pinned Linux image. The APKs
+then won't match F-Droid's or CI's build of the commit. The fallback when
+Docker isn't running.
 
 .PARAMETER Prerelease
 Mark the GitHub release a pre-release. Off by default: every release is a
@@ -71,6 +86,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
 param(
     [switch]$NoPublish,
     [switch]$SkipBuild,
+    [switch]$NoContainer,
     [switch]$Prerelease,
     [string]$Keystore,
     [string]$Alias,
@@ -142,6 +158,18 @@ $apksignerJar = Join-Path $bt 'lib\apksigner.jar'
 if (-not (Test-Path $apksignerJar)) { Die "no build-tools $BuildTools in $sdk (sdkmanager `"build-tools;$BuildTools`")" }
 $zipalign = Join-Path $bt 'zipalign.exe'
 $aapt2 = Join-Path $bt 'aapt2.exe'
+
+# Docker with a Linux engine: the release build's pinned image runs there
+# (android\build-env\build.ps1), and so does apksigcopier.
+function Test-LinuxDocker {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $false }
+    $ErrorActionPreference = 'Continue'
+    $os = & docker info --format '{{.OSType}}' 2>$null
+    return ($LASTEXITCODE -eq 0 -and "$os".Trim() -eq 'linux')
+}
+$haveDocker = Test-LinuxDocker
+$useContainer = $haveDocker -and -not $NoContainer
+$buildEnv = Join-Path $repo 'android\build-env\build.ps1'
 
 $python = $null
 foreach ($candidate in @('python', 'py', 'python3')) {
@@ -271,13 +299,23 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
     if ($null -ne $localTag -and $localTag[0].Trim() -ne $ReleaseCommit) {
         Die "this checkout has a tag $tag at $($localTag[0].Trim().Substring(0, 12)) that GitHub doesn't: delete it (git tag -d $tag) and run again"
     }
+    # The app tag: app-<versionName>, lightweight, on the commit the APKs were
+    # built from (F-Droid builds that commit; the APK records it).
+    $appTag = "app-$($manifest.version_name)"
+    $remoteApp = Invoke-Tool $Git @('ls-remote', 'origin', "refs/tags/$appTag")
+    if ($null -eq $remoteApp) { Die 'git ls-remote origin failed' }
+    $remoteAppSha = @($remoteApp | Where-Object { $_.Trim() } | ForEach-Object { ($_.Trim() -split '\s+')[0] }) | Select-Object -First 1
+    if ($remoteAppSha -and $remoteAppSha -ne $BuiltFrom) {
+        Die "the app tag $appTag already exists on GitHub at another commit ($remoteAppSha): a published tag never moves"
+    }
     # The branch and the tag in one atomic push: a tag pushed meanwhile by
     # anyone else fails both, so gh never attaches the release elsewhere.
     $refspecs = @()
     if ($script:upstream -ne $ReleaseCommit) { $refspecs += "$($ReleaseCommit):refs/heads/$branch" }
     if (-not $remoteTag) { $refspecs += "$($ReleaseCommit):refs/tags/$tag" }
+    if (-not $remoteAppSha) { $refspecs += "$($BuiltFrom):refs/tags/$appTag" }
     if ($refspecs.Count -gt 0) {
-        Say "pushing the release commit $($ReleaseCommit.Substring(0, 12)) to origin/$branch and tagging it $tag, together..."
+        Say "pushing the release commit $($ReleaseCommit.Substring(0, 12)) to origin/$branch, tagging it $tag and the build commit $($BuiltFrom.Substring(0, 12)) $appTag, together..."
         if ($null -eq (Invoke-Tool $Git (@('push', '--atomic', '--quiet', 'origin') + $refspecs))) {
             $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
             Die 'the push failed (nothing was pushed): android/release.json is committed here but not on GitHub. Fix that and run this script again; it carries on from the release commit (nothing is signed again)'
@@ -295,7 +333,8 @@ function Publish-Release([string]$ReleaseCommit, [string]$BuiltFrom, [bool]$Exis
             '',
             '| file | for | SHA-256 |',
             '|---|---|---|'
-        ) + $rows + @('', "Signing certificate SHA-256: ``$($manifest.cert_sha256)`` (check with ``apksigner verify --print-certs <file>``).")
+        ) + $rows + @('', "Signing certificate SHA-256: ``$($manifest.cert_sha256)`` (check with ``apksigner verify --print-certs <file>``).",
+            '', "Built from the commit tagged ``$appTag``. To check an APK is that commit's code: ``bash android/build-env/build.sh --commit $($manifest.commit)``, then ``apksigcopier compare <this APK> --unsigned <the one you built>`` (android/README.md, ""Reproducible builds"").")
         $notesFile = Join-Path $signed 'NOTES.md'
         $utf8 = New-Object Text.UTF8Encoding $false
         [IO.File]::WriteAllText((Join-Path $repo $notesFile), ($notes -join "`n") + "`n", $utf8)
@@ -378,19 +417,35 @@ if ($resume) {
 
 # --- build ---------------------------------------------------------------
 $outUnsigned = 'android\app\build\outputs\apk\release'
+$notReproducible = $false
 if (-not $SkipBuild) {
-    Say "building the release APKs ($($Abis -join ', '))..."
-    Push-Location android
-    try {
-        $ErrorActionPreference = 'Continue'   # Gradle writes warnings to stderr
-        & .\gradlew.bat ':app:assembleRelease' '-Pdomovoi.apkPerAbi' "-Pdomovoi.abis=$($Abis -join ',')"
-        $built = $LASTEXITCODE
-        $ErrorActionPreference = 'Stop'
-        if ($built -ne 0) { Die 'the build failed' }
-    } finally { Pop-Location }
+    if ($useContainer) {
+        # The reproducible build: commit $commit, clean, in the pinned image.
+        Say "building the release APKs ($($Abis -join ', ')) in the pinned Linux image (android\build-env)..."
+        & $buildEnv -Commit $commit -Abis @($Abis -join ',')
+        if ($LASTEXITCODE -ne 0) { Die 'the build failed' }
+    } else {
+        $why = if ($NoContainer) { '-NoContainer' } else { 'Docker is not running (docker info fails, or no Linux engine)' }
+        Write-Host "release: WARNING: $why, so these APKs are built with gradlew.bat on this PC, NOT in the pinned Linux image. They will not match CI's or F-Droid's build of this commit (not reproducible). Start Docker Desktop and run again unless you mean it." -ForegroundColor Yellow
+        $notReproducible = $true
+        Say "building the release APKs ($($Abis -join ', '))..."
+        Push-Location android
+        try {
+            $ErrorActionPreference = 'Continue'   # Gradle writes warnings to stderr
+            & .\gradlew.bat ':app:assembleRelease' '-Pdomovoi.apkPerAbi' "-Pdomovoi.abis=$($Abis -join ',')"
+            $built = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            if ($built -ne 0) { Die 'the build failed' }
+        } finally { Pop-Location }
+    }
 }
 
-$versionName = $null; $versionCode = $null
+# Each APK has its own versionCode, base*10 + its ABI's digit
+# (android\app\build.gradle.kts; F-Droid's VercodeOperation needs them
+# different); the manifest's version_code is the base*10 they share, the Play
+# bundle's, which a phone on an older app compares.
+$AbiDigit = @{ 'armeabi-v7a' = 1; 'arm64-v8a' = 2 }
+$versionName = $null; $baseCode = $null; $apkCodes = @{}
 foreach ($abi in $Abis) {
     $apk = Join-Path $outUnsigned "app-$abi-release-unsigned.apk"
     if (-not (Test-Path $apk)) { Die "no $apk`: build first (drop -SkipBuild)" }
@@ -402,9 +457,15 @@ foreach ($abi in $Abis) {
     $native = ($badging | Where-Object { $_ -like 'native-code: *' } | Select-Object -First 1)
     if ($pkg -ne $Package) { Die "$apk is $pkg, not $Package" }
     if ($native -ne "native-code: '$abi'") { Die "$apk carries $native, not '$abi' only" }
-    if ($null -eq $versionName) { $versionName = $vn; $versionCode = $vc }
-    if ($vn -ne $versionName -or $vc -ne $versionCode) { Die 'the APKs disagree on their version' }
+    if ($vc % 10 -ne $AbiDigit[$abi]) {
+        Die "$apk has versionCode $vc, not base*10 + $($AbiDigit[$abi]) (android\app\build.gradle.kts gives each ABI its own code: was it built before that?)"
+    }
+    $b = [long][math]::Floor($vc / 10)
+    if ($null -eq $versionName) { $versionName = $vn; $baseCode = $b }
+    if ($vn -ne $versionName -or $b -ne $baseCode) { Die 'the APKs disagree on their version' }
+    $apkCodes[$abi] = $vc
 }
+$versionCode = $baseCode * 10
 # The release is Domovoi's: v + pyproject.toml's version in SemVer spelling
 # (v1.2.1, v1.0.0-rc1; domovoi.android_app's release_tag), not the app's
 # versionName (owner decision 2026-11-14). The manifest's tag and URLs name it.
@@ -414,13 +475,13 @@ $tag = ([string]$tagOut[0]).Trim()
 # A full release, marked Latest, unless -Prerelease (a release candidate too:
 # the suffix says what it is, owner decision 2026-10-15).
 $isPrerelease = [bool]$Prerelease
-Say "the Android app $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12)), published as Domovoi's release $tag"
+Say "the Android app $versionName (versionCode $baseCode, so $($apkCodes['arm64-v8a']) arm64-v8a and $($apkCodes['armeabi-v7a']) armeabi-v7a), commit $($commit.Substring(0, 12)), published as Domovoi's release $tag"
 
-# versionCode is YYMMDDNN (android\app\build.gradle.kts): the build's date
-# and that day's number, one sequence for these APKs and the Play bundle
-# (play-bundle.ps1 checks the same shape).
-if ("$versionCode" -notmatch '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$') {
-    Die "versionCode $versionCode is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in android\app\build.gradle.kts, commit, and run again"
+# The base versionCode is YYMMDDNN (android\app\build.gradle.kts): the
+# build's date and that day's number, one sequence for these APKs and the
+# Play bundle (play-bundle.ps1 checks the same shape).
+if ("$baseCode" -notmatch '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$') {
+    Die "versionCode $baseCode is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in android\app\build.gradle.kts, commit, and run again"
 }
 
 $prevCode = 0; $prevCert = $null
@@ -429,10 +490,14 @@ try {
     if ($prev) { $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
 } catch { }
 if ($versionCode -le $prevCode) {
-    Die "versionCode $versionCode is not above the last release's ($prevCode): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android\app\build.gradle.kts, commit, and run again"
+    Die "versionCode $baseCode (x10: $versionCode) is not above the last release's ($prevCode): raise versionCode (YYMMDDNN: the build's date and that day's number) and versionName in android\app\build.gradle.kts, commit, and run again"
 }
+$appTag = "app-$versionName"
 if (-not $NoPublish) {
     if ((Test-Tool $Gh @('release', 'view', $tag, '--repo', $RepoSlug)) -eq 0) { Die "a release $tag already exists on $RepoSlug" }
+    $remoteApp = Invoke-Tool $Git @('ls-remote', '--tags', 'origin', "refs/tags/$appTag")
+    if ($null -eq $remoteApp) { Die 'git ls-remote origin failed' }
+    if (@($remoteApp | Where-Object { $_.Trim() }).Count -gt 0) { Die "the app tag $appTag already exists on GitHub (a published tag never moves: raise versionName)" }
     $remoteTag = Invoke-Tool $Git @('ls-remote', '--tags', 'origin', "refs/tags/$tag")
     if ($null -eq $remoteTag) { Die 'git ls-remote origin failed' }
     if (@($remoteTag | Where-Object { $_.Trim() }).Count -gt 0) { Die "the tag $tag already exists on GitHub (a published tag never moves: raise the version)" }
@@ -478,7 +543,7 @@ try {
         Say "signing $name..."
         $result = Invoke-Tool $java @('-jar', $apksignerJar, 'sign', '--ks', $Keystore, '--ks-key-alias', $Alias,
             '--ks-pass', 'env:DOMOVOI_RELEASE_KS_PASS', '--key-pass', 'env:DOMOVOI_RELEASE_KEY_PASS',
-            '--v4-signing-enabled', 'false', '--out', (Join-Path $signed $name),
+            '--v4-signing-enabled', 'false', '--alignment-preserved', '--out', (Join-Path $signed $name),
             (Join-Path $outUnsigned "app-$abi-release-unsigned.apk"))
         if ($null -eq $result) { Show-ToolError; Die "signing $name failed (wrong password or alias?)" }
     }
@@ -512,6 +577,41 @@ if ($prevCert -and $prevCert -ne $cert) {
 }
 Say "signed by certificate SHA-256 $cert"
 
+# The signature must copy onto the unsigned APK unchanged: what F-Droid does
+# with its own build of this commit (apksigcopier, F-Droid's tool; GPL-3.0,
+# run here only, never shipped). It fails if signing moved anything (an
+# apksigner without --alignment-preserved re-pads the native libraries).
+$copier = $null
+if ($haveDocker) {
+    $img = & $buildEnv -Commit $commit -ImageOnly
+    $img = "$(@($img) | Select-Object -Last 1)".Trim()
+    if ($img) { $copier = 'docker' }
+}
+if (-not $copier) {
+    $cmd = Get-Command apksigcopier -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { $copier = $cmd.Source }
+}
+if (-not $copier) {
+    Write-Host 'release: WARNING: no Docker and no apksigcopier on PATH, so the check that this signature copies onto an unsigned build (what F-Droid does) was skipped.' -ForegroundColor Yellow
+} else {
+    foreach ($abi in $Abis) {
+        $name = "domovoi-$versionName-$abi.apk"
+        $unsignedName = "app-$abi-release-unsigned.apk"
+        if ($copier -eq 'docker') {
+            $sMount = (Resolve-Path $signed).Path -replace '\\', '/'
+            $uMount = (Resolve-Path $outUnsigned).Path -replace '\\', '/'
+            $ok = Test-Tool 'docker' @('run', '--rm', '--network', 'none',
+                '--mount', "type=bind,source=$sMount,target=/signed,readonly",
+                '--mount', "type=bind,source=$uMount,target=/unsigned,readonly",
+                $img, 'apksigcopier', 'compare', "/signed/$name", '--unsigned', "/unsigned/$unsignedName")
+        } else {
+            $ok = Test-Tool $copier @('compare', (Join-Path $signed $name), '--unsigned', (Join-Path $outUnsigned $unsignedName))
+        }
+        if ($ok -ne 0) { Die "apksigcopier compare: the signature of $name does not copy onto $unsignedName unchanged (signed without --alignment-preserved?)" }
+    }
+    Say 'apksigcopier: each signature copies onto its unsigned APK unchanged'
+}
+
 # The R8 mapping of the build these APKs came from (the release build is
 # minified: android\app\build.gradle.kts): what turns a stack trace from them
 # back into class and method names (R8's retrace). Kept beside the signed
@@ -524,8 +624,10 @@ Say "kept the R8 mapping as $signed\domovoi-$versionName-mapping.txt"
 
 $staged = Join-Path $signed 'release.json'
 $published = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
-if ($null -eq (Invoke-Tool $python @('-m', 'domovoi.android_app', 'write', $staged, $signed, '--version-name', $versionName,
-        '--version-code', "$versionCode", '--cert', $cert, '--commit', $commit, '--published', $published, '--tag', $tag))) {
+$codeArgs = @()
+foreach ($abi in $Abis) { $codeArgs += @('--apk-version-code', "$abi=$($apkCodes[$abi])") }
+if ($null -eq (Invoke-Tool $python (@('-m', 'domovoi.android_app', 'write', $staged, $signed, '--version-name', $versionName,
+        '--version-code', "$versionCode", '--cert', $cert, '--commit', $commit, '--published', $published, '--tag', $tag) + $codeArgs))) {
     $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
     Die 'writing the manifest failed'
 }
@@ -533,6 +635,9 @@ $checked = Invoke-Tool $python @('-m', 'domovoi.android_app', 'check', $staged, 
 if ($null -eq $checked) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'the server''s own check refuses these APKs' }
 $checked | ForEach-Object { Write-Host "  $_" }
 
+if ($notReproducible) {
+    Write-Host 'release: WARNING: built with gradlew.bat on this PC, not in the pinned Linux image: F-Droid''s build of this commit will not match these APKs.' -ForegroundColor Yellow
+}
 if ($NoPublish) {
     $kind = if ($isPrerelease) { 'a pre-release' } else { 'the Latest release' }
     Say "not published (-NoPublish). Signed APKs, SHA256SUMS and the manifest it would commit: $signed\"

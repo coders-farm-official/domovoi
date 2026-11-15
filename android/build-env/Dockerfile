@@ -22,6 +22,8 @@
 #     No NDK: the build never strips or builds native code
 #     (packaging.jniLibs.keepDebugSymbols), and with no licence files here a
 #     missing package fails the build instead of being downloaded.
+# The image is named by the git tree of android/build-env (build.sh), so a
+# change to anything here builds a new one.
 # Gradle itself comes from the wrapper (gradle-wrapper.properties pins its
 # SHA-256) and every Maven artifact from gradle/verification-metadata.xml.
 # To move a pin: change it here and in BUILD-ENV.txt, in one commit.
@@ -93,3 +95,7 @@ RUN set -eu; \
       echo "sdk build-tools;35.0.0 revision $(sed -n 's/^Pkg.Revision=//p' "$ANDROID_HOME/build-tools/35.0.0/source.properties")"; \
     } >/etc/domovoi-build-env.txt; \
     cat /etc/domovoi-build-env.txt
+
+# The entry build.sh and build.ps1 run: a clean checkout of one commit from
+# the repository mounted at /git, built by that commit's build-apks.sh.
+COPY --chmod=755 build-commit.sh /usr/local/bin/domovoi-build-commit
