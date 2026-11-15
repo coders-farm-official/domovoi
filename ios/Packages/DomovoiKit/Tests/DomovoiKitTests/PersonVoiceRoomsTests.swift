@@ -310,27 +310,34 @@ final class PersonVoiceRoomsTests: XCTestCase {
 
     /// Person 1's rooms must never land under person 2: the switch happens
     /// **inside** person 1's parked rooms read.
+    ///
+    /// Person 2's own rooms read fails (500), which keeps what is shown — so
+    /// person 1's answer, released after the switch, is the only thing that
+    /// could put rooms on person 2's page. Released before person 2's reads
+    /// can settle: the stub answers one request at a time, and person 2's
+    /// queue behind the park.
     func testSwitchingPersonInsideTheRoomsRoundTripKeepsThemStraight() async {
         let (model, house, _) = rig()
         let park = parkRequest(
             to: "/api/people/1/voice-rooms",
             answering: { .json(House.priyaRooms) },
-            otherwise: { house.answer($0) }
+            otherwise: { request in
+                request.url?.path == "/api/people/2/voice-rooms"
+                    ? .json(#"{"detail":"down"}"#, status: 500)
+                    : house.answer(request)
+            }
         )
 
         model.show(priya)
         await settleUntil({ park.arrived.current }, "person 1's rooms read")
         model.show(jordan)
-        await settleUntil({ !model.loading && !model.voiceRooms.isEmpty }, "person 2's rooms")
         park.release.set(true)
+        await settleUntil({ !model.loading && self.roomReads(2) == 1 }, "person 2's reads")
         await nothingHappens()
 
         XCTAssertFalse(park.ranOut.current, "the park outlasted the session timeout")
         XCTAssertEqual(model.person?.id, 2)
-        XCTAssertEqual(
-            model.voiceRooms.map(\.roomID), ["office"],
-            "person 1's rooms landed under person 2"
-        )
+        XCTAssertEqual(model.voiceRooms, [], "person 1's rooms landed under person 2")
     }
 
     /// The same for the house: an answer from the server the phone has left
