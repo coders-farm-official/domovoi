@@ -8,6 +8,14 @@
 # rule the repo keeps for pinned actions and libraries. Updates of one
 # kind come grouped into a single pull request per ecosystem, so a week
 # brings at most a few. Security updates are not held by the cooldown.
+#
+# Major versions are never offered (ignore semver-major): Gradle 9, AGP 9,
+# OkHttp 5 and the like are migrations, done deliberately on a branch with
+# the full suite, not merged from a weekly bot PR. Python: the installs use
+# hash-pinned lock files our own tooling regenerates, which Dependabot
+# can't, so pip gets security alerts only (no version-update PRs). Gradle
+# bumps also need android/gradle/verification-metadata.xml regenerated
+# once that lands.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -17,6 +25,9 @@ updates:
       day: monday
     cooldown:
       default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       actions:
         patterns: ["*"]
@@ -32,7 +43,7 @@ updates:
     groups:
       python:
         patterns: ["*"]
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0 # security alerts only; see the top
 
   - package-ecosystem: gradle
     directory: /android
@@ -41,6 +52,9 @@ updates:
       day: monday
     cooldown:
       default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       android:
         patterns: ["*"]
