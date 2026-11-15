@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — Setup puts the phone app on the server
+
+- **What changed.** First-run setup now downloads the Android app onto the
+  server by itself (about 100 MB: the release `android/release.json`
+  names, from the project's GitHub release, checked against the release
+  key like an admin's download), in the background, so the server can
+  later hand it to phones that have no internet. It runs while the server
+  is not yet claimed, on every kind of install (Linux, Windows, Mac), under
+  any internet answer except **No**, and tries again for a while if the
+  line isn't up yet. Until 1.3.0 the first download was always an admin's
+  press of **Download the app to this server**.
+- **If setup couldn't** (no internet, internet set to **No**, a failed
+  download), Settings → Phones & browsers → **Get the Domovoi app** and
+  Home's **needs attention** say so, until the app is on the server: it
+  needs the internet once, at some point, or an admin uploads the app's
+  files (**upload an APK**).
+- **Nothing to do** on a server that is already set up: nothing is
+  downloaded by itself. If the app isn't on it, the same reminder shows.
+- **API:** `GET /v1/admin/android-app` (`/api/satellites/android-app`):
+  `auto` carries `setup` (true when this start is first-run setup).
+
 ## 1.3.0 (unreleased) — Release files you can check: SBOMs and build provenance
 
 Nothing to do. Each release on GitHub now carries software bills of

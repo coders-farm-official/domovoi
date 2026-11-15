@@ -3146,11 +3146,13 @@ const SpareWindows = ({ res, fire }) => {
 /* The Android app on this server (2026-10-15, domovoi/android_app.py), the
  * admin's side, shared by Settings → Rooms → add a spare device and
  * Settings → Phones & browsers → get the Domovoi app. The release android/release.json
- * pins comes from the project's GitHub release ONLY when an admin presses
- * "Download the app to this server" (owner decision 2026-10-15: never by
- * itself; after an update brought a newer release the server may refresh
- * it, android_app.auto_refresh), or as an APK an admin uploads (internet
- * access off). The server
+ * pins comes from the project's GitHub release by itself during first-run
+ * setup (owner decision 2026-11-15, android_app.auto_refresh with setup),
+ * else when an admin presses "Download the app to this server" (after an
+ * update brought a newer release the server may refresh it by itself), or
+ * as an APK an admin uploads (internet access off). Until the app is here
+ * the card keeps saying so: the server needs the internet once, at some
+ * point, to download it, or an admin uploads it. The server
  * keeps a file only when it is one the release names, signed by the release
  * key. Progress while it downloads; a failure stays on the card until the
  * next try. No release yet: said plainly, no buttons. `app` is the admin
@@ -3182,13 +3184,17 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
   // A fetch an admin started, or the server's own refresh after an update
   // (domovoi/android_app.py auto_refresh): followed the same way.
   const running = !!(app && app.fetch && app.fetch.running);
+  // First-run setup's download still to start: looked at now and then, so
+  // its progress shows without a reload.
+  const setupComing = !running && !!(app && !app.ready && app.auto && app.auto.setup
+    && app.auto.state === 'waiting');
   React.useEffect(() => {
-    if (!running) return undefined;
+    if (!running && !setupComing) return undefined;
     const t = setInterval(async () => {
       try { setApp(await apiGet('/api/satellites/android-app')); } catch (e) { /* keep the last */ }
-    }, 2000);
+    }, running ? 2000 : 10000);
     return () => clearInterval(t);
-  }, [running]);
+  }, [running, setupComing]);
   const ready = !!(app && app.ready);
   React.useEffect(() => { if (ready && onReady) onReady(); }, [ready]);
   React.useEffect(() => { if (adminState.signedIn) setNeedAdmin(false); }, [adminState.signedIn]);
@@ -3251,9 +3257,30 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
   // A tab without the admin sign-in (a reload past its window): the
   // server would refuse the download, so say whose step it is.
   const adminNeeded = needAdmin || !adminState.signedIn;
+  // First-run setup's own try (android_app.auto_refresh with setup): still
+  // to come, or tried and not done. Its progress shows like any download.
+  const auto = app.auto || {};
+  const setupWaiting = !!auto.setup && auto.state === 'waiting';
+  const setupFirst = setupWaiting && !(auto.tries > 0);
+  const setupMissed = !!auto.setup && (auto.state === 'failed' || auto.state === 'skipped'
+    || (setupWaiting && auto.tries > 0));
   return (
     <div className={`spare-app ${app.ready ? 'spare-app-older' : 'spare-app-missing'}`}
          style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {!app.ready && !running && setupFirst && (
+        <div className="spare-app-setup">
+          {`Setup is about to put the phone app on this server (about ${spareMb(remaining)}), so phones that have no internet can install it from here.`}
+        </div>
+      )}
+      {!app.ready && !running && !setupFirst && (
+        // The reminder (owner decision 2026-11-15): stays until the app is
+        // on this server, whatever kept setup from putting it here.
+        <div role="note" className="spare-app-reminder" style={{ color: 'var(--warn-ink)' }}>
+          {`The phone app isn’t on this server yet${setupMissed ? ': setup couldn’t download it' : ''}. `}
+          {`To give the app to phones that have no internet, this server needs the internet once, at some point, to download it (about ${spareMb(remaining)}).`}
+          {setupWaiting ? ' Setup will try again by itself.' : ''}
+        </div>
+      )}
       {app.ready && (
         <div className="spare-app-older-line">
           Phones get Domovoi {v} from this server ({sizes}) until Domovoi {want}, which this server’s
@@ -3274,7 +3301,8 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
           instead: download them on a computer that has internet, then choose them here.</div>
       ) : app.ready ? null : (
         <div>Domovoi {want} for phones: {spareMb(app.bytes_total)} from the project’s GitHub release, checked
-          against the release key before this server keeps it.</div>
+          against the release key before this server keeps it.{failed ? null : <> No internet here? Download its
+          APKs ({missing}) on a computer that has internet, then choose them with “upload an APK”.</>}</div>
       )}
       {failed && (
         <div role="alert" className="spare-app-error" style={{ color: 'var(--err-ink)' }}>

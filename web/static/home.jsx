@@ -1226,6 +1226,8 @@ const HomePage = ({ counts, badges }) => {
                                { eventTypes: ['satellites.pending.changed'], quiet: true });
   const version = HomeHooks.useCachedObject(admin ? '/api/config/version' : null, HOME_VERSION_GAP_MS);
   const hardware = HomeHooks.useCachedObject(admin ? '/api/models/hardware' : null, HOME_HARDWARE_MS);
+  // Whether the phone app is on this server yet (a reminder row until it is).
+  const phoneApp = HomeHooks.useCachedObject(admin ? '/api/satellites/android-app' : null, HOME_APPROVALS_MS);
 
   // When the rooms and the timers were last read (each read is a new object).
   const satsAt = React.useMemo(() => Date.now(), [sats.data]);
@@ -1339,7 +1341,8 @@ const HomePage = ({ counts, badges }) => {
     // A guest's rooms come from now-playing (HomeGuestRooms); its refused
     // rooms read is not a problem to report.
     ['server', health], ...(guest ? [] : [['rooms', sats]]), ['plugins', plugins], ['media requests', acq],
-    ...(admin ? [['approvals', approvals], ['adoption', pending], ['updates', version], ['disk', hardware]]
+    ...(admin ? [['approvals', approvals], ['adoption', pending], ['updates', version], ['disk', hardware],
+                 ['phone app', phoneApp]]
               : [['settings', cfg]]),
   ];
   const checking = sources.some(([, r]) => !HomeAnswered(r));
@@ -1350,7 +1353,7 @@ const HomePage = ({ counts, badges }) => {
     viewer, health: health.data, rooms, plugins: plugins.data,
     pluginErrors: (window.DomovoiPluginErrors && window.DomovoiPluginErrors._bySlug) || {},
     acq: acq.data, approvals: approvals.data, pending: pending.data,
-    version: version.data, hardware: hardware.data, config: cfg.data,
+    version: version.data, hardware: hardware.data, config: cfg.data, phoneApp: phoneApp.data,
     guard,
   });
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
@@ -1361,7 +1364,7 @@ const HomePage = ({ counts, badges }) => {
   const [checkedAt, setCheckedAt] = React.useState(null);
   React.useEffect(() => { if (!checking) setCheckedAt(Date.now()); },
     [checking, health.data, sats.data, plugins.data, acq.data, approvals.data, pending.data,
-     version.data, hardware.data]);
+     version.data, hardware.data, phoneApp.data]);
 
   // First run: a house with nothing in it yet gets one hint, taken from
   // the manual. Only then is the manual asked for.

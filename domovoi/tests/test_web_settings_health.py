@@ -79,6 +79,7 @@ GREEN = {
     "internet": {"answer": "sometimes", "connectivity": {"online": True, "reason": "connected"}},
     "guard": {"loaded": True, "tier": "household", "data": {"incidents": [], "banner": {"show": False}}},
     "memory": MEM_WSL,
+    "phoneApp": {"release": {"version_name": "1.2.0"}, "ready": True, "fetch": {"running": False}},
 }
 BAD = {
     **GREEN,
@@ -90,13 +91,22 @@ BAD = {
     "plugins": {"plugins": [{"slug": "radio", "name": "Radio", "status": "load_error", "enabled": True}]},
     "version": {"sha": "abc1234def", "last_update": {"status": "failed", "finished_at": "2026-10-20T03:00:00Z"},
                 "restart_required": True},
+    # The phone app isn't on the server (setup couldn't download it).
+    "phoneApp": {"release": {"version_name": "1.2.0"}, "ready": False, "fetch": {"running": False},
+                 "auto": {"state": "failed", "tries": 5, "setup": True}},
 }
-CORE_DOWN = {**GREEN, "health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False}}
+CORE_DOWN ={**GREEN, "health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False}}
 UNREAD = {"viewer": {**ADMIN, "known": False}, "health": None, "rooms": None, "plugins": None, "pluginErrors": {}, "acq": None,
           "approvals": None, "pending": None, "version": None, "hardware": None, "config": None,
-          "internet": None, "guard": {"loaded": False}, "memory": None}
+          "internet": None, "guard": {"loaded": False}, "memory": None, "phoneApp": None}
 MEM_LOW = {**GREEN, "memory": MEM_LINUX_LOW}
 MEM_NA = {**GREEN, "memory": MEM_OFF}
+# The phone app during first-run setup (owner decision 2026-11-15).
+APP_MISSING = {"release": {"version_name": "1.2.0"}, "ready": False, "fetch": {"running": False}, "auto": {}}
+APP_SETUP_SOON = {**GREEN, "phoneApp": {**APP_MISSING, "auto": {"state": "waiting", "tries": 0, "setup": True}}}
+APP_DOWNLOADING = {**GREEN, "phoneApp": {**APP_MISSING, "fetch": {"running": True}}}
+APP_NO_RELEASE = {**GREEN, "phoneApp": {"release": None, "ready": False}}
+APP_OLD_SERVER = {**GREEN, "phoneApp": APP_MISSING}
 
 _CHECKS = r"""
   const w = h.global('window');
@@ -240,6 +250,7 @@ API_GREEN = {
     "GET /api/config/internet": GREEN["internet"],
     "GET /api/containers/incidents": {"incidents": [], "banner": {"show": False}},
     "GET /api/models/memory": MEM_WSL,
+    "GET /api/satellites/android-app": GREEN["phoneApp"],
 }
 
 SCENARIOS: dict[str, dict] = {
@@ -247,7 +258,10 @@ SCENARIOS: dict[str, dict] = {
         "files": [COMPONENTS, HEALTH, HOME], "component": "(window.HomeAttentionRows = HomeAttentionRows, HomePage)",
         "setup": "window.__CASES = " + json.dumps({"green": GREEN, "bad": BAD, "core_down": CORE_DOWN,
                                                    "unread": UNREAD, "mem_low": MEM_LOW,
-                                                   "mem_na": MEM_NA}) + ";",
+                                                   "mem_na": MEM_NA, "app_setup_soon": APP_SETUP_SOON,
+                                                   "app_downloading": APP_DOWNLOADING,
+                                                   "app_no_release": APP_NO_RELEASE,
+                                                   "app_old_server": APP_OLD_SERVER}) + ";",
         "script": _CHECKS,
     },
     "search": {
@@ -322,7 +336,7 @@ def test_health_shows_every_check_green_or_not(driven) -> None:
     green = driven["checks"]["green"]
     keys = [c["key"] for c in green["checks"]]
     assert keys == ["claim", "core", "db", "stt", "disk", "memory", "version", "update", "restart", "rooms", "offline",
-                    "waiting", "kiosk", "approvals", "adopt", "plugins", "acq", "internet", "connection",
+                    "waiting", "kiosk", "approvals", "phoneapp", "adopt", "plugins", "acq", "internet", "connection",
                     "containers"]
     parts = {c["part"] for c in green["checks"]}
     assert parts == {"server", "updates", "rooms", "plugins", "internet", "containers"}
@@ -350,13 +364,14 @@ def test_home_lists_the_problems_among_the_same_checks_linking_into_health(drive
     assert [(r["key"], r["tone"]) for r in bad["home"]] == [
         ("plugins", "err"), ("update", "err"), ("disk", "err"),
         ("stt", "warn"), ("offline", "warn"), ("waiting", "warn"), ("approvals", "warn"),
-        ("restart", "warn"), ("internet", "warn")]
+        ("phoneapp", "warn"), ("restart", "warn"), ("internet", "warn")]
     assert sorted(bad["home"], key=lambda r: r["key"]) and set(k for k, _ in problems) == {r["key"] for r in bad["home"]}
     hrefs = {r["key"]: r["href"] for r in bad["home"]}
     assert hrefs == {"plugins": "#settings/health/plugins", "update": "#settings/health/updates",
                      "disk": "#settings/health/server", "stt": "#settings/health/server",
                      "offline": "#settings/health/rooms", "waiting": "#settings/health/rooms",
-                     "approvals": "#settings/health/rooms", "restart": "#settings/health/updates",
+                     "approvals": "#settings/health/rooms", "phoneapp": "#settings/health/rooms",
+                     "restart": "#settings/health/updates",
                      "internet": "#settings/health/internet"}
     # Health's own rows link on to the page that fixes them, and name the rooms.
     by = {c["key"]: c for c in bad["checks"]}
@@ -364,6 +379,31 @@ def test_home_lists_the_problems_among_the_same_checks_linking_into_health(drive
     assert by["approvals"]["items"] == ["garage"]
     assert by["plugins"]["fix"] == "#plugins" and by["plugins"]["items"] == ["Radio"]
     assert by["update"]["fix"] == "#settings/about"
+
+
+def test_home_reminds_until_the_phone_app_is_on_the_server(driven) -> None:
+    """Owner decision 2026-11-15: setup puts the app on the server; when it
+    couldn't, Home keeps the reminder (an admin's row) until it is there.
+    Never while setup is about to try or a download runs, never on a
+    server with no app release, and gone once the app is here."""
+    checks = driven["checks"]
+    want = "the phone app isn't on this server yet · it needs the internet once to download it"
+    for case in ("bad", "app_old_server"):
+        by = {c["key"]: c for c in checks[case]["checks"]}
+        assert by["phoneapp"]["tone"] == "warn" and by["phoneapp"]["text"] == want, case
+        assert by["phoneapp"]["scope"] == "admin" and by["phoneapp"]["fix"] == "#settings/phones-and-browsers/get-the-app"
+        assert ("phoneapp", "warn") in [(r["key"], r["tone"]) for r in checks[case]["home"]], case
+    for case, text in (("app_setup_soon", "setup is about to put the phone app on this server"),
+                       ("app_downloading", "downloading the phone app to this server…"),
+                       ("app_no_release", "no app release yet")):
+        by = {c["key"]: c for c in checks[case]["checks"]}
+        assert by["phoneapp"]["tone"] == "idle" and by["phoneapp"]["text"] == text, case
+        assert checks[case]["home"] == [], case
+    green = {c["key"]: c for c in checks["green"]["checks"]}
+    assert green["phoneapp"]["tone"] == "ok" and "phones can install Domovoi 1.2.0 from here" in green["phoneapp"]["text"]
+    home = _src("home.jsx")
+    assert "useCachedObject(admin ? '/api/satellites/android-app' : null" in home, "an admin read only"
+    assert "phoneApp: phoneApp.data" in home and "phoneApp: phoneApp.data" in _src("health.jsx")
 
 
 def test_a_down_core_is_the_only_story_and_the_rest_wait(driven) -> None:

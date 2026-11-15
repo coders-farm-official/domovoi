@@ -66,7 +66,7 @@ def iso(ms: int) -> str:
 
 
 ADMIN_PATHS = {"/api/satellites/approvals", "/api/satellites/pending",
-               "/api/config/version", "/api/models/hardware"}
+               "/api/config/version", "/api/models/hardware", "/api/satellites/android-app"}
 PRIVATE_PATH = re.compile(r"conversations|/notes|memories|/api/people|/api/chat|transcript")
 
 # ─── the in-sandbox prelude: a scripted fetch, a stub socket, a clock ────
@@ -260,6 +260,9 @@ def house(**over) -> dict:
         "GET /api/satellites/pending": [],
         "GET /api/config/version": {"restart_required": False, "last_update": None, "bad_sha": None},
         "GET /api/models/hardware": {"disk": {"percent": 40.0}},
+        # The phone app is on the server (setup put it there, 2026-11-15).
+        "GET /api/satellites/android-app": {"release": {"version_name": "1.2.0"}, "ready": True,
+                                            "fetch": {"running": False}, "auto": {}},
     }
     t.update({k: v for k, v in over.items()})
     return t
@@ -1742,7 +1745,7 @@ def test_every_home_read_is_quiet() -> None:
     home = (STATIC / "home.jsx").read_text(encoding="utf-8")
     calls = re.findall(r"useApiObject\(([^;]*?)\);", home, re.S)
     cached = re.findall(r"useCachedObject\(([^;]*?)\);", home, re.S)
-    assert len(calls) + len(cached) >= 12 and len(cached) == 4
+    assert len(calls) + len(cached) >= 12 and len(cached) == 5
     for call in calls:
         assert "HOME_QUIET" in call or "quiet: true" in call, call
     # The cached reads go through one apiGet, quiet too; nothing else fetches.
