@@ -69,10 +69,21 @@ extension StubHouseUITests {
 
     // MARK: - getting there
 
+    /// The groups house is left "on" by a case that set it, and a case that
+    /// runs after it without a reset of its own (Home's audit, I053) would
+    /// draw the share buttons: put the base house back when the case ends.
+    @MainActor
+    func groupsPutTheHouseBack() {
+        addTeardownBlock { @MainActor [weak self] in
+            self?.control("reset-fixtures", "{}", port: 6601, what: "the fixtures back after a groups case")
+        }
+    }
+
     /// Reset, set the groups house up, then launch onto Home and wait for the
     /// kitchen's row to carry its song.
     @MainActor
     func groupsHome(_ setup: String = "{\"mode\":\"on\"}", paired: Bool = true) -> XCUIApplication {
+        groupsPutTheHouseBack()
         control("reset-fixtures", "{}", port: 6601, what: "the fixtures")
         groupsSet(setup)
         let app = launch(paired: paired)
@@ -87,6 +98,7 @@ extension StubHouseUITests {
     /// wait for the broadcast card, which is drawn once the roster lands.
     @MainActor
     func groupsSettings(_ setup: String = "{\"mode\":\"on\"}", paired: Bool = true) -> XCUIApplication {
+        groupsPutTheHouseBack()
         control("reset-fixtures", "{}", port: 6601, what: "the fixtures")
         groupsSet(setup)
         let app = launch(paired: paired, push: "Satellites", pushDelay: 3)
@@ -340,7 +352,7 @@ extension StubHouseUITests {
         let field = roomsField(app, GroupsUnderTest.nameField)
         XCTAssertTrue(groupsReveal(app, field, "THE NAME FIELD"), "no name field")
         field.tap()
-        app.typeText("Downstairs")
+        app.typeText("Downstairs\n")
         for room in ["kitchen", "garage"] {
             let pick = app.buttons.matching(identifier: GroupsUnderTest.pick(room)).firstMatch
             XCTAssertTrue(groupsReveal(app, pick, "THE \(room.uppercased()) PICK"), "no \(room) to pick")
@@ -367,7 +379,7 @@ extension StubHouseUITests {
         let field = roomsField(app, GroupsUnderTest.nameField)
         XCTAssertTrue(groupsReveal(app, field, "THE NAME FIELD"), "no name field")
         field.tap()
-        app.typeText("Radio Room")
+        app.typeText("Radio Room\n")
         for room in ["garage", "office"] {
             let pick = app.buttons.matching(identifier: GroupsUnderTest.pick(room)).firstMatch
             XCTAssertTrue(groupsReveal(app, pick, "THE \(room.uppercased()) PICK"), "no \(room) to pick")
@@ -394,7 +406,7 @@ extension StubHouseUITests {
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         let typed = (field.value as? String) ?? ""
         app.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: max(typed.count, 8)))
-        app.typeText("Top floor")
+        app.typeText("Top floor\n")
         let save = app.buttons[GroupsUnderTest.save]
         XCTAssertTrue(groupsReveal(app, save, "SAVE"), "no save")
         save.tap()

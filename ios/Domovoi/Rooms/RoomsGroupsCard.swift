@@ -38,6 +38,7 @@ struct RoomsGroupsCard: View {
     @State private var name = ""
     @State private var picked: Set<String> = []
     @State private var deleting: MusicGroup?
+    @FocusState private var nameFocused: Bool
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -133,30 +134,7 @@ struct RoomsGroupsCard: View {
                 .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
                 .accessibilityHidden(true)
-            TextField(
-                GroupStrings.nameFieldLabel,
-                text: $name,
-                prompt: ShellHintPrompt.text(GroupStrings.namePlaceholder),
-                axis: .vertical
-            )
-                .lineLimit(1...)
-                .font(.subheadline)
-                .textInputAutocapitalization(.never)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 10)
-                .frame(minHeight: 44)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary)
-                }
-                .accessibilityLabel(GroupStrings.nameFieldLabel)
-                // A name is one line of at most 40 characters (the server's
-                // `max_length`): a Return in this vertical field is a space.
-                .onChange(of: name) { _, typed in
-                    let flat = typed.replacingOccurrences(of: "\n", with: " ")
-                    let capped = String(flat.prefix(40))
-                    if capped != typed { name = capped }
-                }
+            nameField
             Text(GroupStrings.roomsLabel)
                 .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
@@ -169,6 +147,56 @@ struct RoomsGroupsCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// The group's name — **a different control at an accessibility size**,
+    /// as ``AudiobooksView``'s search box: one line with a `done` key at the
+    /// ordinary sizes, a field that grows with the type at the accessibility
+    /// ones (where a vertical field's Return would put in a newline, so the
+    /// newline is taken as "done" instead). Either way Return puts the
+    /// keyboard away, so the room ticks and save under it can be reached.
+    /// A name is one line of at most 40 characters (the server's
+    /// `max_length`).
+    @ViewBuilder
+    private var nameField: some View {
+        let typed = Binding(
+            get: { name },
+            set: { new in
+                if new.contains(where: \.isNewline) { nameFocused = false }
+                let flat = String(new.filter { !$0.isNewline })
+                name = String(flat.prefix(40))
+            }
+        )
+        Group {
+            if typeSize.isAccessibilitySize {
+                TextField(
+                    GroupStrings.nameFieldLabel,
+                    text: typed,
+                    prompt: ShellHintPrompt.text(GroupStrings.namePlaceholder),
+                    axis: .vertical
+                )
+                .lineLimit(1...)
+            } else {
+                TextField(
+                    GroupStrings.nameFieldLabel,
+                    text: typed,
+                    prompt: ShellHintPrompt.text(GroupStrings.namePlaceholder)
+                )
+                .submitLabel(.done)
+                .onSubmit { nameFocused = false }
+            }
+        }
+        .focused($nameFocused)
+        .font(.subheadline)
+        .textInputAutocapitalization(.never)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 10)
+        .frame(minHeight: 44)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary)
+        }
+        .accessibilityLabel(GroupStrings.nameFieldLabel)
     }
 
     /// One room, picked or not: a button with a tick, so the picked state is
