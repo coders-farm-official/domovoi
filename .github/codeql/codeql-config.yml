@@ -1,0 +1,7 @@
+# CodeQL's scope: our own code. Vendored third-party code is out (its
+# findings belong to its authors, and the minified bundles are noise).
+name: domovoi CodeQL config
+paths-ignore:
+  - web/static/vendor
+  - android/native
+  - "**/node_modules"

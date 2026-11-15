@@ -1,0 +1,51 @@
+# CodeQL static analysis (SAST), for OpenSSF Scorecard and the Security tab
+# (code scanning, which only admins see). Python and JavaScript/TypeScript
+# are interpreted, so build-mode none needs no build; `actions` checks the
+# workflows themselves.
+#
+# Runs on pushes to main, weekly, and on pull requests into main (the
+# Dependabot ones; Scorecard's SAST check looks at merged pull requests).
+# No secret: the run's own token, read-only except the one write the job
+# needs. Vendored third-party code is left out in
+# .github/codeql/codeql-config.yml. Every action is pinned by commit SHA
+# (the comment names its release), the same github/codeql-action release
+# scorecard.yml uploads with.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 2" # Tuesdays, 05:41 UTC
+
+permissions: read-all
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      security-events: write # upload the results to code scanning
+      actions: read          # the workflow run's details, for the upload
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: "/language:${{ matrix.language }}"

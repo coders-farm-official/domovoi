@@ -364,6 +364,11 @@ takes a result from a workflow that keeps its rules (only its approved
 actions in that job, no `run` steps, no write permission at the top);
 `domovoi/tests/test_scorecard_workflow.py` holds them.
 
+**CodeQL** (`.github/workflows/codeql.yml`) scans the Python, JavaScript and workflow code on pushes to `main`,
+pull requests into it and weekly (Security → Code scanning, admins only), skipping the vendored code listed in
+`.github/codeql/codeql-config.yml`. What CI installs beyond `requirements.lock` is hash-pinned in
+`.github/ci-extra-requirements.txt` (`pip install --require-hashes`); bump it by hand with the new version's PyPI hashes.
+
 **Dependabot** (`.github/dependabot.yml`) offers weekly update pull requests
 for the workflows' actions, the Python packages and the Android app's Gradle
 dependencies, grouped one per kind, each release at least 14 days old. They
