@@ -1,6 +1,7 @@
 package com.domovoi.app.ui.screens.home
 
 import com.domovoi.app.net.Capabilities
+import com.domovoi.app.ui.screens.music.NowPlayingGroup
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
 import com.domovoi.app.ui.shell.EverythingRoutes
@@ -136,6 +137,9 @@ internal data class HomeNowPlaying(
     val state: String? = null,
     val song: HomeSong? = null,
     val elapsed_sec: Double? = null,
+    // The group this room is in (V060), null outside one. A member room's
+    // state and song are already its host's: the server answers so.
+    val group: NowPlayingGroup? = null,
 )
 
 @Serializable

@@ -136,6 +136,9 @@ internal data class RoomQueueControls(
     val lessLike: Boolean,
     /** "clear queue" (never a guest's). */
     val clear: Boolean,
+    /** "leave" on a room in a group (V060): this room stops, the others
+     *  play on. The household's, never a guest's. */
+    val leave: Boolean = false,
 )
 
 internal fun roomQueueControls(q: RoomQueue): RoomQueueControls {
@@ -147,6 +150,7 @@ internal fun roomQueueControls(q: RoomQueue): RoomQueueControls {
         autoplay = household && q.editable && session,
         lessLike = household && q.editable && session,
         clear = household && q.editable && q.items.isNotEmpty(),
+        leave = household && q.group != null,
     )
 }
 

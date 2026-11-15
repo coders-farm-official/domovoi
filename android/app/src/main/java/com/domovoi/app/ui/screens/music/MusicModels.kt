@@ -157,4 +157,7 @@ data class RoomQueue(
     @SerialName("session_id") val sessionId: String? = null,
     val autoplay: Boolean? = null,
     @SerialName("up_next") val upNext: RoomUpNext? = null,
+    // The group this room is in (V060), null outside one: the queue shown
+    // is then the host's, heard in every room of `group.rooms`.
+    val group: NowPlayingGroup? = null,
 )
