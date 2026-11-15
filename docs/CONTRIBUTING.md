@@ -659,11 +659,12 @@ workflow runs the same scripts. In order:
    above all).
 2. **Only when the app changed: `android/scripts/release.ps1`** (or `.sh`)
    from a clean, pushed checkout of `main`, **with Docker Desktop running**:
-   builds the APKs in the pinned Linux image (`android/build-env`; without
-   Docker it builds with `gradlew.bat` and warns that the APKs aren't
-   reproducible), signs them with the release key
-   (`--alignment-preserved`) and checks the signature copies onto the
-   unsigned build (`apksigcopier compare`), commits `android/release.json`
+   builds the APKs in the pinned Linux image (`android/build-env`; it
+   stops when Docker isn't running, and only `-NoContainer` builds with
+   `gradlew.bat`, warning that the APKs aren't reproducible), signs them
+   with the release key (`--alignment-preserved`) and checks the signature
+   copies onto the unsigned build (`apksigcopier compare`, required unless
+   `-NoCopyCheck`), commits `android/release.json`
    on the commit they were built from (it refuses if anything else was
    committed meanwhile), pushes that commit, its tag `v<pyproject version>`
    and the app tag `app-<versionName>` on the build commit together, and

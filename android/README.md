@@ -201,9 +201,10 @@ APKs, so servers keep fetching them from there ([docs/CONTRIBUTING.md,
    bash android/scripts/release.sh          # Linux, macOS, Git Bash
    ```
 
-   It builds `:app:assembleRelease -Pdomovoi.apkPerAbi -Pdomovoi.abis=arm64-v8a,armeabi-v7a`
-   **in the pinned Linux image** (`android/build-env/build.ps1` / `build.sh`:
-   a clean checkout of the commit, *Reproducible builds* below), asks for
+   It builds the two APKs **in the pinned Linux image**
+   (`android/build-env/build.ps1` / `build.sh`: a clean checkout of the
+   commit, then `:app:assembleRelease -Pdomovoi.apkPerAbi -Pdomovoi.abis=<abi>`
+   once per ABI, *Reproducible builds* below), asks for
    the keystore file, the alias and the passwords (typed, not shown; never
    written anywhere: apksigner reads them from the script's environment
    for that one call), signs `domovoi-<versionName>-arm64-v8a.apk` and
@@ -247,14 +248,25 @@ Desktop (Linux containers) for the build, a JDK and the SDK's build-tools
 with permission to publish releases.
 
 **Without Docker.** When `docker info` fails (Docker Desktop not
-running), or with `-NoContainer` (`--no-container`), the script builds
-with `gradlew.bat` (`./gradlew`) on this machine, as releases up to 1.2.0
-were built, and warns, before the build and again at the end, that these
-APKs are **not the reproducible ones**: F-Droid's build of the commit, and
-CI's, won't match them. Such a release still installs and updates as
-before; F-Droid just can't publish it. The `apksigcopier` check runs in
-the image, else with an `apksigcopier` on `PATH`, else is skipped with a
-warning.
+running, or crashed at start), the script **stops** and says to start it.
+Only `-NoContainer` (`--no-container`) builds with `gradlew.bat`
+(`./gradlew`) on this machine instead, as releases up to 1.2.0 were built,
+and it warns, before the build and again at the end, that these APKs are
+**not the reproducible ones**: F-Droid's build of the commit, and CI's,
+won't match them. Such a release still installs and updates as before;
+F-Droid just can't publish it.
+
+**The apksigcopier check is required.** It runs in the image when Docker
+is up, else with an `apksigcopier` on `PATH` (`python -m pip install
+apksigcopier==1.1.1`; the script hands it the SDK's `apksigner.bat`, or
+`java -jar apksigner.jar`, as its verify command, so neither path may
+contain a space), and the script stops when it can't run at all.
+`-NoCopyCheck` (`--no-copy-check`) skips it, for a release F-Droid isn't
+meant to publish.
+
+**Which build it signs.** Every build the scripts make writes the commit it
+built to `app/build/outputs/apk/release/COMMIT`, and `-SkipBuild` refuses
+APKs whose `COMMIT` isn't HEAD.
 
 **Google Play:** `android/scripts/play-bundle.ps1` (or `.sh`) builds the
 App Bundle and signs it with the same key (jarsigner; its prompts and
@@ -280,8 +292,11 @@ ones included, from some date in 2027. Register the publisher and
 ## Reproducible builds
 
 The release APKs are **reproducible**: anyone who builds the commit a
-release names gets the same bytes as the GitHub APK, apart from the
-signature. That is what lets F-Droid publish the owner-signed APK itself
+release names the same way, one ABI per Gradle run
+(`:app:assembleRelease -Pdomovoi.apkPerAbi -Pdomovoi.abis=<abi>`, which is
+what `build.sh`, CI and F-Droid run), gets the same bytes as the GitHub APK,
+apart from the signature. A run for both ABIs at once does not: its
+arm64-v8a APK's manifest records other source line numbers. That is what lets F-Droid publish the owner-signed APK itself
 (its build of the commit must match, then it copies the signature over
 with apksigcopier and serves our file), and what lets anyone check an APK
 is that commit's code.
@@ -310,8 +325,15 @@ clean, shallow checkout of exactly that commit, fetched from this
 checkout's `.git` (read-only) inside the container, so only committed files
 are built and no line ending, path, locale or SDK of the machine reaches
 the APK. Gradle's downloads stay in the Docker volume
-`domovoi-android-gradle` between runs. On a machine with 32 or more logical
-processors the container runs on 16-31 (`DOMOVOI_BUILD_CPUS` overrides).
+`domovoi-android-gradle` between runs (`DOMOVOI_BUILD_GRADLE_VOLUME=none`
+for an empty Gradle home each time). The warm volume doesn't change the
+APK: builds with it on the owner's PC gave the same bytes as CI's builds,
+which start from an empty Gradle home, and every artifact is held to its
+SHA-256 either way. On a machine with 32 or more logical processors the
+container gets `--cpuset-cpus 16-31` (`DOMOVOI_BUILD_CPUS` overrides): that
+caps the build at 16 of the CPUs Docker's Linux VM has, so half the
+machine stays free; it does not pick the host's E-cores, since the VM
+numbers its CPUs itself.
 
 **What the build does about it** (`app/build.gradle.kts`): no
 dependency-information block in the APK (`dependenciesInfo`), native
