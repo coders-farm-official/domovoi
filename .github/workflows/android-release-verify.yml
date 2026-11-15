@@ -1,0 +1,109 @@
+# Check the published Android app is its commit's code (android/README.md,
+# "Reproducible builds"): what F-Droid does before it publishes a release.
+# The release android/release.json on main names (the APKs on its GitHub
+# release, signed by the owner) against an unsigned build of the commit it
+# names, made here in the pinned image (android/build-env): apksigcopier
+# copies each published APK's signature onto the unsigned one, and the two
+# must then be the same bytes.
+#
+# Weekly (a release keeps reproducing as long as its pinned inputs stay
+# downloadable), and by hand from the Actions tab. It checks nothing, and
+# says so, until main's android/release.json names a release built with
+# per-ABI versionCodes, the first one built reproducibly; releases before
+# that were built on Windows and never will match.
+#
+# No secrets: it reads only public release files and builds unsigned APKs.
+# Every action is pinned by commit SHA (the comment names its release).
+name: android release verify
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-verify
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: the published APKs are their commit's build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: main
+      - name: The release to check
+        id: which
+        run: |
+          python3 - main/android/release.json <<'PY' >>"$GITHUB_OUTPUT"
+          import json, re, sys
+          rel = (json.load(open(sys.argv[1], encoding="utf-8")) or {}).get("release")
+          apks = (rel or {}).get("apks") or []
+          if not rel or not apks or not all("version_code" in e for e in apks):
+              print("check=false")
+              sys.exit(0)
+          commit = rel["commit"]
+          assert re.fullmatch(r"[0-9a-f]{40}", commit), commit
+          print("check=true")
+          print(f"commit={commit}")
+          print(f"tag={rel['tag']}")
+          print(f"version={rel['version_name']}")
+          PY
+          if grep -q '^check=false' "$GITHUB_OUTPUT"; then
+            echo "::notice::android/release.json names no release built reproducibly yet (no per-ABI versionCodes): nothing to check"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.which.outputs.check == 'true'
+        with:
+          persist-credentials: false
+          ref: ${{ steps.which.outputs.commit }}
+          path: build
+      - name: Download the published APKs (held to android/release.json)
+        if: steps.which.outputs.check == 'true'
+        run: |
+          mkdir -p signed
+          python3 - main/android/release.json <<'PY' >"$RUNNER_TEMP/apks.txt"
+          import json, sys
+          for e in json.load(open(sys.argv[1], encoding="utf-8"))["release"]["apks"]:
+              print(e["abi"], e["file"], e["sha256"], e["url"])
+          PY
+          while read -r abi file sha url; do
+            curl -fsSL --retry 3 -o "signed/$file" "$url"
+            echo "$sha  signed/$file" | sha256sum -c -
+          done <"$RUNNER_TEMP/apks.txt"
+      - name: Build the commit's unsigned APKs in its own pinned image
+        if: steps.which.outputs.check == 'true'
+        run: |
+          docker build -q -t domovoi-android-build-env build/android/build-env >/dev/null
+          mkdir -p unsigned
+          docker run --rm -v "$PWD/build:/build/domovoi" -v "$PWD/unsigned:/out" \
+            domovoi-android-build-env bash /build/domovoi/android/build-env/build-apks.sh /build/domovoi /out
+      - name: apksigcopier compare, as F-Droid does
+        if: steps.which.outputs.check == 'true'
+        env:
+          VERSION: ${{ steps.which.outputs.version }}
+          TAG: ${{ steps.which.outputs.tag }}
+        run: |
+          bad=0
+          {
+            echo "### Android app $VERSION (release $TAG) against its commit's build"
+            echo '| APK | reproduces |'
+            echo '|---|---|'
+          } >>"$GITHUB_STEP_SUMMARY"
+          while read -r abi file sha url; do
+            if docker run --rm --network none -v "$PWD/signed:/signed:ro" -v "$PWD/unsigned:/unsigned:ro" \
+                domovoi-android-build-env apksigcopier compare "/signed/$file" --unsigned "/unsigned/app-$abi-release-unsigned.apk"; then
+              echo "| $file | yes |" >>"$GITHUB_STEP_SUMMARY"
+            else
+              echo "| $file | **NO** |" >>"$GITHUB_STEP_SUMMARY"
+              echo "::error::$file is not its commit's build: apksigcopier compare fails"
+              bad=1
+            fi
+          done <"$RUNNER_TEMP/apks.txt"
+          exit "$bad"

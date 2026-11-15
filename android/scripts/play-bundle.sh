@@ -95,11 +95,17 @@ app_id="$(sed -n 's/^[[:space:]]*applicationId[[:space:]]*=[[:space:]]*"\([^"]*\
 [ "$app_id" = "$PACKAGE" ] || die "the applicationId is not $PACKAGE"
 say "Domovoi $version_name (versionCode $version_code), commit ${commit:0:12}"
 
-# versionCode is YYMMDDNN: the build's date and that day's number, one
-# sequence for the GitHub APKs and this bundle (release.sh checks the same
-# shape).
+# The base versionCode is YYMMDDNN: the build's date and that day's number,
+# one sequence for the GitHub APKs and this bundle (release.sh checks the
+# same shape).
 printf '%s\n' "$version_code" | grep -Eq '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$' \
   || die "versionCode $version_code is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in $gradle_file"
+# The bundle's own code is base*10 (android/app/build.gradle.kts); the
+# GitHub APKs of the same release are base*10 + 1 and + 2. The first bundle
+# with a 9-digit code is one-way: Play never takes a lower code after it.
+base_code="$version_code"
+version_code="${base_code}0"
+say "the bundle's versionCode: $version_code (base $base_code x 10)"
 
 # The last GitHub release (android/release.json, when this checkout has one).
 prev_code=0; prev_cert="-"
@@ -112,14 +118,20 @@ if [ -f android/release.json ]; then
   prev="$("$py" - <<'PY'
 import json
 rel = json.load(open("android/release.json", encoding="utf-8")).get("release") or {}
-print(rel.get("version_code") or 0, rel.get("cert_sha256") or "-")
+code = int(rel.get("version_code") or 0)
+apks = rel.get("apks") or []
+# The base it was built from: version_code / 10 for a release with per-ABI
+# codes (each APK entry names its own), else version_code.
+if apks and all(isinstance(e, dict) and "version_code" in e for e in apks):
+    code //= 10
+print(code, rel.get("cert_sha256") or "-")
 PY
 )" || die "android/release.json can't be read"
   prev="${prev//$'\r'/}"
   prev_code="${prev%% *}"; prev_cert="${prev##* }"
 fi
-if [ "$prev_code" -gt 0 ] && [ "$version_code" -lt "$prev_code" ]; then
-  die "versionCode $version_code is below the last GitHub release's ($prev_code): one sequence for both (YYMMDDNN), raise it"
+if [ "$prev_code" -gt 0 ] && [ "$base_code" -lt "$prev_code" ]; then
+  die "versionCode $base_code is below the last GitHub release's ($prev_code): one sequence for both (YYMMDDNN), raise it"
 fi
 
 # ─── build ───────────────────────────────────────────────────────────────

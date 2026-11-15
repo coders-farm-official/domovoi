@@ -1,0 +1,3 @@
+# The build environment runs in Linux: LF however the checkout is made,
+# and in what git archive hands docker build (build.sh, build.ps1).
+* text eol=lf

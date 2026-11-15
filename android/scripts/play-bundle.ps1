@@ -135,12 +135,18 @@ $versionName = $Matches[1]
 if ($gradleFile -notmatch '(?m)^\s*applicationId\s*=\s*"([^"]+)"\s*$' -or $Matches[1] -ne $Package) { Die "the applicationId is not $Package" }
 Say "Domovoi $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12))"
 
-# versionCode is YYMMDDNN: the build's date and that day's number, one
-# sequence for the GitHub APKs and this bundle (release.ps1 checks the same
-# shape).
+# The base versionCode is YYMMDDNN: the build's date and that day's number,
+# one sequence for the GitHub APKs and this bundle (release.ps1 checks the
+# same shape).
 if ("$versionCode" -notmatch '^[0-9]{2}(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$') {
     Die "versionCode $versionCode is not YYMMDDNN (the build's date and that day's number, e.g. 26101501): set it in android\app\build.gradle.kts"
 }
+# The bundle's own code is base*10 (android\app\build.gradle.kts); the
+# GitHub APKs of the same release are base*10 + 1 and + 2. The first bundle
+# with a 9-digit code is one-way: Play never takes a lower code after it.
+$baseCode = $versionCode
+$versionCode = $baseCode * 10
+Say "the bundle's versionCode: $versionCode (base $baseCode x 10)"
 
 # The last GitHub release (android/release.json, when this checkout has
 # one): the same key, and a versionCode above it (one sequence for both).
@@ -148,11 +154,19 @@ $prevCode = 0; $prevCert = $null
 if (Test-Path 'android\release.json') {
     try {
         $prev = (Get-Content -Raw -Encoding UTF8 'android\release.json' | ConvertFrom-Json).release
-        if ($prev) { $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256 }
+        if ($prev) {
+            # The base it was built from: version_code / 10 for a release with
+            # per-ABI codes (each APK entry names its own), else version_code.
+            $prevCode = [long]$prev.version_code; $prevCert = [string]$prev.cert_sha256
+            $apks = @($prev.apks)
+            if ($apks.Count -gt 0 -and @($apks | Where-Object { -not $_.PSObject.Properties['version_code'] }).Count -eq 0) {
+                $prevCode = [long][math]::Floor($prevCode / 10)
+            }
+        }
     } catch { Die "android\release.json can't be read: $($_.Exception.Message)" }
 }
-if ($prevCode -gt 0 -and $versionCode -lt $prevCode) {
-    Die "versionCode $versionCode is below the last GitHub release's ($prevCode): one sequence for both (YYMMDDNN), raise it"
+if ($prevCode -gt 0 -and $baseCode -lt $prevCode) {
+    Die "versionCode $baseCode is below the last GitHub release's ($prevCode): one sequence for both (YYMMDDNN), raise it"
 }
 
 # --- build ---------------------------------------------------------------

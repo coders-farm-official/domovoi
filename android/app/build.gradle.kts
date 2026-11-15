@@ -1,4 +1,5 @@
 import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.variant.FilterConfiguration
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.result.ResolvedArtifactResult
 import org.gradle.maven.MavenModule
@@ -56,16 +57,29 @@ appAbis.forEach { abi ->
 android {
     namespace = "com.domovoi.app"
     compileSdk = 36
+    // Stated, not AGP's default: the release build's own build-tools, the
+    // ones android/build-env/Dockerfile pins (and the release scripts sign
+    // with), so a later AGP can't move it without a change here.
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.domovoi.app"
         minSdk = 26
         targetSdk = 36
-        // One sequence for GitHub releases and Google Play: YYMMDDNN, the
-        // build's date and that day's number (the assistant plan's M4).
-        // Play refuses an upload whose versionCode is not above the last
-        // one, and a phone refuses an update that goes down, so it only
-        // ever goes up; release.ps1 and play-bundle.ps1 both read it here.
+        // The BASE versionCode, YYMMDDNN: the build's date and that day's
+        // number (the assistant plan's M4), one sequence for GitHub releases
+        // and Google Play. Each output's own code is base*10 + a digit
+        // (androidComponents below): 1 armeabi-v7a, 2 arm64-v8a, 3 x86,
+        // 4 x86_64 for a per-ABI APK, 0 for the App Bundle and an APK
+        // carrying several ABIs; release builds only (a debug build keeps
+        // the base, so a debug APK from an older branch still installs over
+        // a newer one on a shared test phone). So the APKs of one release have different
+        // codes, as F-Droid needs (its VercodeOperation 10*%c+d), and a
+        // 64-bit phone ranks arm64 above armeabi. Play refuses an upload
+        // whose versionCode is not above the last one, and a phone refuses
+        // an update that goes down, so it only ever goes up; the release
+        // scripts, play-bundle and scripts/release/finish_release.py read
+        // this line.
         versionCode = 26111301
         versionName = "1.2.0"
         // The ABIs above. One APK per ABI filters by splits (below)
@@ -119,14 +133,45 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // No ndk.debugSymbolLevel: every native library arrives built and
-            // stripped (the AARs', and native/sherpa-onnx's), with no symbols
-            // beyond the dynamic ones Play reads from the libraries
-            // themselves, and extracting even those needs the NDK, which this
-            // build otherwise never uses. Play's "no debug symbols" note on a
-            // bundle is advice, not a requirement.
+            // No ndk.debugSymbolLevel: every native library arrives built
+            // (the AARs', and native/sherpa-onnx's), with no symbols beyond
+            // the dynamic ones Play reads from the libraries themselves, and
+            // extracting even those needs the NDK, which this build otherwise
+            // never uses. Play's "no debug symbols" note on a bundle is
+            // advice, not a requirement.
+            // The PNGs go in as committed: aapt2's crunching is not
+            // byte-for-byte the same everywhere (F-Droid's reproducible-build
+            // notes), and the launcher icons are all it would touch.
+            isCrunchPngs = false
         }
     }
+    // Reproducible release APKs (android/README.md, "Reproducible builds"):
+    // the same commit builds the same bytes on any machine, so F-Droid's
+    // build of it can carry this project's signature.
+    // - No dependency-information block in the APK's signing block: Google
+    //   encrypts it, so nobody else can check it (F-Droid refuses opaque
+    //   blocks). The App Bundle keeps it for Play.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = true
+    }
+    // - Native libraries go in as they arrive, never re-stripped: AGP strips
+    //   them with whatever NDK the machine happens to have (a CI image has
+    //   several, the owner's SDK none), and two llvm-strips needn't agree.
+    //   Every library comes stripped already except ONNX Runtime's small
+    //   libonnxruntime4j_jni.so, which the releases so far (built with no
+    //   NDK) have shipped as it is anyway.
+    packaging {
+        jniLibs {
+            keepDebugSymbols += "**/*.so"
+        }
+    }
+    // - vcsInfo stays AGP's default, and its
+    //   META-INF/version-control-info.textproto holds no commit: AGP looks
+    //   for .git in Gradle's root (android/), and the repository's is one
+    //   level up, so every build, F-Droid's included, writes the same
+    //   NO_SUPPORTED_VCS_FOUND. The commit is the app-<versionName> tag the
+    //   release scripts put on it instead.
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -317,7 +362,7 @@ abstract class DraftAssetsTask : DefaultTask() {
         out.deleteRecursively()
         val src = drafts.get().asFile
         for (sub in listOf("templates", "fonts")) {
-            val files = File(src, sub).listFiles().orEmpty().filter { it.isFile && !it.name.startsWith(".") }
+            val files = File(src, sub).listFiles().orEmpty().filter { it.isFile && !it.name.startsWith(".") }.sortedBy { it.name }
             if (files.isEmpty()) throw GradleException("domovoi/drafts/$sub is empty")
             files.forEach { it.copyTo(File(out, "drafts/$sub/${it.name}"), overwrite = true) }
         }
@@ -578,7 +623,10 @@ abstract class OpenSourceTask : DefaultTask() {
 
 /** POM files, own first, then each parent, for each "group:name:version":
  *  resolved one by one (offline, from the cache the build already filled)
- *  so no version is traded for another. */
+ *  so no version is traded for another. A POM, or a parent a POM names,
+ *  that can't be found fails the build: a short chain would quietly change
+ *  a row's licences in licences/maven.json, and so the APK, from one
+ *  machine to the next. */
 fun pomChains(coords: Collection<String>): Map<String, List<String>> {
     // Gradle's own way to a module's POM (MavenPomArtifact), which works for
     // libraries published with Gradle module metadata too; offline, before
@@ -595,19 +643,28 @@ fun pomChains(coords: Collection<String>): Map<String, List<String>> {
         return viaGradle ?: File(gradle.gradleUserHomeDir, "caches/modules-2/files-2.1/$g/$a/$v").listFiles().orEmpty()
             .map { File(it, "$a-$v.pom") }.firstOrNull { it.isFile }
     }
-    fun parentOf(pom: File): String? = runCatching {
-        val root = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pom).documentElement
+    fun parentOf(pom: File): String? {
+        val root = try {
+            DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pom).documentElement
+        } catch (e: Exception) {
+            throw GradleException("licences: can't read the POM $pom: $e")
+        }
         val parent = (0 until root.childNodes.length).map { root.childNodes.item(it) }
             .filterIsInstance<Element>().firstOrNull { it.tagName == "parent" } ?: return null
         fun part(n: String) = (0 until parent.childNodes.length).map { parent.childNodes.item(it) }
             .filterIsInstance<Element>().firstOrNull { it.tagName == n }?.textContent?.trim()
-        listOf(part("groupId"), part("artifactId"), part("version")).takeIf { p -> p.all { !it.isNullOrBlank() } }?.joinToString(":")
-    }.getOrNull()
+        val gav = listOf(part("groupId"), part("artifactId"), part("version"))
+        if (gav.any { it.isNullOrBlank() }) throw GradleException("licences: $pom names a parent without its group, name and version")
+        return gav.joinToString(":")
+    }
     return coords.associateWith { coord ->
         val chain = mutableListOf<String>()
         var next: String? = coord
         while (next != null && chain.size < 6) {
-            val pom = resolve(next) ?: break
+            val pom = resolve(next) ?: throw GradleException(
+                "licences: no POM for $next" + (if (next != coord) " (a parent of $coord)" else "") +
+                    ", so licences/maven.json can't be written the same everywhere"
+            )
             chain += pom.absolutePath
             next = parentOf(pom)
         }
@@ -615,8 +672,21 @@ fun pomChains(coords: Collection<String>): Map<String, List<String>> {
     }
 }
 
+/** The last digit of each output's versionCode, base*10 + this (see
+ *  defaultConfig.versionCode); 0 for an output with no ABI of its own. */
+val abiVersionDigit = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86" to 3, "x86_64" to 4)
+
 androidComponents {
     onVariants { variant ->
+        // Each release output's versionCode: base*10 + its ABI's digit (0 for
+        // the App Bundle, or an APK carrying several ABIs). Debug builds keep
+        // the base.
+        val base = android.defaultConfig.versionCode ?: throw GradleException("defaultConfig sets no versionCode")
+        if (variant.buildType == "release") variant.outputs.forEach { output ->
+            val abi = output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
+            val digit = if (abi == null) 0 else abiVersionDigit[abi] ?: throw GradleException("no versionCode digit for ABI $abi")
+            output.versionCode.set(base * 10 + digit)
+        }
         variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
         variant.sources.assets?.addGeneratedSourceDirectory(manualAssets, ManualAssetsTask::outputDir)
         variant.sources.assets?.addGeneratedSourceDirectory(draftAssets, DraftAssetsTask::outputDir)

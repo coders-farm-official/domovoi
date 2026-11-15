@@ -1,0 +1,17 @@
+# What android/build-env/Dockerfile installs, as the image itself records it
+# (/etc/domovoi-build-env.txt). CI builds the image and fails when the two
+# differ (ci.yml, android-repro-build), so a pin moved in the Dockerfile is
+# moved here in the same commit. Lines starting with # are not compared.
+base ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+apt snapshot 20261030T000000Z
+apt apksigcopier 1.1.1-1
+apt curl 8.5.0-2ubuntu10.16
+apt git 1:2.43.0-1ubuntu7.4
+apt locales 2.39-0ubuntu8.9
+apt openjdk-21-jdk-headless 21.0.12.1+1-1~24.04.4
+apt tzdata 2026e-0ubuntu0.24.04.1
+apt unzip 6.0-28ubuntu4.1
+jdk Temurin-21.0.13+9 21.0.13+9-LTS (JAVA_HOME /opt/temurin-21)
+jdk-alt Ubuntu 21.0.12.1+1-1-24.04.4-Ubuntu (/usr/lib/jvm/java-21-openjdk-amd64)
+sdk platforms;android-36 revision 2
+sdk build-tools;35.0.0 revision 35.0.0

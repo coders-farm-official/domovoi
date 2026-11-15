@@ -11,10 +11,16 @@
 #            stopped after tagging), and says whether the Android app
 #            changed (its versionName/versionCode differ from the ones
 #            android/release.json names).
+#   build-app  no secrets, read-only, only when the app changed: the
+#            unsigned release APKs, built from main's tip in the pinned
+#            Linux image (android/build-env), the same bytes CI's
+#            reproducibility check and F-Droid build (android/README.md,
+#            "Reproducible builds"). An artifact for the release job.
 #   release  the `release` environment: GitHub waits for the owner's
 #            approval before this job starts or sees a secret. On Windows:
-#            when the app changed, android/scripts/release.ps1 builds,
-#            signs (the keystore from the environment's secrets), commits
+#            when the app changed, android/scripts/release.ps1 -SkipBuild
+#            signs build-app's APKs (the keystore from the environment's
+#            secrets), commits
 #            android/release.json on main, tags it and publishes the APKs;
 #            then, always, scripts/release/finish_release.py builds the
 #            Windows Setup from the tag, signs it with the release key held
@@ -39,9 +45,11 @@
 # that remain the fallback: docs/CONTRIBUTING.md, "Releasing".
 #
 # Hardening: every action is pinned by commit SHA (the comment names its
-# release); the only action is actions/checkout, with no credentials left
-# behind. Tools come from the runner image or are downloaded at a pinned
-# version and checked against a pinned SHA-256. Secrets live only in the
+# release); the actions are actions/checkout (no credentials left behind)
+# and upload-artifact/download-artifact, which carry build-app's unsigned
+# APKs to the release job (no token, no secret). Tools come from the runner
+# image or are downloaded at a pinned version and checked against a pinned
+# SHA-256 (apksigcopier and click by pip's hash check). Secrets live only in the
 # `release` environment and reach only the step that needs each; GITHUB_TOKEN
 # is handed to git per step (never written to .git/config). No secret is
 # written into the workspace; the keystore is written to RUNNER_TEMP for
@@ -119,10 +127,49 @@ jobs:
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
 
+  build-app:
+    name: build the app (no secrets)
+    needs: plan
+    if: github.ref == 'refs/heads/main' && needs.plan.outputs.sign_app == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: The unsigned release APKs, in the pinned image (android/build-env)
+        run: |
+          docker build -q -t domovoi-android-build-env android/build-env >/dev/null
+          mkdir -p "$RUNNER_TEMP/out"
+          docker run --rm -v "$PWD:/build/domovoi" -v "$RUNNER_TEMP/out:/out" \
+            domovoi-android-build-env bash /build/domovoi/android/build-env/build-apks.sh /build/domovoi /out
+          echo "$GITHUB_SHA" >"$RUNNER_TEMP/out/COMMIT"
+          {
+            echo "### Unsigned release APKs of $GITHUB_SHA"
+            echo '```'
+            (cd "$RUNNER_TEMP/out" && sha256sum -- *.apk)
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-unsigned-apks
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 3
+
   release:
     name: sign and publish (approval)
-    needs: [plan, sbom]
-    if: github.ref == 'refs/heads/main'
+    needs: [plan, build-app, sbom]
+    # build-app is skipped for a release that doesn't change the app; with
+    # !cancelled(), not always(), a cancelled run stops this job too. The sbom
+    # check matters: !cancelled() would otherwise sign after a failed SBOM.
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success'
+      && needs.sbom.result == 'success'
+      && (needs.build-app.result == 'success' || needs.build-app.result == 'skipped')
     runs-on: windows-2025
     environment: release
     timeout-minutes: 150
@@ -224,8 +271,8 @@ jobs:
           if (-not (Test-Path -LiteralPath $iscc)) { throw "no $iscc after installing" }
           Remove-Item -LiteralPath $exe
 
-      # ── the app changed: build (no secrets), then sign and publish ──────
-      - name: Android SDK and JDK 17 (the runner's)
+      # ── the app changed: build-app's APKs, signed and published ─────────
+      - name: Android SDK and JDK 17 (the runner's; for signing and checking)
         if: steps.plan.outputs.sign_app == 'true'
         shell: pwsh
         run: |
@@ -239,30 +286,39 @@ jobs:
           & $sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'platform-tools'
           if ($LASTEXITCODE -ne 0) { throw 'sdkmanager failed' }
 
-      - name: Build the release APKs (no secrets)
+      # build-app's unsigned APKs where release.ps1 -SkipBuild signs from:
+      # built in the pinned Linux image from the dispatched commit, never
+      # on this runner (android/README.md, "Reproducible builds").
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.plan.outputs.sign_app == 'true'
-        working-directory: android
-        shell: pwsh
+        with:
+          name: release-unsigned-apks
+          path: android/app/build/outputs/apk/release
+      - name: The APKs are the dispatched commit's
+        if: steps.plan.outputs.sign_app == 'true'
         run: |
-          # The Gradle the wrapper downloads, held to Gradle's published SHA-256
-          # for this run (gradle-wrapper.properties has none yet; put back below,
-          # since release.ps1 wants a clean checkout).
-          $props = 'gradle\wrapper\gradle-wrapper.properties'
-          if (-not (Select-String -LiteralPath $props -SimpleMatch -Quiet 'gradle-8.14.3-bin.zip')) {
-            throw 'the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 in release.yml'
-          }
-          if (-not (Select-String -LiteralPath $props -SimpleMatch -Quiet 'distributionSha256Sum')) {
-            Add-Content -LiteralPath $props -Value 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' -Encoding ascii
-          }
-          try {
-            # What release.ps1 runs (its -SkipBuild signs these), with no daemon left behind.
-            .\gradlew.bat --no-daemon ':app:assembleRelease' '-Pdomovoi.apkPerAbi' '-Pdomovoi.abis=arm64-v8a,armeabi-v7a'
-            if ($LASTEXITCODE -ne 0) { throw 'the build failed' }
-          } finally {
-            git checkout -- $props
-            # Nothing the build started outlives it into the signing steps.
-            Get-Process java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          }
+          out=android/app/build/outputs/apk/release
+          [ "$(tr -d '\r\n' <"$out/COMMIT")" = "$DISPATCHED" ] || { echo "::error::build-app built another commit"; exit 1; }
+          mkdir -p android/app/build/outputs/mapping/release
+          mv "$out/mapping.txt" android/app/build/outputs/mapping/release/mapping.txt
+          ls -l "$out"
+
+      # apksigcopier (F-Droid's tool, GPL-3.0; run here only, never shipped)
+      # for release.ps1's check that the signature copies onto the unsigned
+      # APK unchanged. Pinned with its one dependency by SHA-256.
+      - name: apksigcopier 1.1.1 (pinned, hash-checked)
+        if: steps.plan.outputs.sign_app == 'true'
+        run: |
+          cat >"$RUNNER_TEMP/apksigcopier.txt" <<'REQ'
+          apksigcopier==1.1.1 --hash=sha256:0834bb7d6f3607bb0994cf8cd2e26b8f0c9d481e13b75872e0fa9cec052e519b
+          click==8.4.2 --hash=sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76
+          REQ
+          python -m pip install --disable-pip-version-check --no-deps --require-hashes --only-binary=:all: \
+            -r "$RUNNER_TEMP/apksigcopier.txt"
+          # pip puts the command in Python's Scripts folder; release.ps1 finds it on PATH.
+          scripts="$(python -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+          echo "$scripts" >>"$GITHUB_PATH"
+          "$scripts/apksigcopier" --version
 
       - name: Sign and publish the app (release.ps1)
         if: steps.plan.outputs.sign_app == 'true'

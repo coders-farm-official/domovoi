@@ -63,7 +63,8 @@ own phones.
    ```
    It asks for the keystore, alias and passwords (never stored or
    logged), builds `bundleRelease`, signs it with jarsigner, checks it, and
-   prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-<versionName>-<versionCode>.aab`),
+   prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-<versionName>-<versionCode>.aab`,
+   where `<versionCode>` is the bundle's own, base\*10),
    its SHA-256 and the certificate's SHA-256. Bash: `bash android/scripts/play-bundle.sh`.
 
 ## 1. Create the app
@@ -214,9 +215,13 @@ with `gh`, tagged at that commit (a full release, release
 candidates included; `-Prerelease` makes it a pre-release);
 `scripts/release/finish-release.ps1` then adds the Windows Setup, the
 checksums and the notes. `-NoPublish` stops before git and GitHub. The
-APKs and the Play bundle must share one `versionCode` sequence: a later
-build raises `versionCode` (`YYMMDDNN`) in `android/app/build.gradle.kts`
-before either script runs; both refuse to go backwards.
+APKs and the Play bundle share one `versionCode` sequence: a later build
+raises the base `versionCode` (`YYMMDDNN`) in
+`android/app/build.gradle.kts` before either script runs; both refuse to
+go backwards. Each output's own code is base\*10 + a digit (the bundle 0,
+armeabi-v7a 1, arm64-v8a 2: android/README.md, "ABIs and APKs"), so the
+first bundle uploaded with a 9-digit code is **one-way**: Play accepts only
+codes above the last one, and no 8-digit build can follow it.
 
 ## 9. Android developer verification (2027)
 

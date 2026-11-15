@@ -21,3 +21,13 @@ ios/Packages/DomovoiKit/Tests/DomovoiKitTests/Fixtures/** -text
 
 # Regenerated on any OS and compared byte for byte by CI: always LF.
 web/openapi.json text eol=lf
+
+# The Android release build's environment: its scripts run in Linux.
+android/build-env/** text eol=lf
+# Files from outside android/ that the Android build copies into the APK byte
+# for byte (android/app/build.gradle.kts: manualAssets, draftAssets): LF on
+# every checkout, so a Windows checkout with core.autocrlf=true builds the
+# same APK as Linux (android/README.md, "Reproducible builds").
+web/static/manual-content.json text eol=lf
+domovoi/doc_qa/chat-weak-spots.json text eol=lf
+domovoi/drafts/templates/** text eol=lf

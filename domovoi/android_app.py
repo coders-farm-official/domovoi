@@ -39,6 +39,15 @@ runtime (domovoi/satellite_windows.py):
 * :func:`status` / :func:`public_status` — what the dashboard card and the
   join page show.
 
+**Per-ABI versionCodes** (2026-11-14, reproducible builds for F-Droid). From
+the first release built that way, each APK has its own versionCode,
+``base*10 + digit`` (:data:`ABI_DIGIT`; android/app/build.gradle.kts), and
+the manifest names it per entry (``apks[].version_code``). The release's
+own ``version_code`` is then ``base*10``, the Play bundle's: below every APK
+of that release and above every earlier one, so a phone on an older app,
+which compares that top-level number only, still sees the update.
+Manifests from before (no per-entry codes) load as they always did.
+
 **After an update** (2026-10-23, the owner's Moto: "the app isn't on this
 server yet" from a QR code the dashboard had just offered). The cache is
 kept per release (``…/android_app/<versionCode>/``), and an update that
@@ -89,6 +98,9 @@ RELEASE_DOWNLOAD = "https://github.com/coders-farm-official/domovoi/releases/dow
 #: The ABIs a release carries, in the order pages offer them: "most
 #: phones" first, "older or cheaper phones" second.
 ABIS = ("arm64-v8a", "armeabi-v7a")
+#: The last digit of each per-ABI APK's versionCode (base*10 + digit), as
+#: android/app/build.gradle.kts gives it; 0 is the App Bundle's.
+ABI_DIGIT = {"armeabi-v7a": 1, "arm64-v8a": 2}
 MAX_APK_BYTES = 200 * 1024 * 1024
 FILES_PATH = "/v1/android-app/files/"
 CACHE_BUCKET = "android_app"
@@ -204,6 +216,9 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
     apks = rel.get("apks")
     if not isinstance(apks, list) or not apks:
         raise ManifestError("the release names no APKs")
+    with_codes = [isinstance(e, dict) and "version_code" in e for e in apks]
+    if any(with_codes) and not all(with_codes):
+        raise ManifestError("either every APK names its version_code or none does")
     seen: set[str] = set()
     out_apks = []
     for entry in apks:
@@ -226,7 +241,15 @@ def load_manifest(path: Path | None = None) -> dict[str, Any]:
         size = entry.get("size")
         if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= MAX_APK_BYTES:
             raise ManifestError(f"{abi}: bad size")
-        out_apks.append({"abi": abi, "file": name, "url": entry["url"], "sha256": sha, "size": size})
+        out_entry = {"abi": abi, "file": name, "url": entry["url"], "sha256": sha, "size": size}
+        # The APK's own versionCode (releases since per-ABI codes): the
+        # release's (base*10) plus this ABI's digit, never anything else.
+        if "version_code" in entry:
+            own = entry["version_code"]
+            if not isinstance(own, int) or isinstance(own, bool) or own != code + ABI_DIGIT[abi]:
+                raise ManifestError(f"{abi}: version_code must be the release's plus {ABI_DIGIT[abi]}")
+            out_entry["version_code"] = own
+        out_apks.append(out_entry)
     out_apks.sort(key=lambda e: ABIS.index(e["abi"]))
     return {
         "manifest_version": 1,
@@ -378,7 +401,9 @@ def _current(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {"abi": e["abi"], "file": e["file"], "size": e["size"],
          "ready": _passes(bucket / e["file"], e, rel["cert_sha256"]),
-         "path": FILES_PATH + e["file"]}
+         "path": FILES_PATH + e["file"],
+         # Per-ABI codes (since reproducible builds): what the phone compares.
+         **({"version_code": e["version_code"]} if "version_code" in e else {})}
         for e in rel["apks"]
     ]
 
@@ -765,19 +790,25 @@ MANIFEST_ABOUT = [
 
 
 def build_manifest(folder: Path, *, version_name: str, version_code: int, cert_sha256: str,
-                   commit: str | None, published: str | None, tag: str) -> dict[str, Any]:
+                   commit: str | None, published: str | None, tag: str,
+                   apk_version_codes: dict[str, int] | None = None) -> dict[str, Any]:
     """The release.json document for the signed APKs in ``folder``
     (``domovoi-<version>-<abi>.apk`` for every ABI in :data:`ABIS`),
     attached to the GitHub release ``tag`` (the Domovoi release being cut,
-    :func:`release_tag`)."""
+    :func:`release_tag`). ``apk_version_codes`` ({abi: code}) gives each
+    APK's own versionCode, for a release with per-ABI codes (then
+    ``version_code`` is the base*10 the codes are built on)."""
     apks = []
     for abi in ABIS:
         name = file_name(version_name, abi)
         path = Path(folder) / name
-        apks.append({
+        entry = {
             "abi": abi, "file": name, "url": RELEASE_DOWNLOAD + tag + "/" + name,
             "sha256": _sha256(path), "size": path.stat().st_size,
-        })
+        }
+        if apk_version_codes is not None:
+            entry["version_code"] = apk_version_codes[abi]
+        apks.append(entry)
     return {
         "manifest_version": 1,
         "about": MANIFEST_ABOUT,
@@ -797,10 +828,13 @@ def _main(argv: list[str]) -> int:
       name in DIR, to :func:`check_apk`: exactly what a Domovoi server does
       before it serves them.
     * ``write OUT DIR --version-name V --version-code N --cert HEX --tag vX.Y.Z
-      [--commit SHA] [--published YYYY-MM-DD]`` — write the release.json
-      for the signed APKs in DIR (and ``SHA256SUMS`` beside them), checked
-      by :func:`load_manifest` before it is written. ``--tag`` is the
-      Domovoi release the APKs are published under (``tag`` below).
+      [--commit SHA] [--published YYYY-MM-DD] [--apk-version-code ABI=CODE ...]``
+      — write the release.json for the signed APKs in DIR (and
+      ``SHA256SUMS`` beside them), checked by :func:`load_manifest` before
+      it is written. ``--tag`` is the Domovoi release the APKs are
+      published under (``tag`` below); ``--apk-version-code``, once per ABI,
+      each APK's own versionCode (per-ABI codes; ``--version-code`` is then
+      their base*10).
     * ``tag [PYPROJECT]`` — print the Domovoi release tag of the checkout
       (:func:`release_tag`): what the release scripts tag.
     """
@@ -821,6 +855,7 @@ def _main(argv: list[str]) -> int:
     w.add_argument("--commit")
     w.add_argument("--published")
     w.add_argument("--tag", required=True)
+    w.add_argument("--apk-version-code", action="append", default=[], metavar="ABI=CODE")
     tg = sub.add_parser("tag")
     tg.add_argument("pyproject", nargs="?")
     args = ap.parse_args(argv)
@@ -834,10 +869,23 @@ def _main(argv: list[str]) -> int:
         return 0
 
     if args.cmd == "write":
+        codes: dict[str, int] | None = None
+        if args.apk_version_code:
+            codes = {}
+            for item in args.apk_version_code:
+                abi, _, value = item.partition("=")
+                if abi not in ABIS or not value.isdigit() or abi in codes:
+                    print(f"--apk-version-code {item!r}: ABI=CODE, once for each of {', '.join(ABIS)}",
+                          file=sys.stderr)
+                    return 2
+                codes[abi] = int(value)
+            if set(codes) != set(ABIS):
+                print(f"--apk-version-code: one for each of {', '.join(ABIS)}", file=sys.stderr)
+                return 2
         try:
             doc = build_manifest(Path(args.dir), version_name=args.version_name, version_code=args.version_code,
                                  cert_sha256=args.cert.lower(), commit=args.commit, published=args.published,
-                                 tag=args.tag)
+                                 tag=args.tag, apk_version_codes=codes)
         except OSError as e:
             print(f"an APK is missing: {e}", file=sys.stderr)
             return 2

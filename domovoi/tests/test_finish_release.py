@@ -153,9 +153,9 @@ def _write(root: Path, rel: str, data: str | bytes) -> None:
     p.write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
 
 
-def _manifest(version: str, apks: list[dict], commit: str) -> str:
+def _manifest(version: str, apks: list[dict], commit: str, version_code: int = 26101602) -> str:
     return json.dumps({"manifest_version": 1, "release": {
-        "package": "com.domovoi.app", "version_name": version, "version_code": 26101602,
+        "package": "com.domovoi.app", "version_name": version, "version_code": version_code,
         "tag": f"v{version}", "commit": commit, "published": "2026-10-16", "cert_sha256": CERT, "apks": apks,
     }}, indent=2) + "\n"
 
@@ -177,7 +177,7 @@ class World:
 
     def __init__(self, tmp_path: Path, monkeypatch, version: str = "1.0.0-rc2", stable: str | None = None,
                  hand_notes: str | None = None, github_prerelease: bool = False, annotated: bool = False,
-                 release_key: bytes | None = None):
+                 release_key: bytes | None = None, per_abi_codes: bool = False):
         self.tmp = tmp_path
         self.version = version
         self.tag = f"v{version}"
@@ -219,7 +219,13 @@ class World:
                       "url": f"https://github.com/coders-farm-official/domovoi/releases/download/v{version}/domovoi-{version}-{abi}.apk",
                       "sha256": hashlib.sha256(f"apk {abi}".encode()).hexdigest(), "size": len(f"apk {abi}".encode())}
                      for abi in ("arm64-v8a", "armeabi-v7a")]
-        _write(w, "android/release.json", _manifest(version, self.apks, self.build))
+        # Per-ABI versionCodes (since 2026-11-14): each APK base*10 + its
+        # ABI's digit, the release's code base*10; the base is 26101602.
+        if per_abi_codes:
+            for e in self.apks:
+                e["version_code"] = 261016020 + {"armeabi-v7a": 1, "arm64-v8a": 2}[e["abi"]]
+        _write(w, "android/release.json", _manifest(version, self.apks, self.build,
+                                                     261016020 if per_abi_codes else 26101602))
         _git(w, "commit", "--quiet", "-am", "android: release")
         if annotated:
             _git(w, "tag", "-a", "-m", "a signed release, one day", self.tag)
@@ -1318,6 +1324,28 @@ def test_plan_an_app_release_signs_it_first(tmp_path, monkeypatch):
     doc = _plan(w)
     assert doc["path"] == "app" and doc["sign_app"] is True and doc["finish_at"] == head
     assert doc["app"] == {"version_name": "1.0.1", "version_code": 26101701}
+
+
+@pytest.mark.parametrize("gradle, path", [
+    ('        versionCode = 26101602\n        versionName = "1.0.0"\n', "server"),
+    (APP_1_0_1, "app"),
+])
+@requires_git
+def test_plan_reads_a_per_abi_manifest_by_its_base(tmp_path, monkeypatch, gradle, path):
+    """A manifest with per-ABI versionCodes names base*10 at the top: the app
+    is unchanged when build.gradle.kts still says that base."""
+    w = World(tmp_path, monkeypatch, version="1.0.0", per_abi_codes=True)
+    _server_only(w, gradle=gradle)
+    assert _plan(w)["path"] == path
+    assert fr._released_base({"version_code": 261016020, "apks": w.apks}) == 26101602
+    assert fr._released_base({"version_code": 26101602, "apks": [{"abi": "arm64-v8a"}]}) == 26101602
+
+
+@requires_git
+def test_a_server_only_release_after_a_per_abi_app_release_finishes(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, version="1.0.0", per_abi_codes=True)
+    _server_only(w)
+    assert w.run() == 0
 
 
 @pytest.mark.parametrize("change, why", [
