@@ -1,0 +1,80 @@
+// What the release APKs carry from Maven, for scripts/release/sbom.py: the
+// app's releaseRuntimeClasspath as Gradle resolves it, each component with
+// the SHA-256 of its file and the components it depends on, as JSON.
+//
+//   cd android && ./gradlew --no-daemon --no-configuration-cache \
+//     --init-script ../scripts/release/sbom-android.init.gradle \
+//     -Pdomovoi.sbomDeps=/abs/path/deps.json :app:domovoiSbomDeps
+//
+// Gradle's own API only: no SBOM plugin, so nothing is downloaded beyond
+// what the release build itself resolves, and the dependency verification
+// in android/gradle/verification-metadata.xml covers every file read here.
+// Nothing is built and the project's files are not changed. The SHA-256 is
+// of the file as published on Maven (the .aar or .jar). A component with
+// no file of its own (a BOM, or a Kotlin Multiplatform module that hands
+// over to its -android one) is listed with its dependencies and no file.
+
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+
+gradle.projectsEvaluated { g ->
+    def app = g.rootProject.findProject(':app')
+    if (app == null) {
+        throw new GradleException('sbom-android.init.gradle: no :app project')
+    }
+    app.tasks.register('domovoiSbomDeps') { task ->
+        task.description = "Writes the release runtime classpath as JSON for scripts/release/sbom.py"
+        task.notCompatibleWithConfigurationCache('reads the resolved configuration when it runs')
+        task.doLast {
+            def outPath = app.findProperty('domovoi.sbomDeps')
+            if (!outPath) {
+                throw new GradleException('pass -Pdomovoi.sbomDeps=<file>')
+            }
+            def conf = app.configurations.getByName('releaseRuntimeClasspath')
+            def result = conf.incoming.resolutionResult
+            def key = { id -> "${id.group}:${id.module}:${id.version}".toString() }
+            def moduleDeps = { deps ->
+                deps.findAll { it instanceof ResolvedDependencyResult && it.selected.id instanceof ModuleComponentIdentifier }
+                    .collect { key(it.selected.id) }.unique().sort()
+            }
+            def comps = new TreeMap()
+            result.allComponents.each { c ->
+                if (c.id instanceof ModuleComponentIdentifier) {
+                    comps[key(c.id)] = [group: c.id.group, module: c.id.module, version: c.id.version,
+                                        dependencies: moduleDeps(c.dependencies), artifacts: []]
+                }
+            }
+            def failures = []
+            def view = conf.incoming.artifactView { lenient(true) }
+            view.artifacts.each { a ->
+                def id = a.id.componentIdentifier
+                if (id instanceof ModuleComponentIdentifier && comps.containsKey(key(id))) {
+                    def md = MessageDigest.getInstance('SHA-256')
+                    a.file.withInputStream { s ->
+                        byte[] buf = new byte[1 << 16]
+                        int n
+                        while ((n = s.read(buf)) > 0) { md.update(buf, 0, n) }
+                    }
+                    def entry = [file: a.file.name, sha256: md.digest().encodeHex().toString()]
+                    // An artifact reached by two variants of one component is listed once.
+                    if (!comps[key(id)].artifacts.contains(entry)) {
+                        comps[key(id)].artifacts << entry
+                    }
+                }
+            }
+            view.artifacts.failures.each { failures << it.toString() }
+            if (failures) {
+                throw new GradleException("sbom-android.init.gradle: artifacts that didn't resolve: ${failures.join('; ')}")
+            }
+            comps.values().each { it.artifacts.sort { a -> a.file } }
+            def doc = [format: 1, configuration: conf.name, roots: moduleDeps(result.root.dependencies),
+                       components: comps.values().toList()]
+            def out = new File(outPath.toString())
+            out.parentFile?.mkdirs()
+            out.setText(JsonOutput.prettyPrint(JsonOutput.toJson(doc)) + '\n', 'UTF-8')
+            println "domovoiSbomDeps: ${comps.size()} components -> ${out}"
+        }
+    }
+}
