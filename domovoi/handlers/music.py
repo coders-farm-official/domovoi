@@ -32,6 +32,8 @@ from domovoi.handlers.music_rooms import (
     GROUP_WHICH_RE,
     ROOM_OR_TITLE_KIND,
     ROOM_PLAY_RE,
+    STOP_HERE_RE,
+    STOP_ONLY_RE,
     MusicRoomsMixin,
     control_room_patterns,
 )
@@ -494,6 +496,12 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             FastPath(GROUP_JOIN_RE, MusicHandler._group_join_from_match),
             FastPath(GROUP_LEAVE_RE, MusicHandler._group_leave_from_match),
             FastPath(GROUP_WHICH_RE, MusicHandler._group_which_from_match),
+            # "Stop here" / "stop the music in the office only": that room
+            # alone (it leaves its group); a bare "stop" stops the group.
+            # Closed phrasings, before the place paths would read "here
+            # only" or "the office only" as a room.
+            FastPath(STOP_HERE_RE, MusicHandler._stop_here_from_match),
+            FastPath(STOP_ONLY_RE, MusicHandler._stop_only_from_match),
             FastPath(ROOM_PLAY_RE, MusicHandler._room_play_from_match),
             FastPath(_ROOM_CONTROL_RE, MusicHandler._room_control_from_match),
             FastPath(_ROOM_FIRST_RE, MusicHandler._room_first_from_match),
@@ -1903,9 +1911,11 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
         if ctx.from_phone:
             return phone_play.phone_transport(self.name, ctx, action)
         if action == "stop":
-            left = await self._leave_group(ctx)
-            if left is not None:
-                return left
+            # A room in a group stops with its group, as it pauses with it
+            # (owner, 2026-11-15); "stop here" is _stop_here.
+            grouped = await self._stop_group(ctx)
+            if grouped is not None:
+                return grouped
         mpd = get_mpd_client_for(ctx.room_id)
         try:
             if action == "pause":
@@ -1960,10 +1970,62 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             music_action=music_action,
         )
 
+    async def _stop_group(self, ctx: Context) -> Response | None:
+        """ "Stop" in a room that shares a queue (a group, "everywhere"
+        included): every room of it stops, as a pause pauses every room of
+        it (owner, 2026-11-15, reversing "stop is per room" of 2026-11-14;
+        domovoi/music_groups.py). The shared queue ends — as it does when
+        its host's player stops by itself (``music_groups.upkeep``) and on
+        "stop everywhere" —; the host's player keeps its queue, stopped. A
+        named group stays: "play X upstairs" starts it again. None when
+        the room shares nothing (an ordinary stop)."""
+        from domovoi import music_groups
+        from domovoi.clients.mpd import own_mpd_client
+        from domovoi.handlers.shared.rooms import say_rooms_by_id
+        from domovoi.room_music import deliver_later
+
+        sh = music_groups.share_of(ctx.room_id)
+        if sh is None or ctx.app is None:
+            return None
+        rooms, host, everywhere = list(sh.rooms), sh.host, sh.everywhere
+        await music_groups.end(ctx.app, sh.id, silence_members=False)
+        try:
+            await own_mpd_client(host).stop()
+        except MPDNotPlaying:
+            pass
+        except Exception as e:  # noqa: BLE001 — the rooms still go quiet
+            log.warning("MPD stop failed for group host room=%s: %s", host, e)
+        resumable = getattr(getattr(ctx.app, "state", None), "resumable_music", None)
+        for room in rooms:
+            note_paused_by_person(ctx.app, room, False)
+            if room == ctx.room_id:
+                continue  # this room's stop is the reply's music_action
+            if resumable is not None:
+                resumable.pop(room, None)
+            deliver_later(ctx.app, room, music_action="stop")
+        return Response(
+            text="Stopped everywhere." if everywhere else f"Stopped in {say_rooms_by_id(rooms)}.",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            music_action="stop",
+            data={"stopped_group": sh.id, "rooms": rooms},
+        )
+
+    async def _stop_here(self, ctx: Context) -> Response:
+        """ "Stop here", "stop the music in here", "only stop this room":
+        this room alone stops — it leaves its group, the others play on. A
+        room in no group: an ordinary stop."""
+        if ctx.from_phone:
+            return phone_play.phone_transport(self.name, ctx, "stop")
+        left = await self._leave_group(ctx)
+        if left is not None:
+            return left
+        return await self._simple_ack("stop", ctx)
+
     async def _leave_group(self, ctx: Context) -> Response | None:
-        """ "Stop" in a room that shares a queue (a group): only this room
-        stops — it leaves the group, the others play on (owner,
-        2026-11-14; domovoi/music_groups.py). None when the room shares
+        """ "Stop here" or "leave the group" in a room that shares a queue
+        (a group): only this room stops — it leaves the group, the others
+        play on (domovoi/music_groups.py). None when the room shares
         nothing (an ordinary stop)."""
         from domovoi import music_groups
         from domovoi.handlers.shared.rooms import say_rooms_by_id

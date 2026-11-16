@@ -968,3 +968,35 @@ async def test_a_paused_cast_through_the_core_waits_paused(monkeypatch) -> None:
             assert r.json()["paused"] is False
             assert not paused_by_person(app, "kitchen")
             assert await mpd.state() == "play"  # no satellite: resumed at once
+
+
+# ─── stop's scope (groups, 2026-11-15) ──────────────────────────────────────
+# A stop in a room of a group stops the whole group, as pause does; the
+# buttons ask for the room alone with ``scope=room`` (the spoken "stop here").
+
+
+@pytest.mark.parametrize(
+    ("scope", "transcript"),
+    [(None, "stop the music"), ("group", "stop the music"), ("room", "stop the music here")],
+)
+async def test_stop_scope_picks_the_group_or_the_room(monkeypatch, scope, transcript) -> None:
+    calls = _routed(Response(text="Stopped.", matched_handler="music"), monkeypatch)
+
+    await core_main.admin_music_action("stop", "office", scope=scope)
+
+    assert calls[0] == ("route", transcript, "office")
+
+
+async def test_scope_is_only_for_stop(monkeypatch) -> None:
+    calls = _routed(Response(text="Paused.", matched_handler="music"), monkeypatch)
+
+    await core_main.admin_music_action("pause", "office", scope="room")
+
+    assert calls[0] == ("route", "pause the music", "office")
+
+
+def test_the_room_scope_transcript_is_the_stop_here_path() -> None:
+    from domovoi.router import plan_route
+
+    plan = plan_route(core_main._STOP_HERE_TRANSCRIPT)
+    assert plan is not None and plan.fast_path.method.__name__ == "_stop_here_from_match"
