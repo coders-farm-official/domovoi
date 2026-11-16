@@ -4845,6 +4845,7 @@ class StreamSession:
                     presence_tier=presence_tier,
                     embedding_bytes=embedding_bytes,
                     voice_candidates=list(getattr(ident, "candidates", ()) or ()),
+                    voice_outcome=voice_match.outcome,
                     trigger=trigger,
                     wifi_status=wifi_status,
                     satellite_volume=satellite_volume,

@@ -377,10 +377,13 @@ async def test_a_turn_too_short_to_embed_says_so(room, monkeypatch, caplog) -> N
     monkeypatch.setattr("domovoi.voice_identifier.identify", _identify)
     await _person("Priya", (PRIYA_HERE, ROOM))
     with caplog.at_level(logging.INFO, logger="domovoi.turn_history"):
-        await room.say("Who am I?", STRANGER)
+        end = await room.say("Who am I?", STRANGER)
         await asyncio.sleep(0.2)
     assert (await _last_turn())["voice_outcome"] == "too_short"
     assert any("too short to tell" in r.getMessage() for r in caplog.records)
+    # The voice was never scored: the reply says so, never "I don't
+    # recognize your voice" (domovoi/tests/test_voice_id_unheard.py).
+    assert _reply(end).startswith("That was too short for me to tell who's talking.")
 
 
 @requires_db
