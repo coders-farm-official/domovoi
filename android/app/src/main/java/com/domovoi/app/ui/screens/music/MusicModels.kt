@@ -30,6 +30,9 @@ data class NowPlayingRoom(
     // The library row the room's song resolves to; null for a stream or a
     // file outside the library. The room card's lyric line reads it.
     @SerialName("track_id") val trackId: Long? = null,
+    /** The shared queue the room hears (V060); null outside a group. The
+     *  stop button names it ([groupStopLabel]). */
+    val group: NowPlayingGroup? = null,
 )
 
 @Serializable

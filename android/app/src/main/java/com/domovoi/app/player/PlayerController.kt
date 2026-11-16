@@ -14,6 +14,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.DomovoiJson
+import com.domovoi.app.ui.screens.music.NowPlayingGroup
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -61,6 +63,9 @@ data class RemoteNowPlaying(
     /** [SystemClock.elapsedRealtime] when this reading came in: lyrics
      *  follow the room from it ([LyricsMath.roomPositionMs]). */
     val readAtMs: Long = 0L,
+    /** The shared queue the room hears (V060); null outside a group. A
+     *  stop there stops every room of it, so the stop buttons name it. */
+    val group: NowPlayingGroup? = null,
 )
 
 /**
@@ -1126,6 +1131,9 @@ class PlayerController(
             durationSec = song?.get("duration_sec")?.jsonPrimitive?.doubleOrNull,
             trackId = row["track_id"]?.jsonPrimitive?.longOrNull,
             readAtMs = SystemClock.elapsedRealtime(),
+            group = (row["group"] as? kotlinx.serialization.json.JsonObject)?.let {
+                runCatching { DomovoiJson.decodeFromJsonElement(NowPlayingGroup.serializer(), it) }.getOrNull()
+            },
         )
     }
 

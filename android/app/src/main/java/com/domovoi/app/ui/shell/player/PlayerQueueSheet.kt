@@ -83,6 +83,8 @@ import com.domovoi.app.ui.screens.music.LyricsBody
 import com.domovoi.app.ui.screens.music.rememberLyricsLoad
 import com.domovoi.app.ui.screens.music.SHEET_LYRICS_HEIGHT
 import com.domovoi.app.ui.screens.music.capLyricsHeight
+import com.domovoi.app.ui.screens.music.castStopGroup
+import com.domovoi.app.ui.screens.music.groupStopLabel
 import com.domovoi.app.ui.screens.music.lyricsTrackIdOf
 import com.domovoi.app.ui.theme.Domovoi
 
@@ -340,8 +342,11 @@ internal fun SheetTransport(playing: Boolean, onDismiss: () -> Unit) {
         IconButton(onClick = { app.player.next() }, enabled = canNext) {
             Icon(Icons.Filled.SkipNext, "next", tint = if (canNext) Domovoi.colors.fg else Domovoi.colors.fgFaint)
         }
+        // While casting to a room of a group the stop stops every room of it.
+        val target by app.player.target.collectAsState()
+        val remote by app.player.remote.collectAsState()
         IconButton(onClick = { app.player.stop(); onDismiss() }) {
-            Icon(Icons.Filled.Stop, "stop", tint = Domovoi.colors.fgMuted)
+            Icon(Icons.Filled.Stop, groupStopLabel(castStopGroup(target, remote), "stop"), tint = Domovoi.colors.fgMuted)
         }
     }
 }

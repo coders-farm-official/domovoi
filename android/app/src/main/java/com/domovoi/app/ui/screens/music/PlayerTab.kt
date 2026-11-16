@@ -401,7 +401,12 @@ private fun TransportRow(isRemote: Boolean, effPlaying: Boolean, rooms: List<Str
             )
         }
         SmallIconButton(Icons.Filled.SkipNext, "next", enabled = canNext) { app.player.next() }
-        SmallIconButton(Icons.Filled.Stop, "stop") { app.player.stop() }
+        // While casting to a room of a group the stop stops every room of it.
+        // Only the group counts here, not the room's 2 s reading.
+        val target by app.player.target.collectAsState()
+        val remote = app.player.remote.collectAsState()
+        val stopGroup by remember(target) { derivedStateOf { castStopGroup(target, remote.value) } }
+        SmallIconButton(Icons.Filled.Stop, groupStopLabel(stopGroup, "stop")) { app.player.stop() }
         Spacer(Modifier.weight(1f))
         Box {
             var castOpen by remember { mutableStateOf(false) }

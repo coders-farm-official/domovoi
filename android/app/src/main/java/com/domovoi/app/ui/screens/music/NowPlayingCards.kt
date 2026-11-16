@@ -196,7 +196,8 @@ private fun NPCard(
                     tint = Domovoi.colors.fg,
                 ) { if (playing) transport.pause(np.roomId) else transport.resume(np.roomId) }
                 SmallIconButton(Icons.Filled.SkipNext, "skip") { transport.skip(np.roomId) }
-                SmallIconButton(Icons.Filled.Stop, "stop") { transport.stop(np.roomId) }
+                // In a group the stop stops every room of it (music.jsx NPCard).
+                SmallIconButton(Icons.Filled.Stop, groupStopLabel(np.group, "stop")) { transport.stop(np.roomId) }
                 SmallIconButton(
                     if (np.favorited) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                     "favorite",
