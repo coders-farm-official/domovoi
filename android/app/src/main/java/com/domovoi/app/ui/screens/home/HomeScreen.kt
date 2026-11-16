@@ -314,6 +314,9 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
                     toast(failureText(verb, e))
                 } finally {
                     busy.remove(room)
+                    // A stop in a room of a group ends its shared queue
+                    // (2026-11-15): the share menus re-read, as after a leave.
+                    if (verb == "stop") musicGroups.refresh()
                     refetchRooms()
                 }
             }
