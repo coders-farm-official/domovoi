@@ -145,12 +145,14 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.host_time",
     # Satellite-media prepare (SAT-1) bakes this server's Ed25519 fingerprint
     # into the image, so the WEB process signs and therefore needs the
-    # identity module — and, on an install without ``cryptography``, the
-    # vendored implementation it falls back to. ``_ed25519`` is imported
-    # lazily INSIDE server_identity's functions, so the refusal surfaced only
-    # when someone actually pressed Prepare, as a failed job rather than a
-    # boot error.
+    # identity module, the crypto backend it signs through, and the
+    # pure-Python encoding checks that backend runs before ``cryptography``.
+    # ``_ed25519`` used to be imported lazily INSIDE server_identity's
+    # functions, so the refusal surfaced only when someone actually pressed
+    # Prepare, as a failed job rather than a boot error; both are preloaded
+    # here so a later lazy import can't bring that back.
     "domovoi.server_identity",
+    "domovoi.crypto_backend",
     "domovoi._ed25519",
     # The container guard's expected set: the plugins list
     # (web/backend/api/plugins.py) reads each manifest's declared

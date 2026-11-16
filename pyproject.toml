@@ -95,6 +95,15 @@ dependencies = [
     "rapidfuzz>=3.14",
     "anyascii>=0.3.3",
     "Metaphone>=0.6",
+    # Signing and signature checks (domovoi/crypto_backend.py): the server
+    # identity's Ed25519 (its key, the signed /v1/health challenge, the
+    # signed satellite manifests) and the RSA check of the Android APKs the
+    # core serves. cryptography (Apache-2.0 OR BSD-3-Clause; OpenSSL inside,
+    # Apache-2.0) has abi3 wheels for every platform the server runs on.
+    # A core dependency since 1.3.0: the server never signs with the
+    # pure-Python fallback (domovoi/_ed25519.py), which stays for 32-bit
+    # Pi satellites. 50.0: the first line with no published advisory.
+    "cryptography>=50.0",
 ]
 
 [project.urls]
@@ -228,22 +237,6 @@ chat = [
     # Lower bound = a known-good baseline; pin the exact version validated
     # during the live Letta+Ollama spike. <1 guards the 0.x SDK's API drift.
     "letta-client>=0.1,<1",
-]
-# Ed25519 for the per-install server identity satellites pin
-# (domovoi/server_identity.py): the signed /v1/health challenge and the
-# signed code / plugin-payload manifests.
-#
-# An EXTRA rather than a core dependency, for the same reason the hardware
-# extras are: `cryptography` is a speed-up, not a requirement. The identity
-# layer falls back to the vendored pure implementation in
-# domovoi/_ed25519.py — same keys, same signatures — which is what a 32-bit
-# Pi OS (no aarch64 wheel, no Rust toolchain) and the test environment
-# actually run on. Locking it in requirements.lock (OPS-5) would claim it is
-# part of the tested set, and it is not: the suite runs the vendored path.
-#
-#   pip install -e ".[signing]"
-signing = [
-    "cryptography>=42.0",
 ]
 dev = [
     "pytest>=8.3",

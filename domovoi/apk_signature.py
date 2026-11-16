@@ -1,5 +1,5 @@
-"""Who signed an Android APK: APK Signature Scheme v2 and v3, checked in
-pure Python.
+"""Who signed an Android APK: APK Signature Scheme v2 and v3, checked on
+the server.
 
 The household's server hands phones the Domovoi Android app
 (domovoi/android_app.py). Before it keeps or serves an APK it holds the
@@ -39,9 +39,11 @@ Scope, on purpose narrow (a refusal names what is missing):
   refused (an Android 13+ phone would believe its signer instead).
 * Exactly one signer.
 
-Pure Python (the core has no ``cryptography`` dependency, see
-domovoi/_ed25519.py); RSA verification touches only public data, so it
-need not be constant-time. Reference: source.android.com, "APK Signature
+The parsing (the ZIP's end, the signing block, the DER of a certificate)
+and the content digest are this module's, in Python; the RSA signature
+check is ``cryptography``'s, through :mod:`domovoi.crypto_backend`, which
+falls back to a pure-Python check (public data only) on an install without
+it, with the same answers. Reference: source.android.com, "APK Signature
 Scheme v2" and "v3".
 """
 
@@ -54,6 +56,8 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
+
+from domovoi import crypto_backend
 
 APK_SIG_BLOCK_MAGIC = b"APK Sig Block 42"
 V2_BLOCK_ID = 0x7109871A
@@ -90,11 +94,6 @@ _CHUNK = 1024 * 1024
 _EOCD_MIN = 22
 _EOCD_SIG = b"PK\x05\x06"
 _ZIP64_LOCATOR_SIG = b"PK\x06\x07"
-# DigestInfo prefixes, RFC 8017 section 9.2 note 1.
-_DIGEST_INFO = {
-    "sha256": bytes.fromhex("3031300d060960864801650304020105000420"),
-    "sha512": bytes.fromhex("3051300d060960864801650304020305000440"),
-}
 _RSA_OID = bytes.fromhex("2a864886f70d010101")  # 1.2.840.113549.1.1.1
 
 
@@ -297,20 +296,9 @@ def rsa_public_key(spki: bytes) -> tuple[int, int]:
 
 
 def rsa_pkcs1_v15_verify(n: int, e: int, signature: bytes, message: bytes, digest: str) -> bool:
-    """RSASSA-PKCS1-v1_5 verification (RFC 8017 section 8.2.2): the whole
-    encoded message is rebuilt and compared, never parsed."""
-    k = (n.bit_length() + 7) // 8
-    if len(signature) != k:
-        return False
-    s = int.from_bytes(signature, "big")
-    if s >= n:
-        return False
-    em = pow(s, e, n).to_bytes(k, "big")
-    t = _DIGEST_INFO[digest] + hashlib.new(digest, message).digest()
-    if k < len(t) + 11:
-        return False
-    expected = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
-    return hmac.compare_digest(em, expected)
+    """RSASSA-PKCS1-v1_5 verification (RFC 8017 section 8.2.2), by
+    ``cryptography`` (:func:`domovoi.crypto_backend.rsa_pkcs1v15_verify`)."""
+    return crypto_backend.rsa_pkcs1v15_verify(n, e, signature, message, digest)
 
 
 # ─── the content digest ───────────────────────────────────────────────────

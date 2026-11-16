@@ -44,6 +44,7 @@ from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import server_identity  # noqa: E402
+from domovoi import crypto_backend  # noqa: E402
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
     GUEST_PLAYING_ENTRY_DETAIL,
@@ -348,6 +349,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi import image_safety
 
     image_safety.configure_pillow()
+
+    # Which library signs and checks signatures here, said once at boot:
+    # INFO with the cryptography and OpenSSL versions, ERROR on an install
+    # without it (then nothing is signed; domovoi/crypto_backend.py).
+    crypto_backend.backend()
 
     # Domovoi's own help (the manual, FAQ, troubleshooting) as the first
     # lookup source (domovoi/lookup.py, SDK 1.8): local, always on.
@@ -1443,6 +1449,10 @@ async def health(
             doc["identity"] = block
     except OSError as e:      # pragma: no cover — read-only config dir
         log.warning("could not load the server identity: %s", e)
+    except crypto_backend.CryptoUnavailable as e:
+        # Liveness still answers; the identity is missing, which every
+        # satellite refuses, and the boot log said why at ERROR.
+        log.error("no server identity: %s", e)
     return doc
 
 
@@ -3051,6 +3061,10 @@ async def admin_version() -> dict[str, Any]:
     # ({at, reason, pid, log}), or None: the Version card says when and
     # why, and where the stacks are (domovoi/loop_watchdog.py).
     state["last_watchdog_restart"] = await asyncio.to_thread(loop_watchdog.last_stall)
+    # Which library signs and checks signatures ({backend, cryptography,
+    # openssl, signing}; domovoi/crypto_backend.py): "pure" with signing
+    # false is an install missing its cryptography package.
+    state["crypto"] = crypto_backend.info()
     # A Windows install's other half (domovoi/windows_side.py): the Windows
     # side's version as DomovoiHost reported it, the release this code
     # includes, whether the Windows step is needed, the dashboard's request,

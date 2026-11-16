@@ -194,6 +194,13 @@ those voices shaped it; **Synthetic voices only** avoids that.
   credit: *Portions of this software are copyright © The FreeType Project
   (www.freetype.org). All rights reserved.*
 - **ReportLab** (test pages, text and table printouts, scan PDFs): BSD.
+- **cryptography** (signs the server's identity and checks signatures,
+  the Android app's included; since 1.3.0): Apache-2.0 or BSD-3-Clause.
+  Its wheel carries OpenSSL (Apache-2.0) and the Rust crates it is built
+  from, under MIT, Apache-2.0 and BSD-3-Clause (self_cell is Apache-2.0 or
+  GPL-2.0, taken under Apache-2.0; unicode-ident adds the Unicode licence).
+  The licence texts and an SBOM of every crate come inside the wheel
+  (`cryptography-*.dist-info/licenses/` and `sboms/`).
 - **The dashboard's libraries**, served by the server itself so the
   dashboard makes no outside requests (`web/static/vendor/`): React and
   ReactDOM 18.3.1 (MIT), Babel standalone 7.29.0 (MIT), Lucide 1.22.0

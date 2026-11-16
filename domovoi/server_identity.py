@@ -37,8 +37,9 @@ What the key signs:
   endpoint keeps serving the old unsigned shape for devices that predate
   all of this.
 
-Backend: ``cryptography`` when it is installed, else the vendored pure
-implementation in :mod:`domovoi._ed25519`. Same keys, same signatures.
+Backend: ``cryptography``, through :mod:`domovoi.crypto_backend`. The
+server never signs with the pure-Python code in :mod:`domovoi._ed25519`;
+without ``cryptography`` no key is made and nothing is signed.
 """
 
 from __future__ import annotations
@@ -57,6 +58,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from domovoi import crypto_backend
 
 log = logging.getLogger(__name__)
 
@@ -101,63 +104,28 @@ MANIFEST_SERIALS_NAME = "manifest-serials.json"
 
 
 # ─── backend ──────────────────────────────────────────────────────────────
+# The arithmetic is domovoi.crypto_backend's: ``cryptography`` signs and
+# verifies, and signing never falls back to the pure-Python code.
 
 def _backend() -> str:
-    """Which implementation signs and verifies here: ``"cryptography"`` or
-    ``"pure"``. Resolved per call so a test can see both."""
-    try:
-        import cryptography.hazmat.primitives.asymmetric.ed25519  # noqa: F401
-    except Exception:      # noqa: BLE001 — any import failure means "not available"
-        return "pure"
-    return "cryptography"
+    """Which implementation does the arithmetic here: ``"cryptography"``,
+    or ``"pure"`` on a broken install (then nothing is signed)."""
+    return crypto_backend.backend()
 
 
 def public_key_for(seed: bytes) -> bytes:
-    if _backend() == "cryptography":
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-
-        key = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
-        return key.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        )
-    from domovoi import _ed25519
-
-    return _ed25519.public_key(seed)
+    return crypto_backend.ed25519_public_key(seed)
 
 
 def sign(seed: bytes, message: bytes) -> bytes:
-    if _backend() == "cryptography":
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-
-        return ed25519.Ed25519PrivateKey.from_private_bytes(seed).sign(message)
-    from domovoi import _ed25519
-
-    return _ed25519.sign(seed, message)
+    return crypto_backend.ed25519_sign(seed, message)
 
 
 def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     """Whether ``signature`` is ``public``'s signature over ``message``.
     Never raises — a bad key, a bad signature and a wrong signature are one
     answer."""
-    from domovoi import _ed25519 as _pure
-
-    if _pure.small_order_part(public, signature):
-        return False   # a key or R of small order proves nothing, whichever backend
-    if _backend() == "cryptography":
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-
-        try:
-            ed25519.Ed25519PublicKey.from_public_bytes(public).verify(
-                signature, message
-            )
-            return True
-        except Exception:      # noqa: BLE001 — InvalidSignature and malformed input alike
-            return False
-    from domovoi import _ed25519
-
-    return _ed25519.verify(public, message, signature)
+    return crypto_backend.ed25519_verify(public, message, signature)
 
 
 # ─── encoding ─────────────────────────────────────────────────────────────

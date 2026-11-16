@@ -37,7 +37,7 @@ The core's private key lives one filename away at
 developer machine, an all-in-one install, a container satellite beside a
 core) the two used to be the same path.
 
-Stdlib only (plus the optional ``cryptography`` speed-up), because
+Stdlib only (plus ``cryptography`` where the venv has it), because
 :mod:`satellite.provisioning_mode` runs before the venv has anything else.
 """
 
@@ -117,12 +117,31 @@ _CHALLENGE_BYTES = 16
 
 # ─── primitives ───────────────────────────────────────────────────────────
 
+_BACKEND_LOGGED = False
+
+
 def _backend() -> str:
+    """``"cryptography"`` when the venv has it, else ``"pure"``: the
+    vendored satellite/_ed25519.py, for a 32-bit Pi OS image with no wheel
+    for it. Said once per process in the log, so a unit on the fallback is
+    never one silently."""
+    global _BACKEND_LOGGED
     try:
         import cryptography.hazmat.primitives.asymmetric.ed25519  # noqa: F401
     except Exception:      # noqa: BLE001 — any import failure means "not available"
-        return "pure"
-    return "cryptography"
+        name = "pure"
+    else:
+        name = "cryptography"
+    if not _BACKEND_LOGGED:
+        _BACKEND_LOGGED = True
+        if name == "pure":
+            log.warning(
+                "cryptography is not installed: server signatures are checked "
+                "with the pure-Python fallback (satellite/_ed25519.py)"
+            )
+        else:
+            log.info("server signatures are checked with cryptography")
+    return name
 
 
 def verify(public: bytes, message: bytes, signature: bytes) -> bool:
@@ -130,8 +149,11 @@ def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     Never raises: everything wrong is the same answer."""
     from satellite import _ed25519 as _pure
 
-    if _pure.small_order_part(public, signature):
-        return False   # a key or R of small order proves nothing, whichever backend
+    # A malformed or non-canonical encoding, a key or R of small order, S
+    # out of range: refused before either backend sees it, so OpenSSL and
+    # the fallback give the same answer to every input.
+    if not _pure.precheck(public, signature):
+        return False
     if _backend() == "cryptography":
         from cryptography.hazmat.primitives.asymmetric import ed25519
 
@@ -142,9 +164,7 @@ def verify(public: bytes, message: bytes, signature: bytes) -> bool:
             return True
         except Exception:      # noqa: BLE001
             return False
-    from satellite import _ed25519
-
-    return _ed25519.verify(public, message, signature)
+    return _pure.verify(public, message, signature)
 
 
 def unb64(value: object) -> bytes | None:

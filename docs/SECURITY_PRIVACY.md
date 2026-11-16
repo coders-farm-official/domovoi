@@ -1328,8 +1328,9 @@ hash-checked, said plainly (OPS-9, a documented limit for 1.0):
   the update unit records that re-sync as a `warn` step and Settings →
   About & updates shows **lock not applied: <reason>**, so the opt-in never turns
   itself off silently.
-- **Extras outside the lock** (`cuda`, `fastlane`, `shazam`, `chat`,
-  `signing`) go through the resolver too, when you add them.
+- **Extras outside the lock** (`cuda`, `fastlane`, `shazam`, `chat`) go
+  through the resolver too, when you add them. (`cryptography`, the
+  `signing` extra until 1.3.0, is a core dependency in both locks now.)
 - **The `dev` lock** (`requirements.lock`, core + `dev`, Python 3.12) is
   the suite's set, not a server's.
 - **A plugin's own lock** is hash-checked by the plugin installer
@@ -2968,6 +2969,41 @@ LAN: the identity proves *who* answered and that the code manifest is the
 one your core published, not that nothing in between could read the
 traffic. See the hardening backlog.
 
+### Which crypto library does the arithmetic
+
+Since 1.3.0 the server signs and checks signatures with
+[`cryptography`](https://cryptography.io/) (Apache-2.0 or BSD-3-Clause,
+OpenSSL inside), a core dependency pinned with its hashes in both server
+locks. Every call goes through one module, `domovoi/crypto_backend.py`:
+
+| Where | What | Library |
+|---|---|---|
+| The core and the dashboard (the server) | The identity's key pair, the signed `/v1/health` answer, the signed `manifest.sig` lists, the key baked into a prepared card | `cryptography` (Ed25519). **Never** the pure-Python code: without `cryptography` the server makes no key and signs nothing (`/v1/health` answers without `identity`, and every satellite refuses it) |
+| The core | The Android APK's v2/v3 signature, before the app is kept or served | `cryptography` (RSA PKCS#1 v1.5, SHA-256 or SHA-512). Parsing the APK and its content digest stay Domovoi's own Python |
+| A satellite (Raspberry Pi, spare computer) | Checking the server's signatures | `cryptography` where the satellite's Python has it (64-bit Pi OS, spare computers: their locks pin it), else the vendored pure-Python Ed25519 in `satellite/_ed25519.py`: the 32-bit Pi OS case, which may have no wheel. A check touches only public data, so not being constant-time costs nothing there |
+| The Pi's root helper (`domovoi-apply-payload`) | Re-checking the plugin payload list as root | The same pure-Python file, copied to `/usr/local/lib/domovoi/domovoi_ed25519.py` at prepare time (stdlib only, by design) |
+| Release and update signatures | The Windows Setup, the release manifest, signed commits for the Linux update unit | `ssh-keygen` (OpenSSH), not Python; the Windows programs use their own verifier (C#) |
+
+The backend is said once at boot in each server process's log (INFO with
+the `cryptography` and OpenSSL versions; ERROR if the package is missing)
+and reported by `GET /v1/admin/version` as `crypto`: `{backend,
+cryptography, openssl, signing}`. A satellite says once in its journal
+which one it checks with.
+
+**Same answers whichever library does it.** The pure-Python checks refuse
+some encodings OpenSSL would take: a public key written non-canonically
+(its `y` at or above the field prime, or x = 0 with the sign bit set),
+with which OpenSSL accepts a signature `R = [S]B` over any message for the
+identity key spelled that way. So every verifier, the server's and the
+satellites', runs the pure-Python encoding checks first (canonical points,
+no small-order key or R, S below the group order: `precheck` in
+`_ed25519.py`) and only then hands the equation to `cryptography`; the RSA
+check likewise refuses a signature of the wrong length or above the
+modulus, and a key OpenSSL won't load, before either backend. The tests
+hold both backends to identical results on the RFC 8032 vectors, the
+Windows Setup's edge vectors, every APK fixture and random keys
+(`domovoi/tests/test_crypto_backend.py`).
+
 ### The two identity files are not the same file
 
 `~/.domovoi/server-identity.json` is a **core's private key**, mode 0600.
@@ -4108,8 +4144,9 @@ devices, so:
   signer's RSA PKCS#1 v1.5 signature over its signed data, the first
   certificate carrying that same public key, and the content digest over
   every byte of the ZIP entries, central directory and end record
-  (`domovoi/apk_signature.py`, pure Python, cross-checked against
-  `apksigner` on the test fixtures); that certificate's SHA-256 is the
+  (`domovoi/apk_signature.py`; the RSA arithmetic by `cryptography`
+  since 1.3.0, see [Which crypto library does the arithmetic](#which-crypto-library-does-the-arithmetic);
+  cross-checked against `apksigner` on the test fixtures); that certificate's SHA-256 is the
   pinned one; and it carries native libraries for exactly its entry's ABI.
   A v2 block is required (Android 8 reads no v3), and a v3 block its
   stripping-protection attribute names must be there (Android refuses a

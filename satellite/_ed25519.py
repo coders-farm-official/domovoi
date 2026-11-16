@@ -1,24 +1,28 @@
-"""Ed25519 (RFC 8032) in pure Python — the fallback when ``cryptography``
-is not installed.
+"""Ed25519 (RFC 8032) in pure Python — the satellites' fallback when
+``cryptography`` can't be installed, and the encoding checks every
+verifier runs first.
 
-Why this exists at all. The server identity that satellites pin has to be
-verifiable in three places with three different dependency budgets:
+Where it runs:
 
-  * the core, which can have ``cryptography`` from PyPI;
-  * the satellite venv on a Pi — ``cryptography`` ships aarch64 wheels, but
-    a 32-bit Pi OS (armv7l) has none and would need a Rust toolchain;
-  * this repo's test environment, which must not grow a build dependency.
+  * the core (the server) signs and verifies with ``cryptography`` only,
+    through :mod:`domovoi.crypto_backend`, and never signs with this. A
+    server without ``cryptography`` is a broken install: signing is refused
+    there, and only a signature *check* falls back to this, logged at
+    ERROR at boot;
+  * a satellite verifies the server with ``cryptography`` when its venv has
+    it, else with this — the case it exists for is a 32-bit Pi OS image
+    that has no wheel for it (:mod:`satellite.server_identity`);
+  * the Pi's root helper (``domovoi_ed25519.py``, copied from the satellite
+    twin by satellite-media prepare) uses it as is, stdlib only;
+  * :func:`precheck` runs in front of ``cryptography`` everywhere, so both
+    backends refuse exactly the same keys and signatures.
 
-So the identity layer prefers ``cryptography`` and falls back to this. The
-two produce identical signatures — the RFC 8032 test vectors in
-``domovoi/tests/test_server_identity.py`` pin that.
+The two produce identical signatures — the RFC 8032 test vectors and the
+cross-backend tests in ``domovoi/tests/test_crypto_backend.py`` pin that.
 
 This implementation is straightforward field arithmetic and is **not**
 constant-time. That is fine for verification, which only ever touches
-public data. For signing, :mod:`domovoi.server_identity` uses this only
-when ``cryptography`` is missing, and says so in its log line: a timing
-side channel on the core's signing key needs local code execution on the
-core host, which is already game over.
+public data; it is why the server never signs with it.
 
 There is a byte-identical twin at ``satellite/_ed25519.py``. The satellite
 tree is mirrored to the Pi on its own and cannot import ``domovoi.*``, so
@@ -159,8 +163,9 @@ def small_order_part(public: bytes, signature: bytes) -> bool:
     """Whether the key, or the signature's R, is a point of small order.
     With such a key a signature can hold for any message (the identity key
     with R the identity and S = 0 verifies everything), so a verifier
-    refuses it whatever does the arithmetic: :func:`verify` here, and the
-    identity layers before they hand off to ``cryptography`` (review of
+    refuses it whatever does the arithmetic: :func:`verify` here, and
+    :func:`precheck`, which the identity layers run before they hand off
+    to ``cryptography`` (review of
     wf/win-sat-installer, round 2; the Windows satellite Setup's verifier
     refuses the same, and domovoi/tests/fixtures/
     ed25519-setup-vectors.json holds both to it)."""
@@ -173,23 +178,50 @@ def small_order_part(public: bytes, signature: bytes) -> bool:
     return False
 
 
+def _parse(
+    public: bytes, signature: bytes
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], int] | None:
+    """(A, R, S) when the key and signature are encodings a verifier goes
+    on to check, else None: the right lengths, A and R canonical points of
+    the curve (``y`` below the field prime, no "negative zero" x), neither
+    of small order (:func:`small_order_part`), S below L."""
+    if len(public) != KEY_SIZE or len(signature) != SIGNATURE_SIZE:
+        return None
+    point_a = _decode_point(public)
+    point_r = _decode_point(signature[:32])
+    if point_a is None or point_r is None:
+        return None
+    if _small_order(point_a) or _small_order(point_r):
+        return None
+    s = int.from_bytes(signature[32:], "little")
+    if s >= L:
+        return None
+    return point_a, point_r, s
+
+
+def precheck(public: bytes, signature: bytes) -> bool:
+    """Whether the key and signature get as far as the group equation:
+    everything :func:`verify` refuses before it, and nothing more.
+
+    An identity layer that hands the equation to ``cryptography`` runs this
+    first, so both backends refuse the same inputs: OpenSSL decodes a
+    non-canonical key encoding (``y`` of p or more, or x = 0 with the sign
+    bit set) as the point it stands for, and with the identity spelled that
+    way any R = [S]B verifies for any message. Public data only, so it need
+    not be constant-time."""
+    return _parse(public, signature) is not None
+
+
 def verify(public: bytes, message: bytes, signature: bytes) -> bool:
     """Whether ``signature`` is this key's signature over ``message``.
 
     Never raises: a malformed key, a malformed signature, a key or R of
     small order (:func:`small_order_part`) and a wrong signature are all
     the same answer to the caller — no."""
-    if len(public) != KEY_SIZE or len(signature) != SIGNATURE_SIZE:
+    parsed = _parse(public, signature)
+    if parsed is None:
         return False
-    point_a = _decode_point(public)
-    point_r = _decode_point(signature[:32])
-    if point_a is None or point_r is None:
-        return False
-    if _small_order(point_a) or _small_order(point_r):
-        return False
-    s = int.from_bytes(signature[32:], "little")
-    if s >= L:
-        return False
+    point_a, point_r, s = parsed
     k = int.from_bytes(
         hashlib.sha512(signature[:32] + public + message).digest(), "little"
     ) % L
