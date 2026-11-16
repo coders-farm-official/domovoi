@@ -7027,6 +7027,26 @@
         }
       }
     },
+    "/api/satellites/join-problems": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "List Join Problems",
+        "description": "Why room devices could not join lately, in plain words, newest first\n(``{\"problems\": [{kind, subject, text, count, at}]}``): the reasons only\nthe server knows, so Settings \u2192 Rooms can say them instead of the\nroom's ring just staying red.",
+        "operationId": "list_join_problems_api_satellites_join_problems_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/enrolment": {
       "post": {
         "tags": [

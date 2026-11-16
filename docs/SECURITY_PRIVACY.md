@@ -2875,6 +2875,32 @@ The nonce and the address are restricted to URL-safe characters on the
 core, because a nonce that could carry a newline would let an unbound
 signature over `nonce\naddr` pass as a bound one.
 
+**Addresses the host vouches for (1.3.0).** A core that runs inside a VM
+or a NAT'd distro is reached at the HOST's LAN address, which no interface
+of the core owns, so the core would refuse to sign for it. The machine
+hosting the core can vouch for such an address
+(`server_identity.VOUCHED_ADDRESS_SOURCES`, checked after the interface
+check): today the one source is the root-owned network-name report the
+host already writes (`/var/lib/domovoi-windows/lan_name.json` under
+DomovoiHost; a Mac host adds its own file to the same list), which is
+believed only while root owns it and its folder alone. Only IP literals
+count — a source cannot vouch for a name — and an address no source names
+is refused exactly as before. A source must be something only the host
+(root) can write: an address in it is one the core signs its identity for.
+
+**Why a room couldn't join is said on the dashboard (1.3.0).** When the core
+refuses to sign for the address a room dialled, or refuses a room's hello
+for a reason only the server knows (paired with a different device, no
+pairing key under strict pairing, two devices asking for one name, too many
+requests from one address, a code no device uses), it keeps one plain line
+about it in memory (`domovoi/join_problems.py`), and Settings → Rooms shows
+the newest five to admins (`GET /v1/admin/satellites/join-problems`, admin
+read). Bounded because most of these are reached by unauthenticated
+traffic: five lines, one per kind and subject, a repeat bumps a count, a
+day's age drops a line, a restart clears them. The address in a line is the
+one the device SAID it dialled (validated to `host:port` characters) — text
+for an admin to read, never anything the core acts on.
+
 **A signed list says when, not only who.** Every `manifest.sig` envelope
 carries `issued_at` and a per-channel `serial` that only grows when the
 list changes, under a second signature (`signature_v2`), and a satellite
@@ -3812,6 +3838,13 @@ a **boot-time** gate and the edges matter:
   — as proof that a core once accepted it, and writes the record once.
   None of those can exist on a parked device: the core refuses an unpaired
   room's `hello` before the socket carries anything it could act on.
+
+**Pending requests expire (1.3.0).** A request on the approvals list that
+no device has refreshed for 15 minutes is deleted, and with it its hold on
+the room name: a device that was switched off, or set up again elsewhere,
+no longer keeps a name for good. A device that is still waiting re-asks far
+more often (a Pi at least every minute, a phone every 35 s) and keeps its
+row, its code and its place.
 
 **Re-pairing.** Re-flashing a Pi, swapping the device, or moving a room to
 new hardware gives that room a new token that won't match — so the device is

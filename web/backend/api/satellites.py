@@ -351,6 +351,25 @@ async def list_approvals(request: Request):
     )
 
 
+@router.get(
+    "/join-problems",
+    # Admin READ at both hops: the lines name rooms and the addresses
+    # devices dialled. Declared BEFORE /{room_id}, like /approvals.
+    dependencies=[Depends(require_admin_read)],
+)
+async def list_join_problems(request: Request):
+    """Why room devices could not join lately, in plain words, newest first
+    (``{"problems": [{kind, subject, text, count, at}]}``): the reasons only
+    the server knows, so Settings → Rooms can say them instead of the
+    room's ring just staying red."""
+    return bridge_response(
+        *await get_admin(
+            "/v1/admin/satellites/join-problems",
+            headers=auth_forward_headers(request),
+        )
+    )
+
+
 # ─── spare devices: the enrolment payload and the install command ─────────
 #
 # Settings → Rooms → "Add a spare device" (S1, 2026-10-13). One payload,

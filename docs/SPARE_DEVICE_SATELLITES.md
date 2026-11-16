@@ -63,6 +63,11 @@ out of the house with a code on a web page. If the dashboard says the
 address it found isn't usable (a server with several network cards), tick
 **a different server address** and give the one your devices reach.
 
+If a device cannot join for a reason only the server knows (it reached the
+server at an address the server can't prove is its own, or the room name is
+paired with another device), **Settings → Rooms** says so in a line above
+the approvals.
+
 ## Linux laptops and mini PCs
 
 Tested on **Debian 11, 12 and 13**, **Ubuntu 22.04 and 24.04** and **Linux

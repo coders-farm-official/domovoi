@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — Settings → Rooms says why a room couldn't join
+
+- **What changed.** When a room device can't join for a reason only the
+  server knows, **Settings → Rooms** now says so in a plain line above the
+  approvals — for example "A room tried to join at 192.168.1.30:6370, but
+  this server couldn't prove it's the one at that address. Add that address
+  to the server's trusted addresses (TRUSTED_HOSTS), or set the room up with
+  the server's own address." The other lines cover a room paired with a
+  different device, a device without a pairing key, two devices asking for
+  one name, too many requests from one address and a code no device uses.
+  The newest five are kept, each for a day, in memory (admins only:
+  `GET /api/satellites/join-problems`).
+- **Also.** A core reached at its host's address through a VM or a NAT'd
+  distro can now be vouched for by the host (its root-owned network-name
+  report, `server_identity.VOUCHED_ADDRESS_SOURCES`) instead of needing that
+  address in `TRUSTED_HOSTS`. And a request on the approvals list that no
+  device has visited for fifteen minutes now disappears on its own, freeing
+  its room name; a device that is still waiting keeps its place.
+- **Nothing to do.**
+
 ## 1.3.0 (unreleased) — The server signs with `cryptography`, not its own code
 
 Nothing to do: the update installs it. The server's identity (the key a
