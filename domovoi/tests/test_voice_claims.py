@@ -287,7 +287,9 @@ async def test_a_room_claim_is_marked_and_forget_me_from_that_voice_keeps_the_pe
         pending = (await SessionRepository(s).get_context(sid))["pending_confirmation"]
         done = await handler.handle_choice_reply(pending["kind"], pending, "yes", ctx, s)
         await s.commit()
-    assert done.text == "Done — I'll know your voice in this room now, Priya."
+    # 1.3.0's longer introduction: the clip is saved (and claimed) as the
+    # name settles, then it asks for more speech.
+    assert done.text == "Last bit: count from one to ten for me, at your normal voice."
     [row] = await _rows(priya)
     assert row["claimed_at"] is not None and row["claim_room"] == "garage"
     assert row["claimed_by_person_id"] is None
