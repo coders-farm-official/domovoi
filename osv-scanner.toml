@@ -1,0 +1,27 @@
+# Accepted vulnerabilities for .github/workflows/osv.yml (OSV-Scanner).
+#
+# The job fails on ANY known vulnerability in the lock files it scans. An
+# advisory that does not apply to us, or that can't be fixed yet, goes here
+# instead of being left to fail every run, and only with:
+#   id           the advisory's id as the scanner prints it (GHSA-, PYSEC-,
+#                CVE-...); one entry covers its aliases too
+#   ignoreUntil  a date, at most about two months out: the entry stops
+#                counting then and the job fails again, so every acceptance
+#                gets looked at again (renew it only after checking)
+#   reason       why it is safe: what the advisory needs, and why we don't
+#                meet it
+# Never ignore something that has a fixed version we can take: bump the lock.
+# docs/CONTRIBUTING.md ("CI", "Dependencies") says how.
+
+# setuptools is held below 82 in requirements-linux-py314.in: webrtcvad, the
+# voice-activity wheel, imports pkg_resources, which setuptools 82 removed.
+# Both advisories are fixed only in 83 and later.
+[[IgnoredVulns]]
+id = "GHSA-h35f-9h28-mq5c"
+ignoreUntil = 2026-12-15
+reason = "setuptools below 83: MANIFEST.in exclusions missed on macOS (NFC/NFD names) while BUILDING a source distribution. The server runs on Linux and never builds an sdist from this lock's setuptools; held below 82 for webrtcvad's pkg_resources."
+
+[[IgnoredVulns]]
+id = "GHSA-xmj3-9gf7-h52w"
+ignoreUntil = 2026-12-15
+reason = "setuptools below 84.1: a crafted legacy wheel can write an __init__.py outside its folder, on Windows only. This lock is the Linux server's (py314 manylinux) and installs no legacy wheels; held below 82 for webrtcvad's pkg_resources."

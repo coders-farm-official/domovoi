@@ -1,0 +1,94 @@
+# OSV-Scanner (google/osv-scanner, Apache-2.0) over the lock files.
+#
+# Dependabot can't read our hash-pinned requirements*.lock files, which are
+# what the server, the satellites and the build tools actually install, so
+# this job checks them against the OSV database (every PyPI advisory, GitHub's
+# included) and FAILS on any known vulnerability. An advisory that doesn't
+# apply to us, or can't be fixed yet, goes in osv-scanner.toml with a reason
+# and an expiry date (docs/CONTRIBUTING.md, "Dependencies").
+#
+# Blocking: requirements.lock, requirements-linux-py314.lock,
+# requirements-linux-py314-no-deps.lock, the satellite's satellite/locks/*.txt
+# and the three build-tool requirement files (installer art, g2p training,
+# wake-word trainer). Not blocking, printed in the job summary: the Android
+# app's Gradle verification metadata (it also lists build-tool jars such as
+# lint's, and there are no Gradle lock files to tell them apart) and the wake
+# trainer image's constraints.txt (the image's full pin set, not hash-locked).
+# satellite/requirements*.txt are loose ranges, not pins: their locks above
+# are what gets scanned.
+#
+# Runs on pushes to main, on pull requests that touch what it reads (the
+# Dependabot ones too), daily (new advisories land any day), and by hand.
+# No secret: the run's own read-only token. The scanner is a release binary
+# pinned by version and SHA-256 (the release's own SHA256SUMS), not an action.
+name: osv
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/osv.yml"
+      - "osv-scanner.toml"
+      - "requirements*.lock"
+      - "satellite/locks/**"
+      - "scripts/g2p/requirements-train.txt"
+      - "scripts/wake_word/docker/**"
+      - "windows/installer/art/requirements.txt"
+      - "android/gradle/verification-metadata.xml"
+  schedule:
+    - cron: "23 6 * * *" # daily, 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OSV_SCANNER_VERSION: v2.7.0
+  OSV_SCANNER_SHA256: 160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b # osv-scanner_linux_amd64
+
+jobs:
+  scan:
+    name: OSV-Scanner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install OSV-Scanner (pinned by SHA-256)
+        run: |
+          curl -sSfL -o osv-scanner "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner" | sha256sum -c -
+          chmod +x osv-scanner
+          ./osv-scanner --version
+
+      - name: Scan the lock files (fails on any vulnerability)
+        run: |
+          args=()
+          for f in requirements.lock requirements-linux-py314.lock requirements-linux-py314-no-deps.lock \
+                   satellite/locks/pc-*.txt \
+                   scripts/g2p/requirements-train.txt scripts/wake_word/docker/requirements.txt \
+                   windows/installer/art/requirements.txt; do
+            [ -f "$f" ] || { echo "missing: $f" >&2; exit 2; }
+            args+=(-L "requirements.txt:$f")
+          done
+          ./osv-scanner scan source --config osv-scanner.toml --no-resolve "${args[@]}"
+
+      # Everything above passed or failed on its own: this step only reports.
+      - name: Report the Android app and the trainer image (does not fail)
+        if: always()
+        continue-on-error: true
+        run: |
+          ./osv-scanner scan source --config osv-scanner.toml --no-resolve \
+            -L verification-metadata.xml:android/gradle/verification-metadata.xml \
+            -L requirements.txt:scripts/wake_word/docker/constraints.txt \
+            --format markdown --output-file informational.md || true
+          {
+            echo "### Not blocking: Android Gradle metadata and the wake trainer's constraints.txt"
+            cat informational.md 2>/dev/null || echo "(no report)"
+          } >> "$GITHUB_STEP_SUMMARY"
