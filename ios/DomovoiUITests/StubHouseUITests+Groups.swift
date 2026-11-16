@@ -22,6 +22,9 @@ import XCTest
 ///   (kitchen, garage, office), or garage joined kitchen by hand.
 /// * `{"fail": 400 | 409 | 403 | null}` — every write answers that, with the
 ///   server's own sentence.
+/// * `POST /api/music/stop/{room}` on a room in a group
+///   (`batch-2026-11-15/group-stop/stubhouse.patch`) stops the whole group
+///   (`?scope=room`: that room leaves), as main a1b71234 does.
 ///
 /// `GET /api/_test/groups` reads back what the phone sent (`sent`).
 ///
@@ -65,6 +68,9 @@ extension StubHouseUITests {
         static let deletedUpstairs = "group Upstairs deleted"
         static let deleteTitle = "Delete the group Upstairs?"
         static let delete = "delete"
+        /// A grouped room's stop (`home.jsx` HomeStopTitle, 2026-11-15).
+        static let stopUpstairs = "stop Upstairs: kitchen, garage, office"
+        static let stopPair = "stop the group: kitchen, garage"
     }
 
     // MARK: - getting there
@@ -291,6 +297,55 @@ extension StubHouseUITests {
         leave.tap()
         XCTAssertTrue(roomsWaitFor(app, GroupsUnderTest.garageLeft), "leaving said nothing")
         XCTAssertTrue(roomsWaitGone(app, GroupsUnderTest.garageChip), "the garage still names the group")
+    }
+
+    // MARK: - Home: a grouped room's stop
+
+    /// A stop in a room of a group stops every room of it (2026-11-15), so
+    /// every member's stop says so, in the web's words; pause stays the
+    /// room's own name. No "stop kitchen" is left that would silence the
+    /// garage and the office.
+    @MainActor
+    func testGroups_AGroupedRoomsStopNamesTheGroup() throws {
+        let app = groupsHome("{\"mode\":\"on\",\"shared\":\"upstairs\"}")
+        let stop = app.buttons[GroupsUnderTest.stopUpstairs].firstMatch
+        let shown = stop.waitForExistence(timeout: 20)
+        evidence(app, "groups-09-group-stop")
+        if !shown {
+            print("=== NO GROUP STOP — tree follows ===")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(shown, "a grouped room's stop does not name its group")
+        XCTAssertFalse(app.buttons["stop kitchen"].exists, "the host's stop reads as the room's own — tree follows\n" + app.debugDescription)
+        XCTAssertFalse(app.buttons["stop garage"].exists, "a member's stop reads as the room's own — tree follows\n" + app.debugDescription)
+        XCTAssertTrue(app.buttons["pause kitchen"].exists, "pause lost its room's name — tree follows\n" + app.debugDescription)
+    }
+
+    /// Rooms joined one by one are "the group".
+    @MainActor
+    func testGroups_RoomsJoinedByHandStopAsTheGroup() throws {
+        let app = groupsHome("{\"mode\":\"on\",\"shared\":\"pair\"}")
+        let stop = app.buttons[GroupsUnderTest.stopPair].firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: 20), "the pair's stop does not say the group — tree follows\n" + app.debugDescription)
+        evidence(app, "groups-10-pair-stop")
+    }
+
+    /// The stop is the bare one (the server's default scope is the group):
+    /// every room of the group goes quiet and the chips go.
+    @MainActor
+    func testGroups_AGroupStopStopsEveryRoom() throws {
+        let app = groupsHome("{\"mode\":\"on\",\"shared\":\"upstairs\"}")
+        XCTAssertTrue(containing(app, GroupsUnderTest.garageChip).waitForExistence(timeout: 20), "no group to stop")
+        let stop = app.buttons[GroupsUnderTest.stopUpstairs].firstMatch
+        XCTAssertTrue(groupsReveal(app, stop, "THE GROUP'S STOP"), "no group stop to tap")
+        stop.tap()
+        XCTAssertTrue(roomsWaitGone(app, GroupsUnderTest.garageChip), "the garage still names the group")
+        XCTAssertTrue(roomsWaitGone(app, GroupsUnderTest.kitchenChip), "the kitchen still names the group")
+        XCTAssertFalse(app.buttons[GroupsUnderTest.stopUpstairs].exists, "a group stop is still drawn after the stop")
+        evidence(app, "groups-11-group-stopped")
+        let sent = groupsSent()
+        XCTAssertTrue(sent.contains("/api/music/stop/"), "no stop was posted: \(sent)")
+        XCTAssertTrue(sent.contains("\"scope\": null"), "the stop carried a scope: \(sent)")
     }
 
     // MARK: - the queue sheet

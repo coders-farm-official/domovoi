@@ -539,8 +539,10 @@ struct HomeRoomsView: View {
                 .disabled(busy(room.roomID))
                 // `pause kitchen`, `resume kitchen`, `stop kitchen` — the
                 // package's ``transportLabel(_:room:)``, and the only thing
-                // that says which room an unlabelled glyph belongs to.
-                .accessibilityLabel(transportLabel(verb, room: room.roomID))
+                // that says which room an unlabelled glyph belongs to. In a
+                // group the stop names the group it stops ("stop Upstairs:
+                // office, garage", `HomeStopTitle`).
+                .accessibilityLabel(transportLabel(verb, room: room))
             }
         }
     }
