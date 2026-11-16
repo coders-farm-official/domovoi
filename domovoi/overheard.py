@@ -107,8 +107,20 @@ _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 _CLAUSE_RE = re.compile(r",|\s+and\s+", re.IGNORECASE)
 _GREETING = r"(?:(?:hey|hi|hello|ok|okay|yo)[,\s]+)"
 # The assistant's names as Whisper writes them. Bare "Domo" is not one (TV
-# says "domo arigato"); "hey Domo" is.
-_NAMES = ("domovoi", "domovoy", "domovoj", "domavoi")
+# says "domo arigato"); "hey Domo" is. "Domo boy" / "Doma boy" is how
+# Whisper hears "Domovoi" said quickly (live 1.3.0 check, 2026-11-16).
+_NAMES = ("domovoi", "domovoy", "domovoj", "domavoi", "domo boy", "doma boy", "domo boi")
+
+
+def assistant_names(bot_name: str | None = None) -> list[str]:
+    """The names a transcript may call the assistant by, as Whisper writes
+    them (plus the configured ``bot_name``), regex-escaped, longest first —
+    for a pattern that allows an address to the assistant. Bare "domo" is
+    not among them: a caller whose pattern is anchored enough adds it."""
+    names = {re.escape(n) for n in _NAMES}
+    if bot_name and bot_name.strip() and bot_name.strip().lower() != "domo":
+        names.add(re.escape(bot_name.strip().lower()))
+    return sorted(names, key=len, reverse=True)
 # The stock openWakeWord phrases a satellite may listen for (satellite
 # config.toml.example), which media says itself. Not "Alexa": a capture
 # that starts with it is somebody talking to another assistant in the room.
@@ -175,10 +187,7 @@ def is_long(transcript: str, *, exit_reason: str | None, audio_seconds: float) -
 
 
 def _address_re(bot_name: str | None) -> re.Pattern[str]:
-    names = set(_NAMES)
-    if bot_name and bot_name.strip() and bot_name.strip().lower() != "domo":
-        names.add(re.escape(bot_name.strip().lower()))
-    alt = "|".join(sorted(names, key=len, reverse=True))
+    alt = "|".join(assistant_names(bot_name))
     return re.compile(
         rf"^(?:{_GREETING}?(?:{alt})|{_GREETING}domo)\b[,.!?:;]*\s*", re.IGNORECASE,
     )
