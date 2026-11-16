@@ -511,6 +511,15 @@ _WONT_SAVE_TEXT = "Okay, I won't save that."
 #: Seconds of speech the introduction collects before it stops asking.
 INTRO_SPEECH_TARGET_SEC = 8.0
 
+#: A room sample with less speech than this (1.3.0's relearn clips are
+#: about a second) is "short": "my name is X" in X's own recognized voice,
+#: in a room with no sample of X at least this long, goes on to learn the
+#: voice there (VoiceProfileHandler._offer_learn_here) instead of stopping
+#: at "I already know you".
+ROOM_SAMPLE_GOOD_SEC = 4.0
+#: The payload key of a room-learning collection's room.
+_LEARN_ROOM_KEY = "learn_room"
+
 #: The introduction's stages after the name (``stage`` in its payload):
 #: "How do you spell that?" (the name not yet settled), then, the voice
 #: saved, counting to ten and one sentence.
@@ -1498,12 +1507,17 @@ class VoiceProfileHandler(Handler):
             except Exception as e:
                 log.warning("PeopleRepository.get failed: %s", e)
                 existing = None
-            if existing is not None and _same_name(existing[1], name):
+            already = existing is not None and (
+                _same_name(existing[1], name)
+                # "my name is Jordyn" in Jordan's voice: Jordan, misheard.
+                or (sounds_like_name(name, existing[1]) and not spelled)
+            )
+            if already:
+                learn = await self._offer_learn_here(existing, ctx, session, clips)
+                if learn is not None:
+                    return learn
                 return self._say(f"I already know you, {existing[1]}.", ctx)
             if existing is not None and sounds_like_name(name, existing[1]):
-                if not spelled:
-                    # "my name is Jordyn" in Jordan's voice: Jordan, misheard.
-                    return self._say(f"I already know you, {existing[1]}.", ctx)
                 # Spelled out, and not how the house spells this voice's
                 # name: the saved spelling may be the wrong one. Never a
                 # second person with the same voice.
@@ -2094,18 +2108,110 @@ class VoiceProfileHandler(Handler):
             expect_followup=True,
         )
 
+    async def _offer_learn_here(
+        self,
+        existing: tuple,
+        ctx: Context,
+        session: AsyncSession,
+        clips: list | None,
+    ) -> Response | None:
+        """ "my name is X" in X's own recognized voice, at a satellite whose
+        room has no good sample of X (none, or only ones under
+        :data:`ROOM_SAMPLE_GOOD_SEC` of speech, like 1.3.0's one-second
+        relearn clips): "I already know you, X. Let me learn your voice
+        better here: count from one to ten …", and the same collection as
+        an introduction, seeded with this turn's clip. Its result becomes
+        the room's sample (claimed for the room), replacing the short ones
+        there. None: the room has a good sample (today's "I already know
+        you" stands), or this is not a satellite's introduction."""
+        if clips is None or not ctx.room_id or phone_chat_mic(ctx) or is_phone_room(ctx.room_id):
+            return None
+        person_id, name = int(existing[0]), existing[1]
+        try:
+            here = await VoiceProfilesRepository(session).room_samples(
+                person_id, ctx.room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+            )
+        except Exception as e:
+            log.warning("learning a room: reading its samples failed: %s", e)
+            return None
+        if any((secs or 0.0) >= ROOM_SAMPLE_GOOD_SEC for _id, secs in here):
+            return None
+        parked = await self._park_collect(
+            _STAGE_COUNT, name, person_id, None, clips, ctx, session,
+            extra={
+                _LEARN_ROOM_KEY: ctx.room_id,
+                "replace_ids": [int(i) for i, _s in here],
+                "have_secs": max([float(s or 0.0) for _i, s in here], default=0.0),
+                _CLAIMED_BY_KEY: person_id,
+            },
+        )
+        if not parked:
+            return None
+        log.info(
+            "learning person_id=%d's voice in room=%s (%d short sample(s) there)",
+            person_id, ctx.room_id, len(here),
+        )
+        return Response(
+            text=f"I already know you, {name}. Let me learn your voice better here: "
+            "count from one to ten for me, at your normal voice.",
+            session_id=ctx.session_id, matched_handler=self.name, expect_followup=True,
+        )
+
+    async def _save_learned_room(
+        self, data: dict, person_id: int, clips: list, session: AsyncSession,
+    ) -> int | None:
+        """The room-learning collection's result as the room's sample
+        (claimed for the room, like "Is that you?"'s yes), in place of the
+        short samples the room had of the person — only when it holds more
+        speech than the best of them. The new sample's id, or None."""
+        room = data.get(_LEARN_ROOM_KEY)
+        together = _combined(clips)
+        if not room or together is None:
+            return None
+        if _speech_of(clips) <= float(data.get("have_secs") or 0.0):
+            return None
+        if await self._is_denylisted(together, session):
+            return None
+        repo = VoiceProfilesRepository(session)
+        try:
+            replace = [int(i) for i in data.get("replace_ids") or []]
+            if replace:
+                await repo.delete_samples(person_id, replace)
+            sample_id = await repo.add(
+                person_id=person_id,
+                embedding=together.astype(np.float32).tobytes(),
+                model=repo.EMBEDDING_MODEL_TAG,
+                room_id=room,
+                sample_seconds=_speech_of(clips),
+                claimed=True,
+                claim_room=room,
+                claimed_by=_claimed_by(data),
+            )
+        except Exception as e:
+            log.warning("learning a room: saving the sample failed: %s", e)
+            return None
+        log.info(
+            "learned person_id=%d's voice in room=%s: %d clip(s), %.1f s (replaced %d)",
+            person_id, room, len(clips), _speech_of(clips), len(replace),
+        )
+        return sample_id
+
     async def _park_collect(
         self,
         stage: str,
         name: str,
         person_id: int,
-        sample_id: int,
+        sample_id: int | None,
         clips: list,
         ctx: Context,
         session: AsyncSession,
+        *,
+        extra: dict | None = None,
     ) -> bool:
         """Park the next "say something for me" question (a choice: the
-        very next turn answers it, within :data:`SELF_INTRO_TTL_SEC`)."""
+        very next turn answers it, within :data:`SELF_INTRO_TTL_SEC`).
+        ``sample_id`` None: a room-learning collection whose sample isn't
+        saved yet (``extra`` says where)."""
         try:
             await request_confirmation(
                 session,
@@ -2113,10 +2219,11 @@ class VoiceProfileHandler(Handler):
                 kind="core.self_intro",
                 handler=self.name,
                 data={
+                    **(extra or {}),
                     "stage": stage,
                     "name": name,
                     "person_id": int(person_id),
-                    "sample_id": int(sample_id),
+                    "sample_id": None if sample_id is None else int(sample_id),
                     _CLIPS_KEY: clips,
                     **_origin(ctx),
                     "created_at": datetime.now(tz=timezone.utc).isoformat(),
@@ -2157,18 +2264,29 @@ class VoiceProfileHandler(Handler):
         stays: in time and from the same room, this turn's clip joins it
         (the sample's embedding becomes all the clips' together); "stop" or
         "never mind" ends it; a reply past its time isn't an answer (None:
-        routed as usual)."""
+        routed as usual).
+
+        A room-learning collection (:meth:`_offer_learn_here`) has no
+        sample yet: it saves one (:meth:`_save_learned_room`) once it holds
+        :data:`ROOM_SAMPLE_GOOD_SEC` of speech, or when it ends ("stop", a
+        command, the last question) with more speech than the room had."""
         if not _answered_where_asked(data, ctx):
             return self._say(_ELSEWHERE_TEXT, ctx)
         name = str(data.get("name") or "")
+        learning = bool(data.get(_LEARN_ROOM_KEY))
         try:
             person_id = int(data.get("person_id"))
-            sample_id = int(data.get("sample_id"))
+            sample_id = None if data.get("sample_id") is None else int(data.get("sample_id"))
         except (TypeError, ValueError):
+            return None
+        if sample_id is None and not learning:
             return None
         if _intro_expired(data):
             return None
+        clips = _clips(data)
         if self._is_stop(transcript):
+            if sample_id is None:
+                await self._save_learned_room(data, person_id, clips, session)
             return self._say(_stopped_text(name), ctx)
         stage = data.get("stage")
         if stage == _STAGE_COUNT and self._is_command(transcript):
@@ -2176,13 +2294,17 @@ class VoiceProfileHandler(Handler):
             # introduction is over (its sample stays) and the turn is routed
             # as usual. Not after the sentence, which is meant to sound
             # like one ("… what's on today?").
+            if sample_id is None:
+                await self._save_learned_room(data, person_id, clips, session)
             return None
-        clips = _clips(data)
         clip = _turn_clip(ctx, expected=person_id)
-        if clip is not None and _resembles(clips, clip) and not await self._is_denylisted(
+        added = clip is not None and _resembles(clips, clip) and not await self._is_denylisted(
             _decode_b64_embedding(clip[0]), session,
-        ):
+        )
+        if added:
             clips.append(clip)
+        finished = _speech_of(clips) >= INTRO_SPEECH_TARGET_SEC or stage == _STAGE_SENTENCE
+        if added and sample_id is not None:
             together = _combined(clips)
             try:
                 kept = await VoiceProfilesRepository(session).replace_embedding(
@@ -2194,14 +2316,20 @@ class VoiceProfileHandler(Handler):
                 return self._say(_thanks_text(name), ctx)
             if not kept:
                 return self._say(f"I can't find {name} any more, so I didn't save that.", ctx)
-        if _speech_of(clips) >= INTRO_SPEECH_TARGET_SEC or stage == _STAGE_SENTENCE:
+        elif sample_id is None and (finished or _speech_of(clips) >= ROOM_SAMPLE_GOOD_SEC):
+            sample_id = await self._save_learned_room(data, person_id, clips, session)
+        if finished:
             log.info(
                 "introduction: person_id=%d's sample from %d clip(s), %.1f s of speech",
                 person_id, len(clips), _speech_of(clips),
             )
             return self._say(_thanks_text(name), ctx)
+        learn_keys = {
+            k: data[k] for k in (_LEARN_ROOM_KEY, "replace_ids", "have_secs", _CLAIMED_BY_KEY)
+            if k in data
+        } if learning else None
         if not await self._park_collect(
-            _STAGE_SENTENCE, name, person_id, sample_id, clips, ctx, session,
+            _STAGE_SENTENCE, name, person_id, sample_id, clips, ctx, session, extra=learn_keys,
         ):
             return self._say(_thanks_text(name), ctx)
         return Response(

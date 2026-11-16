@@ -391,6 +391,15 @@ nothing. This applies to the re-introduction everyone does after this
 update and to teaching a new room your voice. The phone's chat mic keeps
 the one-clip introduction. Thresholds are unchanged.
 
+**"My name is …" in a room that hasn't learned you yet.** When Domovoi
+already recognizes you but the room has no sample of your voice, or only a
+short one (under about 4 seconds of speech, like the one-second clips from
+the first re-introductions), it no longer stops at "I already know you,
+Sarah.": it adds "Let me learn your voice better here: count from one to
+ten for me, at your normal voice." and collects your voice the same way.
+The result becomes that room's sample, replacing the short one. A room
+with a good sample keeps the plain answer.
+
 **A room may ask "was that you?" once.** When a command in a room scores
 just under the bar for one person (at least 0.50, clearly ahead of anyone
 else), and that room has no sample of their voice yet, Domovoi answers the

@@ -565,3 +565,83 @@ async def test_the_ask_rides_on_the_turns_hooks(db_session, quiet_rooms) -> None
         transcript="what time is it", audio_seconds=1.5,
     )
     assert named.text == "It's five o'clock."
+
+
+# ─── "I already know you" in a room that hasn't learned you (2026-11-16) ──
+
+LEARN = (
+    "I already know you, Sarah. Let me learn your voice better here: count "
+    "from one to ten for me, at your normal voice."
+)
+
+
+async def _sarah(*samples: tuple[int, str, float]) -> int:
+    """Sarah, with a satellite sample per ``(voice level, room, speech seconds)``."""
+    async with SessionLocal() as s:
+        pid = int((await s.execute(
+            text("INSERT INTO people (name) VALUES ('Sarah') RETURNING id"),
+        )).scalar_one())
+        repo = VoiceProfilesRepository(s)
+        for level, room_id, secs in samples:
+            await repo.add(
+                person_id=pid, embedding=(await _vec(_pcm(1.0, level))).tobytes(),
+                model=repo.EMBEDDING_MODEL_TAG, room_id=room_id, sample_seconds=secs,
+            )
+        await s.commit()
+    return pid
+
+
+async def _room_rows(pid: int, room_id: str) -> list[tuple[int, float | None, bool]]:
+    async with SessionLocal() as s:
+        rows = (await s.execute(text(
+            "SELECT id, sample_seconds, claimed_at IS NOT NULL FROM voice_profiles "
+            "WHERE person_id = :p AND room_id = :r ORDER BY id"
+        ), {"p": pid, "r": room_id})).all()
+    return [(int(r[0]), r[1], bool(r[2])) for r in rows]
+
+
+@requires_db
+async def test_recognised_in_a_room_without_a_sample_learns_it_there(room) -> None:
+    pid = await _sarah((700, "garage", 1.0))
+    asked = await room.say("My name is Sarah.", _pcm(1.0, 711))
+    assert _reply(asked) == LEARN
+    assert asked["expect_followup"] is True
+    assert (await room.pending())["stage"] == "count"
+    assert await _room_rows(pid, ROOM) == []
+
+    # Five seconds: enough for a room sample (saved now), short of eight.
+    more = await room.say(COUNTING, _pcm(4.0, 712), trigger="followup")
+    assert _reply(more) == SENTENCE
+    [(first_id, secs, claimed)] = await _room_rows(pid, ROOM)
+    assert secs == pytest.approx(5.0) and claimed
+
+    done = await room.say(
+        "Good morning Domovoi, what's on today?", _pcm(1.0, 713), trigger="followup",
+    )
+    assert _reply(done) == "Thanks, Sarah! I'll know your voice now."
+    assert await _room_rows(pid, ROOM) == [(first_id, pytest.approx(6.0), True)]
+    assert [r[1] for r in await _room_rows(pid, "garage")] == [1.0]
+    assert [n for _p, n in await _people()] == ["Sarah"]
+
+
+@requires_db
+async def test_a_short_sample_in_the_room_is_replaced_by_the_longer_one(room) -> None:
+    pid = await _sarah((700, "garage", 1.0), (701, ROOM, 1.0))
+    [(old_id, _s, _c)] = await _room_rows(pid, ROOM)
+    asked = await room.say("My name is Sarah.", _pcm(1.0, 721))
+    assert _reply(asked) == LEARN
+    done = await room.say(COUNTING, _pcm(8.0, 722), trigger="followup")
+    assert _reply(done) == "Thanks, Sarah! I'll know your voice now."
+    rows = await _room_rows(pid, ROOM)
+    assert len(rows) == 1
+    new_id, secs, claimed = rows[0]
+    assert new_id != old_id and secs == pytest.approx(9.0) and claimed
+
+
+@requires_db
+async def test_a_good_sample_in_the_room_keeps_the_plain_reply(room) -> None:
+    pid = await _sarah((700, "garage", 1.0), (701, ROOM, 5.0))
+    said = await room.say("My name is Sarah.", _pcm(1.0, 731))
+    assert _reply(said) == "I already know you, Sarah."
+    assert await room.pending() is None
+    assert [r[1] for r in await _room_rows(pid, ROOM)] == [5.0]
