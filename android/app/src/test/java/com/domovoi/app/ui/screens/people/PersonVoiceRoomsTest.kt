@@ -11,7 +11,7 @@ import org.junit.Test
 import java.io.IOException
 
 /**
- * Rooms that know this voice (GET /api/people/{id}/voice-rooms) — the web
+ * Rooms that have learned this voice (GET /api/people/{id}/voice-rooms) — the web
  * People page's PersonVoiceRooms (web/static/people.jsx), on the phone.
  */
 class PersonVoiceRoomsTest {
@@ -42,23 +42,24 @@ class PersonVoiceRoomsTest {
     }
 
     /** Since V061 a room knows a voice only with a sample of the current
-     *  model: the server sends `current` alone, and false is "not yet". */
+     *  model: the server sends `current` alone, and false is "not yet learned". */
     @Test fun aRoomIsKnownOnlyWhenCurrent() {
         val parsed = rooms("""[{"room_id":"kitchen","current":true},{"room_id":"garage","current":false}]""")
         assertEquals("1/2", voiceRoomsCount(parsed))
-        assertEquals(listOf("kitchen", "garage · not yet"), parsed.map(::voiceRoomChip))
+        assertEquals(listOf("kitchen · learned", "garage · not yet learned"), parsed.map(::voiceRoomChip))
         assertEquals(
-            "Rooms recognize a voice best once they have heard it themselves. In each room " +
-                "marked “not yet”, Priya can say “my name is Priya” and answer yes.",
+            "Every room can recognize Priya from any sample. A room recognizes a voice more " +
+                "reliably once it has learned it there: in a room marked “not yet learned”, Priya can " +
+                "say “my name is Priya” and answer yes.",
             voiceRoomsHint("Priya", parsed),
         )
     }
 
-    @Test fun aPreV061BuildsLegacyRoomIsNotCalledNotYet() {
+    @Test fun aPreV061BuildsLegacyRoomIsNotCalledNotYetLearned() {
         val parsed = rooms("""[{"room_id":"den","current":false,"legacy":true}]""")
         assertEquals(listOf(oldBuildRoom), parsed)
         assertEquals("1/1", voiceRoomsCount(parsed))
-        assertEquals("den", voiceRoomChip(parsed.single()))
+        assertEquals("den · learned", voiceRoomChip(parsed.single()))
         assertNull(voiceRoomsHint("Priya", parsed))
     }
 
@@ -77,26 +78,31 @@ class PersonVoiceRoomsTest {
         assertEquals("2/2", voiceRoomsCount(listOf(kitchen, office)))
     }
 
-    @Test fun chipsMarkOnlyRoomsWithNeitherSample() {
-        assertEquals("kitchen", voiceRoomChip(kitchen))
-        assertEquals("office", voiceRoomChip(office))
-        assertEquals("garage · not yet", voiceRoomChip(garage))
-        assertEquals("rooms that know this voice", VOICE_ROOMS_LABEL)
+    /** Owner, 1.3.0 device check: every chip says learned or not yet
+     *  learned, never "knows" (any room can recognize the person). */
+    @Test fun chipsSayLearnedOrNotYetLearned() {
+        assertEquals("kitchen · learned", voiceRoomChip(kitchen))
+        assertEquals("office · learned", voiceRoomChip(office))
+        assertEquals("garage · not yet learned", voiceRoomChip(garage))
+        assertEquals("dining-room · not yet learned", voiceRoomChip(VoiceRoom("dining-room")))
+        assertEquals("rooms that have learned this voice", VOICE_ROOMS_LABEL)
     }
 
-    @Test fun hintOnlyWhenARoomIsNotYet() {
+    @Test fun hintOnlyWhenARoomHasNotYetLearned() {
         assertNull(voiceRoomsHint("Priya", listOf(kitchen, office)))
         assertEquals(
-            "Rooms recognize a voice best once they have heard it themselves. In each room " +
-                "marked “not yet”, Priya can say “my name is Priya” and answer yes.",
+            "Every room can recognize Priya from any sample. A room recognizes a voice more " +
+                "reliably once it has learned it there: in a room marked “not yet learned”, Priya can " +
+                "say “my name is Priya” and answer yes.",
             voiceRoomsHint("Priya", listOf(kitchen, garage)),
         )
     }
 
-    @Test fun hintWithoutANameSaysTheyAndAnEllipsis() {
+    @Test fun hintWithoutANameSaysThisPersonTheyAndAnEllipsis() {
         assertEquals(
-            "Rooms recognize a voice best once they have heard it themselves. In each room " +
-                "marked “not yet”, they can say “my name is …” and answer yes.",
+            "Every room can recognize this person from any sample. A room recognizes a voice more " +
+                "reliably once it has learned it there: in a room marked “not yet learned”, they can " +
+                "say “my name is …” and answer yes.",
             voiceRoomsHint("  ", listOf(garage)),
         )
     }

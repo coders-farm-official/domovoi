@@ -96,20 +96,23 @@ internal fun renameFailureText(e: Throwable): String {
 }
 
 // ---------------------------------------------------------------------------
-// Rooms that know this voice (GET /api/people/{id}/voice-rooms, 1.3.0) — the
-// web People page's PersonVoiceRooms. A room recognizes a voice best from a
-// sample heard in that room, so the household sees which rooms don't know a
-// person yet and how to fix it ("my name is …" said there, then "yes").
-// Read-only: rooms never use a phone's samples, so the phone records nothing.
+// Rooms that have learned this voice (GET /api/people/{id}/voice-rooms, 1.3.0)
+// — the web People page's PersonVoiceRooms. Every room compares a voice with
+// all of the person's samples, so any room can name them; a room that has
+// learned the voice itself (a sample recorded there) names it more reliably.
+// The chips say which rooms have learned it, never which rooms "know" the
+// person (owner device check, 1.3.0: "not yet" read as "this room can't
+// recognize me" right after it had). "my name is …" said in a room, then
+// "yes", adds a sample there. Read-only: the phone records nothing.
 // ---------------------------------------------------------------------------
 
-/** One room and whether it knows this person's voice (server VoiceRoom):
+/** One room and whether it has learned this person's voice (server VoiceRoom):
  *  [current] a satellite sample of the current speaker model. Since V061 that
  *  is the only kind that counts, and the server no longer sends [legacy]. It
  *  is still read because a 1.3.0 build from before V061 (main between
  *  67dea58a and 79acc157, never released) sent `legacy: true` for a room
  *  whose only sample was pre-1.3.0, and on that server such a room did know
- *  the voice; calling it "not yet" there would be wrong. */
+ *  the voice; calling it "not yet learned" there would be wrong. */
 @Serializable
 internal data class VoiceRoom(
     val room_id: String = "",
@@ -119,8 +122,9 @@ internal data class VoiceRoom(
     val known: Boolean get() = current || legacy
 }
 
-internal const val VOICE_ROOMS_LABEL = "rooms that know this voice"
-internal const val VOICE_ROOM_NOT_YET = " · not yet"
+internal const val VOICE_ROOMS_LABEL = "rooms that have learned this voice"
+internal const val VOICE_ROOM_LEARNED = "learned"
+internal const val VOICE_ROOM_NOT_YET = "not yet learned"
 
 /** The rows of a voice-rooms answer: anything that isn't a room (not an
  *  object, no room name) is dropped; a missing flag is false. */
@@ -158,17 +162,21 @@ internal fun showVoiceRooms(person: Person, rooms: List<VoiceRoom>, voiceId: Voi
 /** "known/total", e.g. "2/3". */
 internal fun voiceRoomsCount(rooms: List<VoiceRoom>): String = "${rooms.count { it.known }}/${rooms.size}"
 
-/** A room's chip text: its name, plus " · not yet" when it has no sample. */
+/** A room's chip text: "kitchen · learned" or "garage · not yet learned". */
 internal fun voiceRoomChip(room: VoiceRoom): String =
-    room.room_id + if (room.known) "" else VOICE_ROOM_NOT_YET
+    room.room_id + " · " + if (room.known) VOICE_ROOM_LEARNED else VOICE_ROOM_NOT_YET
 
-/** How to teach the missing rooms, or null when every room knows the voice. */
+/** How to teach the rooms that haven't learned the voice, or null when every
+ *  room has. Says first that any room can recognize them already. */
 internal fun voiceRoomsHint(name: String, rooms: List<VoiceRoom>): String? {
     if (rooms.all { it.known }) return null
-    val who = name.trim().ifEmpty { "they" }
-    val said = name.trim().ifEmpty { "…" }
-    return "Rooms recognize a voice best once they have heard it themselves. In each room " +
-        "marked “not yet”, $who can say “my name is $said” and answer yes."
+    val named = name.trim()
+    val subject = named.ifEmpty { "this person" }
+    val who = named.ifEmpty { "they" }
+    val said = named.ifEmpty { "…" }
+    return "Every room can recognize $subject from any sample. A room recognizes a voice more " +
+        "reliably once it has learned it there: in a room marked “not yet learned”, $who can " +
+        "say “my name is $said” and answer yes."
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +421,7 @@ internal class PersonDetailData(
     val preferences: Map<String, JsonElement>,
     val errors: PersonDetailErrors,
     val loading: Boolean,
-    /** Rooms that know this voice; empty (section hidden) until read, on a
+    /** Rooms that have learned this voice; empty (section hidden) until read, on a
      *  server without the route, or in a house with no rooms. */
     val voiceRooms: List<VoiceRoom>,
     val refresh: () -> Unit,
@@ -484,6 +492,27 @@ internal fun rememberPersonDetail(personId: Long, voiceSamples: Int = 0): Person
         loading = loading,
         voiceRooms = voiceRooms,
     ) { tick++ }
+}
+
+// ---------------------------------------------------------------------------
+// Where a person was last heard (the profile header, web heardIn). The room
+// of their newest identified turn: GET /api/people/{id}/conversations is
+// newest first (ORDER BY at DESC), so it is the first row the detail already
+// holds; no extra read. A phone's chat mic logs as room "phone-<device>"
+// ("the phone"); a turn with no room came from chat.
+// ---------------------------------------------------------------------------
+
+/** "last heard in": a room name (dashes and underscores as spaces, as the
+ *  web shows it), "the phone", "chat", or "—" before they have said anything.
+ *  [failed]: the conversations read failed, so "?" (F-A008: not knowing is
+ *  not "never"); [loading] with nothing read yet is "…", not "—". */
+internal fun lastHeardIn(turns: List<PersonTurn>, failed: Boolean = false, loading: Boolean = false): String {
+    if (failed) return "?"
+    val turn = turns.firstOrNull() ?: return if (loading) "…" else "—"
+    val room = turn.room_id.orEmpty().trim()
+    if (room.isEmpty()) return "chat"
+    if (room.startsWith("phone-")) return "the phone"
+    return room.replace(Regex("[-_]+"), " ")
 }
 
 internal fun prettyPref(v: JsonElement): String = if (v is JsonPrimitive) v.content else v.toString()
