@@ -2,7 +2,9 @@
 # provision.sh: take a fresh Ubuntu 26.04 box to a running Domovoi server,
 # unattended. The same script builds a bare-metal Linux host (the Beelink
 # procedure in docs/LINUX_HOST.md) and the private WSL2 distro the Windows
-# installer imports from Ubuntu's official .wsl image.
+# installer imports from Ubuntu's official .wsl image. Bare metal can also
+# be Debian 13 or an Ubuntu-based Linux Mint 22 / Pop!_OS 24.04 (preflight,
+# detect_platform; docs/LINUX_HOST.md, Which distro).
 #
 #   sudo bash provision.sh --internet always --timezone Europe/Berlin   # bare metal
 #   sudo bash provision.sh --internet never \
@@ -10,7 +12,9 @@
 #   sudo bash provision.sh --dry-run ...                      # say what it would do
 #
 # What it does, in order (each is a step with an id, see STEP_IDS):
-#   preflight    root, Ubuntu x86_64, systemd as PID 1, waits for cloud-init
+#   preflight    root, x86_64, a supported system (Ubuntu 26.04, Debian 13,
+#                an Ubuntu derivative on 24.04 or 26.04; others stop here),
+#                systemd as PID 1, waits for cloud-init
 #   apt          the LINUX_HOST.md "Install" prerequisites (+ curl, gnupg,
 #                zstd, tzdata, sudo, which this script needs)
 #   user         the service user (default domovoi): created with password
@@ -30,7 +34,9 @@
 #                /etc/domovoi/allowed_signers exists: docs/LINUX_HOST.md
 #                "Signed updates"); an existing checkout is never moved
 #   docker       Docker's key (exactly one key, the manifest's fingerprint)
-#                and apt repository; docker-ce at the manifest's versions
+#                and apt repository (Docker's Debian one on Debian, the
+#                suite this system is or is based on); docker-ce at the
+#                manifest's versions for that suite
 #                when it is not installed yet (not held: apt upgrade moves
 #                it later, as on the Beelink); the service user in the
 #                docker group
@@ -46,7 +52,13 @@
 #                update. DOMOVOI_MANAGE_GPU_RUNTIME=0 in
 #                /etc/default/domovoi-update skips it
 #   venv         the venv and the three hash-checked installs from
-#                requirements-linux-py314.lock (LINUX_HOST.md "Install")
+#                requirements-linux-py314.lock (LINUX_HOST.md "Install").
+#                Built from this box's python3 when that is the lock's
+#                Python (Ubuntu 26.04); elsewhere from the CPython the
+#                manifest pins, which scripts/linux/python-runtime.sh
+#                installs with uv under /usr/local/lib/domovoi-python (uv
+#                and CPython each checked against their SHA-256); a new pin
+#                moves the venv onto it (python -m venv --upgrade)
 #   env          domovoi/.env: python -m domovoi.env_bootstrap [--internet],
 #                then the hardware tier's keys (its vision model included),
 #                the WSL keys and the media paths, through the repo's own
@@ -97,9 +109,10 @@
 #                players still on the old image and restarts a running core,
 #                which recreates them on the new one, as an update does
 #   searxng      the search helper, started for always/sometimes, off for never
-#   os-jobs      Ubuntu's own background jobs follow the internet answer:
+#   os-jobs      the system's own background jobs follow the internet answer:
 #                scripts/linux/os-jobs.sh masks the updaters, news and
-#                crash-report timers for never and puts them back for
+#                crash-report timers (on Debian: the apt timers that run
+#                unattended-upgrades) for never and puts them back for
 #                always/sometimes; on WSL it disables and masks wsl-pro and
 #                snapd whatever the answer. The update unit runs the same
 #                helper after every healthy restart or update, so an answer
@@ -211,18 +224,20 @@
 # image's base, PIPER_PINS, the Ollama release in docs/LINUX_HOST.md. The
 # few with no home in the repo (docker-ce versions and key, the NVIDIA
 # Container Toolkit's versions and key, the Whisper revision and model.bin
-# SHA-256, the tier models and their digests) are in
+# SHA-256, the tier models and their digests, uv and the CPython for a box
+# whose python3 is not the lock's) are in
 # scripts/linux/provision-manifest.conf, read from the same checkout.
 # Checked against a pin, and a mismatch stops the run: every Python package
-# (the lock's hashes), the Ollama tarball (SHA-256), Docker's apt key and
+# (the lock's hashes), the Ollama tarball (SHA-256), uv and CPython where
+# they are installed (SHA-256), Docker's apt key and
 # NVIDIA's (fingerprints; apt then checks the packages against the index
 # that key signs), the compose images and the MPD image's base (digests),
 # each Ollama model (digest),
 # Whisper's model.bin and the Piper voice (SHA-256), the phone app's APKs
 # (android/release.json: size, SHA-256 and the release key's signature).
 # Not hashed by this
-# script: Ubuntu's own packages (apt checks them against Ubuntu's signed
-# archive, at whatever version it serves), what Dockerfile.mpd installs
+# script: the system's own packages (apt checks them against Ubuntu's or
+# Debian's signed archive, at whatever version it serves), what Dockerfile.mpd installs
 # with apt inside the image build, and Whisper's small files beside
 # model.bin (config.json, tokenizer.json, vocabulary.*), which come from
 # the pinned Hugging Face revision over HTTPS.
@@ -576,8 +591,10 @@ usage() {
 Usage: sudo bash provision.sh [options]
 
 Takes a fresh Ubuntu 26.04 box (bare metal, or the Windows installer's WSL2
-distro) to a running Domovoi server. Safe to run again: finished steps are
-skipped, a killed run resumes, a changed option re-runs what it feeds.
+distro) to a running Domovoi server; on bare metal also Debian 13, or
+Linux Mint 22 / Pop!_OS 24.04 (Ubuntu-based). Safe to run again: finished
+steps are skipped, a killed run resumes, a changed option re-runs what it
+feeds.
 
   --repo-url URL        the repository to clone (default:
                         https://github.com/coders-farm-official/domovoi; a
@@ -1010,6 +1027,10 @@ declare -A M=()
 
 MANIFEST_KEYS=(manifest_version docker_key_url docker_key_fpr docker_repo_url docker_suite
   docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin
+  docker_debian_key_url docker_debian_repo_url
+  docker_trixie_ce docker_trixie_ce_cli docker_trixie_containerd_io docker_trixie_buildx_plugin docker_trixie_compose_plugin
+  docker_noble_ce docker_noble_ce_cli docker_noble_containerd_io docker_noble_buildx_plugin docker_noble_compose_plugin
+  uv_version uv_sha256 python_version python_build python_sha256
   nvidia_key_url nvidia_key_fpr nvidia_repo_url
   nvidia_container_toolkit nvidia_container_toolkit_base libnvidia_container_tools libnvidia_container1
   whisper_model whisper_repo whisper_revision whisper_model_bin_sha256 whisper_model_bin_bytes
@@ -1042,12 +1063,22 @@ load_manifest() {
   for k in docker_key_fpr nvidia_key_fpr; do
     [[ ${M[$k]} =~ ^[0-9A-F]{40}$ ]] || die "$file: $k is not a 40-hex-digit fingerprint"
   done
-  for k in docker_key_url docker_repo_url nvidia_key_url nvidia_repo_url; do
+  for k in docker_key_url docker_repo_url docker_debian_key_url docker_debian_repo_url nvidia_key_url nvidia_repo_url; do
     [[ ${M[$k]} =~ ^https://[A-Za-z0-9./_-]+$ ]] || die "$file: $k is not an https URL"
   done
   for k in docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin \
+      docker_trixie_ce docker_trixie_ce_cli docker_trixie_containerd_io docker_trixie_buildx_plugin docker_trixie_compose_plugin \
+      docker_noble_ce docker_noble_ce_cli docker_noble_containerd_io docker_noble_buildx_plugin docker_noble_compose_plugin \
       nvidia_container_toolkit nvidia_container_toolkit_base libnvidia_container_tools libnvidia_container1; do
     [[ ${M[$k]} =~ ^([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$ ]] || die "$file: $k is not a Debian version"
+  done
+  # The CPython for a box whose python3 is not the lock's
+  # (scripts/linux/python-runtime.sh reads the same keys and checks them too).
+  [[ ${M[uv_version]} =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$file: uv_version is not a version (x.y.z)"
+  [[ ${M[python_version]} =~ ^3\.[0-9]+\.[0-9]+$ ]] || die "$file: python_version is not a CPython 3 version (3.y.z)"
+  [[ ${M[python_build]} =~ ^[0-9]{8}$ ]] || die "$file: python_build is not a python-build-standalone release (YYYYMMDD)"
+  for k in uv_sha256 python_sha256; do
+    [[ ${M[$k]} =~ ^[0-9a-f]{64}$ ]] || die "$file: $k is not a SHA-256"
   done
   [[ ${M[whisper_revision]} =~ ^[0-9a-f]{40}$ ]] || die "$file: whisper_revision is not a commit SHA"
   [[ ${M[whisper_repo]} =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "$file: whisper_repo is not owner/name"
@@ -1199,16 +1230,74 @@ run_step() {
 
 os_field() { (. "$OS_RELEASE" 2>/dev/null && eval "printf '%s' \"\${$1:-}\""); }
 
-do_preflight() {
-  local id ver arch
-  arch=$(uname -m)
-  [ "$arch" = x86_64 ] || die "x86_64 only (this is $arch): the lock and the Ollama pin are for x86_64"
+# The systems this installs on (docs/LINUX_HOST.md, Which distro; owner
+# decision 2026-11-15), as /etc/os-release names them:
+#   Ubuntu 26.04 (resolute)       ID=ubuntu: the one it is made for; other
+#                                 Ubuntu versions go on with a warning, on
+#                                 their own suite's Docker pins when the
+#                                 manifest has them (24.04, noble), else
+#                                 on 26.04's, as before
+#   Debian 13 (trixie)            ID=debian VERSION_ID=13
+#   Ubuntu-based derivatives      ID_LIKE has ubuntu (Linux Mint 22, Pop!_OS
+#                                 24.04 and later): as the Ubuntu release
+#                                 UBUNTU_CODENAME names, which the manifest
+#                                 must pin Docker for (noble, resolute)
+# Anything else stops here, saying so: Fedora and Arch are not supported
+# yet (their packages, Docker's repositories and the units' paths differ).
+# OS_FAMILY (ubuntu | debian) picks Docker's repository and OS_SUITE its
+# suite (docker_pin); the Python the venv runs on is decided by the lock
+# and this box's python3, in the venv step.
+OS_FAMILY=""
+OS_SUITE=""
+PINNED_SUITES="resolute noble trixie"
+ISSUES_URL=https://github.com/coders-farm-official/domovoi/issues
+detect_platform() {
+  local id ver like codename ucodename name
   id=$(os_field ID)
   ver=$(os_field VERSION_ID)
-  [ "$id" = ubuntu ] || die "Ubuntu only (this is ${id:-unknown}); docs/LINUX_HOST.md targets Ubuntu 26.04"
-  if [ "$ver" != 26.04 ]; then
-    warn "this is Ubuntu $ver; the script, the lock (Python 3.14) and the docker-ce pins are for 26.04"
-  fi
+  like=" $(os_field ID_LIKE) "
+  codename=$(os_field VERSION_CODENAME)
+  ucodename=$(os_field UBUNTU_CODENAME)
+  name=$(os_field PRETTY_NAME)
+  name=${name:-${id:-an unknown system}}
+  case $id in
+    ubuntu)
+      OS_FAMILY=ubuntu
+      OS_SUITE=${codename:-$ucodename}
+      if [ "$ver" != 26.04 ]; then
+        if [ -n "$OS_SUITE" ] && [[ " $PINNED_SUITES " == *" $OS_SUITE "* ]]; then
+          warn "this is Ubuntu $ver; Domovoi is made for 26.04. It goes on with Docker's $OS_SUITE packages and, unless this Ubuntu's python3 is 3.14, a CPython 3.14 of its own for the venv"
+        else
+          warn "this is Ubuntu $ver; the script, the lock (Python 3.14) and the docker-ce pins are for 26.04"
+          OS_SUITE=resolute
+        fi
+      fi ;;
+    debian)
+      [ "$ver" = 13 ] || die "this is $name: of Debian, Domovoi installs on Debian 13 (trixie) only. Supported: Ubuntu 26.04, Debian 13, and Linux Mint 22 or Pop!_OS 24.04 (docs/LINUX_HOST.md, Which distro)"
+      OS_FAMILY=debian
+      OS_SUITE=trixie ;;
+    *)
+      if [[ $like == *" ubuntu "* ]]; then
+        [ -n "$ucodename" ] || die "$name says it is based on Ubuntu but names no UBUNTU_CODENAME in /etc/os-release, so there is no telling which Ubuntu packages fit it"
+        [[ " $PINNED_SUITES " == *" $ucodename "* ]] \
+          || die "$name is based on Ubuntu $ucodename, which Domovoi has no Docker packages pinned for (it installs on derivatives of Ubuntu 24.04, noble, and 26.04, resolute: Linux Mint 22, Pop!_OS 24.04)"
+        OS_FAMILY=ubuntu
+        OS_SUITE=$ucodename
+        case $id in
+          linuxmint|pop) log "$name: an Ubuntu derivative, installed as Ubuntu $ucodename" ;;
+          *) warn "$name: an Ubuntu derivative Domovoi has not been tried on; installed as Ubuntu $ucodename" ;;
+        esac
+      else
+        die "this is $name, which Domovoi does not install on yet. Supported: Ubuntu 26.04, Debian 13, and Ubuntu-based Linux Mint 22 or Pop!_OS 24.04 (docs/LINUX_HOST.md, Which distro). Fedora, Arch and others are not supported yet; to ask for one, open an issue: $ISSUES_URL"
+      fi ;;
+  esac
+}
+
+do_preflight() {
+  local arch
+  arch=$(uname -m)
+  [ "$arch" = x86_64 ] || die "x86_64 only (this is $arch): the lock and the Ollama pin are for x86_64"
+  detect_platform
   log "$(os_field PRETTY_NAME), $(uname -r); WSL: $([ "$WSL" = 1 ] && echo yes || echo no)"
   if ! systemd_running; then
     if [ "$WSL" = 1 ]; then
@@ -1249,6 +1338,14 @@ do_preflight() {
 # build (1:1.5.6-1.1ubuntu4 when this was written) is the one tested; an
 # install from before it gets the same package from apply-update.sh
 # (ADDED_PACKAGES, reconcile_added_packages).
+# The same names on every system this installs on: each of them is a
+# package of that name in Debian 13 (trixie) and Ubuntu 24.04 (noble) too
+# (checked against both archives on 2026-11-15; Debian's pkg-config is the
+# transitional package to pkgconf, as Ubuntu's is), so there is nothing to
+# map. Where the venv runs on the pinned CPython, python3, python3-venv and
+# python3-dev are the system's own Python all the same: root's helpers run
+# it (/usr/bin/python3: the cache trim, the checkout-owner check), and the
+# list stays one list.
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
   git ffmpeg mpg123 libchromaprint-tools xorriso
   zstd ca-certificates curl gnupg tzdata sudo)
@@ -2521,9 +2618,33 @@ do_checkout() {
 # ─── docker ──────────────────────────────────────────────────────────────
 
 DOCKER_PKGS=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+# The suites the manifest pins Docker for besides its own docker_suite
+# (resolute, Ubuntu 26.04): docker_<suite>_ce, _ce_cli, _containerd_io,
+# _buildx_plugin and _compose_plugin each.
+DOCKER_EXTRA_SUITES="noble trixie"
+# docker_pin KEY: what this box installs Docker from, by the manifest key
+# that names it for Ubuntu 26.04 (docker_key_url, docker_key_fpr,
+# docker_repo_url, docker_suite, docker_ce, docker_ce_cli, containerd_io,
+# docker_buildx_plugin, docker_compose_plugin). On Ubuntu 26.04 (and on an
+# Ubuntu without pins of its own, as before) that key itself; on Debian 13
+# and on noble (Ubuntu 24.04 and its derivatives) that suite's versions,
+# and on Debian, Docker's Debian repository. One key fingerprint for all:
+# Docker signs every repository with it.
+docker_pin() {
+  local k=$1
+  if [[ " $DOCKER_EXTRA_SUITES " != *" $OS_SUITE "* ]]; then printf '%s' "${M[$k]}"; return 0; fi
+  case $k in
+    docker_key_url|docker_repo_url)
+      if [ "$OS_FAMILY" = debian ]; then printf '%s' "${M[docker_debian_${k#docker_}]}"; else printf '%s' "${M[$k]}"; fi ;;
+    docker_key_fpr) printf '%s' "${M[$k]}" ;;
+    docker_suite) printf '%s' "$OS_SUITE" ;;
+    docker_*) printf '%s' "${M[docker_${OS_SUITE}_${k#docker_}]}" ;;
+    *) printf '%s' "${M[docker_${OS_SUITE}_$k]}" ;;
+  esac
+}
 docker_wanted() {
-  printf '%s\n' "containerd.io=${M[containerd_io]}" "docker-buildx-plugin=${M[docker_buildx_plugin]}" \
-    "docker-ce-cli=${M[docker_ce_cli]}" "docker-ce=${M[docker_ce]}" "docker-compose-plugin=${M[docker_compose_plugin]}" | LC_ALL=C sort
+  printf '%s\n' "containerd.io=$(docker_pin containerd_io)" "docker-buildx-plugin=$(docker_pin docker_buildx_plugin)" \
+    "docker-ce-cli=$(docker_pin docker_ce_cli)" "docker-ce=$(docker_pin docker_ce)" "docker-compose-plugin=$(docker_pin docker_compose_plugin)" | LC_ALL=C sort
 }
 docker_installed() { dpkg-query -W -f='${Package}=${Version}\n' "${DOCKER_PKGS[@]}" 2>/dev/null | LC_ALL=C sort || true; }
 # The packages not installed yet, as pkg=<the manifest's version>. One that
@@ -2534,7 +2655,7 @@ docker_missing() {
   local have p
   have=$(dpkg-query -W -f='${Package} ${Status}\n' "${DOCKER_PKGS[@]}" 2>/dev/null | awk '/ install ok installed$/ {print $1}') || true
   for p in "${DOCKER_PKGS[@]}"; do
-    printf '%s\n' "$have" | grep -qxF -- "$p" || printf '%s=%s\n' "$p" "${M[${p//[-.]/_}]}"
+    printf '%s\n' "$have" | grep -qxF -- "$p" || printf '%s=%s\n' "$p" "$(docker_pin "${p//[-.]/_}")"
   done
 }
 in_group() { id -nG "$SVC_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$1"; }
@@ -2542,8 +2663,8 @@ in_group() { id -nG "$SVC_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$1"; }
 docker_sources_text() {
   cat <<EOF
 Types: deb
-URIs: ${M[docker_repo_url]}
-Suites: ${M[docker_suite]}
+URIs: $(docker_pin docker_repo_url)
+Suites: $(docker_pin docker_suite)
 Components: stable
 Architectures: amd64
 Signed-By: /etc/apt/keyrings/docker.asc
@@ -2560,7 +2681,7 @@ docker_key_export() {
   gh=$(mktemp -d) || die "can't make a temporary keyring"
   if ! GNUPGHOME=$gh gpg --batch --no-tty --quiet --import "$src" >/dev/null 2>&1; then
     rm -rf "$gh"
-    die "Docker's apt key from ${M[docker_key_url]} is not a key gpg can read"
+    die "Docker's apt key from $(docker_pin docker_key_url) is not a key gpg can read"
   fi
   # Read to the end (no early-quitting reader under pipefail).
   listing=$(GNUPGHOME=$gh gpg --batch --no-tty --with-colons --fixed-list-mode --list-keys 2>/dev/null) || listing=""
@@ -2571,15 +2692,18 @@ docker_key_export() {
   fi
   if command -v gpgconf >/dev/null 2>&1; then GNUPGHOME=$gh gpgconf --kill all >/dev/null 2>&1 || true; fi
   rm -rf "$gh"
-  [ "$n" = 1 ] || die "Docker's apt key file from ${M[docker_key_url]} holds $n primary keys; apt would trust every one, and only ${M[docker_key_fpr]} is pinned"
+  [ "$n" = 1 ] || die "Docker's apt key file from $(docker_pin docker_key_url) holds $n primary keys; apt would trust every one, and only ${M[docker_key_fpr]} is pinned"
   [ "$fpr" = "${M[docker_key_fpr]}" ] || die "Docker's apt key has fingerprint '${fpr:-none}', the manifest pins ${M[docker_key_fpr]}"
   [ -s "$dest" ] || die "gpg exported nothing for ${M[docker_key_fpr]}"
 }
 
 inputs_docker() {
   local k
+  # As this box installs them (docker_pin): on Ubuntu 26.04 the manifest's
+  # own lines, so a box installed before other systems were pinned keeps
+  # its marker.
   for k in docker_key_url docker_key_fpr docker_repo_url docker_suite docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin; do
-    echo "$k=${M[$k]}"
+    echo "$k=$(docker_pin "$k")"
   done
   echo "$SVC_USER"
 }
@@ -2592,11 +2716,11 @@ plan_docker() {
 }
 do_docker() {
   local key missing
-  # https://docs.docker.com/engine/install/ubuntu/ "Install using the apt
-  # repository" (deb822 docker.sources), with the key checked against the
-  # manifest before apt trusts it.
+  # https://docs.docker.com/engine/install/ubuntu/ (and .../debian/)
+  # "Install using the apt repository" (deb822 docker.sources), with the
+  # key checked against the manifest before apt trusts it.
   key=$TMP_DIR/docker-download.asc
-  curl -fsSL --retry 3 -o "$key" "${M[docker_key_url]}" || die "could not download Docker's apt key from ${M[docker_key_url]}"
+  curl -fsSL --retry 3 -o "$key" "$(docker_pin docker_key_url)" || die "could not download Docker's apt key from $(docker_pin docker_key_url)"
   docker_key_export "$key" "$TMP_DIR/docker.asc"
   write_if_changed "$APT_KEYRING" 0644 <"$TMP_DIR/docker.asc" || true
   write_if_changed "$APT_SOURCE" 0644 < <(docker_sources_text) || true
@@ -2769,15 +2893,69 @@ lock_stanzas() { as_svc awk -v roots="$*" "$LOCK_CLOSURE_AWK" "$CHECKOUT/$LOCK_N
 # of the subcommand, where pip refuses it.
 pip_svc() { svc_py -m pip --disable-pip-version-check --no-input "$@"; }
 
+# The Python the venv is built from (owner decision 2026-11-15): this box's
+# python3 when it is the Python the lock is for (Ubuntu 26.04's 3.14), as
+# always; otherwise (Debian 13's 3.13, Ubuntu 24.04's 3.12) the CPython the
+# manifest pins, which scripts/linux/python-runtime.sh installs under
+# /usr/local/lib/domovoi-python, both downloads checked against their
+# SHA-256. The venv then names that interpreter (pyvenv.cfg's home) and
+# everything after it (the units, the update unit's re-sync) runs the
+# venv's python as on Ubuntu. A new pin moves the venv to the new
+# interpreter in place (venv_move); the old one stays where it was (the
+# update unit removes builds no venv needs after a successful update).
+python_runtime_script() { src_file scripts/linux/python-runtime.sh; }
+python_runtime() { bash "$(python_runtime_script)" --manifest "$MANIFEST_FILE" "$@"; }
+needs_own_python() {
+  local want have
+  want=$(lock_python 2>/dev/null) || want=""
+  have=$(system_python) || have=""
+  [ -n "$want" ] && [ "$want" != "$have" ]
+}
+# The folder of the interpreter the venv runs on (pyvenv.cfg's home), read
+# as the service user, whose file it is.
+venv_home() { as_svc sed -n 's/^home[[:space:]]*=[[:space:]]*//p' "$CHECKOUT/.venv/pyvenv.cfg" 2>/dev/null | tail -n 1 | tr -d '\r'; }
+venv_on_own_python() {
+  local py
+  py=$(python_runtime --path 2>/dev/null) || return 1
+  [ "$(venv_home)" = "$(dirname "$py")" ] && python_runtime --check >/dev/null 2>&1
+}
 inputs_venv() {
   file_sig "$CHECKOUT/$LOCK_NAME"
   file_sig "$CHECKOUT/$NODEPS_LOCK_NAME"
   file_sig "$CHECKOUT/pyproject.toml"
   system_python
   echo "$CHECKOUT $SVC_USER"
+  # Only where the venv runs on the pinned CPython: a box on its own
+  # python3 (Ubuntu 26.04) keeps its marker.
+  if needs_own_python; then
+    echo "cpython ${M[python_version]}+${M[python_build]} ${M[python_sha256]} uv ${M[uv_version]} ${M[uv_sha256]}"
+    file_sig "$(python_runtime_script)"
+  fi
 }
-check_venv() { [ -x "$VENV_PY" ] && svc_py -c 'import domovoi.config, fastapi; from domovoi.clients.whisper import import_faster_whisper; import_faster_whisper()' >/dev/null 2>&1; }
-plan_venv() { echo "venv $CHECKOUT/.venv; pip install --require-hashes from $LOCK_NAME and $NODEPS_LOCK_NAME (four installs, docs/LINUX_HOST.md Install)"; }
+check_venv() {
+  [ -x "$VENV_PY" ] && svc_py -c 'import domovoi.config, fastapi; from domovoi.clients.whisper import import_faster_whisper; import_faster_whisper()' >/dev/null 2>&1 \
+    && { ! needs_own_python || venv_on_own_python; }
+}
+plan_venv() {
+  echo "venv $CHECKOUT/.venv; pip install --require-hashes from $LOCK_NAME and $NODEPS_LOCK_NAME (four installs, docs/LINUX_HOST.md Install)"
+  local pv=${M[python_version]:-?} pb=${M[python_build]:-?} uv=${M[uv_version]:-?}
+  echo "its Python: this box's python3 when it is the lock's (3.14), else CPython $pv from python-build-standalone $pb via uv $uv (scripts/linux/python-runtime.sh: both downloads checked against their SHA-256) in /usr/local/lib/domovoi-python"
+}
+
+# venv_move PY: the venv onto the interpreter PY, in place (the same
+# minor version: every installed package stays as it is). python -m venv
+# --upgrade rewrites pyvenv.cfg and makes bin/'s interpreter link, but
+# leaves a link that is already there alone, so the one naming the old
+# interpreter by its absolute path goes first. As the service user, whose
+# venv it is. A core or dashboard still running keeps the old interpreter
+# (its folder stays) until the start step restarts them.
+venv_move() {
+  local py=$1 from
+  from=$(venv_home)
+  as_svc find "$CHECKOUT/.venv/bin" -maxdepth 1 -type l -lname '/*' -delete || die "could not remove the old interpreter's link from $CHECKOUT/.venv/bin"
+  (cd "$CHECKOUT" && as_svc "$py" -m venv --upgrade .venv) || die "$py -m venv --upgrade .venv failed: $CHECKOUT/.venv has no interpreter link now; run this again"
+  log "moved the venv from ${from:-an unknown interpreter} to $(dirname "$py") (python -m venv --upgrade)"
+}
 
 PY_IMPORT_CHECK='#provision:import-check
 import importlib, sys
@@ -2805,15 +2983,30 @@ if bad:
 print("imports OK: %d modules" % len(mods))'
 
 do_venv() {
-  local want have tools reqs
+  local want have tools reqs py=python3 pyout
   [ -f "$CHECKOUT/$LOCK_NAME" ] || die "the checkout has no $LOCK_NAME"
   want=$(lock_python)
   have=$(system_python) || have=""
   [ -n "$want" ] || die "$LOCK_NAME does not say which Python it was compiled for"
-  [ "$want" = "$have" ] || die "$LOCK_NAME is for Python $want and this box's python3 is ${have:-missing}: every package is installed hash-checked from the lock, and there is no lock for $have"
+  if [ "$want" != "$have" ]; then
+    # Every package is installed hash-checked from the lock, which is for
+    # one Python: the manifest's CPython has to be that one.
+    [ "${M[python_version]%.*}" = "$want" ] \
+      || die "$LOCK_NAME is for Python $want, this box's python3 is ${have:-missing}, and the CPython provision-manifest.conf pins is ${M[python_version]}, not a $want either"
+    [ -f "$(python_runtime_script)" ] || die "the checkout has no scripts/linux/python-runtime.sh"
+    log "$LOCK_NAME is for Python $want and this box's python3 is ${have:-missing}: the venv runs on CPython ${M[python_version]} (python-build-standalone ${M[python_build]}), installed by scripts/linux/python-runtime.sh"
+    emit_frac 20 "Installing Python ${M[python_version]}"
+    local -a keep=()
+    if [ "$KEEP_DOWNLOADS" = 1 ]; then keep=(--keep-downloads); fi
+    pyout=$(python_runtime --cache "$CACHE_DIR" "${keep[@]}") || die "scripts/linux/python-runtime.sh could not install CPython ${M[python_version]} (the lines above say why)"
+    py=$(printf '%s\n' "$pyout" | tail -n 1)
+    [[ $py == /* ]] && [ -x "$py" ] || die "scripts/linux/python-runtime.sh named no interpreter (it said: ${pyout:-nothing})"
+  fi
   if [ ! -x "$VENV_PY" ]; then
-    (cd "$CHECKOUT" && as_svc python3 -m venv .venv) || die "python3 -m venv failed"
+    (cd "$CHECKOUT" && as_svc "$py" -m venv .venv) || die "$py -m venv failed"
     log "created $CHECKOUT/.venv"
+  elif [ "$py" != python3 ] && [ "$(venv_home)" != "$(dirname "$py")" ]; then
+    venv_move "$py"
   fi
   # docs/LINUX_HOST.md "Install from the hash-pinned lock": the build tools
   # from the lock, every pin (sdist-only ones built with those tools), the

@@ -81,10 +81,30 @@ installed from the dashboard as a zip upload or a GitHub URL.
 > dashboard is the house spirit itself, minding your home from inside your
 > network — never someone else's cloud.
 
+## Install on Linux
+
+On an x86_64 computer running Ubuntu 26.04, Debian 13, or Linux Mint 22 / Pop!_OS 24.04
+(other Ubuntu versions may work, and it says so), open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
+```
+
+> **From Domovoi 1.3.0.** Until then this command answers 404: use
+> [the install script by hand](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
+
+It asks whether the server will have internet after setup, its time zone, and whether to include AI chat,
+checks that it downloaded a signed release, installs everything, and ends with the address to open from your phone.
+To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
+Fedora, Arch and other systems are not supported yet ([which systems, and why](docs/LINUX_HOST.md#which-distro));
+to ask for yours, [open an issue](https://github.com/coders-farm-official/domovoi/issues).
+On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md).
+
 ---
 
 ## Table of contents
 
+- [Install on Linux](#install-on-linux)
 - [Status and roadmap](#status-and-roadmap)
 - [Who it's for](#who-its-for)
 - [First install](#first-install)
@@ -379,12 +399,14 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 
 Three ways in:
 
-- **Ubuntu 26.04, one script.** `scripts/linux/provision.sh` installs the
-  server, its services and the models in one unattended run, at the latest
-  release, and the server then follows the `stable` channel: releases only
+- **Linux (Ubuntu 26.04, Debian 13, Mint 22, Pop!_OS 24.04), one command:** [Install on Linux](#install-on-linux)
+  above. It checks the latest release and runs `scripts/linux/provision.sh`,
+  which installs the server, its services and the models in one run, and
+  the server then follows the `stable` channel: releases only
   ([Release channels](docs/LINUX_HOST.md#release-channels); before the
   first release, `main`):
-  [Or let the script do it](docs/LINUX_HOST.md#or-let-the-script-do-it).
+  [One command](docs/LINUX_HOST.md#one-command), or
+  [run the install script yourself](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
 - **Windows 11, the installer (preview).** `DomovoiSetup.exe` runs that
   same script inside a private WSL2 distro. It is unsigned; download it from
   the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest),
