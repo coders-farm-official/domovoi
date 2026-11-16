@@ -2182,11 +2182,11 @@ case_lock_without_the_no_deps_lock_stops() {
   end_case
 }
 
-case_manifest_unknown_key_stops() {
-  new_case manifest_unknown_key_stops
+case_manifest_unknown_key_is_ignored() {
+  new_case manifest_unknown_key_is_ignored
   run_prov "${wsl_args[@]}" --ref odd-manifest
-  check "exit 1" eq "$RC" 1
-  check "names it" said "unknown key surprise_key"
+  check "exit 0" eq "$RC" 0
+  check "names it, as ignored" said "unknown key surprise_key (a newer manifest than this script; ignored)"
   end_case
 }
 
@@ -5234,7 +5234,7 @@ CASES=(
   case_router_digest_mismatch_stops
   case_docker_key_mismatch_stops
   case_manifest_missing_key_stops
-  case_manifest_unknown_key_stops
+  case_manifest_unknown_key_is_ignored
   case_lock_without_build_tools_stops
   case_media_list_change_rewrites_the_block
   case_media_unterminated_block_keeps_the_rest
