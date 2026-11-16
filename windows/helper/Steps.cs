@@ -512,6 +512,7 @@ namespace Domovoi.Windows.Helper
             o.Kv("tier", st.Tier ?? "");
             o.Kv("gpu", st.GpuKnown ? (st.Gpu.Count == 0 ? "none" : string.Join(", ", st.Gpu.ToArray())) : "");
             o.Kv("ai", st.Ai == null ? "" : (st.Ai.Value ? "yes" : "no"));
+            o.Kv("phone_app", st.PhoneApp == null ? "" : (st.PhoneApp.Value ? "yes" : "no"));
             o.Kv("lan_name", st.LanName ?? "");
             o.Kv("generation", Inv.S(st.Generation));
             o.Kv("attempt", Inv.S(st.Attempt));

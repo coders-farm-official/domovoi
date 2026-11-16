@@ -753,7 +753,7 @@ class PluginHost:
                     if rel.startswith(prefix):
                         rel = rel[len(prefix):]
                         break
-                return f"{static_base}/{rel}"
+                return f"{static_base}/{rel}"  # noqa: B023 - called inside the iteration, never kept
 
             def _icon_url(p: Any) -> str | None:
                 # nav_icon / nav_icon_dark: one of the plugin's own static

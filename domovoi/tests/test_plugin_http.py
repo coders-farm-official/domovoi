@@ -359,7 +359,7 @@ async def test_the_route_table_does_not_grow_across_enable_cycles() -> None:
 
     def _with_hooks(router: APIRouter) -> APIRouter:
         async def hook() -> None:
-            router.routes  # a load's own handler closes over that load
+            router.routes  # noqa: B018 - a load's own handler closes over that load
 
         router.on_startup.append(hook)
         router.on_shutdown.append(hook)

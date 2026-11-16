@@ -18,7 +18,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import tomllib
 import urllib.error
 from pathlib import Path
 

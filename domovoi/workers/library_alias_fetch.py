@@ -58,7 +58,7 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Mapping, Protocol, Sequence
+from typing import Any, Iterable, Protocol, Sequence
 
 from sqlalchemy import text
 

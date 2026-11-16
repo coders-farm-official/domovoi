@@ -14,7 +14,7 @@ from domovoi.handlers.playlist import (
     _SHUFFLE_FAVORITES_RE,
     _SHUFFLE_PLAYLIST_RE,
 )
-from domovoi.models import Context, Intent
+from domovoi.models import Context
 from domovoi.tests.conftest import requires_db
 
 
@@ -316,7 +316,6 @@ async def test_add_to_playlist_refuses_http_source(db_session) -> None:
 async def test_play_playlist_multi_match_parks_confirmation(db_session) -> None:
     """Two playlists whose names both contain the substring should
     trigger pending_confirmation (the standard disambiguation flow)."""
-    from uuid import uuid4
 
     from domovoi.db.repositories import SessionRepository
 

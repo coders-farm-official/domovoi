@@ -18,7 +18,7 @@ import struct
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 log = logging.getLogger(__name__)
 

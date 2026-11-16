@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
-from uuid import uuid4
 
 from domovoi.db.repositories import SessionRepository
 from domovoi.models import Context, Intent

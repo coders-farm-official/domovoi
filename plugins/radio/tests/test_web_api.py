@@ -312,7 +312,7 @@ def test_a_host_local_stream_url_cannot_be_saved(web_client) -> None:
 def test_snapshots_are_verbatim_json_payloads(web_client) -> None:
     from domovoi_plugin_radio import web as radio_web
 
-    st = _seed_station(web_client)
+    _seed_station(web_client)
 
     async def _run():
         async with web_client.ctx.db_session_scope() as s:

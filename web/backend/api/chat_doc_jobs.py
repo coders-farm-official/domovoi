@@ -51,7 +51,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import math
 import shutil
 import time
 import uuid
@@ -60,7 +59,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 
 from domovoi import doc_extract

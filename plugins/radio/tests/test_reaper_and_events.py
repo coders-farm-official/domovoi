@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 from sqlalchemy import text
 
 from domovoi.tests.conftest import requires_db

@@ -10,7 +10,6 @@ httpx MockTransport serving the signed fixtures
 from __future__ import annotations
 
 import hashlib
-import io
 import ipaddress
 import struct
 import sys

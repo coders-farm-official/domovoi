@@ -9133,7 +9133,7 @@ def _log_capture_environment(input_device: object) -> None:
                 continue
             def _r(name: str) -> str:
                 try:
-                    return (dev / name).read_text(encoding="utf-8").strip()
+                    return (dev / name).read_text(encoding="utf-8").strip()  # noqa: B023 - called inside the iteration, never kept
                 except OSError:
                     return "?"
             log.info(

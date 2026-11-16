@@ -2682,7 +2682,7 @@ watch the server's traffic under **No**.
 | **Wake-word training** — the trainer image's build (Docker Hub's base image, two GitHub repositories, PyPI packages, GitHub release assets, Ubuntu's package archive) and its training data (Hugging Face `davidscripka/openwakeword_features` and `MIT_environmental_impulse_responses`, openWakeWord's background-clip zips on Backblaze B2): about 22 GB, once | Only after an admin turns training on in Settings → Voice → Wake words: the build and the data download then, a rebuild by the Linux update unit when `scripts/wake_word/docker` changes, and a training that finds its data missing. All of it from inside containers, outside the core's outbound-URL check ([details](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) | Don't turn it on. Under `never` the card refuses, every training is refused before it starts, and the update unit doesn't rebuild; answering `never` stops a setup job's build or download and the update unit's rebuild that are already running. |
 | **NVIDIA Container Toolkit** — NVIDIA's apt repository (`nvidia.github.io`) | Only on a Linux server (or the Windows install's distro) where an NVIDIA GPU is visible: at install, and at an update or Restart while it is missing; `apt upgrade` afterwards, like any package | `DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update`. Under `never` the update unit downloads nothing (the install itself still does, as for every package it installs). |
 | **Debian's installer image** — the amd64 netinst (793 MB) from `cdimage.debian.org`, kept only if its size and SHA-256 are the pinned ones, for old computers' room sticks; and `xorriso` from Ubuntu's archive on a server installed before it (the update unit) | Only when an admin presses **Prepare the stick** and the image isn't on the server yet (it is kept for the next stick). The old computer itself then downloads Debian's packages and the satellite's libraries while it sets up, as a Linux laptop does | Don't prepare a stick. Under `never` it is refused unless the image is already here, and the update unit installs nothing. |
-| **The Android app for phones** — the APKs `android/release.json` names, from this project's GitHub release, each held to its pinned size, SHA-256 and signing certificate (`domovoi/android_app.py`; [below](#the-app-from-your-own-server-the-join-page)) | The first time only when an admin presses **Download the app to this server**; afterwards, under **Yes, always** only, the newer release an update names, once per start | Don't press it, or drop the APKs in by hand. Under `never` it is refused. |
+| **The Android app for phones** — the APKs `android/release.json` names, from this project's GitHub release, each held to its pinned size, SHA-256 and signing certificate (`domovoi/android_app.py`; [below](#the-app-from-your-own-server-the-join-page)) | At install, with the other install-time downloads (`scripts/linux/provision.sh`, the `phone-app` step, which the Windows installer runs in its distro too), whatever the internet answer; never fatal (owner decision 2026-11-15). Else when an admin presses **Download the app to this server**; afterwards, under **Yes, always** only, the newer release an update names, once per start | Installing needs the internet (an install without it finishes without the app and says so). After that, don't press it, or drop the APKs in by hand. Under `never` the dashboard's download and the refresh are refused. |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub), and the spare-device card's **get the Windows files** (python.org, PyPI) and **get the Linux Python** (python-build-standalone's GitHub releases), each file held to its pinned SHA-256 | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
@@ -4122,11 +4122,19 @@ devices, so:
 * **Where it comes from:** only
   `https://github.com/coders-farm-official/domovoi/releases/download/<tag>/<file>`
   (the URL is fixed by the manifest's tag and file name), through the
-  outbound gate (public addresses only, each redirect vetted), only when an
-  admin presses **Download the app to this server**
-  (`POST /v1/admin/android-app/fetch`; nothing starts a first download by
-  itself, owner decision 2026-10-15); refused under `INTERNET_ACCESS=never`.
-  The one exception keeps an admin's choice current: after an update
+  outbound gate (public addresses only, each redirect vetted): at install,
+  where `scripts/linux/provision.sh` (its `phone-app` step, as the service
+  user) calls the same `fetch` and `check_apk` with the gate held open for
+  that one call, whatever the internet answer, like the voices and models
+  it fetches ahead (owner decision 2026-11-15, which replaced the
+  2026-10-15 rule that only an admin's press starts the first download; a
+  failure there is never fatal, and the install says so); or when an admin
+  presses **Download the app to this server**
+  (`POST /v1/admin/android-app/fetch`), refused under
+  `INTERNET_ACCESS=never`. The core itself never starts a first download.
+  Until the app is here the dashboard says the server needs the internet
+  once to download it, or an admin uploads it.
+  One more exception keeps the app current: after an update
   brings a newer release, a server that already holds an older one and
   whose internet answer is `always` fetches the new one by itself, once
   per start with backoff (`android_app.auto_refresh`; never under

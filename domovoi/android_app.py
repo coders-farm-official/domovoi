@@ -18,12 +18,13 @@ the first release exists, and then every page says so plainly.
 This module is the core's half, shaped like the Windows satellite's
 runtime (domovoi/satellite_windows.py):
 
-* :func:`fetch` — the first time only when an admin presses the dashboard's
-  button (never by itself: owner decision 2026-10-15), each APK the manifest names is
+* :func:`fetch` — at install (see **At install** below), or when an admin
+  presses the dashboard's button, each APK the manifest names is
   downloaded from that GitHub release only (the URL is fixed by the tag
   and file name; through the outbound gate, domovoi/net_safety.py) into
   ``~/.domovoi/satellite_media/cache/android_app/<versionCode>/`` and kept
-  only if :func:`check_apk` passes. Refused under ``INTERNET_ACCESS=never``.
+  only if :func:`check_apk` passes. Refused under ``INTERNET_ACCESS=never``
+  (the install's fetch aside).
 * :func:`accept_upload` — the same files dropped in by an admin (a house
   with no internet, or a slow line): kept only if one of the manifest's
   entries matches it exactly and :func:`check_apk` passes.
@@ -66,11 +67,25 @@ every phone was told to ask. Now:
 * older folders are dropped only once the new release is complete
   (:func:`_tidy`), never by a fetch that failed half-way;
 * :func:`auto_refresh` fetches the new release by itself, once per start
-  with backoff, ONLY where an admin had already put an app on this server
-  (an older release in the cache) and internet access is "always"
-  (:func:`auto_fetch_decision`; docs/INTERNET.md). The first download stays
-  an admin's (owner decision 2026-10-15), and "sometimes" keeps big
-  automatic downloads off, as it does for podcasts.
+  with backoff, ONLY where the app was already on this server (an older
+  release in the cache) and internet access is "always"
+  (:func:`auto_fetch_decision`; docs/INTERNET.md). The core never makes the
+  first download by itself, and "sometimes" keeps big automatic downloads
+  off, as it does for podcasts.
+
+**At install** (owner decision 2026-11-15, which replaces the 2026-10-15
+rule that the first download is always an admin's button press). The
+installer puts the app on the server with the other install-time downloads
+(the voices, Whisper, the speaker model, the Ollama models): the
+``phone-app`` step of scripts/linux/provision.sh, which the Windows
+installer runs inside its WSL distro too, calls :func:`fetch` with the
+egress gate held open, whatever the internet answer, as provisioning does
+for every download it makes ahead. It is never fatal: an install with no
+internet finishes and says the phone app couldn't be downloaded. Until the
+app is here (that install, or a server set up by hand) the dashboard says
+so: the server needs the internet once, at some point, to download it
+(an admin's "Download the app to this server"), or an admin uploads its
+files (:func:`accept_upload`).
 """
 
 from __future__ import annotations
@@ -661,9 +676,9 @@ def start_fetch(manifest: dict[str, Any]) -> bool:
 # ─── keeping it current after an update ───────────────────────────────────
 # An update that brings a new release.json leaves the old release serving
 # (_fallback) and, where the household allows it, fetches the new one by
-# itself: the admin chose to have the app on this server, and this keeps
-# that choice current. Never the first download (owner decision
-# 2026-10-15), never under "sometimes" (big automatic downloads stay off,
+# itself: the app was put on this server (at install, or by an admin), and
+# this keeps it current. Never the first download (that is the install's,
+# scripts/linux/provision.sh phone-app, or an admin's), never under "sometimes" (big automatic downloads stay off,
 # docs/INTERNET.md) or "never", never before the question is answered
 # (every default stays as it was), and never while the container guard's
 # freeze is on. Once per start: a first try after AUTO_DELAYS[0], then a
@@ -696,8 +711,8 @@ def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None) -> 
                        "for an admin: press “Download the app to this server”")
     fb = _fallback(manifest)
     if fb is None:
-        return False, ("no admin has put the app on this server yet: the first download is an admin's "
-                       "(“Download the app to this server”)")
+        return False, ("the app isn't on this server yet: it needs the internet once to download it "
+                       "(“Download the app to this server”), or an admin uploads its files")
     return True, f"updating the app on this server from Domovoi {fb['version_name']} to {rel['version_name']}"
 
 

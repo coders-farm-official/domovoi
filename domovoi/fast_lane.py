@@ -344,7 +344,7 @@ def _unpack(archive: Path, staging: Path, spec: ModelSpec) -> None:
                 continue
             h = hashlib.sha256()
             with src, open(staging / parts[1], "wb") as out:
-                for block in iter(lambda: src.read(_DOWNLOAD_CHUNK), b""):
+                for block in iter(lambda: src.read(_DOWNLOAD_CHUNK), b""):  # noqa: B023 - called inside the iteration, never kept
                     h.update(block)
                     out.write(block)
             if h.hexdigest() != wanted[parts[1]]:

@@ -440,7 +440,7 @@ def test_the_tray_the_build_makes_is_attached_and_summed(tmp_path, monkeypatch):
     assert [Path(a).name for a in upload[3:6]] == ["DomovoiSetup.exe", "DomovoiTray.exe", "SHA256SUMS"]
     assert w.load()["files"]["DomovoiTray.exe"] == tray_sha
     notes = w.state["releases"][w.tag]["body"]
-    assert f"| DomovoiTray.exe |" in notes and tray_sha in notes and "from before the tray icon" in notes
+    assert "| DomovoiTray.exe |" in notes and tray_sha in notes and "from before the tray icon" in notes
 
 
 @requires_git

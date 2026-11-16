@@ -869,9 +869,51 @@ def test_settings_devices_offers_the_app_to_household_phones(phone):
     admin = phone["card_missing"]
     assert "Download the app to this server (about 127 MB)" in admin["text"] and admin["qr"] == []
     guest = phone["card_missing_guest"]
-    assert "An admin puts it here: sign in as admin, then press “Download the app to this server”" in guest["text"]
+    assert REMINDER_GUEST in guest["text"]
+    assert "An admin does that: sign in as admin, then press “Download the app to this server”, or upload its files." in guest["text"]
     assert "sign in as admin" in guest["text"] and guest["qr"] == []
     assert "Download the app to this server (about" not in guest["text"], "no button a guest can't use"
+
+
+# ─── the reminder until the app is on the server (owner decision 2026-11-15) ─
+# The install puts the app here (scripts/linux/provision.sh, phone-app); the
+# card reminds only when it isn't: that install had no internet, or a server
+# set up by hand. No "setup" talk.
+
+REMINDER = ("The phone app isn’t on this server. To give it to phones that have no internet, this server "
+            "needs the internet once, at some point, to download it (about 127 MB)")
+REMINDER_GUEST = ("The phone app isn’t on this server (Domovoi 9.9.9), so there is no code to scan. To give it to "
+                  "phones that have no internet, this server needs the internet once, at some point, to download it.")
+
+
+def test_the_card_reminds_until_the_app_is_on_the_server(phone):
+    """The app isn't here: the card says plainly that the server needs the
+    internet once, and names the way the card offers (the download, or the
+    upload when internet access is off; an admin's step without the
+    sign-in)."""
+    r = phone["missing"]
+    assert REMINDER + ": press “Download the app to this server”, or upload its files." in r["text"]
+    assert "No internet here? Download its APKs (domovoi-9.9.9-arm64-v8a.apk, domovoi-9.9.9-armeabi-v7a.apk)" in r["text"]
+    assert "“upload an APK”" in r["text"] and any("upload an APK" in b for b in r["buttons"])
+    assert REMINDER not in r["after"], "no reminder while it downloads"
+    offline = phone["offline"]
+    assert REMINDER + ", or upload its files." in offline["text"], "no download to press with internet off"
+    assert REMINDER not in offline["after"], "gone once it is here"
+    assert REMINDER + ". An admin does that." in phone["view_only"]["text"]
+    assert REMINDER in phone["failed"]["text"] and "The download failed" in phone["failed"]["text"]
+    for case in ("ready", "older", "none"):
+        assert "isn’t on this server" not in phone[case]["text"], case
+    for case in ("missing", "offline", "view_only", "failed"):
+        assert "setup" not in phone[case]["text"].lower().replace("domovoisetup", ""), case
+
+
+def test_the_card_has_no_setup_download_left():
+    """The core no longer downloads the app on its first start (b41f4f26,
+    reverted): nothing on the card waits for or describes one."""
+    src = (REPO / "web" / "static" / "satellites.jsx").read_text(encoding="utf-8")
+    body = src[src.index("const AppOnServer = "):src.index("const SparePhone = ")]
+    for gone in ("auto.setup", "waiting_for_answer", "Setup is about to", "setup couldn’t", "Setup will try"):
+        assert gone not in body, gone
 
 
 def test_the_card_says_older_linux_gets_its_own_python_and_offers_to_fetch_it(card):

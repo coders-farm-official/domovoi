@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import io
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import pytest

@@ -60,7 +60,7 @@ async def test_invalidate_forces_a_fresh_read(monkeypatch):
 
 
 async def test_pull_invalidates_the_cache(monkeypatch, tmp_path):
-    calls = _count_calls(monkeypatch, ["aaaaaaa", "bbbbbbb", "bbbbbbb"])
+    _count_calls(monkeypatch, ["aaaaaaa", "bbbbbbb", "bbbbbbb"])
     assert await git_version.cached_current_sha() == "aaaaaaa"
     # No allowed-signers file: the pull is not enforced (test_git_version_signing
     # covers the gate), and the host's own file never leaks in.

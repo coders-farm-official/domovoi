@@ -27,7 +27,7 @@ from domovoi.help_desk.index import (
     first_words,
     get_index,
 )
-from domovoi.lookup import LOCAL, LOOKUP_SOURCE, LookupDocument, LookupHit
+from domovoi.lookup import LOCAL, LookupDocument, LookupHit
 
 log = logging.getLogger(__name__)
 

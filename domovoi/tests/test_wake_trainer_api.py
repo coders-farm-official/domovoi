@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from domovoi import admin_auth
 from domovoi import wake_trainer_setup as wts
-from domovoi.config import Settings, settings
+from domovoi.config import Settings
 from domovoi.config_schema import FIELD_BY_NAME
 from domovoi.main import app as core_app
 from domovoi.tests.route_walk import iter_route_contexts

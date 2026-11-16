@@ -59,7 +59,6 @@ from domovoi.container_guard.model import (
     RUNNING,
     SEVERITY_ERROR,
     SEVERITY_WARN,
-    STOPPED,
     TAMPER,
     DockerView,
     Expected,

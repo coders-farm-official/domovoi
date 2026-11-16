@@ -308,6 +308,15 @@ needs something it can only download is usually the day the line is down.
 
       With the Linux units that is
       `sudo -u domovoi -H /opt/domovoi/.venv/bin/python -c "…"`.
+- [ ] **Check the phone app is on this server.** The installer already put
+      it there with its other downloads (about 100 MB), so the server can
+      hand it to phones that have no internet: Settings → Phones & browsers
+      → **Get the Domovoi app** shows the code to scan once it is. If it
+      says the phone app isn't on this server (the install had no internet,
+      or the server was set up by hand), press **Download the app to this
+      server** now. A server that never goes online can be given the app's
+      files instead: download them on a computer that has internet and use
+      **upload an APK** on that card.
 - [ ] **Pull every Ollama model you'll want** (`ollama pull <model>`, or
       Settings → Models, which shows the model each role uses).
 - [ ] **The extra voices**, if you want them: `SEED_VOICE_CATALOG=true`
@@ -619,11 +628,13 @@ allowed, they send short text:
   station's audio to Shazam to name the song.
 
 And only if you choose them: downloads an admin starts (models, plugins,
-updates, the satellite cache). One of them stays current by itself: once an
-admin has put the Android app on the server for phones, a box answered
-**Yes, always** fetches the newer app an update names (from the project's
-GitHub release, once per start with retries); under **Sometimes** it waits
-for the admin's **Download the app to this server**, as big downloads do. On a Windows install that includes the
+updates, the satellite cache). One of them stays current by itself: the
+Android app for phones, which the installer puts on the server with its
+other downloads (whatever the answer, as it does the voices and models),
+is kept current on a box answered **Yes, always**: it fetches the newer app
+an update names (from the project's GitHub release, once per start with
+retries); under **Sometimes** it waits for the admin's **Download the app
+to this server**, as big downloads do. On a Windows install that includes the
 Windows part of **Update Domovoi**: the tray on the PC downloads the
 release's `DomovoiSetup.exe`, its manifest and their signatures from
 github.com, after an admin asked for it in the dashboard or chose it in the
@@ -730,7 +741,7 @@ the download on to their own storage hosts, listed in the same row; under
 
 | Host | Contacted by | What for | Yes | Sometimes | No |
 |---|---|---|---|---|---|
-| `download.docker.com` · `github.com` · `nvidia.github.io`, Ubuntu's archive | the Linux install script (`provision.sh`) | Docker, Ollama's release, the NVIDIA toolkit, the system's packages: installing needs the internet | not the server | not the server | not the server |
+| `download.docker.com` · `github.com` · `nvidia.github.io`, Ubuntu's archive | the Linux install script (`provision.sh`) | Docker, Ollama's release, the NVIDIA toolkit, the system's packages; the phone app (the Android app's release on GitHub, for phones with no internet; an install that can't reach it finishes without it and says so): installing needs the internet | not the server | not the server | not the server |
 | `releases.ubuntu.com` · `github.com` · `raw.githubusercontent.com` | the Windows Setup and the tray icon | Ubuntu's WSL image, WSL itself, the install script; the Windows part of **Update Domovoi** (when an admin asks) | not the server | not the server | the tray offers no Windows update |
 | `github.com` · `pypi.org` · `files.pythonhosted.org` · `www.python.org` · `deb.debian.org`, Raspberry Pi OS's archive and time servers | a satellite being set up, and its operating system | Packages, Python and wake-word models the server's card or cache doesn't carry; the system clock | not the server | not the server | not the server; the Domovoi part of a satellite talks only to the server |
 | `huggingface.co` · `en.wikipedia.org` · `api.search.brave.com`, your own SearXNG, a page you name | the Android app | On-device models and voices you choose to download; a phone chat's lookups away from home, after its card | not the server | not the server | not the server; at home the phone's lookups go through the server and follow its answer |

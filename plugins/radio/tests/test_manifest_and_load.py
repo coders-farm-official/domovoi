@@ -9,7 +9,6 @@ owners through the merged registry.
 
 from __future__ import annotations
 
-import pytest
 
 from domovoi.plugins_runtime.lockfile import normalize_name, parse_lockfile
 from domovoi.plugins_runtime.manifest import (

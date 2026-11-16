@@ -497,7 +497,7 @@ def remove_training_containers(reason: str) -> int:
         _docker(["stop", "-t", str(STOP_GRACE_SEC), *ids], 30 + STOP_GRACE_SEC)
         _docker(["rm", "-f", *ids], 60)
         log(f"removed {len(ids)} training container(s) ({reason})")
-    scrub_cache(f"find /data/cache/runs -path '*/positive_train/real_*.wav' -delete",
+    scrub_cache("find /data/cache/runs -path '*/positive_train/real_*.wav' -delete",
                 "copies of recorded clips")
     return len(ids)
 

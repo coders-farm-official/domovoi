@@ -44,6 +44,9 @@
 #     checkout's domovoi/.env, piper-info / piper-download and
 #     whisper-download write fake model files whose hashes the fixture
 #     manifest pins (whisper-content and piper-content override them);
+#     phone-app-info / phone-app-download stand in for the Android app's
+#     fetch into the core's cache (phone-app-fail: no internet;
+#     phone-app-none: no release yet; phone-app-unreadable: a bad manifest);
 #     `-m pip install -r` fails when pip-fail is set.
 #
 # Usage: bash scripts/linux/tests/test-provision.sh [--case NAME|GLOB]... [--list]
@@ -111,6 +114,65 @@ OLLAMA_CONTENT="fake ollama 0.34.4 tarball"
 
 sha_of_text() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 
+# The downloads scripts/linux/python-runtime.sh checks and runs, for a box
+# whose python3 is not the lock's: uv.tar.gz, a real archive whose uv is a
+# script that does what `uv python install KEY` does with the mirror it is
+# given (the folder KEY with bin/python3.<minor> in UV_PYTHON_INSTALL_DIR),
+# and two CPython archives it only needs to find in that mirror (pbs.tar.gz,
+# the manifest's pin, and pbs2.tar.gz, the new-python branch's). uv runs
+# with no environment but its own (env -i), so it logs nothing; the
+# interpreter it installs logs as own-python. That interpreter answers the
+# helper's version check, and `-m venv [--upgrade] DIR` the way python
+# does: pyvenv.cfg's home is its folder, bin/python the venv template, and
+# bin/python3.<minor> a link to it by its absolute path, left alone when
+# there (--upgrade too).
+build_own_python_downloads() {
+  local p=$WORK/uvpkg/uv-x86_64-unknown-linux-gnu
+  mkdir -p "$p"
+  cat >"$p/uv" <<'SH'
+#!/usr/bin/env bash
+case ${1-} in
+  --version) echo "uv 0.13.6 (fixture)"; exit 0 ;;
+  python) [ "${2-}" = install ] && [ -n "${3-}" ] || { echo "uv fixture: python install KEY only" >&2; exit 2; } ;;
+  *) echo "uv fixture: unexpected $*" >&2; exit 2 ;;
+esac
+key=$3
+ver=${key#cpython-}; ver=${ver%%-*}
+mirror=${UV_PYTHON_INSTALL_MIRROR#file://}
+ls "$mirror"/*/"cpython-$ver+"*-install_only_stripped.tar.gz >/dev/null 2>&1 \
+  || { echo "error: cpython-$ver is not in the mirror $mirror" >&2; exit 1; }
+[ -n "${UV_PYTHON_INSTALL_DIR-}" ] && [ -n "${UV_NO_CONFIG-}" ] || { echo "uv fixture: no install dir, or config allowed" >&2; exit 1; }
+d=$UV_PYTHON_INSTALL_DIR/$key
+mkdir -p "$d/bin"
+echo "$ver" >"$d/version"
+cat >"$d/bin/python${ver%.*}" <<'PY'
+#!/usr/bin/env bash
+bin=${0%/*}
+ver=$(cat "$bin/../version")
+[ -z "${SHIM_STATE-}" ] || echo "own-python $0 $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = -I ] && [ "${2-}" = -c ]; then echo "$ver"; exit 0; fi
+if [ "${1-}" = -c ]; then echo "${ver%.*}"; exit 0; fi
+if [ "${1-}" = -m ] && [ "${2-}" = venv ]; then
+  up=0; d=$3
+  if [ "$3" = --upgrade ]; then up=1; d=$4; fi
+  [ ! -f "$SHIM_STATE/venv-move-fail" ] || [ "$up" = 0 ] || { echo "Error: fixture" >&2; exit 1; }
+  mkdir -p "$d/bin"
+  if [ "$up" = 0 ]; then cp "$SHIM_VENV_TEMPLATE" "$d/bin/python"; chmod +x "$d/bin/python"; fi
+  [ -L "$d/bin/python${ver%.*}" ] || [ -e "$d/bin/python${ver%.*}" ] || ln -s "$0" "$d/bin/python${ver%.*}"
+  printf 'home = %s\ninclude-system-site-packages = false\nversion = %s\n' "$bin" "$ver" >"$d/pyvenv.cfg"
+  exit 0
+fi
+exit 1
+PY
+chmod +x "$d/bin/python${ver%.*}"
+SH
+  chmod +x "$p/uv"
+  tar -czf "$WORK/uv.tar.gz" -C "$WORK/uvpkg" uv-x86_64-unknown-linux-gnu
+  printf 'fake CPython 3.14.10 (20261026)\n' | gzip >"$WORK/pbs.tar.gz"
+  printf 'fake CPython 3.14.11 (20261110)\n' | gzip >"$WORK/pbs2.tar.gz"
+  printf 'tampered\n' | gzip >"$WORK/pbs-tampered.tar.gz"
+}
+
 build_origin() {
   local o=$WORK/origin
   mkdir -p "$o/docs" "$o/scripts/linux/units" "$o/domovoi"
@@ -125,8 +187,12 @@ build_origin() {
     echo "OLLAMA_SHA256=$(sha256sum "$WORK/ollama.tar.zst" | cut -d' ' -f1)"
     echo '```'
   } >"$o/docs/LINUX_HOST.md"
-  # The real manifest, with the Whisper pin swapped for the fake model's.
-  sed "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
+  build_own_python_downloads
+  # The real manifest, with the Whisper pin swapped for the fake model's,
+  # and uv's and CPython's for the fake downloads'.
+  sed -e "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
+    -e "s/^uv_sha256=.*/uv_sha256=$(sha256sum "$WORK/uv.tar.gz" | cut -d' ' -f1)/" \
+    -e "s/^python_sha256=.*/python_sha256=$(sha256sum "$WORK/pbs.tar.gz" | cut -d' ' -f1)/" \
     "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$o/scripts/linux/provision-manifest.conf"
   cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO"/scripts/linux/units/*.timer \
     "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" "$o/scripts/linux/units/"
@@ -135,6 +201,7 @@ build_origin() {
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
   cp "$REAL_REPO/scripts/linux/gpu-runtime.sh" "$o/scripts/linux/gpu-runtime.sh"
+  cp "$REAL_REPO/scripts/linux/python-runtime.sh" "$o/scripts/linux/python-runtime.sh"
   cp "$REAL_REPO/scripts/linux/db-diagnostics.sh" "$REAL_REPO/scripts/linux/db-half-made.sh" "$o/scripts/linux/"
   cat >"$o/scripts/linux/install-update-unit.sh" <<'SH'
 #!/usr/bin/env bash
@@ -210,6 +277,13 @@ LOCK
   git -C "$o" checkout -q -b no-nodeps-lock
   git -C "$o" rm -q requirements-linux-py314-no-deps.lock
   git -C "$o" commit -q -m "no no-deps lock"
+  git -C "$o" checkout -q main
+  # A branch whose manifest pins another CPython build (a later release's).
+  git -C "$o" checkout -q -b new-python
+  sed -i -e 's/^python_version=.*/python_version=3.14.11/' -e 's/^python_build=.*/python_build=20261110/' \
+    -e "s/^python_sha256=.*/python_sha256=$(sha256sum "$WORK/pbs2.tar.gz" | cut -d' ' -f1)/" \
+    "$o/scripts/linux/provision-manifest.conf"
+  git -C "$o" commit -q -am "manifest pins CPython 3.14.11"
   git -C "$o" checkout -q main
   # A branch not on main's history.
   git -C "$o" checkout -q --orphan elsewhere
@@ -338,7 +412,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     -o) out=$2; shift 2 ;;
     -d) data=$2; shift 2 ;;
-    -H|-X|--max-time|--connect-timeout|--retry|--retry-delay|-C) shift 2 ;;
+    -H|-X|--max-time|--connect-timeout|--retry|--retry-delay|-C|--proto) shift 2 ;;
     -I|-fsSLI) head=1; shift ;;
     -*) [[ $1 == -*I* && $1 != --* ]] && head=1; shift ;;
     *) url=$1; shift ;;
@@ -347,7 +421,17 @@ done
 echo "curl $url${out:+ -o $out}${data:+ -d $data}" >>"$SHIM_STATE/calls.log"
 active() { [ -f "$SHIM_STATE/active/$1" ]; }
 case $url in
-  https://download.docker.com/linux/ubuntu/gpg)
+  # uv and CPython for python-runtime.sh (pbs-tampered: the file served is
+  # not the pinned one).
+  https://github.com/astral-sh/uv/releases/download/*/uv-x86_64-unknown-linux-gnu.tar.gz)
+    [ ! -f "$SHIM_STATE/download-fail" ] || { echo "curl: (56) fixture" >&2; exit 56; }
+    cp "$SHIM_WORK/uv.tar.gz" "$out" ;;
+  https://github.com/astral-sh/python-build-standalone/releases/download/*)
+    src=$SHIM_WORK/pbs.tar.gz
+    case $url in */20261110/*) src=$SHIM_WORK/pbs2.tar.gz ;; esac
+    [ ! -f "$SHIM_STATE/pbs-tampered" ] || src=$SHIM_WORK/pbs-tampered.tar.gz
+    cp "$src" "$out" ;;
+  https://download.docker.com/linux/ubuntu/gpg|https://download.docker.com/linux/debian/gpg)
     printf 'KEY %s\n' "$(cat "$SHIM_STATE/docker-fpr")" >"$out"
     [ ! -f "$SHIM_STATE/docker-extra-key" ] || printf 'KEY %s\n' "$(cat "$SHIM_STATE/docker-extra-key")" >>"$out" ;;
   https://nvidia.github.io/libnvidia-container/gpgkey)
@@ -961,6 +1045,22 @@ if [ "${1-}" = -c ]; then
       [ ! -f "$SHIM_STATE/speaker-fail" ] || { echo "ModelUnavailable: fixture" >&2; exit 1; }
       d=$SHIM_ROOT$3; mkdir -p "$d"
       cat "$SHIM_STATE/speaker-content" >"$d/speaker.onnx"; echo "$d/speaker.onnx"; exit 0 ;;
+    "#provision:phone-app-info")
+      # phone-app-none: android/release.json names no release yet;
+      # phone-app-unreadable: the manifest can't be read.
+      [ ! -f "$SHIM_STATE/phone-app-unreadable" ] || { echo "ManifestError: fixture" >&2; exit 1; }
+      [ ! -f "$SHIM_STATE/phone-app-none" ] || { echo none; exit 0; }
+      d=$HOME/.domovoi/satellite_media/cache/android_app/26111301
+      if [ -f "$SHIM_ROOT$d/domovoi-1.2.0-arm64-v8a.apk" ] && [ -f "$SHIM_ROOT$d/domovoi-1.2.0-armeabi-v7a.apk" ]; then echo here; else echo missing; fi
+      echo 1.2.0; echo 101000000; echo "$d"; exit 0 ;;
+    "#provision:phone-app-download")
+      # phone-app-fail: no internet (what fetch says, then exit 1).
+      grep -q 'override_policy("always")' <<<"$2" || { echo "not held open" >&2; exit 1; }
+      echo phone-app-download >>"$SHIM_STATE/phone-app-fetches"
+      [ ! -f "$SHIM_STATE/phone-app-fail" ] || { echo "2 of 2 app files failed: domovoi-1.2.0-arm64-v8a.apk: ConnectError: fixture"; exit 1; }
+      d=$SHIM_ROOT$HOME/.domovoi/satellite_media/cache/android_app/26111301; mkdir -p "$d"
+      echo arm64 >"$d/domovoi-1.2.0-arm64-v8a.apk"; echo v7a >"$d/domovoi-1.2.0-armeabi-v7a.apk"
+      echo "2 app files verified (2 downloaded)"; exit 0 ;;
     "#provision:whisper-download")
       d=$SHIM_ROOT$HOME/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/$4
       mkdir -p "$d"; cat "$SHIM_STATE/whisper-content" >"$d/model.bin"; echo "$d"; exit 0 ;;
@@ -1094,7 +1194,7 @@ final_field() { grep '"final":true' "$CASE/progress.jsonl" | tail -n 1 | sed -n 
 progress_ok() {
   [ -s "$CASE/progress.jsonl" ] || { echo "      no progress lines"; return 1; }
   if [ -z "$JSON_PY" ]; then
-    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":22,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
+    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":23,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
       && { echo "      a progress line does not match the protocol"; return 1; }
     return 0
   fi
@@ -1107,7 +1207,7 @@ for n, l in enumerate(lines, 1):
     o = json.loads(l)
     for k in ("v", "step", "index", "total", "state", "percent", "message"):
         assert k in o, "line %d lacks %s: %s" % (n, k, l)
-    assert o["v"] == 1 and o["total"] == 22, l
+    assert o["v"] == 1 and o["total"] == 23, l
     assert o["state"] in ("start", "progress", "done", "skip", "fail", "plan"), l
     assert 0 <= o["percent"] <= 100, l
     if o["state"] != "fail" and not o.get("final"):
@@ -1142,7 +1242,7 @@ end_case() {
   fi
 }
 
-STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng os-jobs units timezone start update-unit)
+STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper phone-app images searxng os-jobs units timezone start update-unit)
 
 # ─── cases ───────────────────────────────────────────────────────────────
 
@@ -1254,7 +1354,12 @@ case_dry_run_changes_nothing() {
   check "plans the vision model" said "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
   check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M afc393e3572c07db0bc84aa460d928a16c75f3fbb9ca9e0dccc4fbd2dafb573e"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
-  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 20
+  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 21
+  check "the phone app is listed among the downloads" \
+    grep -q '"step":"phone-app".*"state":"plan".*"message":"run: Downloading the phone app"' "$CASE/progress.jsonl"
+  check "with what it fetches" said "the phone app android/release.json names (about 100 MB) from the project's GitHub release"
+  check "whatever the internet answer, never fatal" said "whatever the internet answer; never fatal"
+  check "nothing fetched" absent "$STATE/phone-app-fetches"
   check "the GPU step: a skip, asked of the helper beside the script" \
     grep -q '"step":"gpu-runtime".*"state":"plan".*"message":"skip: no NVIDIA GPU visible (WSL: no /dev/dxg' "$CASE/progress.jsonl"
   check "the preflight runs for real" eq "$(state_of preflight)" done
@@ -1346,6 +1451,28 @@ case_full_run_wsl() {
   check "no toolkit" not_called "nvidia-container-toolkit"
   check "Docker not configured for it" not_called "nvidia-ctk"
   check "Docker not restarted" not_called "systemctl restart docker"
+  # venv: Ubuntu 26.04's own python3 is the lock's, so the venv is made
+  # from it, as always: no uv, no CPython of Domovoi's (2026-11-15).
+  check "venv from the system's python3" called "python3 -m venv .venv"
+  check "no uv download" not_called "astral-sh/uv"
+  check "no CPython download" not_called "python-build-standalone"
+  check "no python folder of Domovoi's" absent "$ROOT/usr/local/lib/domovoi-python"
+  check "said nothing of one" not_said "python-runtime"
+  # The docker and venv steps' inputs on Ubuntu 26.04 are what they were
+  # before Debian and the own CPython came in (2026-11-15), line for line:
+  # a box installed before keeps its markers, and a re-run there re-runs
+  # neither step.
+  local exp k
+  exp=$( { echo docker
+           for k in docker_key_url docker_key_fpr docker_repo_url docker_suite docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin; do
+             echo "$k=$(sed -n "s/^$k=//p" "$CHECKOUT/scripts/linux/provision-manifest.conf")"
+           done
+           echo domovoi; } | sha256sum | cut -d' ' -f1)
+  check "docker marker as before" eq "$(cat "$ROOT/var/lib/domovoi-provision/steps/docker")" "$exp"
+  exp=$( { echo venv
+           for k in requirements-linux-py314.lock requirements-linux-py314-no-deps.lock pyproject.toml; do sha256sum "$CHECKOUT/$k" | cut -d' ' -f1; done
+           echo 3.14; echo "$CHECKOUT domovoi"; } | sha256sum | cut -d' ' -f1)
+  check "venv marker as before" eq "$(cat "$ROOT/var/lib/domovoi-provision/steps/venv")" "$exp"
   # venv: the three LINUX_HOST.md installs, in order
   check "build tools from the lock" called "-m pip --disable-pip-version-check --no-input install --require-hashes -r $ROOT/var/cache/domovoi-provision/build-tools."
   check "not the -c form pip 25.1 refuses" not_called "-c requirements-linux-py314.lock setuptools wheel"
@@ -1390,6 +1517,13 @@ case_full_run_wsl() {
   check "and the other two" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-ljspeech-medium.onnx"
   check "voice ID's speaker model, beside them" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/speaker.onnx"
   check "no espeak-ng installed" not_called "espeak-ng"
+  # phone-app: the Android app in the core's cache, for phones with no internet
+  check "phone app in the core's cache" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-arm64-v8a.apk"
+  check "both APKs" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-armeabi-v7a.apk"
+  check "phone app step's summary" grep -q '"step":"phone-app".*"state":"done".*"message":"Phone app Domovoi 1.2.0"' "$CASE/progress.jsonl"
+  check "phone_app true in the final line" eq "$(final_field phone_app)" true
+  check "the finish step says it is here" said "phone app: on this server, for phones that have no internet"
+  check "no phone-app warning" not_said "The phone app couldn't be downloaded"
   # images, search helper
   check "database images pulled as compose pins them" called "docker compose pull postgres flyway"
   check "MPD image built as the core does" called " -t domovoi-mpd:latest -f $CHECKOUT/domovoi/Dockerfile.mpd $CHECKOUT/domovoi"
@@ -1452,6 +1586,8 @@ case_second_run_skips_everything() {
     check "step $s skipped" eq "$(state_of "$s")" skip
   done
   check "only preflight and finish start" eq "$(grep -c '"state":"start"' "$CASE/progress.jsonl")" 2
+  check "the phone app fetched once, on the first run" eq "$(grep -c . "$STATE/phone-app-fetches")" 1
+  check "and still here" eq "$(final_field phone_app)" true
   check "every file as it was" eq "$(tree_sig)" "$sig"
   check ".env untouched" eq "$(cksum <"$CHECKOUT/domovoi/.env")" "$env_before"
   check "no apt" not_called "apt-get"
@@ -1853,6 +1989,89 @@ case_piper_sha_mismatch_stops() {
   check "exit 1" eq "$RC" 1
   check "piper failed" eq "$(state_of piper)" fail
   check "says it does not match" said "does not match its pin"
+  end_case
+}
+
+# The phone app (owner decision 2026-11-15): fetched at install like the
+# voices, whatever the internet answer, and never fatal. A box with no
+# internet finishes, says so plainly in the step and again at the end, and
+# a later run (a repair) tries again.
+case_phone_app_failure_is_not_fatal() {
+  new_case phone_app_failure_is_not_fatal
+  : >"$STATE/phone-app-fail"
+  run_prov "${wsl_args[@]}"
+  check "exit 0: the install finishes" eq "$RC" 0
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "progress format" progress_ok
+  check "the step is done, not failed" eq "$(state_of phone-app)" done
+  check "its summary says why, plainly" grep -qF '"step":"phone-app","index":15,"total":23,"state":"done","percent":' "$CASE/progress.jsonl"
+  check "in these words" grep -qF "\"message\":\"The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings)\"" "$CASE/progress.jsonl"
+  check "a warning, with fetch's own word" said "WARNING: The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings) (2 of 2 app files failed"
+  check "counted with the warnings" eq "$(final_field warnings)" 3
+  check "the end of the install repeats it" eq "$(grep -v '^@@DOMOVOI ' "$CASE/output.log" | grep -cF "The phone app couldn't be downloaded")" 2
+  check "the second time in the finish step" eq "$(sed -n '/dashboard: http:\/\/localhost:6369/,$p' "$CASE/output.log" | grep -c "^provision: The phone app couldn't be downloaded: this server needs the internet once")" 1
+  check "phone_app false in the final line" eq "$(final_field phone_app)" false
+  check "the steps after it ran" eq "$(state_of start)" done
+  check "nothing in the cache" absent "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-arm64-v8a.apk"
+  # The line is back: the next run fetches it, and only it.
+  rm -f "$STATE/phone-app-fail"
+  run_prov "${wsl_args[@]}"
+  check "rerun exit 0" eq "$RC" 0
+  check "fetched on the rerun" eq "$(grep -c . "$STATE/phone-app-fetches")" 2
+  check "here now" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-arm64-v8a.apk"
+  check "phone_app true" eq "$(final_field phone_app)" true
+  check "no warning about it now" not_said "The phone app couldn't be downloaded"
+  check "the other steps skipped" eq "$(state_of piper)" skip
+  end_case
+}
+
+# Whatever the internet answer: never is the household's answer for later,
+# not for what the install puts on the box (the egress gate held open for
+# this one call, as for the voices).
+case_phone_app_fetched_under_never() {
+  new_case phone_app_fetched_under_never
+  run_prov --internet never --skip-models
+  check "exit 0" eq "$RC" 0
+  check "fetched" eq "$(grep -c . "$STATE/phone-app-fetches")" 1
+  check "here" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-armeabi-v7a.apk"
+  check "phone_app true" eq "$(final_field phone_app)" true
+  check "the snippet holds the gate open" grep -qF 'with egress.override_policy("always"):' <<<"$(sed -n "/^PY_PHONE_APP_DOWNLOAD=/,/^raise SystemExit/p" "$SCRIPT")"
+  end_case
+}
+
+# Already on the server (an earlier install, or an admin's download): the
+# step skips it and fetches nothing.
+case_phone_app_already_here_skips() {
+  new_case phone_app_already_here_skips
+  local d=$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301
+  mkdir -p "$d"
+  echo arm64 >"$d/domovoi-1.2.0-arm64-v8a.apk"; echo v7a >"$d/domovoi-1.2.0-armeabi-v7a.apk"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "nothing fetched" absent "$STATE/phone-app-fetches"
+  check "says it is here" grep -q '"step":"phone-app".*"state":"done".*"message":"Phone app Domovoi 1.2.0 already here"' "$CASE/progress.jsonl"
+  check "phone_app true" eq "$(final_field phone_app)" true
+  end_case
+}
+
+# No app release yet, or a manifest the core refuses: nothing to fetch, or
+# a warning; the install goes on either way.
+case_phone_app_no_release_or_unreadable() {
+  new_case phone_app_no_release_or_unreadable
+  : >"$STATE/phone-app-none"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "nothing fetched" absent "$STATE/phone-app-fetches"
+  check "says so" grep -q '"step":"phone-app".*"state":"done".*"message":"No phone app release yet"' "$CASE/progress.jsonl"
+  check "phone_app null" eq "$(final_field phone_app)" null
+  check "no warning about it" not_said "The phone app couldn't be downloaded"
+  rm -f "$STATE/phone-app-none"
+  : >"$STATE/phone-app-unreadable"
+  run_prov "${wsl_args[@]}"
+  check "unreadable: exit 0" eq "$RC" 0
+  check "unreadable: the step is done" eq "$(state_of phone-app)" done
+  check "unreadable: says so" said "WARNING: The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings) (android/release.json could not be read)"
+  check "unreadable: phone_app false" eq "$(final_field phone_app)" false
   end_case
 }
 
@@ -2285,6 +2504,183 @@ case_os_jobs_on_bare_metal() {
   run_prov --internet never --skip-models
   check "second run exit 0" eq "$RC" 0
   check "second run: os-jobs skipped" eq "$(state_of os-jobs)" skip
+  end_case
+}
+
+# ─── Other systems (owner decision 2026-11-15) ───────────────────────────
+
+# os_release LINE...: /etc/os-release as another system writes it.
+os_release() { printf '%s\n' "$@" >"$ROOT/etc/os-release"; }
+DEBIAN_13=('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"' 'NAME="Debian GNU/Linux"' 'VERSION_ID="13"'
+  'VERSION="13 (trixie)"' 'VERSION_CODENAME=trixie' 'ID=debian')
+MINT_22=('NAME="Linux Mint"' 'VERSION="22.1 (Xia)"' 'ID=linuxmint' 'ID_LIKE="ubuntu debian"'
+  'PRETTY_NAME="Linux Mint 22.1"' 'VERSION_ID="22.1"' 'VERSION_CODENAME=xia' 'UBUNTU_CODENAME=noble')
+POP_2404=('NAME="Pop!_OS"' 'VERSION="24.04 LTS"' 'ID=pop' 'ID_LIKE="ubuntu debian"'
+  'PRETTY_NAME="Pop!_OS 24.04 LTS"' 'VERSION_ID="24.04"' 'VERSION_CODENAME=noble' 'UBUNTU_CODENAME=noble')
+# Where python-runtime.sh puts the manifest's CPython (and the new-python
+# branch's), as the box sees it.
+OWN_PY=/usr/local/lib/domovoi-python/20261026/cpython-3.14.10-linux-x86_64-gnu/bin
+OWN_PY2=/usr/local/lib/domovoi-python/20261110/cpython-3.14.11-linux-x86_64-gnu/bin
+
+# Debian 13: Docker from Docker's Debian repository at the trixie pins, the
+# same system packages, and the venv on the manifest's CPython (Debian's
+# python3 is 3.13), uv and CPython each checked against their pin. A second
+# run changes nothing and downloads nothing.
+case_debian_13_bare_metal() {
+  new_case debian_13_bare_metal --bare
+  os_release "${DEBIAN_13[@]}"
+  echo 3.13 >"$STATE/py-version"
+  run_prov --internet always --skip-models --timezone America/New_York
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "said what it is" said "Debian GNU/Linux 13 (trixie), "
+  check "no warning about the system" not_said "made for 26.04"
+  check "the same system packages" called "install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools xorriso zstd ca-certificates curl gnupg tzdata sudo"
+  # Docker
+  check "Docker's key from its Debian repository" called "curl https://download.docker.com/linux/debian/gpg"
+  check "nothing from its Ubuntu one" not_called "download.docker.com/linux/ubuntu"
+  check "the pinned key" has_line "$ROOT/etc/apt/keyrings/docker.asc" "KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+  check "docker.sources: Debian" has_line "$ROOT/etc/apt/sources.list.d/docker.sources" "URIs: https://download.docker.com/linux/debian"
+  check "docker.sources: trixie" has_line "$ROOT/etc/apt/sources.list.d/docker.sources" "Suites: trixie"
+  check "docker-ce at the trixie pin" called "docker-ce=5:29.8.1-1~debian.13~trixie"
+  check "containerd at the trixie pin" called "containerd.io=2.3.5-1~debian.13~trixie"
+  check "compose at the trixie pin" called "docker-compose-plugin=5.5.1-1~debian.13~trixie"
+  check "no resolute package" not_called "~resolute"
+  # Python
+  check "said why" said "requirements-linux-py314.lock is for Python 3.14 and this box's python3 is 3.13: the venv runs on CPython 3.14.10"
+  check "uv at its pin" called "curl https://github.com/astral-sh/uv/releases/download/0.13.6/uv-x86_64-unknown-linux-gnu.tar.gz"
+  check "CPython at its pin" called "curl https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.14.10%2B20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+  check "installed in its build's folder" test -x "$ROOT$OWN_PY/python3.14"
+  check "the venv made from it" called "own-python $ROOT$OWN_PY/python3.14 -m venv .venv"
+  check "not from Debian's python3" not_called "python3 -m venv"
+  check "pyvenv.cfg names it" has_line "$CHECKOUT/.venv/pyvenv.cfg" "home = $ROOT$OWN_PY"
+  check "then the lock, hash-checked" called "install --require-hashes --no-build-isolation -r requirements-linux-py314.lock"
+  check "the downloads are not kept" absent "$ROOT/var/cache/domovoi-provision/cpython-3.14.10+20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+  check "uv is not kept" absent "$ROOT/var/cache/domovoi-provision/uv-0.13.6-uv-x86_64-unknown-linux-gnu.tar.gz"
+  check "venv done" eq "$(state_of venv)" done
+  check "update unit installed" eq "$(state_of update-unit)" done
+  check "the zone set" called "timedatectl set-timezone America/New_York"
+  run_prov --internet always --skip-models --timezone America/New_York
+  check "second run exit 0" eq "$RC" 0
+  check "second run: venv skipped" eq "$(state_of venv)" skip
+  check "second run: docker skipped" eq "$(state_of docker)" skip
+  check "second run: nothing downloaded" not_called "astral-sh"
+  check "second run: nothing restarted" not_called "systemctl restart domovoi"
+  end_case
+}
+
+# A later commit pins another CPython build: the next run installs it beside
+# the old one and moves the venv onto it in place (python -m venv
+# --upgrade, after the old absolute link is gone), then restarts core and
+# web, which read the venv. The old interpreter stays where it was.
+case_own_python_new_pin_moves_the_venv() {
+  new_case own_python_new_pin_moves_the_venv --bare
+  os_release "${DEBIAN_13[@]}"
+  echo 3.13 >"$STATE/py-version"
+  run_prov --internet always --skip-models
+  check "first run exit 0" eq "$RC" 0
+  check "on 3.14.10" has_line "$CHECKOUT/.venv/pyvenv.cfg" "home = $ROOT$OWN_PY"
+  # The dashboard's pull brings the commit with the new pin.
+  git -C "$CHECKOUT" fetch -q origin new-python && git -C "$CHECKOUT" merge -q --ff-only FETCH_HEAD
+  run_prov --internet always --skip-models
+  check "exit 0" eq "$RC" 0
+  check "venv ran again: its inputs changed" eq "$(state_of venv)" done
+  check "the new build downloaded" called "python-build-standalone/releases/download/20261110/cpython-3.14.11%2B20261110"
+  check "installed beside the old one" test -x "$ROOT$OWN_PY2/python3.14"
+  check "the old one kept" test -x "$ROOT$OWN_PY/python3.14"
+  check "the venv moved in place" called "own-python $ROOT$OWN_PY2/python3.14 -m venv --upgrade .venv"
+  check "not made again" not_called "$OWN_PY2/python3.14 -m venv .venv"
+  check "pyvenv.cfg names the new one" has_line "$CHECKOUT/.venv/pyvenv.cfg" "home = $ROOT$OWN_PY2"
+  check "said so" said "moved the venv from $ROOT$OWN_PY to $ROOT$OWN_PY2"
+  check "core and web restarted onto it" called "systemctl restart domovoi-core.service domovoi-web.service"
+  run_prov --internet always --skip-models
+  check "third run: venv skipped" eq "$(state_of venv)" skip
+  end_case
+}
+
+# A CPython download that is not the pinned file: nothing from it runs,
+# and the run stops at the venv step.
+case_own_python_sha_mismatch_stops() {
+  new_case own_python_sha_mismatch_stops --bare
+  os_release "${DEBIAN_13[@]}"
+  echo 3.13 >"$STATE/py-version"
+  touch "$STATE/pbs-tampered"
+  run_prov --internet always --skip-models
+  check "exit 1" eq "$RC" 1
+  check "failed at venv" eq "$(final_field failed_step)" '"venv"'
+  check "said why" said "does not match its pin"
+  check "no interpreter" absent "$ROOT$OWN_PY"
+  check "no venv" absent "$CHECKOUT/.venv"
+  check "the bad file is not kept" absent "$ROOT/var/cache/domovoi-provision/cpython-3.14.10+20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz.part"
+  end_case
+}
+
+# Linux Mint 22 is Ubuntu 24.04 underneath: Docker's Ubuntu repository at
+# the noble pins, and the venv on the manifest's CPython (noble's python3 is
+# 3.12).
+case_linux_mint_22_installs_as_noble() {
+  new_case linux_mint_22_installs_as_noble --bare
+  os_release "${MINT_22[@]}"
+  echo 3.12 >"$STATE/py-version"
+  run_prov --internet sometimes --skip-models
+  check "exit 0" eq "$RC" 0
+  check "said what it is" said "Linux Mint 22.1: an Ubuntu derivative, installed as Ubuntu noble"
+  check "no warning about it" not_said "has not been tried on"
+  check "Docker's Ubuntu repository" has_line "$ROOT/etc/apt/sources.list.d/docker.sources" "URIs: https://download.docker.com/linux/ubuntu"
+  check "noble" has_line "$ROOT/etc/apt/sources.list.d/docker.sources" "Suites: noble"
+  check "docker-ce at the noble pin" called "docker-ce=5:29.8.1-1~ubuntu.24.04~noble"
+  check "the venv on the own CPython" has_line "$CHECKOUT/.venv/pyvenv.cfg" "home = $ROOT$OWN_PY"
+  end_case
+}
+
+# Pop!_OS 24.04 and Ubuntu 24.04 itself, planned (a dry run reads the
+# system for real): the noble pins, the own CPython; Ubuntu 24.04 with the
+# warning it always had, in its new words.
+case_noble_systems_plan_the_noble_pins() {
+  new_case noble_systems_plan_the_noble_pins --bare
+  os_release "${POP_2404[@]}"
+  echo 3.12 >"$STATE/py-version"
+  run_prov --dry-run --internet always
+  check "exit 0" eq "$RC" 0
+  check "Pop!_OS is known" said "Pop!_OS 24.04 LTS: an Ubuntu derivative, installed as Ubuntu noble"
+  check "noble docker-ce planned" said "apt-get install docker-ce=5:29.8.1-1~ubuntu.24.04~noble"
+  check "the venv's Python planned" said "else CPython 3.14.10 from python-build-standalone 20261026 via uv 0.13.6"
+  os_release 'ID=ubuntu' 'VERSION_ID="24.04"' 'VERSION_CODENAME=noble' 'UBUNTU_CODENAME=noble' 'PRETTY_NAME="Ubuntu 24.04.3 LTS"'
+  run_prov --dry-run --internet always
+  check "Ubuntu 24.04: exit 0" eq "$RC" 0
+  check "Ubuntu 24.04: warned" said "this is Ubuntu 24.04; Domovoi is made for 26.04. It goes on with Docker's noble packages"
+  check "Ubuntu 24.04: noble docker-ce planned" said "apt-get install docker-ce=5:29.8.1-1~ubuntu.24.04~noble"
+  # An Ubuntu the manifest pins nothing for goes on as before, on 26.04's.
+  os_release 'ID=ubuntu' 'VERSION_ID="25.10"' 'VERSION_CODENAME=questing' 'PRETTY_NAME="Ubuntu 25.10"'
+  run_prov --dry-run --internet always
+  check "Ubuntu 25.10: exit 0" eq "$RC" 0
+  check "Ubuntu 25.10: the old warning" said "this is Ubuntu 25.10; the script, the lock (Python 3.14) and the docker-ce pins are for 26.04"
+  check "Ubuntu 25.10: resolute docker-ce planned" said "apt-get install docker-ce=5:29.8.1-1~ubuntu.26.04~resolute"
+  end_case
+}
+
+# Anything else stops at the preflight, before apt, saying what is
+# supported and where to ask (Fedora and Arch are not, yet).
+case_unsupported_systems_stop_at_preflight() {
+  new_case unsupported_systems_stop_at_preflight --bare
+  local spec says
+  for spec in \
+      'ID=fedora|VERSION_ID=43|PRETTY_NAME="Fedora Linux 43 (Server Edition)"#Fedora, Arch and others are not supported yet' \
+      'ID=arch|PRETTY_NAME="Arch Linux"#open an issue: https://github.com/coders-farm-official/domovoi/issues' \
+      'ID=debian|VERSION_ID="12"|VERSION_CODENAME=bookworm|PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"#Debian 13 (trixie) only' \
+      'ID=zorin|ID_LIKE="ubuntu debian"|UBUNTU_CODENAME=jammy|VERSION_ID="17"|PRETTY_NAME="Zorin OS 17"#is based on Ubuntu jammy, which Domovoi has no Docker packages pinned for' \
+      'ID=odd|ID_LIKE=ubuntu|PRETTY_NAME="Odd OS"#names no UBUNTU_CODENAME' \
+      'ID=linuxmint|ID_LIKE=debian|VERSION_ID="7"|DEBIAN_CODENAME=trixie|PRETTY_NAME="LMDE 7 (Gigi)"#Fedora, Arch and others are not supported yet'; do
+    says=${spec#*#}
+    IFS='|' read -r -a lines <<<"${spec%%#*}"
+    os_release "${lines[@]}"
+    run_prov --internet always --skip-models
+    check "${lines[0]}: exit 1" eq "$RC" 1
+    check "${lines[0]}: failed at preflight" eq "$(final_field failed_step)" '"preflight"'
+    check "${lines[0]}: says $says" said "$says"
+    check "${lines[0]}: nothing installed" not_called "apt-get"
+  done
   end_case
 }
 
@@ -4827,6 +5223,10 @@ CASES=(
   case_whisper_sha_mismatch_stops
   case_piper_speaker_model_failure_stops
   case_piper_sha_mismatch_stops
+  case_phone_app_failure_is_not_fatal
+  case_phone_app_fetched_under_never
+  case_phone_app_already_here_skips
+  case_phone_app_no_release_or_unreadable
   case_piper_unpinned_voice_with_a_space
   case_piper_empty_configured_voice
   case_model_digest_mismatch_stops
@@ -4912,6 +5312,12 @@ CASES=(
   case_wsl_conf_restart_note_comes_first
   case_bare_metal_media_paths
   case_os_jobs_on_bare_metal
+  case_debian_13_bare_metal
+  case_own_python_new_pin_moves_the_venv
+  case_own_python_sha_mismatch_stops
+  case_linux_mint_22_installs_as_noble
+  case_noble_systems_plan_the_noble_pins
+  case_unsupported_systems_stop_at_preflight
   case_wsl_zone_follows_windows
   case_bare_metal_sets_the_zone
   case_cpu_only_box_reports_no_gpu

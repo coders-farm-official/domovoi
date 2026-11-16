@@ -46,6 +46,85 @@ advisories in three packages the server and the rooms install.
   `GHSA-m462-7rxw-wvpg`, `GHSA-rfpc-qcw5-3pc4`, `GHSA-v4x8-3wr5-3wq8`
   (high).
 
+## 1.3.0 (unreleased) — Debian 13, Linux Mint 22 and Pop!_OS 24.04
+
+- **What changed.** The Linux install (the one command, and
+  `scripts/linux/provision.sh` behind it) now also runs on **Debian 13**
+  and on the Ubuntu-based **Linux Mint 22** and **Pop!_OS 24.04**, besides
+  Ubuntu 26.04 ([LINUX_HOST.md, Which distro](LINUX_HOST.md#which-distro)).
+  Docker comes from Docker's Debian repository on Debian and as Ubuntu
+  24.04's packages on Mint and Pop!_OS, each pinned like 26.04's. Where the
+  system's `python3` is not 3.14 (all three), the venv runs on a CPython
+  3.14 that Domovoi installs under `/usr/local/lib/domovoi-python` with uv,
+  both downloads pinned by version and SHA-256
+  ([The Python the venv runs on](LINUX_HOST.md#the-python-the-venv-runs-on)).
+  Fedora, Arch and other systems stop at once with a clear message; ask for
+  yours in an issue. A fresh install on Ubuntu 26.04 and Debian 13 is now
+  tested in CI every week, with an update and a rollback after it.
+- **What to know.** On Debian and the Ubuntu 24.04 systems, a release that
+  pins a newer build of that CPython moves the venv onto it during the
+  dashboard's update (a `python` step in **last update**) and back if the
+  update rolls back; under internet **No** it waits, with a `warn`. Each
+  build has its own folder (about 100 MB); after a successful update the
+  ones no venv needs are removed (a `python-cleanup` step), keeping the
+  current build and the one before it. Under **No**, Debian's apt timers and unattended
+  upgrades are masked as on Ubuntu; `popularity-contest`, which reports
+  only if you said yes to it, is left as you set it, and the update says so.
+- **Nothing to do** on Ubuntu 26.04 or in the Windows installer's distro:
+  the venv stays on the system's Python, and nothing they install, run or
+  record changes (a re-run of `provision.sh` skips every step as before).
+  Ubuntu releases other than 26.04 still warn first; Ubuntu 24.04 now gets
+  its own Docker packages and Domovoi's CPython instead of stopping at the
+  venv.
+
+## 1.3.0 (unreleased) — Install on Linux with one command
+
+- **What changed.** On Ubuntu 26.04 the server now installs with one command:
+  `curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash`.
+  It asks whether the server will have internet and its time zone, checks
+  what it downloaded (the commit GitHub names for `stable`, and that
+  release's manifest signed with the release key the Windows programs
+  pin), then runs `scripts/linux/provision.sh` from that copy at that exact
+  commit, which asks about AI chat as before. It ends with the address to
+  open and how to read the setup code. Answers can be given on the command
+  line instead (`... | sudo bash -s -- --internet never --timezone Europe/Berlin --yes`),
+  and every `provision.sh` option passes through. Before the first release
+  it installs `main`, unsigned, and says so; `--channel main` asks for
+  `main` on purpose.
+- **Nothing to do** on a server that is already installed, and
+  `provision.sh` itself is unchanged: its options, its output and the
+  Windows installer's use of it stay as they were. Cloning and running
+  `provision.sh` yourself still works
+  ([LINUX_HOST.md, Install](LINUX_HOST.md#install), which also shows how to
+  read the one-command script before running it). The section that
+  described it is now **Or run the install script yourself**; the old
+  `#or-let-the-script-do-it` link lands on the page without the jump.
+
+## 1.3.0 (unreleased) — The installer puts the phone app on the server
+
+- **What changed.** The install now downloads the Android app onto the
+  server with its other install-time downloads (the voices, Whisper, the
+  speaker model, the AI models): about 100 MB, the release
+  `android/release.json` names, from the project's GitHub release, checked
+  against the release key like an admin's download. So the server can
+  hand it to phones that have no internet. It is the `phone-app` step of
+  `scripts/linux/provision.sh`, which the Windows installer runs too;
+  like the other install downloads it doesn't depend on the internet
+  answer. Until 1.3.0 the first download was always an admin's press of
+  **Download the app to this server**.
+- **If the install couldn't** (no internet then), the install still
+  finishes: its summary says "The phone app couldn't be downloaded: this
+  server needs the internet once, at some point, to put it here (or upload
+  it in Settings)", and so does the Windows installer's last page. Settings
+  → Phones & browsers → **Get the Domovoi app** and Home's **needs
+  attention** keep saying so until the app is on the server; a re-run of
+  the install script tries again, and skips it once it is here.
+- **Nothing to do** on a server that is already set up: nothing is
+  downloaded by itself. If the app isn't on it, the same reminder shows.
+- **For scripts reading the install's progress:** the final progress line
+  carries `phone_app` (true, false, or null when unknown), and there is one
+  more step (`phone-app`, after `piper`), so `total` is 23.
+
 ## 1.3.0 (unreleased) — Release files you can check: SBOMs and build provenance
 
 Nothing to do. Each release on GitHub now carries software bills of

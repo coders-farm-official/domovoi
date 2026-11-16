@@ -844,7 +844,6 @@ def test_the_sync_step_can_import_the_satellite_package():
 
 
 def test_the_install_never_sees_the_unbuildable_packages():
-    from domovoi.satellite_media import overlay
 
     for body in _render_both().values():
         assert "strip_sdist_only" in body
@@ -859,7 +858,6 @@ def test_the_unbuildable_list_comes_from_the_fetcher():
     """One definition. A package that cannot ship as a wheel must not be
     allowed to fail the install either, and both facts follow from the same
     list rather than two that drift."""
-    from domovoi.satellite_media import overlay
     from domovoi.satellite_media.fetchers import SDIST_ONLY_PACKAGES
 
     for body in _render_both().values():
@@ -1233,11 +1231,21 @@ def test_a_payload_without_clips_says_so():
 def test_the_core_renders_them_synchronously():
     """Prepare has to COPY the result, so this one cannot be the existing
     fire-and-forget background regenerate."""
-    import inspect
+    # Read the function from main.py itself, not through inspect.getsource:
+    # that goes through linecache and co_firstlineno, and in CI it once
+    # returned the function above this one (run 43773285395) when the
+    # cached lines and the loaded code disagreed.
+    import ast
+    from pathlib import Path
 
     from domovoi import main
 
-    src = inspect.getsource(main.admin_render_setup_clips)
+    path = Path(main.__file__)
+    text = path.read_text(encoding="utf-8")
+    node = next(n for n in ast.walk(ast.parse(text))
+                if isinstance(n, ast.AsyncFunctionDef) and n.name == "admin_render_setup_clips")
+    src = ast.get_source_segment(text, node)
+    assert src and src.startswith("async def admin_render_setup_clips")
     assert "await render_setup_clips()" in src
     assert "create_task" not in src
 

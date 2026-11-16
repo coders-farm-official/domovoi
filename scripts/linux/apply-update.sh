@@ -46,6 +46,17 @@
 #      the update before anything is stopped.
 #   3. Stop domovoi-web and domovoi-core: at most DOMOVOI_UPDATE_STOP_TIMEOUT
 #      seconds, then SIGKILL whatever is still stopping (stop_services).
+#   3b. Where the venv runs on Domovoi's own CPython (a box whose python3
+#      is not the lock's: Debian 13, Ubuntu 24.04 and its derivatives) and
+#      this commit's pin manifest names another build: install it beside
+#      the old one (scripts/linux/python-runtime.sh, every download checked
+#      against its SHA-256) and move the venv onto it in place (python -m
+#      venv --upgrade); a rollback moves it back. Under never, a build not
+#      installed yet waits (a `warn` step). Never on a venv of the system's
+#      python3 (switch_python; docs/LINUX_HOST.md step 4b). After a
+#      successful update, never during one, the builds no venv needs go
+#      (prune_python): the current one, the one before it and any build a
+#      venv names stay.
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
 #      requirements lock changed: through pip's resolver, as before the
 #      lock existed, unless DOMOVOI_USE_LOCK=1; then from the hash-pinned
@@ -443,6 +454,14 @@ MODE=""
 STARTED_AT=""
 START_MS=0
 DEPS_CHANGED=0
+# The venv runs on Domovoi's own CPython (python-runtime.sh) and this
+# commit pins another build: PY_FROM is the interpreter it runs on, PY_TO
+# the pinned one (plan_python). PY_MOVED: the python step started moving
+# it, so a rollback moves it back.
+PY_CHANGED=0
+PY_MOVED=0
+PY_FROM=""
+PY_TO=""
 MPD_CHANGED=0
 MPD_IMAGE_CHANGED=0
 # What record_mpd_image did with this run's last music player build:
@@ -1999,6 +2018,123 @@ sync_deps_resolved() {
   fi
 }
 
+# ─── The venv's own CPython (step 4b) ────────────────────────────────────
+
+# Where the system's python3 is not the lock's (Debian 13, Ubuntu 24.04 and
+# its derivatives), provision.sh built the venv on the CPython the pin
+# manifest names, under /usr/local/lib/domovoi-python
+# (scripts/linux/python-runtime.sh). A commit that pins another build moves
+# the venv onto it here, with core and web stopped: python-runtime.sh
+# installs it beside the old one (uv and CPython checked against their
+# SHA-256), then the venv is moved in place (python -m venv --upgrade, the
+# same minor version, so every package stays). A rollback moves it back;
+# the old interpreter is never removed, so that always works. A venv on the
+# system's python3 (Ubuntu 26.04, the Windows installer's distro), or on an
+# interpreter of the administrator's, is never touched. Under never, a
+# build not installed yet is not downloaded: the venv stays where it is, a
+# `warn` step says so, and the update goes on (the lock is for the same
+# minor version). The helper and the manifest are the verified copy's.
+PY_RUNTIME=$SCRIPT_DIR/python-runtime.sh
+PY_MANIFEST=$SCRIPT_DIR/provision-manifest.conf
+OWN_PY_DIR=$TEST_ROOT/usr/local/lib/domovoi-python
+
+# venv_cfg KEY: pyvenv.cfg's KEY, read as the service user, whose file it is.
+venv_cfg() { as_user sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" "$VENV_DIR/pyvenv.cfg" 2>/dev/null | tail -n 1 | tr -d '\r'; }
+
+# Sets PY_CHANGED, PY_FROM and PY_TO when the venv is on Domovoi's own
+# CPython and this commit pins another one. Changes nothing.
+plan_python() {
+  local home want
+  [ -f "$PY_RUNTIME" ] && [ -f "$PY_MANIFEST" ] && [ -f "$VENV_DIR/pyvenv.cfg" ] || return 0
+  home=$(venv_cfg home) || home=""
+  case $home in "$OWN_PY_DIR"/?*) ;; *) return 0 ;; esac
+  want=$(bash "$PY_RUNTIME" --manifest "$PY_MANIFEST" --path 2>/dev/null) || return 0
+  [ "$(dirname "$want")" != "$home" ] || return 0
+  PY_FROM=$(venv_cfg executable) || PY_FROM=""
+  [ -n "$PY_FROM" ] || PY_FROM=$home/python3
+  PY_TO=$want
+  PY_CHANGED=1
+}
+
+# venv_onto PY: the venv onto the interpreter PY, in place. python -m venv
+# --upgrade leaves a bin/ link that is already there alone, so the one that
+# names the old interpreter by its absolute path goes first.
+venv_onto() {
+  as_user find "$VENV_DIR/bin" -maxdepth 1 -type l -lname '/*' -delete || return 1
+  (cd "$REPO_DIR" && as_user "$1" -m venv --upgrade "$VENV_DIR")
+}
+
+switch_python() {
+  local out py
+  out=$(bash "$PY_RUNTIME" --manifest "$PY_MANIFEST") || { echo "python-runtime.sh could not install $PY_TO"; return 1; }
+  py=$(printf '%s\n' "$out" | tail -n 1)
+  if [[ $py != /* ]] || [ ! -x "$py" ]; then echo "python-runtime.sh named no interpreter"; return 1; fi
+  PY_TO=$py
+  PY_MOVED=1
+  venv_onto "$PY_TO" || return 1
+  STEP_DETAIL="the venv runs on $(dirname "$PY_TO") now, the CPython this commit pins (was $(dirname "$PY_FROM"))"
+}
+
+# build_of PATH: the build (YYYYMMDD) of a path under OWN_PY_DIR, or nothing.
+build_of() {
+  local b=${1#"$OWN_PY_DIR"/}
+  [ "$b" != "$1" ] || return 0
+  b=${b%%/*}
+  if [[ $b =~ ^[0-9]{8}$ ]]; then printf '%s' "$b"; fi
+}
+
+# The builds a venv on this box names (pyvenv.cfg's home): the service's,
+# read as the service user, and any other venv in the usual places, read
+# as plain files (a link is not followed).
+builds_in_use() {
+  local f h
+  build_of "$(venv_cfg home)"; echo
+  while IFS= read -r f; do
+    h=$(sed -n 's/^home[[:space:]]*=[[:space:]]*//p' "$f" 2>/dev/null | tail -n 1 | tr -d '\r') || h=""
+    build_of "$h"; echo
+  done < <(find "$TEST_ROOT/opt" "$TEST_ROOT/srv" "$TEST_ROOT/home" "$TEST_ROOT/root" "$TEST_ROOT/usr/local" \
+             "$TEST_ROOT/var/lib" -maxdepth 5 -name pyvenv.cfg -type f 2>/dev/null)
+}
+
+# After a successful full update, never during one: the own CPython's
+# builds no venv needs any more go. Kept: the build the service's venv runs
+# on, the one before it (what this run moved the venv from, else the newest
+# build older than the current one), so a hand-made rollback still finds
+# its interpreter, and every build any venv names. Nothing is touched on a
+# venv of the system's python3. A failure is a `warn` and the update stands.
+prune_python() {
+  local cur prev="" b t0 in_use
+  local -a gone=() stuck=()
+  [ -d "$OWN_PY_DIR" ] || return 0
+  cur=$(build_of "$(venv_cfg home)") || cur=""
+  [ -n "$cur" ] || return 0
+  t0=$(now_ms)
+  if [ "$PY_MOVED" = 1 ]; then prev=$(build_of "$PY_FROM") || prev=""; fi
+  if [ -z "$prev" ]; then
+    prev=$(for b in "$OWN_PY_DIR"/*/; do
+             b=${b%/}; b=${b##*/}
+             if [[ $b =~ ^[0-9]{8}$ ]] && [[ $b < $cur ]]; then echo "$b"; fi
+           done | sort | tail -n 1) || prev=""
+  fi
+  in_use=" $(builds_in_use | tr '\n' ' ') " || in_use=" "
+  for b in "$OWN_PY_DIR"/*/; do
+    [ -d "$b" ] || continue
+    b=${b%/}; b=${b##*/}
+    [[ $b =~ ^[0-9]{8}$ ]] || continue
+    [ "$b" != "$cur" ] && [ "$b" != "$prev" ] || continue
+    [[ $in_use != *" $b "* ]] || continue
+    if rm -rf -- "${OWN_PY_DIR:?}/$b"; then gone+=("$b"); else stuck+=("$b"); fi
+  done
+  if [ "${#stuck[@]}" -gt 0 ]; then
+    add_step python-cleanup warn "$t0" "could not remove $OWN_PY_DIR/{${stuck[*]}}${gone[*]:+; removed ${gone[*]}}"
+    log "could not remove old CPython builds: ${stuck[*]}; not fatal"
+  elif [ "${#gone[@]}" -gt 0 ]; then
+    add_step python-cleanup ok "$t0" "removed CPython builds no venv uses: ${gone[*]} (kept $cur${prev:+ and $prev})"
+    log "removed CPython builds no venv uses: ${gone[*]}"
+  fi
+  return 0
+}
+
 # ─── Packages a release stopped using ────────────────────────────────────
 
 # pip never removes a package nothing requires any more, so a venv keeps
@@ -3076,7 +3212,8 @@ full_update() {
   if paths_changed "${MPD_PATHS[@]}"; then MPD_CHANGED=1; fi
   if paths_changed domovoi/Dockerfile.mpd; then MPD_IMAGE_CHANGED=1; fi
   if images_changed; then IMAGES_CHANGED=1; fi
-  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; then
+  plan_python
+  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ] || [ "$PY_CHANGED" = 1 ]; then
     # Read once, before anything is touched: what this run may download
     # depends on it (the rollback's re-sync and rebuild use it too).
     POLICY_AT_START=$(internet_policy 2>/dev/null || true)
@@ -3098,7 +3235,21 @@ full_update() {
     finish aborted "the dependencies changed but the venv can't be re-synced, so nothing was changed: $why"
     return
   fi
-  add_step preflight ok "$t0" "deps_changed=$DEPS_CHANGED mpd_changed=$MPD_CHANGED"
+  # Another CPython build pinned (step 4b): under never, one that is not
+  # installed yet stays a download for later, not a reason to refuse.
+  if [ "$PY_CHANGED" = 1 ] && [ "$POLICY_AT_START" = never ] \
+      && ! bash "$PY_RUNTIME" --manifest "$PY_MANIFEST" --check >/dev/null 2>&1; then
+    add_step python warn "$t0" "this commit pins $(dirname "$PY_TO"), but internet access is turned off for this box, so the venv stays on $(dirname "$PY_FROM") (the same Python version; the next update with internet moves it)"
+    PY_CHANGED=0
+  fi
+  if [ "$PY_CHANGED" = 1 ] && ! why=$(venv_writable); then
+    add_step preflight refused "$t0" "$why"
+    finish aborted "this commit pins another CPython build but the venv can't be moved onto it, so nothing was changed: $why"
+    return
+  fi
+  local py_note=""
+  if [ "$PY_CHANGED" = 1 ]; then py_note=" python_changed=1"; fi
+  add_step preflight ok "$t0" "deps_changed=$DEPS_CHANGED mpd_changed=$MPD_CHANGED$py_note"
   write_result running
   # Before the backup and the stop: domovoi-db's compose up (step 7) and the
   # search helper refuse to run without these.
@@ -3125,6 +3276,9 @@ full_update() {
 
   SERVICES_STOPPED=1
   run_step stop-services stop_services || failed=stop-services
+  if [ -z "$failed" ] && [ "$PY_CHANGED" = 1 ]; then
+    run_step python switch_python || failed=python
+  fi
   if [ -z "$failed" ] && [ "$DEPS_CHANGED" = 1 ]; then
     run_step sync-deps sync_deps || failed=sync-deps
     if [ -z "$failed" ]; then drop_retired_packages; fi
@@ -3154,6 +3308,7 @@ full_update() {
     reconcile_os_jobs
     reconcile_added_packages
     reconcile_wake_trainer || true
+    prune_python
     finish ok
     return
   fi
@@ -3180,6 +3335,11 @@ rollback() {
   restore_checkout_owner "$REPO_DIR" "$SERVICE_USER"
   clear_stale_git_locks "$REPO_DIR"
   if run_step rollback-checkout git_as reset --keep "$PREV_SHA"; then
+    # The venv back onto the interpreter it ran on (step 4b), before the
+    # re-sync runs pip through it.
+    if [ "$PY_MOVED" = 1 ]; then
+      run_step rollback-python venv_onto "$PY_FROM" || rb_failed rollback-python
+    fi
     if [ "$DEPS_CHANGED" = 1 ]; then
       run_step rollback-deps sync_deps || rb_failed rollback-deps
       # Best effort: a pin that can't be restored leaves a newer but

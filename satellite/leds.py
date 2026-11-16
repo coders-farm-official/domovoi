@@ -581,12 +581,12 @@ def _setup_main(argv: list[str] | None = None) -> int:
 
         prof = PROFILES.get("respeaker_2mic_hat")
         brightness = getattr(prof, "leds_brightness", 16) if prof else 16
-        driver = _APA102Driver(LedConfig.num_leds, brightness)
+        driver = _APA102Driver(LEDConfig.num_leds, brightness)
     except Exception as e:  # noqa: BLE001 - no SPI, no spidev, no ring
         log.debug("setup LEDs unavailable: %s", e)
         return 0
     try:
-        for i in range(LedConfig.num_leds):
+        for i in range(LEDConfig.num_leds):
             driver.set_pixel(i, r, g, b)
         driver.show()
     except Exception as e:  # noqa: BLE001

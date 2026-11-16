@@ -3146,11 +3146,15 @@ const SpareWindows = ({ res, fire }) => {
 /* The Android app on this server (2026-10-15, domovoi/android_app.py), the
  * admin's side, shared by Settings → Rooms → add a spare device and
  * Settings → Phones & browsers → get the Domovoi app. The release android/release.json
- * pins comes from the project's GitHub release ONLY when an admin presses
- * "Download the app to this server" (owner decision 2026-10-15: never by
- * itself; after an update brought a newer release the server may refresh
- * it, android_app.auto_refresh), or as an APK an admin uploads (internet
- * access off). The server
+ * pins comes from the project's GitHub release at install, with the other
+ * install-time downloads (owner decision 2026-11-15: scripts/linux/provision.sh,
+ * the phone-app step), else when an admin presses "Download the app to this
+ * server" (after an update brought a newer release the server may refresh
+ * it by itself, android_app.auto_refresh), or as an APK an admin uploads
+ * (internet access off). Until the app is here (the install couldn't
+ * download it, or a server set up by hand) the card says so: the server
+ * needs the internet once, at some point, to download it, or its files are
+ * uploaded. The server
  * keeps a file only when it is one the release names, signed by the release
  * key. Progress while it downloads; a failure stays on the card until the
  * next try. No release yet: said plainly, no buttons. `app` is the admin
@@ -3251,9 +3255,22 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
   // A tab without the admin sign-in (a reload past its window): the
   // server would refuse the download, so say whose step it is.
   const adminNeeded = needAdmin || !adminState.signedIn;
+  // The reminder (owner decision 2026-11-15): the install puts the app here,
+  // so this shows only when it couldn't (no internet then) or on a server
+  // set up by hand, and stays until the app is here. The way it names is
+  // one this card offers: the download, or the upload when internet access
+  // is off; without the admin sign-in, an admin's step (said below).
+  const how = adminNeeded ? '. An admin does that.'
+    : app.internet_off ? ', or upload its files.'
+    : ': press “Download the app to this server”, or upload its files.';
   return (
     <div className={`spare-app ${app.ready ? 'spare-app-older' : 'spare-app-missing'}`}
          style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {!app.ready && !running && (
+        <div role="note" className="spare-app-reminder" style={{ color: 'var(--warn-ink)' }}>
+          {`The phone app isn’t on this server. To give it to phones that have no internet, this server needs the internet once, at some point, to download it (about ${spareMb(remaining)})${how}`}
+        </div>
+      )}
       {app.ready && (
         <div className="spare-app-older-line">
           Phones get Domovoi {v} from this server ({sizes}) until Domovoi {want}, which this server’s
@@ -3274,7 +3291,8 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
           instead: download them on a computer that has internet, then choose them here.</div>
       ) : app.ready ? null : (
         <div>Domovoi {want} for phones: {spareMb(app.bytes_total)} from the project’s GitHub release, checked
-          against the release key before this server keeps it.</div>
+          against the release key before this server keeps it.{failed ? null : <> No internet here? Download its
+          APKs ({missing}) on a computer that has internet, then choose them with “upload an APK”.</>}</div>
       )}
       {failed && (
         <div role="alert" className="spare-app-error" style={{ color: 'var(--err-ink)' }}>

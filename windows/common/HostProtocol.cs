@@ -155,6 +155,10 @@ namespace Domovoi.Windows
         // questions on (true) or left out (false); null: unknown (no run
         // yet, or one that didn't say).
         public bool? Ai;
+        // provision.sh's final "phone_app" in this host's run: the Android app
+        // on the server (true), or the install couldn't download it (false);
+        // null: unknown.
+        public bool? PhoneApp;
         // The network name DomovoiHost holds ("domovoi2.local"), for Setup's
         // last page; null when none (MdnsResponder.cs).
         public string LanName;
@@ -181,6 +185,7 @@ namespace Domovoi.Windows
             d["tier"] = Tier;
             d["gpu"] = GpuKnown && Gpu != null ? (object)Gpu.ToArray() : null;
             d["ai"] = Ai == null ? null : (object)Ai.Value;
+            d["phone_app"] = PhoneApp == null ? null : (object)PhoneApp.Value;
             d["lan_name"] = LanName;
             d["updated"] = Updated;
             d["holder"] = Holder;
@@ -207,6 +212,7 @@ namespace Domovoi.Windows
             s.Gpu = Json.StrList(d, "gpu");
             s.GpuKnown = s.Gpu != null;
             s.Ai = Json.Bool(d, "ai");
+            s.PhoneApp = Json.Bool(d, "phone_app");
             string ln = Json.Str(d, "lan_name");
             s.LanName = ln != null && ln.EndsWith(".local", StringComparison.Ordinal)
                 && Domovoi.Windows.LanName.Exact(ln.Substring(0, ln.Length - 6)) != null ? ln : null;

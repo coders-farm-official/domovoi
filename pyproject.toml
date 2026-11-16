@@ -282,3 +282,33 @@ markers = [
     "slow: a test that builds a large fixture (seconds, not minutes), such as Up next's 100k-track refill timing; runs by default, deselect with -m 'not slow'",
     "xdist_group(name): under pytest -n, tests of one group run on one worker, one at a time (they share something outside the process: Postgres roles, a fixed temp file); see domovoi/tests/conftest.py",
 ]
+
+# Lint only, never `ruff format`: the code is not reformatted by a tool.
+# CI runs `ruff check` (the "ruff" job); see docs/CONTRIBUTING.md, "Linting".
+[tool.ruff]
+target-version = "py311" # requires-python's floor; CI runs 3.12
+line-length = 100 # documentation only: E501 (line length) is not selected
+extend-exclude = [
+    "web/static/vendor", # vendored third-party bundles (CodeQL skips them too)
+    "android",
+    "ios",
+    "**/node_modules",
+]
+
+[tool.ruff.lint]
+# Real mistakes only, no style rules:
+#   F    pyflakes: undefined names, unused imports and variables, redefinitions
+#   E9   syntax errors and unreadable files
+#   B023 closures that capture a loop variable by reference (late binding)
+#   B018 useless expressions
+# The rest of bugbear is left out on purpose: B904/B905/B008/B007 are
+# mostly style or false positives here (FastAPI's Depends() in defaults).
+select = ["F", "E9", "B023", "B018"]
+
+[tool.ruff.lint.per-file-ignores]
+# A pytest fixture imported from a helper module is "redefined" by the test
+# parameter of the same name: that is how fixtures are used, not a mistake.
+"**/tests/**" = ["F811"]
+# dbus-python signature strings ("s", "b", "i") in annotations are not types.
+"satellite/tray_dbus.py" = ["F722", "F821"]
+"satellite/tests/test_tray_dbus.py" = ["F722", "F821"]

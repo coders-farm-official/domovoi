@@ -212,11 +212,11 @@ STORE_SCENARIOS = {
             {"status": 200, "body": {"token": "current-household", "header": "X-Device-Token"}},
             OK,
         ],
-        "script": rf"""
+        "script": r"""
           await h.attempt(() => h.w.apiGet('/api/rooms'));
           await h.Auth.login('correct horse battery');
           await h.attempt(() => h.w.apiGet('/api/rooms'));
-          return {{ trouble: h.Auth.deviceTrouble(), last: h.calls[h.calls.length - 1].headers['X-Device-Token'] }};
+          return { trouble: h.Auth.deviceTrouble(), last: h.calls[h.calls.length - 1].headers['X-Device-Token'] };
         """,
     },
     "a_wait_holds_the_token_until_it_ends": {

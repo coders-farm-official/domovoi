@@ -1772,6 +1772,202 @@ case_migration_health_failure_rolls_back() {
   end_case
 }
 
+# ─── The venv's own CPython (step 4b) ────────────────────────────────────
+
+# own_python BUILD VERSION: a CPython as python-runtime.sh installs it
+# under the case's helper root, and its path on stdout. It answers the
+# helper's version check, and `-m venv --upgrade DIR` the way python does
+# (pyvenv.cfg's home and executable become its own).
+own_python() {
+  local d=$OSROOT/usr/local/lib/domovoi-python/$1/cpython-$2-linux-x86_64-gnu/bin
+  mkdir -p "$d"
+  echo "$2" >"$d/../version"
+  cat >"$d/python${2%.*}" <<'SH'
+#!/usr/bin/env bash
+echo "own-python $0 $*" >>"$SHIM_STATE/calls.log"
+bin=${0%/*}
+if [ "${1-}" = -I ] && [ "${2-}" = -c ]; then cat "$bin/../version"; exit 0; fi
+if [ "${1-}" = -m ] && [ "${2-}" = venv ] && [ "${3-}" = --upgrade ]; then
+  # venv-upgrade-fail names the interpreter whose --upgrade fails.
+  [ "$(cat "$SHIM_STATE/venv-upgrade-fail" 2>/dev/null)" != "$0" ] || { echo "Error: fixture" >&2; exit 1; }
+  printf 'home = %s\nexecutable = %s\nversion = %s\n' "$bin" "$0" "$(cat "$bin/../version")" >"$4/pyvenv.cfg"
+  exit 0
+fi
+exit 1
+SH
+  chmod +x "$d/python${2%.*}"
+  printf '%s' "$d/python${2%.*}"
+}
+# The manifest's CPython (scripts/linux/provision-manifest.conf), which the
+# helper finds installed, so these cases download nothing.
+OWN_PIN_BUILD=$(sed -n 's/^python_build=//p' "$HERE/../provision-manifest.conf")
+OWN_PIN_VERSION=$(sed -n 's/^python_version=//p' "$HERE/../provision-manifest.conf")
+
+# own_python_case NAME: the venv on an older own CPython build, the pinned
+# one installed beside it; commit B changes only code.
+own_python_case() {
+  new_case "$1"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  OLD_PY=$(own_python 20260901 3.14.9)
+  NEW_PY=$(own_python "$OWN_PIN_BUILD" "$OWN_PIN_VERSION")
+  printf 'home = %s\nexecutable = %s\nversion = 3.14.9\n' "${OLD_PY%/*}" "$OLD_PY" >"$CASE/venv/pyvenv.cfg"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  SHA_B=$(commit_all "B: code only")
+}
+
+case_own_python_new_pin_moves_the_venv() {
+  own_python_case own_python_new_pin_moves_the_venv
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the preflight saw it" grep -qF 'python_changed=1' "$RESULT"
+  check "a python step" step_is python ok
+  check "moved in place" called "$NEW_PY -m venv --upgrade $CASE/venv"
+  check "with core and web stopped" before "systemctl stop domovoi-web.service" "$NEW_PY -m venv --upgrade"
+  check "before they start again" before "$NEW_PY -m venv --upgrade" "systemctl start domovoi-core.service"
+  check "pyvenv.cfg names the pinned one" grep -qxF "home = ${NEW_PY%/*}" "$CASE/venv/pyvenv.cfg"
+  check "the old one is left where it is" test -x "$OLD_PY"
+  check "no deps re-sync for it" not_called "pip --disable-pip-version-check --no-input install"
+  # Moved once: the next update finds the venv on the pin.
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: code only" >/dev/null
+  : >"$STATE/calls.log"
+  run_update
+  check "next update: ok" eq "$(field status)" '"ok"'
+  check "next update: no python step" not_called "-m venv --upgrade"
+  end_case
+}
+
+case_own_python_rollback_moves_it_back() {
+  own_python_case own_python_rollback_moves_it_back
+  echo "$SHA_B" >"$STATE/curl-fail-when-head"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "moved forward" called "$NEW_PY -m venv --upgrade $CASE/venv"
+  check "and back" called "$OLD_PY -m venv --upgrade $CASE/venv"
+  check "a rollback-python step" step_is rollback-python ok
+  check "after the checkout went back" before "reset --keep $SHA_A" "$OLD_PY -m venv --upgrade"
+  check "pyvenv.cfg names the old one again" grep -qxF "home = ${OLD_PY%/*}" "$CASE/venv/pyvenv.cfg"
+  end_case
+}
+
+case_own_python_move_failure_rolls_back() {
+  own_python_case own_python_move_failure_rolls_back
+  printf '%s' "$NEW_PY" >"$STATE/venv-upgrade-fail"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "failed at python" eq "$(field error | grep -c 'failed at python')" 1
+  check "the venv put back on the old one" called "$OLD_PY -m venv --upgrade $CASE/venv"
+  end_case
+}
+
+# Under never, a pinned build that is not installed yet is not downloaded:
+# the venv stays, a warn step says so, and the update goes on.
+case_own_python_waits_under_never() {
+  own_python_case own_python_waits_under_never
+  rm -rf "$OSROOT/usr/local/lib/domovoi-python/$OWN_PIN_BUILD"
+  echo never >"$STATE/internet-policy"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is python warn
+  check "says why" grep -qF "internet access is turned off for this box, so the venv stays on ${OLD_PY%/*}" "$RESULT"
+  check "nothing downloaded" not_called "curl https://github.com"
+  check "the venv untouched" grep -qxF "home = ${OLD_PY%/*}" "$CASE/venv/pyvenv.cfg"
+  end_case
+}
+
+# A venv on the system's python3 (Ubuntu 26.04, the Windows installer's
+# distro) is never moved, whatever the manifest pins.
+case_system_python_venv_is_left_alone() {
+  new_case system_python_venv_is_left_alone
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'home = /usr/bin\nexecutable = /usr/bin/python3.14\nversion = 3.14.3\n' >"$CASE/venv/pyvenv.cfg"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code only" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no python step" not_called "-m venv"
+  check "no python_changed" not_grep 'python_changed' "$RESULT"
+  check "pyvenv.cfg as it was" grep -qxF "home = /usr/bin" "$CASE/venv/pyvenv.cfg"
+  end_case
+}
+not_grep() { ! grep -qF -- "$1" "$2"; }
+
+# After a successful update that moved the venv: the build it runs on and
+# the one it came from stay, an older one no venv names goes.
+case_own_python_old_builds_go_after_a_good_update() {
+  own_python_case own_python_old_builds_go_after_a_good_update
+  local older; older=$(own_python 20260701 3.14.8)
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the oldest build removed" test ! -e "$OSROOT/usr/local/lib/domovoi-python/20260701"
+  check "the one the venv came from kept" test -x "$OLD_PY"
+  check "the one it runs on kept" test -x "$NEW_PY"
+  check "a python-cleanup step" step_is python-cleanup ok
+  check "naming what went" grep -qF "removed CPython builds no venv uses: 20260701" "$RESULT"
+  check "the step comes after the update was healthy" eq "$(grep -o '"name": "[a-z-]*"' "$RESULT" | grep -e '"health"' -e '"python-cleanup"' | tr -d '"' | tr '\n' ' ')" "name: health name: python-cleanup "
+  check "the oldest one was there to remove" test -n "$older"
+  end_case
+}
+
+# A build another venv on the box names is never removed, nor is anything
+# removed during an update that rolls back.
+case_own_python_builds_in_use_or_rolled_back_stay() {
+  own_python_case own_python_builds_in_use_or_rolled_back_stay
+  local older other
+  older=$(own_python 20260701 3.14.8)
+  other=$(own_python 20260601 3.14.7)
+  mkdir -p "$OSROOT/opt/other/.venv"
+  printf 'home = %s\n' "${other%/*}" >"$OSROOT/opt/other/.venv/pyvenv.cfg"
+  echo "$SHA_B" >"$STATE/curl-fail-when-head"
+  run_update
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "nothing removed during a rolled-back update" test -x "$older"
+  check "no cleanup step" not_grep '"name": "python-cleanup"' "$RESULT"
+  # The next update is good: the unused old build goes, the one another
+  # venv names stays.
+  rm -f "$STATE/curl-fail-when-head"
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: code only" >/dev/null
+  run_update
+  check "next update: ok" eq "$(field status)" '"ok"'
+  check "the unused build removed" test ! -e "$OSROOT/usr/local/lib/domovoi-python/20260701"
+  check "the build another venv names kept" test -x "$other"
+  check "the one the venv came from kept" test -x "$OLD_PY"
+  check "the one it runs on kept" test -x "$NEW_PY"
+  end_case
+}
+
+# An update that moves nothing keeps the current build and the newest
+# older one; and a venv on the system's python3 never has its interpreters
+# looked at.
+case_own_python_cleanup_without_a_move() {
+  new_case own_python_cleanup_without_a_move
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local cur prev oldest
+  oldest=$(own_python 20260701 3.14.8)
+  prev=$(own_python 20260901 3.14.9)
+  cur=$(own_python "$OWN_PIN_BUILD" "$OWN_PIN_VERSION")
+  printf 'home = %s\nexecutable = %s\n' "${cur%/*}" "$cur" >"$CASE/venv/pyvenv.cfg"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code only" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no python step" not_called "-m venv --upgrade"
+  check "the oldest removed" test ! -e "$OSROOT/usr/local/lib/domovoi-python/20260701"
+  check "the newest older kept" test -x "$prev"
+  check "the current kept" test -x "$cur"
+  # On the system's python3 now: nothing of Domovoi's own is touched.
+  printf 'home = /usr/bin\n' >"$CASE/venv/pyvenv.cfg"
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: code only" >/dev/null
+  run_update
+  check "system python: ok" eq "$(field status)" '"ok"'
+  check "system python: the builds left alone" test -x "$prev"
+  check "system python: no cleanup step" not_grep '"name": "python-cleanup"' "$RESULT"
+  end_case
+}
+
 case_flyway_failure_without_growth() {
   new_case flyway_failure_without_growth
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -5315,6 +5511,14 @@ CASES=(
   case_venv_from_the_core_unit
   case_venv_ignores_a_non_venv_interpreter
   case_venv_not_writable_aborts
+  case_own_python_new_pin_moves_the_venv
+  case_own_python_rollback_moves_it_back
+  case_own_python_move_failure_rolls_back
+  case_own_python_waits_under_never
+  case_system_python_venv_is_left_alone
+  case_own_python_old_builds_go_after_a_good_update
+  case_own_python_builds_in_use_or_rolled_back_stay
+  case_own_python_cleanup_without_a_move
   case_stop_detail_says_how_each_unit_stopped
   case_a_unit_already_down_is_said_to_be
   case_a_hung_stop_is_killed_and_the_restart_goes_on
