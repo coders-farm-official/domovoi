@@ -42,7 +42,6 @@ clipboard history).
 | `RELEASE_SIGNING_KEY_PASSPHRASE` | that key's passphrase |
 | `ANDROID_KEYSTORE_B64` | the Android keystore file, base64 |
 | `ANDROID_KEYSTORE_PASSWORD` | the keystore's password |
-| `ANDROID_KEY_ALIAS` | the key's alias (`domovoi` unless you chose another) |
 | `ANDROID_KEY_PASSWORD` | the key's own password; set it to the keystore's password when they are the same |
 
 From Git Bash, in any folder (adjust the two paths if yours differ; these
@@ -54,9 +53,19 @@ gh secret set RELEASE_SIGNING_KEY $R < ~/.domovoi-release/domovoi-release
 gh secret set RELEASE_SIGNING_KEY_PASSPHRASE $R      # prompts, hidden
 base64 -w0 ~/domovoi-release.jks | gh secret set ANDROID_KEYSTORE_B64 $R
 gh secret set ANDROID_KEYSTORE_PASSWORD $R           # prompts, hidden
-gh secret set ANDROID_KEY_ALIAS $R                   # prompts
 gh secret set ANDROID_KEY_PASSWORD $R                # prompts, hidden
 gh secret list $R                                    # names and dates only
+```
+
+One value is a **variable**, not a secret: `ANDROID_KEY_ALIAS`, the key's
+alias (`domovoi` unless you chose another). It names the key and unlocks
+nothing, and as a secret GitHub would mask it everywhere, including every
+release file name it appears in, which dropped 1.3.0's hand-off to the
+provenance job. **Settings → Environments → release → Environment
+variables**, or:
+
+```bash
+gh variable set ANDROID_KEY_ALIAS $R --body domovoi
 ```
 
 The same values from PowerShell, for the web form (each goes to the

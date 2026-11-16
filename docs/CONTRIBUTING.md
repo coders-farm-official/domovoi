@@ -349,9 +349,10 @@ looks flaky; a second red is a real failure, so fix it or add it to
 `known_failures.toml` with its reason). Main stays green: a red run on
 `main` is fixed before anything else is pushed.
 
-No workflow uses a secret, and none may: release signing and publishing
-stay on the owner's PC ("Releasing", below). Actions are pinned by commit
-SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
+No workflow but the release's signing job uses a secret, and none may:
+the signing secrets live only in the `release` environment, behind the
+owner's approval ("Releasing", below). Actions are pinned by commit SHA
+(`domovoi/tests/test_ops_ci_workflow.py` holds the line).
 
 ### The fresh-install test
 
@@ -741,9 +742,14 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    libraries; finish-release attaches them (`--sbom-dir`) and lists them in
    `SHA256SUMS`. **attest** (Linux, after the release) records GitHub's
    build provenance for every file in that `SHA256SUMS`, once the release
-   on GitHub holds exactly those files. If attest fails, the release is
+   on GitHub holds exactly those files; the signing job hands it
+   `SHA256SUMS` as an artifact (`release-sums`), since GitHub drops a job
+   output that holds a secret's value. If attest fails, the release is
    already out: **Re-run failed jobs** runs it again, and nothing is
-   published twice. How a user checks a file:
+   published twice. A release whose run made no provenance at all (1.3.0)
+   gets it from **Run workflow** with the tag and **attest_published**
+   ticked: only attest runs, taking `SHA256SUMS` from the published
+   release (weaker than the signing job's own, so the release notes say so). How a user checks a file:
    [SECURITY.md, "Verifying a release"](../SECURITY.md#verifying-a-release).
 
 Every check the scripts make still runs; the workflow adds the plan, and a
