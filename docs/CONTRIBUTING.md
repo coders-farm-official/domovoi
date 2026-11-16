@@ -393,11 +393,10 @@ The images are pinned by release and checksum in the script; a new image
 
 **OpenSSF Scorecard** (`.github/workflows/scorecard.yml`) rates the
 repository's supply-chain practices on every push to `main`, weekly and
-when branch protection changes, and lists its findings under Security →
-Code scanning. It doesn't publish yet: the score goes public on
-[scorecard.dev](https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi),
-with a README badge, once the cheap fixes are in (`publish_results` and
-the badge change together). scorecard.dev only
+when branch protection changes, publishes the score (the README's badge,
+[scorecard.dev](https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi);
+public from 1.3.0, and `publish_results` and the badge only ever change
+together) and lists its findings under Security → Code scanning. scorecard.dev only
 takes a result from a workflow that keeps its rules (only its approved
 actions in that job, no `run` steps, no write permission at the top);
 `domovoi/tests/test_scorecard_workflow.py` holds them.

@@ -4,257 +4,256 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## 1.3.0 (unreleased) — "Who am I?" and "Where am I?" asked any way
+## 2026-11-16 — 1.3.0
 
-- **What changed.** "Who am I right now?", "Who am I, Domovoi?" (also as
-  Whisper hears it, "Domo boy"), "What's my name?", "Do you know my
-  name?", "Who's talking?" now get the voice-profile answer instead of a
-  general-knowledge guess. "Where am I?", "Which room am I in?" and "What
-  room is this?" name the room the request came from ("You're in the
-  basement."), by its label in **Settings → Rooms**; from the app's chat mic
-  the answer says it can't tell which room. "My name is …" is still an
-  introduction.
-- **Nothing to do.**
+Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows
+satellite Setup beside it) and, released with it under its own version,
+the Android app (docs/CONTRIBUTING.md, "Releasing"): phones learn the
+calendars, Up next, groups and voice ID changes below. It follows 1.2.1
+(2026-11-14) and holds every entry between this heading and "1.2.1",
+gathered here under one heading (each was written as "1.3.0 (unreleased)"
+or dated 2026-11-14). The plain-language summary is
+`docs/release/v1.3.0.md`.
 
-## 1.3.0 (unreleased) — Settings → Rooms says why a room couldn't join
+What a household notices:
 
-- **What changed.** When a room device can't join for a reason only the
-  server knows, **Settings → Rooms** now says so in a plain line above the
-  approvals — for example "A room tried to join at 192.168.1.30:6370, but
-  this server couldn't prove it's the one at that address. Add that address
-  to the server's trusted addresses (TRUSTED_HOSTS), or set the room up with
-  the server's own address." The other lines cover a room paired with a
-  different device, a device without a pairing key, two devices asking for
-  one name, too many requests from one address and a code no device uses.
-  The newest five are kept, each for a day, in memory (admins only:
-  `GET /api/satellites/join-problems`).
-- **Also.** A core reached at its host's address through a VM or a NAT'd
-  distro can now be vouched for by the host (its root-owned network-name
-  report, `server_identity.VOUCHED_ADDRESS_SOURCES`) instead of needing that
-  address in `TRUSTED_HOSTS`. And a request on the approvals list that no
-  device has visited for fifteen minutes now disappears on its own, freeing
-  its room name; a device that is still waiting keeps its place.
-- **Nothing to do.**
+* **Other calendars on the household calendar, read-only:** a Google,
+  Outlook or iCloud calendar by its private link, and a phone's own
+  calendars shared from the app; Home's card is **today / next**.
+* **Up next everywhere:** a ⋯ menu on every song, the Queue panel for any
+  room, the queue by voice ("what's next", "play X next", "clear the
+  queue", "skip this artist"), **Settings → Household → Music mix**, "why
+  this song?", and optional similar artists and song popularity from
+  ListenBrainz (MusicBrainz ids only).
+* **Groups:** rooms that play one shared queue ("play jazz everywhere",
+  "play this in the office too", named groups in Settings → Rooms).
+* **A new voice ID** (3D-Speaker ERes2Net instead of Resemblyzer, no
+  torch): it names the speaker about twice as often, and **everyone says
+  "my name is …" once more**.
+* **Library tools** (Music → Tools): duplicates, needs review, cover art
+  from the Cover Art Archive written into files (with Undo), a file's own
+  MusicBrainz ids, every credited artist, playlists from `.m3u` files.
+* **Rooms:** a new install's rooms wake on "Domovoi"; each room says which
+  word it wakes on; Settings → Rooms says why a room couldn't join.
+* **Installing:** one command on Linux, Debian 13, Linux Mint 22 and
+  Pop!_OS 24.04 besides Ubuntu 26.04, and the installer puts the phone app
+  on the server.
+* **Security:** the server signs with `cryptography`; Pillow, certifi and
+  filelock security updates; five fixes from the code scan; SBOMs and
+  build provenance on every release file.
 
-## 1.3.0 (unreleased) — The server signs with `cryptography`, not its own code
+**Migrations V054–V061**, in order, all run by the update: V054 (the
+household wake-word default), V055 (calendar sources), V056 (Music mix and
+ListenBrainz), V057 (phone calendars' keys), V058 (library tools), V059
+(cover versions), V060 (groups), V061 (voice ID's new model: deletes the
+old voice samples). After the update the tag backfill reads every music
+file once more (V058, below).
 
-Nothing to do: the update installs it. The server's identity (the key a
-prepared satellite trusts, the signed `/v1/health` answer, the signed
-satellite code, plugin, sound and wake-word lists) and the signature check
-of the Android app it serves now run on
-[`cryptography`](https://cryptography.io/) 50.0.2 (Apache-2.0 or
-BSD-3-Clause, OpenSSL inside) instead of Domovoi's own pure-Python Ed25519
-and RSA code, which wasn't constant-time. Before, a server used
-`cryptography` only if someone had installed the optional `signing` extra;
-now it is a core dependency in both server locks, and the `signing` extra
-is gone.
+By hand, after updating:
 
-- **Same keys, same signatures.** The identity file is untouched and
-  every prepared card keeps trusting the server: Ed25519 gives the same
-  signature from either code, and the tests hold them to it.
-- **The server never signs with the fallback.** A server missing the
-  package (a broken install) says so at ERROR at boot, makes no key and
-  signs nothing, so satellites refuse it until the dependencies are
-  reinstalled from the lock. Signature checks still answer, in pure Python.
-- **Where it's said.** Each server process logs the library and OpenSSL
-  versions once at boot, and `GET /v1/admin/version` reports `crypto`:
-  `{backend, cryptography, openssl, signing}`.
-- **Satellites are unchanged**: they check with `cryptography` where their
-  Python has it and with the vendored pure-Python Ed25519 otherwise (the
-  32-bit Pi OS case), and now say once in the journal which.
-- **One verdict for every input.** OpenSSL accepts a public key written in
-  a non-canonical way that Domovoi's code refused: written so, the
-  identity key took one forged signature as valid over any message. Every
-  verifier now runs Domovoi's encoding checks before handing a signature to
-  `cryptography`, so both give the same answer. A satellite only trusts
-  the key whose fingerprint it pinned, so no pinned device was exposed;
-  a device with nothing pinned trusts the first key it meets anyway.
-- **Developers:** reinstall from the lock (`pip install --require-hashes
-  -r requirements.lock`, or `pip install -e .`): the suite now signs with
-  `cryptography`, and without it the identity and APK tests fail.
+* **Everyone says "my name is …" once more**, in any room, and answers
+  yes: until then Domovoi names nobody (the People page says who is left).
+  Anyone who had asked Domovoi never to save their voice says so again. A
+  `VOICE_PROFILE_MATCH_THRESHOLD`, `VOICE_PROFILE_SAME_ROOM_MARGIN` or
+  `THIRD_PARTY_CLUSTER_MERGE_THRESHOLD` line in `domovoi/.env` is on the
+  old model's scale: delete it. Under internet **No**, copy voice ID's
+  model file by hand (docs/INTERNET.md).
+* **Update the phone app** for Phone calendars, groups, the Music mix and
+  voice ID's "learn this voice again" on the People screens. (A test build
+  of the app from before V057 stops sharing its calendars at its second
+  snapshot: it needs the calendar key.)
+* **Upgrade room** on a room that reads "unknown until this room updates"
+  for its wake word.
+* **Windows installs:** the Linux part comes first, then the Windows part
+  from the 1.3.0 Setup (the tray's own changes, such as **Save logs for
+  support...** opening the folder it just made, arrive only with it):
+  **Update Domovoi** on the dashboard's Version card (Settings → System →
+  About & updates), or the tray's **Finish updating Domovoi...**.
 
-## 1.3.0 (unreleased) — Security updates: Pillow, certifi, filelock
+Also in this release, without an entry of its own: a bare "play" ("play
+again", "unpause") resumes the room's music; a room playing music (on
+its own or in a group) picks it up again after a voice turn even when the
+core restarted since, and "join the kitchen" said in a room already in
+that group sends its speaker the stream again; replies read decades as
+words ("2020s" is "twenty twenties"); "play something" tries up to
+three picks before giving up; the tray's **Save logs for support...** opens
+the new folder and also exports the core's freeze files; `provision.sh`
+warns about a manifest key it doesn't know instead of stopping; and the
+Android release APKs are built in a pinned Linux image, reproducibly, one
+`versionCode` per ABI (android/README.md, "Reproducible builds").
 
-Nothing to do: these come with the update. They fix published security
-advisories in three packages the server and the rooms install.
+### Other calendars on the household calendar, read-only (V055)
 
-- **Pillow 12.3.0 → 13.0.0** (pictures: thumbnails, cover art, chat
-  pictures, printing and scanning). Pillow 13.0.0 fixes 43 advisories,
-  five of them critical, mostly about crafted image files (JPEG, TIFF,
-  GIF, PDF, FlashPix and others) that could crash the server, use up its
-  memory or CPU, or read or write memory they shouldn't:
-  `GHSA-22hg-r758-rrw9`, `GHSA-24rc-8hj2-v98c`, `GHSA-254f-3936-288h`,
-  `GHSA-27h8-gf7j-v5hc`, `GHSA-332p-7hrc-92wf`, `GHSA-3j72-p6qg-6xp7`,
-  `GHSA-4558-3h8r-v8xp`, `GHSA-462x-pgg6-55fp`, `GHSA-4rm8-3hmm-39fg`,
-  `GHSA-4rr5-89j8-mwwm`, `GHSA-58r4-6rv3-gfh8`, `GHSA-5x8w-8jj5-q52h`,
-  `GHSA-5xm2-6676-qcp9`, `GHSA-654x-cwwv-5j9c`, `GHSA-65qm-jvmh-6pqg`,
-  `GHSA-74r2-7ff9-mjj2`, `GHSA-78g4-xqwv-q3g8`, `GHSA-7mwm-ghpf-9vrm`,
-  `GHSA-8g5g-8vmr-9782`, `GHSA-9v9v-9qvf-h2hj`, `GHSA-c6hw-5grf-ff96`,
-  `GHSA-cp9v-662q-vvx9`, `GHSA-f2g6-542v-9j58`, `GHSA-fc9g-5qg7-mf45`,
-  `GHSA-g4qv-2jxx-769h`, `GHSA-g7cr-3p24-7wf7`, `GHSA-g842-9rc4-69pw`,
-  `GHSA-gg2r-wvfm-q9rx`, `GHSA-j4m9-6w36-pw47`, `GHSA-jg86-v3jv-hrpm`,
-  `GHSA-mrfp-p49p-3hf2`, `GHSA-p4wg-p73j-c528`, `GHSA-p8hx-v2p6-rp84`,
-  `GHSA-pchr-8j38-3x4p`, `GHSA-q45j-58j2-45rg`, `GHSA-rfgq-q3w2-pmv2`,
-  `GHSA-v9pv-5gc8-w2m6`, `GHSA-vx6w-vv9f-6gvg`, `GHSA-w889-685w-c8fh`,
-  `GHSA-wqgw-9xfh-qf2g`, `GHSA-xcvg-w56q-r89m`, `GHSA-xgh8-jp6q-p5x8`,
-  `GHSA-xvh5-g6gv-559v`. The lowest Pillow the server accepts is now
-  13.0, so an update that resolves from the package index can't land on
-  an older one. Domovoi's own picture code needed no change.
-- **certifi 2026.6.17 → 2026.10.23** (the list of trusted certificate
-  authorities for the server's outside connections; the PC and Windows
-  rooms had 2026.7.22). The old list still trusted emSign roots whose
-  intermediate keys were compromised: `GHSA-6q48-6c7w-9gw2`
-  (also `PYSEC-2026-4320`), critical. A room computer gets the new list
-  the next time it updates.
-- **filelock 4.0.12 → 4.2.10** (Linux server only; used when models are
-  downloaded). Lock-file handling a local user could abuse to read,
-  truncate or hold another user's files: `GHSA-567q-5qvw-pf92`,
-  `GHSA-6627-m3xw-93mp`, `GHSA-69hj-f68j-2879`, `GHSA-8mx5-7m5m-r77g`,
-  `GHSA-9c4x-gm8v-wgc4`, `GHSA-9j6q-wvj5-jgjg`, `GHSA-9vhv-jxww-xfm5`,
-  `GHSA-cwqr-hh33-gh44`, `GHSA-fj95-fr6c-h845`, `GHSA-fq56-3cx3-fjxp`,
-  `GHSA-m462-7rxw-wvpg`, `GHSA-rfpc-qcw5-3pc4`, `GHSA-v4x8-3wr5-3wq8`
-  (high).
+The Calendar page, Home and voice ("what's on my calendar today") can now
+show calendars from elsewhere beside the household's own. **Read-only**:
+Domovoi never changes them, and never signs in to Google, Microsoft, Apple
+or Samsung.
 
-## 1.3.0 (unreleased) — Debian 13, Linux Mint 22 and Pop!_OS 24.04
+- **By link.** An admin adds a Google, Outlook or iCloud calendar by its
+  private ICS link in **Settings → Household → Calendars** (name, colour,
+  whose). The core reads it every 30 minutes (every 2 hours when the
+  internet answer is **Sometimes**; never under **No**, where the last
+  copy stays and the page says how old it is), backing off after
+  failures; **refresh now** reads it at once. The link is a secret:
+  stored on the server only, never shown again (only its host), never
+  logged. `INTERNET.md`'s egress inventory lists the new destination.
+- **From a phone.** The Android app's new **Phone calendars** section
+  ("Share this phone's calendars with the house", off by default) sends
+  the calendars a person picks to the server over the house's network,
+  and deletes them when sharing is turned off. Works with no internet.
+- Events from elsewhere carry their calendar's name and colour and can't
+  be edited or deleted here (`PATCH`/`DELETE` answer `409`). Home's card
+  is now **today / next**: what's still on today, then the week's next
+  events, from every calendar.
 
-- **What changed.** The Linux install (the one command, and
-  `scripts/linux/provision.sh` behind it) now also runs on **Debian 13**
-  and on the Ubuntu-based **Linux Mint 22** and **Pop!_OS 24.04**, besides
-  Ubuntu 26.04 ([LINUX_HOST.md, Which distro](LINUX_HOST.md#which-distro)).
-  Docker comes from Docker's Debian repository on Debian and as Ubuntu
-  24.04's packages on Mint and Pop!_OS, each pinned like 26.04's. Where the
-  system's `python3` is not 3.14 (all three), the venv runs on a CPython
-  3.14 that Domovoi installs under `/usr/local/lib/domovoi-python` with uv,
-  both downloads pinned by version and SHA-256
-  ([The Python the venv runs on](LINUX_HOST.md#the-python-the-venv-runs-on)).
-  Fedora, Arch and other systems stop at once with a clear message; ask for
-  yours in an issue. A fresh install on Ubuntu 26.04 and Debian 13 is now
-  tested in CI every week, with an update and a rollback after it.
-- **What to know.** On Debian and the Ubuntu 24.04 systems, a release that
-  pins a newer build of that CPython moves the venv onto it during the
-  dashboard's update (a `python` step in **last update**) and back if the
-  update rolls back; under internet **No** it waits, with a `warn`. Each
-  build has its own folder (about 100 MB); after a successful update the
-  ones no venv needs are removed (a `python-cleanup` step), keeping the
-  current build and the one before it. Under **No**, Debian's apt timers and unattended
-  upgrades are masked as on Ubuntu; `popularity-contest`, which reports
-  only if you said yes to it, is left as you set it, and the update says so.
-- **Nothing to do** on Ubuntu 26.04 or in the Windows installer's distro:
-  the venv stays on the system's Python, and nothing they install, run or
-  record changes (a re-run of `provision.sh` skips every step as before).
-  Ubuntu releases other than 26.04 still warn first; Ubuntu 24.04 now gets
-  its own Docker packages and Domovoi's CPython instead of stopping at the
-  venv.
+**What an update needs:** the migration (V055, a new `calendar_sources`
+table and a `calendar_source_id` column on `calendar_events`; the
+`source` check now also allows `link` and `phone`). Nothing to configure.
+Answer changes a client may notice: `GET /api/calendar/events` now also
+returns an event that began before `start` and is still on, every event
+carries `all_day` and the calendar fields, and an all-day event's times
+are written with the server's own offset (`…T00:00:00-05:00`) so they
+carry their date. Clients that read `limit` events with no window should
+pass `start`/`end`: a linked calendar can hold thousands of events.
 
-## 1.3.0 (unreleased) — Install on Linux with one command
+### Phones' calendars: whose they are, how long they last (V057)
 
-- **What changed.** On Ubuntu 26.04 the server now installs with one command:
-  `curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash`.
-  It asks whether the server will have internet and its time zone, checks
-  what it downloaded (the commit GitHub names for `stable`, and that
-  release's manifest signed with the release key the Windows programs
-  pin), then runs `scripts/linux/provision.sh` from that copy at that exact
-  commit, which asks about AI chat as before. It ends with the address to
-  open and how to read the setup code. Answers can be given on the command
-  line instead (`... | sudo bash -s -- --internet never --timezone Europe/Berlin --yes`),
-  and every `provision.sh` option passes through. Before the first release
-  it installs `main`, unsigned, and says so; `--channel main` asks for
-  `main` on purpose.
-- **Nothing to do** on a server that is already installed, and
-  `provision.sh` itself is unchanged: its options, its output and the
-  Windows installer's use of it stay as they were. Cloning and running
-  `provision.sh` yourself still works
-  ([LINUX_HOST.md, Install](LINUX_HOST.md#install), which also shows how to
-  read the one-command script before running it). The section that
-  described it is now **Or run the install script yourself**; the old
-  `#or-let-the-script-do-it` link lands on the page without the jump.
+Review fixes to the phone calendars above, made before 1.3.0 shipped.
 
-## 1.3.0 (unreleased) — Security fixes from the code scan
+- **Only the phone itself changes its calendars.** The first snapshot a
+  phone sends is answered with a `calendar_key`; every later
+  `PUT`/`DELETE /api/calendar/phones/{device_id}` must carry it
+  (`X-Domovoi-Calendar-Key`, `403` without). An admin can remove a phone
+  calendar, or all of one phone's, in **Settings → Household →
+  Calendars**, e.g. one left behind by an uninstalled app.
+- **Left-behind calendars go by themselves.** A phone not heard from for
+  a day shows as stale ("Last heard from … 30 hours ago"); after 7 days
+  without an update its calendars are deleted (the calendar refresher).
+  Replacing the household device token removes every phone's calendars;
+  phones given the new token send them again.
+- **A late upload can't bring them back**: a snapshot's optional
+  `generation` older than the moment sharing was turned off is refused
+  (`410`).
+- **`GET /api/calendar/events` with no `start`/`end`** now answers a day
+  ago to 60 days ahead (it was every event, oldest first, capped at 500).
+- The same event shared by two phones (`ical_uid`, optional) is listed
+  once, with `also_in`. A private event a phone sends as `busy` shows and
+  is read aloud as busy time ("Tomorrow you're busy from 3 PM to 4 PM").
+- **iPhones share calendars too.** The snapshot's optional `platform`
+  (`"android"` or `"ios"`, anything else `422`) is recorded on the phone's
+  device entry, so an iPhone is no longer listed as an Android phone. A
+  body without it (an older Android build) still counts as `"android"`.
+- `GET /api/calendar/sources`: a phone's `device_id` is for admins only,
+  `account_name` is no longer kept or returned, `status` may be `stale`,
+  and a phone's calendars carry `expires_at`.
 
-Nothing to do; no migration. GitHub's code scanning (CodeQL) found these,
-each fixed with a test:
+**What an update needs:** the migration (V057: `calendar_phones`, and
+`ical_uid` / `busy` on `calendar_events`; it clears stored
+`account_name`s). A phone app built before this keeps working until its
+second snapshot, which needs the key: update the app.
 
-- **A crafted reply could freeze the server.** Answering a "did you mean
-  …?" with "yes" and a long run of "sure thing" took the server time that
-  doubled with every repeat; a few hundred characters held it for days.
-  Any paired device (or, before setup, anything on the network) could send
-  one. It now takes a moment, and every reply means what it did before.
-- **A crafted document or chat draft could stall the dashboard.** A save
-  from the document editor made of "<" with no ">", or a chat draft line of
-  "[" with no "]", took time that grew with the square of its length (a
-  large one held the dashboard for minutes to hours). Both now take time in
-  proportion to their length, with the same result as before.
-- **A plugin's table names reached the database as SQL.** The uninstall
-  dialog's row counts put a plugin's table names into a query as written,
-  so a plugin could have had a query of its choosing run, outside its own
-  database role, when an admin opened the dialog. Names are now quoted.
-- **The join page offered a link a crafted address could steer.** A room
-  code with a "#" (or another character no code carries) in a `/join`
-  link now reads as a code the page can't read, instead of being copied
-  into the "open the app" link, where it could name another app or
-  fallback address.
+### Up next: the queue everywhere, by voice, a Music mix, and similar artists
 
-## 1.3.0 (unreleased) — The installer puts the phone app on the server
+**Migration V056**, after the calendars' V055. Nothing else to do.
 
-- **What changed.** The install now downloads the Android app onto the
-  server with its other install-time downloads (the voices, Whisper, the
-  speaker model, the AI models): about 100 MB, the release
-  `android/release.json` names, from the project's GitHub release, checked
-  against the release key like an admin's download. So the server can
-  hand it to phones that have no internet. It is the `phone-app` step of
-  `scripts/linux/provision.sh`, which the Windows installer runs too;
-  like the other install downloads it doesn't depend on the internet
-  answer. Until 1.3.0 the first download was always an admin's press of
-  **Download the app to this server**.
-- **If the install couldn't** (no internet then), the install still
-  finishes: its summary says "The phone app couldn't be downloaded: this
-  server needs the internet once, at some point, to put it here (or upload
-  it in Settings)", and so does the Windows installer's last page. Settings
-  → Phones & browsers → **Get the Domovoi app** and Home's **needs
-  attention** keep saying so until the app is on the server; a re-run of
-  the install script tries again, and skips it once it is here.
-- **Nothing to do** on a server that is already set up: nothing is
-  downloaded by itself. If the app isn't on it, the same reminder shows.
-- **For scripts reading the install's progress:** the final progress line
-  carries `phone_app` (true, false, or null when unknown), and there is one
-  more step (`phone-app`, after `piper`), so `total` is 23.
+#### Up next leans toward songs you haven't heard in a while, and says why
 
-## 1.3.0 (unreleased) — Release files you can check: SBOMs and build provenance
+- **Freshness:** inside each kind of pick, a song heard today counts ×0.7
+  and one not heard in 90 days (or never) ×1.3, smoothly in between, a
+  little less for a song played very often — by the listener's own
+  listens, else the household's. A nudge, not a filter: favourites and
+  what you play still come up. In a simulated month on a 5,000-song
+  library, repeats fell by about a fifth.
+- **"Why this song?"** Every Up next pick keeps the signals that weighed
+  most in choosing it, and the queue says them in plain words: "same
+  artist as the last song · not played in 4 months". API: `Pick.why` and
+  the room queue's `why` (strings, null for older picks).
+- **Settings → Household → Music mix** (new; search "mix"): **Discovery ↔
+  Favorites** and **Stay close ↔ Wander** (five steps each, the middle is
+  how Up next chose before), **Autoplay when a playlist ends** (the
+  default a new Up next takes: rooms, browsers and phones that don't say;
+  a browser's own queue switch still wins for that browser), **No repeats
+  within N songs** (20–500, default 50), and the two internet switches
+  below. Each person can set their own two sliders in Settings → Household
+  → People; their sessions use them. API: `GET/PUT /api/music/mix`,
+  `GET/PUT /api/people/{id}/music-mix`.
 
-Nothing to do. Each release on GitHub now carries software bills of
-materials (`domovoi-server.cdx.json`, `domovoi-web.cdx.json`, and
-`domovoi-android.cdx.json` when it carries the app), and every file on it
-has GitHub build provenance: `gh attestation verify <file> -R coders-farm-official/domovoi`
-([SECURITY.md, Verifying a release](../SECURITY.md#verifying-a-release)).
+#### Similar artists and song popularity from ListenBrainz (optional)
 
-## 1.3.0 (unreleased) — Voice ID's model has a backup copy
+Two new switches, each its own, defaults following the internet answer:
+**Similar artists from the internet** (on for **Yes**, off for Sometimes
+and No; `MUSIC_SIMILAR_ARTISTS_ENABLED`) adds "similar to *artist*"
+wildcards from songs you already have; **Song popularity from the
+internet** (on for **Yes** and **Sometimes**, like artist names and synced
+lyrics; `MUSIC_POPULARITY_ENABLED`) lets an artist's well-known songs come
+up a little more often (×0.9–×1.2; your own taste counts more). **Only
+MusicBrainz ids** (public catalogue numbers) of your artists and songs go
+to listenbrainz.org — never names or what you played — from a background
+job, one request a second, a batch a minute (about 650 requests the first
+time for a 6,000-song library, then about 8 a day). **Choosing songs never
+waits on the internet:** Up next reads only what was already fetched, and
+with the switches off (which also deletes what was fetched) it works from
+your library alone. New egress hosts: `labs.api.listenbrainz.org`,
+`api.listenbrainz.org` (docs/INTERNET.md).
 
-- **What changed.** A server now downloads voice ID's speaker model from
-  Coders Farm's own copy first ([domovoi-models](https://github.com/coders-farm-official/domovoi-models),
-  release `eres2net-vox-v1`) and from the sherpa-onnx project's release only
-  if that fails. Both are checked against the same size and SHA-256, so a
-  changed file is refused wherever it came from. If upstream ever moves or
-  removes the file, new installs still get it.
-- **Nothing to do.** A server that already has the model never downloads it again.
+#### The queue, easier to find and to use
 
-## 1.3.0 (unreleased) — Each room says which word it wakes on
+What changed on the dashboard and in the API:
 
-No migration. In Settings → Rooms, a room's drawer lists its **wake word**
-(“Domovoi”, or whichever word) in its details, above the voice: the name
-only, the sensitivity stays in the room's Settings tab. The word is the model the room
-device reports loading; a room on older software shows the word the server
-gave it, a room waiting for its word's model shows it as pending, and a room
-older than the household default that reports nothing reads **unknown until
-this room updates** (upgrading the room fixes it).
+- **Every song row has a ⋯ menu** with **play next** and **add to
+  queue** (Library, an artist's, album's or genre's songs, playlists, a
+  room's Recently played). It goes where the music plays and says so:
+  "play next here", "play next in kitchen". The Library's two queue
+  buttons became this one menu.
+- **The Queue panel picks whose queue it shows**: this browser, or any
+  room (the room's real queue, with everything Music → Room queue does).
+  A browser playing in a room still keeps its own copy of what it sent;
+  the room's own queue is one pick away. Songs are grouped under **now
+  playing**, **next** and **up next**; the grip drags or moves a song with
+  the arrow keys, and an arrow button plays a song next.
+- **Home's room cards** (playing or paused) have a **queue** button, and
+  a room's page in Settings → Rooms has **open queue**: the queue panel
+  aimed at that room, or Music → Room queue when nothing plays in this
+  browser.
+- **API:** `POST /api/playlists/{id}/tracks` also takes
+  `{track_ids: [...]}` (up to 500) and answers 200
+  `{added, duplicates, missing}`; the one-song body is unchanged. "Save as
+  playlist" now sends one request instead of one per song.
+  `GET /api/satellites/{room}/recently-played` rows gain `track_id`.
 
-- **Satellites:** Pi and PC rooms add `wake_word` (the loaded model's slug,
-  e.g. `domovoi_v1`, `hey_jarvis`) to their health sample. Phones in room
-  mode can send the same field; until they do, their hello's word is used.
-- **API:** each `GET /api/satellites` row carries `wakes_on` (`{slug, name,
-  source, pending_slug, pending_name, text}`; `source` is `device`,
-  `assigned`, `chosen`, `pending` or `unknown`).
+#### The queue and Up next by voice
 
-## 1.3.0 (unreleased) — Groups: rooms that play one shared queue (V060)
+In a room (or with the room's name after it, "… in the kitchen"):
+
+- **"what's next"** / "what's up next" says the next two songs.
+- **"play *song* next"** puts it right after the song playing now;
+  **"add *song* to the queue"**, **"queue up *song*"** or **"queue
+  *song*"** put it after the songs already asked for, before Up next's
+  picks. **Changed meaning:** "queue up *song*" used to play it at once;
+  it now adds it when something is playing, and plays it only when the
+  room is quiet (owner decision 2026-11-12).
+- **"clear the queue"** removes everything after the song playing now
+  (it keeps playing; Up next refills while autoplay is on).
+- **"skip this artist"** / **"no more *artist*"** skips them and leaves
+  them out of the room's mix; their waiting picks leave the queue.
+- **"turn autoplay off / on"**, **"stop after this list"**: the room's
+  Autoplay switch. On with no Up next yet makes one from the queue's
+  songs.
+- **"why is this playing"** says the pick's reason in words.
+- **"play something like this"** / **"more like this"** starts Up next
+  again from the song playing now (the song plays on; the old picks make
+  way). A stream or a podcast isn't a library song, and it says so.
+- **"play next"** and **"play the next song"** now skip, as "next" does
+  (they used to search the library for a song called "next"). A bare
+  "skip this" waits the longer pause before acting, because it also
+  starts "skip this artist".
+- A command that changes the room's mix from a recognised voice makes it
+  that person's mix.
+
+Nothing here needs the internet; none of it is offered to the language
+model's tools (they are fast paths only).
+
+### Groups: rooms that play one shared queue (V060)
 
 **Migration V060** (`room_groups`, `room_group_rooms`, `shared_queues`,
 `shared_queue_rooms`), after V059. Nothing else to do: no new container,
@@ -308,7 +307,7 @@ no satellite update. A room in a group plays another room's MPD stream
 - **Licences:** MPD (GPL-2.0-or-later, its own container) is now listed
   in docs/LICENSES.md.
 
-## 1.3.0 — Voice ID: a new speaker model; everyone says "my name is …" once more (V061)
+### Voice ID: a new speaker model; everyone says "my name is …" once more (V061)
 
 **What to do after updating:** each person says **"my name is …"** once,
 in any room, and answers the few questions that follow (below). Until they do, Domovoi doesn't know who is
@@ -432,7 +431,29 @@ voice that was never scored) and for the help desk's "send it to me".
 until they introduce themselves again; `GET /api/people` rows gain
 `voice_relearn`, and `GET /api/people/voice-id` is new (docs/API_REFERENCE.md).
 
-## 1.3.0 (unreleased) — Library tools: duplicates, needs review, cover art written into files (V058, V059)
+### Voice ID's model has a backup copy
+
+- **What changed.** A server now downloads voice ID's speaker model from
+  Coders Farm's own copy first ([domovoi-models](https://github.com/coders-farm-official/domovoi-models),
+  release `eres2net-vox-v1`) and from the sherpa-onnx project's release only
+  if that fails. Both are checked against the same size and SHA-256, so a
+  changed file is refused wherever it came from. If upstream ever moves or
+  removes the file, new installs still get it.
+- **Nothing to do.** A server that already has the model never downloads it again.
+
+### "Who am I?" and "Where am I?" asked any way
+
+- **What changed.** "Who am I right now?", "Who am I, Domovoi?" (also as
+  Whisper hears it, "Domo boy"), "What's my name?", "Do you know my
+  name?", "Who's talking?" now get the voice-profile answer instead of a
+  general-knowledge guess. "Where am I?", "Which room am I in?" and "What
+  room is this?" name the room the request came from ("You're in the
+  basement."), by its label in **Settings → Rooms**; from the app's chat mic
+  the answer says it can't tell which room. "My name is …" is still an
+  introduction.
+- **Nothing to do.**
+
+### Library tools: duplicates, needs review, cover art written into files (V058, V059)
 
 **Migration V058**, after the calendars' V055/V057 and Up next's V056
 (`library_match_candidates`, `library_duplicate_keeps`, `library_trash`,
@@ -521,181 +542,10 @@ rules stand.
 New routes: `/api/music/library-tools/*` (docs/API_REFERENCE.md) and
 `POST /api/playlists/{id}/copy`.
 
-## 2026-11-14 — Phones' calendars: whose they are, how long they last (V057)
+### A new install wakes on "Domovoi"; rooms you have keep their word
 
-Review fixes to the phone calendars below, before 1.3.0 ships.
-
-- **Only the phone itself changes its calendars.** The first snapshot a
-  phone sends is answered with a `calendar_key`; every later
-  `PUT`/`DELETE /api/calendar/phones/{device_id}` must carry it
-  (`X-Domovoi-Calendar-Key`, `403` without). An admin can remove a phone
-  calendar, or all of one phone's, in **Settings → Household →
-  Calendars**, e.g. one left behind by an uninstalled app.
-- **Left-behind calendars go by themselves.** A phone not heard from for
-  a day shows as stale ("Last heard from … 30 hours ago"); after 7 days
-  without an update its calendars are deleted (the calendar refresher).
-  Replacing the household device token removes every phone's calendars;
-  phones given the new token send them again.
-- **A late upload can't bring them back**: a snapshot's optional
-  `generation` older than the moment sharing was turned off is refused
-  (`410`).
-- **`GET /api/calendar/events` with no `start`/`end`** now answers a day
-  ago to 60 days ahead (it was every event, oldest first, capped at 500).
-- The same event shared by two phones (`ical_uid`, optional) is listed
-  once, with `also_in`. A private event a phone sends as `busy` shows and
-  is read aloud as busy time ("Tomorrow you're busy from 3 PM to 4 PM").
-- **iPhones share calendars too.** The snapshot's optional `platform`
-  (`"android"` or `"ios"`, anything else `422`) is recorded on the phone's
-  device entry, so an iPhone is no longer listed as an Android phone. A
-  body without it (an older Android build) still counts as `"android"`.
-- `GET /api/calendar/sources`: a phone's `device_id` is for admins only,
-  `account_name` is no longer kept or returned, `status` may be `stale`,
-  and a phone's calendars carry `expires_at`.
-
-**What an update needs:** the migration (V057: `calendar_phones`, and
-`ical_uid` / `busy` on `calendar_events`; it clears stored
-`account_name`s). A phone app built before this keeps working until its
-second snapshot, which needs the key: update the app.
-
-## 2026-11-14 — Other calendars on the household calendar, read-only (V055)
-
-The Calendar page, Home and voice ("what's on my calendar today") can now
-show calendars from elsewhere beside the household's own. **Read-only**:
-Domovoi never changes them, and never signs in to Google, Microsoft, Apple
-or Samsung.
-
-- **By link.** An admin adds a Google, Outlook or iCloud calendar by its
-  private ICS link in **Settings → Household → Calendars** (name, colour,
-  whose). The core reads it every 30 minutes (every 2 hours when the
-  internet answer is **Sometimes**; never under **No**, where the last
-  copy stays and the page says how old it is), backing off after
-  failures; **refresh now** reads it at once. The link is a secret:
-  stored on the server only, never shown again (only its host), never
-  logged. `INTERNET.md`'s egress inventory lists the new destination.
-- **From a phone.** The Android app's new **Phone calendars** section
-  ("Share this phone's calendars with the house", off by default) sends
-  the calendars a person picks to the server over the house's network,
-  and deletes them when sharing is turned off. Works with no internet.
-- Events from elsewhere carry their calendar's name and colour and can't
-  be edited or deleted here (`PATCH`/`DELETE` answer `409`). Home's card
-  is now **today / next**: what's still on today, then the week's next
-  events, from every calendar.
-
-**What an update needs:** the migration (V055, a new `calendar_sources`
-table and a `calendar_source_id` column on `calendar_events`; the
-`source` check now also allows `link` and `phone`). Nothing to configure.
-Answer changes a client may notice: `GET /api/calendar/events` now also
-returns an event that began before `start` and is still on, every event
-carries `all_day` and the calendar fields, and an all-day event's times
-are written with the server's own offset (`…T00:00:00-05:00`) so they
-carry their date. Clients that read `limit` events with no window should
-pass `start`/`end`: a linked calendar can hold thousands of events.
-
-## 1.3.0 (unreleased) — Up next: the queue everywhere, by voice, a Music mix, and similar artists
-
-**Migration V056** (V055 is wf/cal-130's: merge that first, so the
-migration numbers have no gap). Nothing else to do.
-
-### Up next leans toward songs you haven't heard in a while, and says why
-
-- **Freshness:** inside each kind of pick, a song heard today counts ×0.7
-  and one not heard in 90 days (or never) ×1.3, smoothly in between, a
-  little less for a song played very often — by the listener's own
-  listens, else the household's. A nudge, not a filter: favourites and
-  what you play still come up. In a simulated month on a 5,000-song
-  library, repeats fell by about a fifth.
-- **"Why this song?"** Every Up next pick keeps the signals that weighed
-  most in choosing it, and the queue says them in plain words: "same
-  artist as the last song · not played in 4 months". API: `Pick.why` and
-  the room queue's `why` (strings, null for older picks).
-- **Settings → Household → Music mix** (new; search "mix"): **Discovery ↔
-  Favorites** and **Stay close ↔ Wander** (five steps each, the middle is
-  how Up next chose before), **Autoplay when a playlist ends** (the
-  default a new Up next takes: rooms, browsers and phones that don't say;
-  a browser's own queue switch still wins for that browser), **No repeats
-  within N songs** (20–500, default 50), and the two internet switches
-  below. Each person can set their own two sliders in Settings → Household
-  → People; their sessions use them. API: `GET/PUT /api/music/mix`,
-  `GET/PUT /api/people/{id}/music-mix`.
-
-### Similar artists and song popularity from ListenBrainz (optional)
-
-Two new switches, each its own, defaults following the internet answer:
-**Similar artists from the internet** (on for **Yes**, off for Sometimes
-and No; `MUSIC_SIMILAR_ARTISTS_ENABLED`) adds "similar to *artist*"
-wildcards from songs you already have; **Song popularity from the
-internet** (on for **Yes** and **Sometimes**, like artist names and synced
-lyrics; `MUSIC_POPULARITY_ENABLED`) lets an artist's well-known songs come
-up a little more often (×0.9–×1.2; your own taste counts more). **Only
-MusicBrainz ids** (public catalogue numbers) of your artists and songs go
-to listenbrainz.org — never names or what you played — from a background
-job, one request a second, a batch a minute (about 650 requests the first
-time for a 6,000-song library, then about 8 a day). **Choosing songs never
-waits on the internet:** Up next reads only what was already fetched, and
-with the switches off (which also deletes what was fetched) it works from
-your library alone. New egress hosts: `labs.api.listenbrainz.org`,
-`api.listenbrainz.org` (docs/INTERNET.md).
-
-### The queue, easier to find and to use
-
-What changed on the dashboard and in the API:
-
-- **Every song row has a ⋯ menu** with **play next** and **add to
-  queue** (Library, an artist's, album's or genre's songs, playlists, a
-  room's Recently played). It goes where the music plays and says so:
-  "play next here", "play next in kitchen". The Library's two queue
-  buttons became this one menu.
-- **The Queue panel picks whose queue it shows**: this browser, or any
-  room (the room's real queue, with everything Music → Room queue does).
-  A browser playing in a room still keeps its own copy of what it sent;
-  the room's own queue is one pick away. Songs are grouped under **now
-  playing**, **next** and **up next**; the grip drags or moves a song with
-  the arrow keys, and an arrow button plays a song next.
-- **Home's room cards** (playing or paused) have a **queue** button, and
-  a room's page in Settings → Rooms has **open queue**: the queue panel
-  aimed at that room, or Music → Room queue when nothing plays in this
-  browser.
-- **API:** `POST /api/playlists/{id}/tracks` also takes
-  `{track_ids: [...]}` (up to 500) and answers 200
-  `{added, duplicates, missing}`; the one-song body is unchanged. "Save as
-  playlist" now sends one request instead of one per song.
-  `GET /api/satellites/{room}/recently-played` rows gain `track_id`.
-
-### The queue and Up next by voice
-
-In a room (or with the room's name after it, "… in the kitchen"):
-
-- **"what's next"** / "what's up next" says the next two songs.
-- **"play *song* next"** puts it right after the song playing now;
-  **"add *song* to the queue"**, **"queue up *song*"** or **"queue
-  *song*"** put it after the songs already asked for, before Up next's
-  picks. **Changed meaning:** "queue up *song*" used to play it at once;
-  it now adds it when something is playing, and plays it only when the
-  room is quiet (owner decision 2026-11-12).
-- **"clear the queue"** removes everything after the song playing now
-  (it keeps playing; Up next refills while autoplay is on).
-- **"skip this artist"** / **"no more *artist*"** skips them and leaves
-  them out of the room's mix; their waiting picks leave the queue.
-- **"turn autoplay off / on"**, **"stop after this list"**: the room's
-  Autoplay switch. On with no Up next yet makes one from the queue's
-  songs.
-- **"why is this playing"** says the pick's reason in words.
-- **"play something like this"** / **"more like this"** starts Up next
-  again from the song playing now (the song plays on; the old picks make
-  way). A stream or a podcast isn't a library song, and it says so.
-- **"play next"** and **"play the next song"** now skip, as "next" does
-  (they used to search the library for a song called "next"). A bare
-  "skip this" waits the longer pause before acting, because it also
-  starts "skip this artist".
-- A command that changes the room's mix from a recognised voice makes it
-  that person's mix.
-
-Nothing here needs the internet; none of it is offered to the language
-model's tools (they are fast paths only).
-
-## 2026-11-14 — A new install wakes on "Domovoi"; rooms you have keep their word
-
-A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm
+**Migration V054** (the household's wake-word default,
+`household_settings` `wake_default`). A new install's rooms wake on **"Domovoi"**: a wake-word model Coders Farm
 trained on synthetic voices only and publishes in its own repository,
 [domovoi-wake-word-models](https://github.com/coders-farm-official/domovoi-wake-word-models),
 under CC BY-NC-SA 4.0 (non-commercial, because of its training data; it is
@@ -725,6 +575,234 @@ new rooms can't wake yet and what fixes it.
 A trained word can no longer be named after a word rooms already have
 ("Hey Jarvis", "Alexa", "Domovoi v1"…): a room would load the stock model
 for it instead of the one you trained.
+
+### Each room says which word it wakes on
+
+No migration. In Settings → Rooms, a room's drawer lists its **wake word**
+(“Domovoi”, or whichever word) in its details, above the voice: the name
+only, the sensitivity stays in the room's Settings tab. The word is the model the room
+device reports loading; a room on older software shows the word the server
+gave it, a room waiting for its word's model shows it as pending, and a room
+older than the household default that reports nothing reads **unknown until
+this room updates** (upgrading the room fixes it).
+
+- **Satellites:** Pi and PC rooms add `wake_word` (the loaded model's slug,
+  e.g. `domovoi_v1`, `hey_jarvis`) to their health sample. Phones in room
+  mode can send the same field; until they do, their hello's word is used.
+- **API:** each `GET /api/satellites` row carries `wakes_on` (`{slug, name,
+  source, pending_slug, pending_name, text}`; `source` is `device`,
+  `assigned`, `chosen`, `pending` or `unknown`).
+
+### Settings → Rooms says why a room couldn't join
+
+- **What changed.** When a room device can't join for a reason only the
+  server knows, **Settings → Rooms** now says so in a plain line above the
+  approvals — for example "A room tried to join at 192.168.1.30:6370, but
+  this server couldn't prove it's the one at that address. Add that address
+  to the server's trusted addresses (TRUSTED_HOSTS), or set the room up with
+  the server's own address." The other lines cover a room paired with a
+  different device, a device without a pairing key, two devices asking for
+  one name, too many requests from one address and a code no device uses.
+  The newest five are kept, each for a day, in memory (admins only:
+  `GET /api/satellites/join-problems`).
+- **Also.** A core reached at its host's address through a VM or a NAT'd
+  distro can now be vouched for by the host (its root-owned network-name
+  report, `server_identity.VOUCHED_ADDRESS_SOURCES`) instead of needing that
+  address in `TRUSTED_HOSTS`. And a request on the approvals list that no
+  device has visited for fifteen minutes now disappears on its own, freeing
+  its room name; a device that is still waiting keeps its place.
+- **Nothing to do.**
+
+### Install on Linux with one command
+
+- **What changed.** On Ubuntu 26.04 the server now installs with one command:
+  `curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash`.
+  It asks whether the server will have internet and its time zone, checks
+  what it downloaded (the commit GitHub names for `stable`, and that
+  release's manifest signed with the release key the Windows programs
+  pin), then runs `scripts/linux/provision.sh` from that copy at that exact
+  commit, which asks about AI chat as before. It ends with the address to
+  open and how to read the setup code. Answers can be given on the command
+  line instead (`... | sudo bash -s -- --internet never --timezone Europe/Berlin --yes`),
+  and every `provision.sh` option passes through. Before the first release
+  it installs `main`, unsigned, and says so; `--channel main` asks for
+  `main` on purpose.
+- **Nothing to do** on a server that is already installed, and
+  `provision.sh` itself is unchanged: its options, its output and the
+  Windows installer's use of it stay as they were. Cloning and running
+  `provision.sh` yourself still works
+  ([LINUX_HOST.md, Install](LINUX_HOST.md#install), which also shows how to
+  read the one-command script before running it). The section that
+  described it is now **Or run the install script yourself**; the old
+  `#or-let-the-script-do-it` link lands on the page without the jump.
+
+### Debian 13, Linux Mint 22 and Pop!_OS 24.04
+
+- **What changed.** The Linux install (the one command, and
+  `scripts/linux/provision.sh` behind it) now also runs on **Debian 13**
+  and on the Ubuntu-based **Linux Mint 22** and **Pop!_OS 24.04**, besides
+  Ubuntu 26.04 ([LINUX_HOST.md, Which distro](LINUX_HOST.md#which-distro)).
+  Docker comes from Docker's Debian repository on Debian and as Ubuntu
+  24.04's packages on Mint and Pop!_OS, each pinned like 26.04's. Where the
+  system's `python3` is not 3.14 (all three), the venv runs on a CPython
+  3.14 that Domovoi installs under `/usr/local/lib/domovoi-python` with uv,
+  both downloads pinned by version and SHA-256
+  ([The Python the venv runs on](LINUX_HOST.md#the-python-the-venv-runs-on)).
+  Fedora, Arch and other systems stop at once with a clear message; ask for
+  yours in an issue. A fresh install on Ubuntu 26.04 and Debian 13 is now
+  tested in CI every week, with an update and a rollback after it.
+- **What to know.** On Debian and the Ubuntu 24.04 systems, a release that
+  pins a newer build of that CPython moves the venv onto it during the
+  dashboard's update (a `python` step in **last update**) and back if the
+  update rolls back; under internet **No** it waits, with a `warn`. Each
+  build has its own folder (about 100 MB); after a successful update the
+  ones no venv needs are removed (a `python-cleanup` step), keeping the
+  current build and the one before it. Under **No**, Debian's apt timers and unattended
+  upgrades are masked as on Ubuntu; `popularity-contest`, which reports
+  only if you said yes to it, is left as you set it, and the update says so.
+- **Nothing to do** on Ubuntu 26.04 or in the Windows installer's distro:
+  the venv stays on the system's Python, and nothing they install, run or
+  record changes (a re-run of `provision.sh` skips every step as before).
+  Ubuntu releases other than 26.04 still warn first; Ubuntu 24.04 now gets
+  its own Docker packages and Domovoi's CPython instead of stopping at the
+  venv.
+
+### The installer puts the phone app on the server
+
+- **What changed.** The install now downloads the Android app onto the
+  server with its other install-time downloads (the voices, Whisper, the
+  speaker model, the AI models): about 100 MB, the release
+  `android/release.json` names, from the project's GitHub release, checked
+  against the release key like an admin's download. So the server can
+  hand it to phones that have no internet. It is the `phone-app` step of
+  `scripts/linux/provision.sh`, which the Windows installer runs too;
+  like the other install downloads it doesn't depend on the internet
+  answer. Until 1.3.0 the first download was always an admin's press of
+  **Download the app to this server**.
+- **If the install couldn't** (no internet then), the install still
+  finishes: its summary says "The phone app couldn't be downloaded: this
+  server needs the internet once, at some point, to put it here (or upload
+  it in Settings)", and so does the Windows installer's last page. Settings
+  → Phones & browsers → **Get the Domovoi app** and Home's **needs
+  attention** keep saying so until the app is on the server; a re-run of
+  the install script tries again, and skips it once it is here.
+- **Nothing to do** on a server that is already set up: nothing is
+  downloaded by itself. If the app isn't on it, the same reminder shows.
+- **For scripts reading the install's progress:** the final progress line
+  carries `phone_app` (true, false, or null when unknown), and there is one
+  more step (`phone-app`, after `piper`), so `total` is 23.
+
+### The server signs with `cryptography`, not its own code
+
+Nothing to do: the update installs it. The server's identity (the key a
+prepared satellite trusts, the signed `/v1/health` answer, the signed
+satellite code, plugin, sound and wake-word lists) and the signature check
+of the Android app it serves now run on
+[`cryptography`](https://cryptography.io/) 50.0.2 (Apache-2.0 or
+BSD-3-Clause, OpenSSL inside) instead of Domovoi's own pure-Python Ed25519
+and RSA code, which wasn't constant-time. Before, a server used
+`cryptography` only if someone had installed the optional `signing` extra;
+now it is a core dependency in both server locks, and the `signing` extra
+is gone.
+
+- **Same keys, same signatures.** The identity file is untouched and
+  every prepared card keeps trusting the server: Ed25519 gives the same
+  signature from either code, and the tests hold them to it.
+- **The server never signs with the fallback.** A server missing the
+  package (a broken install) says so at ERROR at boot, makes no key and
+  signs nothing, so satellites refuse it until the dependencies are
+  reinstalled from the lock. Signature checks still answer, in pure Python.
+- **Where it's said.** Each server process logs the library and OpenSSL
+  versions once at boot, and `GET /v1/admin/version` reports `crypto`:
+  `{backend, cryptography, openssl, signing}`.
+- **Satellites are unchanged**: they check with `cryptography` where their
+  Python has it and with the vendored pure-Python Ed25519 otherwise (the
+  32-bit Pi OS case), and now say once in the journal which.
+- **One verdict for every input.** OpenSSL accepts a public key written in
+  a non-canonical way that Domovoi's code refused: written so, the
+  identity key took one forged signature as valid over any message. Every
+  verifier now runs Domovoi's encoding checks before handing a signature to
+  `cryptography`, so both give the same answer. A satellite only trusts
+  the key whose fingerprint it pinned, so no pinned device was exposed;
+  a device with nothing pinned trusts the first key it meets anyway.
+- **Developers:** reinstall from the lock (`pip install --require-hashes
+  -r requirements.lock`, or `pip install -e .`): the suite now signs with
+  `cryptography`, and without it the identity and APK tests fail.
+
+### Security updates: Pillow, certifi, filelock
+
+Nothing to do: these come with the update. They fix published security
+advisories in three packages the server and the rooms install.
+
+- **Pillow 12.3.0 → 13.0.0** (pictures: thumbnails, cover art, chat
+  pictures, printing and scanning). Pillow 13.0.0 fixes 43 advisories,
+  five of them critical, mostly about crafted image files (JPEG, TIFF,
+  GIF, PDF, FlashPix and others) that could crash the server, use up its
+  memory or CPU, or read or write memory they shouldn't:
+  `GHSA-22hg-r758-rrw9`, `GHSA-24rc-8hj2-v98c`, `GHSA-254f-3936-288h`,
+  `GHSA-27h8-gf7j-v5hc`, `GHSA-332p-7hrc-92wf`, `GHSA-3j72-p6qg-6xp7`,
+  `GHSA-4558-3h8r-v8xp`, `GHSA-462x-pgg6-55fp`, `GHSA-4rm8-3hmm-39fg`,
+  `GHSA-4rr5-89j8-mwwm`, `GHSA-58r4-6rv3-gfh8`, `GHSA-5x8w-8jj5-q52h`,
+  `GHSA-5xm2-6676-qcp9`, `GHSA-654x-cwwv-5j9c`, `GHSA-65qm-jvmh-6pqg`,
+  `GHSA-74r2-7ff9-mjj2`, `GHSA-78g4-xqwv-q3g8`, `GHSA-7mwm-ghpf-9vrm`,
+  `GHSA-8g5g-8vmr-9782`, `GHSA-9v9v-9qvf-h2hj`, `GHSA-c6hw-5grf-ff96`,
+  `GHSA-cp9v-662q-vvx9`, `GHSA-f2g6-542v-9j58`, `GHSA-fc9g-5qg7-mf45`,
+  `GHSA-g4qv-2jxx-769h`, `GHSA-g7cr-3p24-7wf7`, `GHSA-g842-9rc4-69pw`,
+  `GHSA-gg2r-wvfm-q9rx`, `GHSA-j4m9-6w36-pw47`, `GHSA-jg86-v3jv-hrpm`,
+  `GHSA-mrfp-p49p-3hf2`, `GHSA-p4wg-p73j-c528`, `GHSA-p8hx-v2p6-rp84`,
+  `GHSA-pchr-8j38-3x4p`, `GHSA-q45j-58j2-45rg`, `GHSA-rfgq-q3w2-pmv2`,
+  `GHSA-v9pv-5gc8-w2m6`, `GHSA-vx6w-vv9f-6gvg`, `GHSA-w889-685w-c8fh`,
+  `GHSA-wqgw-9xfh-qf2g`, `GHSA-xcvg-w56q-r89m`, `GHSA-xgh8-jp6q-p5x8`,
+  `GHSA-xvh5-g6gv-559v`. The lowest Pillow the server accepts is now
+  13.0, so an update that resolves from the package index can't land on
+  an older one. Domovoi's own picture code needed no change.
+- **certifi 2026.6.17 → 2026.10.23** (the list of trusted certificate
+  authorities for the server's outside connections; the PC and Windows
+  rooms had 2026.7.22). The old list still trusted emSign roots whose
+  intermediate keys were compromised: `GHSA-6q48-6c7w-9gw2`
+  (also `PYSEC-2026-4320`), critical. A room computer gets the new list
+  the next time it updates.
+- **filelock 4.0.12 → 4.2.10** (Linux server only; used when models are
+  downloaded). Lock-file handling a local user could abuse to read,
+  truncate or hold another user's files: `GHSA-567q-5qvw-pf92`,
+  `GHSA-6627-m3xw-93mp`, `GHSA-69hj-f68j-2879`, `GHSA-8mx5-7m5m-r77g`,
+  `GHSA-9c4x-gm8v-wgc4`, `GHSA-9j6q-wvj5-jgjg`, `GHSA-9vhv-jxww-xfm5`,
+  `GHSA-cwqr-hh33-gh44`, `GHSA-fj95-fr6c-h845`, `GHSA-fq56-3cx3-fjxp`,
+  `GHSA-m462-7rxw-wvpg`, `GHSA-rfpc-qcw5-3pc4`, `GHSA-v4x8-3wr5-3wq8`
+  (high).
+
+### Security fixes from the code scan
+
+Nothing to do; no migration. GitHub's code scanning (CodeQL) found these,
+each fixed with a test:
+
+- **A crafted reply could freeze the server.** Answering a "did you mean
+  …?" with "yes" and a long run of "sure thing" took the server time that
+  doubled with every repeat; a few hundred characters held it for days.
+  Any paired device (or, before setup, anything on the network) could send
+  one. It now takes a moment, and every reply means what it did before.
+- **A crafted document or chat draft could stall the dashboard.** A save
+  from the document editor made of "<" with no ">", or a chat draft line of
+  "[" with no "]", took time that grew with the square of its length (a
+  large one held the dashboard for minutes to hours). Both now take time in
+  proportion to their length, with the same result as before.
+- **A plugin's table names reached the database as SQL.** The uninstall
+  dialog's row counts put a plugin's table names into a query as written,
+  so a plugin could have had a query of its choosing run, outside its own
+  database role, when an admin opened the dialog. Names are now quoted.
+- **The join page offered a link a crafted address could steer.** A room
+  code with a "#" (or another character no code carries) in a `/join`
+  link now reads as a code the page can't read, instead of being copied
+  into the "open the app" link, where it could name another app or
+  fallback address.
+
+### Release files you can check: SBOMs and build provenance
+
+Nothing to do. Each release on GitHub now carries software bills of
+materials (`domovoi-server.cdx.json`, `domovoi-web.cdx.json`, and
+`domovoi-android.cdx.json` when it carries the app), and every file on it
+has GitHub build provenance: `gh attestation verify <file> -R coders-farm-official/domovoi`
+([SECURITY.md, Verifying a release](../SECURITY.md#verifying-a-release)).
 
 ## 2026-11-14 — 1.2.1
 
