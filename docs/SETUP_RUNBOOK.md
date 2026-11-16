@@ -16,7 +16,8 @@ learn the quirks of your particular mic board; the rest are repetition.
 **Three ways to bring up the server.** On a **Windows 11 PC**, run
 `DomovoiSetup.exe` ([the Windows installer](WINDOWS_HOST.md), a preview): it
 installs the whole server for you and ends with a setup code. On an
-**Ubuntu 26.04 box**, one command does Steps 1 and 2 in one run
+**Ubuntu 26.04 box** (or Debian 13, Linux Mint 22, Pop!_OS 24.04:
+[which systems](LINUX_HOST.md#which-distro)), one command does Steps 1 and 2 in one run
 ([LINUX_HOST.md, One command](LINUX_HOST.md#one-command); it runs
 `scripts/linux/provision.sh`, which you can also
 [run yourself](LINUX_HOST.md#or-run-the-install-script-yourself)).
