@@ -86,7 +86,9 @@ async def _vec(pcm: bytes) -> bytes:
 
 
 async def _person(name: str, *samples: tuple[bytes, str]) -> int:
-    """A person with a satellite sample per ``(pcm, room)``."""
+    """A person with a satellite sample per ``(pcm, room)``, each a good
+    one (5 s of speech): a room with only short samples of a recognized
+    voice goes on to learn it there (test_voice_intro_longer.py)."""
     async with SessionLocal() as s:
         pid = int((await s.execute(
             text("INSERT INTO people (name) VALUES (:n) RETURNING id"), {"n": name},
@@ -95,7 +97,7 @@ async def _person(name: str, *samples: tuple[bytes, str]) -> int:
         for pcm, room in samples:
             await repo.add(
                 person_id=pid, embedding=await _vec(pcm),
-                model=repo.EMBEDDING_MODEL_TAG, room_id=room, sample_seconds=1.0,
+                model=repo.EMBEDDING_MODEL_TAG, room_id=room, sample_seconds=5.0,
             )
         await s.commit()
     return pid
@@ -290,7 +292,12 @@ async def test_no_enrols_a_new_namesake_from_the_same_clip(room) -> None:
     other_mic = np.full(16_000, 4444, dtype=np.int16).tobytes()
     assert _reply(await room.say("My name is Priya.", other_mic)) == _more_than_one("Priya")
     # The newcomer as this room hears them: named by voice, not a guess.
-    assert _reply(await room.say("My name is Priya.", STRANGER)) == "I already know you, Priya."
+    # (Its one sample is the one-second introduction's, so the room goes on
+    # to learn it better: still no third Priya.)
+    assert _reply(await room.say("My name is Priya.", STRANGER)) == (
+        "I already know you, Priya. Let me learn your voice better here: count "
+        "from one to ten for me, at your normal voice."
+    )
     assert len(await _people()) == 2
     assert await _samples(priya) == [("satellite", "office")]
     assert await _samples(newcomer) == [("satellite", ROOM)]

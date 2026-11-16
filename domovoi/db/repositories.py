@@ -1256,6 +1256,24 @@ class VoiceProfilesRepository:
         )
         return bool(result.rowcount)
 
+    async def room_samples(
+        self, person_id: int, room_id: str, model: str,
+    ) -> list[tuple[int, float | None]]:
+        """``(id, sample_seconds)`` of ``person_id``'s SATELLITE samples
+        from ``room_id``, oldest first."""
+        rows = await self.s.execute(
+            text(
+                """
+                SELECT id, sample_seconds FROM voice_profiles
+                 WHERE person_id = :pid AND room_id = :room AND model = :model
+                   AND source = 'satellite'
+                 ORDER BY id
+                """
+            ),
+            {"pid": int(person_id), "room": room_id, "model": model},
+        )
+        return [(int(r[0]), None if r[1] is None else float(r[1])) for r in rows.all()]
+
     async def room_sample_count(self, person_id: int, room_id: str, model: str) -> int:
         """How many SATELLITE samples ``person_id`` has from ``room_id``."""
         row = await self.s.execute(
