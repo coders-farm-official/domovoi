@@ -261,6 +261,10 @@ PHRASES: dict[str, tuple] = {
     "play jazz upstairs": ("music", "fast", {}),
     "join the kitchen": ("music", "fast", {}),
     "leave the group": ("music", "fast", {}),
+    # Stop in a group (owner, 2026-11-15): the whole group; "here" or "only": one room.
+    "stop the music": ("music", "fast", {}),
+    "stop here": ("music", "fast", {}),
+    "stop the music in the office only": ("music", "fast", {}),
     "which rooms are playing this": ("music", "fast", {}),
     "play the song that goes …": ("music", "fast", {"try": "play the song that goes warm stones by the fire"}),
     # Up next by voice (phase P6, handlers/music_queue_voice.py).

@@ -1909,6 +1909,7 @@
           "music"
         ],
         "summary": "Stop",
+        "description": "Stop a room's music. A room in a group stops its whole group unless\n``scope=room`` (2026-11-15).",
         "operationId": "stop_api_music_stop__room_id__post",
         "parameters": [
           {
@@ -1919,6 +1920,28 @@
               "type": "string",
               "title": "Room Id"
             }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "group",
+                    "room"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`group` (the default): a room in a group stops the whole group; `room`: this room alone stops (it leaves the group).",
+              "title": "Scope"
+            },
+            "description": "`group` (the default): a room in a group stops the whole group; `room`: this room alone stops (it leaves the group)."
           }
         ],
         "responses": {

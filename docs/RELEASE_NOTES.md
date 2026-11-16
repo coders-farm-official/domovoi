@@ -303,11 +303,18 @@ no satellite update. A room in a group plays another room's MPD stream
   satellite or the household's app, as before (CORE-11).
 - **What a room in a group does:** "play X" there changes the music in
   every room of the group; skip, back and queue edits are the group's;
-  **pause and resume are the whole group's**; **stop stops only that
-  room** (it leaves the group, the others play on; when the room whose
-  player it was stops, the queue moves to the room that joined first and
-  can take it, with a second or two of gap there; when none can, the group
-  ends). A room whose speaker has never connected can't join. Podcasts and
+  **pause, resume and stop are the whole group's**: "stop" (or the stop
+  button on Home and the Music page) stops every room of the group and the
+  group's shared session ends, its queue kept, stopped; a named group
+  stays, so "play X upstairs" starts it again. **"Stop here"** ("stop in
+  here", "stop just here", "stop the music here", "only stop this room",
+  or "leave the group") stops only that room: it leaves the group, the
+  others play on ("Stopped here. The music plays on in the garage.").
+  "Stop the music in the office" stops the office's group; "stop the music
+  in the office only" stops just the office. When the room whose player
+  it was leaves, the queue moves to the room that joined first and can
+  take it, with a second or two of gap there; when none can, the group
+  ends. A room whose speaker has never connected can't join. Podcasts and
   audiobooks still play in one room: aimed at a group, Domovoi says so. A guest's skip or add reaches the group
   while the guest's room plays it. The group ends when its music runs out;
   a room offline for 30 minutes leaves; a restart keeps a group that
@@ -387,8 +394,11 @@ loudness** (the quiet room before a command and the second of silence
 after it are cut off; measured again for the new model: at the 1 % ceiling
 it names more than the whole recording does). A room holds a person to the
 samples it heard itself when it has one, and the People page shows
-**rooms that know this voice**: in a room marked "not yet", the person says
-"my name is …" there and answers yes. A command with music under it is
+**rooms that have learned this voice** (every room can recognize a person
+from any of their samples; one that has learned the voice there does it
+more reliably): in a room marked "not yet learned", the person says "my
+name is …" there and answers yes. A person's profile now opens with where
+they were **last heard in** (a room, "the phone" or "chat") and when. A command with music under it is
 scored but names nobody (`noisy` in the room's history, "too noisy to
 tell").
 

@@ -49,9 +49,11 @@ jazz upstairs" / "... in the north wing" does the same for a named group (a
 group's name needs no "in"); "play this everywhere", "play this in the
 office too", "share this with the garage" let other rooms hear what plays
 here; "join the kitchen" / "play the kitchen's music in here" makes this
-room hear the kitchen's; "leave the group" leaves (as "stop" in a room of a
-group does: only that room stops); "just in here" keeps the music here and
-stops the others; "which rooms are playing this" names them. A stop or a
+room hear the kitchen's; "stop" in a room of a group stops the whole
+group, as "pause" pauses it (owner, 2026-11-15); "stop here", "stop the
+music in here" and "leave the group" stop only that room (it leaves, the
+others play on), as "stop the music in the office only" does for another
+room; "just in here" keeps the music here and stops the others; "which rooms are playing this" names them. A stop or a
 pause "everywhere" or "upstairs" applies to every such room that plays.
 Bringing music into other rooms needs a paired satellite (CORE-11).
 
@@ -166,6 +168,31 @@ GROUP_LEAVE_RE = re.compile(
     r"|(?:play (?:it|this|the music) )?(?:just|only) (?:in )?(?:here|this room)"
     r"|keep (?:it|the music|this) (?:just |only )?(?:in )?here)$"
 )
+#: Stopping the music, as said before a place.
+_STOP_HEAD = (
+    r"(?:stop(?: it| the music| music| playing| the song)?"
+    r"|turn (?:off the music|the music off)|shut off the music)"
+)
+_HERE_WORDS = r"(?:(?:right |in )?here|(?:in )?this room)"
+#: A stop for this room alone: "stop here", "stop in here", "stop just
+#: here", "stop the music here", "only stop this room", "stop here only".
+#: In a group this room leaves it and the others play on; a bare "stop"
+#: stops the whole group (owner, 2026-11-15). Every phrasing starts with
+#: "stop" or "turn/shut off", so no song with "here" in its name ("play
+#: wish you were here") is taken.
+STOP_HERE_RE = re.compile(
+    r"^(?:only |just )?" + _STOP_HEAD + r" (?:(?:just|only) )?" + _HERE_WORDS + r"(?: only)?$"
+)
+#: A stop for another room alone, said with "only" or "just": "stop the
+#: music in the office only", "stop the music just in the office", "only
+#: stop the music in the office". Without the word, a stop in a room of a
+#: group stops the group (the room-control path).
+STOP_ONLY_RE = re.compile(
+    r"^(?:only " + _STOP_HEAD + r" (?:(?:just|only) )?(?P<prep1>" + _PREP + r") (?P<place1>.+?)(?: only)?"
+    r"|" + _STOP_HEAD + r" (?:just|only) (?P<prep2>" + _PREP + r") (?P<place2>.+?)(?: only)?"
+    r"|" + _STOP_HEAD + r" (?P<prep3>" + _PREP + r") (?P<place3>.+?) only)$"
+)
+
 #: "which rooms are playing this", "where is this playing".
 GROUP_WHICH_RE = re.compile(
     r"^(?:(?:which|what) rooms? (?:are|is) (?:playing|hearing|listening to) " + _THIS + r"(?: too)?"
@@ -330,6 +357,7 @@ class MusicRoomsMixin(RoomCommandsMixin):
         "_room_play_from_match", "_room_control_from_match", "_room_first_from_match",
         "_room_group_from_match", "_group_share_from_match", "_group_join_from_match",
         "_group_leave_from_match", "_group_which_from_match",
+        "_stop_here_from_match", "_stop_only_from_match",
     )
 
     # ── the fast paths ──
@@ -389,6 +417,17 @@ class MusicRoomsMixin(RoomCommandsMixin):
 
     async def _group_which_from_match(self, m, ctx, session):
         return await self._which_rooms(ctx, session)
+
+    async def _stop_here_from_match(self, m, ctx, session):
+        return await self._stop_here(ctx)  # type: ignore[attr-defined]
+
+    async def _stop_only_from_match(self, m, ctx, session):
+        """ "Stop the music in the office only": that room alone stops."""
+        n = next(i for i in (1, 2, 3) if m.group(f"place{i}") is not None)
+        prep, place = m.group(f"prep{n}"), m.group(f"place{n}")
+        return await self._room_command(
+            f"stop the music {prep} {place}", ctx, session, "control", only=True,
+        )
 
     def _action_of(self, text_: str) -> str | None:
         hit = self._own_path(CONTROL_ALIASES.get(text_, text_))
@@ -472,7 +511,10 @@ class MusicRoomsMixin(RoomCommandsMixin):
         family: str,
         *,
         name_checked: bool = False,
+        only: bool = False,
     ) -> Response | None:
+        """``only``: a stop for the named room alone ("stop the music in the
+        office only"), never its whole group."""
         rooms = await rooms_mod.household_rooms(session, ctx.app)
         ask, unknown = self._parse(transcript, family, rooms)
         if ask is None and unknown is None:
@@ -501,9 +543,13 @@ class MusicRoomsMixin(RoomCommandsMixin):
         if place.kind == "group":
             return await self._in_group(ask, action, place, ctx, session)
         if place.kind == "here" or any(r.room_id == ctx.room_id for r in place.rooms):
+            if action == "stop":
+                # "Stop the music in here": a stop qualified by this room
+                # is for this room alone, never its group (2026-11-15).
+                return await self._stop_here(ctx)  # type: ignore[attr-defined]
             return await self._here(ask, transcript, ctx, session)
         room = self._pick_room(place.rooms)
-        return await self._in_room(ask, action, room, ctx, session)
+        return await self._in_room(ask, action, room, ctx, session, only=only)
 
     async def _worth_a_room(self, ask: _Ask, session: AsyncSession) -> bool:
         """Whether a play's object is music for sure: words that mean any
@@ -567,6 +613,7 @@ class MusicRoomsMixin(RoomCommandsMixin):
     # ── another room ──
     async def _in_room(
         self, ask: _Ask, action: str, room: Room, ctx: Context, session: AsyncSession,
+        *, only: bool = False,
     ) -> Response | None:
         target = await self._target(room, action, ctx)
         if isinstance(target, Response):
@@ -580,6 +627,9 @@ class MusicRoomsMixin(RoomCommandsMixin):
                 response = await self._play_random(target, session)  # type: ignore[attr-defined]
             else:
                 response = await self._play_there(ask, target, session)
+        elif only and action == "stop":
+            # That room alone: it leaves its group, the others play on.
+            response = await self._stop_here(target)  # type: ignore[attr-defined]
         else:
             hit = self._own_path(CONTROL_ALIASES.get(ask.head, ask.head))
             if hit is None:  # the head matched _CONTROL_HEAD_RE, so it has one
@@ -1064,6 +1114,8 @@ __all__ = [
     "ROOM_OR_TITLE_KIND",
     "ROOM_PLAY_RE",
     "ROOM_TAIL",
+    "STOP_HERE_RE",
+    "STOP_ONLY_RE",
     "control_room_patterns",
     "say_in_room",
 ]

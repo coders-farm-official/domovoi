@@ -15,7 +15,8 @@ Pinned here (SHARED-QUEUES-PLAN.md §5 "Tests", with the owner's answers of
 * the sweeper: a group whose host ran dry ends, a member offline for 30
   minutes leaves;
 * voice: "play X upstairs" (a named group, no "in"), "play X everywhere",
-  "play this in the garage too", "join the garage", "stop" in a member room,
+  "play this in the garage too", "join the garage", "stop" in a group (the
+  whole group, owner 2026-11-15) and "stop here" (this room alone),
   "leave the group", "just in here", "which rooms are playing this", "stop
   the music upstairs"; "play the jazz station" is never a group's;
 * named groups' names; and, with the database, the mirror the web reads.
@@ -319,24 +320,139 @@ async def test_play_x_in_a_member_room_changes_the_groups_music(house) -> None:
     assert music_groups.host_of("dining_room") == "garage"  # still together
 
 
-async def test_stop_in_a_member_room_stops_only_that_room(house) -> None:
+# Stop (owner, 2026-11-15, reversing "stop is per room" of 2026-11-14): a
+# bare stop is the whole group's, as pause is; "stop here" is this room's.
+
+
+async def test_stop_in_a_member_room_stops_the_whole_group(house) -> None:
     await _playing(house, "garage")
     app = _app()
-    await music_groups.share(app, "garage", ["dining_room"])
-    resp = await _say("stop", _ctx(app=app), FakeDB())
-    assert resp.text == "Stopped here. The music plays on in the garage."
+    ctx = _ctx(app=app)
+    await music_groups.share(app, "garage", ["dining_room", "jordan_office"])
+    resp = await _say("stop", ctx, FakeDB())
+    assert resp.text == "Stopped in the dining room, the garage and the jordan office."
     assert resp.music_action == "stop"
-    assert house.clients["garage"]._state == "play"
+    assert house.clients["garage"]._state == "stop"  # the host's player
+    assert music_groups.shares() == []
+    assert {"type": "music_stop"} in _sat(ctx, "garage").frames
+    assert {"type": "music_stop"} in _sat(ctx, "jordan_office").frames
+    assert "jordan_office" not in app.state.resumable_music
+    # Its queue is kept, stopped: "resume" in the old host plays it again.
+    assert [e["file"] for e in await house.clients["garage"].queue_list()][0] == "song.mp3"
+
+
+async def test_stop_the_music_in_the_host_room_stops_the_whole_group(house) -> None:
+    await _playing(house, "garage")
+    app = _app()
+    ctx = _ctx(room="garage", app=app)
+    await music_groups.share(app, "garage", ["dining_room", "jordan_office"])
+    resp = await _say("stop the music", ctx, FakeDB())
+    assert resp.music_action == "stop"
+    assert house.clients["garage"]._state == "stop"
+    assert music_groups.shares() == []
+    assert {"type": "music_stop"} in _sat(ctx, "dining_room").frames
+    # Nobody took the queue over: no member's own player plays.
+    assert house.clients["dining_room"]._state != "play"
+
+
+async def test_stop_everywhere_share_says_everywhere(house) -> None:
+    await _playing(house, "garage")
+    app = _app()
+    await music_groups.share(app, "garage", ["dining_room"], everywhere=True)
+    resp = await _say("stop", _ctx(app=app), FakeDB())
+    assert resp.text == "Stopped everywhere."
     assert music_groups.shares() == []
 
 
-async def test_stop_in_the_host_room_hands_the_queue_on(house) -> None:
+@pytest.mark.parametrize("said", [
+    "stop here", "stop in here", "stop just here", "stop the music here",
+    "only stop this room", "stop the music in here", "stop here only",
+    "turn off the music in here", "stop the music in this room",
+])
+async def test_stop_here_stops_only_this_room(house, said) -> None:
     await _playing(house, "garage")
     app = _app()
     await music_groups.share(app, "garage", ["dining_room", "jordan_office"])
-    resp = await _say("stop the music", _ctx(room="garage", app=app), FakeDB())
+    resp = await _say(said, _ctx(app=app), FakeDB())
+    assert resp.text == "Stopped here. The music plays on in the garage and the jordan office."
+    assert resp.music_action == "stop"
+    assert house.clients["garage"]._state == "play"
+    assert music_groups.share_of("dining_room") is None
+    assert set(music_groups.share_of("garage").rooms) == {"garage", "jordan_office"}
+
+
+async def test_stop_here_in_the_host_room_hands_the_queue_on(house) -> None:
+    await _playing(house, "garage")
+    app = _app()
+    await music_groups.share(app, "garage", ["dining_room", "jordan_office"])
+    resp = await _say("stop here", _ctx(room="garage", app=app), FakeDB())
     assert resp.music_action == "stop"
     assert music_groups.share_of("dining_room").host == "dining_room"
+
+
+async def test_stop_the_music_in_another_room_stops_its_group(house) -> None:
+    await _playing(house, "garage")
+    app = _app()
+    ctx = _ctx(room="living_room", app=app)
+    await music_groups.share(app, "garage", ["jordan_office"])
+    resp = await _say("stop the music in jordan's office", ctx, FakeDB())
+    assert resp.text == "Stopped in the garage and the jordan office."
+    assert music_groups.shares() == []
+    assert house.clients["garage"]._state == "stop"
+    assert {"type": "music_stop"} in _sat(ctx, "jordan_office").frames
+    assert {"type": "music_stop"} in _sat(ctx, "garage").frames
+
+
+@pytest.mark.parametrize("said", [
+    "stop the music in jordan's office only", "stop the music just in jordan's office",
+    "only stop the music in jordan's office", "stop the music only in jordan's office",
+])
+async def test_stop_in_another_room_only_stops_that_room(house, said) -> None:
+    await _playing(house, "garage")
+    app = _app()
+    ctx = _ctx(room="living_room", app=app)
+    await music_groups.share(app, "garage", ["jordan_office", "dining_room"])
+    resp = await _say(said, ctx, FakeDB())
+    assert resp.text == "Stopped the music in Jordan's Office."
+    assert music_groups.share_of("jordan_office") is None
+    assert set(music_groups.share_of("garage").rooms) == {"garage", "dining_room"}
+    assert house.clients["garage"]._state == "play"
+    assert {"type": "music_stop"} in _sat(ctx, "jordan_office").frames
+
+
+async def test_stop_in_a_room_in_no_group_is_unchanged(house) -> None:
+    await _playing(house, "dining_room")
+    for said in ("stop", "stop here"):
+        await _playing(house, "dining_room")
+        resp = await _say(said, _ctx(), FakeDB())
+        assert resp.text == "Stopped."
+        assert resp.music_action == "stop"
+        assert house.clients["dining_room"]._state == "stop"
+
+
+@pytest.mark.parametrize("said, method", [
+    ("stop", "_stop_from_match"),
+    ("stop the music", "_stop_from_match"),
+    ("stop here", "_stop_here_from_match"),
+    ("stop in here", "_stop_here_from_match"),
+    ("stop just here", "_stop_here_from_match"),
+    ("stop the music here", "_stop_here_from_match"),
+    ("only stop this room", "_stop_here_from_match"),
+    ("stop the music in here", "_stop_here_from_match"),
+    ("stop the music in the office", "_room_control_from_match"),
+    ("stop the music in the office only", "_stop_only_from_match"),
+    ("stop the music just in the office", "_stop_only_from_match"),
+    ("leave the group", "_group_leave_from_match"),
+    ("just in here", "_group_leave_from_match"),
+    # A song with "here" in its name is still a play, never a stop.
+    ("play wish you were here", "_play_any_from_match"),
+    ("play here comes the sun", "_play_any_from_match"),
+    ("play stop right here", "_play_any_from_match"),
+])
+def test_stop_phrases_route(said, method) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "music", (said, plan)
+    assert plan.fast_path.method.__name__ == method
 
 
 async def test_play_this_in_the_garage_too(house) -> None:

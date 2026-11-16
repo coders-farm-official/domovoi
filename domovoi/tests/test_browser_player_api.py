@@ -242,3 +242,26 @@ def test_play_tracks_domovoi_unreachable_502(monkeypatch):
             json={"room_id": "kitchen", "track_ids": [1]},
         )
     assert r.status_code == 502
+
+
+# ─── stop's scope (groups, 2026-11-15) ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(("scope", "path"), [
+    (None, "/v1/admin/music/stop/kitchen"),
+    ("group", "/v1/admin/music/stop/kitchen?scope=group"),
+    ("room", "/v1/admin/music/stop/kitchen?scope=room"),
+])
+async def test_stop_passes_its_scope_to_the_core(monkeypatch, scope, path):
+    """A room in a group stops the whole group unless the caller asks for
+    the room alone; a caller that sends no scope reads as before."""
+    captured = {}
+
+    async def _fake_post_admin(path, body=None, headers=None):
+        captured["path"] = path
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(music_api, "post_admin", _fake_post_admin)
+    monkeypatch.setattr(music_api, "auth_forward_headers", lambda request: {})
+    await music_api.stop("kitchen", object(), scope=scope)
+    assert captured["path"] == path
