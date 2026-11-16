@@ -311,7 +311,7 @@ no satellite update. A room in a group plays another room's MPD stream
 ## 1.3.0 — Voice ID: a new speaker model; everyone says "my name is …" once more (V061)
 
 **What to do after updating:** each person says **"my name is …"** once,
-in any room, and answers yes. Until they do, Domovoi doesn't know who is
+in any room, and answers the few questions that follow (below). Until they do, Domovoi doesn't know who is
 speaking: it answers everyone, it just names nobody. The People page shows
 who still has to ("Not recognized by voice yet"), and the household notice
 at its top says how many. Someone who once asked Domovoi **never to save
@@ -368,6 +368,38 @@ name is …" there and answers yes. A person's profile now opens with where
 they were **last heard in** (a room, "the phone" or "chat") and when. A command with music under it is
 scored but names nobody (`noisy` in the room's history, "too noisy to
 tell").
+
+**A longer introduction, so Domovoi learns enough of your voice** (found
+on the owner's device check: one "my name is …" is about a second of
+speech, and in rooms the owner's own voice then scored 0.41 to 0.61
+against the 0.58 bar, with another household member's nearly as close).
+In a room, after "my name is …" Domovoi now asks **"Nice to meet you! How
+do you spell that?"**. Spell it ("S, A, R, A, H"): that is the
+spelling it saves, so a misheard name is fixed right there ("yes", or "no,
+it's …", still work). Then, if it hasn't heard about eight seconds of your
+voice yet, **"Last bit: count from one to ten for me, at your normal
+voice."**, and only if that's still not enough, **"Thanks — one more: say
+'Good morning Domovoi, what's on today?' like you would at breakfast."**
+It ends with "Thanks, Sarah! I'll know your voice now." Someone who
+speaks for longer gets fewer questions. Your voice is saved as one sample
+as soon as the name is settled, and each answer after that improves it (the
+clips are combined into one voiceprint), so "stop", "never mind" or
+walking away keeps what it already heard, never less than before. A clip
+that's too short, under music or in somebody else's recognized voice adds
+nothing. This applies to the re-introduction everyone does after this
+update and to teaching a new room your voice. The phone's chat mic keeps
+the one-clip introduction. Thresholds are unchanged.
+
+**A room may ask "was that you?" once.** When a command in a room scores
+just under the bar for one person (at least 0.50, clearly ahead of anyone
+else), and that room has no sample of their voice yet, Domovoi answers the
+command and then asks **"By the way, was that you, Sarah?"**. "Yes" (right
+away, in the same room, within about 30 seconds) saves that command's clip
+as the room's sample of your voice; "no", or anything else, saves nothing.
+A room asks one person at most once a day, and keeps at most three samples
+of a person from these yeses. It never asks from a phone, during an
+introduction, or after a command too short or noisy to score; nothing is
+ever saved without the yes.
 
 **A request too short to tell who's talking says so** (found on the first
 real-device check): voice ID names someone only from at least a second of

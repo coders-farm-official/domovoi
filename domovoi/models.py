@@ -75,6 +75,11 @@ class Context(BaseModel):
     # (too short, no embedding, timed out): a reply to the second must not
     # say the speaker is unknown (``voice_identifier.unheard_text``).
     voice_outcome: str | None = None
+    # How much speech the utterance held, as the voice embedder measured it
+    # (``IdentificationResult.speech_seconds``); None when unknown. The
+    # introduction adds it up until it has heard enough of a new voice
+    # (handlers/voice_profile.py).
+    voice_speech_sec: float | None = None
     # What opened the mic for this utterance: "wake_word", "barge_in",
     # "followup", or "push_to_talk" (None on non-satellite paths like
     # /v1/intent). Stamped from the `utterance_start` frame and persisted to

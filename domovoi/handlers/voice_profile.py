@@ -32,6 +32,15 @@ yes. A heard name nobody has that sounds like one somebody has asks "Did
 you mean Jordan?" (``core.name_sound_alike``) instead of making a second,
 misheard person.
 
+At a satellite (2026-11-16) the first question is "Nice to meet you! How do
+you spell that?" instead (the spelling given is the name), and once the
+name is settled and the voice saved, the introduction asks the speaker to
+count to ten, and maybe say one sentence, until it has heard about eight
+seconds of speech; the one sample's embedding becomes all the clips'
+together ("Hearing enough of a new voice" below). A room that nearly
+recognizes someone it has no sample of asks "By the way, was that you, X?"
+once a day (:func:`maybe_ask_room_check`).
+
 We keep the embedding around in the pending payload (rather than
 re-embedding on confirmation) because re-embedding the *next*
 utterance — likely "yes" — produces a different vector. The original
@@ -122,7 +131,14 @@ from domovoi import voice_history
 from domovoi.models import Context, Intent, Response, is_phone_room
 from domovoi.overheard import assistant_names
 from domovoi.person_names import read_name_reply, sound_alike_people, sounds_like_name, spell_out
-from domovoi.voice_identifier import claims_by_this_voice, is_own_voice, unheard_text
+from domovoi.voice_identifier import (
+    OUTCOME_DENYLIST,
+    OUTCOME_NO_MATCH,
+    OUTCOME_NOISY,
+    claims_by_this_voice,
+    is_own_voice,
+    unheard_text,
+)
 
 log = logging.getLogger(__name__)
 
@@ -464,6 +480,137 @@ _INTRO_EXPIRED_TEXT = (
 _WONT_SAVE_TEXT = "Okay, I won't save that."
 
 
+# ─── Hearing enough of a new voice (2026-11-16) ───────────────────────────
+#
+# One "my name is X" is about a second of speech, too little for a stable
+# voiceprint: a household member's own score in rooms sat at 0.41-0.61
+# against the 0.58 bar, and another member's voice scored nearly as close.
+# So at a satellite the introduction keeps listening across a few turns
+# until it has about INTRO_SPEECH_TARGET_SEC of SPEECH (as the embedder
+# measures it: Context.voice_speech_sec), stopping as soon as it has
+# enough:
+#
+#   "my name is X"  ->  "Nice to meet you! How do you spell that?"
+#   (the spelling) ->  saved; "Last bit: count from one to ten for me, …"
+#   (counting)      ->  "Thanks — one more: say 'Good morning Domovoi, …'"
+#   (the sentence)  ->  "Thanks, X! I'll know your voice now."
+#
+# The voice is saved as ONE sample, at the moment today's flow saved it
+# (the name settled): each further clip REPLACES that sample's embedding
+# with the mean of every clip's unit-norm embedding, re-normalised. The
+# matcher already scores a person against the mean of their unit-norm
+# samples (voice_identifier._person_scores), so several samples from one
+# introduction would score the same in that room — but they would outweigh
+# the person's other rooms in their overall centroid, and break "one
+# sample per room" (learning, the room check's cap, "forget me"'s claims).
+# A clip that is too short or under music adds nothing; walking away,
+# "stop" or "never mind" leaves the sample as it is, never worse than the
+# one-clip introduction. The phone's chat mic keeps the one-clip flow.
+
+#: Seconds of speech the introduction collects before it stops asking.
+INTRO_SPEECH_TARGET_SEC = 8.0
+
+#: The introduction's stages after the name (``stage`` in its payload):
+#: "How do you spell that?" (the name not yet settled), then, the voice
+#: saved, counting to ten and one sentence.
+_STAGE_SPELL = "spell"
+_STAGE_COUNT = "count"
+_STAGE_SENTENCE = "sentence"
+_COLLECT_STAGES = (_STAGE_COUNT, _STAGE_SENTENCE)
+
+_SPELL_TEXT = "Nice to meet you! How do you spell that?"
+_COUNT_TEXT = "Last bit: count from one to ten for me, at your normal voice."
+
+
+def _sentence_text(bot_name: str) -> str:
+    return (
+        f"Thanks — one more: say 'Good morning {bot_name}, what's on today?' "
+        "like you would at breakfast."
+    )
+
+
+def _thanks_text(name: str) -> str:
+    return f"Thanks, {name}! I'll know your voice now."
+
+
+def _stopped_text(name: str) -> str:
+    return f"Okay, I'll stop there. I'll still know your voice, {name}."
+
+
+#: The payload key of the clips heard so far: ``[[embedding_b64, speech_sec], …]``.
+_CLIPS_KEY = "clips"
+#: A reply that ends the collecting ("never mind", "no" are read too).
+_STOP_RE = re.compile(
+    r"^(?:stop|stop it|stop that|please stop|that's enough|enough|i'm done|done|quit)$"
+)
+
+
+def _turn_clip(ctx: Context, *, expected: int | None, first: bool = False) -> list | None:
+    """This turn's voice as a clip of the introduction, ``[b64, speech
+    seconds]``, or None when it doesn't count: no voiceprint (too little
+    speech), an opted-out voice, music under it, or a voice recognized as
+    somebody other than ``expected`` (a different person answered). The
+    introduction's own clip (``first``) is always kept, as it always was;
+    under music its speech just isn't counted."""
+    raw = ctx.embedding_bytes
+    if raw is None or len(raw) != EMBEDDING_DIM * 4:
+        return None
+    secs = float(ctx.voice_speech_sec) if ctx.voice_speech_sec is not None else 0.0
+    if first:
+        return [base64.b64encode(raw).decode("ascii"), 0.0 if ctx.voice_outcome == OUTCOME_NOISY else secs]
+    if ctx.voice_outcome in (OUTCOME_NOISY, OUTCOME_DENYLIST):
+        return None
+    if ctx.person_id is not None and ctx.person_id != expected:
+        return None
+    if ctx.voice_candidates and expected not in ctx.voice_candidates:
+        return None
+    return [base64.b64encode(raw).decode("ascii"), secs]
+
+
+def _clips(data: dict) -> list[list]:
+    """The clips a parked introduction carries (unreadable ones dropped)."""
+    out: list[list] = []
+    for item in data.get(_CLIPS_KEY) or []:
+        try:
+            b64, secs = item
+            if _decode_b64_embedding(str(b64)) is not None:
+                out.append([str(b64), max(0.0, float(secs))])
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _speech_of(clips: list[list]) -> float:
+    return float(sum(secs for _b64, secs in clips))
+
+
+def _combined(clips: list[list]) -> np.ndarray | None:
+    """One embedding for the clips: each L2-normalised, averaged, and the
+    mean normalised again. None when no clip is usable."""
+    vectors = []
+    for b64, _secs in clips:
+        vec = _decode_b64_embedding(b64)
+        if vec is None:
+            continue
+        norm = float(np.linalg.norm(vec))
+        if norm:
+            vectors.append(vec / norm)
+    if not vectors:
+        return None
+    mean = np.mean(vectors, axis=0)
+    norm = float(np.linalg.norm(mean))
+    if not norm:
+        return None
+    return (mean / norm).astype(np.float32)
+
+
+def _collecting(data: dict) -> bool:
+    """Whether a parked introduction collects more of the voice: one asked
+    at a satellite that started with a clip (not the phone's chat mic,
+    not one parked before 2026-11-16)."""
+    return _CLIPS_KEY in data and not _asked_on_the_phone(data)
+
+
 def _not_a_command(name: str) -> bool:
     """A lone word given as a name ("no, Jordyn") that no fast path takes
     as a command ("no, pause" is not somebody called Pause)."""
@@ -709,6 +856,115 @@ async def maybe_inject_third_party_ask(
     return True
 
 
+# ─── "Was that you?" — a room checks once (2026-11-16) ────────────────────
+#
+# A voice that scores just under the bar for one known person, clearly
+# ahead of everyone else, in a room that has no sample of them yet: after
+# the answer, "By the way, was that you, X?". Only the very next turn's
+# yes, in the same room within ROOM_CHECK_TTL_SEC, saves THAT turn's clip
+# as the room's sample for X. Nothing unconfirmed is ever saved: drift
+# re-enrolment from borderline matches once filed one person's voice under
+# another (voice_identifier.py, job 4). A room asks a person at most once a
+# day, whatever the answer. Never from a phone, never inside an
+# introduction, never on a turn too short or too noisy to score.
+
+#: The lowest score that asks (the bar itself is the match threshold).
+ROOM_CHECK_FLOOR = 0.50
+#: How long the question waits for its yes, in seconds.
+ROOM_CHECK_TTL_SEC = 30.0
+#: How long a room stays quiet about a person after asking, in seconds.
+ROOM_CHECK_QUIET_SEC = 24 * 3600.0
+#: At most this many samples a room keeps of one person from a yes here.
+ROOM_CHECK_CAP = 3
+#: When each (person_id, room_id) was last asked. In memory: a restart
+#: forgets it, and the room may ask once more.
+_ROOM_CHECK_ASKED: dict[tuple[int, str], float] = {}
+
+
+def _room_check_wanted(ctx: Context, response: Response, ident) -> tuple[int, float] | None:
+    """``(person_id, score)`` when this turn may ask "was that you?", from
+    what is known without the database; None otherwise."""
+    room = ctx.room_id
+    if not room or is_phone_room(room) or ctx.from_phone or phone_chat_mic(ctx):
+        return None
+    if ident is None or getattr(ident, "outcome", None) != OUTCOME_NO_MATCH:
+        # Not scored (too short, no voiceprint), under music, two people
+        # too close to call, an opt-out, or a match.
+        return None
+    if ident.person_id is not None or ident.embedding is None or ident.denylisted:
+        return None
+    speech = getattr(ident, "speech_seconds", None)
+    if speech is not None and speech < settings.voice_profile_min_utterance_sec:
+        return None
+    person_id, best = ident.best_person_id, ident.best_similarity
+    if person_id is None or best is None:
+        return None
+    if not (ROOM_CHECK_FLOOR <= best < settings.voice_profile_match_threshold):
+        return None
+    runner_up = ident.runner_up_similarity
+    if runner_up is not None and best - runner_up < settings.voice_profile_match_margin:
+        return None
+    if ctx.long_capture or not ctx.answerable:
+        return None
+    if response.matched_handler == VoiceProfileHandler.name or response.expect_followup:
+        # An introduction (or another question) is going on.
+        return None
+    if not (response.text or "").strip():
+        return None
+    asked = _ROOM_CHECK_ASKED.get((int(person_id), room))
+    if asked is not None and time.time() - asked < ROOM_CHECK_QUIET_SEC:
+        return None
+    return int(person_id), float(best)
+
+
+async def maybe_ask_room_check(
+    session: AsyncSession, *, ctx: Context, response: Response, ident,
+) -> bool:
+    """Append "By the way, was that you, X?" to ``response`` and park the
+    question with this turn's voice, when the turn qualifies (see above).
+    True when it asked. Best-effort: a failure asks nothing."""
+    try:
+        wanted = _room_check_wanted(ctx, response, ident)
+        if wanted is None or response.session_id is None:
+            return False
+        person_id, best = wanted
+        room = str(ctx.room_id)
+        pending = (await SessionRepository(session).get_context(response.session_id) or {}).get(
+            "pending_confirmation"
+        )
+        if pending:
+            return False
+        if await VoiceProfilesRepository(session).room_sample_count(
+            person_id, room, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+        ):
+            return False
+        person = await PeopleRepository(session).get(person_id)
+        if person is None:
+            return False
+        await request_confirmation(
+            session,
+            response.session_id,
+            kind="core.room_check",
+            handler="voice_profile",
+            data={
+                "person_id": person_id,
+                "name": person[1],
+                "embedding_b64": _b64_embedding(np.asarray(ident.embedding, dtype=np.float32)),
+                "score": round(best, 3),
+                "expires_at": time.time() + ROOM_CHECK_TTL_SEC,
+                **_origin(ctx),
+            },
+        )
+    except Exception as e:
+        log.warning("room check: asking failed: %s", e)
+        return False
+    _ROOM_CHECK_ASKED[(person_id, room)] = time.time()
+    response.text = (response.text or "").rstrip() + f" By the way, was that you, {person[1]}?"
+    response.expect_followup = True
+    log.info("room check: asked person_id=%d in room=%s (score %.3f)", person_id, room, best)
+    return True
+
+
 # ─── Handler ──────────────────────────────────────────────────────────────
 
 
@@ -728,6 +984,7 @@ class VoiceProfileHandler(Handler):
     confirmation_kinds = (
         "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
         "core.room_voice_add", "core.forget_me", "core.name_sound_alike",
+        "core.room_check",
     )
     # "Add this phone's voice to X?" and a satellite's "I already know
     # someone called X. Is that you?" are answered by the very next turn or
@@ -740,9 +997,10 @@ class VoiceProfileHandler(Handler):
     # right?" (its reply may be a correction or a spelling, not only a
     # yes/no) and "Did you mean X?" (a heard name that sounds like someone
     # the house knows).
+    # A room's "By the way, was that you, X?" (maybe_ask_room_check) too.
     choice_kinds = (
         "core.phone_voice_add", "core.room_voice_add", "core.forget_me",
-        "core.self_intro", "core.name_sound_alike",
+        "core.self_intro", "core.name_sound_alike", "core.room_check",
     )
     requires_network = "no"
 
@@ -853,6 +1111,10 @@ class VoiceProfileHandler(Handler):
         if kind == "core.self_intro":
             if not _answered_where_asked(data, ctx):
                 return Response(text=_ELSEWHERE_TEXT, session_id=ctx.session_id, matched_handler=self.name)
+            if data.get("stage") in _COLLECT_STAGES:
+                # The voice is saved already; a bare yes/no here has
+                # nothing left to confirm.
+                return self._say("Got it.", ctx)
             if not affirmative:
                 return Response(
                     text="Got it — I won't save that.",
@@ -874,9 +1136,9 @@ class VoiceProfileHandler(Handler):
                     session_id=ctx.session_id,
                     matched_handler=self.name,
                 )
-            return await self._enroll(
-                name, embedding, ctx, session, phone=_asked_on_the_phone(data),
-                room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=_claimed_by(data),
+            return await self._enroll_collecting(
+                name, embedding, data, ctx, session,
+                clips=_clips(data) if _collecting(data) else None,
             )
         if kind == "core.third_party_intro_confirm":
             return await self._handle_third_party_confirm(
@@ -1158,9 +1420,16 @@ class VoiceProfileHandler(Handler):
             )
 
         embedding = np.frombuffer(ctx.embedding_bytes, dtype=np.float32)
+        # At a satellite the introduction goes on listening until it has
+        # heard enough of the voice (INTRO_SPEECH_TARGET_SEC); this turn is
+        # its first clip.
+        clips = None
+        if not phone_chat_mic(ctx):
+            first_clip = _turn_clip(ctx, expected=ctx.person_id, first=True)
+            clips = [first_clip] if first_clip is not None else None
         return await self._propose_name(
             name, embedding, ctx, session, claimed_by=ctx.person_id, first=True,
-            spelled=spelled,
+            spelled=spelled, clips=clips,
         )
 
     async def _propose_name(
@@ -1174,8 +1443,15 @@ class VoiceProfileHandler(Handler):
         first: bool,
         spelled: bool = False,
         check_sound_alike: bool = True,
+        clips: list | None = None,
+        accept: bool = False,
     ) -> Response:
-        """A name for this voice — from "my name is X", or a correction or
+        """``clips``: the introduction's clips so far, when it collects
+        more of the voice (a satellite's); carried by every question asked
+        from here. ``accept``: the name was spelled in reply to "How do you
+        spell that?", so a new name is saved as spelled, not read back.
+
+        A name for this voice — from "my name is X", or a correction or
         spelling given in reply to the read-back — met against the people
         the house knows, in this order:
 
@@ -1240,18 +1516,32 @@ class VoiceProfileHandler(Handler):
                     known[0], embedding, ctx, session, claimed_by=claimed_by,
                 )
             return await self._offer_room_voice(
-                known[0], embedding, ctx, session, claimed_by=claimed_by,
+                known[0], embedding, ctx, session, claimed_by=claimed_by, clips=clips,
             )
         if check_sound_alike:
             alikes = await self._sound_alikes(name, session)
             if len(alikes) == 1:
                 return await self._offer_sound_alike(
                     alikes[0], name, embedding, ctx, session, claimed_by=claimed_by,
+                    clips=clips,
                 )
+        if accept and clips is not None:
+            # "J O R D Y N" in reply to "How do you spell that?": their
+            # spelling is the name.
+            return await self._enroll_collecting(
+                name, embedding, {**_origin(ctx), _CLAIMED_BY_KEY: claimed_by}, ctx, session,
+                clips=clips,
+            )
+        if first and clips is not None and not spelled:
+            # A satellite's introduction: the spelling both settles the
+            # name and is more of the voice.
+            text, stage = _SPELL_TEXT, _STAGE_SPELL
+        else:
+            text = _intro_question(name) if first else _corrected_question(name)
+            stage = _STAGE_CONFIRM
         return await self._park_intro(
             name, embedding, ctx, session, claimed_by=claimed_by,
-            text=_intro_question(name) if first else _corrected_question(name),
-            stage=_STAGE_CONFIRM,
+            text=text, stage=stage, clips=clips,
         )
 
     async def _park_intro(
@@ -1265,6 +1555,7 @@ class VoiceProfileHandler(Handler):
         text: str,
         stage: str,
         heard: str | None = None,
+        clips: list | None = None,
     ) -> Response:
         """Park the self-introduction question (a choice: the next turn
         answers it, within :data:`SELF_INTRO_TTL_SEC`) and ask ``text``.
@@ -1286,6 +1577,7 @@ class VoiceProfileHandler(Handler):
                     "stage": stage,
                     "heard": heard,
                     "expires_at": time.time() + SELF_INTRO_TTL_SEC,
+                    **({_CLIPS_KEY: clips} if clips is not None else {}),
                 },
             )
         except Exception as e:
@@ -1317,6 +1609,7 @@ class VoiceProfileHandler(Handler):
         session: AsyncSession,
         *,
         claimed_by: int | None,
+        clips: list | None = None,
     ) -> Response:
         """ "my name is Jordyn" where nobody is called Jordyn but Jordan is
         known: "Did you mean Jordan?" — the name was most likely misheard
@@ -1333,6 +1626,7 @@ class VoiceProfileHandler(Handler):
             "person_id": int(person_id),
             "heard": heard,
             "expires_at": time.time() + VOICE_ADD_TTL_SEC,
+            **({_CLIPS_KEY: clips} if clips is not None else {}),
         }
         try:
             await request_confirmation(
@@ -1412,6 +1706,7 @@ class VoiceProfileHandler(Handler):
         session: AsyncSession,
         *,
         claimed_by: int | None,
+        clips: list | None = None,
     ) -> Response:
         """ "my name is X" at a satellite, for an X who exists but isn't
         who this voice was matched as (a room they were never heard in, a
@@ -1429,6 +1724,7 @@ class VoiceProfileHandler(Handler):
             **_origin(ctx),
             "person_id": int(person_id),
             "expires_at": time.time() + VOICE_ADD_TTL_SEC,
+            **({_CLIPS_KEY: clips} if clips is not None else {}),
         }
         try:
             await request_confirmation(
@@ -1481,11 +1777,19 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         room_id = data.get(_ORIGIN_ROOM_KEY) or ctx.room_id
+        clips, embedding = self._intro_voice(data, ctx, embedding)
+        saved: list = [] if clips is not None else None
         if not affirmative:
-            return await self._enroll_namesake(name, embedding, room_id, ctx, session)
-        return await self._add_room_sample(
+            response = await self._enroll_namesake(
+                name, embedding, room_id, ctx, session, saved=saved,
+                sample_seconds=_speech_of(clips) if clips is not None else None,
+            )
+            return await self._go_on(response, saved, clips, ctx, session, keep_text=True)
+        response = await self._add_room_sample(
             person_id, name, embedding, room_id, ctx, session, claimed_by=_claimed_by(data),
+            saved=saved, sample_seconds=_speech_of(clips) if clips is not None else None,
         )
+        return await self._go_on(response, saved, clips, ctx, session)
 
     async def _enroll_namesake(
         self,
@@ -1494,8 +1798,14 @@ class VoiceProfileHandler(Handler):
         room_id: str | None,
         ctx: Context,
         session: AsyncSession,
+        *,
+        saved: list | None = None,
+        sample_seconds: float | None = None,
     ) -> Response:
-        """The "no" to "I already know someone called X. Is that you?": a
+        """``saved``: given, it gets ``(sample_id, person_id, name)`` of the
+        sample saved (:meth:`_go_on`).
+
+        The "no" to "I already know someone called X. Is that you?": a
         new person called X, on purpose, with this clip as their satellite
         sample for ``room_id``. The opt-out list first, under the name lock
         like every enrolment. From then on "my name is X" from a voice
@@ -1511,13 +1821,15 @@ class VoiceProfileHandler(Handler):
             await people.lock_names()
             others = await people.find_by_name(name)
             person_id = await people.create(name=name)
-            await VoiceProfilesRepository(session).add(
+            sample_id = await VoiceProfilesRepository(session).add(
                 person_id=person_id,
                 embedding=embedding.astype(np.float32).tobytes(),
                 model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
                 room_id=room_id,
-                sample_seconds=None,
+                sample_seconds=sample_seconds,
             )
+            if saved is not None:
+                saved.append((sample_id, person_id, name))
         except Exception as e:
             log.warning("namesake enrollment failed for name=%s: %s", name, e)
             return Response(
@@ -1549,6 +1861,8 @@ class VoiceProfileHandler(Handler):
         session: AsyncSession,
         *,
         claimed_by: int | None = None,
+        saved: list | None = None,
+        sample_seconds: float | None = None,
     ) -> Response:
         """One clip into ``person_id``'s SATELLITE samples, tagged with
         ``room_id``: the opt-out list first, then the person re-read (they
@@ -1573,16 +1887,18 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         try:
-            await VoiceProfilesRepository(session).add(
+            sample_id = await VoiceProfilesRepository(session).add(
                 person_id=person_id,
                 embedding=embedding.astype(np.float32).tobytes(),
                 model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
                 room_id=room_id,
-                sample_seconds=None,
+                sample_seconds=sample_seconds,
                 claimed=True,
                 claim_room=room_id,
                 claimed_by=claimed_by,
             )
+            if saved is not None:
+                saved.append((sample_id, person_id, person[1]))
         except Exception as e:
             log.warning("room voice add failed for person_id=%s: %s", person_id, e)
             return Response(
@@ -1621,6 +1937,8 @@ class VoiceProfileHandler(Handler):
             return await self._handle_intro_reply(data, transcript, ctx, session)
         if kind == "core.name_sound_alike":
             return await self._handle_sound_alike_reply(data, transcript, ctx, session)
+        if kind == "core.room_check":
+            return await self._handle_room_check_reply(data, transcript, ctx, session)
         affirmative = _parse_yes_no(transcript)
         if affirmative is None:
             affirmative = _parse_yes_no(strip_leading_filler(transcript))
@@ -1663,19 +1981,209 @@ class VoiceProfileHandler(Handler):
 
     async def _ask_for_name(
         self, data: dict, ctx: Context, session: AsyncSession, *, spelling: bool,
+        clips: list | None = None, embedding: np.ndarray | None = None,
     ) -> Response:
         """Ask for the name again — "What's your name?" after a plain no,
         "how do you spell it?" after a correction that couldn't be read —
         keeping the introduction's voice. A fresh question, with its own
         :data:`SELF_INTRO_TTL_SEC`."""
-        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
+        if embedding is None:
+            embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
         if embedding is None:
             return self._say("Something went wrong storing that — try saying your name again.", ctx)
         heard = str(data.get("name") or data.get("heard") or "") or None
         return await self._park_intro(
             "", embedding, ctx, session, claimed_by=_claimed_by(data),
             text=_ASK_SPELLING_TEXT if spelling else _ASK_NAME_TEXT,
-            stage=_STAGE_ASK_NAME, heard=heard,
+            stage=_STAGE_ASK_NAME, heard=heard, clips=clips,
+        )
+
+    # ─── Hearing more of the voice ────────────────────────────────────
+    def _intro_voice(
+        self, data: dict, ctx: Context, embedding: np.ndarray | None,
+    ) -> tuple[list | None, np.ndarray | None]:
+        """The clips of a collecting introduction with this reply's added
+        (when it counts: :func:`_turn_clip`), and the voice they make
+        together; ``(None, embedding)`` for one that doesn't collect."""
+        if not _collecting(data):
+            return None, embedding
+        clips = _clips(data)
+        clip = _turn_clip(ctx, expected=_claimed_by(data))
+        if clip is not None:
+            clips.append(clip)
+        together = _combined(clips)
+        return clips, together if together is not None else embedding
+
+    async def _enroll_collecting(
+        self,
+        name: str,
+        embedding: np.ndarray,
+        data: dict,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        clips: list | None,
+    ) -> Response:
+        """:meth:`_enroll` the settled name, then (a collecting
+        introduction) go on listening (:meth:`_go_on`)."""
+        saved: list | None = [] if clips is not None else None
+        response = await self._enroll(
+            name, embedding, ctx, session, phone=_asked_on_the_phone(data),
+            room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=_claimed_by(data),
+            saved=saved, sample_seconds=_speech_of(clips) if clips is not None else None,
+        )
+        return await self._go_on(response, saved, clips, ctx, session)
+
+    async def _go_on(
+        self,
+        response: Response,
+        saved: list | None,
+        clips: list | None,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        keep_text: bool = False,
+    ) -> Response:
+        """After an introduction saved its sample: done ("Thanks, X! I'll
+        know your voice now.") when the clips hold
+        :data:`INTRO_SPEECH_TARGET_SEC` of speech, else "Last bit: count
+        from one to ten …", parked as the next stage. ``response`` stands
+        when nothing was saved (an opt-out, an error, two namesakes);
+        ``keep_text``: its words go first (a new namesake's)."""
+        if not saved or clips is None:
+            return response
+        sample_id, person_id, name = saved[0]
+        if _speech_of(clips) >= INTRO_SPEECH_TARGET_SEC:
+            log.info(
+                "introduction: person_id=%d saved from %d clip(s), %.1f s of speech",
+                person_id, len(clips), _speech_of(clips),
+            )
+            text = response.text if keep_text else _thanks_text(name)
+            return self._say(text, ctx)
+        parked = await self._park_collect(
+            _STAGE_COUNT, name, person_id, sample_id, clips, ctx, session,
+        )
+        if not parked:
+            return self._say(response.text if keep_text else _thanks_text(name), ctx)
+        text = f"{response.text} {_COUNT_TEXT}" if keep_text else _COUNT_TEXT
+        return Response(
+            text=text, session_id=ctx.session_id, matched_handler=self.name,
+            expect_followup=True,
+        )
+
+    async def _park_collect(
+        self,
+        stage: str,
+        name: str,
+        person_id: int,
+        sample_id: int,
+        clips: list,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> bool:
+        """Park the next "say something for me" question (a choice: the
+        very next turn answers it, within :data:`SELF_INTRO_TTL_SEC`)."""
+        try:
+            await request_confirmation(
+                session,
+                ctx.session_id,
+                kind="core.self_intro",
+                handler=self.name,
+                data={
+                    "stage": stage,
+                    "name": name,
+                    "person_id": int(person_id),
+                    "sample_id": int(sample_id),
+                    _CLIPS_KEY: clips,
+                    **_origin(ctx),
+                    "created_at": datetime.now(tz=timezone.utc).isoformat(),
+                    "expires_at": time.time() + SELF_INTRO_TTL_SEC,
+                },
+            )
+        except Exception as e:
+            log.warning("couldn't park the introduction's next question: %s", e)
+            return False
+        return True
+
+    @staticmethod
+    def _is_stop(transcript: str) -> bool:
+        """ "stop", "never mind", "cancel", a plain "no": the person has
+        had enough of the introduction."""
+        from domovoi.router import normalize_transcript
+
+        t = re.sub(r"[.!?,]+", " ", normalize_transcript(transcript or "").lower())
+        t = " ".join(t.split())
+        if _STOP_RE.match(t):
+            return True
+        reply = read_name_reply(t)
+        return reply is not None and reply.kind in (person_names.CANCEL, person_names.NO)
+
+    @staticmethod
+    def _is_command(transcript: str) -> bool:
+        """Whether a fast path takes the turn (as the router would read it)."""
+        from domovoi.router import first_fast_path, normalize_transcript, strip_leading_filler
+
+        t = normalize_transcript(transcript or "")
+        return first_fast_path(t) is not None or first_fast_path(strip_leading_filler(t)) is not None
+
+    async def _handle_collect_reply(
+        self, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The turn after "count from one to ten" or "say 'Good morning
+        Domovoi, …'". The sample is saved already, so whatever happens it
+        stays: in time and from the same room, this turn's clip joins it
+        (the sample's embedding becomes all the clips' together); "stop" or
+        "never mind" ends it; a reply past its time isn't an answer (None:
+        routed as usual)."""
+        if not _answered_where_asked(data, ctx):
+            return self._say(_ELSEWHERE_TEXT, ctx)
+        name = str(data.get("name") or "")
+        try:
+            person_id = int(data.get("person_id"))
+            sample_id = int(data.get("sample_id"))
+        except (TypeError, ValueError):
+            return None
+        if _intro_expired(data):
+            return None
+        if self._is_stop(transcript):
+            return self._say(_stopped_text(name), ctx)
+        stage = data.get("stage")
+        if stage == _STAGE_COUNT and self._is_command(transcript):
+            # A command instead of counting ("who am I?", "play jazz"): the
+            # introduction is over (its sample stays) and the turn is routed
+            # as usual. Not after the sentence, which is meant to sound
+            # like one ("… what's on today?").
+            return None
+        clips = _clips(data)
+        clip = _turn_clip(ctx, expected=person_id)
+        if clip is not None and not await self._is_denylisted(
+            _decode_b64_embedding(clip[0]), session,
+        ):
+            clips.append(clip)
+            together = _combined(clips)
+            try:
+                kept = await VoiceProfilesRepository(session).replace_embedding(
+                    sample_id, person_id, together.astype(np.float32).tobytes(),
+                    _speech_of(clips),
+                )
+            except Exception as e:
+                log.warning("introduction: updating the sample failed: %s", e)
+                return self._say(_thanks_text(name), ctx)
+            if not kept:
+                return self._say(f"I can't find {name} any more, so I didn't save that.", ctx)
+        if _speech_of(clips) >= INTRO_SPEECH_TARGET_SEC or stage == _STAGE_SENTENCE:
+            log.info(
+                "introduction: person_id=%d's sample from %d clip(s), %.1f s of speech",
+                person_id, len(clips), _speech_of(clips),
+            )
+            return self._say(_thanks_text(name), ctx)
+        if not await self._park_collect(
+            _STAGE_SENTENCE, name, person_id, sample_id, clips, ctx, session,
+        ):
+            return self._say(_thanks_text(name), ctx)
+        return Response(
+            text=_sentence_text(ctx.bot_name), session_id=ctx.session_id,
+            matched_handler=self.name, expect_followup=True,
         )
 
     async def _handle_intro_reply(
@@ -1698,54 +2206,72 @@ class VoiceProfileHandler(Handler):
         * no: "What's your name?" (once; a no to that saves nothing);
         * "never mind" / "forget it": nothing saved;
         * anything else: not about the name — the question is dropped and
-          the turn routed as usual (None)."""
+          the turn routed as usual (None).
+
+        "Nice to meet you! How do you spell that?" (a satellite's
+        introduction, stage ``spell``) is answered the same way, and a
+        spelling of a different name is taken as spelled, not read back.
+        Each reply is more of the voice (:meth:`_intro_voice`). The stages
+        after the voice is saved ("count from one to ten …") are
+        :meth:`_handle_collect_reply`'s."""
+        stage = data.get("stage") or _STAGE_CONFIRM
+        if stage in _COLLECT_STAGES:
+            return await self._handle_collect_reply(data, transcript, ctx, session)
         reply = self._read_reply(transcript)
         if reply is None:
             return None
         if not _answered_where_asked(data, ctx):
             return self._say(_ELSEWHERE_TEXT, ctx)
-        stage = data.get("stage") or _STAGE_CONFIRM
         name = str(data.get("name") or "")
+        naming = (_STAGE_CONFIRM, _STAGE_SPELL)
         if reply.kind == person_names.CANCEL:
             return self._say(_WONT_SAVE_TEXT, ctx)
+        clips, embedding = self._intro_voice(
+            data, ctx, _decode_b64_embedding(str(data.get("embedding_b64") or "")),
+        )
         if reply.kind == person_names.NO:
             if stage == _STAGE_ASK_NAME or not name:
                 return self._say(_WONT_SAVE_TEXT, ctx)
             if _intro_expired(data):
                 return self._say(_INTRO_EXPIRED_TEXT, ctx)
-            return await self._ask_for_name(data, ctx, session, spelling=False)
+            return await self._ask_for_name(
+                data, ctx, session, spelling=False, clips=clips, embedding=embedding,
+            )
         if _intro_expired(data):
             return self._say(_INTRO_EXPIRED_TEXT, ctx)
-        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
         if embedding is None:
             return self._say("Something went wrong storing that — try saying your name again.", ctx)
         if reply.kind == person_names.UNCLEAR:
-            return await self._ask_for_name(data, ctx, session, spelling=True)
+            return await self._ask_for_name(
+                data, ctx, session, spelling=True, clips=clips, embedding=embedding,
+            )
         if reply.kind == person_names.YES:
             if stage == _STAGE_ASK_NAME or not name:
-                return await self._ask_for_name(data, ctx, session, spelling=False)
-            return await self._enroll(
-                name, embedding, ctx, session, phone=_asked_on_the_phone(data),
-                room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=_claimed_by(data),
-            )
+                return await self._ask_for_name(
+                    data, ctx, session, spelling=False, clips=clips, embedding=embedding,
+                )
+            return await self._enroll_collecting(name, embedding, data, ctx, session, clips=clips)
         # A name.
         new_name = reply.name or ""
-        if name and _same_name(new_name, name) and stage == _STAGE_CONFIRM:
+        if name and _same_name(new_name, name) and stage in naming:
             if reply.polarity is False and not reply.spelled:
                 # "No, it's Jordan" to "Jordan": the name sounded right and
                 # the spelling is what's wrong.
-                return await self._ask_for_name(data, ctx, session, spelling=True)
-            return await self._enroll(
-                name, embedding, ctx, session, phone=_asked_on_the_phone(data),
-                room_id=data.get(_ORIGIN_ROOM_KEY), claimed_by=_claimed_by(data),
-            )
+                return await self._ask_for_name(
+                    data, ctx, session, spelling=True, clips=clips, embedding=embedding,
+                )
+            if reply.spelled and new_name != name:
+                # Spelled the same, written differently ("McDonald"): theirs.
+                name = new_name
+            return await self._enroll_collecting(name, embedding, data, ctx, session, clips=clips)
         log.info(
             "self-introduction corrected: %r -> %r (%s)",
             name or data.get("heard"), new_name, "spelled" if reply.spelled else "said",
         )
         return await self._propose_name(
             new_name, embedding, ctx, session, claimed_by=_claimed_by(data), first=False,
-            spelled=reply.spelled,
+            spelled=reply.spelled, clips=clips,
+            accept=stage == _STAGE_SPELL and reply.spelled,
         )
 
     async def _handle_sound_alike_reply(
@@ -1781,6 +2307,7 @@ class VoiceProfileHandler(Handler):
         if embedding is None or person_id is None or not known:
             return self._say("Something went wrong storing that — try saying your name again.", ctx)
         claimed_by = _claimed_by(data)
+        clips, embedding = self._intro_voice(data, ctx, embedding)
         is_known = reply.kind == person_names.YES or (
             reply.kind == person_names.NAME and _same_name(reply.name or "", known)
         )
@@ -1789,25 +2316,80 @@ class VoiceProfileHandler(Handler):
                 return await self._add_phone_sample(
                     person_id, known, embedding, ctx, session, claimed_by=claimed_by,
                 )
-            return await self._add_room_sample(
+            saved: list | None = [] if clips is not None else None
+            response = await self._add_room_sample(
                 person_id, known, embedding, data.get(_ORIGIN_ROOM_KEY) or ctx.room_id,
-                ctx, session, claimed_by=claimed_by,
+                ctx, session, claimed_by=claimed_by, saved=saved,
+                sample_seconds=_speech_of(clips) if clips is not None else None,
             )
+            return await self._go_on(response, saved, clips, ctx, session)
         if reply.kind == person_names.UNCLEAR:
             return await self._ask_for_name(
                 {**data, "name": "", "heard": heard}, ctx, session, spelling=True,
+                clips=clips, embedding=embedding,
             )
         if reply.kind == person_names.NO:
             if not heard:
-                return await self._ask_for_name({**data, "name": ""}, ctx, session, spelling=False)
+                return await self._ask_for_name(
+                    {**data, "name": ""}, ctx, session, spelling=False,
+                    clips=clips, embedding=embedding,
+                )
             return await self._propose_name(
                 heard, embedding, ctx, session, claimed_by=claimed_by, first=True,
-                check_sound_alike=False,
+                check_sound_alike=False, clips=clips,
             )
         return await self._propose_name(
             reply.name or "", embedding, ctx, session, claimed_by=claimed_by, first=False,
-            spelled=reply.spelled, check_sound_alike=False,
+            spelled=reply.spelled, check_sound_alike=False, clips=clips,
         )
+
+    async def _handle_room_check_reply(
+        self, data: dict, transcript: str, ctx: Context, session: AsyncSession,
+    ) -> Response | None:
+        """The turn after "By the way, was that you, X?" (maybe_ask_room_check).
+        Yes, in time and in the same room: the asking turn's clip becomes
+        this room's sample for X (marked as claimed, like every sample a
+        yes adds), unless X has :data:`ROOM_CHECK_CAP` here already. No:
+        nothing. Anything else isn't an answer (None: routed as usual), and
+        saves nothing either."""
+        from domovoi.router import _parse_yes_no, normalize_transcript, strip_leading_filler
+
+        said = normalize_transcript(transcript or "")
+        affirmative = _parse_yes_no(said)
+        if affirmative is None:
+            affirmative = _parse_yes_no(strip_leading_filler(said))
+        if affirmative is None:
+            return None
+        room_id = data.get(_ORIGIN_ROOM_KEY)
+        if _asked_on_the_phone(data) or phone_chat_mic(ctx) or ctx.from_phone or room_id != ctx.room_id:
+            return None
+        name = str(data.get("name") or "")
+        if not affirmative:
+            return self._say("Okay, my mistake.", ctx)
+        try:
+            expired = time.time() > float(data.get("expires_at"))
+        except (TypeError, ValueError):
+            expired = True
+        if expired:
+            return self._say("That was a while ago, so I didn't save it.", ctx)
+        try:
+            person_id = int(data.get("person_id"))
+        except (TypeError, ValueError):
+            person_id = None
+        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
+        if person_id is None or embedding is None or not name or not room_id:
+            return self._say("Something went wrong storing that — your voice wasn't added.", ctx)
+        try:
+            here = await VoiceProfilesRepository(session).room_sample_count(
+                person_id, room_id, VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+            )
+        except Exception as e:
+            log.warning("room check: counting the room's samples failed: %s", e)
+            return self._say("Something went wrong saving that — your voice wasn't added.", ctx)
+        if here >= ROOM_CHECK_CAP:
+            return self._say(f"Thanks, {name}. I already know your voice in this room.", ctx)
+        log.info("room check: person_id=%d confirmed in room=%s", person_id, room_id)
+        return await self._add_room_sample(person_id, name, embedding, room_id, ctx, session)
 
     async def _handle_phone_voice_add(
         self,
@@ -1960,8 +2542,13 @@ class VoiceProfileHandler(Handler):
         phone: bool = False,
         room_id: str | None = None,
         claimed_by: int | None = None,
+        saved: list | None = None,
+        sample_seconds: float | None = None,
     ) -> Response:
-        """Save ``embedding`` as ``name``'s voice. ``phone``: the question
+        """``saved``: given, a satellite sample saved is reported in it as
+        ``(sample_id, person_id, name)`` (:meth:`_go_on`).
+
+        Save ``embedding`` as ``name``'s voice. ``phone``: the question
         was asked on a chat mic (its parked origin, never the answering
         turn's), so the voice goes into the PHONE set; otherwise into the
         SATELLITE set, tagged with ``room_id`` (where the question was
@@ -2009,6 +2596,7 @@ class VoiceProfileHandler(Handler):
                 )
             return await self._add_room_sample(
                 known[0][0], name, embedding, room_id, ctx, session, claimed_by=claimed_by,
+                saved=saved, sample_seconds=sample_seconds,
             )
         try:
             voice_profiles = VoiceProfilesRepository(session)
@@ -2024,13 +2612,15 @@ class VoiceProfileHandler(Handler):
                     cap=settings.voice_profile_phone_sample_cap,
                 )
             else:
-                await voice_profiles.add(
+                sample_id = await voice_profiles.add(
                     person_id=person_id,
                     embedding=embedding.astype(np.float32).tobytes(),
                     model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
                     room_id=room_id,
-                    sample_seconds=None,
+                    sample_seconds=sample_seconds,
                 )
+                if saved is not None:
+                    saved.append((sample_id, person_id, name))
         except Exception as e:
             log.warning("voice enrollment failed for name=%s: %s", name, e)
             return Response(

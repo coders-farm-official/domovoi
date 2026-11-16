@@ -68,6 +68,9 @@ PRIYA_HERE = np.full(16_000, 2222, dtype=np.int16).tobytes()
 STRANGER = np.full(16_000, 3333, dtype=np.int16).tobytes()
 
 ROOM_QUESTION = "I already know someone called Priya. Is that you?"
+#: What a satellite's introduction asks once the voice is saved, while it
+#: has heard less than eight seconds of it (2026-11-16).
+COUNT_TEXT = "Last bit: count from one to ten for me, at your normal voice."
 SORT_IT_OUT = "An admin can rename or remove one of them in Settings, under People."
 
 
@@ -225,10 +228,12 @@ async def test_my_name_at_a_satellite_for_someone_known_asks_then_adds_a_room_sa
     # The answer comes in the follow-up; the QUESTION's clip is the one
     # saved, whoever says the yes.
     done = await room.say("Yes.", STRANGER, trigger="followup")
-    assert _reply(done) == "Done — I'll know your voice in this room now, Priya."
+    # Saved at once; then the introduction asks for more of the voice
+    # (2026-11-16), and a command instead of counting ends it.
+    assert _reply(done) == COUNT_TEXT
     assert await _people() == [(priya, "Priya")]
     assert await _samples(priya) == [("satellite", "office"), ("satellite", ROOM)]
-    assert await room.pending() is None
+    assert (await room.pending())["stage"] == "count"
 
     # The stub's two clips of one person are unrelated vectors (a real
     # voice's are not), so his centroid scores ~0.71 against either: take
@@ -257,15 +262,17 @@ async def test_no_enrols_a_new_namesake_from_the_same_clip(room) -> None:
     priya = await _person("Priya", (PRIYA_OFFICE, "office"))
     asked = await room.say("My name is Priya.", STRANGER)
     assert _reply(asked) == ROOM_QUESTION
-    # The QUESTION's clip is the new person's, whoever says the no.
-    no = await room.say("No.", PRIYA_HERE, trigger="followup")
-    assert _reply(no) == NEW_NAMESAKE
+    # The QUESTION's clip is the new person's. (Since 2026-11-16 the answer
+    # is more of their voice too, when it isn't somebody else's: the same
+    # voice answers here.)
+    no = await room.say("No.", STRANGER, trigger="followup")
+    assert _reply(no) == f"{NEW_NAMESAKE} {COUNT_TEXT}"
     people = await _people()
     assert [n for _, n in people] == ["Priya", "Priya"]
     newcomer = people[1][0]
     assert await _samples(priya) == [("satellite", "office")]
     assert await _samples(newcomer) == [("satellite", ROOM)]
-    assert await room.pending() is None
+    assert (await room.pending())["stage"] == "count"
 
     # The first Priya, unknown to this room's mic: never guessed.
     again = await room.say("My name is Priya.", PRIYA_HERE)
@@ -288,7 +295,7 @@ async def test_a_no_after_the_other_was_forgotten_just_enrols(room) -> None:
         await s.execute(text("DELETE FROM people WHERE id = :p"), {"p": priya})
         await s.commit()
     no = await room.say("No.", STRANGER, trigger="followup")
-    assert _reply(no) == "Got it, Priya."
+    assert _reply(no) == f"Got it, Priya. {COUNT_TEXT}"
     people = await _people()
     assert [n for _, n in people] == ["Priya"]
     assert await _samples(people[0][0]) == [("satellite", ROOM)]
@@ -431,10 +438,10 @@ async def test_the_room_question_takes_no_answer_from_a_chat_mic(db_session) -> 
 
 async def test_a_name_taken_between_the_question_and_the_yes_gets_the_sample_not_a_twin(room) -> None:
     asked = await room.say("My name is Ana.", PRIYA_HERE)
-    assert _reply(asked) == "Nice to meet you, Ana. That's A, N, A. Did I get that right?"
+    assert _reply(asked) == "Nice to meet you! How do you spell that?"
     ana = await _person("Ana", (PRIYA_OFFICE, "office"))   # enrolled elsewhere meanwhile
     done = await room.say("Yes.", PRIYA_HERE, trigger="followup")
-    assert _reply(done) == "Done — I'll know your voice in this room now, Ana."
+    assert _reply(done) == COUNT_TEXT
     assert await _people() == [(ana, "Ana")]
     assert await _samples(ana) == [("satellite", "office"), ("satellite", ROOM)]
 
