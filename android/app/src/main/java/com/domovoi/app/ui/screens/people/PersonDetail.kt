@@ -146,8 +146,11 @@ internal fun PersonDetail(
             when (tab) {
                 0 -> ProfileTab(
                     person = person,
-                    sessionCount = detail.sessions.size,
-                    turnCount = detail.conversations.size,
+                    heardIn = lastHeardIn(
+                        detail.conversations,
+                        failed = detail.errors.conversations != null,
+                        loading = detail.loading,
+                    ),
                     voiceRooms = detail.voiceRooms,
                     voiceId = voiceId,
                     onForget = { confirmForget = true },
@@ -209,8 +212,7 @@ internal fun PersonDetail(
 @Composable
 private fun ProfileTab(
     person: Person,
-    sessionCount: Int,
-    turnCount: Int,
+    heardIn: String,
     voiceRooms: List<VoiceRoom>,
     voiceId: VoiceIdStatus?,
     onForget: () -> Unit,
@@ -264,26 +266,19 @@ private fun ProfileTab(
             )
         }
 
-        // Web order: namesakes, then this, then the stats.
+        // Web order: namesakes, then this, then where and when they were
+        // last heard. No voice profile / session / turn counts: the tabs
+        // and the samples already say them (owner, 1.3.0 device check).
         personVoiceRelearnNotice(person, voiceId)?.let { VoiceNoticeBox(it, Domovoi.colors.warnSoft) }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Stat("last heard in", heardIn, modifier = Modifier.weight(1f))
             Stat(
                 "last heard",
                 relTime(person.last_seen_at),
                 "presence: ${person.presence_tier ?: "—"}",
                 Modifier.weight(1f),
             )
-            Stat(
-                "voice profiles",
-                "${person.voice_profile_count}",
-                "enrolled",
-                Modifier.weight(1f),
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Stat("sessions", "$sessionCount", "recent", Modifier.weight(1f))
-            Stat("turns", "$turnCount", "conversation_log rows", Modifier.weight(1f))
         }
 
         VoiceRoomsSection(person, voiceRooms, voiceId)
@@ -319,7 +314,7 @@ private fun ProfileTab(
 }
 
 // ---------------------------------------------------------------------------
-// Rooms that know this voice (web PersonVoiceRooms) — read-only.
+// Rooms that have learned this voice (web PersonVoiceRooms) — read-only.
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalLayoutApi::class)
