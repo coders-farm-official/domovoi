@@ -5344,19 +5344,19 @@ const GetTheAppCard = () => {
     return <Card title="Get the Domovoi app" sub={sub}>{note('No app release yet. When there is one, this server offers it here.')}</Card>;
   }
   if (!app.ready) {
-    // First-run setup downloads it by itself while the server is online
-    // (owner decision 2026-11-15); when it couldn't, an admin's press or
-    // upload puts it here, and until then this card keeps saying so.
+    // The install puts it here with its other downloads (owner decision
+    // 2026-11-15); when it couldn't, or on a server set up by hand, an
+    // admin's press or upload does, and until then this card says so.
     return (
       <Card title="Get the Domovoi app" sub={sub}>
         {admin
           ? <div style={{ padding: '12px 16px' }}><AppOnServer onReady={() => setTick(t => t + 1)}/></div>
           : (
             <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div>The app isn’t on this server yet (Domovoi {app.release.version_name}), so there is no code to scan.
-                To give the app to phones that have no internet, this server needs the internet once, at some
-                point, to download it. An admin starts that: sign in as admin, then press “Download the app to
-                this server”, or upload the app’s files if this server has no internet.</div>
+              <div>The phone app isn’t on this server (Domovoi {app.release.version_name}), so there is no code to
+                scan. To give it to phones that have no internet, this server needs the internet once, at some
+                point, to download it. An admin does that: sign in as admin, then press “Download the app to this
+                server”, or upload its files.</div>
               <div>
                 <Button icon="key" onClick={() => { try { Auth.openModal(); } catch (e) { /* no auth.js */ } }}>
                   sign in as admin

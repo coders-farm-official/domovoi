@@ -375,13 +375,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Runs BEFORE any model loads: the admin claim is how a bad model
     # setting gets fixed from the dashboard, so nothing that can fail or
     # hang in a model load may stand between a fresh box and its code.
-    # A code means nobody has claimed this server yet: this start is
-    # first-run setup on every kind of install (Linux, the Windows
-    # installer's distro, the Mac), which puts the phone app on the server
-    # below (domovoi/android_app.py, "During setup").
-    first_run_setup = False
     try:
-        first_run_setup = await admin_auth_mod.ensure_setup_code_if_unclaimed() is not None
+        await admin_auth_mod.ensure_setup_code_if_unclaimed()
     except Exception as e:
         log.warning("setup-code boot hook raised: %s", e)
 
@@ -984,16 +979,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     schedule_speech_warm_up("boot")
 
-    # The Android app phones install from here: during first-run setup, put
-    # it on the server while it is online (owner decision 2026-11-15); after
-    # an update brought a new release, fetch it where the household allows
-    # it. In the background either way, never under internet "never"
-    # (domovoi/android_app.py auto_refresh; an old one serves meanwhile).
-    # Not under stubs: the suite's cores never download the real release.
+    # The Android app phones install from here: after an update brought a
+    # new release, fetch it in the background where the household allows
+    # it (domovoi/android_app.py auto_refresh; the old one serves meanwhile).
     from domovoi import android_app as _android_app
 
-    _android_app.schedule_auto_refresh(frozen=container_freeze.is_frozen,
-                                       setup=first_run_setup and not settings.use_stubs)
+    _android_app.schedule_auto_refresh(frozen=container_freeze.is_frozen)
 
     # The server's name on the home network (domovoi/lan_name/): the core
     # announces it on Linux, DomovoiHost on the Windows install (told by a

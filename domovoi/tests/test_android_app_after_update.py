@@ -188,7 +188,7 @@ async def test_the_file_route_serves_the_old_release_until_the_new_one_is_here(t
 
 @pytest.mark.parametrize("policy,old_cached,go", [
     ("always", True, True),
-    ("always", False, False),      # after setup, the first download is an admin's (setup: test_android_app_setup.py)
+    ("always", False, False),      # the first download is the install's or an admin's, never the core's
     ("sometimes", True, False),    # big automatic downloads stay off (docs/INTERNET.md)
     ("sometimes", False, False),
     ("never", True, False),
@@ -251,11 +251,11 @@ def test_the_refresh_downloads_nothing_unless_internet_is_always(tmp_path, cache
     assert github.seen == [] and aa._auto["state"] == "skipped"
 
 
-def test_after_setup_the_refresh_never_makes_the_first_download(tmp_path, cache, github, fresh_job):
+def test_the_refresh_never_makes_the_first_download(tmp_path, cache, github, fresh_job):
     m = load(tmp_path, manifest_doc(GOOD))
     with egress.override_policy("always"):
         why = _run(aa.auto_refresh(lambda: m, delays=(0.0,), sleep=_no_wait))
-    assert github.seen == [] and "setup is over" in why and "internet once" in why
+    assert github.seen == [] and "isn't on this server yet" in why and "internet once" in why
 
 
 def test_the_refresh_retries_with_backoff_then_stops(tmp_path, cache, github, fresh_job):
@@ -288,7 +288,7 @@ def test_the_refresh_waits_out_a_freeze(tmp_path, cache, github, fresh_job):
 
 def test_the_core_starts_and_stops_the_refresh():
     src = (aa.REPO / "domovoi" / "main.py").read_text(encoding="utf-8")
-    assert "schedule_auto_refresh(frozen=container_freeze.is_frozen," in src
+    assert "schedule_auto_refresh(frozen=container_freeze.is_frozen)" in src
     assert '("Android app refresh", _android_app.cancel_auto_refresh' in src
     assert aa.AUTO_DELAYS[0] >= 60, "never in the middle of the core's own start"
 
