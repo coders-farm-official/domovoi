@@ -194,13 +194,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Python 3.12+ from the runner's tool cache
+      # 3.12 or 3.13 only: from 3.14 the Windows CPython builds ship zlib-ng,
+      # whose deflate output differs from zlib's, so apksigcopier can't find
+      # the APK's compression level ("Unsupported compresslevel") and the
+      # copy check refuses every release (1.3.0's first run, 2026-11-16).
+      - name: Python 3.13 or 3.12 from the runner's tool cache (zlib, not zlib-ng)
         shell: pwsh
         run: |
           $dir = Get-ChildItem (Join-Path $env:RUNNER_TOOL_CACHE 'Python') -Directory |
-            Where-Object { $_.Name -match '^3\.(1[2-9])\.\d+$' } |
+            Where-Object { $_.Name -match '^3\.1[23]\.\d+$' } |
             Sort-Object { [version]$_.Name } | Select-Object -Last 1
-          if (-not $dir) { throw 'no Python 3.12+ in the tool cache' }
+          if (-not $dir) { throw 'no Python 3.13 or 3.12 in the tool cache (3.14+ ships zlib-ng, which apksigcopier compare cannot use)' }
           $py = Join-Path $dir.FullName 'x64'
           & (Join-Path $py 'python.exe') --version
           Add-Content -LiteralPath $env:GITHUB_PATH -Value $py -Encoding utf8

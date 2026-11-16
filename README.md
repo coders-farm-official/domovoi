@@ -17,9 +17,8 @@
   <a href="https://play.google.com/store/apps/details?id=com.domovoi.app"><img alt="Android app: the version on stable" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fcoders-farm-official%2Fdomovoi%2Fstable%2Fandroid%2Frelease.json&query=%24.release.version_name&prefix=v&label=Android%20app&color=2EA043&style=flat-square&labelColor=1F1A14"></a>
   <img alt="iPhone app: coming soon" src="https://img.shields.io/badge/iPhone%20app-coming%20soon-8B8178?style=flat-square&labelColor=1F1A14">
   <br>
-  <a href="docs/CONTRIBUTING.md#running-the-tests"><img alt="tests: 27,900+ (server and rooms, Android app, Windows)" src="https://img.shields.io/badge/tests-27%2C900%2B-2EA043?style=flat-square&labelColor=1F1A14"></a>
+  <a href="docs/CONTRIBUTING.md#running-the-tests"><img alt="tests: 26,600+ (server and rooms, Android app, Windows)" src="https://img.shields.io/badge/tests-26%2C600%2B-2EA043?style=flat-square&labelColor=1F1A14"></a>
   <a href="https://github.com/coders-farm-official/domovoi/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI on main" src="https://img.shields.io/github/actions/workflow/status/coders-farm-official/domovoi/ci.yml?branch=main&label=CI&style=flat-square&labelColor=1F1A14"></a>
-  <a href="https://scorecard.dev/viewer/?uri=github.com/coders-farm-official/domovoi"><img alt="OpenSSF Scorecard" src="https://img.shields.io/ossf-scorecard/github.com/coders-farm-official/domovoi?label=OpenSSF%20Scorecard&style=flat-square&labelColor=1F1A14"></a>
   <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
   <br>
   <img alt="runs on: Linux, Windows, Raspberry Pi, Android" src="https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows%20%C2%B7%20Raspberry%20Pi%20%C2%B7%20Android-F2A618?style=flat-square&labelColor=1F1A14">
@@ -90,6 +89,9 @@ On an x86_64 computer running Ubuntu 26.04, Debian 13, or Linux Mint 22 / Pop!_O
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
 ```
+
+> **From Domovoi 1.3.0.** Until then this command answers 404: use
+> [the install script by hand](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
 
 It asks whether the server will have internet after setup, its time zone, and whether to include AI chat,
 checks that it downloaded a signed release, installs everything, and ends with the address to open from your phone.
@@ -188,7 +190,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **A Windows installer.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
-  [v1.3.0 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.3.0)
+  [v1.2.1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.1)
   ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
   Domovoi's icon beside the clock: whether Domovoi is
   running, the dashboard, a QR code for phones, and a helper that prepares
@@ -226,25 +228,25 @@ they have been tried on fewer devices than the rest, aren't yet held to
   setup. Tested in virtual machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
-**This release: Domovoi v1.3.0**
+**This release: Domovoi v1.2.1**
 
-Version 1.3.0 follows [v1.2.1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.1).
-It is the server, the Android app and a Windows Setup (with the Windows
-satellite Setup beside it), one `SHA256SUMS` for every file, software bills
-of materials, and GitHub build provenance for each file
-([verifying a release](SECURITY.md#verifying-a-release)), published as
-described in [Releasing](docs/CONTRIBUTING.md#releasing). `stable` points
-at 1.3.0, and new installs follow it. A plain-language summary is in
-[docs/release/v1.3.0.md](docs/release/v1.3.0.md); every change is in the
-[release notes](docs/RELEASE_NOTES.md). Since 1.2.1: other calendars on the
-household calendar, read-only, by private link or shared from a phone; Up
-next everywhere, by voice, with a Music mix and optional similar artists
-from ListenBrainz; groups of rooms that play one shared queue; a new voice
-ID that names the speaker about twice as often (everyone introduces
-themselves once more); library tools for duplicates, songs to review and
-cover art; new installs that wake on "Domovoi"; one-command install on
-Linux, now also on Debian 13, Linux Mint 22 and Pop!_OS 24.04, with the
-phone app downloaded at install; and security updates.
+Version 1.2.1 follows [v1.2.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.2.0).
+It is the first release numbered by Domovoi's own version alone: the server
+and a Windows Setup (with the Windows satellite Setup beside it), one
+`SHA256SUMS` for every file, published as described in
+[Releasing](docs/CONTRIBUTING.md#releasing). The Android app is unchanged
+and stays 1.2.0, on the v1.2.0 release. `stable` points at 1.2.1, and new
+installs follow it. A plain-language summary is in
+[docs/release/v1.2.1.md](docs/release/v1.2.1.md); every change is in the
+[release notes](docs/RELEASE_NOTES.md). Since 1.2.0: song recognition that
+no longer renames songs to covers, instrumentals or the wrong song, reads
+video-upload names, and a repair for libraries it damaged; a Windows update
+that finishes its Windows part from the tray, says honestly what ran, and,
+asked for from a phone, stays in sight on the PC until it is done; one
+button per state on the Version card; rooms that wake less on the TV
+(sensitivity 0.7, confirmation 2 by default); a **Download** for a trained
+wake word, with its model card and licence notice; and the guides brought
+up to date.
 
 **Later**
 
