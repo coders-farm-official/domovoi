@@ -29,7 +29,7 @@ class ShareSyncTest {
     private val server = "http://192.168.1.20:6369"
     private val other = "http://192.168.1.30:6369"
     private var now = 1_800_000_000_000L
-    private val work = PhoneCalendar(12, "Work", "alex@example.com", 0xFF33B679.toInt())
+    private val work = PhoneCalendar(12, "Work", "com.google", 0xFF33B679.toInt())
     private val home = PhoneCalendar(3, "Home")
     private var onPhone: List<PhoneCalendar>? = listOf(work, home)
     private var rowsFor: (Set<Long>) -> List<InstanceRow> = { ids -> ids.map { InstanceRow(it * 100, it, now + 1000, now + 2000, false, "e$it", null) } }

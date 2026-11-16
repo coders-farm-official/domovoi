@@ -18,7 +18,7 @@ import org.junit.Test
 class SharePayloadTest {
     private val now = 1_800_000_000_000L
     private val day = SharePayload.DAY_MS
-    private val work = PhoneCalendar(12, "Work", "alex@example.com", 0xFF33B679.toInt())
+    private val work = PhoneCalendar(12, "Work", "com.google", 0xFF33B679.toInt())
     private val home = PhoneCalendar(3, "Home", null, null)
 
     private fun row(id: Long, cal: Long = 12, begin: Long = now + id * 3_600_000, end: Long? = begin + 3_600_000,
@@ -53,9 +53,10 @@ class SharePayloadTest {
         assertEquals(setOf("calendar_id", "name", "color", "events"), c.keys)
         assertEquals("12", c["calendar_id"]!!.jsonPrimitive.content)
         assertEquals("Work", c["name"]!!.jsonPrimitive.content)
-        // The account is for this phone's own screen: never sent.
+        // The kind of account is for this phone's own screen: never sent.
         assertFalse("account_name" in c)
-        assertFalse("alex@example.com" in b.toString())
+        assertFalse("account_type" in c)
+        assertFalse("com.google" in b.toString())
         assertEquals("#33b679", c["color"]!!.jsonPrimitive.content)
         val e = events(c).single().jsonObject
         assertEquals("345:1700003600000", e["uid"]!!.jsonPrimitive.content)
@@ -186,7 +187,7 @@ class SharePayloadTest {
 
     /** Review MEDIUM 5: a calendar named after the account's address. */
     @Test fun aCalendarNamedLikeAnEmailAddressIsMainCalendar() {
-        val mail = PhoneCalendar(12, "alex.smith@gmail.com", "alex.smith@gmail.com")
+        val mail = PhoneCalendar(12, "alex.smith@gmail.com", "com.google")
         val b = SharePayload.build(null, SharePayload.window(now), listOf(mail), emptyList(), setOf(12L), now).body
         assertEquals("Main calendar", cals(b).single().jsonObject["name"]!!.jsonPrimitive.content)
         assertFalse("gmail" in b.toString())
