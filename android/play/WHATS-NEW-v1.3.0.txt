@@ -1,0 +1,8 @@
+Domovoi 1.3.0
+
+- Share your phone's calendars with the house (read only); each says where it's from
+- Groups: rooms play the same music together, from Home and the queue
+- Voice ID: see which rooms have learned your voice
+- A person's page shows where and when they were last heard
+- Up next: your mix settings, and why each song was picked
+- Reproducible builds: anyone can check this app matches its source
