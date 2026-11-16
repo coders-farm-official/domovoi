@@ -26,8 +26,9 @@
 # kept. One folder per build: a new pin goes in beside the old one, never
 # over it, so a service still running on the old interpreter keeps its
 # standard library, and an update that is rolled back finds the old one
-# where it was. A folder no venv names is left for the administrator (each
-# is about 100 MB); nothing here removes one.
+# where it was. Nothing here removes one: apply-update.sh does, at the end
+# of a successful update (prune_python), keeping the build the venv runs
+# on, the one before it and any build a venv names (each is about 100 MB).
 #
 # Output: progress lines on stderr; on stdout, the interpreter's path (the
 # install and --path), nothing for --check. The interpreter answers to

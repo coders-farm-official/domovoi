@@ -90,6 +90,9 @@ On an x86_64 computer running Ubuntu 26.04, Debian 13, or Linux Mint 22 / Pop!_O
 curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
 ```
 
+> **From Domovoi 1.3.0.** Until then this command answers 404: use
+> [the install script by hand](docs/LINUX_HOST.md#or-run-the-install-script-yourself).
+
 It asks whether the server will have internet after setup, its time zone, and whether to include AI chat,
 checks that it downloaded a signed release, installs everything, and ends with the address to open from your phone.
 To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).

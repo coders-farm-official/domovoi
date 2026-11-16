@@ -23,8 +23,9 @@ a way that would otherwise get reported as a bug.
   pins a newer build of that CPython moves the venv onto it during the
   dashboard's update (a `python` step in **last update**) and back if the
   update rolls back; under internet **No** it waits, with a `warn`. Each
-  build is kept in its own folder (about 100 MB); remove an old one by hand
-  once nothing uses it. Under **No**, Debian's apt timers and unattended
+  build has its own folder (about 100 MB); after a successful update the
+  ones no venv needs are removed (a `python-cleanup` step), keeping the
+  current build and the one before it. Under **No**, Debian's apt timers and unattended
   upgrades are masked as on Ubuntu; `popularity-contest`, which reports
   only if you said yes to it, is left as you set it, and the update says so.
 - **Nothing to do** on Ubuntu 26.04 or in the Windows installer's distro:

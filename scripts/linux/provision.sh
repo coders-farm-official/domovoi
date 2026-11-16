@@ -2901,7 +2901,8 @@ pip_svc() { svc_py -m pip --disable-pip-version-check --no-input "$@"; }
 # SHA-256. The venv then names that interpreter (pyvenv.cfg's home) and
 # everything after it (the units, the update unit's re-sync) runs the
 # venv's python as on Ubuntu. A new pin moves the venv to the new
-# interpreter in place (venv_move); the old one stays where it was.
+# interpreter in place (venv_move); the old one stays where it was (the
+# update unit removes builds no venv needs after a successful update).
 python_runtime_script() { src_file scripts/linux/python-runtime.sh; }
 python_runtime() { bash "$(python_runtime_script)" --manifest "$MANIFEST_FILE" "$@"; }
 needs_own_python() {

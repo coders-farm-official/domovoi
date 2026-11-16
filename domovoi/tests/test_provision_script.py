@@ -430,6 +430,18 @@ def test_both_scripts_run_the_same_python_helper():
     assert 'case $home in "$OWN_PY_DIR"/?*) ;; *) return 0 ;; esac' in text
 
 
+def test_old_cpython_builds_go_only_after_a_good_update():
+    """The update unit removes the builds no venv needs only at the end of
+    a successful update: one call, between the last soft step and
+    `finish ok`, never in the rollback."""
+    text = APPLY_UPDATE.read_text(encoding="utf-8")
+    calls = re.findall(r"^\s+prune_python$", text, re.M)
+    assert len(calls) == 1
+    assert "    reconcile_wake_trainer || true\n    prune_python\n    finish ok\n" in text
+    rollback = re.search(r"^rollback\(\) \{\n(.*?)^\}$", text, re.M | re.S).group(1)
+    assert "prune_python" not in rollback
+
+
 def test_install_and_provision_accept_the_same_systems():
     """install.sh's gate lets through what provision.sh's preflight
     installs: Ubuntu, Debian 13, and Ubuntu derivatives on the suites the

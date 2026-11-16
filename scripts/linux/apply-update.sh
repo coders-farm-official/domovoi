@@ -53,7 +53,10 @@
 #      against its SHA-256) and move the venv onto it in place (python -m
 #      venv --upgrade); a rollback moves it back. Under never, a build not
 #      installed yet waits (a `warn` step). Never on a venv of the system's
-#      python3 (switch_python; docs/LINUX_HOST.md step 4b).
+#      python3 (switch_python; docs/LINUX_HOST.md step 4b). After a
+#      successful update, never during one, the builds no venv needs go
+#      (prune_python): the current one, the one before it and any build a
+#      venv names stay.
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
 #      requirements lock changed: through pip's resolver, as before the
 #      lock existed, unless DOMOVOI_USE_LOCK=1; then from the hash-pinned
@@ -2072,6 +2075,66 @@ switch_python() {
   STEP_DETAIL="the venv runs on $(dirname "$PY_TO") now, the CPython this commit pins (was $(dirname "$PY_FROM"))"
 }
 
+# build_of PATH: the build (YYYYMMDD) of a path under OWN_PY_DIR, or nothing.
+build_of() {
+  local b=${1#"$OWN_PY_DIR"/}
+  [ "$b" != "$1" ] || return 0
+  b=${b%%/*}
+  if [[ $b =~ ^[0-9]{8}$ ]]; then printf '%s' "$b"; fi
+}
+
+# The builds a venv on this box names (pyvenv.cfg's home): the service's,
+# read as the service user, and any other venv in the usual places, read
+# as plain files (a link is not followed).
+builds_in_use() {
+  local f h
+  build_of "$(venv_cfg home)"; echo
+  while IFS= read -r f; do
+    h=$(sed -n 's/^home[[:space:]]*=[[:space:]]*//p' "$f" 2>/dev/null | tail -n 1 | tr -d '\r') || h=""
+    build_of "$h"; echo
+  done < <(find "$TEST_ROOT/opt" "$TEST_ROOT/srv" "$TEST_ROOT/home" "$TEST_ROOT/root" "$TEST_ROOT/usr/local" \
+             "$TEST_ROOT/var/lib" -maxdepth 5 -name pyvenv.cfg -type f 2>/dev/null)
+}
+
+# After a successful full update, never during one: the own CPython's
+# builds no venv needs any more go. Kept: the build the service's venv runs
+# on, the one before it (what this run moved the venv from, else the newest
+# build older than the current one), so a hand-made rollback still finds
+# its interpreter, and every build any venv names. Nothing is touched on a
+# venv of the system's python3. A failure is a `warn` and the update stands.
+prune_python() {
+  local cur prev="" b t0 in_use
+  local -a gone=() stuck=()
+  [ -d "$OWN_PY_DIR" ] || return 0
+  cur=$(build_of "$(venv_cfg home)") || cur=""
+  [ -n "$cur" ] || return 0
+  t0=$(now_ms)
+  if [ "$PY_MOVED" = 1 ]; then prev=$(build_of "$PY_FROM") || prev=""; fi
+  if [ -z "$prev" ]; then
+    prev=$(for b in "$OWN_PY_DIR"/*/; do
+             b=${b%/}; b=${b##*/}
+             if [[ $b =~ ^[0-9]{8}$ ]] && [[ $b < $cur ]]; then echo "$b"; fi
+           done | sort | tail -n 1) || prev=""
+  fi
+  in_use=" $(builds_in_use | tr '\n' ' ') " || in_use=" "
+  for b in "$OWN_PY_DIR"/*/; do
+    [ -d "$b" ] || continue
+    b=${b%/}; b=${b##*/}
+    [[ $b =~ ^[0-9]{8}$ ]] || continue
+    [ "$b" != "$cur" ] && [ "$b" != "$prev" ] || continue
+    [[ $in_use != *" $b "* ]] || continue
+    if rm -rf -- "${OWN_PY_DIR:?}/$b"; then gone+=("$b"); else stuck+=("$b"); fi
+  done
+  if [ "${#stuck[@]}" -gt 0 ]; then
+    add_step python-cleanup warn "$t0" "could not remove $OWN_PY_DIR/{${stuck[*]}}${gone[*]:+; removed ${gone[*]}}"
+    log "could not remove old CPython builds: ${stuck[*]}; not fatal"
+  elif [ "${#gone[@]}" -gt 0 ]; then
+    add_step python-cleanup ok "$t0" "removed CPython builds no venv uses: ${gone[*]} (kept $cur${prev:+ and $prev})"
+    log "removed CPython builds no venv uses: ${gone[*]}"
+  fi
+  return 0
+}
+
 # ─── Packages a release stopped using ────────────────────────────────────
 
 # pip never removes a package nothing requires any more, so a venv keeps
@@ -3245,6 +3308,7 @@ full_update() {
     reconcile_os_jobs
     reconcile_added_packages
     reconcile_wake_trainer || true
+    prune_python
     finish ok
     return
   fi

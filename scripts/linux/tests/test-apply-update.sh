@@ -1893,6 +1893,81 @@ case_system_python_venv_is_left_alone() {
 }
 not_grep() { ! grep -qF -- "$1" "$2"; }
 
+# After a successful update that moved the venv: the build it runs on and
+# the one it came from stay, an older one no venv names goes.
+case_own_python_old_builds_go_after_a_good_update() {
+  own_python_case own_python_old_builds_go_after_a_good_update
+  local older; older=$(own_python 20260701 3.14.8)
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the oldest build removed" test ! -e "$OSROOT/usr/local/lib/domovoi-python/20260701"
+  check "the one the venv came from kept" test -x "$OLD_PY"
+  check "the one it runs on kept" test -x "$NEW_PY"
+  check "a python-cleanup step" step_is python-cleanup ok
+  check "naming what went" grep -qF "removed CPython builds no venv uses: 20260701" "$RESULT"
+  check "the step comes after the update was healthy" eq "$(grep -o '"name": "[a-z-]*"' "$RESULT" | grep -e '"health"' -e '"python-cleanup"' | tr -d '"' | tr '\n' ' ')" "name: health name: python-cleanup "
+  check "the oldest one was there to remove" test -n "$older"
+  end_case
+}
+
+# A build another venv on the box names is never removed, nor is anything
+# removed during an update that rolls back.
+case_own_python_builds_in_use_or_rolled_back_stay() {
+  own_python_case own_python_builds_in_use_or_rolled_back_stay
+  local older other
+  older=$(own_python 20260701 3.14.8)
+  other=$(own_python 20260601 3.14.7)
+  mkdir -p "$OSROOT/opt/other/.venv"
+  printf 'home = %s\n' "${other%/*}" >"$OSROOT/opt/other/.venv/pyvenv.cfg"
+  echo "$SHA_B" >"$STATE/curl-fail-when-head"
+  run_update
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "nothing removed during a rolled-back update" test -x "$older"
+  check "no cleanup step" not_grep '"name": "python-cleanup"' "$RESULT"
+  # The next update is good: the unused old build goes, the one another
+  # venv names stays.
+  rm -f "$STATE/curl-fail-when-head"
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: code only" >/dev/null
+  run_update
+  check "next update: ok" eq "$(field status)" '"ok"'
+  check "the unused build removed" test ! -e "$OSROOT/usr/local/lib/domovoi-python/20260701"
+  check "the build another venv names kept" test -x "$other"
+  check "the one the venv came from kept" test -x "$OLD_PY"
+  check "the one it runs on kept" test -x "$NEW_PY"
+  end_case
+}
+
+# An update that moves nothing keeps the current build and the newest
+# older one; and a venv on the system's python3 never has its interpreters
+# looked at.
+case_own_python_cleanup_without_a_move() {
+  new_case own_python_cleanup_without_a_move
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local cur prev oldest
+  oldest=$(own_python 20260701 3.14.8)
+  prev=$(own_python 20260901 3.14.9)
+  cur=$(own_python "$OWN_PIN_BUILD" "$OWN_PIN_VERSION")
+  printf 'home = %s\nexecutable = %s\n' "${cur%/*}" "$cur" >"$CASE/venv/pyvenv.cfg"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code only" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no python step" not_called "-m venv --upgrade"
+  check "the oldest removed" test ! -e "$OSROOT/usr/local/lib/domovoi-python/20260701"
+  check "the newest older kept" test -x "$prev"
+  check "the current kept" test -x "$cur"
+  # On the system's python3 now: nothing of Domovoi's own is touched.
+  printf 'home = /usr/bin\n' >"$CASE/venv/pyvenv.cfg"
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: code only" >/dev/null
+  run_update
+  check "system python: ok" eq "$(field status)" '"ok"'
+  check "system python: the builds left alone" test -x "$prev"
+  check "system python: no cleanup step" not_grep '"name": "python-cleanup"' "$RESULT"
+  end_case
+}
+
 case_flyway_failure_without_growth() {
   new_case flyway_failure_without_growth
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -5441,6 +5516,9 @@ CASES=(
   case_own_python_move_failure_rolls_back
   case_own_python_waits_under_never
   case_system_python_venv_is_left_alone
+  case_own_python_old_builds_go_after_a_good_update
+  case_own_python_builds_in_use_or_rolled_back_stay
+  case_own_python_cleanup_without_a_move
   case_stop_detail_says_how_each_unit_stopped
   case_a_unit_already_down_is_said_to_be
   case_a_hung_stop_is_killed_and_the_restart_goes_on

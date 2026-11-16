@@ -261,8 +261,10 @@ venv from that instead (`scripts/linux/python-runtime.sh`):
   that brings the commit ([step 4b](#updates-from-the-dashboard)), which
   moves it back if the update rolls back. Under internet **No** an update
   doesn't download a build: the venv stays where it is, and the update
-  says so. The old folder stays (about 100 MB each); remove one by hand
-  once no venv names it.
+  says so. Builds no venv needs any more are removed at the end of a
+  successful update, never during one (a `python-cleanup` step): kept are
+  the build the venv runs on, the one before it, and any build a venv on
+  the box names. Each is about 100 MB.
 - **Ubuntu 26.04** never gets any of this: its `python3` is the lock's,
   and the venv is made from it as it always was.
 
@@ -359,6 +361,10 @@ may work, and it says so), open a terminal and run:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
 ```
+
+> **From Domovoi 1.3.0.** Until 1.3.0 is released, `stable` has no
+> `install.sh` and this command answers 404: use
+> [the install script by hand](#or-run-the-install-script-yourself), below.
 
 It asks two questions: **will this server have internet after setup**
 (yes always, sometimes, or no: [what each means](#will-your-domovoi-have-internet);
@@ -1601,7 +1607,11 @@ does this:
    installed yet is not downloaded: the venv stays where it is (the same
    Python version), a `python` `warn` says so, and the update goes on. A
    venv on the system's `python3` (Ubuntu 26.04, the Windows installer's
-   distro) is never touched.
+   distro) is never touched. At the end of a successful update (never
+   during one, never after a rollback) the builds no venv needs any more
+   are removed, a `python-cleanup` step: kept are the build the venv runs
+   on, the one before it (the one this update moved it from, else the
+   newest older one) and every build a venv on the box names.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
    changed: re-sync the venv. A change to `pyproject.toml` that only moves
    `[project]`'s `version` line (every release's bump) is not a dependency
