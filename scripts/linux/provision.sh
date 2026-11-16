@@ -1119,7 +1119,7 @@ RERUN_REASON=""
 
 # Steps that read the checkout, and those that read the pin manifest: a
 # dry run before the clone plans them without their inputs.
-after_clone() { case " docker gpu-runtime venv env ollama models whisper piper phone-app imagessearxng os-jobs units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
+after_clone() { case " docker gpu-runtime venv env ollama models whisper piper phone-app images searxng os-jobs units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
 needs_manifest() { case " docker gpu-runtime env models whisper " in *" $1 "*) return 0 ;; esac; return 1; }
 
 plan_details() {
