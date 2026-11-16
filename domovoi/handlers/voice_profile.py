@@ -98,6 +98,7 @@ import time
 from datetime import datetime, timezone
 
 import numpy as np
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.clients.voice_embedder import (
@@ -114,10 +115,12 @@ from domovoi.db.repositories import (
 )
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared.rooms import spoken_room
 from domovoi.log_privacy import said
 from domovoi import person_names
 from domovoi import voice_history
 from domovoi.models import Context, Intent, Response, is_phone_room
+from domovoi.overheard import assistant_names
 from domovoi.person_names import read_name_reply, sound_alike_people, sounds_like_name, spell_out
 from domovoi.voice_identifier import claims_by_this_voice, is_own_voice, unheard_text
 
@@ -248,13 +251,49 @@ _THIRD_PARTY_INTRO_RE = re.compile(
     r"$"
 )
 
-# "Who am I (talking to)" / "do you know me" / "do you know who I am"
-_WHOAMI_RE = re.compile(
-    r"^(?:"
+# An address to the assistant, before or after a short question: "Domovoi,
+# who am I?", "who am I, Domo boy?" (Whisper's "Domovoi" said quickly),
+# "hey Domo, where am I?". The names are the overheard guard's, so a new
+# mis-hearing added there counts here too. Bare "domo" is fine HERE: the
+# questions it hangs off are anchored at both ends.
+_ADDRESS = (
+    r"(?:(?:hey|hi|ok|okay)[,\s]+)?(?:"
+    + "|".join([*assistant_names(settings.bot_name), "domo"])
+    + r")"
+)
+# What Whisper puts between the parts: "who am I, Domo boy?", "who am I?
+# Domovoi.", "who am I right now".
+_SEP = r"[\s,.!?;:]+"
+# Said after the question without changing it.
+_QUALIFIER = r"(?:right now|now|today|again|then)"
+
+
+def _addressed_question(core: str) -> re.Pattern[str]:
+    """``core`` (an alternation, the whole turn on its own) with an optional
+    leading address, then up to two trailing qualifiers or addresses —
+    still anchored at both ends, so "who am I to judge" is not one."""
+    return re.compile(
+        rf"^(?:{_ADDRESS}{_SEP})?(?:{core})(?:{_SEP}(?:{_QUALIFIER}|{_ADDRESS})){{0,2}}$"
+    )
+
+
+# "Who am I (talking to)" / "what's my name" / "do you know me" / "who's
+# talking". Not "my name is X": that is an introduction (_SELF_INTRO_RE).
+_WHOAMI_RE = _addressed_question(
     r"who am i(?: talking to)?"
+    r"|what(?:'s| is) my name"
     r"|do you (?:know|recognize) me"
-    r"|do you know who i am"
-    r")$"
+    r"|do you know (?:who i am|my name)"
+    r"|who(?:'s| is) (?:talking|speaking)(?: to you)?"
+)
+
+# "Where am I" / "which room am I in" / "what room is this": the room the
+# turn came from.
+_WHEREAMI_RE = _addressed_question(
+    r"where am i"
+    r"|(?:which|what) room am i in"
+    r"|(?:which|what) room is this"
+    r"|(?:which|what) room are you in"
 )
 
 # "Forget me" / "don't save my voice" / "forget my voice"
@@ -748,6 +787,7 @@ class VoiceProfileHandler(Handler):
             FastPath(_DENYLIST_RE, VoiceProfileHandler._denylist_from_match),
             FastPath(_FORGET_RE, VoiceProfileHandler._forget_from_match),
             FastPath(_WHOAMI_RE, VoiceProfileHandler._whoami_from_match),
+            FastPath(_WHEREAMI_RE, VoiceProfileHandler._whereami_from_match),
             # Third-party intros must come before self-intros — both can
             # match "this is Alex", but the third-party form's leading
             # "Domovoi," disambiguator wins when present.
@@ -1014,6 +1054,33 @@ class VoiceProfileHandler(Handler):
         self, m: re.Match[str], ctx: Context, session: AsyncSession
     ) -> Response:
         return await self._whoami(ctx, session)
+
+    async def _whereami_from_match(
+        self, m: re.Match[str], ctx: Context, session: AsyncSession
+    ) -> Response:
+        return Response(
+            text=await self._whereami(ctx, session),
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+        )
+
+    async def _whereami(self, ctx: Context, session: AsyncSession) -> str:
+        """"You're in the basement." — the room whose satellite took the
+        turn, by its label in Settings → Rooms when it has one."""
+        if ctx.from_phone or is_phone_room(ctx.room_id):
+            return "You're talking to me from your phone, so I can't tell which room you're in."
+        room_id = ctx.room_id
+        if not room_id:
+            return "You're not talking to me from a room, so I can't tell which room you're in."
+        label: str | None = None
+        try:
+            row = (await session.execute(
+                sql_text("SELECT room_label FROM satellites WHERE room_id = :r"), {"r": room_id},
+            )).first()
+            label = row[0] if row else None
+        except Exception as e:
+            log.warning("whereami: reading the room label failed: %s", e)
+        return f"You're in {spoken_room(room_id, label)}."
 
     async def _forget_from_match(
         self, m: re.Match[str], ctx: Context, session: AsyncSession

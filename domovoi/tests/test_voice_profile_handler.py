@@ -7,6 +7,7 @@ from sqlalchemy import text
 from domovoi.clients.voice_embedder import EMBEDDING_DIM, StubVoiceEmbedder
 from domovoi.db.repositories import (
     PeopleRepository,
+    SatellitesRepository,
     SessionRepository,
     VoiceProfilesRepository,
 )
@@ -16,10 +17,12 @@ from domovoi.handlers.voice_profile import (
     _FORGET_RE,
     _SELF_INTRO_RE,
     _THIRD_PARTY_INTRO_RE,
+    _WHEREAMI_RE,
     _WHOAMI_RE,
     _clean_name,
 )
 from domovoi.models import Context
+from domovoi.router import plan_route
 from domovoi.tests.conftest import requires_db
 
 
@@ -72,6 +75,168 @@ def test_whoami_regex() -> None:
         "do you know who i am",
     ):
         assert _WHOAMI_RE.match(s), f"expected match: {s!r}"
+
+
+# ─── "Who am I" / "where am I", however it's said (live 1.3.0, 2026-11-16) ──
+# Each went to Q&A on the basement satellite and got a nonsense answer.
+# Raw transcripts as Whisper writes them: routed through the router's own
+# normalization (plan_route), so case, commas and the closing "?" count.
+
+_WHO_AM_I_SAID = (
+    "Who am I?",
+    "Who am I right now?",
+    "Who am I now?",
+    "Who am I today?",
+    "Who am I, Domo boy?",
+    "Who am I, Doma boy?",
+    "Who am I, Domovoi?",
+    "Who am I Domovoi",
+    "Who am I? Domovoi.",
+    "Who am I right now, Domovoi?",
+    "Domovoi, who am I?",
+    "Hey Domovoi, who am I right now?",
+    "Hey Domo, who am I?",
+    "Domo boy, who am I?",
+    "What is my name?",
+    "What's my name?",
+    "What's my name, Domovoi?",
+    "What is my name again?",
+    "Do you know my name?",
+    "Do you know who I am?",
+    "Do you know me?",
+    "Who's talking?",
+    "Who is speaking?",
+    "Who is talking to you?",
+    "Who am I talking to?",
+)
+
+_WHERE_AM_I_SAID = (
+    "Where am I?",
+    "Where am I right now?",
+    "Where am I, Domovoi?",
+    "Where am I, Domo boy?",
+    "Domovoi, where am I?",
+    "Which room am I in?",
+    "What room am I in?",
+    "What room is this?",
+    "Which room is this, Domovoi?",
+)
+
+
+@pytest.mark.parametrize("said", _WHO_AM_I_SAID)
+def test_who_am_i_said_any_way_routes_to_whoami(said: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "voice_profile", said
+    assert plan.fast_path.pattern is _WHOAMI_RE, said
+
+
+@pytest.mark.parametrize("said", _WHERE_AM_I_SAID)
+def test_where_am_i_said_any_way_routes_to_whereami(said: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "voice_profile", said
+    assert plan.fast_path.pattern is _WHEREAMI_RE, said
+
+
+@pytest.mark.parametrize("said", (
+    "Who am I to judge?",
+    "Who am I kidding?",
+    "Who am I supposed to call?",
+    "Where am I going to put this?",
+    "Where am I supposed to park?",
+    "What is my name in Spanish?",
+    "Do you know my name means wolf?",
+    "Who's talking about the game?",
+    "What room is this song from?",
+))
+def test_idioms_and_longer_questions_are_not_whoami(said: str) -> None:
+    """Anchored at both ends: only the qualifiers and addresses ride along."""
+    plan = plan_route(said)
+    assert plan is None or plan.fast_path.pattern not in (_WHOAMI_RE, _WHEREAMI_RE), said
+
+
+@pytest.mark.parametrize("said", ("My name is Sarah.", "My name's Sarah.", "I'm Sarah."))
+def test_introductions_stay_introductions(said: str) -> None:
+    plan = plan_route(said)
+    assert plan is not None and plan.handler.name == "voice_profile"
+    assert plan.fast_path.pattern is _SELF_INTRO_RE
+
+
+class _Rows:
+    def __init__(self, row):
+        self._row = row
+
+    def first(self):
+        return self._row
+
+
+class _LabelSession:
+    """The one read ``_whereami`` makes: the room's label (or none)."""
+
+    def __init__(self, label=None, *, fail: bool = False):
+        self.label, self.fail, self.asked = label, fail, []
+
+    async def execute(self, stmt, params=None):
+        self.asked.append(params)
+        if self.fail:
+            raise RuntimeError("db down")
+        return _Rows((self.label,) if self.label is not None else None)
+
+
+@pytest.mark.asyncio
+async def test_where_am_i_names_the_room_by_its_id() -> None:
+    ctx = Context(session_id=None, room_id="basement", online=True)
+    session = _LabelSession()
+    r = await VoiceProfileHandler()._whereami_from_match(None, ctx, session)
+    assert r.text == "You're in the basement."
+    assert r.matched_handler == "voice_profile"
+    assert session.asked == [{"r": "basement"}]
+
+
+@pytest.mark.asyncio
+async def test_where_am_i_uses_the_rooms_label() -> None:
+    ctx = Context(session_id=None, room_id="sat_3", online=True)
+    r = await VoiceProfileHandler()._whereami_from_match(None, ctx, _LabelSession("Living Room"))
+    assert r.text == "You're in the living room."
+    r = await VoiceProfileHandler()._whereami_from_match(None, ctx, _LabelSession("Alex's Office"))
+    assert r.text == "You're in Alex's Office."
+
+
+@pytest.mark.asyncio
+async def test_where_am_i_without_the_label_still_names_the_room() -> None:
+    ctx = Context(session_id=None, room_id="kids_room", online=True)
+    r = await VoiceProfileHandler()._whereami_from_match(None, ctx, _LabelSession(fail=True))
+    assert r.text == "You're in the kids room."
+
+
+@pytest.mark.asyncio
+async def test_where_am_i_from_a_phone_says_it_cant_tell() -> None:
+    session = _LabelSession("Basement")
+    for ctx in (
+        Context(session_id=None, room_id="phone-abc", online=True, device_kind="phone"),
+        Context(session_id=None, room_id="phone-abc", online=True),
+    ):
+        r = await VoiceProfileHandler()._whereami_from_match(None, ctx, session)
+        assert r.text == (
+            "You're talking to me from your phone, so I can't tell which room you're in."
+        )
+    assert session.asked == []
+
+
+@pytest.mark.asyncio
+async def test_where_am_i_with_no_room() -> None:
+    r = await VoiceProfileHandler()._whereami_from_match(
+        None, Context(session_id=None, room_id=None, online=True), _LabelSession("Basement"),
+    )
+    assert "can't tell which room you're in" in r.text
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_where_am_i_reads_the_label_from_settings_rooms(db_session) -> None:
+    await SatellitesRepository(db_session).set_room_label("whereami_test_room", "Basement")
+    ctx = Context(session_id=None, room_id="whereami_test_room", online=True)
+    r = await VoiceProfileHandler()._whereami_from_match(None, ctx, db_session)
+    assert r.text == "You're in the basement."
 
 
 def test_forget_regex() -> None:

@@ -4,6 +4,18 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — "Who am I?" and "Where am I?" asked any way
+
+- **What changed.** "Who am I right now?", "Who am I, Domovoi?" (also as
+  Whisper hears it, "Domo boy"), "What's my name?", "Do you know my
+  name?", "Who's talking?" now get the voice-profile answer instead of a
+  general-knowledge guess. "Where am I?", "Which room am I in?" and "What
+  room is this?" name the room the request came from ("You're in the
+  basement."), by its label in **Settings → Rooms**; from the app's chat mic
+  the answer says it can't tell which room. "My name is …" is still an
+  introduction.
+- **Nothing to do.**
+
 ## 1.3.0 (unreleased) — Settings → Rooms says why a room couldn't join
 
 - **What changed.** When a room device can't join for a reason only the
