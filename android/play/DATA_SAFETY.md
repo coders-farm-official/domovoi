@@ -191,7 +191,12 @@ pins the exact keys at every level). A private or confidential event
 (`Instances.ACCESS_LEVEL` 2 or 1) goes as title "busy" with no location; a
 link in a location goes as "online meeting"; an event the person declined
 is not sent; a calendar whose name is an email address goes as "Main
-calendar".
+calendar". To list the calendars to tick, the app reads each one's kind of
+account (`Calendars.ACCOUNT_TYPE`, e.g. `com.google`) and shows it as
+"Google account", "Samsung account", "Microsoft / Outlook", "Other account"
+or "On this phone only" (`calendarshare/CalendarSource.kt`); that stays on
+the phone. The account's name (`ACCOUNT_NAME`, usually an email address) is
+not read, not shown and not sent.
 Turning it off sends `DELETE`, which removes the server's copy; if the
 server can't be reached the delete is kept and retried **while that server
 is the active, paired one** (switched to another server, it waits until

@@ -29,7 +29,9 @@ class PhoneCalendarReader(private val context: Context) {
         val proj = arrayOf(
             CalendarContract.Calendars._ID,
             CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
-            CalendarContract.Calendars.ACCOUNT_NAME,
+            // The kind of account only ("com.google"), never ACCOUNT_NAME
+            // (the person's address): the picker says "Google account".
+            CalendarContract.Calendars.ACCOUNT_TYPE,
             CalendarContract.Calendars.CALENDAR_COLOR,
         )
         val out = mutableListOf<PhoneCalendar>()
@@ -37,19 +39,47 @@ class PhoneCalendarReader(private val context: Context) {
             context.contentResolver.query(
                 CalendarContract.Calendars.CONTENT_URI, proj,
                 "${CalendarContract.Calendars.VISIBLE} = 1", null,
+                // Sorted by account in the provider (keeps one account's
+                // calendars together); the address itself is never read.
                 "${CalendarContract.Calendars.ACCOUNT_NAME} ASC, ${CalendarContract.Calendars.CALENDAR_DISPLAY_NAME} ASC",
             )?.use { c ->
                 while (c.moveToNext()) {
                     out += PhoneCalendar(
                         id = c.getLong(0),
                         name = c.getString(1)?.ifBlank { null } ?: "Calendar",
-                        accountName = c.getString(2)?.ifBlank { null },
+                        accountType = c.getString(2)?.ifBlank { null },
                         color = if (c.isNull(3)) null else c.getInt(3),
                     )
                 }
             }
             out.toList()
         }.getOrElse { if (it is SecurityException) null else throw IOException("calendar provider", it) }
+    }
+
+    /** How many occurrences each visible calendar has in [window] (the
+     *  window the house is sent), by calendar id; a calendar with none is
+     *  absent. Reads the CALENDAR_ID column only. Null without the
+     *  permission or when the provider fails: the picker then shows no
+     *  counts. Call it off the main thread. */
+    fun counts(window: ShareWindow): Map<Long, Int>? {
+        if (!allowed()) return null
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, window.startMs)
+            ContentUris.appendId(it, window.endMs)
+        }.build()
+        return runCatching {
+            val out = HashMap<Long, Int>()
+            context.contentResolver.query(
+                uri, arrayOf(CalendarContract.Instances.CALENDAR_ID),
+                "${CalendarContract.Instances.VISIBLE} = 1", null, null,
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getLong(0)
+                    out[id] = (out[id] ?: 0) + 1
+                }
+            }
+            out as Map<Long, Int>
+        }.getOrNull()
     }
 
     /** Every occurrence in [window] for the calendars [ids] (repeating
