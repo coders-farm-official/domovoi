@@ -445,8 +445,8 @@ def body(rel: Release) -> str:
         f"- **A Domovoi server** updates from its dashboard: Settings, Configuration, Version, then check for updates. "
         f"A new Linux server: [docs/LINUX_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/LINUX_HOST.md).",
         "- **Phones** get the app from their own server (the join page, or Settings, Devices), "
-        "which puts it there during setup while online (else an admin presses \"Download the app to this server\" "
-        "there, or uploads it).",
+        "where the installer puts it (else an admin presses \"Download the app to this server\" there, "
+        "or uploads it).",
         f"- **Windows (preview):** `{SETUP_ASSET}` puts the server on a Windows 11 PC.",
     ]
     if rel.satellite_setup_sha256:
