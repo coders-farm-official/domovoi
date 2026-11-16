@@ -186,16 +186,19 @@ def test_they_come_first_with_an_open_slot() -> None:
     # place (music_rooms.py: a lyric is read whole, "… in the garage"
     # included), a named group last, then "play X, the song Y" and "play X
     # by Y"
-    assert [p.method.__name__ for p in paths[4:12]] == [
+    # ("stop here" stops this room only, before the place paths read
+    # "here" as a room: owner, 2026-11-15)
+    assert [p.method.__name__ for p in paths[4:14]] == [
         "_group_share_from_match", "_group_join_from_match", "_group_leave_from_match",
-        "_group_which_from_match", "_room_play_from_match", "_room_control_from_match",
-        "_room_first_from_match", "_room_group_from_match"]
+        "_group_which_from_match", "_stop_here_from_match", "_stop_only_from_match",
+        "_room_play_from_match",
+        "_room_control_from_match", "_room_first_from_match", "_room_group_from_match"]
     # then the queue's commands (music_queue_voice.py: "play X next" before
     # "play X by Y" splits it), then "play X, the song Y" and "play X by Y"
     queue = len(_music().queue_fast_paths())
-    assert paths[12 + queue].method.__name__ == "_play_artist_song_from_match"
-    assert patterns.index(_PLAY_ARTIST_RE) == 13 + queue
-    assert all(p.early_commit is None for p in paths[2:12 + queue])
+    assert paths[14 + queue].method.__name__ == "_play_artist_song_from_match"
+    assert patterns.index(_PLAY_ARTIST_RE) == 15 + queue
+    assert all(p.early_commit is None for p in paths[2:14 + queue])
 
 
 def test_an_explicit_request_is_read_with_and_without_the_artist() -> None:
