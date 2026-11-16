@@ -144,6 +144,35 @@ def _plain_number(m):
     return " " + _number_word(s) + " "
 
 
+def _plural(words):
+    """'twenty' -> 'twenties', 'hundred' -> 'hundreds' (last word only)."""
+    head, _, last = words.rpartition(" ")
+    last = last[:-1] + "ies" if last.endswith("y") else last + "s"
+    return (head + " " if head else "") + last
+
+
+def _decade(m):
+    """'2020s' -> 'twenty twenties', '1900s' -> 'nineteen hundreds', '80s' ->
+    'eighties'. A year that isn't a round decade ('2005s') or a one-digit 's'
+    ('5s') is left to the number rules."""
+    s = m.group(1)
+    n = int(s)
+    if n % 10:
+        return m.group(0)
+    if len(s) == 2:
+        if n == 0:
+            return m.group(0)
+        return " " + _plural(N.cardinal(n)) + " "
+    if not 1100 <= n <= 2099:
+        return m.group(0)
+    hi, lo = divmod(n, 100)
+    if 2000 <= n <= 2009:
+        return " " + _plural(N.cardinal(n)) + " "
+    if lo == 0:
+        return " " + N.cardinal(hi) + " hundreds "
+    return " " + N.cardinal(hi) + " " + _plural(N.cardinal(lo)) + " "
+
+
 def _date_md(m):
     mo, d, y = int(m.group(1)), int(m.group(2)), m.group(3)
     if not (1 <= mo <= 12 and 1 <= d <= 31):
@@ -197,6 +226,8 @@ def prenormalize(text):
                + r")\b", lambda m: _units(m), t, flags=re.I)
     # ordinals
     t = re.sub(r"\b(\d+)(st|nd|rd|th)\b", lambda m: " " + N.ordinal(int(m.group(1))) + " ", t)
+    # decades: 2020s / 1990's / '80s -> twenty twenties / nineteen nineties / eighties
+    t = re.sub(r"(?<![\w.,])'?(\d{4}|\d{2})'?s\b", _decade, t)
     # Month + day -> ordinal ("October 14" -> "October fourteenth")
     t = re.sub(r"\b(" + MONTH_RE + r")\s+(\d{1,2})\b(?![:.,]?\d)",
                lambda m: f"{m.group(1)} {N.ordinal(int(m.group(2)))}", t)
