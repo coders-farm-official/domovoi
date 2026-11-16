@@ -93,6 +93,7 @@ from domovoi.clients.voice_embedder import (
     EMBEDDING_DIM,
     VoicePrint,
     get_voice_embedder,
+    voice_id_unavailable,
 )
 from domovoi.config import settings
 from domovoi.db.repositories import (
@@ -138,6 +139,10 @@ class IdentificationResult:
     outcome: str | None = None
     best_person_id: int | None = None
     runner_up_person_id: int | None = None
+    #: How much speech the recording held, when that is why nothing was
+    #: scored (``too_short``): the speech alone, not the recording, whose
+    #: second of trailing silence would hide a short command.
+    speech_seconds: float | None = None
 
 
 # ─── A turn's identification, as kept and shown (V049) ────────────────────
@@ -166,6 +171,35 @@ _UNSCORED = frozenset({
     OUTCOME_TOO_SHORT, OUTCOME_NO_EMBEDDING, OUTCOME_NO_SAMPLES, OUTCOME_TIMEOUT,
     OUTCOME_DENYLIST, OUTCOME_ERROR,
 })
+
+#: Outcomes where the turn's voice was never scored: no voiceprint was made
+#: (too little speech, the embedder gave none) or identification didn't
+#: finish. Such a turn says nothing about whether Domovoi knows the speaker,
+#: so a reply must not say it doesn't (:func:`unheard_text`).
+UNHEARD = frozenset({
+    OUTCOME_TOO_SHORT, OUTCOME_NO_EMBEDDING, OUTCOME_TIMEOUT, OUTCOME_ERROR,
+})
+
+
+def unheard_text(outcome: str | None, example: str | None = None) -> str | None:
+    """What to say instead of "I don't recognize your voice" when the
+    turn's voice was never scored (:data:`UNHEARD`), or None when it was
+    (or the outcome isn't known: a typed request). Never claims anything
+    about who Domovoi knows. ``example``: a longer way to ask ("who am I,
+    Domovoi?"), offered when there is one."""
+    again = "Try again with a few more words"
+    again += f", like \"{example}\"" if example else "."
+    if outcome == OUTCOME_TOO_SHORT:
+        return f"That was too short for me to tell who's talking. {again}"
+    if outcome == OUTCOME_NO_EMBEDDING:
+        return (
+            f"I couldn't hear your voice clearly enough that time to tell who's talking. {again}"
+        )
+    if outcome in (OUTCOME_TIMEOUT, OUTCOME_ERROR):
+        return (
+            "I couldn't work out who's talking that time. Please ask me again in a moment."
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -198,7 +232,10 @@ class VoiceMatch:
             return cls(outcome=outcome or OUTCOME_ERROR, speech_seconds=speech_seconds)
         out = getattr(ident, "outcome", None) or _inferred_outcome(ident)
         if out in _UNSCORED:
-            return cls(outcome=out, speech_seconds=speech_seconds)
+            measured = getattr(ident, "speech_seconds", None)
+            return cls(
+                outcome=out, speech_seconds=measured if measured is not None else speech_seconds,
+            )
         return cls(
             outcome=out,
             best_person_id=getattr(ident, "best_person_id", None),
@@ -574,6 +611,37 @@ async def embed_voice(pcm_int16: bytes) -> np.ndarray | None:
     return None if voice is None else voice.current
 
 
+def _why_no_print(pcm_int16: bytes | None) -> tuple[str, float | None]:
+    """Why :func:`embed_print` made no voiceprint of this recording, and
+    how much speech it held: ``too_short`` when the speech is under
+    ``voice_profile_min_utterance_sec``, ``no_embedding`` otherwise.
+
+    The embedder measures the speech alone (domovoi/voice_prep.py), not
+    the recording: a satellite's recording ends with the second of silence
+    it waited through, so "who am I?" (about half a second of speech) is a
+    recording well over the minimum that the embedder rightly turns down.
+    Judged by the recording's length, that read as ``no_embedding``, and
+    the reply said nothing useful about it."""
+    pcm = pcm_int16 or b""
+    min_sec = settings.voice_profile_min_utterance_sec
+    seconds = len(pcm) / (16_000 * 2)
+    if seconds < min_sec:
+        return OUTCOME_TOO_SHORT, round(seconds, 2)
+    if voice_id_unavailable():
+        return OUTCOME_NO_EMBEDDING, None
+    try:
+        from domovoi.voice_prep import for_embedding
+
+        wav = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
+        speech = float(for_embedding(wav).speech_sec)
+    except Exception as e:  # noqa: BLE001 — the outcome is only a label
+        log.debug("voice identification: measuring the speech failed: %s", e)
+        return OUTCOME_NO_EMBEDDING, None
+    if speech < min_sec:
+        return OUTCOME_TOO_SHORT, round(speech, 2)
+    return OUTCOME_NO_EMBEDDING, round(speech, 2)
+
+
 def _as_print(embedding: Any) -> VoicePrint | None:
     """``identify(embedding=...)`` takes a :class:`VoicePrint`, or a bare
     embedding (clarity unknown)."""
@@ -725,20 +793,18 @@ async def identify(
     voice = await embed_print(pcm_int16) if embedding is _EMBED_HERE else _as_print(embedding)
 
     if voice is None:
-        # Sub-second clip, embedder unavailable, etc. Use a high tier so
+        # Too little speech, embedder unavailable, etc. Use a high tier so
         # any explicit identity-revealing utterance ("I'm Sarah") still
         # gets prompted to enroll on the next turn that produces a
         # usable vector.
-        seconds = len(pcm_int16 or b"") / (16_000 * 2)
+        outcome, speech = _why_no_print(pcm_int16)
         return IdentificationResult(
             person_id=None,
             presence_tier="high",
             embedding=None,
             best_similarity=None,
-            outcome=(
-                OUTCOME_TOO_SHORT if seconds < settings.voice_profile_min_utterance_sec
-                else OUTCOME_NO_EMBEDDING
-            ),
+            outcome=outcome,
+            speech_seconds=speech,
         )
     embedding = voice.current
 

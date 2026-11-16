@@ -373,6 +373,23 @@ samples it heard itself when it has one, and the People page shows
 scored but names nobody (`noisy` in the room's history, "too noisy to
 tell").
 
+**A request too short to tell who's talking says so** (found on the first
+real-device check): voice ID names someone only from at least a second of
+speech (`VOICE_PROFILE_MIN_UTTERANCE_SEC`, unchanged), counted on the speech
+alone, while the turn's outcome was judged on the whole recording, which
+includes the second of silence after the command. So "who am I?" (about
+half a second of speech) was logged `no_embedding`, and the reply said "I
+don't recognize your voice yet … my voice recognition was upgraded …" to
+someone the room had learned a minute before. Now such a turn is
+`too_short` in the room's history (with the speech's length), and "who am
+I" answers "That was too short for me to tell who's talking. Try again with
+a few more words, like "who am I, Domovoi?"" (or, when the embedder gave
+nothing from enough speech or identification timed out, that it couldn't
+tell who was talking that time). "I don't recognize your voice" and the
+"upgraded" advice are said only when the voice was scored and nobody
+matched. The same goes for "remember that …" (no "say my name is" for a
+voice that was never scored) and for the help desk's "send it to me".
+
 **Phone apps:** nothing to update. A person's voice-sample count reads 0
 until they introduce themselves again; `GET /api/people` rows gain
 `voice_relearn`, and `GET /api/people/voice-id` is new (docs/API_REFERENCE.md).

@@ -311,6 +311,12 @@ class HelpDeskHandler(Handler):
         if action == "self":
             if ctx.person_id:
                 return await self._send(int(ctx.person_id), data, ctx, session, asker=True)
+            from domovoi.voice_identifier import unheard_text
+
+            unheard = unheard_text(ctx.voice_outcome)
+            if unheard is not None:
+                # Never scored: not "unknown", just not heard well enough.
+                return self._reply(ctx, f"{unheard} Nothing was sent.")
             return self._reply(ctx, "I can't tell who you are by your voice yet, so I won't guess. "
                                     "Nothing was sent.")
         people = await people_named(session, name)

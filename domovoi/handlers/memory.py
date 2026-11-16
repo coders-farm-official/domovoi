@@ -34,6 +34,7 @@ from domovoi.db.repositories import (
 )
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
+from domovoi.voice_identifier import unheard_text
 
 log = logging.getLogger(__name__)
 
@@ -304,8 +305,12 @@ class MemoryHandler(Handler):
         silently writing a global row, we tell the speaker how to
         identify themselves first."""
         if ctx.person_id is None:
+            # A voice that was never scored (too short to tell) isn't an
+            # unknown one: asking them to introduce themselves would only
+            # get "I already know you".
+            unheard = unheard_text(ctx.voice_outcome)
             return Response(
-                text=(
+                text=unheard or (
                     "I don't know who you are yet — say 'my name is "
                     "so-and-so' and then I can start remembering "
                     "things for you."

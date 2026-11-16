@@ -1052,7 +1052,12 @@ load_manifest() {
     [[ $line =~ ^([a-z][a-z0-9_]*)=([^[:space:]]+)$ ]] || die "$file line $n is not key=value: $line"
     key=${BASH_REMATCH[1]}
     val=${BASH_REMATCH[2]}
-    case " ${MANIFEST_KEYS[*]} " in *" $key "*) ;; *) die "$file line $n: unknown key $key" ;; esac
+    # A key this script doesn't know comes from a NEWER manifest: a Windows
+    # Setup or an older provision.sh repairing a checkout the dashboard has
+    # already moved past it (2026-11-15: a 1.2.1 Setup refused main's Debian
+    # pins). Skip it with a warning; every key this script needs is still
+    # required below, so nothing it relies on can be missing.
+    case " ${MANIFEST_KEYS[*]} " in *" $key "*) ;; *) warn "$file line $n: unknown key $key (a newer manifest than this script; ignored)"; continue ;; esac
     [ -z "${M[$key]+x}" ] || die "$file line $n: $key is set twice"
     M[$key]=$val
   done <"$file"

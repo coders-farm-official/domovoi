@@ -89,7 +89,7 @@ from domovoi.clients.whisper import (
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.models import PHONE_ROOM_PREFIX, Context, Intent, Response
-from domovoi.voice_identifier import speaker_is_confident
+from domovoi.voice_identifier import OUTCOME_ERROR, speaker_is_confident
 from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
@@ -712,6 +712,10 @@ async def _answer(
         presence_tier=getattr(ident, "presence_tier", None),
         embedding_bytes=embedding.astype("float32").tobytes() if embedding is not None else None,
         voice_candidates=list(getattr(ident, "candidates", ()) or ()),
+        voice_outcome=(
+            getattr(ident, "outcome", None) if ident is not None
+            else OUTCOME_ERROR
+        ),
         trigger="push_to_talk",
         app=app,
         device_kind="phone",

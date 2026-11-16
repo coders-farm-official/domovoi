@@ -1956,7 +1956,10 @@ are personal.
   can't be anyone's.
 
 **If something's wrong:** two people with the same name: an admin renames
-one on [Settings → Household → People](#settings/people).
+one on [Settings → Household → People](#settings/people). "That was too
+short for me to tell who's talking": a very short request ("who am I?")
+can be too little voice to tell; ask with a few more words ("who am I,
+Domovoi?"). It doesn't mean Domovoi has forgotten you.
 
 [More detail](docs/FAQ.md#does-it-support-multiple-people)
 

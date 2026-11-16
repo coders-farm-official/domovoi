@@ -218,7 +218,18 @@ def _podcast_show_candidate(query: dict) -> str:
     cand = (query.get("artist") or query.get("any") or query.get("title") or "").strip()
     return _RECENCY_PREFIX_RE.sub("", cand).strip()
 _PAUSE_RE = re.compile(r"^(?:pause|pause the music|pause music)$")
-_RESUME_RE = re.compile(r"^(?:resume|resume the music|continue|continue the music)$")
+# A bare "play" after a pause is "carry on" (owner, 2026-11-15: "Domovoi,
+# play" fell through to Q&A). Never "play music" / "play something", which
+# the random paths own.
+_RESUME_RE = re.compile(
+    r"^(?:resume|resume the music|continue|continue the music|continue playing"
+    r"|unpause|unpause the music|resume playing"
+    r"|start the music again|play the music again)$"
+)
+# Bare "play" / "play again" resume too, but as their own path: inside the
+# room-control pattern built from _RESUME_RE, "play in the garage" would
+# steal a song called "In the Garage".
+_PLAY_BARE_RE = re.compile(r"^(?:play|play again)$")
 _STOP_RE = re.compile(r"^(?:stop|stop the music|stop music)$")
 # Includes "skip this / skip it / skip this one / skip this song / skip
 # this track" — voice-natural ways of saying "next" without saying the
@@ -506,6 +517,7 @@ class MusicHandler(MusicRoomsMixin, MusicQueueMixin, MusicChoiceMixin, Handler):
             # The one-word forms ("stop", "next", "resume") are held as "B".
             FastPath(_PAUSE_RE, MusicHandler._pause_from_match, early_commit="A"),
             FastPath(_RESUME_RE, MusicHandler._resume_from_match, early_commit="A"),
+            FastPath(_PLAY_BARE_RE, MusicHandler._resume_from_match, early_commit="A"),
             FastPath(_STOP_RE, MusicHandler._stop_from_match, early_commit="A"),
             FastPath(_SKIP_THIS_RE, MusicHandler._next_from_match, early_commit="B"),
             FastPath(_NEXT_RE, MusicHandler._next_from_match, early_commit="A"),

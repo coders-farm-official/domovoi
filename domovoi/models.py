@@ -69,6 +69,12 @@ class Context(BaseModel):
     # is someone known. Empty otherwise. "Who am I" reads it to say when
     # the two share a name (handlers/voice_profile.py).
     voice_candidates: list[int] = Field(default_factory=list)
+    # How voice ID scored this utterance (``voice_identifier.OUTCOME_*``),
+    # None when no voice was heard (a typed request). With ``person_id``
+    # None it tells "nobody matched" from "the voice was never scored"
+    # (too short, no embedding, timed out): a reply to the second must not
+    # say the speaker is unknown (``voice_identifier.unheard_text``).
+    voice_outcome: str | None = None
     # What opened the mic for this utterance: "wake_word", "barge_in",
     # "followup", or "push_to_talk" (None on non-satellite paths like
     # /v1/intent). Stamped from the `utterance_start` frame and persisted to

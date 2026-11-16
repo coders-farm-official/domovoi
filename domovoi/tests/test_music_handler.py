@@ -116,6 +116,14 @@ def test_pause_regex() -> None:
 def test_resume_regex() -> None:
     assert _RESUME_RE.match("resume")
     assert _RESUME_RE.match("continue the music")
+    # A bare "play" after a pause resumes (it used to fall through to Q&A).
+    for said in ("unpause", "start the music again"):
+        assert _RESUME_RE.match(said), said
+    from domovoi.handlers.music import _PLAY_BARE_RE
+    for said in ("play", "play again"):
+        assert _PLAY_BARE_RE.match(said), said
+    for said in ("play music", "play something", "play jazz", "play in the garage"):
+        assert not _RESUME_RE.match(said) and not _PLAY_BARE_RE.match(said), said
 
 
 def test_stop_regex() -> None:
