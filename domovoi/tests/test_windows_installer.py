@@ -751,8 +751,9 @@ def test_the_artwork_is_what_make_art_makes():
     docs/assets/domovoi-icon.png (compared pixel for pixel), with the Pillow
     version requirements.txt pins."""
     pil = pytest.importorskip("PIL")
-    if pil.__version__ != "12.3.0":
-        pytest.skip(f"make_art.py needs Pillow 12.3.0, this venv has {pil.__version__}")
+    pinned = re.search(r"^pillow==(\S+)", (ART / "requirements.txt").read_text(encoding="utf-8"), re.M).group(1)
+    if pil.__version__ != pinned:
+        pytest.skip(f"make_art.py needs Pillow {pinned}, this venv has {pil.__version__}")
     proc = subprocess.run([sys.executable, str(ART / "make_art.py"), "--check"], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 

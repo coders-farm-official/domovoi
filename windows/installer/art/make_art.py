@@ -21,7 +21,7 @@ Writes, next to this script:
 
 No text in the pictures (the product name is in the wizard's own text), so
 no font is involved. The output depends only on the source and Pillow's
-version (12.3.0, requirements.txt, the version requirements.lock pins);
+version (13.0.0, requirements.txt, the version requirements.lock pins);
 --check compares decoded pixels, not file bytes, so a different zlib can't
 fail it.
 """
@@ -39,7 +39,7 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 SOURCE = REPO / "docs" / "assets" / "domovoi-icon.png"
-PILLOW = "12.3.0"
+PILLOW = "13.0.0"
 
 # The icon's dark ground (docs/assets/README.md) and the brand amber,
 # oklch(0.78 0.16 75) (docs/design/colors_and_type.css --brand) in sRGB.
