@@ -930,7 +930,12 @@ class MusicRoomsMixin(RoomCommandsMixin):
             return self._room_reply(ctx, f"Nothing is playing {where} right now.")
         host = music_groups.host_of(source.room_id) or source.room_id
         if host == (music_groups.host_of(ctx.room_id) or ctx.room_id):
-            return self._room_reply(ctx, "This room is already playing that.")
+            # Already in: send the stream to this room's speaker again
+            # rather than refuse, so a satellite that fell silent while the
+            # server still counts it in (after a core restart, 2026-11-16)
+            # has a way back.
+            music_groups.resync(ctx.app, ctx.room_id)
+            return self._room_reply(ctx, f"Playing the music from {source.spoken} here.")
         await music_groups.share(ctx.app, host, [ctx.room_id])
         return self._room_reply(ctx, f"Playing the music from {source.spoken} here too.")
 
