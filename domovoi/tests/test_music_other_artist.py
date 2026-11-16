@@ -275,7 +275,7 @@ async def test_mpd_finding_ti_inside_tiller_is_not_played(
     mpd_module._clients = {"kitchen": _SubstringMPD()}
     ctx = await _ctx(db_session, online=True)
     with _provider(_OneStreamProvider()) as provider:
-        r = await _say(MusicHandler(), "play exchange by ti", ctx, db_session)
+        await _say(MusicHandler(), "play exchange by ti", ctx, db_session)
     assert provider.calls == ["exchange by ti"]
 
 

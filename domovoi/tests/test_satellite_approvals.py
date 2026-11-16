@@ -9,7 +9,6 @@ than reporting a green run over tests that never executed.
 from __future__ import annotations
 
 import asyncio
-import inspect
 from pathlib import Path
 
 import pytest

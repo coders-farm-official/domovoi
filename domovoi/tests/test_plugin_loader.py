@@ -185,7 +185,7 @@ async def test_greedy_catchall_below_900_rejected(tmp_path: Path) -> None:
 
 async def test_greedy_catchall_at_900_allowed(tmp_path: Path) -> None:
     root = make_plugin(tmp_path, "greedyok", band=900, pattern=r"^fetch (.+)$")
-    lp = await _load(root, "greedyok")
+    await _load(root, "greedyok")
     try:
         assert "greedyok" in HANDLER_BY_NAME
     finally:
@@ -226,7 +226,7 @@ async def test_foreign_plugin_corpus_protected(tmp_path: Path) -> None:
         tmp_path, "earlier", band=400, pattern=r"^zap the widget$",
         corpus=("zap the widget",),
     )
-    lp = await _load(first, "earlier")
+    await _load(first, "earlier")
     try:
         poacher = make_plugin(
             tmp_path, "latecomer", band=280, pattern=r"^zap the widget$"
@@ -532,7 +532,7 @@ async def test_discovery_loads_in_slug_order_and_honors_tombstone(
         assert row is not None and row.status == "uninstalled"
 
         # An unregistered hand-copied dir is flagged, never loaded.
-        stray = make_plugin(installed, "straycopy")
+        make_plugin(installed, "straycopy")
         await LOADER.discover_and_load_all()
         assert any("straycopy" in d for d in LOADER.unregistered_dirs)
         assert "straycopy" not in LOADER.loaded

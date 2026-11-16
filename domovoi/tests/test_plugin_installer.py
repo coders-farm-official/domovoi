@@ -461,7 +461,7 @@ async def test_bundled_uninstall_tombstones_and_never_resurrects() -> None:
     # with the plugin present in the bundled dir.
     from domovoi.plugins_runtime import loader as loader_mod
 
-    bundled_dir = loader_mod.bundled_root()
+    loader_mod.bundled_root()
     await LOADER.discover_and_load_all()
     assert SLUG not in LOADER.loaded
     row = await reg.get_plugin(SLUG)

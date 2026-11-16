@@ -434,7 +434,7 @@ async def test_a_room_by_its_label_and_a_room_mode_phone_and_a_laptop(house) -> 
                        ("play weezer in the study", "study_laptop")):
         house.lib.played.clear()
         ctx = _ctx()
-        resp = await _say(said, ctx)
+        await _say(said, ctx)
         assert house.lib.played == [("Weezer", room, "dining_room")], said
         assert len(_sat(ctx, room).started) == 1
 

@@ -23,7 +23,6 @@ import os
 import threading
 import time
 import zipfile
-from pathlib import Path
 from typing import Any
 
 import pytest

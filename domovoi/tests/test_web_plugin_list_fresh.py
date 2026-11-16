@@ -318,7 +318,7 @@ async def test_back_to_back_registry_writes_leave_the_host_right(monkeypatch) ->
             await reg.delete_plugin(_FRESH)
             await _insert(f"1.1.{attempt}")
             ok = await _until(
-                lambda: (host.rows.get(_FRESH) or {}).get("version") == f"1.1.{attempt}",
+                lambda: (host.rows.get(_FRESH) or {}).get("version") == f"1.1.{attempt}",  # noqa: B023 - called inside the iteration, never kept
                 timeout=15.0,     # a busy shared Postgres; a lost NOTIFY never arrives
             )
             # A refused load: inserted ok, then marked load_error.

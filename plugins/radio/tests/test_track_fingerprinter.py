@@ -4,7 +4,6 @@ monkeypatched so the worker logic tests run without the audio stack)."""
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 from domovoi.tests.conftest import requires_db

@@ -28,7 +28,6 @@ import threading
 import types
 
 import numpy as np
-import pytest
 
 from satellite.tests._client_import import import_client
 

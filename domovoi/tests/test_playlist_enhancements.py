@@ -11,7 +11,7 @@ from domovoi.handlers.shared.playlist_pick import (
     persist_resume_position,
     read_resume_position,
 )
-from domovoi.models import Context, Intent
+from domovoi.models import Context
 from domovoi.tests.conftest import requires_db
 
 

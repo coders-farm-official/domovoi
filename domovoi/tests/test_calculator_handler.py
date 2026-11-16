@@ -31,7 +31,6 @@ from domovoi.handlers.calculator import (
     _PERCENT_OF_RE,
     _SPLIT_RE,
     _SPLIT_TIP_RE,
-    _SQRT_RE,
     _TIP_RE,
     _UNIT_CONVERT_RE,
     _UNIT_HOW_MANY_RE,

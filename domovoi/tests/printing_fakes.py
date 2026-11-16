@@ -141,7 +141,7 @@ class FakeIppPrinter:
 
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            line = await reader.readline()
+            await reader.readline()
             headers = {}
             while True:
                 h = await reader.readline()

@@ -1114,7 +1114,7 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
         tag_commit = t.git("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}").strip()
     rel = _manifest_at(t, tag_commit)
     if not rel:
-        die(f"the tag's android/release.json names no release: android/scripts/release.ps1 makes the first one")
+        die("the tag's android/release.json names no release: android/scripts/release.ps1 makes the first one")
     app_changed = rel.get("tag") == tag   # path a; otherwise path b
 
     on_github = _remote_ref(t, f"refs/tags/{tag}") if fetched else None

@@ -41,7 +41,7 @@ from domovoi.db.repositories import (
 from domovoi.db.session import SessionLocal, engine, session_scope
 from domovoi.main import app as core_app
 from domovoi.streaming import StreamSession
-from domovoi.tests.conftest import TABLES_TO_TRUNCATE, requires_db
+from domovoi.tests.conftest import requires_db
 
 pytestmark = requires_db
 

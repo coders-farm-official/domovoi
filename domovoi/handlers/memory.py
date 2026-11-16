@@ -31,7 +31,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.db.repositories import (
     FavoritesRepository,
     MemoriesRepository,
-    PeopleRepository,
 )
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response

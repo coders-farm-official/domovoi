@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 from pycrdt import Doc, Text, XmlElement, XmlFragment, write_var_uint
 
-from domovoi.tests.collab_sim import SimClient, control
+from domovoi.tests.collab_sim import SimClient
 from domovoi.tests.conftest import requires_db
 from domovoi.tests.test_collab_rooms import (  # noqa: F401 — fixtures and helpers
     collab_db, connect, docs, make_peer, manager, open_room, pump, seed, server_doc,

@@ -506,7 +506,7 @@ async def test_the_offer_is_said_after_the_answer(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_nothing_to_say_speaks_the_routers_line(monkeypatch) -> None:
-    seen = _streamed_turn(monkeypatch, [], rest="Sorry, I don't have an answer for that.")
+    _streamed_turn(monkeypatch, [], rest="Sorry, I don't have an answer for that.")
     ws = _FakeWS()
     sess = streaming.StreamSession(ws, "office")  # type: ignore[arg-type]
     await sess._process_utterance(b"\x00" * 32_000, trigger="wake_word")

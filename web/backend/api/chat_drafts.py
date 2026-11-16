@@ -55,7 +55,6 @@ from sqlalchemy.exc import IntegrityError
 
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
-from domovoi.config import settings as core_settings
 from domovoi.drafts import ats, blocks, diff, docx_file, kinds, pdf_file, phrases, prompts, templates
 from domovoi.drafts import store as draft_store
 from web.backend.db import session_scope

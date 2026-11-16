@@ -16,7 +16,6 @@ import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -35,7 +34,6 @@ from domovoi.lyrics import status as lyrics_state
 from domovoi.lyrics.lrc import format_lrc
 from domovoi.lyrics.status import lyrics_status
 from domovoi.tests.conftest import requires_db
-from domovoi.workers import lyrics_fetch as lf
 from domovoi.workers.lyrics_fetch import (
     LrclibAnswer,
     LyricsFetchError,

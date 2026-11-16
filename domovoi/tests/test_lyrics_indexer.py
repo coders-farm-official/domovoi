@@ -12,7 +12,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
-import pytest
 from sqlalchemy import text
 
 from domovoi.tests.conftest import requires_db

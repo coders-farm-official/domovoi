@@ -25,7 +25,6 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from string import Template
 
 _MARKER = "# --- domovoi satellite (media-prep) ---"
 _END_MARKER = "# --- end domovoi satellite ---"

@@ -844,7 +844,6 @@ def test_the_sync_step_can_import_the_satellite_package():
 
 
 def test_the_install_never_sees_the_unbuildable_packages():
-    from domovoi.satellite_media import overlay
 
     for body in _render_both().values():
         assert "strip_sdist_only" in body
@@ -859,7 +858,6 @@ def test_the_unbuildable_list_comes_from_the_fetcher():
     """One definition. A package that cannot ship as a wheel must not be
     allowed to fail the install either, and both facts follow from the same
     list rather than two that drift."""
-    from domovoi.satellite_media import overlay
     from domovoi.satellite_media.fetchers import SDIST_ONLY_PACKAGES
 
     for body in _render_both().values():

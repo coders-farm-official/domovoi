@@ -526,7 +526,6 @@ async def run_lookup(
     question the offline library answers never reaches the internet. Raises
     :class:`egress.InternetTurnedOff` when ``internet`` is asked for while
     the household's answer is "never"."""
-    from domovoi import lookup_answer
 
     query = " ".join(str(query or "").split())[:300]
     limit = max(1, min(int(limit), MAX_RESULTS))
@@ -612,7 +611,6 @@ async def read_page(url: str, *, query: str = "") -> LookupOutcome:
     :class:`egress.InternetTurnedOff` under "never"."""
     import httpx
 
-    from domovoi import lookup_answer, page_text
 
     url = str(url or "").strip()
     try:

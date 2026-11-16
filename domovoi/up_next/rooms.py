@@ -52,7 +52,7 @@ import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Iterable, Iterator
 
 from sqlalchemy import text

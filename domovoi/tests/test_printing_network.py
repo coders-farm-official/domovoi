@@ -18,7 +18,7 @@ import pytest
 from domovoi import net_safety
 from domovoi.printing import capabilities as caps_mod
 from domovoi.printing import escl, http11, ipp, lan_target, mdns, options
-from domovoi.printing.client import IppClient, IppError, Printer
+from domovoi.printing.client import IppClient, Printer
 from domovoi.tests.printing_fakes import FakeIppPrinter, FakeScanner, scan_page_jpeg
 
 # ─── mDNS ─────────────────────────────────────────────────────────────────
