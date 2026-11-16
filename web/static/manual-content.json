@@ -444,7 +444,7 @@
      "dashboard",
      "app"
     ],
-    "text": "**Introduce yourself** in that room: \"my name is …\", then \"yes\"."
+    "text": "**Introduce yourself** in that room: \"my name is …\", then spell it and count to ten when asked."
    },
    {
     "id": "music",
@@ -4847,7 +4847,7 @@
        "path": "fast"
       },
       {
-       "text": "yes",
+       "text": "S, A, R, A, H",
        "then": true
       },
       {
@@ -4878,7 +4878,13 @@
      "ordered": false,
      "items": [
       {
-       "text": "Teach a new room your voice: say \"my name is …\" there. It asks \"Is that you?\"; say yes."
+       "text": "Introduce yourself in a room: \"my name is …\". Domovoi asks how to spell it (the spelling you give is the one it saves), then, until it has heard about eight seconds of your voice, asks you to count from one to ten and maybe say one more sentence. \"Stop\" ends it early and keeps what it heard."
+      },
+      {
+       "text": "Teach a new room your voice: say \"my name is …\" there. It asks \"Is that you?\"; say yes, then count when asked."
+      },
+      {
+       "text": "A room that nearly recognized you may ask once, after answering, \"By the way, was that you, Sarah?\". Say yes and that room learns your voice; say no and it won't ask again that day."
       },
       {
        "text": "[Settings → Household → People](route:settings/people) shows everyone, when they were last heard, and their memories."

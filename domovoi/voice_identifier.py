@@ -139,9 +139,11 @@ class IdentificationResult:
     outcome: str | None = None
     best_person_id: int | None = None
     runner_up_person_id: int | None = None
-    #: How much speech the recording held, when that is why nothing was
-    #: scored (``too_short``): the speech alone, not the recording, whose
-    #: second of trailing silence would hide a short command.
+    #: How much speech the recording held: the speech alone, not the
+    #: recording, whose second of trailing silence would hide a short
+    #: command. Why nothing was scored when it is ``too_short``; for a
+    #: scored turn, what the introduction counts towards the speech it
+    #: collects (handlers/voice_profile.py).
     speech_seconds: float | None = None
 
 
@@ -611,6 +613,21 @@ async def embed_voice(pcm_int16: bytes) -> np.ndarray | None:
     return None if voice is None else voice.current
 
 
+def measured_speech_sec(pcm_int16: bytes | None) -> float | None:
+    """How much speech a recording holds, measured the way the embedder
+    measures it (domovoi/voice_prep.py: the speech alone, the silence
+    around it trimmed), or None when it can't be measured."""
+    pcm = pcm_int16 or b""
+    try:
+        from domovoi.voice_prep import for_embedding
+
+        wav = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
+        return float(for_embedding(wav).speech_sec)
+    except Exception as e:  # noqa: BLE001 — only a measurement
+        log.debug("voice identification: measuring the speech failed: %s", e)
+        return None
+
+
 def _why_no_print(pcm_int16: bytes | None) -> tuple[str, float | None]:
     """Why :func:`embed_print` made no voiceprint of this recording, and
     how much speech it held: ``too_short`` when the speech is under
@@ -629,13 +646,8 @@ def _why_no_print(pcm_int16: bytes | None) -> tuple[str, float | None]:
         return OUTCOME_TOO_SHORT, round(seconds, 2)
     if voice_id_unavailable():
         return OUTCOME_NO_EMBEDDING, None
-    try:
-        from domovoi.voice_prep import for_embedding
-
-        wav = np.frombuffer(pcm[: len(pcm) // 2 * 2], dtype=np.int16).astype(np.float32) / 32768.0
-        speech = float(for_embedding(wav).speech_sec)
-    except Exception as e:  # noqa: BLE001 — the outcome is only a label
-        log.debug("voice identification: measuring the speech failed: %s", e)
+    speech = measured_speech_sec(pcm)
+    if speech is None:
         return OUTCOME_NO_EMBEDDING, None
     if speech < min_sec:
         return OUTCOME_TOO_SHORT, round(speech, 2)
@@ -807,6 +819,9 @@ async def identify(
             speech_seconds=speech,
         )
     embedding = voice.current
+    speech_sec = voice.speech_sec
+    if speech_sec is None:
+        speech_sec = measured_speech_sec(pcm_int16)
 
     # Denylist pre-empt. Check before the regular profile
     # match so a denylisted user never gets fed into the identification
@@ -935,6 +950,7 @@ async def identify(
         outcome=outcome,
         best_person_id=decision.best_person,
         runner_up_person_id=decision.runner_up_person,
+        speech_seconds=speech_sec,
     )
 
 

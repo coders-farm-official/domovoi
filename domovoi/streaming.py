@@ -1498,11 +1498,13 @@ async def run_voice_profile_hooks(
     # The hooks no-op cleanly when no expectation is parked.
     from domovoi.handlers.voice_profile import (
         buffer_unknown_voice_turn,
+        maybe_ask_room_check,
         maybe_inject_third_party_ask,
     )
     ctx_with_session = ctx.model_copy(
         update={"session_id": response.session_id}
     )
+    said_before = response.text
     if (
         person_id is None
         and ident is not None
@@ -1524,35 +1526,42 @@ async def run_voice_profile_hooks(
             audio_seconds=audio_seconds,
         )
     elif person_id is not None:
-        injected = await maybe_inject_third_party_ask(
+        await maybe_inject_third_party_ask(
             s,
             ctx=ctx_with_session,
             response=response,
         )
-        if injected:
-            # The conversation_log row for this turn was
-            # written by route() with the *pre-injection*
-            # text. Update it so the audit trail matches
-            # what the user actually hears. Targets the
-            # most recent row for this session — safe
-            # because we're inside the same transaction
-            # and no concurrent turn can interleave.
-            from sqlalchemy import text as sql_text
-            await s.execute(
-                sql_text(
-                    """
-                    UPDATE conversation_log
-                    SET assistant_text = :t
-                    WHERE id = (
-                        SELECT id FROM conversation_log
-                        WHERE session_id = :sid
-                        ORDER BY id DESC
-                        LIMIT 1
-                    )
-                    """
-                ),
-                {"t": response.text, "sid": str(response.session_id)},
-            )
+    if person_id is None:
+        # A voice just under the bar for one known person, in a room that
+        # has never learned them: "By the way, was that you, X?", once a
+        # day at most (handlers/voice_profile.py, maybe_ask_room_check).
+        await maybe_ask_room_check(
+            s, ctx=ctx_with_session, response=response, ident=ident,
+        )
+    if response.text != said_before:
+        # The conversation_log row for this turn was
+        # written by route() with the *pre-injection*
+        # text. Update it so the audit trail matches
+        # what the user actually hears. Targets the
+        # most recent row for this session — safe
+        # because we're inside the same transaction
+        # and no concurrent turn can interleave.
+        from sqlalchemy import text as sql_text
+        await s.execute(
+            sql_text(
+                """
+                UPDATE conversation_log
+                SET assistant_text = :t
+                WHERE id = (
+                    SELECT id FROM conversation_log
+                    WHERE session_id = :sid
+                    ORDER BY id DESC
+                    LIMIT 1
+                )
+                """
+            ),
+            {"t": response.text, "sid": str(response.session_id)},
+        )
 
 
 class _InterimSpeech:
@@ -4846,6 +4855,7 @@ class StreamSession:
                     embedding_bytes=embedding_bytes,
                     voice_candidates=list(getattr(ident, "candidates", ()) or ()),
                     voice_outcome=voice_match.outcome,
+                    voice_speech_sec=getattr(ident, "speech_seconds", None),
                     trigger=trigger,
                     wifi_status=wifi_status,
                     satellite_volume=satellite_volume,

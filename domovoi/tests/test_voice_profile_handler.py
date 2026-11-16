@@ -288,8 +288,9 @@ async def test_self_intro_parks_pending_confirmation(db_session) -> None:
     response = await handler._self_intro_from_match(m, ctx, db_session)
     await db_session.commit()
 
-    assert "sarah" in response.text.lower()
-    assert "right" in response.text.lower()  # asks confirmation
+    # A satellite's introduction asks for the spelling (2026-11-16): the
+    # answer settles the name and is more of the voice.
+    assert response.text == "Nice to meet you! How do you spell that?"
     assert response.expect_followup is True
 
     # Pending confirmation parked.
@@ -299,7 +300,9 @@ async def test_self_intro_parks_pending_confirmation(db_session) -> None:
     assert pending["handler"] == "voice_profile"
     assert pending["kind"] == "core.self_intro"
     assert pending["name"] == "Sarah"
+    assert pending["stage"] == "spell"
     assert "embedding_b64" in pending
+    assert len(pending["clips"]) == 1
 
     # No people row created yet.
     rows = (await db_session.execute(text("SELECT count(*) FROM people"))).scalar_one()

@@ -75,7 +75,8 @@ network.
 3. **Add your first room**: [Settings → Household → Rooms](#settings/rooms).
    See [A Raspberry Pi room](#node:pi-room).
 4. **Say the wake word** in that room: {wake}, then "what time is it?"
-5. **Introduce yourself** in that room: "my name is …", then "yes".
+5. **Introduce yourself** in that room: "my name is …", then spell it and
+   count to ten when asked.
 6. **Add your music**: [Music](#music), **Upload**, or copy files into the
    server's music folder.
 7. **Put the app on your phones**: [Settings → Household → Phones &
@@ -1939,7 +1940,7 @@ are personal.
 
 **Try saying**
 
-- "my name is Sarah", then "yes"
+- "my name is Sarah", then "S, A, R, A, H"
 - "who am I"
 - "forget me" (deletes your voice, your memories and what you said; it
   must be your own voice)
@@ -1947,8 +1948,16 @@ are personal.
 
 **How to**
 
+- Introduce yourself in a room: "my name is …". Domovoi asks how to spell
+  it (the spelling you give is the one it saves), then, until it has heard
+  about eight seconds of your voice, asks you to count from one to ten
+  and maybe say one more sentence. "Stop" ends it early and keeps what it
+  heard.
 - Teach a new room your voice: say "my name is …" there. It asks "Is that
-  you?"; say yes.
+  you?"; say yes, then count when asked.
+- A room that nearly recognized you may ask once, after answering, "By
+  the way, was that you, Sarah?". Say yes and that room learns your
+  voice; say no and it won't ask again that day.
 - [Settings → Household → People](#settings/people) shows everyone, when they were last heard, and their
   memories.
 - *(admin)* **rename**, **forget person**, or delete one wrong voice
