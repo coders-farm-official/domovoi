@@ -168,11 +168,13 @@ const PersonVoiceSamples = ({ samples, onDelete }) => (
 
 /* ---- Rooms that know this voice (GET …/voice-rooms) ------- */
 /*
- * A far-off room recognizes a voice it has heard there far better than one
- * heard only in another room (each room's mic, distance and echo colour a
- * voice), so the household sees which rooms don't know a person yet and
- * how to fix it: "my name is …" said in that room, then "yes", adds a
- * sample there. Hidden while voice ID can't run, or while the person has
+ * Every room compares a voice with all of the person's samples, so any
+ * room can name them; a room that has learned the voice itself (a sample
+ * recorded there) names it more reliably, because each room's mic,
+ * distance and echo colour a voice. The chips say which rooms have
+ * learned it, never which rooms "know" the person (owner device check,
+ * 1.3.0: "not yet" read as "this room can't recognize me" right after it
+ * had). "my name is …" said in a room, then "yes", adds a sample there. Hidden while voice ID can't run, or while the person has
  * to introduce themselves again (PersonVoiceRelearn says so instead).
  */
 const PersonVoiceRooms = ({ person, rooms, voiceId }) => {
@@ -182,7 +184,7 @@ const PersonVoiceRooms = ({ person, rooms, voiceId }) => {
   return (
     <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <div className="label">rooms that know this voice</div>
+        <div className="label">rooms that have learned this voice</div>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
           {rooms.length - missing.length}/{rooms.length}
         </span>
@@ -190,14 +192,15 @@ const PersonVoiceRooms = ({ person, rooms, voiceId }) => {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
         {rooms.map(r => (
           <Pill key={r.room_id} tone={r.current ? 'ok' : 'idle'}>
-            {r.room_id}{r.current ? '' : ' · not yet'}
+            {r.room_id} · {r.current ? 'learned' : 'not yet learned'}
           </Pill>
         ))}
       </div>
       {missing.length > 0 && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 8, lineHeight: 1.5 }}>
-          Rooms recognize a voice best once they have heard it themselves. In each room marked
-          “not yet”, {person.name || 'they'} can say “my name is {person.name || '…'}” and answer yes.
+          Every room can recognize {person.name || 'this person'} from any sample. A room recognizes a
+          voice more reliably once it has learned it there: in a room marked “not yet learned”,
+          {' '}{person.name || 'they'} can say “my name is {person.name || '…'}” and answer yes.
         </div>
       )}
     </div>
@@ -648,7 +651,22 @@ const ListeningHistoryPanel = () => {
 
 window.ListeningHistoryPanel = ListeningHistoryPanel;
 
-const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceRooms, voiceMatches, voiceId, onDeleteSample, onForget, onRenamed, fire, listens, onDeviceChanged }) => {
+/*
+ * Where a person was last heard, for the profile header: the room of their
+ * newest identified turn (GET /api/people/{id}/conversations is newest
+ * first, so it is the first row the page already holds; no extra query).
+ * A phone's chat mic logs as room "phone-<device>" ("the phone"); a turn
+ * with no room came from chat. "—" until they have said anything.
+ */
+const heardIn = (turn) => {
+  if (!turn) return '—';
+  const room = (turn.room_id || '').trim();
+  if (!room) return 'chat';
+  if (room.startsWith('phone-')) return 'the phone';
+  return room.replace(/[-_]+/g, ' ');
+};
+
+const ProfileTab = ({ person, lastTurn, samples, voiceRooms, voiceMatches, voiceId, onDeleteSample, onForget, onRenamed, fire, listens, onDeviceChanged }) => {
   // Rename: PATCH /api/people/{id}, admin tier. A name somebody else has
   // is refused (409) with the server's reason, and the box stays open.
   const [editing, setEditing] = React.useState(false);
@@ -707,28 +725,15 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, voiceRooms, voic
 
       <PersonVoiceRelearn person={person} voiceId={voiceId}/>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', borderBottom: '1px solid var(--border-soft)' }}>
         <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
+          <div className="label">last heard in</div>
+          <div style={{ fontSize: 18, fontWeight: 600, marginTop: 2 }}>{heardIn(lastTurn)}</div>
+        </div>
+        <div style={{ padding: '14px 16px' }}>
           <div className="label">last heard</div>
           <div style={{ fontSize: 18, fontWeight: 600, marginTop: 2 }}>{relTime(person.last_seen_at)}</div>
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>presence: {person.presence_tier || '—'}</div>
-        </div>
-        <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
-          <div className="label">voice profiles</div>
-          <div style={{ fontSize: 18, fontWeight: 600, marginTop: 2 }}>{person.voice_profile_count}</div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
-            {samples.filter(s => s.source === 'phone').length} from the phone
-          </div>
-        </div>
-        <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
-          <div className="label">sessions</div>
-          <div style={{ fontSize: 18, fontWeight: 600, marginTop: 2 }}>{sessionCount}</div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>recent</div>
-        </div>
-        <div style={{ padding: '14px 16px' }}>
-          <div className="label">turns</div>
-          <div style={{ fontSize: 18, fontWeight: 600, marginTop: 2 }}>{turnCount}</div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>conversation_log rows</div>
         </div>
       </div>
 
@@ -1585,8 +1590,7 @@ const PeoplePage = ({ embedded = false } = {}) => {
             <Tabs tabs={tabs} value={tab} onChange={setTab} padX={16}/>
             {tab === 'profile' && (
               <ProfileTab person={selected}
-                          sessionCount={sessions.length}
-                          turnCount={conversations.length}
+                          lastTurn={conversations[0]}
                           samples={samples}
                           voiceRooms={voiceRooms}
                           voiceMatches={voiceMatches}

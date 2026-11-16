@@ -342,8 +342,11 @@ loudness** (the quiet room before a command and the second of silence
 after it are cut off; measured again for the new model: at the 1 % ceiling
 it names more than the whole recording does). A room holds a person to the
 samples it heard itself when it has one, and the People page shows
-**rooms that know this voice**: in a room marked "not yet", the person says
-"my name is …" there and answers yes. A command with music under it is
+**rooms that have learned this voice** (every room can recognize a person
+from any of their samples; one that has learned the voice there does it
+more reliably): in a room marked "not yet learned", the person says "my
+name is …" there and answers yes. A person's profile now opens with where
+they were **last heard in** (a room, "the phone" or "chat") and when. A command with music under it is
 scored but names nobody (`noisy` in the room's history, "too noisy to
 tell").
 
