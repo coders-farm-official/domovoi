@@ -8,7 +8,8 @@
 * **why a room couldn't join** — said in Settings → Rooms
   (``domovoi/join_problems.py``) instead of only in the journal.
 
-No database.
+Plus the health answer's ``pairing_proof`` advert and the approve route's
+answer for a device that checks the code itself. No database.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 from domovoi import admin_auth, join_problems, main, server_identity
+from satellite import pairing_proof
 from satellite import server_identity as sat_identity
 
 
@@ -143,3 +145,32 @@ def test_the_join_problems_route_is_admin_read():
                  if getattr(r, "path", "") == "/v1/admin/satellites/join-problems")
     deps = [d.dependency for d in route.dependencies]
     assert main.require_admin_read in deps
+
+
+# ─── the advert and the approve answer ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_health_advertises_the_approval_proof(healthy_core):
+    doc = await main.health()
+    assert doc["pairing_proof"] == pairing_proof.VERSION
+
+
+@pytest.mark.asyncio
+async def test_approving_a_device_that_checks_the_code_says_so(monkeypatch):
+    @asynccontextmanager
+    async def fake_scope():
+        yield object()
+
+    class _Repo:
+        def __init__(self, _s):
+            pass
+
+        async def approve(self, room_id, code):
+            return "entered"
+
+    monkeypatch.setattr(main, "session_scope", fake_scope)
+    monkeypatch.setattr(main, "SatelliteApprovalRepository", _Repo)
+    main.APPROVAL_CODE_LIMITER.reset()
+    out = await main.admin_satellite_approve("kitchen", main._ApproveSatelliteBody(code="481502"))
+    assert out == {"approved": False, "waiting_for_device": True, "room_id": "kitchen"}

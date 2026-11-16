@@ -2835,6 +2835,16 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
           {error.text}
         </div>
       )}
+      {!error && a.waiting_for_device && (
+        <div style={{ padding: '0 16px 10px', fontSize: 12, lineHeight: 1.5, color: 'var(--fg-muted)' }}>
+          Code sent. Waiting for the room device to check it — it does on its next visit, within seconds.
+        </div>
+      )}
+      {!error && !a.waiting_for_device && a.code_rejected && (
+        <div role="alert" style={{ padding: '0 16px 10px', fontSize: 12, lineHeight: 1.5, color: 'var(--err-ink)' }}>
+          The room device didn’t accept the last code typed here. Check the digits it’s saying and type them again.
+        </div>
+      )}
       <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
         {a.has_code === false
           ? `This request arrived without a code — power-cycle the room device so it asks again with one.`
@@ -3813,9 +3823,14 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     try {
       // The code rides with the approval: the server compares it before it
       // binds the room to that device, so an approve without one is refused.
-      await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`,
-                    action === 'approve' ? { code } : {});
-      fire(action === 'approve' ? `${a.room_id} approved` : `${a.room_id} rejected`);
+      const r = await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`,
+                              action === 'approve' ? { code } : {});
+      // A room device that checks the code itself (1.3.0) hasn't said yes
+      // yet: it confirms on its next visit, within seconds. Don't call it
+      // approved before it is.
+      fire(action !== 'approve' ? `${a.room_id} rejected`
+        : r && r.waiting_for_device ? `Code sent — ${a.room_id} finishes joining when it checks in`
+          : `${a.room_id} approved`);
       refreshApprovals();
     } catch (e) {
       // A refusal about the code stays on the card the operator is

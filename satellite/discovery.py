@@ -470,3 +470,178 @@ def locate(
     if host is None:
         return None
     return Located(f"{scheme}://{host}:{last_port}", "scan", host)
+
+
+# ─── every house, not the first (1.3.0) ───────────────────────────────────
+#
+# A device set up with no server address (``auto``) and not pinned to one
+# asks EVERY Domovoi server it finds for approval (satellite/house_pairing.py)
+# and accepts only the one that proves the code a person typed there. So
+# discovery here collects instead of stopping at the first answer — capped
+# at MAX_HOUSES, because each one is a connection every few seconds.
+
+#: The most servers an unpinned device asks at once.
+MAX_HOUSES = 8
+
+
+@dataclass(frozen=True)
+class House:
+    """A Domovoi server that answered, as this device saw it."""
+    url: str                       # ws:// (or wss://) host:port it answered on
+    fingerprint: str | None        # the identity it PROVED at that address
+    proof: bool                    # it advertises pairing_proof (and proved its key)
+    name: str = ""                 # its bot_name: unsigned, for logs only
+    via: str = ""                  # "name", "last-known", "scan" or "address"
+
+
+def probe_house(host: str, *, port: int = CORE_PORT,
+                timeout: float = _PROBE_TIMEOUT_SEC, opener=None,
+                scheme: str = "http") -> House | None:
+    """``host`` as a :class:`House`, or None when it does not answer as a
+    Domovoi server at all.
+
+    The identity is checked as :func:`probe` checks a pinned one — a
+    signature over a nonce made up here AND the address dialled — but with
+    nothing to compare against: what comes back is the fingerprint the
+    host PROVED at this address, so the approval exchange can be bound to
+    it. ``proof`` is true only when the host advertises
+    ``pairing_proof`` (an integer) AND bound its signature to the address
+    dialled; a host that cannot do both is an older server, which an
+    unpinned device never asks."""
+    import urllib.request
+
+    from satellite import server_identity
+
+    opener = opener or urllib.request.urlopen
+    challenge = server_identity.new_challenge()
+    addr = f"{host}:{port}"
+    http = "https" if scheme == "https" else "http"
+    url = (f"{http}://{host}:{port}{HEALTH_PATH}?challenge={challenge}"
+           f"&addr={urllib.parse.quote(addr, safe='')}")
+    try:
+        with opener(url, timeout=timeout) as r:
+            if getattr(r, "status", 200) != 200:
+                return None
+            doc = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:      # noqa: BLE001 — every failure is just "not here"
+        return None
+    if not (isinstance(doc, dict) and doc.get("status") == "ok" and doc.get("bot_name")):
+        return None
+    fingerprint: str | None = None
+    bound = False
+    try:
+        fingerprint = server_identity.verify_health_document(
+            doc, challenge=challenge, expected_fingerprint=None, addr=addr,
+        )
+        identity = doc.get("identity")
+        bound = isinstance(identity, dict) and identity.get("addr") == addr
+    except server_identity.IdentityError as e:
+        log.info("%s answers as Domovoi but could not prove an identity: %s", host, e)
+    advertised = doc.get("pairing_proof")
+    proof = (
+        fingerprint is not None and bound
+        and isinstance(advertised, int) and not isinstance(advertised, bool)
+        and advertised >= 1
+    )
+    ws = "wss" if scheme == "https" else "ws"
+    name = str(doc.get("bot_name") or "")[:40]
+    return House(url=f"{ws}://{host}:{port}", fingerprint=fingerprint, proof=proof, name=name)
+
+
+def find_houses(
+    *,
+    port: int = CORE_PORT,
+    ip: str | None = None,
+    hosts: list[str] | None = None,
+    probe_fn: Callable[..., House | None] = probe_house,
+    workers: int = _WORKERS,
+    cap: int = MAX_HOUSES,
+) -> list[House]:
+    """Every host on this subnet that answers as a Domovoi server, up to
+    ``cap`` — the sweep of :func:`find_core`, collecting instead of
+    stopping at the first. Same cost: one /24, 32 at a time."""
+    if hosts is None:
+        ip = ip or local_ipv4()
+        if not ip:
+            log.warning("no local IPv4 address — cannot look for Domovoi servers")
+            return []
+        hosts = candidate_hosts(ip)
+    if not hosts:
+        return []
+    found: list[House] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(probe_fn, h, port=port): h for h in hosts}
+        try:
+            for fut in as_completed(futures):
+                try:
+                    house = fut.result()
+                except Exception:  # noqa: BLE001 — a probe that breaks is a miss
+                    house = None
+                if house is not None:
+                    found.append(house)
+                    if len(found) >= cap:
+                        break
+        finally:
+            for fut in futures:
+                fut.cancel()
+    return found
+
+
+def locate_all(
+    *,
+    names: list[str] | tuple[str, ...] = DEFAULT_NAMES,
+    last_known: str | None = None,
+    port: int = CORE_PORT,
+    cap: int = MAX_HOUSES,
+    probe_fn: Callable[..., House | None] | None = None,
+    sweeper: Callable[..., list[House]] | None = None,
+    resolver: Callable[..., Any] | None = None,
+    scan: bool = True,
+) -> list[House]:
+    """Every Domovoi server this device can find, in the order of
+    :func:`locate` (names, the last-known address, the sweep), one entry
+    per server identity (a server answering on two addresses is asked at
+    the first), at most ``cap``. A host with no provable identity is kept
+    once per address, as a legacy server the caller can report."""
+    probe_fn = probe_house if probe_fn is None else probe_fn
+    out: list[House] = []
+    seen_fp: set[str] = set()
+    seen_url: set[str] = set()
+
+    def take(house: House | None, via: str) -> None:
+        if house is None or len(out) >= cap or house.url in seen_url:
+            return
+        if house.fingerprint and house.fingerprint in seen_fp:
+            return
+        seen_url.add(house.url)
+        if house.fingerprint:
+            seen_fp.add(house.fingerprint)
+        out.append(House(house.url, house.fingerprint, house.proof, house.name, via))
+
+    def ask(host: str, p: int, via: str) -> None:
+        try:
+            take(probe_fn(host, port=p, timeout=_SINGLE_PROBE_TIMEOUT_SEC), via)
+        except Exception as e:  # noqa: BLE001
+            log.debug("probing %s failed: %s", host, e)
+
+    tried: set[str] = set()
+    for name in names:
+        for addr in resolve_name(name, resolver=resolver):
+            if addr not in tried:
+                tried.add(addr)
+                ask(addr, port, "name")
+    if last_known and last_known.strip().lower() != AUTO:
+        host, p = _host_port(last_known, port)
+        if host and host not in tried:
+            tried.add(host)
+            ask(host, p, "last-known")
+    if scan and len(out) < cap:
+        sweeper = find_houses if sweeper is None else sweeper
+        try:
+            swept = sweeper(port=port, cap=cap)
+        except Exception as e:  # noqa: BLE001
+            log.warning("the network sweep failed: %s", e)
+            swept = []
+        for house in swept:
+            take(house, "scan")
+    return out

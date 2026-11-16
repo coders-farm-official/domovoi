@@ -2435,10 +2435,14 @@ _CODE_DECOY = "\x00no-code-on-file"
 
 #: A pending request nobody has refreshed for this long is gone (1.3.0). A
 #: device that is still waiting re-asks far more often than this (a Pi at
-#: least every minute, a phone every 35 s), so only a request whose device
-#: was switched off or set up again elsewhere expires — and with it the
-#: room name it was holding.
+#: least every minute, a phone every 35 s, an "every house" device every
+#: 10 s), so only a request whose device was switched off, set up again
+#: elsewhere, or approved by another house and could not withdraw here
+#: expires — and with it the room name it was holding.
 APPROVAL_EXPIRY_SEC = 900.0
+#: How long a code typed for a proof request waits for its device to come
+#: back and run the exchange (V062).
+ENTERED_CODE_TTL_SEC = 600.0
 
 
 class SatelliteApprovalRepository:
@@ -2463,6 +2467,7 @@ class SatelliteApprovalRepository:
         board: str | None = None,
         sat_type: str = "voice",
         takeover_after_sec: float | None = None,
+        proof: bool = False,
     ) -> tuple[str, str | None]:
         """Record (or refresh) a pending approval.
 
@@ -2491,6 +2496,12 @@ class SatelliteApprovalRepository:
         piling up rows, and it keeps the code the customer was already
         shown: whatever they are holding must stay the thing that works.
 
+        ``proof`` (V062): the device proves approvals itself and never sent
+        a code, so none is kept — ``code`` is NULL on such a row whatever
+        was there — and a code an operator already typed for it survives a
+        refresh by the same device (it is waiting for exactly that
+        device). A takeover clears it with everything else.
+
         A request nobody refreshed for :data:`APPROVAL_EXPIRY_SEC` is
         deleted first, so it holds its room name against nobody.
         """
@@ -2502,12 +2513,22 @@ class SatelliteApprovalRepository:
             await self.s.execute(
                 text(
                     "INSERT INTO satellite_approvals "
-                    "(room_id, token_hash, code, mac, board, sat_type) "
-                    "VALUES (:r, :h, :c, :m, :b, :t) "
+                    "(room_id, token_hash, code, mac, board, sat_type, proof) "
+                    "VALUES (:r, :h, :c, :m, :b, :t, :p) "
                     "ON CONFLICT (room_id) DO UPDATE SET "
-                    f"code = CASE WHEN {same} "
+                    "code = CASE WHEN EXCLUDED.proof THEN NULL "
+                    f"WHEN {same} "
                     "THEN COALESCE(satellite_approvals.code, EXCLUDED.code) "
                     "ELSE EXCLUDED.code END, "
+                    "proof = EXCLUDED.proof, "
+                    f"entered_code = CASE WHEN {same} AND EXCLUDED.proof "
+                    "THEN satellite_approvals.entered_code ELSE NULL END, "
+                    f"entered_at = CASE WHEN {same} AND EXCLUDED.proof "
+                    "THEN satellite_approvals.entered_at ELSE NULL END, "
+                    f"proof_failures = CASE WHEN {same} "
+                    "THEN satellite_approvals.proof_failures ELSE 0 END, "
+                    f"last_proof_failure_at = CASE WHEN {same} "
+                    "THEN satellite_approvals.last_proof_failure_at ELSE NULL END, "
                     f"first_seen_at = CASE WHEN {same} "
                     "THEN satellite_approvals.first_seen_at ELSE now() END, "
                     f"attempts = CASE WHEN {same} "
@@ -2522,8 +2543,9 @@ class SatelliteApprovalRepository:
                     "RETURNING code"
                 ),
                 {
-                    "r": room_id, "h": token_hash, "c": code,
-                    "m": mac, "b": board, "t": sat_type,
+                    "r": room_id, "h": token_hash,
+                    "c": None if proof else code,
+                    "m": mac, "b": board, "t": sat_type, "p": bool(proof),
                     "takeover": (
                         None if takeover_after_sec is None
                         else float(takeover_after_sec)
@@ -2543,16 +2565,29 @@ class SatelliteApprovalRepository:
         at the device that made the request — printing it on the same page
         as the approve button would make it a label again rather than
         something only the room's device can tell them. ``has_code`` says
-        whether there is anything to type. Expired requests are deleted
-        before the list is read."""
+        whether there is anything to type.
+
+        A proof request (V062) has no code on file and still has something
+        to type: the device checks it. ``proof`` marks such a row,
+        ``waiting_for_device`` says a typed code is waiting for the device's
+        next visit, and ``code_rejected`` says the last code typed for it was
+        not the device's (the device did not confirm it). Expired requests
+        are deleted before the list is read."""
         await self.purge_expired()
         rows = (
             await self.s.execute(
                 text(
-                    "SELECT room_id, (code IS NOT NULL) AS has_code, mac, board, "
-                    "sat_type, first_seen_at, last_seen_at, attempts "
+                    "SELECT room_id, (code IS NOT NULL OR proof) AS has_code, "
+                    "mac, board, sat_type, first_seen_at, last_seen_at, attempts, "
+                    "proof, "
+                    "(entered_code IS NOT NULL AND entered_at > now() - "
+                    "make_interval(secs => CAST(:ttl AS double precision))) "
+                    "AS waiting_for_device, "
+                    "(last_proof_failure_at IS NOT NULL AND entered_code IS NULL) "
+                    "AS code_rejected, proof_failures "
                     "FROM satellite_approvals ORDER BY first_seen_at"
-                )
+                ),
+                {"ttl": float(ENTERED_CODE_TTL_SEC)},
             )
         ).mappings().all()
         return [dict(r) for r in rows]
@@ -2589,12 +2624,20 @@ class SatelliteApprovalRepository:
 
         The comparison is :func:`secrets.compare_digest` and runs even when
         there is nothing on file, so the answers cost the same.
+
+        A proof request (V062) has nothing on file to compare: its device
+        never sent its code. The typed code is kept for one exchange with
+        the device instead, and the answer is:
+
+        * ``"entered"`` — kept; the device runs the exchange on its next
+          visit and the room is bound only if it confirms the code;
+        * ``"malformed"`` — not six digits, which no such device holds.
         """
         await self.purge_expired()
         pending = (
             await self.s.execute(
                 text(
-                    "SELECT token_hash, code FROM satellite_approvals "
+                    "SELECT token_hash, code, proof FROM satellite_approvals "
                     "WHERE room_id = :r"
                 ),
                 {"r": room_id},
@@ -2602,6 +2645,20 @@ class SatelliteApprovalRepository:
         ).first()
         if pending is None:
             return "not_pending"
+        if pending.proof:
+            from satellite import pairing_proof
+
+            candidate = (code or "").strip()
+            if not pairing_proof.valid_code(candidate):
+                return "malformed"
+            await self.s.execute(
+                text(
+                    "UPDATE satellite_approvals SET entered_code = :c, "
+                    "entered_at = now() WHERE room_id = :r"
+                ),
+                {"r": room_id, "c": candidate},
+            )
+            return "entered"
         stored = pending.code
         candidate = (code or "").strip()
         # Compared as BYTES: compare_digest refuses a non-ASCII str, and
@@ -2630,6 +2687,12 @@ class SatelliteApprovalRepository:
         if row is None:
             # Raced a reject between the read and the delete.
             return "not_pending"
+        await self._bind(room_id, row)
+        return "approved"
+
+    async def _bind(self, room_id: str, row: Any) -> None:
+        """Write the pairing for a request just taken off the list (``row``:
+        its token_hash, board and sat_type)."""
         await self.s.execute(
             text(
                 "INSERT INTO satellite_pairings (room_id, token_hash, last_seen_at) "
@@ -2658,7 +2721,85 @@ class SatelliteApprovalRepository:
                     "b": row.board,
                 },
             )
+
+    async def take_entered_code(
+        self, room_id: str, token_hash: str,
+        ttl_sec: float = ENTERED_CODE_TTL_SEC,
+    ) -> str | None:
+        """The code an operator typed for THIS device's proof request, taken
+        off the row so it serves exactly one exchange — a rogue device
+        holding the request gets one guess per code typed, never a second
+        run with the same one. None when nothing was typed, when it is older
+        than ``ttl_sec``, or when the row is some other device's."""
+        row = (
+            await self.s.execute(
+                text(
+                    "SELECT entered_code AS code, (entered_at > now() - make_interval("
+                    "secs => CAST(:ttl AS double precision))) AS fresh "
+                    "FROM satellite_approvals WHERE room_id = :r AND token_hash = :h "
+                    "AND proof AND entered_code IS NOT NULL FOR UPDATE"
+                ),
+                {"r": room_id, "h": token_hash, "ttl": float(ttl_sec)},
+            )
+        ).first()
+        if row is None:
+            return None
+        await self.s.execute(
+            text(
+                "UPDATE satellite_approvals SET entered_code = NULL, entered_at = NULL "
+                "WHERE room_id = :r"
+            ),
+            {"r": room_id},
+        )
+        return row.code if row.fresh else None
+
+    async def note_proof_failure(self, room_id: str, token_hash: str) -> None:
+        """The device did not confirm the code typed for it: wrong digits,
+        or not the device in the room. Counted on the row for the
+        dashboard; the request itself stays parked for the real device."""
+        await self.s.execute(
+            text(
+                "UPDATE satellite_approvals SET proof_failures = proof_failures + 1, "
+                "last_proof_failure_at = now() "
+                "WHERE room_id = :r AND token_hash = :h"
+            ),
+            {"r": room_id, "h": token_hash},
+        )
+
+    async def promote_proven(self, room_id: str, token_hash: str) -> str:
+        """Bind the room to the device whose proof request this is, once
+        the device has confirmed the code the operator typed (the exchange
+        in domovoi/streaming.py). ``"approved"`` or ``"not_pending"`` (the
+        request was rejected, expired or taken over meanwhile)."""
+        row = (
+            await self.s.execute(
+                text(
+                    "DELETE FROM satellite_approvals WHERE room_id = :r "
+                    "AND token_hash = :h AND proof "
+                    "RETURNING token_hash, board, sat_type"
+                ),
+                {"r": room_id, "h": token_hash},
+            )
+        ).first()
+        if row is None:
+            return "not_pending"
+        await self._bind(room_id, row)
         return "approved"
+
+    async def withdraw(self, room_id: str, token_hash: str) -> bool:
+        """The device asks to be taken off the list: another house approved
+        it. Only the device whose request it is can do that — the hash of
+        the token it parked with is the proof."""
+        row = (
+            await self.s.execute(
+                text(
+                    "DELETE FROM satellite_approvals WHERE room_id = :r "
+                    "AND token_hash = :h RETURNING 1"
+                ),
+                {"r": room_id, "h": token_hash},
+            )
+        ).first()
+        return row is not None
 
     async def purge_expired(self, expiry_sec: float = APPROVAL_EXPIRY_SEC) -> int:
         """Delete requests nobody has refreshed for ``expiry_sec``."""

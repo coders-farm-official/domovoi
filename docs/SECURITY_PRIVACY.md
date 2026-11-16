@@ -3839,12 +3839,96 @@ a **boot-time** gate and the edges matter:
   None of those can exist on a parked device: the core refuses an unpaired
   room's `hello` before the socket carries anything it could act on.
 
-**Pending requests expire (1.3.0).** A request on the approvals list that
-no device has refreshed for 15 minutes is deleted, and with it its hold on
-the room name: a device that was switched off, or set up again elsewhere,
-no longer keeps a name for good. A device that is still waiting re-asks far
-more often (a Pi at least every minute, a phone every 35 s) and keeps its
-row, its code and its place.
+### Asking every house: an approval the device can check (1.3.0)
+
+**The problem.** A room device set up through the Wi-Fi portal with the
+server-address field left blank (`domovoi_url = "auto"`) and no server key
+on its card used to keep the FIRST host that answered as Domovoi and wait
+there for approval forever. On a network with two Domovoi servers — a live
+house and a test server on the same /24, neighbours on a shared building
+network — that is a coin toss, and losing it strands the device. Worse, the
+device sent its approval code in its `hello`, so whichever server it
+reached learned the code.
+
+**What it does now.** Such a device asks EVERY Domovoi server it can find
+(names, the last-known address, then the /24 sweep — `discovery.locate_all`,
+at most eight servers, rediscovered every two minutes, each asked again
+every ten seconds; `satellite/house_pairing.py`) and parks a request with
+each. It accepts an approval only from a server that PROVES it knows the
+six digits the person read off the device and typed into that server's
+dashboard. A server that merely says `ready` (or sends a proof that does
+not check out) is ignored and logged, and the device keeps waiting. Once one
+server proves the code, the device writes that server's address and key
+into config.toml — from then on it talks only to that key-checked server,
+exactly like a device approved the old way — and withdraws its request from
+every other server it asked (a `hello` with `approval_withdraw: true`,
+authenticated by the token that request was parked with). Requests also
+expire on every server after fifteen minutes without a visit.
+
+**The proof.** Six digits is a million possibilities, which a computer tries
+in under a second, so nothing either side sends may let the other test codes
+offline: not the code, not a hash of it, not an HMAC under it (whoever sees
+`HMAC(code, nonce)` with the nonce can try every code). Two parties sharing a
+short secret, either of which may be lying, need a password-authenticated key
+exchange: this is **SPAKE2** over the 2048-bit MODP group of RFC 3526
+(group 14), in stdlib Python (`satellite/pairing_proof.py`, imported by both
+the device and the core — one implementation):
+
+1. hello: the device sends `X = g^x·M^w` (`w` from the code, `x` fresh per
+   connection) — and **never the code**;
+2. the core, holding a code the person typed, sends `Y = g^y·N^w`;
+3. both derive `K = SHA-256(context, room, server fingerprint, X, Y, Z, w)`
+   with `Z = g^xy`; the device answers with `HMAC(K, "device confirms")`;
+4. the core checks that in **constant time**, and only then binds the room
+   and sends `HMAC(K, "server confirms")`;
+5. the device checks that before it believes anything.
+
+`X` and `Y` each look uniformly random to anyone without `w`, so an
+eavesdropper learns nothing, and a party that is lying can test exactly
+ONE guessed code per run — and only by taking part in a run the other side
+counts. The transcript binds the room and the fingerprint the device proved
+for the address it dialled, so a proof from one house's run is worthless in
+any other run, with any other key.
+
+**Who can guess, and how often.**
+
+| Who | What they can do | Limit |
+|---|---|---|
+| A neighbour's or hostile server the device asks | run the exchange with guessed codes | the device answers at most **5 challenges per 30 minutes**, across every server, kept across restarts (`~/.domovoi/approval-proof-budget.json`): at one in a million each, about 1 in 4,000 per day of waiting |
+| A rogue device parked under your room's name | answer the exchange for the code you typed | each typed code serves **one** run (taken off the row, gone after ten minutes), and the approve route takes five codes per room per five minutes; a failed run is shown on the card ("the room device didn't accept the last code") |
+| Someone watching the network | nothing | no message can be tested against a code |
+| Someone relaying between the device and your server | relay the exchange — and win nothing | the device's key check binds the address dialled; the core will not sign for a relay's address |
+| The same hostile server spending the device's budget | delay approval up to 30 minutes | it cannot approve; the typed code keeps waiting for ten minutes and can be typed again |
+
+What the proof does **not** do: it does not encrypt anything, it does not
+protect a room after pairing (the pairing token and the server key do that,
+as before), and an active man-in-the-middle who can also forge your server's
+key is out of scope here as everywhere else on the LAN. A device that loses
+power in the half-second between the core binding the room and the device
+saving it comes back unpaired while the core thinks it paired; **Reset
+pairing** in the room's drawer fixes it.
+
+**One code for every house, and its own token for each.** The device has one
+code — the portal's, shown as the setup network closes, and said out loud —
+because the exchange already makes a code worthless outside the house the
+person typed it into. Its pairing token, a bearer secret, is a different
+matter: each server gets `HMAC-SHA256(token, fingerprint)`, so no server
+learns a token it could present to another. The approving server's token
+replaces the device's own.
+
+**Mixed versions.**
+
+| Device | Server | What happens |
+|---|---|---|
+| new, address left blank, no key | new (`pairing_proof` in `/v1/health`) | asked, proof required |
+| new, address left blank, no key | older | **never asked**: an approval from it cannot be checked. The device logs that it found one and says to update it — or to type its address in the portal |
+| new, address typed in the portal (or a prepared card's key) | new | that server only, with the proof |
+| new, address typed in the portal (or a prepared card's key) | older | the old flow (the code in the hello): the person chose that server |
+| older | new | the old flow, unchanged: the core compares the code it was sent |
+
+Spare computers (enrolled with a room code that pins the server's key) and
+phones in room mode keep the old flow: their server was chosen by a
+key-pinning enrolment, never by discovery.
 
 **Re-pairing.** Re-flashing a Pi, swapping the device, or moving a room to
 new hardware gives that room a new token that won't match — so the device is

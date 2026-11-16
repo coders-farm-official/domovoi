@@ -4,104 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## 1.3.0 (unreleased) — Settings → Rooms says why a room couldn't join
+## 1.3.0 (unreleased) — A new room asks every Domovoi server, and joins the one you approve it on (V062)
 
-- **What changed.** When a room device can't join for a reason only the
-  server knows, **Settings → Rooms** now says so in a plain line above the
-  approvals — for example "A room tried to join at 192.168.1.30:6370, but
-  this server couldn't prove it's the one at that address. Add that address
-  to the server's trusted addresses (TRUSTED_HOSTS), or set the room up with
-  the server's own address." The other lines cover a room paired with a
-  different device, a device without a pairing key, two devices asking for
-  one name, too many requests from one address and a code no device uses.
-  The newest five are kept, each for a day, in memory (admins only:
-  `GET /api/satellites/join-problems`).
-- **Also.** A core reached at its host's address through a VM or a NAT'd
-  distro can now be vouched for by the host (its root-owned network-name
-  report, `server_identity.VOUCHED_ADDRESS_SOURCES`) instead of needing that
-  address in `TRUSTED_HOSTS`. And a request on the approvals list that no
-  device has visited for fifteen minutes now disappears on its own, freeing
-  its room name; a device that is still waiting keeps its place.
-- **Nothing to do.**
-
-## 1.3.0 (unreleased) — The server signs with `cryptography`, not its own code
-
-Nothing to do: the update installs it. The server's identity (the key a
-prepared satellite trusts, the signed `/v1/health` answer, the signed
-satellite code, plugin, sound and wake-word lists) and the signature check
-of the Android app it serves now run on
-[`cryptography`](https://cryptography.io/) 50.0.2 (Apache-2.0 or
-BSD-3-Clause, OpenSSL inside) instead of Domovoi's own pure-Python Ed25519
-and RSA code, which wasn't constant-time. Before, a server used
-`cryptography` only if someone had installed the optional `signing` extra;
-now it is a core dependency in both server locks, and the `signing` extra
-is gone.
-
-- **Same keys, same signatures.** The identity file is untouched and
-  every prepared card keeps trusting the server: Ed25519 gives the same
-  signature from either code, and the tests hold them to it.
-- **The server never signs with the fallback.** A server missing the
-  package (a broken install) says so at ERROR at boot, makes no key and
-  signs nothing, so satellites refuse it until the dependencies are
-  reinstalled from the lock. Signature checks still answer, in pure Python.
-- **Where it's said.** Each server process logs the library and OpenSSL
-  versions once at boot, and `GET /v1/admin/version` reports `crypto`:
-  `{backend, cryptography, openssl, signing}`.
-- **Satellites are unchanged**: they check with `cryptography` where their
-  Python has it and with the vendored pure-Python Ed25519 otherwise (the
-  32-bit Pi OS case), and now say once in the journal which.
-- **One verdict for every input.** OpenSSL accepts a public key written in
-  a non-canonical way that Domovoi's code refused: written so, the
-  identity key took one forged signature as valid over any message. Every
-  verifier now runs Domovoi's encoding checks before handing a signature to
-  `cryptography`, so both give the same answer. A satellite only trusts
-  the key whose fingerprint it pinned, so no pinned device was exposed;
-  a device with nothing pinned trusts the first key it meets anyway.
-- **Developers:** reinstall from the lock (`pip install --require-hashes
-  -r requirements.lock`, or `pip install -e .`): the suite now signs with
-  `cryptography`, and without it the identity and APK tests fail.
-
-## 1.3.0 (unreleased) — Security updates: Pillow, certifi, filelock
-
-Nothing to do: these come with the update. They fix published security
-advisories in three packages the server and the rooms install.
-
-- **Pillow 12.3.0 → 13.0.0** (pictures: thumbnails, cover art, chat
-  pictures, printing and scanning). Pillow 13.0.0 fixes 43 advisories,
-  five of them critical, mostly about crafted image files (JPEG, TIFF,
-  GIF, PDF, FlashPix and others) that could crash the server, use up its
-  memory or CPU, or read or write memory they shouldn't:
-  `GHSA-22hg-r758-rrw9`, `GHSA-24rc-8hj2-v98c`, `GHSA-254f-3936-288h`,
-  `GHSA-27h8-gf7j-v5hc`, `GHSA-332p-7hrc-92wf`, `GHSA-3j72-p6qg-6xp7`,
-  `GHSA-4558-3h8r-v8xp`, `GHSA-462x-pgg6-55fp`, `GHSA-4rm8-3hmm-39fg`,
-  `GHSA-4rr5-89j8-mwwm`, `GHSA-58r4-6rv3-gfh8`, `GHSA-5x8w-8jj5-q52h`,
-  `GHSA-5xm2-6676-qcp9`, `GHSA-654x-cwwv-5j9c`, `GHSA-65qm-jvmh-6pqg`,
-  `GHSA-74r2-7ff9-mjj2`, `GHSA-78g4-xqwv-q3g8`, `GHSA-7mwm-ghpf-9vrm`,
-  `GHSA-8g5g-8vmr-9782`, `GHSA-9v9v-9qvf-h2hj`, `GHSA-c6hw-5grf-ff96`,
-  `GHSA-cp9v-662q-vvx9`, `GHSA-f2g6-542v-9j58`, `GHSA-fc9g-5qg7-mf45`,
-  `GHSA-g4qv-2jxx-769h`, `GHSA-g7cr-3p24-7wf7`, `GHSA-g842-9rc4-69pw`,
-  `GHSA-gg2r-wvfm-q9rx`, `GHSA-j4m9-6w36-pw47`, `GHSA-jg86-v3jv-hrpm`,
-  `GHSA-mrfp-p49p-3hf2`, `GHSA-p4wg-p73j-c528`, `GHSA-p8hx-v2p6-rp84`,
-  `GHSA-pchr-8j38-3x4p`, `GHSA-q45j-58j2-45rg`, `GHSA-rfgq-q3w2-pmv2`,
-  `GHSA-v9pv-5gc8-w2m6`, `GHSA-vx6w-vv9f-6gvg`, `GHSA-w889-685w-c8fh`,
-  `GHSA-wqgw-9xfh-qf2g`, `GHSA-xcvg-w56q-r89m`, `GHSA-xgh8-jp6q-p5x8`,
-  `GHSA-xvh5-g6gv-559v`. The lowest Pillow the server accepts is now
-  13.0, so an update that resolves from the package index can't land on
-  an older one. Domovoi's own picture code needed no change.
-- **certifi 2026.6.17 → 2026.10.23** (the list of trusted certificate
-  authorities for the server's outside connections; the PC and Windows
-  rooms had 2026.7.22). The old list still trusted emSign roots whose
-  intermediate keys were compromised: `GHSA-6q48-6c7w-9gw2`
-  (also `PYSEC-2026-4320`), critical. A room computer gets the new list
-  the next time it updates.
-- **filelock 4.0.12 → 4.2.10** (Linux server only; used when models are
-  downloaded). Lock-file handling a local user could abuse to read,
-  truncate or hold another user's files: `GHSA-567q-5qvw-pf92`,
-  `GHSA-6627-m3xw-93mp`, `GHSA-69hj-f68j-2879`, `GHSA-8mx5-7m5m-r77g`,
-  `GHSA-9c4x-gm8v-wgc4`, `GHSA-9j6q-wvj5-jgjg`, `GHSA-9vhv-jxww-xfm5`,
-  `GHSA-cwqr-hh33-gh44`, `GHSA-fj95-fr6c-h845`, `GHSA-fq56-3cx3-fjxp`,
-  `GHSA-m462-7rxw-wvpg`, `GHSA-rfpc-qcw5-3pc4`, `GHSA-v4x8-3wr5-3wq8`
-  (high).
+- **What changed.** A room device set up through the Wi-Fi portal with the
+  server-address field left blank used to wait for approval on whichever
+  Domovoi server answered first — on a network with a test server, or a
+  neighbour's, it could wait for ever on the wrong one. It now asks every
+  Domovoi server it finds (up to eight) and joins only the one that proves
+  it knows the six digits the device says: the server you typed them into.
+  The device never sends its code anywhere any more; the check is a
+  password-authenticated exchange (SPAKE2) that lets neither side test
+  codes behind the other's back. Once one server approves it, the device
+  withdraws its request from the others. Details and the threat model:
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-130).
+- **What you see.** Typing the code on **Settings → Rooms** now says "Code
+  sent" for such a device, and the room appears within about ten seconds,
+  when the device next checks in — not at the click. A code the device did
+  not accept says so on its card; type it again. A pending request that no
+  device has visited for fifteen minutes disappears on its own. Settings →
+  Rooms also says, in a line, why a room could not join when only the
+  server knows (for example "A room tried to join at 192.168.1.30:6370, but
+  this server couldn't prove it's the one at that address"), instead of the
+  room's ring just staying red.
+- **What to know.** A new room device with the address left blank does
+  **not** ask a server older than 1.3.0: an approval from it can't be
+  checked. Update the server first, or type its address in the setup
+  portal (then the device asks only that server, the old way). Rooms set
+  up before, spare computers and phones in room mode work exactly as
+  before. A core reached at its host's address through a VM or a NAT'd
+  distro can be vouched for by the host (its root-owned network-name
+  report) instead of `TRUSTED_HOSTS`.
+- **Migration.** V062 adds five columns to `satellite_approvals`. Nothing
+  to do: the update runs it.
 
 ## 1.3.0 (unreleased) — Debian 13, Linux Mint 22 and Pop!_OS 24.04
 

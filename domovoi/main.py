@@ -44,7 +44,10 @@ from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
-from domovoi import crypto_backend  # noqa: E402
+try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
+    from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
+except ImportError:  # pragma: no cover — a core without it advertises no proof
+    PAIRING_PROOF_VERSION = None
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
     GUEST_PLAYING_ENTRY_DETAIL,
@@ -1409,6 +1412,11 @@ async def health(
         # and time. No room names: this answer is open.
         "speech": turn_watchdog.speech_health(),
     }
+    if PAIRING_PROOF_VERSION:
+        # 1.3.0: this server can PROVE an approval to a room device — the
+        # exchange in satellite/pairing_proof.py. A device that asks every
+        # server it finds for approval asks only those that say so.
+        doc["pairing_proof"] = PAIRING_PROOF_VERSION
     global _UNBOUND_CHALLENGE_SEEN
     if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:
         raise HTTPException(status_code=400, detail="challenge is too long")
@@ -4861,6 +4869,22 @@ async def admin_satellite_approve(
                 "that request carries no code — power-cycle the room device "
                 "so it asks again with one"
             ),
+        )
+    if result == "entered":
+        # A device that proves approvals (1.3.0) never sent its code: the
+        # core cannot say yet whether this one is right. The DEVICE checks
+        # it on its next visit (every ten seconds while it waits), and the
+        # room is bound only if it confirms. Not "approved", so the
+        # dashboard does not say so before it is true.
+        log.info(
+            "pairing: room=%s code typed; waiting for the device to confirm it",
+            room_id,
+        )
+        return {"approved": False, "waiting_for_device": True, "room_id": room_id}
+    if result == "malformed":
+        raise HTTPException(
+            status_code=422,
+            detail="an approval code is six digits — type the six the room device is saying",
         )
     if result != "approved":
         log.warning("pairing: room=%s approval code did not match", room_id)
