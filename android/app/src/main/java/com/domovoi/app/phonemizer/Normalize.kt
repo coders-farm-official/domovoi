@@ -97,6 +97,7 @@ internal object Normalize {
             UNITS.keys.sortedByDescending { it.length }.joinToString("|") + """)$B""",
     )
     private val ORDINAL = Regex("""$B($D+)(st|nd|rd|th)$B""")
+    private val DECADE = Regex("""(?<![\p{L}\p{N}_.,])'?($D{4}|$D{2})'?s$B""")
     private val MONTH_DAY = Regex("""$B($MONTH_RE)$S+($D{1,2})$B(?![:.,]?$D)""")
     private val ABBREV_RE = Regex("""$B[A-Za-z]{1,6}\.""")
     private val DOTTED = Regex("""$B(?:[A-Za-z]\.){2,}""")
@@ -207,6 +208,29 @@ internal object Normalize {
         return " " + numberWord(s) + " "
     }
 
+    private fun plural(words: String): String {
+        val i = words.lastIndexOf(' ')
+        val head = if (i < 0) "" else words.substring(0, i + 1)
+        val last = words.substring(i + 1)
+        return head + (if (last.endsWith("y")) last.dropLast(1) + "ies" else last + "s")
+    }
+
+    private fun decade(m: MatchResult): String {
+        val s = m.g(1)!!
+        val n = Py.int(s).toInt()
+        if (n % 10 != 0) return m.value
+        if (s.length == 2) {
+            if (n == 0) return m.value
+            return " " + plural(N.cardinal(n.toLong())) + " "
+        }
+        if (n !in 1100..2099) return m.value
+        val hi = n / 100
+        val lo = n % 100
+        if (n in 2000..2009) return " " + plural(N.cardinal(n.toLong())) + " "
+        if (lo == 0) return " " + N.cardinal(hi.toLong()) + " hundreds "
+        return " " + N.cardinal(hi.toLong()) + " " + plural(N.cardinal(lo.toLong())) + " "
+    }
+
     private fun dateMd(m: MatchResult): String {
         val mo = Py.int(m.g(1)!!).toInt()
         val d = Py.int(m.g(2)!!).toInt()
@@ -258,6 +282,7 @@ internal object Normalize {
         t = t.replace("24/7", " twenty four seven ")
         t = UNIT_RE.sub(t) { m, _ -> units(m) }
         t = ORDINAL.sub(t) { m, _ -> " " + N.ordinal(Py.int(m.g(1)!!)) + " " }
+        t = DECADE.sub(t) { m, _ -> decade(m) }
         t = MONTH_DAY.sub(t) { m, _ -> "${m.g(1)} ${N.ordinal(Py.int(m.g(2)!!))}" }
         t = ABBREV_RE.sub(t) { m, src -> abbrev(m, src) }
         t = DOTTED.sub(t) { m, src -> spell(m.value) + keepPeriod(m, src) }
