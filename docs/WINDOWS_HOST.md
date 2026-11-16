@@ -187,9 +187,10 @@ signature, before it runs it.
    `C:\ProgramData\Domovoi\logs`, which only administrators can open, so
    **Copy logs** (on Setup's error pop-ups, its last page after a failure,
    and the uninstaller's messages) copies them to a new folder in
-   `Documents\Domovoi logs`. Setup opens that folder for you; the
-   uninstaller, which runs as administrator, only names it (opening it from
-   there would run as administrator too). Every line is filtered on the
+   `Documents\Domovoi logs` (`install-<date>-<time>`, or `uninstall-...`).
+   Setup opens that new folder for you; the uninstaller, which runs as
+   administrator, only names it (opening it from there would run as
+   administrator too). Every line is filtered on the
    way: passwords, tokens and setup codes are blanked as far as Setup can
    recognise them.
 9. **Shows your setup code** once, with a **Copy** button, **Open
@@ -274,8 +275,9 @@ folders, the profile, the account rights, the sign-in entry, the account,
 shows each step as it happens (the status line, the bar, and a list of
 what was done). Its record goes to `%TEMP%\domovoi-uninstall-<time>.log`
 (that one file stays, on purpose); **Copy logs** on its messages copies it,
-with Domovoi's own logs while they are still there, to
-`Documents\Domovoi logs`.
+with Domovoi's own logs while they are still there, to a new
+`uninstall-<date>-<time>` folder in `Documents\Domovoi logs`, and names
+that folder.
 
 It works after a half-finished setup, and running it again is safe: it
 looks at what is on the PC as well as Setup's install record, and skips
@@ -351,7 +353,7 @@ asked for from another device waits, a single click finishes it.
 | **Keep this PC awake** | On by default: Windows doesn't put the PC to sleep while the icon runs (the screen may still turn off). The line under it says, from the power plan (never changed), whether Windows would still sleep it when nobody is signed in. |
 | **Start with Windows** | This account's sign-in start, on by default. |
 | **Update Domovoi...** | The whole update, both halves, behind one administrator's permission prompt ([Updates and the release channel](#updates-and-the-release-channel)). It reads **Finish updating Domovoi...** while the dashboard has asked for the Windows part; the icon then wears a blue **!** and a click on it does the same ([A request from another device](#a-request-from-another-device)). |
-| **Save logs for support...** | Domovoi's logs are administrators-only: Windows asks for permission, then Setup's helper copies them to `Documents\Domovoi logs`, blanked as **Copy logs** does, with the icon's own log beside them. Without Setup's helper on the PC only the icon's log is copied, and it says so. |
+| **Save logs for support...** | Domovoi's logs are administrators-only: Windows asks for permission, then Setup's helper copies them to a new folder in `Documents\Domovoi logs` (`install-<date>-<time>`), blanked as **Copy logs** does, the icon's own log goes in with them, and Explorer opens that new folder. Without Setup's helper on the PC (or when Windows' permission is refused or the copy fails) only the icon's log is copied, straight into `Documents\Domovoi logs`, and that folder opens. |
 | **Restart Domovoi...** | Asks first, then Windows asks for an administrator, then `Restart-Service DomovoiHost`: for when the dashboard itself can't be reached. |
 | **Hide this icon** | Hides it until the next sign-in; Domovoi keeps running, and so does **Keep this PC awake**. **Domovoi** in the Start menu brings it back. |
 
@@ -757,8 +759,10 @@ people outside the household sign in to.
 Logs are in `C:\ProgramData\Domovoi\logs` (administrators only). The
 **Copy logs** button on Setup's error pop-ups, on its last page after a
 failure, and on the uninstaller's messages copies them to a new folder in
-`Documents\Domovoi logs` (of the account that ran Setup); Setup opens it,
-the uninstaller names it:
+`Documents\Domovoi logs` (of the account that ran Setup), named
+`install-<date>-<time>` or `uninstall-<date>-<time>`; Setup and the icon's
+**Save logs for support...** open that new folder, the uninstaller names
+it:
 
 | File | What |
 |---|---|
@@ -766,7 +770,8 @@ the uninstaller names it:
 | `host.log` | DomovoiHost: the import, the holder (`wsl.exe -d domovoi --exec sleep infinity`), restarts, requests, the ports it waited for. |
 | `provision.log` | Everything `provision.sh` printed, including its `@@DOMOVOI` progress lines. When the start fails it also holds `systemctl status` of `domovoi-db`, `domovoi-core` and `domovoi-web` and their last 200 journal lines, so it names the real cause (a port already taken, a migration that failed); when the database is the cause, also the Postgres container's state and its last 100 log lines (passwords blanked). |
 | `host-status.json` | (in the copy) What DomovoiHost last reported to Setup. |
-| `core.log` | The journal of `domovoi-core` and `domovoi-web` inside the distro: the last 24 hours, at most 5000 lines each (the newest 2 MB of each). DomovoiHost copies it out to `logs\core.log` once Domovoi is ready and every 10 minutes after; Setup's **Copy logs** and the icon's **Save logs for support...** ask it for a fresh copy first and wait up to 20 seconds. When it can't give one (Domovoi's Linux system isn't running, WSL doesn't answer within 15 seconds) the copy starts with a `NOTE:` line saying why and when the last copy was made; with no copy at all, the file is that one line. The uninstaller's copy takes the last copy as it is. |
+| `core.log` | The journal of `domovoi-core` and `domovoi-web` inside the distro: the last 72 hours, or since the core last started when that is earlier, at most 5000 lines each (the newest of them, and the newest 2 MB of each). DomovoiHost copies it out to `logs\core.log` once Domovoi is ready and every 10 minutes after; Setup's **Copy logs** and the icon's **Save logs for support...** ask it for a fresh copy first and wait up to 30 seconds. When it can't give one (Domovoi's Linux system isn't running, WSL doesn't answer within 15 seconds) the copy starts with a `NOTE:` line saying why and when the last copy was made; with no copy at all, the file is that one line. The uninstaller's copy takes the last copy as it is. |
+| `core-watchdog.log`, `core-watchdog.log.1`, `core-faulthandler.log` | The core's own record of a freeze ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog)): each stall's reason with every thread's stack and the event loop's tasks, and what faulthandler wrote when it ended a frozen core. They live in the service user's `~/.domovoi/logs` inside the distro, where the journal doesn't keep them whole; DomovoiHost reads them as that user (never as root) with `core.log`, at the same times, the newest 2 MB of each, every line blanked, into `logs\`, and the copy takes at most 4 MB of each. A file the distro doesn't have (no freeze yet) isn't in the copy. |
 
 Setup's own record of the changes it made is `C:\ProgramData\Domovoi\state\install.log`
 (administrators only; `domovoi-svc` can't write there).

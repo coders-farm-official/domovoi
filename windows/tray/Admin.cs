@@ -68,6 +68,14 @@ namespace Domovoi.Windows.Tray
             return "copy-logs --kind install --dest \"" + dest.TrimEnd('\\') + "\"";
         }
 
+        // With the id of the note the helper leaves the new folder's name
+        // in (common\LogsFolder.cs).
+        public static string CopyLogsArguments(string dest, string note)
+        {
+            if (!Domovoi.Windows.LogsFolder.IsNoteId(note)) throw new ArgumentException("bad note id");
+            return CopyLogsArguments(dest) + " --note " + note;
+        }
+
         // Runs exe elevated (Windows asks first) and waits. Null when it
         // ran and exited 0; "cancelled" when the person said no; else why.
         public static string RunElevated(string exe, string args, int timeoutMs)

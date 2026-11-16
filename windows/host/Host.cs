@@ -17,9 +17,10 @@
 //   6a. tell the Linux side which Windows side runs it (WindowsSide.cs:
 //      /var/lib/domovoi-windows/side.json, written as root at every
 //      bring-up), for the dashboard's Version card;
-//   6b. copy the core's journal out to logs\core.log for "Save logs"
-//      (CoreLog.cs, CoreJournal.cs): once ready, every 10 minutes, and on
-//      the helper's request;
+//   6b. copy the core's journal out to logs\core.log for "Save logs", and
+//      the core's watchdog and faulthandler logs beside it (CoreLog.cs,
+//      CoreJournal.cs): once ready, every 10 minutes, and on the helper's
+//      request;
 //   6c. the household's hardware limits (HardwareLimits.cs): every 30 s,
 //      read the core's request as the service user, keep a changed choice
 //      and write it into .wslconfig (memory=, processors=), restart the
@@ -84,6 +85,8 @@ namespace Domovoi.Windows.Host
         // failure logged (one host.log line per change, not every 10 min).
         DateTime coreLogNext = DateTime.MinValue;
         string coreLogLastError;
+        // The same for the core's own files (core-watchdog.log and the rest).
+        string coreFilesLastError;
         // The household's hardware limits (HardwareLimits.cs): when the
         // request is next read, the report last written (its text without
         // the time), the last problem logged, and when the last restart for
@@ -1685,13 +1688,23 @@ namespace Domovoi.Windows.Host
 
         // A fresh logs\core.log; null, or why not. Only while the holder
         // keeps the distro up: a wsl.exe -d call would start a stopped one,
-        // and a distro that isn't up has no journal to give.
+        // and a distro that isn't up has no journal to give. The core's own
+        // files (core-watchdog.log and the rest) come along, except when the
+        // journal read timed out (WSL is wedged; one wait is enough); how
+        // that went is logged, not answered.
         string RefreshCoreLog()
         {
             if (holder == null || SafeExited(holder)) return "Domovoi's Linux system is not running";
-            return CoreJournal.Refresh(
-                delegate (IEnumerable<string> args, int timeoutMs, int maxOutput) { return Wsl.Run(args, timeoutMs, null, maxOutput); },
-                Paths.CoreLogFile, DateTime.UtcNow);
+            Func<IEnumerable<string>, int, int, WslResult> run =
+                delegate (IEnumerable<string> args, int timeoutMs, int maxOutput) { return Wsl.Run(args, timeoutMs, null, maxOutput); };
+            string why = CoreJournal.Refresh(run, Paths.CoreLogFile, DateTime.UtcNow);
+            string filesWhy = why == CoreLog.TimedOutWhy ? "skipped: " + why : CoreJournal.RefreshFiles(run, Paths.Logs, DateTime.UtcNow);
+            if (filesWhy != coreFilesLastError)
+            {
+                log.Write(filesWhy == null ? "copied the core's watchdog and faulthandler logs to " + Paths.Logs : "could not copy the core's watchdog and faulthandler logs: " + filesWhy);
+                coreFilesLastError = filesWhy;
+            }
+            return why;
         }
 
         void NoteCoreLog(string why)

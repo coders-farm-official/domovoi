@@ -8,9 +8,17 @@
 // own log from the temp folder when the uninstaller names it, and
 // logs\core.log, the core's journal DomovoiHost copies out (common\
 // CoreLog.cs; Setup's and the tray's copies ask it for a fresh one first,
-// and the copy says when it has only an older one or none). Every line
-// goes through Redact.Line on the way: passwords, tokens and setup codes are
-// blanked as far as the helper can recognise them.
+// and the copy says when it has only an older one or none), with the
+// core's own watchdog and faulthandler logs DomovoiHost copies out beside
+// it (core-watchdog.log, its .1, core-faulthandler.log; each read up to
+// CoreLog.MaxFileCopyBytes). Every line goes through Redact.Line on the
+// way: passwords, tokens and setup codes are blanked as far as the helper
+// can recognise them.
+//
+// The new folder's name goes to stdout (folder=, Setup reads it) and, with
+// --note ID (the tray, which can't read the output of a program Windows'
+// permission prompt starts), to a note beside it (common\LogsFolder.cs),
+// written last, the way every file here is.
 //
 // The helper runs elevated, the destination is a folder the household can
 // write and the sources are in folders domovoi-svc can write, so nothing is
@@ -244,13 +252,7 @@ namespace Domovoi.Windows.Helper
             return list;
         }
 
-        public static void Copy(Output o, string destRoot, string kind, string uninstallLog)
-        {
-            Copy(o, destRoot, kind, uninstallLog, DateTime.Now);
-        }
-
-        // now: the time the folder is named after (the tests pass one).
-        public static void Copy(Output o, string destRoot, string kind, string uninstallLog, DateTime now)
+        public static void Copy(Output o, string destRoot, string kind, string uninstallLog, string note)
         {
             if (kind != "install" && kind != "uninstall") throw new ArgumentException("--kind must be install or uninstall");
             // A fresh core.log from DomovoiHost for Setup's and the tray's
@@ -258,17 +260,27 @@ namespace Domovoi.Windows.Helper
             // stopping or unregistering then, and wouldn't answer).
             Func<string> refresh = null;
             if (kind == "install") refresh = delegate { return AskForCoreLog(CoreLog.HelperWaitSec); };
-            Copy(o, destRoot, kind, Sources(uninstallLog), Paths.CoreLogFile, refresh, now);
+            Copy(o, destRoot, kind, Sources(uninstallLog), Paths.CoreLogFile, refresh, DateTime.Now, note);
+        }
+
+        public static void Copy(Output o, string destRoot, string kind, List<KeyValuePair<string, string>> sources,
+            string coreLog, Func<string> refreshCoreLog, DateTime now)
+        {
+            Copy(o, destRoot, kind, sources, coreLog, refreshCoreLog, now, null);
         }
 
         // The copy itself, with its inputs passed in (the tests use folders
         // of their own): sources as Sources() lists them, coreLog the
-        // core.log to copy, refreshCoreLog null (don't ask) or what asks
-        // DomovoiHost for a fresh one (null when it did, else why not).
+        // core.log to copy (the core's own files, CoreLog.Files, are taken
+        // from the same folder), refreshCoreLog null (don't ask) or what
+        // asks DomovoiHost for a fresh one (null when it did, else why not),
+        // now the time the folder is named after, note null or the id of
+        // the tray's note (LogsFolder).
         public static void Copy(Output o, string destRoot, string kind, List<KeyValuePair<string, string>> sources,
-            string coreLog, Func<string> refreshCoreLog, DateTime now)
+            string coreLog, Func<string> refreshCoreLog, DateTime now, string note)
         {
             if (kind != "install" && kind != "uninstall") throw new ArgumentException("--kind must be install or uninstall");
+            if (note != null && !LogsFolder.IsNoteId(note)) throw new ArgumentException("--note must be 32 hex digits");
             string root = MediaPaths.Normalize(destRoot);
             string why = MediaPaths.Problem(root);
             if (why != null) throw new ArgumentException("--dest: " + why);
@@ -309,13 +321,35 @@ namespace Domovoi.Windows.Helper
                     string core = CopyCoreLog(o, destH, dest, coreLog, refreshCoreLog);
                     if (core != "none") copied++;
                     o.Kv("core_log", core);
+                    // The core's own files, which DomovoiHost refreshed with
+                    // core.log: whichever it has, each cut at MaxFileCopyBytes.
+                    string coreDir = Path.GetDirectoryName(Path.GetFullPath(coreLog));
+                    foreach (string file in CoreLog.Files)
+                    {
+                        string from = Path.Combine(coreDir, file);
+                        if (!File.Exists(from)) continue;
+                        SafeFileHandle sh;
+                        try { sh = OpenSource(from); }
+                        catch (InvalidOperationException e) { o.Say("skipped " + from + ": " + e.Message); continue; }
+                        catch (Win32Exception e) { o.Say("skipped " + from + ": " + e.Message); continue; }
+                        using (sh)
+                        using (SafeFileHandle wh = CreateIn(destH, file, false))
+                        {
+                            if (wh == null) throw new InvalidOperationException(Path.Combine(dest, file) + " appeared before the copy; not writing it");
+                            CopyRedacted(sh, wh, CoreLog.MaxFileCopyBytes, file);
+                        }
+                        copied++;
+                    }
                     using (SafeFileHandle rh = CreateIn(destH, "README.txt", false))
                     {
                         if (rh == null) throw new InvalidOperationException(Path.Combine(dest, "README.txt") + " appeared before the copy; not writing it");
                         byte[] text = new UTF8Encoding(false).GetBytes(
                             "Domovoi's logs, copied by " + (kind == "install" ? "Domovoi Setup" : "Domovoi's uninstaller") + " on "
                             + now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + ".\r\n"
-                            + "core.log is the journal of Domovoi's core and dashboard (domovoi-core, domovoi-web) for the last 24 hours. "
+                            + "core.log is the journal of Domovoi's core and dashboard (domovoi-core, domovoi-web) for the last "
+                            + Inv.S(CoreLog.WindowHours) + " hours, or since the core last started if that is earlier. "
+                            + "core-watchdog.log (and its older part, core-watchdog.log.1) and core-faulthandler.log are the core's own record of a freeze: "
+                            + "what was running when it stopped answering. "
                             + "Passwords, tokens and setup codes are blanked as far as Setup can recognise them. "
                             + "docs/WINDOWS_HOST.md, \"When something goes wrong\", says what each file is.\r\n");
                         using (var w = new FileStream(rh, FileAccess.Write)) w.Write(text, 0, text.Length);
@@ -323,8 +357,30 @@ namespace Domovoi.Windows.Helper
                     o.Say("copied " + Inv.S(copied) + " log file(s) to " + dest);
                     o.Kv("folder", dest);
                     o.Kv("copied", Inv.S(copied));
+                    if (note != null) WriteNote(o, rootH, root, note, name);
                 }
             }
+        }
+
+        // The tray's note (common\LogsFolder.cs): the new folder's name, in
+        // a file created next to it relative to the held handle. A name
+        // already taken (a file, a folder, a link) is left alone, and a note
+        // that can't be written never fails the finished copy: the tray then
+        // opens the parent.
+        static void WriteNote(Output o, SafeFileHandle rootH, string root, string id, string folderName)
+        {
+            string noteName = LogsFolder.NoteName(id);
+            byte[] b = LogsFolder.NoteBytes(folderName);
+            try
+            {
+                using (SafeFileHandle nh = CreateIn(rootH, noteName, false))
+                {
+                    if (nh == null) { o.Say(Path.Combine(root, noteName) + " is already there; not writing the note"); return; }
+                    using (var w = new FileStream(nh, FileAccess.Write)) w.Write(b, 0, b.Length);
+                }
+            }
+            catch (Win32Exception e) { o.Say("not writing the note " + Path.Combine(root, noteName) + ": " + e.Message); }
+            catch (IOException e) { o.Say("not writing the note " + Path.Combine(root, noteName) + ": " + e.Message); }
         }
 
         // -- the core's log (common\CoreLog.cs) --------------------------
@@ -467,6 +523,25 @@ namespace Domovoi.Windows.Helper
                 if (!(e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException || e is FormatException
                       || e is Win32Exception)) throw;
                 return e.Message;
+            }
+        }
+
+        // At most max bytes of src, every line redacted; a note at the end
+        // when there was more.
+        static void CopyRedacted(SafeFileHandle src, SafeFileHandle dest, long max, string name)
+        {
+            bool cut;
+            byte[] body = ReadBounded(src, max, out cut);
+            using (var r = new StreamReader(new MemoryStream(body), Encoding.UTF8, true))
+            using (var w = new StreamWriter(new FileStream(dest, FileAccess.Write), new UTF8Encoding(false)))
+            {
+                string line;
+                while ((line = r.ReadLine()) != null)
+                {
+                    w.Write(Redact.Line(line));
+                    w.Write("\r\n");
+                }
+                if (cut) w.Write("NOTE: " + name + " is larger than " + Inv.S(max / (1024 * 1024)) + " MB; the rest is left out.\r\n");
             }
         }
 

@@ -94,6 +94,7 @@ static partial class Tests
         ProfileCleanup();
         LogCopies();
         CoreLogCopies();
+        LogsFolderTests();
         UninstallTexts();
         LeftoverProfileTests();
         TrayTests();
@@ -2041,25 +2042,29 @@ static partial class Tests
         return r;
     }
 
-    const string JournalOut = "==== domovoi-core (journalctl --since -24h, at most 5000 lines)\n"
+    const string JournalOut = "==== domovoi-core (journalctl since 2026-11-06 03:13:00 UTC, at most 5000 lines)\n"
         + "2026-11-09T03:12:44+0000 domovoi python[812]: INFO turn started room=kitchen\n"
         + "2026-11-09T03:12:45+0000 domovoi python[812]: INFO 192.168.1.41:5123 - \"GET /v1/stream?token=s3cr3tT0ken HTTP/1.1\" 101\n"
-        + "==== domovoi-web (journalctl --since -24h, at most 5000 lines)\n"
+        + "==== domovoi-web (journalctl since 2026-11-06 03:13:00 UTC, at most 5000 lines)\n"
         + "2026-11-09T03:12:46+0000 domovoi python[901]: WARNING Authorization: Bearer eyJhbGciOi.abc.def rejected\n";
 
     static void CoreLogCopies()
     {
-        Run("core log: the journal command (units, 24 h, lines, newest bytes, as root, no shell from outside)", delegate
+        Run("core log: the journal command (units, 72 h or since the core's start, lines, newest bytes, as root, no shell from outside)", delegate
         {
             string[] a = CoreLog.WslArgs(Paths.DistroName);
             SeqEq(new[] { "-d", "domovoi", "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c" }, a.Take(9), "wsl.exe arguments");
             Eq(10, a.Length, "one script argument");
             string s = a[9];
             Eq(CoreLog.Script(), s, "the fixed script");
-            True(s.StartsWith("for u in domovoi-core domovoi-web; do ", StringComparison.Ordinal), "both units: " + s);
-            True(s.Contains("/usr/bin/journalctl -u \"$u\" --since=-24h -n 5000 --no-pager -o short-iso 2>&1 | /usr/bin/tail -c 2097152"), "bounded: " + s);
+            True(s.StartsWith("s=$(($(/usr/bin/date +%s)-259200)); ", StringComparison.Ordinal), "72 hours back: " + s);
+            True(s.Contains("r=$(/usr/bin/systemctl show domovoi-core.service -p ActiveEnterTimestamp --value 2>/dev/null); "), "the core's last start: " + s);
+            True(s.Contains("[ \"$r\" -lt \"$s\" ] && s=$r; fi; "), "only when earlier: " + s);
+            True(s.Contains("for u in domovoi-core domovoi-web; do "), "both units: " + s);
+            True(s.Contains("/usr/bin/journalctl -u \"$u\" --since=\"@$s\" -n 5000 --no-pager -o short-iso 2>&1 | /usr/bin/tail -c 2097152"), "bounded: " + s);
             True(s.Contains("echo \"==== $u "), "a header per unit");
-            True(CoreLog.TimeoutMs <= 15000 && CoreLog.HelperWaitSec * 1000 > CoreLog.TimeoutMs, "the helper waits longer than the host's read");
+            True(CoreLog.TimeoutMs <= 15000 && CoreLog.FilesTimeoutMs <= 15000, "bounded reads");
+            True(CoreLog.HelperWaitSec * 1000 > CoreLog.TimeoutMs + CoreLog.FilesTimeoutMs, "the helper waits longer than the host's two reads");
             True(CoreLog.MaxOutputChars > 2 * CoreLog.BytesPerUnit, "the output backstop is above both units' cut");
         });
         Run("core log: rendered with a header, every line redacted, long lines cut", delegate
@@ -2068,7 +2073,7 @@ static partial class Tests
             string longLine = "2026-11-09T03:00:00+0000 domovoi python[812]: " + new string('x', 9000);
             string t = CoreLog.Render(0, false, JournalOut + longLine + "\n", "", new DateTime(2026, 11, 9, 3, 13, 0), out why);
             True(t != null, "rendered: " + why);
-            True(t.StartsWith("# Domovoi's core log: journalctl of domovoi-core and domovoi-web, the last 24 hours, at most 5000 lines each, read by DomovoiHost at 2026-11-09 03:13:00 UTC\r\n", StringComparison.Ordinal), "header: " + t.Substring(0, 200));
+            True(t.StartsWith("# Domovoi's core log: journalctl of domovoi-core and domovoi-web, the last 72 hours (or since the core last started, if earlier), at most 5000 lines each, read by DomovoiHost at 2026-11-09 03:13:00 UTC\r\n", StringComparison.Ordinal), "header: " + t.Substring(0, 200));
             True(t.Contains("turn started room=kitchen\r\n") && t.Contains("==== domovoi-web"), "the lines, CRLF");
             True(!t.Contains("s3cr3tT0ken") && t.Contains("?token=[hidden]"), "a token in a URL");
             True(!t.Contains("eyJhbGciOi") && t.Contains("Authorization: Bearer [hidden]"), "an Authorization header");
@@ -2225,6 +2230,7 @@ static partial class Tests
                 if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
             }
         });
+        CoreFileCopies();
         Run("redact: journal-style lines (access logs, JSON, headers)", delegate
         {
             Eq("INFO 192.168.1.41:5123 - \"GET /v1/stream?token=[hidden] HTTP/1.1\" 101", Redact.Line("INFO 192.168.1.41:5123 - \"GET /v1/stream?token=abc123def HTTP/1.1\" 101"), "a token in a query string");
@@ -2240,6 +2246,240 @@ static partial class Tests
                 "-- No entries --",
             })
                 Eq(keep, Redact.Line(keep), "kept: " + keep);
+        });
+    }
+
+    // -- the core's own files (CoreLog.Files) -----------------------------
+
+    // What FileArgs' script prints: a null text is a file the distro
+    // doesn't have.
+    static string FilesOut(string watchdog, string rotated, string faulthandler)
+    {
+        var sb = new System.Text.StringBuilder();
+        string[] texts = { watchdog, rotated, faulthandler };
+        for (int i = 0; i < CoreLog.Files.Length; i++)
+        {
+            if (texts[i] == null) sb.Append("==== ").Append(CoreLog.Files[i]).Append(" none\n");
+            else sb.Append("==== ").Append(CoreLog.Files[i]).Append('\n').Append(Convert.ToBase64String(new System.Text.UTF8Encoding(false).GetBytes(texts[i]))).Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    const string WatchdogText = "===== 2026-11-15T21:58:02+00:00 (stall: the event loop did not answer for 30 s) =====\n"
+        + "==== core-faulthandler.log none\n"
+        + "Thread 0x7f (MainThread):\n  File \"/opt/domovoi/domovoi/router.py\", line 812 in route\n"
+        + "task GET /v1/stream?token=s3cr3tT0ken pending\n";
+
+    static void CoreFileCopies()
+    {
+        Run("core files: the read (as the service user, the three files, the newest 2 MB of each in base64, no shell from outside)", delegate
+        {
+            string[] a = CoreLog.FileArgs(Paths.DistroName);
+            SeqEq(new[] { "-d", "domovoi", "-u", "domovoi", "--cd", "/", "--exec", "/bin/sh", "-c" }, a.Take(9), "wsl.exe arguments: the service user, never root");
+            Eq(10, a.Length, "one script argument");
+            string s = a[9];
+            Eq(CoreLog.FilesScript(), s, "the fixed script");
+            SeqEq(new[] { "core-watchdog.log", "core-watchdog.log.1", "core-faulthandler.log" }, CoreLog.Files, "the files");
+            True(s.StartsWith("for f in core-watchdog.log core-watchdog.log.1 core-faulthandler.log; do p=/home/domovoi/.domovoi/logs/$f; ", StringComparison.Ordinal), s);
+            True(s.Contains("/usr/bin/tail -c 2097152 \"$p\" | /usr/bin/base64 -w 0; echo; "), "bounded, one base64 line: " + s);
+            True(s.Contains("else echo \"==== $f none\"; fi; "), "a missing file says so: " + s);
+            True(CoreLog.MaxFilesOutputChars > 3 * ((CoreLog.BytesPerFile + 2) / 3 * 4 + 64), "the output backstop is above all three files in base64");
+        });
+        Run("core files: rendered from base64, every line redacted, a header inside a file is only text, a missing file is null", delegate
+        {
+            string why;
+            string longLine = new string('z', 9000);
+            var got = CoreLog.RenderFiles(0, false, FilesOut(WatchdogText + longLine + "\n", null, ""), "", new DateTime(2026, 11, 15, 22, 4, 13), out why);
+            True(got != null, "rendered: " + why);
+            Eq(3, got.Count, "every file");
+            string w = got["core-watchdog.log"];
+            True(w.StartsWith("# core-watchdog.log from /home/domovoi/.domovoi/logs in Domovoi's Linux system, read by DomovoiHost at 2026-11-15 22:04:13 UTC\r\n", StringComparison.Ordinal), w.Substring(0, 160));
+            True(w.Contains("\r\n==== core-faulthandler.log none\r\n") && w.Contains("line 812 in route\r\n"), "the file's own lines, CRLF: " + w);
+            True(!w.Contains("s3cr3tT0ken") && w.Contains("?token=[hidden]"), "redacted");
+            True(w.Contains(new string('z', 100) + " [cut]") && !w.Contains(new string('z', CoreLog.MaxLineChars + 1)), "a long line is cut");
+            True(got["core-watchdog.log.1"] == null, "the distro has no .1");
+            True(got["core-faulthandler.log"].EndsWith(" UTC\r\n(empty)\r\n", StringComparison.Ordinal), "an empty file says so: " + got["core-faulthandler.log"]);
+        });
+        Run("core files: a failed read gives nothing and says why", delegate
+        {
+            string why;
+            True(CoreLog.RenderFiles(-1, true, FilesOut("x", "y", "z"), "", DateTime.UtcNow, out why) == null, "timed out");
+            Eq("reading the core's files did not answer within 10 s", why, "timeout reason");
+            True(CoreLog.RenderFiles(1, false, "", "su: user domovoi does not exist\n", DateTime.UtcNow, out why) == null, "failed");
+            Eq("wsl.exe exit 1: su: user domovoi does not exist", why, "failure reason");
+            string two = FilesOut("x", "y", "z");
+            two = two.Substring(0, two.IndexOf("==== core-faulthandler.log", StringComparison.Ordinal));
+            True(CoreLog.RenderFiles(0, false, two, "", DateTime.UtcNow, out why) == null, "a file left out");
+            Eq("the read of the core's files printed nothing for core-faulthandler.log", why, "left-out reason");
+            True(CoreLog.RenderFiles(0, false, "==== core-watchdog.log\n!!not base64!!\n" + FilesOut("x", "y", "z"), "", DateTime.UtcNow, out why) == null, "garbled");
+            Eq("core-watchdog.log did not come back as base64", why, "garbled reason");
+            True(CoreLog.RenderFiles(0, false, "==== ../../etc/passwd\ncm9vdA==\n" + FilesOut("x", null, null), "", DateTime.UtcNow, out why) != null, "another name is ignored");
+        });
+        Run("core files: DomovoiHost's writer (the arguments, written beside core.log, a file the distro dropped is removed, a failed read keeps them)", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string rotated = System.IO.Path.Combine(root, "core-watchdog.log.1");
+                System.IO.File.WriteAllText(rotated, "an older copy\r\n");
+                IEnumerable<string> gotArgs = null; int gotTimeout = 0, gotMax = 0;
+                string why = Domovoi.Windows.Host.CoreJournal.RefreshFiles(delegate (IEnumerable<string> args, int timeoutMs, int maxOutput)
+                {
+                    gotArgs = args.ToList(); gotTimeout = timeoutMs; gotMax = maxOutput;
+                    return Wsl(0, false, FilesOut(WatchdogText, null, "Fatal Python error: Aborted\n"), "");
+                }, root, new DateTime(2026, 11, 15, 22, 4, 13));
+                True(why == null, "written: " + why);
+                SeqEq(CoreLog.FileArgs("domovoi"), gotArgs, "the arguments");
+                Eq(CoreLog.FilesTimeoutMs, gotTimeout, "the timeout");
+                Eq(CoreLog.MaxFilesOutputChars, gotMax, "the output bound");
+                string w = System.IO.File.ReadAllText(System.IO.Path.Combine(root, "core-watchdog.log"));
+                True(w.Contains("line 812 in route") && !w.Contains("s3cr3tT0ken"), "redacted on the way in: " + w);
+                True(System.IO.File.ReadAllText(System.IO.Path.Combine(root, "core-faulthandler.log")).Contains("Fatal Python error: Aborted\r\n"), "the faulthandler log");
+                True(!System.IO.File.Exists(rotated), "the .1 the distro no longer has is gone");
+                Eq(0, System.IO.Directory.GetFiles(root, ".core-*").Length, "no temporary file left");
+
+                why = Domovoi.Windows.Host.CoreJournal.RefreshFiles(delegate { return Wsl(-1, true, "", ""); }, root, DateTime.UtcNow);
+                Eq("reading the core's files did not answer within 10 s", why, "a timeout");
+                Eq(w, System.IO.File.ReadAllText(System.IO.Path.Combine(root, "core-watchdog.log")), "the last copy stays");
+                why = Domovoi.Windows.Host.CoreJournal.RefreshFiles(delegate { throw new System.ComponentModel.Win32Exception(2); }, root, DateTime.UtcNow);
+                True(why != null && why.StartsWith("wsl.exe could not be started: ", StringComparison.Ordinal), "wsl.exe missing: " + why);
+                why = Domovoi.Windows.Host.CoreJournal.RefreshFiles(delegate { return Wsl(0, false, FilesOut("x", null, null), ""); }, System.IO.Path.Combine(root, "gone"), DateTime.UtcNow);
+                True(why != null && why.StartsWith("can't write ", StringComparison.Ordinal), "an unwritable place: " + why);
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+        Run("core files: copy logs takes them from beside core.log, redacted, each cut at 4 MB, and the README names them", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string core = System.IO.Path.Combine(root, "core.log");
+                System.IO.File.WriteAllText(core, "turn ok\r\n");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(root, "core-watchdog.log"), "stall\r\nGET /v1/stream?token=leakme HTTP/1.1\r\n");
+                var line = new string('y', 1023) + "\n";
+                using (var w = new System.IO.StreamWriter(System.IO.Path.Combine(root, "core-watchdog.log.1"), false, new System.Text.UTF8Encoding(false)))
+                    for (int i = 0; i < 5 * 1024; i++) w.Write(line);
+                string dest = System.IO.Path.Combine(root, "Domovoi logs");
+                var o = new Domovoi.Windows.Helper.Output(null);
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "install", NoSources(), core, delegate { return null; }, new DateTime(2099, 12, 31, 23, 59, 59));
+                string made = System.IO.Path.Combine(dest, "install-20991231-235959");
+                string wd = System.IO.File.ReadAllText(System.IO.Path.Combine(made, "core-watchdog.log"));
+                True(wd.StartsWith("stall\r\n", StringComparison.Ordinal) && !wd.Contains("leakme") && wd.Contains("token=[hidden]"), "redacted: " + wd);
+                string rot = System.IO.File.ReadAllText(System.IO.Path.Combine(made, "core-watchdog.log.1"));
+                True(rot.EndsWith("NOTE: core-watchdog.log.1 is larger than 4 MB; the rest is left out.\r\n", StringComparison.Ordinal), "a cut note");
+                True(rot.Length < CoreLog.MaxFileCopyBytes + 64 * 1024 && rot.Length > CoreLog.MaxFileCopyBytes - 64 * 1024, "bounded: " + Inv.S(rot.Length));
+                True(!System.IO.File.Exists(System.IO.Path.Combine(made, "core-faulthandler.log")), "a file DomovoiHost doesn't have isn't made up");
+                string readme = System.IO.File.ReadAllText(System.IO.Path.Combine(made, "README.txt"));
+                True(readme.Contains("for the last 72 hours, or since the core last started if that is earlier") && readme.Contains("core-watchdog.log") && readme.Contains("core-faulthandler.log"), "README: " + readme);
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+    }
+
+    // -- which new folder Save logs made (common\LogsFolder.cs) -------------
+
+    static void LogsFolderTests()
+    {
+        Run("logs folder: only the names copy-logs gives its folders", delegate
+        {
+            foreach (string ok in new[] { "install-20261115-220413", "uninstall-20261115-220413", "install-20261115-220413-2", "uninstall-20261115-220413-99" })
+                True(LogsFolder.IsFolderName(ok), "a folder name: " + ok);
+            foreach (string bad in new[]
+            {
+                null, "", "install-20261115-22041", "install-20261115-220413-100", "repair-20261115-220413", "Install-20261115-220413",
+                "install-20261115-220413\\..\\..", "install-20261115-220413/x", "..\\install-20261115-220413", "C:\\x\\install-20261115-220413",
+                "install-20261115-220413 ", "install-20261115-220413\n", "install-20261115-220413.", "install-20261115-220413:x", ".", "..",
+            })
+                True(!LogsFolder.IsFolderName(bad), "not a folder name: " + (bad ?? "(null)"));
+            True(LogsFolder.IsNoteId(LogsFolder.NewNoteId()), "a new note id");
+            foreach (string bad in new[] { null, "", "ABCDEF0123456789ABCDEF0123456789", "0123456789abcdef0123456789abcde", "..\\0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef0" })
+                True(!LogsFolder.IsNoteId(bad), "not a note id: " + (bad ?? "(null)"));
+            Eq(".copy-logs-0123456789abcdef0123456789abcdef.txt", LogsFolder.NoteName("0123456789abcdef0123456789abcdef"), "the note's name");
+            Throws<ArgumentException>(delegate { LogsFolder.NoteName("..\\x"); }, "a bad id");
+            Throws<ArgumentException>(delegate { LogsFolder.NoteBytes("..\\Windows"); }, "a bad folder name");
+            Eq("install-20261115-220413", LogsFolder.FromNote(System.Text.Encoding.ASCII.GetBytes("install-20261115-220413")), "a note");
+            True(LogsFolder.FromNote(System.Text.Encoding.ASCII.GetBytes("install-20261115-220413\r\n")) == null, "nothing else in a note");
+            True(LogsFolder.FromNote(System.Text.Encoding.ASCII.GetBytes("..\\..\\Windows")) == null, "a path");
+            True(LogsFolder.FromNote(new byte[LogsFolder.MaxNoteBytes + 1]) == null && LogsFolder.FromNote(new byte[0]) == null && LogsFolder.FromNote(null) == null, "too long, empty, none");
+        });
+        Run("logs folder: the tray opens the new folder only when it is a real folder directly inside the one it chose, else that one", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            try
+            {
+                string parent = System.IO.Path.Combine(root, "Domovoi logs");
+                string made = System.IO.Path.Combine(parent, "install-20261115-220413");
+                System.IO.Directory.CreateDirectory(made);
+                Eq(made, LogsFolder.ToOpen(parent, "install-20261115-220413"), "the new folder");
+                Eq(made, LogsFolder.ToOpen(parent + "\\", "install-20261115-220413"), "a trailing backslash on the parent");
+                Eq(parent, LogsFolder.ToOpen(parent, null), "no name: the parent");
+                Eq(parent, LogsFolder.ToOpen(parent, "install-20261115-220414"), "no such folder");
+                Eq(parent, LogsFolder.ToOpen(parent, "..\\Domovoi logs\\install-20261115-220413"), "not a plain name");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(parent, "install-20261115-220415"), "a file");
+                Eq(parent, LogsFolder.ToOpen(parent, "install-20261115-220415"), "a file, not a folder");
+                Junction(System.IO.Path.Combine(parent, "install-20261115-220416"), victim);
+                Eq(parent, LogsFolder.ToOpen(parent, "install-20261115-220416"), "a link");
+            }
+            finally
+            {
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
+        });
+        Run("logs folder: the helper's note names the folder it made, last, and the tray takes it (owner 2026-11-15: Explorer opened the parent)", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            try
+            {
+                var at = new DateTime(2099, 12, 31, 23, 59, 59);
+                var o = new Domovoi.Windows.Helper.Output(null);
+                string dest = System.IO.Path.Combine(root, "Domovoi logs");
+                string id = LogsFolder.NewNoteId();
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "install", NoSources(), NoCoreLog, null, at, id);
+                string note = System.IO.Path.Combine(dest, LogsFolder.NoteName(id));
+                Eq("install-20991231-235959", System.IO.File.ReadAllText(note), "the note");
+                string name = LogsFolder.TakeNote(dest, id);
+                Eq("install-20991231-235959", name, "taken");
+                True(!System.IO.File.Exists(note), "and deleted");
+                Eq(System.IO.Path.Combine(dest, "install-20991231-235959"), LogsFolder.ToOpen(dest, name), "the folder to open");
+                True(System.IO.File.Exists(System.IO.Path.Combine(LogsFolder.ToOpen(dest, name), "README.txt")), "the copy is in it");
+                True(LogsFolder.TakeNote(dest, id) == null, "a note is taken once");
+
+                // The next free name is the one the note gives.
+                id = LogsFolder.NewNoteId();
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "install", NoSources(), NoCoreLog, null, at, id);
+                Eq("install-20991231-235959-2", LogsFolder.TakeNote(dest, id), "the second folder");
+
+                // Something already at the note's name is never written over or through.
+                id = LogsFolder.NewNoteId();
+                System.IO.File.WriteAllText(System.IO.Path.Combine(dest, LogsFolder.NoteName(id)), "uninstall-20991231-235959");
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "install", NoSources(), NoCoreLog, null, at, id);
+                Eq("uninstall-20991231-235959", System.IO.File.ReadAllText(System.IO.Path.Combine(dest, LogsFolder.NoteName(id))), "left as it was");
+                id = LogsFolder.NewNoteId();
+                Junction(System.IO.Path.Combine(dest, LogsFolder.NoteName(id)), victim);
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "install", NoSources(), NoCoreLog, null, at, id);
+                Eq(0, System.IO.Directory.GetFileSystemEntries(victim).Length, "nothing written through a link at the note's name");
+                True(LogsFolder.TakeNote(dest, id) == null, "a link is no note");
+
+                // A note that isn't a folder name, or is too long, gives nothing and is cleared.
+                id = LogsFolder.NewNoteId();
+                System.IO.File.WriteAllText(System.IO.Path.Combine(dest, LogsFolder.NoteName(id)), "..\\..\\Windows\\System32");
+                True(LogsFolder.TakeNote(dest, id) == null && !System.IO.File.Exists(System.IO.Path.Combine(dest, LogsFolder.NoteName(id))), "a path");
+                id = LogsFolder.NewNoteId();
+                System.IO.File.WriteAllText(System.IO.Path.Combine(dest, LogsFolder.NoteName(id)), new string('a', 4096));
+                True(LogsFolder.TakeNote(dest, id) == null && !System.IO.File.Exists(System.IO.Path.Combine(dest, LogsFolder.NoteName(id))), "too long");
+                True(LogsFolder.TakeNote(dest, "..\\x") == null, "a bad id");
+
+                Throws<ArgumentException>(delegate { Domovoi.Windows.Helper.Logs.Copy(o, dest, "install", NoSources(), NoCoreLog, null, at, "..\\..\\x"); }, "--note checked");
+                Eq("copy-logs --kind install --dest \"C:\\Users\\alex\\Documents\\Domovoi logs\" --note 0123456789abcdef0123456789abcdef",
+                    Domovoi.Windows.Tray.Admin.CopyLogsArguments(@"C:\Users\alex\Documents\Domovoi logs\", "0123456789abcdef0123456789abcdef"), "the tray's arguments");
+                Throws<ArgumentException>(delegate { Domovoi.Windows.Tray.Admin.CopyLogsArguments(@"C:\x", "\" --dest C:\\Windows"); }, "a bad note id from the tray");
+            }
+            finally
+            {
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
         });
     }
 
