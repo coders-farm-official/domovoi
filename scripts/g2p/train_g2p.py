@@ -261,7 +261,10 @@ def main(dict_path, outdir, epochs=30):
     dummy = torch.tensor([encode("hello")])
     onnx_path = os.path.join(outdir, "g2p.onnx")
     torch.onnx.export(Export(model), (dummy,), onnx_path, input_names=["chars"], output_names=["logits"],
-                      dynamic_axes={"chars": {1: "T"}, "logits": {1: "T3"}}, opset_version=17)
+                      dynamic_axes={"chars": {1: "T"}, "logits": {1: "T3"}}, opset_version=17,
+                      # The TorchScript exporter, as before: torch 2.9+ makes the
+                      # dynamo exporter (which needs onnxscript) the default.
+                      dynamo=False)
     json.dump({"letters": LETTERS, "upsample": UPS, "phones": PHONES, "max_chars": MAXC},
               open(os.path.join(outdir, "g2p_vocab.json"), "w"), indent=1)
     print("exported", os.path.getsize(onnx_path), flush=True)

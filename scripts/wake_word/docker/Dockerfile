@@ -137,11 +137,11 @@ RUN pip install --no-cache-dir \
 #                                       keeps the .dataio / .processing paths the
 #                                       trainer imports)
 #   torch-audiomentations           -> data.py (GPU-side augmentation)
-#   datasets                        -> entrypoint RIR download (MIT IRs)
-# datasets is PINNED ==3.6.0: 4.x/5.x moved Audio decoding to `torchcodec`
-# (needs FFmpeg libs + a torch-matched build), so streaming the MIT RIR audio
-# raises "please install 'torchcodec'". 3.6.0 still decodes via soundfile AND
-# co-exists with the image's huggingface_hub 1.x — no torchcodec needed.
+# There is NO `datasets` here (it was ==3.6.0, which carries a path-traversal
+# advisory, GHSA-379c-qx7v-6h59, fixed only in 5.0.1+): 4.x/5.x decode audio
+# through `torchcodec` (FFmpeg libs + a torch-matched build) even to iterate
+# rows, so the entrypoint fetches the MIT RIR WAVs with huggingface_hub at the
+# pinned commit and reads them with soundfile instead.
 # scipy is PINNED <1.15: acoustics 0.2.6 (newest on PyPI) imports the removed
 # scipy.special.sph_harm at module load; scipy 1.14.x still ships it. 1.14 keeps
 # librosa/numba happy too. NO tensorflow / onnx_tf: train.py only needs them for
@@ -155,7 +155,6 @@ RUN pip install --no-cache-dir \
         "speechbrain==1.1.0" \
         "torch-audiomentations==0.12.0" \
         "acoustics==0.2.6" \
-        "datasets==3.6.0" \
         "scipy<1.15"
 
 # Brotli 1.2: the base image's conda Brotli is 1.1.0, but httpx2 (what

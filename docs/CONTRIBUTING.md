@@ -416,6 +416,32 @@ own tooling. They
 are the one exception to "no pull requests": review one like any change and
 merge it if CI is green.
 
+**OSV-Scanner** (`.github/workflows/osv.yml`) is what watches those lock
+files, which Dependabot can't read: it checks `requirements.lock`, the two
+Linux py314 locks, the satellite's `satellite/locks/pc-*.txt` and the three
+build-tool requirement files (installer art, g2p training, wake-word
+trainer) against the OSV database on every push to `main`, on pull requests
+that touch them, by hand, and **daily**, so a new advisory turns the job red
+the same day. It fails on any known vulnerability. The fix is a bump of the
+lock (a regenerated lock, a new hash-pinned requirement). The Android
+Gradle metadata and the wake trainer's `constraints.txt` are listed in the
+job summary but don't fail it (they include build-tool jars, and the
+trainer's pin set is not hash-locked yet). The scanner is a release binary
+pinned by version and SHA-256 in the workflow; bump both together, to a
+release at least 14 days old, with the checksum from the release's own
+`SHA256SUMS`.
+
+An advisory that does not apply to us, or has no fix we can take (a
+package held back on purpose), is accepted in `osv-scanner.toml`: one
+`[[IgnoredVulns]]` entry with the advisory `id`, an `ignoreUntil` date at
+most about two months out, and a `reason` that says what the advisory needs
+and why we don't meet it. When the date passes the job fails again, so every
+acceptance gets looked at again. Never accept something a bump would fix.
+To run it yourself, download the same release binary and run
+`osv-scanner scan source --config osv-scanner.toml --no-resolve -L
+requirements.txt:requirements.lock` (one `-L` per file, as the workflow
+does).
+
 New code needs tests in the same PR. The house pattern is tiered: pure
 functions get plain unit tests, handler fast-paths get regex + behavior
 tests, worker `tick()`s run against recording doubles

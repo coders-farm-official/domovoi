@@ -326,3 +326,7 @@ trained on CMUdict alone.
   Checked 2026-10-12: a full rerun of the script in the pinned container
   (14 threads, about 95 minutes) reproduced all four files above byte for
   byte, every epoch's loss and dev scores equal to the recorded run's.
+  Since 2026-11-15 `scripts/g2p/requirements-train.txt` pins newer wheels
+  (torch 2.13.0+cpu, onnxruntime 1.32.0, to clear security advisories in the
+  build tools), so a rerun now gives a model of the same quality but not
+  these bytes; the shipped file is unchanged.
