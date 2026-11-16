@@ -129,7 +129,9 @@ const SatRoomBattery = ({ s, online }) => {
  * satellite is the problem. The card says "can't connect" and when the
  * room was last heard from instead. */
 /* Which word the room wakes on (GET /api/satellites `wakes_on`), by name
- * only: its sensitivity is a separate setting (Settings tab). Display only.
+ * only: its sensitivity is a separate setting (Settings tab). Display only,
+ * in the room drawer's details above the voice (owner 2026-11-15: not on the
+ * room card, not in the drawer header).
  * `source` says where the name came from; the tooltip says it in words. */
 const SAT_WAKES_ON_WHY = {
   device: 'the wake word this room device reported loading',
@@ -138,18 +140,14 @@ const SAT_WAKES_ON_WHY = {
   pending: 'this room is waiting for this word’s model to reach the server; it wakes on its first word until then',
   unknown: 'this room’s software doesn’t say which word it wakes on; upgrading it does',
 };
-const SatWakesOn = ({ s, style }) => {
+const SatWakeWord = ({ s }) => {
   const w = s && s.wakes_on;
   if (!w || !w.text) return null;
   const known = w.source !== 'unknown';
   return (
-    <div className="sat-wakes-on" title={SAT_WAKES_ON_WHY[w.source] || undefined}
-         style={{ fontSize: 12, color: 'var(--fg-muted)', minWidth: 0, overflow: 'hidden',
-                  textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...style }}>
-      wakes on{' '}
-      <span style={{ color: known ? 'var(--fg)' : 'var(--fg-faint)', fontWeight: known ? 500 : 400 }}>
-        {known ? `“${w.text}”` : w.text}
-      </span>
+    <div className="mono" title={SAT_WAKES_ON_WHY[w.source] || undefined}
+         style={{ color: known ? 'var(--fg)' : 'var(--fg-faint)' }}>
+      {known ? `“${w.text}”` : w.text}
     </div>
   );
 };
@@ -229,7 +227,6 @@ const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
         ) : (
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>no music</div>
         )}
-        <SatWakesOn s={s} style={{ marginTop: 8 }}/>
         {s.capture_commands && (
           <div style={{ marginTop: 8 }}><CaptureChip/></div>
         )}
@@ -1470,6 +1467,12 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             </div>
           </>
         )}
+        {s.wakes_on && s.wakes_on.text && (
+          <>
+            <div className="label">wake word</div>
+            <SatWakeWord s={s}/>
+          </>
+        )}
         <div className="label">voice</div>
         <RoomVoicePicker s={s} fire={fire} refresh={refresh}/>
         <div className="label">version</div>
@@ -2307,7 +2310,6 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           )}
           <div style={{ marginLeft: 'auto' }}><IconButton name="x" onClick={onClose}/></div>
         </div>
-        <SatWakesOn s={s} style={{ padding: '8px 16px', borderBottom: '1px solid var(--border-soft)' }}/>
         <Tabs tabs={tabs} value={tab} onChange={setTab} padX={16}/>
         {/* Its own scroller: a table header sticks to this edge, not to .main's padding. */}
         <div style={{ flex: 1, overflow: 'auto', '--tbl-stick-top': '0px' }}>

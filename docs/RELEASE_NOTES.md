@@ -103,9 +103,9 @@ has GitHub build provenance: `gh attestation verify <file> -R coders-farm-offici
 
 ## 1.3.0 (unreleased) — Each room says which word it wakes on
 
-No migration. Settings → Rooms shows **wakes on “Domovoi”** (or whichever
-word) on each room's card and at the top of its drawer: the name only, the
-sensitivity stays in the room's Settings tab. The word is the model the room
+No migration. In Settings → Rooms, a room's drawer lists its **wake word**
+(“Domovoi”, or whichever word) in its details, above the voice: the name
+only, the sensitivity stays in the room's Settings tab. The word is the model the room
 device reports loading; a room on older software shows the word the server
 gave it, a room waiting for its word's model shows it as pending, and a room
 older than the household default that reports nothing reads **unknown until
