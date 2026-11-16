@@ -29,7 +29,8 @@ with it) and the Android SDK (local.properties, ANDROID_HOME, or
 %LOCALAPPDATA%\Android\Sdk).
 
 .PARAMETER SkipBuild
-Sign what the last build left (after a failed signing).
+Sign what the last build left (after a failed signing: a run that succeeds
+removes the unsigned copy, so there is nothing to re-sign after one).
 
 .PARAMETER Keystore
 The keystore file (asked for when not given).
@@ -267,6 +268,13 @@ $mapping = 'android\app\build\outputs\mapping\release\mapping.txt'
 $keptMap = Join-Path $outDir "domovoi-$versionName-$versionCode-mapping.txt"
 if (Test-Path -LiteralPath $mapping) { Copy-Item -LiteralPath $mapping -Destination $keptMap } else { $keptMap = '(none: the build left no mapping.txt)' }
 
+# Play refuses the unsigned Gradle output ("All uploaded bundles must be
+# signed"), and it sits one folder over under a plainer name: the 1.2.0 and
+# 1.3.0 uploads both picked it up first. Once the signed copy has passed
+# every check, remove it, so release-signed\ holds the only .aab. A run
+# that fails stops before this line, so -SkipBuild can still re-sign.
+Remove-Item -LiteralPath $unsigned -Force
+
 Say 'done.'
 Write-Host "  bundle:      $signedAab ($([math]::Round($size / 1MB, 1)) MB)"
 Write-Host "  SHA-256:     $sha"
@@ -274,5 +282,5 @@ Write-Host "  certificate: $cert (SHA-256 of the signing certificate)"
 Write-Host "  version:     $versionName ($versionCode), commit $commit"
 Write-Host "  R8 mapping:  in the bundle (Play reads it), and $keptMap"
 Write-Host ''
-Write-Host '  Next: Play Console -> Test and release -> Testing -> Internal testing -> Create new release, upload the .aab'
-Write-Host '  (android\play\PUBLISH-CHECKLIST.md; the first upload needs App signing set up first).'
+Write-Host "  Next: upload $signedAab (the unsigned app-release.aab is removed)"
+Write-Host '  in Play Console -> Test and release -> Production -> Create new release (android\play\PUBLISH-CHECKLIST.md).'
