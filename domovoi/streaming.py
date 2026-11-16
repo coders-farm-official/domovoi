@@ -2946,10 +2946,15 @@ class StreamSession:
           drop its request here, if the token is the one it parked with.
 
         Every failure refuses. Strict or lenient pairing makes no difference
-        here: this path never pairs on trust."""
+        here: this path never pairs on trust.
+
+        CORE-41: the per-source limiter is consulted BEFORE anything costs
+        arithmetic — checking the device's element is a 2048-bit modular
+        exponentiation — and that arithmetic runs off the event loop. A
+        withdraw counts against the same per-source budget as a new name."""
         withdraw = ctrl.get("approval_withdraw") is True
         pake = ctrl.get("approval_pake")
-        entered: str | None = None
+        source = self._hello_source()
         try:
             async with session_scope() as s:
                 row = await SatellitePairingRepository(s).get_pairing(self.room_id)
@@ -2961,48 +2966,56 @@ class StreamSession:
                         })
                         return False
                     return None
-                approvals = SatelliteApprovalRepository(s)
-                if withdraw:
-                    gone = await approvals.withdraw(self.room_id, token_hash)
-                    log.info(
-                        "pairing: room=%s request %s by its device (another "
-                        "server approved it)", self.room_id,
-                        "withdrawn" if gone else "already gone",
-                    )
-                    await self._safe_send_text({
-                        "type": "error", "reason": "approval_withdrawn",
-                        "withdrawn": gone,
-                    })
-                    return False
-                from satellite import pairing_proof
-
-                if pairing_proof.decode(pake) is None:
-                    log.warning(
-                        "pairing: room=%s approval request refused — its "
-                        "approval_pake is not a valid exchange message",
-                        self.room_id,
-                    )
-                    await self._safe_send_text({
-                        "type": "error", "reason": "approval_pake_invalid",
-                        "message": "the approval exchange message is not valid",
-                    })
-                    return False
-                existing = await approvals.get(self.room_id)
-                refresh = existing is not None and secrets.compare_digest(
-                    str(existing.get("token_hash") or ""), token_hash
+                existing = None if withdraw else await SatelliteApprovalRepository(s).get(
+                    self.room_id
                 )
-                limiter = APPROVAL_REFRESH_LIMITER if refresh else APPROVAL_HELLO_LIMITER
-                if not limiter.allow(self._hello_source()):
-                    join_problems.throttled(self._hello_source())
-                    log.warning(
-                        "pairing: room=%s approval request throttled for this source",
-                        self.room_id,
-                    )
-                    await self._safe_send_text({
-                        "type": "error", "reason": "approval_throttled",
-                        "message": "too many approval requests — try again shortly",
-                    })
-                    return False
+        except Exception as e:  # noqa: BLE001 — fail CLOSED, whatever the posture
+            return await self._proof_unavailable(e)
+        refresh = existing is not None and secrets.compare_digest(
+            str(existing.get("token_hash") or ""), token_hash
+        )
+        limiter = APPROVAL_REFRESH_LIMITER if refresh else APPROVAL_HELLO_LIMITER
+        if not limiter.allow(source):
+            join_problems.throttled(source)
+            log.warning(
+                "pairing: room=%s approval %s throttled for this source", self.room_id,
+                "withdrawal" if withdraw else "request",
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_throttled",
+                "message": "too many approval requests — try again shortly",
+            })
+            return False
+        if withdraw:
+            try:
+                async with session_scope() as s:
+                    gone = await SatelliteApprovalRepository(s).withdraw(self.room_id, token_hash)
+            except Exception as e:  # noqa: BLE001
+                return await self._proof_unavailable(e)
+            log.info(
+                "pairing: room=%s request %s by its device (another server approved it)",
+                self.room_id, "withdrawn" if gone else "already gone",
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_withdrawn", "withdrawn": gone,
+            })
+            return False
+        from satellite import pairing_proof
+
+        if await asyncio.to_thread(pairing_proof.decode, pake) is None:
+            log.warning(
+                "pairing: room=%s approval request refused — its approval_pake "
+                "is not a valid exchange message", self.room_id,
+            )
+            await self._safe_send_text({
+                "type": "error", "reason": "approval_pake_invalid",
+                "message": "the approval exchange message is not valid",
+            })
+            return False
+        entered: tuple[str, Any] | None = None
+        try:
+            async with session_scope() as s:
+                approvals = SatelliteApprovalRepository(s)
                 outcome, _code = await approvals.request(
                     self.room_id,
                     token_hash=token_hash,
@@ -3029,14 +3042,9 @@ class StreamSession:
                         ),
                     })
                     return False
-                entered = await approvals.take_entered_code(self.room_id, token_hash)
+                entered = await approvals.take_entered(self.room_id, token_hash)
         except Exception as e:  # noqa: BLE001 — fail CLOSED, whatever the posture
-            log.warning("pairing: room=%s proof request failed: %s", self.room_id, e)
-            await self._safe_send_text({
-                "type": "error", "reason": "approval_unavailable",
-                "message": "the server could not record the approval request",
-            })
-            return False
+            return await self._proof_unavailable(e)
         if entered is None:
             log.info(
                 "pairing: room=%s awaiting approval (the device proves the code)",
@@ -3049,7 +3057,15 @@ class StreamSession:
                 "proof": True,
             })
             return False
-        return await self._prove_approval(token_hash, entered, pake)
+        return await self._prove_approval(token_hash, entered[0], pake, entered_at=entered[1])
+
+    async def _proof_unavailable(self, e: BaseException) -> bool:
+        log.warning("pairing: room=%s proof request failed: %s", self.room_id, e)
+        await self._safe_send_text({
+            "type": "error", "reason": "approval_unavailable",
+            "message": "the server could not record the approval request",
+        })
+        return False
 
     async def _receive_text_frame(self, timeout: float) -> dict[str, Any] | None:
         """The next text frame as a dict, or None on a timeout, a
@@ -3066,25 +3082,48 @@ class StreamSession:
             return None
         return frame if isinstance(frame, dict) else None
 
-    async def _prove_approval(self, token_hash: str, code: str, pake: Any) -> bool:
+    async def _put_code_back(self, token_hash: str, code: str, entered_at: Any) -> None:
+        """A run in which the device made no guess — it declined, timed
+        out, went away: the typed code waits for its next visit, as typed
+        (the ten minutes still count from the typing)."""
+        try:
+            async with session_scope() as s:
+                await SatelliteApprovalRepository(s).restore_entered_code(
+                    self.room_id, token_hash, code, entered_at,
+                )
+        except Exception as e:  # noqa: BLE001
+            log.debug("pairing: could not keep the typed code: %s", e)
+
+    async def _prove_approval(self, token_hash: str, code: str, pake: Any,
+                              *, entered_at: Any = None) -> bool:
         """Run the exchange for a code an operator typed (taken off the row
-        already, so it serves this one run whatever happens).
+        for this run).
 
         Order matters: the core sends its ``Y``, the device answers with its
         confirmation, the core checks that in constant time — and only then
         binds the room and sends ITS half (``approval_proof``). A device
         that does not hold the typed code gets nothing it could test codes
-        against; a run it fails is counted on the request for the
-        dashboard."""
+        against.
+
+        Only a confirmation that does not check out is a GUESS: it uses the
+        typed code up and is counted on the request for the dashboard. A
+        run that ends any other way — the device declines
+        (``approval_decline``: it is busy with another house's exchange,
+        out of budget, or holding this server back), says nothing for
+        :data:`APPROVAL_CONFIRM_TIMEOUT_SEC`, or goes away — tested nothing,
+        so the code is put back for the next visit and nothing is counted."""
         from domovoi import server_identity as core_identity
         from satellite import pairing_proof
 
         try:
             fingerprint = core_identity.load_or_create().fingerprint
-            exchange = pairing_proof.ServerExchange(
-                code, pake, room_id=self.room_id, fingerprint=fingerprint,
+            # Four 2048-bit exponentiations: off the event loop.
+            exchange = await asyncio.to_thread(
+                pairing_proof.ServerExchange, code, pake,
+                room_id=self.room_id, fingerprint=fingerprint,
             )
         except (OSError, ValueError) as e:
+            await self._put_code_back(token_hash, code, entered_at)
             log.warning("pairing: room=%s cannot run the approval exchange: %s",
                         self.room_id, e)
             await self._safe_send_text({
@@ -3094,8 +3133,19 @@ class StreamSession:
             return False
         await self._safe_send_text({"type": "approval_challenge", "pake": exchange.message})
         frame = await self._receive_text_frame(APPROVAL_CONFIRM_TIMEOUT_SEC)
-        tag = frame.get("tag") if frame and frame.get("type") == "approval_confirm" else None
-        if not exchange.device_proved(tag):
+        kind = frame.get("type") if frame else None
+        if kind != "approval_confirm":
+            await self._put_code_back(token_hash, code, entered_at)
+            log.info(
+                "pairing: room=%s the device %s — the typed code waits for its next visit",
+                self.room_id,
+                "declined the exchange for now" if kind == "approval_decline"
+                else "did not answer the exchange",
+            )
+            if kind == "approval_decline":
+                await self._safe_send_text({"type": "error", "reason": "approval_declined"})
+            return False
+        if not exchange.device_proved(frame.get("tag")):
             try:
                 async with session_scope() as s:
                     await SatelliteApprovalRepository(s).note_proof_failure(
@@ -3105,8 +3155,7 @@ class StreamSession:
                 log.debug("pairing: could not count the failed exchange: %s", e)
             log.warning(
                 "pairing: room=%s the device did not confirm the code typed on "
-                "the dashboard (%s) — the request stays parked",
-                self.room_id, "no answer" if frame is None else "a different code",
+                "the dashboard — the request stays parked", self.room_id,
             )
             await self._safe_send_text({
                 "type": "error", "reason": "approval_code_mismatch",

@@ -417,3 +417,126 @@ async def test_a_legacy_request_still_compares_codes_in_the_core() -> None:
     assert await _type_code(WRONG) == "mismatch"
     assert await _type_code(CODE) == "approved"
     assert await _pairing() is not None
+
+
+# ─── a run with no guess in it spends no typed code (SAT-14 / SAT-15) ──────
+
+
+async def _challenge_then(after: str | None, tmp_path) -> dict:
+    """Park, have a code typed, open the run — then the device sends
+    ``after`` (a frame type) or goes away (None). The core's last frame."""
+    await _visit(tmp=tmp_path)
+    await _type_code(CODE)
+    token = house_pairing.house_token(MASTER, _fingerprint())
+    device = pairing_proof.DeviceExchange(CODE)
+    sessions: list = []
+    async with _bridge(sessions)(f"ws://192.168.1.20:6370/v1/stream/{ROOM}") as ws:
+        await ws.send(json.dumps({"type": "hello", "room_id": ROOM, "pairing_token": token,
+                                  "approval_pake": device.message}))
+        frame = json.loads(await ws.recv())
+        assert frame["type"] == "approval_challenge"
+        if after is not None:
+            await ws.send(json.dumps({"type": after, "reason": "budget"}))
+    return sessions[0].ws.sent[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_declined_exchange_keeps_the_typed_code_and_counts_nothing(tmp_path) -> None:
+    """A device that declines a challenge (busy with another house, out of
+    budget, holding this server back) made no guess. The core used to
+    treat it as a failed run: the typed code gone, a failure counted, the
+    card saying the device rejected the code."""
+    last = await _challenge_then("approval_decline", tmp_path)
+    assert last.get("reason") == "approval_declined"
+    row = await _row()
+    assert row["entered_code"] == CODE and row["proof_failures"] == 0
+    result, _token, _s = await _visit(tmp=tmp_path)     # and the next visit uses it
+    assert result.kind == "approved"
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_goes_away_mid_exchange_spent_no_guess(tmp_path) -> None:
+    await _challenge_then(None, tmp_path)
+    row = await _row()
+    assert row["entered_code"] == CODE and row["proof_failures"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_device_out_of_budget_declines_and_the_code_waits(tmp_path) -> None:
+    await _visit(tmp=tmp_path)
+    await _type_code(CODE)
+    spent = house_pairing.ProofBudget(tmp_path / "spent.json", max_attempts=1)
+    assert spent.spend()
+    result, _token, _s = await _visit(budget=spent, tmp=tmp_path)
+    assert result.kind == "declined"
+    row = await _row()
+    assert row["entered_code"] == CODE and row["proof_failures"] == 0
+    assert await _pairing() is None
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_confirmation_still_uses_the_code_up(tmp_path) -> None:
+    """The one run that IS a guess: a confirmation that does not check out."""
+    await _visit(tmp=tmp_path)
+    await _type_code(WRONG)
+    result, _t, _s = await _visit(tmp=tmp_path)
+    assert result.kind == "mismatch"
+    row = await _row()
+    assert row["entered_code"] is None and row["proof_failures"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_stale_typed_code_is_forgotten_not_kept() -> None:
+    await _request(proof=True)
+    await _type_code(CODE)
+    async with session_scope() as s:
+        await s.execute(text("UPDATE satellite_approvals SET entered_at = now() - interval '11 minutes'"))
+    async with session_scope() as s:
+        await SatelliteApprovalRepository(s).list_pending()
+    row = await _row()
+    assert row["entered_code"] is None and row["entered_at"] is None
+
+
+# ─── CORE-41: the limiter before the arithmetic, and off the loop ─────────
+
+
+@pytest.mark.asyncio
+async def test_bad_exchange_messages_are_throttled_before_any_arithmetic(monkeypatch) -> None:
+    """CORE-41 PoC: the element check (a 2048-bit modular exponentiation)
+    ran on the event loop for every hello BEFORE the per-source limiter —
+    and a message that failed it never reached the limiter at all, so one
+    address could make the core do that work as fast as it could send."""
+    calls: list[int] = []
+    real = pairing_proof.decode
+    monkeypatch.setattr(pairing_proof, "decode", lambda t: calls.append(1) or real(t))
+    junk = pairing_proof.encode(pairing_proof._P - 1)          # well-formed, wrong subgroup
+    for _ in range(streaming.APPROVAL_HELLO_MAX_PER_WINDOW + 10):
+        sess = _sess()
+        await sess._validate_pairing({"pairing_token": MASTER, "approval_pake": junk})
+    assert len(calls) <= streaming.APPROVAL_HELLO_MAX_PER_WINDOW
+    assert sess.ws.sent[-1]["reason"] == "approval_throttled"
+
+
+@pytest.mark.asyncio
+async def test_the_exchange_arithmetic_runs_off_the_event_loop(tmp_path, monkeypatch) -> None:
+    ran: list[str] = []
+    real = asyncio.to_thread
+
+    async def spy(fn, *a, **k):
+        ran.append(getattr(fn, "__name__", repr(fn)))
+        return await real(fn, *a, **k)
+
+    monkeypatch.setattr(streaming.asyncio, "to_thread", spy)
+    await _visit(tmp=tmp_path)
+    await _type_code(CODE)
+    result, _t, _s = await _visit(tmp=tmp_path)
+    assert result.kind == "approved"
+    assert "decode" in ran and "ServerExchange" in ran
+
+
+@pytest.mark.asyncio
+async def test_withdrawals_are_throttled_per_source() -> None:
+    for _ in range(streaming.APPROVAL_HELLO_MAX_PER_WINDOW + 5):
+        sess = _sess()
+        await sess._validate_pairing({"pairing_token": "d" * 64, "approval_withdraw": True})
+    assert sess.ws.sent[-1]["reason"] == "approval_throttled"

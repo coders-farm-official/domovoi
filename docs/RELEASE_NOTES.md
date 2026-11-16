@@ -27,6 +27,25 @@ a way that would otherwise get reported as a bug.
   portal (then the device asks only that server, the old way). Rooms set
   up before, spare computers and phones in room mode work exactly as
   before.
+- **Hardened after review (security audit round 5).** A server that keeps
+  a device's connection busy can no longer freeze it: each visit is bounded
+  as a whole, and the device adopts the server that proved the code at
+  once. A device that may not check another code right now (it allows 5
+  per 30 minutes and 20 a day of running time, and holds back for a while
+  a server whose run proved nothing) keeps visiting and declines, and the
+  server keeps the code you typed — a run in which the device made no
+  guess no longer uses your code up or marks it as rejected. The "can this
+  server prove an approval" answer is now signed, so it cannot be stripped
+  on the way. A device set up with the address left blank no longer records
+  the first server it found for its clock; it records the one that
+  approved it, at its next restart. And a server signs its identity for
+  its own address only at the port it actually listens on.
+- **What to know (ports).** If satellites reach the core through a
+  port-forward that CHANGES the port (outside 16370 to the core's 6370, for
+  example), list that `host:port` in `TRUSTED_HOSTS` (or, for a host
+  integration, vouch for it as `ip:port`); a forward that keeps the port
+  needs nothing. Every server a blank-address device asks sees its room
+  name on the approvals list for up to fifteen minutes.
 - **Migration.** V062 adds five columns to `satellite_approvals`. Nothing
   to do: the update runs it.
 

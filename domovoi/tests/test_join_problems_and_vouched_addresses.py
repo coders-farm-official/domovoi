@@ -57,7 +57,8 @@ def test_a_vouched_address_is_ours_and_an_arbitrary_one_is_not():
     ours = server_identity.dialed_address_is_ours
     vouched = {"192.168.1.30"}
     assert ours("192.168.1.30:6370", can_bind=_nobody_binds, vouched=vouched) is True
-    assert ours("192.168.1.30:6371", can_bind=_nobody_binds, vouched=vouched) is True
+    # A bare vouched IP is the host's address at the CORE's port (SAT-13).
+    assert ours("192.168.1.30:6371", can_bind=_nobody_binds, vouched=vouched) is False
     assert ours("192.168.1.31:6370", can_bind=_nobody_binds, vouched=vouched) is False
     assert ours("192.168.1.30:6370", can_bind=_nobody_binds, vouched=set()) is False
 
@@ -174,3 +175,101 @@ async def test_approving_a_device_that_checks_the_code_says_so(monkeypatch):
     main.APPROVAL_CODE_LIMITER.reset()
     out = await main.admin_satellite_approve("kitchen", main._ApproveSatelliteBody(code="481502"))
     assert out == {"approved": False, "waiting_for_device": True, "room_id": "kitchen"}
+
+
+# ─── SAT-13: the port is part of the address ──────────────────────────────
+
+
+def _the_box(ip):
+    return str(ip) == "192.168.1.20"
+
+
+def test_a_relay_on_the_servers_own_machine_at_another_port_is_refused():
+    """SAT-13 PoC: the check ignored the port, so anything else listening on
+    the server's own machine — at 7000, forwarding to the core — got the
+    core's signature for ``192.168.1.20:7000`` and passed a pinned device's
+    key check as if it were the server."""
+    ours = server_identity.dialed_address_is_ours
+    assert ours("192.168.1.20:6370", can_bind=_the_box, vouched=set()) is True
+    assert ours("192.168.1.20:7000", can_bind=_the_box, vouched=set()) is False
+    assert ours("127.0.0.1:7000", can_bind=_the_box, vouched=set()) is False
+    assert ours("[::1]:7000", can_bind=_the_box, vouched=set()) is False
+    assert ours("localhost:7000", can_bind=_the_box, vouched=set()) is False
+    assert ours("192.168.1.20", can_bind=_the_box, vouched=set()) is False   # no port at all
+
+
+def test_the_port_a_question_arrived_at_is_the_cores():
+    ours = server_identity.dialed_address_is_ours
+    assert ours("192.168.1.20:6394", can_bind=_the_box, vouched=set(), listen_ports={6394}) is True
+    assert ours("192.168.1.20:6370", can_bind=_the_box, vouched=set(), listen_ports={6394}) is False
+
+
+def test_a_host_vouches_for_a_changed_port_explicitly(monkeypatch):
+    ours = server_identity.dialed_address_is_ours
+    vouched = {"192.168.1.30:16370"}
+    assert ours("192.168.1.30:16370", can_bind=_nobody_binds, vouched=vouched) is True
+    assert ours("192.168.1.30:6370", can_bind=_nobody_binds, vouched=vouched) is False
+    assert ours("192.168.1.30:16371", can_bind=_nobody_binds, vouched=vouched) is False
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES",
+                        [lambda: ["192.168.1.30:16370", "[fd00::30]:6371", "fd00::31",
+                                  "evil.local:6370", "192.168.1.30:99999"]])
+    assert server_identity.host_vouched_addresses() == {
+        "192.168.1.30:16370", "[fd00::30]:6371", "fd00::31"}
+
+
+class _Req:
+    def __init__(self, port):
+        self.scope = {"server": ("172.17.0.2", port)}
+
+
+@pytest.mark.asyncio
+async def test_health_signs_only_at_the_port_the_question_arrived_at(healthy_core, monkeypatch):
+    monkeypatch.setattr(server_identity, "VOUCHED_ADDRESS_SOURCES", [])
+    challenge = sat_identity.new_challenge()
+    doc = await main.health(challenge=challenge, addr="127.0.0.1:7000", request=_Req(6370))
+    assert doc["identity"].get("addr_refused") == "127.0.0.1:7000"
+    doc = await main.health(challenge=challenge, addr="127.0.0.1:6394", request=_Req(6394))
+    assert doc["identity"]["addr"] == "127.0.0.1:6394" and "signature" in doc["identity"]
+
+
+# ─── SAT-16: the advert is signed when the device asks ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_health_signs_the_pairing_proof_advert(healthy_core, identity_in_tmp):
+    """SAT-16 PoC: ``pairing_proof`` sat outside the signed block, so a host
+    in the middle could strip it and pass this server off as an older one.
+    A pairing-proof challenge now gets it signed, as the last line."""
+    import base64
+
+    challenge = "pairing-proof." + "ab" * 16
+    doc = await main.health(challenge=challenge, addr="127.0.0.1:6370")
+    public = base64.b64decode(doc["identity"]["public_key"])
+    signature = base64.b64decode(doc["identity"]["signature"])
+    signed = (b"domovoi-health-v1\n" + challenge.encode() + b"\n127.0.0.1:6370"
+              + b"\npairing_proof=" + str(pairing_proof.VERSION).encode())
+    assert sat_identity.verify(public, signed, signature)
+    assert doc["pairing_proof"] == pairing_proof.VERSION
+    assert sat_identity.verify_health_proof(
+        doc, challenge=challenge, expected_fingerprint=identity_in_tmp.fingerprint,
+        addr="127.0.0.1:6370",
+    ) == (identity_in_tmp.fingerprint, pairing_proof.VERSION)
+    stripped = dict(doc)
+    stripped.pop("pairing_proof")
+    with pytest.raises(sat_identity.IdentityError):
+        sat_identity.verify_health_proof(
+            stripped, challenge=challenge, expected_fingerprint=identity_in_tmp.fingerprint,
+            addr="127.0.0.1:6370",
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_challenge_is_signed_as_it_always_was(healthy_core, identity_in_tmp):
+    """Older devices (and the root clock helper) never ask: their message
+    is byte for byte what it was."""
+    challenge = sat_identity.new_challenge()
+    doc = await main.health(challenge=challenge, addr="127.0.0.1:6370")
+    assert sat_identity.verify_health_document(
+        doc, challenge=challenge, expected_fingerprint=identity_in_tmp.fingerprint,
+        addr="127.0.0.1:6370",
+    ) == identity_in_tmp.fingerprint

@@ -1196,3 +1196,97 @@ def test_setup_passes_the_naming_step_and_it_is_a_no_op_off_a_satellite(monkeypa
     monkeypatch.setattr(pm.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(pm.sys, "platform", "win32")
     pm.name_before_join("den")
+
+
+# ─── SAT-17: a device that asks every server records none at setup ─────────
+
+
+def _provision(tmp_path, monkeypatch, url, pinned):
+    from satellite import server_identity
+
+    done = []
+    monkeypatch.setattr(server_identity, "pinned_fingerprint", lambda configured=None: pinned)
+    monkeypatch.setattr(pm, "CONFIG_DIR", tmp_path / ".domovoi")
+    monkeypatch.setattr(pm, "CONFIG_PATH", tmp_path / ".domovoi" / "config.toml")
+    monkeypatch.setattr(pm, "PAIRING_TOKEN_PATH", tmp_path / ".domovoi" / "pairing_token")
+    monkeypatch.setattr(pm, "give_to_satellite_user", lambda p: True)
+    monkeypatch.setattr(pm, "_write_not_approved", lambda: None)
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (True, None))
+    # The first server that answered the setup's search: anybody's.
+    monkeypatch.setattr(pm, "resolve_auto_url", lambda u: "ws://192.168.1.66:6370")
+    monkeypatch.setattr(pm, "write_root_server_pin", lambda u: done.append(("pin", u)) or True)
+    monkeypatch.setattr(pm, "sync_time_with_server",
+                        lambda u, **k: done.append(("clock", u)))
+
+    class T:
+        def clear_provision(self):
+            pass
+
+    payload = {"room_id": "den", "domovoi_url": url, "device_profile": "pi_xvf3800",
+               "pairing_token": "t" * 64, "wifi": {"ssid": "Home", "psk": "hunter2hunter2"}}
+    ok, _ = pm.apply_provision(payload, transport=T(), wifi_attempts=1, wifi_join_timeout=1)
+    assert ok
+    return done
+
+
+@pytest.mark.parametrize("pinned", [(None, "none"), ("SHA256:met-once", "recorded")])
+def test_every_house_setup_records_no_server_for_root_and_takes_no_clock(
+        tmp_path, monkeypatch, pinned):
+    """SAT-17 PoC: setup used to write the FIRST server that answered into
+    root's /etc/domovoi/server.url and copy its clock — for a device that
+    then asks every server and may join another. The clock helper then
+    refused the real server's time for good."""
+    assert _provision(tmp_path, monkeypatch, "auto", pinned) == []
+
+
+def test_a_card_with_a_key_still_records_its_server_at_setup(tmp_path, monkeypatch):
+    done = _provision(tmp_path, monkeypatch, "auto", ("SHA256:ours", "image"))
+    assert done == [("pin", "ws://192.168.1.66:6370"), ("clock", "ws://192.168.1.66:6370")]
+
+
+@pytest.fixture
+def no_root_pins(tmp_path):
+    etc = tmp_path / "etc"
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[satellite]\ndomovoi_url = "ws://192.168.1.50:6370"\n'
+                   'server_fingerprint = "SHA256:proved"\n', encoding="utf-8")
+    return {"pin_path": etc / "server.url", "identity_path": etc / "server-identity.json",
+            "config_path": cfg}
+
+
+def test_root_records_the_server_that_proved_the_code(no_root_pins):
+    """After a server proved the code, config.toml holds its address and
+    key; root writes BOTH of its records from them — once the address has
+    signed for that key to root itself."""
+    import json as _json
+
+    asked = []
+
+    def probe(host, *, port, timeout, expected_fingerprint):
+        asked.append((host, port, expected_fingerprint))
+        return True
+
+    report = ns.Report()
+    ns.refresh_server_pin(report, probe=probe, sleep=lambda s: None, **no_root_pins)
+    assert asked == [("192.168.1.50", 6370, "SHA256:proved")]
+    assert no_root_pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.1.50:6370"
+    doc = _json.loads(no_root_pins["identity_path"].read_text(encoding="utf-8"))
+    assert doc["fingerprint"] == "SHA256:proved"
+    assert report.changed and report.errors == []
+
+
+def test_root_records_nothing_the_address_does_not_prove(no_root_pins):
+    report = ns.Report()
+    ns.refresh_server_pin(report, probe=lambda *a, **k: False, attempts=2,
+                          sleep=lambda s: None, **no_root_pins)
+    assert not no_root_pins["pin_path"].exists()
+    assert not no_root_pins["identity_path"].exists()
+    assert report.errors == [] and report.skipped
+
+
+def test_root_records_nothing_without_a_key_in_config(no_root_pins):
+    no_root_pins["config_path"].write_text('[satellite]\ndomovoi_url = "ws://192.168.1.50:6370"\n',
+                                           encoding="utf-8")
+    report = ns.Report()
+    ns.refresh_server_pin(report, probe=lambda *a, **k: pytest.fail("asked"), **no_root_pins)
+    assert not no_root_pins["pin_path"].exists()

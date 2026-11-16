@@ -2722,20 +2722,21 @@ class SatelliteApprovalRepository:
                 },
             )
 
-    async def take_entered_code(
+    async def take_entered(
         self, room_id: str, token_hash: str,
         ttl_sec: float = ENTERED_CODE_TTL_SEC,
-    ) -> str | None:
-        """The code an operator typed for THIS device's proof request, taken
-        off the row so it serves exactly one exchange — a rogue device
-        holding the request gets one guess per code typed, never a second
-        run with the same one. None when nothing was typed, when it is older
-        than ``ttl_sec``, or when the row is some other device's."""
+    ) -> tuple[str, Any] | None:
+        """The code an operator typed for THIS device's proof request and
+        when, taken off the row for one exchange — a rogue device holding
+        the request gets one guess per code typed, never a second run with
+        the same one (a run that made no guess puts it back,
+        :meth:`restore_entered_code`). None when nothing was typed, when it
+        is older than ``ttl_sec``, or when the row is some other device's."""
         row = (
             await self.s.execute(
                 text(
-                    "SELECT entered_code AS code, (entered_at > now() - make_interval("
-                    "secs => CAST(:ttl AS double precision))) AS fresh "
+                    "SELECT entered_code AS code, entered_at, (entered_at > now() - "
+                    "make_interval(secs => CAST(:ttl AS double precision))) AS fresh "
                     "FROM satellite_approvals WHERE room_id = :r AND token_hash = :h "
                     "AND proof AND entered_code IS NOT NULL FOR UPDATE"
                 ),
@@ -2751,7 +2752,35 @@ class SatelliteApprovalRepository:
             ),
             {"r": room_id},
         )
-        return row.code if row.fresh else None
+        return (row.code, row.entered_at) if row.fresh else None
+
+    async def take_entered_code(
+        self, room_id: str, token_hash: str,
+        ttl_sec: float = ENTERED_CODE_TTL_SEC,
+    ) -> str | None:
+        """:meth:`take_entered`, the code alone."""
+        taken = await self.take_entered(room_id, token_hash, ttl_sec)
+        return taken[0] if taken else None
+
+    async def restore_entered_code(
+        self, room_id: str, token_hash: str, code: str, entered_at: Any,
+    ) -> bool:
+        """Put a typed code back after a run in which the device made no
+        guess (it declined, timed out or went away), with its original
+        typing time so it still goes stale on time. Only onto the same
+        device's request, and never over a code typed since."""
+        row = (
+            await self.s.execute(
+                text(
+                    "UPDATE satellite_approvals SET entered_code = :c, "
+                    "entered_at = COALESCE(CAST(:t AS timestamptz), now()) "
+                    "WHERE room_id = :r AND token_hash = :h AND proof "
+                    "AND entered_code IS NULL RETURNING 1"
+                ),
+                {"r": room_id, "h": token_hash, "c": code, "t": entered_at},
+            )
+        ).first()
+        return row is not None
 
     async def note_proof_failure(self, room_id: str, token_hash: str) -> None:
         """The device did not confirm the code typed for it: wrong digits,
@@ -2801,8 +2830,20 @@ class SatelliteApprovalRepository:
         ).first()
         return row is not None
 
-    async def purge_expired(self, expiry_sec: float = APPROVAL_EXPIRY_SEC) -> int:
-        """Delete requests nobody has refreshed for ``expiry_sec``."""
+    async def purge_expired(self, expiry_sec: float = APPROVAL_EXPIRY_SEC,
+                            entered_ttl_sec: float = ENTERED_CODE_TTL_SEC) -> int:
+        """Delete requests nobody has refreshed for ``expiry_sec``, and
+        forget a typed code (V062) once it is older than
+        ``entered_ttl_sec``: a stale code is never used, so it is not kept
+        either. Returns how many requests were deleted."""
+        await self.s.execute(
+            text(
+                "UPDATE satellite_approvals SET entered_code = NULL, entered_at = NULL "
+                "WHERE entered_code IS NOT NULL AND (entered_at IS NULL OR entered_at "
+                "< now() - make_interval(secs => CAST(:t AS double precision)))"
+            ),
+            {"t": float(entered_ttl_sec)},
+        )
         result = await self.s.execute(
             text(
                 "DELETE FROM satellite_approvals WHERE last_seen_at < now() - "

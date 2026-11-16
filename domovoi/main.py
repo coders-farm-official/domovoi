@@ -1359,9 +1359,22 @@ async def alive() -> dict[str, Any]:
     return {"alive": True, "pid": os.getpid()}
 
 
+def _arrival_ports(request: Any) -> set[int] | None:
+    """The port a request reached this core at (the listening socket's), or
+    None when it cannot be told (a direct call): the identity proof is
+    signed for this box's own addresses at that port only."""
+    try:
+        server = request.scope.get("server") if request is not None else None
+        port = int(server[1]) if server and server[1] else None
+    except (AttributeError, TypeError, ValueError, IndexError):
+        port = None
+    return {port} if port else None
+
+
 @app.get("/v1/health")
 async def health(
-    challenge: str | None = None, addr: str | None = None
+    challenge: str | None = None, addr: str | None = None,
+    request: Request = None,  # type: ignore[assignment] — injected; None when called directly
 ) -> dict[str, Any]:
     """Liveness, plus this install's cryptographic identity.
 
@@ -1380,9 +1393,22 @@ async def health(
     the core will not sign for the relay's address, and an answer signed
     for the core's own address does not match what the satellite dialed.
     A refused address comes back as ``addr_refused`` with no signature.
+    The address's PORT counts too (SAT-13): an address of this box is
+    signed for only at the port this request arrived at (the core's own),
+    so something else on this machine listening elsewhere and forwarding
+    here is refused like any other relay; a host vouches for a changed
+    port explicitly (``server_identity.VOUCHED_ADDRESS_SOURCES``).
     The bare ``challenge`` form is still answered, for satellites running
     code from before the binding; they take the new code on their next
     upgrade.
+
+    A challenge that starts with ``pairing-proof.`` (1.3.1 devices) asks
+    for the approval-proof advert to be signed: the bound answer then
+    carries ``pairing_proof`` (the exchange version, 0 for none) and the
+    signature covers ``pairing_proof=N`` as a last line, so a host in the
+    middle that strips the field breaks the signature rather than passing
+    this server off as one that cannot prove an approval. It rides in the
+    challenge because a separate flag could be stripped too.
 
     The pre-identity fields are untouched, so a satellite that predates
     this (and any other caller) reads exactly what it always read.
@@ -1442,8 +1468,14 @@ async def health(
                     "upgrade (this is logged once per start)"
                 )
             doc["identity"] = identity.health_answer(challenge)
-        elif server_identity.dialed_address_is_ours(addr):
-            doc["identity"] = identity.health_answer(challenge, addr=addr)
+        elif server_identity.dialed_address_is_ours(addr, listen_ports=_arrival_ports(request)):
+            signed_proof = None
+            if server_identity.asks_for_pairing_proof(challenge):
+                signed_proof = int(PAIRING_PROOF_VERSION or 0)
+                doc["pairing_proof"] = signed_proof
+            doc["identity"] = identity.health_answer(
+                challenge, addr=addr, pairing_proof=signed_proof,
+            )
         else:
             log.warning(
                 "refused to sign the identity proof for %s: it is not an "

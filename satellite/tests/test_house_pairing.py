@@ -13,12 +13,15 @@ No network, no database.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import time
+import urllib.parse
 from contextlib import asynccontextmanager
 
 import pytest
 
-from satellite import discovery, house_pairing, pairing_proof, server_identity
+from satellite import _ed25519, discovery, house_pairing, pairing_proof, server_identity
 from satellite.discovery import House
 from satellite.tests._client_import import import_client
 from satellite.tests.test_server_identity import _Resp, _health_opener, _server
@@ -44,9 +47,18 @@ class FakeHouse:
     * ``garbage`` — answers the device's half with a proof that is noise;
     * ``other_fp`` — knows the code, but computes the run for another key
       (what a proof carried from another server looks like);
-    * ``replay`` — sends back ``self.replayed`` instead of its own proof."""
+    * ``replay`` — sends back ``self.replayed`` instead of its own proof;
+    * ``chatty`` — answers the hello with ``working`` frames, for ever;
+    * ``silent`` — answers nothing at all, and keeps the socket open;
+    * ``stall`` — challenges, then answers the device's confirmation with
+      ``working`` frames, for ever.
 
-    def __init__(self, url: str, fp: str, mode: str = "honest") -> None:
+    Like the core it puts a typed code back when the device declines, or
+    says nothing within ``confirm_deadline`` (a run with no guess in it);
+    ``challenge_delay`` holds its challenge back a moment."""
+
+    def __init__(self, url: str, fp: str, mode: str = "honest", *,
+                 confirm_deadline: float = 30.0, challenge_delay: float = 0.0) -> None:
         self.house = House(url=url, fingerprint=fp, proof=True, name=url[-8:], via="name")
         self.mode = mode
         self.entered: str | None = None
@@ -55,6 +67,21 @@ class FakeHouse:
         self.paired: str | None = None
         self.last_proof: str | None = None
         self.replayed: str | None = None
+        self.confirm_deadline = confirm_deadline
+        self.challenge_delay = challenge_delay
+        self.declines = 0
+        self.timeouts = 0
+        self.challenges = 0
+
+    @staticmethod
+    async def _babble(say, from_device: asyncio.Queue) -> None:
+        while True:
+            await say({"type": "working", "stage": "thinking"})
+            try:
+                if await asyncio.wait_for(from_device.get(), 0.02) is None:
+                    return
+            except asyncio.TimeoutError:
+                continue
 
     async def serve(self, hello: dict, to_device: asyncio.Queue, from_device: asyncio.Queue) -> None:
         self.hellos.append(hello)
@@ -66,6 +93,13 @@ class FakeHouse:
         if self.mode == "ready":
             await say({"type": "ready"})
             return
+        if self.mode == "chatty":
+            await self._babble(say, from_device)
+            return
+        if self.mode == "silent":
+            while await from_device.get() is not None:
+                pass
+            return
         if self.entered is None:
             await say({"type": "error", "reason": "awaiting_approval", "proof": True})
             return
@@ -73,11 +107,28 @@ class FakeHouse:
         fp = "SHA256:" + "Z" * 43 if self.mode == "other_fp" else self.house.fingerprint
         ex = pairing_proof.ServerExchange(code, hello["approval_pake"], room_id=hello["room_id"],
                                           fingerprint=fp)
+        if self.challenge_delay:
+            await asyncio.sleep(self.challenge_delay)
+        self.challenges += 1
         await say({"type": "approval_challenge", "pake": ex.message})
-        raw = await from_device.get()
-        if raw is None:
+        try:
+            raw = await asyncio.wait_for(from_device.get(), self.confirm_deadline)
+        except asyncio.TimeoutError:
+            self.timeouts += 1
+            self.entered = code
             return
-        tag = json.loads(raw).get("tag")
+        if raw is None:
+            self.entered = code
+            return
+        answer = json.loads(raw)
+        if answer.get("type") == "approval_decline":
+            self.declines += 1
+            self.entered = code
+            return
+        tag = answer.get("tag")
+        if self.mode == "stall":
+            await self._babble(say, from_device)
+            return
         if self.mode == "garbage":
             await say({"type": "approval_proof", "tag": "ab" * 32})
             return
@@ -208,18 +259,81 @@ def _opener_with(field, **kw):
     return opener, fp
 
 
-def test_probe_house_needs_the_advert_and_an_address_bound_key():
-    opener, fp = _opener_with(1)
+def _proof_opener(advert, *, strip=False, bind="echo", tamper=None, seed_byte=1):
+    """A 1.3.1 core's /v1/health: for a pairing-proof challenge bound to an
+    address it SIGNS ``pairing_proof=<advert>`` (``advert=None``: an older
+    core, which signs no such line and has no such field). ``strip`` and
+    ``tamper`` are a host in the middle: it drops the field, or replaces
+    it, after the core signed."""
+    seed, public, fp = _server(seed_byte)
+
+    def opener(url, timeout=None):
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        challenge = query["challenge"][0]
+        dialed = query.get("addr", [None])[0]
+        signed_addr = dialed if (dialed is not None and bind == "echo") else None
+        line = None
+        if (advert is not None and signed_addr is not None
+                and challenge.startswith(server_identity.PAIRING_PROOF_CHALLENGE_PREFIX)):
+            line = advert
+        message = b"domovoi-health-v1\n" + challenge.encode()
+        if signed_addr is not None:
+            message += b"\n" + signed_addr.encode()
+            if line is not None:
+                message += b"\npairing_proof=" + str(line).encode()
+        block = {
+            "algorithm": "ed25519", "fingerprint": fp,
+            "public_key": base64.b64encode(public).decode("ascii"),
+            "challenge": challenge,
+            "signature": base64.b64encode(_ed25519.sign(seed, message)).decode("ascii"),
+        }
+        if signed_addr is not None:
+            block["addr"] = signed_addr
+        doc = {"status": "ok", "bot_name": "Domovoi", "identity": block}
+        if line is not None:
+            doc["pairing_proof"] = line
+        if strip:
+            doc.pop("pairing_proof", None)
+        if tamper is not None:
+            doc["pairing_proof"] = tamper
+        return _Resp(json.dumps(doc).encode("utf-8"))
+    return opener, fp
+
+
+def test_probe_house_needs_a_signed_advert_and_an_address_bound_key():
+    opener, fp = _proof_opener(1)
     house = discovery.probe_house("192.168.1.20", opener=opener)
     assert house.proof and house.fingerprint == fp and house.url == "ws://192.168.1.20:6370"
-    for advert in (None, True, "1", 0):
-        old, _ = _opener_with(advert)
-        assert discovery.probe_house("192.168.1.20", opener=old).proof is False
-    unbound, _ = _opener_with(1, bind=None)
+    assert house.identity == "proved"
+    old, fp_old = _proof_opener(None)             # an older core: proves its key, signs no proof
+    h = discovery.probe_house("192.168.1.20", opener=old)
+    assert h.proof is False and h.fingerprint == fp_old and h.identity == "proved"
+    none, _ = _proof_opener(0)                    # a 1.3.1 core without the exchange
+    assert discovery.probe_house("192.168.1.20", opener=none).proof is False
+    unbound, _ = _proof_opener(1, bind=None)
     assert discovery.probe_house("192.168.1.20", opener=unbound).proof is False
     refused, _ = _opener_with(1, bind="refuse")
     h = discovery.probe_house("192.168.1.20", opener=refused)
     assert h.proof is False and h.fingerprint is None
+
+
+def test_an_unsigned_advert_proves_nothing():
+    """The field outside the signature (the pre-fix core's shape) is not
+    believed: anyone in the middle could have added it."""
+    unsigned, _ = _opener_with(1)
+    h = discovery.probe_house("192.168.1.20", opener=unsigned)
+    assert h.proof is False and h.identity == "failed"
+
+
+@pytest.mark.parametrize("strip, tamper", [(True, None), (False, 0), (False, 2)])
+def test_a_stripped_or_changed_advert_breaks_the_signature(strip, tamper):
+    """SAT-16 PoC: a host in the middle that strips (or changes) a 1.3.1
+    core's ``pairing_proof`` used to pass it off as an older core — and a
+    device whose address was typed then asked it the old way. Now the
+    advert is signed: the answer does not verify at all."""
+    opener, _fp = _proof_opener(1, strip=strip, tamper=tamper)
+    h = discovery.probe_house("192.168.1.20", opener=opener)
+    assert h.proof is False and h.fingerprint is None and h.identity == "failed"
 
 
 # ─── parking with every house ──────────────────────────────────────────────
@@ -311,7 +425,10 @@ def test_two_houses_with_the_code_typed_approve_exactly_one(tmp_path):
     assert rnd.approved is not None
     assert [a.paired, b.paired].count(None) == 1
     kinds = sorted(v.kind for v in rnd.visits.values())
-    assert kinds == ["aborted", "approved"]
+    assert kinds == ["approved", "declined"]
+    # The other house was told, and keeps its typed code.
+    other = b if a.paired else a
+    assert other.declines == 1 and other.entered == CODE
 
 
 # ─── the budget ────────────────────────────────────────────────────────────
@@ -330,18 +447,26 @@ def test_the_budget_counts_answered_challenges_and_survives_a_restart(tmp_path):
     assert again.allow()
 
 
-def test_a_spent_budget_asks_nobody(tmp_path):
+def test_a_spent_budget_still_visits_and_declines(tmp_path):
+    """SAT-15 PoC: a spent budget used to ask NOBODY — every request it had
+    parked expired after fifteen minutes, and a code typed meanwhile was
+    lost. Now it keeps visiting, and declines the challenge: the house
+    keeps the typed code for later and counts nothing."""
     a = FakeHouse("ws://192.168.1.20:6370", FP1)
     budget = house_pairing.ProofBudget(tmp_path / "b.json", max_attempts=1)
     budget.spend()
+    a.entered = CODE
     contacted: list[str] = []
     rnd = _run(_coordinator([a], tmp_path, budget=budget, contacted=contacted).round())
-    assert rnd.budget_spent and contacted == []
+    assert rnd.budget_spent and contacted == [a.house.url]
+    assert rnd.visits[a.house.url].kind == "declined"
+    assert a.declines == 1 and a.entered == CODE and a.paired is None
+    assert [h.url for h in rnd.parked] == [a.house.url]
 
 
 def test_each_wrong_code_costs_one_from_the_budget(tmp_path):
     a = FakeHouse("ws://192.168.1.20:6370", FP1)
-    budget = house_pairing.ProofBudget(tmp_path / "b.json", max_attempts=2)
+    budget = house_pairing.ProofBudget(tmp_path / "b.json", max_attempts=2, hold_base_sec=0)
     coord = _coordinator([a], tmp_path, budget=budget)
     for _ in range(2):
         a.entered = "000000"
@@ -349,6 +474,7 @@ def test_each_wrong_code_costs_one_from_the_budget(tmp_path):
     a.entered = CODE                     # right, but the budget is spent
     rnd = _run(coord.round())
     assert rnd.budget_spent and rnd.approved is None and a.entered == CODE
+    assert rnd.visits[a.house.url].kind == "declined"
 
 
 def test_tokens_are_per_house_and_stable():
@@ -383,6 +509,7 @@ def test_adopting_the_approving_house_pins_it_and_keeps_its_token(tmp_path, conf
     (tmp_path / "pairing_token").write_text(MASTER + "\n", encoding="utf-8")
     import types
 
+    monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
     cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
     house = House("ws://192.168.1.30:6370", FP2, True, "test")
     token = house_pairing.house_token(MASTER, FP2)
@@ -402,26 +529,29 @@ def test_a_typed_address_on_an_old_server_keeps_the_old_flow(monkeypatch):
     import types
 
     monkeypatch.setattr(client, "_approval_decision", lambda: (False, "test"))
-    monkeypatch.setattr(client, "_one_house", lambda cfg: None)     # an old server there
+    monkeypatch.setattr(client, "_probe_one_house", lambda cfg: ("legacy", None))  # an old server
     cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint="",
                                 room_id=ROOM, sat_type="voice")
-    sat = types.SimpleNamespace(cfg=cfg, _hello_frame=dict, _house_pairing=None)
+    sat = types.SimpleNamespace(cfg=cfg, _hello_frame=dict, _house_pairing=None,
+                                _one_house_said=None)
     _run(client.Satellite._start_house_pairing(sat))
-    assert sat._house_pairing is None
+    assert sat._house_pairing is None and sat._legacy_allowed is True
 
 
 def test_a_typed_address_on_a_new_server_uses_the_proof(monkeypatch, tmp_path):
     import types
 
     monkeypatch.setattr(client, "_approval_decision", lambda: (False, "test"))
-    monkeypatch.setattr(client, "_one_house",
-                        lambda cfg: House("ws://192.168.1.20:6370", FP1, True, via="address"))
+    monkeypatch.setattr(client, "_probe_one_house",
+                        lambda cfg: ("proof", House("ws://192.168.1.20:6370", FP1, True,
+                                                    via="address")))
     monkeypatch.setattr(client, "_effective_pairing_token", lambda: MASTER)
     monkeypatch.setattr(client, "_proof_code", lambda: CODE)
     monkeypatch.setattr(client, "APPROVAL_BUDGET_PATH", tmp_path / "b.json")
     cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint="",
                                 room_id=ROOM, sat_type="voice")
-    sat = types.SimpleNamespace(cfg=cfg, _hello_frame=dict, _house_pairing=None)
+    sat = types.SimpleNamespace(cfg=cfg, _hello_frame=dict, _house_pairing=None,
+                                _one_house_said=None)
     _run(client.Satellite._start_house_pairing(sat))
     assert isinstance(sat._house_pairing, house_pairing.Coordinator)
 
@@ -433,3 +563,277 @@ def test_an_older_four_digit_code_is_replaced_for_the_proof(monkeypatch, tmp_pat
     assert pairing_proof.valid_code(code)
     assert (tmp_path / "approval_code").read_text(encoding="utf-8").strip() == code
     assert client._proof_code() == code     # and kept
+
+
+# ─── SAT-14: a visit is bounded as a whole, and adoption is prompt ─────────
+#
+# Each test is a proof of concept against the code before the fix, where
+# VISIT_TIMEOUT_SEC bounded each FRAME: a server that kept sending frames
+# froze the round for ever. ``_within`` turns "for ever" into a failure.
+
+
+@pytest.fixture
+def quick(monkeypatch):
+    monkeypatch.setattr(house_pairing, "VISIT_TIMEOUT_SEC", 2.0, raising=False)
+    monkeypatch.setattr(house_pairing, "PROOF_WAIT_SEC", 0.3, raising=False)
+    monkeypatch.setattr(house_pairing, "ANSWER_LOCK_WAIT_SEC", 1.5, raising=False)
+    monkeypatch.setattr(house_pairing, "ROUND_GRACE_SEC", 0.2, raising=False)
+
+
+def _within(coro, limit: float):
+    async def go():
+        return await asyncio.wait_for(coro, limit)
+    try:
+        return asyncio.run(go())
+    except asyncio.TimeoutError:
+        pytest.fail(f"still running after {limit} s")
+
+
+def _visit(house: FakeHouse, budget, code: str = CODE):
+    return house_pairing.visit(
+        house.house, room_id=ROOM, code=code, hello={}, token="t" * 64,
+        connect=_connect([house]), budget=budget,
+    )
+
+
+def test_a_server_that_keeps_talking_cannot_hold_a_visit(tmp_path, quick):
+    chatty = FakeHouse("ws://192.168.1.66:6370", FP1, mode="chatty")
+    t0 = time.monotonic()
+    result = _within(_visit(chatty, house_pairing.ProofBudget(tmp_path / "b.json")), 6)
+    assert result.kind == "unreachable"
+    assert time.monotonic() - t0 < 4
+
+
+def test_after_answering_only_the_proof_is_accepted(tmp_path, quick):
+    """A server that challenges and then stalls (``working`` frames instead
+    of its proof) gets PROOF_WAIT_SEC, not for ever — and is held back."""
+    stall = FakeHouse("ws://192.168.1.66:6370", FP1, mode="stall")
+    stall.entered = "000000"
+    budget = house_pairing.ProofBudget(tmp_path / "b.json")
+    result = _within(_visit(stall, budget), 6)
+    assert result.kind == "unproven"
+    assert budget.held(stall.house) > 0
+
+
+def test_a_stalled_challenger_does_not_make_the_real_house_time_out(tmp_path, quick):
+    """The SAT-14 scenario: a hostile server's challenge took the
+    one-exchange lock and kept the socket alive, so the real house's run
+    timed out at its confirm deadline (its typed code spent, a failure
+    counted) and the device never adopted it."""
+    hostile = FakeHouse("ws://192.168.1.66:6370", FP1, mode="stall")
+    hostile.entered = "000000"
+    real = FakeHouse("ws://192.168.1.20:6370", FP2, confirm_deadline=2.0, challenge_delay=0.1)
+    real.entered = CODE
+    rnd = _within(_coordinator([hostile, real], tmp_path).round(), 8)
+    assert rnd.approved is not None and rnd.approved.url == real.house.url
+    assert real.timeouts == 0 and real.paired == house_pairing.house_token(MASTER, FP2)
+
+
+def test_a_round_returns_as_soon_as_one_house_proves(tmp_path, quick):
+    """Adoption waits for nobody: a house that never answers is cut once
+    another has proved the code."""
+    silent = FakeHouse("ws://192.168.1.66:6370", FP1, mode="silent")
+    real = FakeHouse("ws://192.168.1.20:6370", FP2)
+    real.entered = CODE
+    t0 = time.monotonic()
+    rnd = _within(_coordinator([silent, real], tmp_path).round(), 6)
+    assert rnd.approved is not None and rnd.approved.url == real.house.url
+    assert time.monotonic() - t0 < 1.5, "it waited for the silent house"
+
+
+def test_adopting_records_the_approval_so_a_restart_is_not_half_paired(
+        tmp_path, config_file, monkeypatch):
+    """The proof is the approval. Recorded only at the first ``ready``, a
+    restart in between came back asking that one server for a proof the
+    core no longer runs (the room is bound), ignored its plain ``ready``,
+    and stayed half-paired until Reset pairing."""
+    import types
+
+    monkeypatch.setattr(server_identity, "PENDING_SERVER_SIDECAR", tmp_path / "pending.json")
+    monkeypatch.setattr(client, "PAIRING_TOKEN_SIDECAR", tmp_path / "pairing_token")
+    monkeypatch.setattr(client, "_PAIRING_TOKEN_OVERRIDE", None)
+    monkeypatch.setattr(client, "APPROVED_MARKER", tmp_path / "approved")
+    cfg = types.SimpleNamespace(domovoi_url="auto", server_fingerprint="", room_id=ROOM)
+    house = House("ws://192.168.1.30:6370", FP2, True, "test")
+    client._adopt_approved_house(cfg, config_file, house, house_pairing.house_token(MASTER, FP2))
+    assert client._read_approval_record() == client._APPROVAL_YES
+
+
+# ─── SAT-15: the budget, and who gets the places ───────────────────────────
+
+
+def test_the_budget_survives_a_wall_clock_step(tmp_path):
+    """A Pi with no battery clock answers challenges while its clock is an
+    hour behind, then the clock is set (NTP, or a server it copies the time
+    from). The wall-clock stamps then looked an hour old and the budget
+    was whole again. It counts running time now."""
+    path = tmp_path / "budget.json"
+    behind = house_pairing.ProofBudget(path, clock=lambda: time.time() - 3600, max_attempts=2)
+    assert behind.spend() and behind.spend()
+    after = house_pairing.ProofBudget(path, max_attempts=2)       # clock set; or restarted
+    assert not after.allow()
+
+
+def test_an_unreadable_budget_file_counts_as_spent(tmp_path):
+    path = tmp_path / "budget.json"
+    path.write_text("{not json", encoding="utf-8")
+    budget = house_pairing.ProofBudget(path)
+    assert not budget.allow() and not budget.spend()
+
+
+def test_a_budget_that_cannot_be_saved_answers_nothing(tmp_path):
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    budget = house_pairing.ProofBudget(blocker / "budget.json")   # its folder is a file
+    assert budget.spend() is False
+    assert not budget.allow()
+
+
+def test_a_daily_cap_bounds_a_patient_server(tmp_path):
+    now = [0.0]
+    budget = house_pairing.ProofBudget(tmp_path / "b.json", clock=lambda: now[0], max_attempts=5,
+                                       window_sec=1800, daily_max=20, hold_base_sec=0)
+    answered = 0
+    while now[0] < 86400 - 1800:
+        while budget.spend():
+            answered += 1
+        now[0] += 1800
+    assert answered == 20
+
+
+def test_a_server_whose_run_proved_nothing_is_held_for_a_growing_while(tmp_path):
+    now = [0.0]
+    budget = house_pairing.ProofBudget(tmp_path / "b.json", clock=lambda: now[0],
+                                       max_attempts=50, daily_max=50)
+    a = FakeHouse("ws://192.168.1.20:6370", FP1)
+    coord = _coordinator([a], tmp_path, budget=budget)
+    a.entered = "000000"
+    assert _run(coord.round()).visits[a.house.url].kind == "mismatch"
+    a.entered = CODE
+    rnd = _run(coord.round())
+    assert rnd.visits[a.house.url].kind == "declined" and a.entered == CODE
+    now[0] += house_pairing.HOLD_BASE_SEC + 1
+    rnd = _run(coord.round())
+    assert rnd.approved is not None
+    # The hold doubles, and follows the address as well as the key.
+    budget.fail(a.house)
+    budget.fail(a.house)
+    assert budget.held(a.house) > house_pairing.HOLD_BASE_SEC * 1.5
+    assert budget.held(House(a.house.url, "SHA256:" + "9" * 43, True)) > 0
+
+
+def test_arrival_order_does_not_decide_who_is_asked(tmp_path):
+    """Twenty hosts that answer the sweep first used to fill all eight
+    places, for good. The places rotate now."""
+    crowd = [House(f"ws://192.168.1.{i}:6370", f"SHA256:{i:043d}", True, via="scan")
+             for i in range(100, 120)]
+    real = House("ws://192.168.1.250:6370", FP1, True, via="scan")       # answered last
+    coord = _coordinator([], tmp_path)
+    coord._discover = lambda: crowd + [real]
+    seen = False
+    for _ in range(3):           # 21 servers, 8 places: everyone within three looks
+        _run(coord.discover_now())
+        assert len(coord.houses) == discovery.MAX_HOUSES
+        seen = seen or real.url in [h.url for h in coord.houses]
+    assert seen
+
+
+def test_hosts_that_prove_nothing_take_no_place():
+    legacy = [House(f"ws://192.168.1.{i}:6370", None, False, via="scan") for i in range(100, 110)]
+    real = House("ws://192.168.1.20:6370", FP1, True, via="scan")
+    out = discovery.locate_all(names=(), sweeper=lambda **k: legacy + [real], cap=8)
+    assert real.url in [h.url for h in out if h.proof]
+
+
+def test_a_name_or_last_known_server_always_has_a_place():
+    crowd = [House(f"ws://192.168.1.{i}:6370", f"SHA256:{i:043d}", True, via="scan")
+             for i in range(100, 130)]
+    named = House("ws://192.168.1.20:6370", FP1, True, via="name")
+    last = House("ws://192.168.1.21:6370", FP2, True, via="last-known")
+    for rotation in range(6):
+        chosen = discovery.choose_houses(crowd + [named, last], cap=8, rotation=rotation)
+        urls = [h.url for h in chosen]
+        assert named.url in urls and last.url in urls and len(chosen) == 8
+
+
+def test_the_sweep_collects_every_answer():
+    hits = {f"192.168.1.{i}" for i in range(100, 120)}
+    probe = lambda h, **k: House(f"ws://{h}:6370", "SHA256:" + h, True) if h in hits else None  # noqa: E731
+    found = discovery.find_houses(hosts=[f"192.168.1.{i}" for i in range(2, 200)], probe_fn=probe)
+    assert len(found) == len(hits)
+
+
+# ─── SAT-16: the advert is signed, and remembered ──────────────────────────
+
+
+def _typed(monkeypatch, tmp_path, fp):
+    import types
+
+    monkeypatch.setattr(client, "_approval_decision", lambda: (False, "test"))
+    monkeypatch.setattr(client, "_pinned_fingerprint", lambda cfg: (fp, "config"))
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
+    monkeypatch.setattr(client, "APPROVAL_CODE_SIDECAR", tmp_path / "approval_code")
+    (tmp_path / "approval_code").write_text(CODE + "\n", encoding="utf-8")
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint=fp,
+                                room_id=ROOM, sat_type="voice")
+    return cfg, types.SimpleNamespace(cfg=cfg, _hello_frame=dict, _house_pairing=None,
+                                      _one_house_said=None)
+
+
+def test_a_stripped_advert_never_sends_the_code_the_old_way(monkeypatch, tmp_path):
+    """SAT-16 PoC: a device whose server was chosen for it (a typed address,
+    a pinned key) asked that server ONCE per boot whether it proves
+    approvals; a host in the middle that stripped ``pairing_proof`` from
+    that one answer made it ask the old way — its code in the hello, a
+    bare ``ready`` believed. Now the stripped answer does not verify, and
+    the device sends nothing until it gets one that does."""
+    import urllib.request
+
+    opener, fp = _proof_opener(1, strip=True)
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    _cfg, sat = _typed(monkeypatch, tmp_path, fp)
+    _run(client.Satellite._start_house_pairing(sat))
+    assert sat._house_pairing is None
+    assert getattr(sat, "_legacy_allowed", True) is False, "it would ask the old way"
+
+
+def test_a_server_seen_proving_is_never_asked_the_old_way_again(monkeypatch, tmp_path):
+    import urllib.request
+
+    opener, fp = _proof_opener(1)
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    cfg, _sat = _typed(monkeypatch, tmp_path, fp)
+    status, house = client._probe_one_house(cfg)
+    assert status == "proof" and house.fingerprint == fp
+    # Later the same key answers WITHOUT the advert (signed that way, so it
+    # verifies): a downgrade — never the old way for it again.
+    older, _ = _proof_opener(None)
+    monkeypatch.setattr(urllib.request, "urlopen", older)
+    assert client._probe_one_house(cfg)[0] == "unknown"
+    assert client._legacy_approval_code(cfg) is None
+
+
+def test_an_older_server_that_proves_its_key_keeps_the_old_flow(monkeypatch, tmp_path):
+    import urllib.request
+
+    older, fp = _proof_opener(None)
+    monkeypatch.setattr(urllib.request, "urlopen", older)
+    cfg, _sat = _typed(monkeypatch, tmp_path, fp)
+    assert client._probe_one_house(cfg) == ("legacy", None)
+    assert client._legacy_approval_code(cfg) == CODE
+
+
+def test_the_old_way_is_decided_again_before_every_session(monkeypatch, tmp_path):
+    """Not once per boot: a server that cannot prove an approval at boot,
+    and can a minute later, is asked with the proof from then on."""
+    answers = iter([("legacy", None),
+                    ("proof", House("ws://192.168.1.20:6370", FP1, True, via="address"))])
+    monkeypatch.setattr(client, "_probe_one_house", lambda cfg: next(answers))
+    _cfg, sat = _typed(monkeypatch, tmp_path, FP1)
+    monkeypatch.setattr(client, "_effective_pairing_token", lambda: MASTER)
+    monkeypatch.setattr(client, "APPROVAL_BUDGET_PATH", tmp_path / "b.json")
+    sat._start_house_pairing = lambda: client.Satellite._start_house_pairing(sat)
+    _run(client.Satellite._start_house_pairing(sat))                      # at boot
+    assert _run(client.Satellite._before_legacy_session(sat)) == "legacy"  # the first session
+    assert _run(client.Satellite._before_legacy_session(sat)) == "proof"   # asked again
+    assert isinstance(sat._house_pairing, house_pairing.Coordinator)

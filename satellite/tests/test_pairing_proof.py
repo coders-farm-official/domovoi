@@ -127,3 +127,67 @@ def test_malformed_tags_never_verify():
     for bad in (None, "", "zz" * 32):
         assert not dev.server_proved(bad)
     assert not pp.DeviceExchange(CODE).server_proved(srv.proof)   # never answered
+
+
+# ─── known answers, for anyone porting the exchange ───────────────────────
+#
+# An app on another platform (an iPhone in room mode, a phone app's own
+# pairing) has to produce these bytes exactly. Any change to the group, to
+# M and N, to how the code becomes a scalar or to the transcript changes
+# them — and is then a new VERSION of the exchange, not an edit.
+
+KAT_M = (
+    "e9138bfd8a67eb0c1de6b0b8b7ad9db702b835f91d6636bc52a87f0305995c17"
+    "6636669b41bffc7ecc788b0189e859dd44c976616cfd0c5ac3fbe23a221bdb15"
+    "e5d5f41dbd89025252eedd41e86ff190f149c6ed656c74e66a88aa7843b0b3c2"
+    "ad25ce488e8559bf6390ab7b82a5fca0779c68506e1fdd222641b1341879252f"
+    "802a958f611591bd50d070c31040a4fb9a32abc7af2d691e5cd613f218145fcb"
+    "6e5c8cb0301d6cd0e0e44a8361cc67f6ec0ce27c0428cc77606c3f339f937095"
+    "734949365c046b45162ff1b030972dce883d7949cb1f5893f4dd0bb9c7479449"
+    "389769ec0357745e614e7a31123739873069987c61d4a8cee6f0a503a60c30e6"
+)
+KAT_N = (
+    "475fad6cd736abf7e306edb3567e965036b383c99da8b7196868bc22c70810db"
+    "8039e98f958bfa7fc62e44de2eac95d6ec1d7bd366c40a8a25d4f6935c25ea67"
+    "ae14507263b92fe3bdc8bca039ecc7f7e6218f2c883add4de53ac445a3b1ac38"
+    "172155a504802345e0a0611c62d3e4dd6001267acdbb914221876b9d983d6207"
+    "74983a9115a2a76ca5f7792a22f13fcbe20e27033f76696c508a5325fe8fb431"
+    "5793eff39ebd605eceb4171ff2ed910192b41134efa452cb6868590bbc738f91"
+    "7baaa3115a8bd4a190f4adecfa1a8feb9c7808425a95025db9e99d8021810d3e"
+    "75aab40d117b9cb7d56527ac5e371c891cd88a1c99ea93c078e900d0d693e865"
+)
+#: w for the code "481502".
+KAT_W = int(
+    "feb842d1f0035f4a86bb9a7cb26e00a79cb1affb0ec9c38bcba52544d885e6bf"
+    "c32e5e7900cc6824e93b8cbe006d04699e42e6f8dc575dd7bc54a7449d1a4ffe", 16)
+#: The secret exponents of the run below: SHA-256 of a label, as integers.
+KAT_X_LABEL = b"domovoi kat x"
+KAT_Y_LABEL = b"domovoi kat y"
+KAT_FP = "SHA256:" + "1" * 43
+#: SHA-256 of X's and Y's 256-byte encodings, and both confirmation tags.
+KAT_X_SHA = "3d2c07a63e805f071c60a832050ba02569f695d0698ac345056da22df2732c48"
+KAT_Y_SHA = "8300c1c33c9b5d08a1b53e3ca9d033d5ce5b5534ea5783685d1eea7a103bdbfb"
+KAT_DEVICE_TAG = "adb967cfd4797043ea90e429848342e372c12576eddb8ac7697f64aeaa70ad8d"
+KAT_SERVER_TAG = "98c2558dd793dbf9b103f692b77531b19927f69ffe5837566585bdd7ec1ccc8a"
+
+
+def test_known_answer_m_n_and_the_code_scalar():
+    assert pp.encode(pp._M) == KAT_M
+    assert pp.encode(pp._N) == KAT_N
+    assert pp._code_scalar(CODE) == KAT_W
+
+
+def test_known_answer_transcript(monkeypatch):
+    import hashlib
+
+    exponents = iter([int(hashlib.sha256(KAT_X_LABEL).hexdigest(), 16),
+                      int(hashlib.sha256(KAT_Y_LABEL).hexdigest(), 16)])
+    monkeypatch.setattr(pp, "_secret_exponent", lambda: next(exponents))
+    dev = pp.DeviceExchange(CODE)
+    srv = pp.ServerExchange(CODE, dev.message, room_id=ROOM, fingerprint=KAT_FP)
+    assert hashlib.sha256(bytes.fromhex(dev.message)).hexdigest() == KAT_X_SHA
+    assert hashlib.sha256(bytes.fromhex(srv.message)).hexdigest() == KAT_Y_SHA
+    tag = dev.answer(srv.message, room_id=ROOM, fingerprint=KAT_FP)
+    assert tag == KAT_DEVICE_TAG
+    assert srv.device_proved(tag) and srv.proof == KAT_SERVER_TAG
+    assert dev.server_proved(KAT_SERVER_TAG)

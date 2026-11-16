@@ -2875,6 +2875,15 @@ The nonce and the address are restricted to URL-safe characters on the
 core, because a nonce that could carry a newline would let an unbound
 signature over `nonce\naddr` pass as a bound one.
 
+**The port is part of the address (1.3.1).** An address this box owns, a
+loopback or `localhost` is signed for only at the port the question
+arrived at — the port the core listens on. Before, the port was ignored, so
+anything else listening on the server's own machine at another port and
+forwarding to the core (a relay any local account could start) got a
+signature for its own `host:port` and passed a pinned device's key check.
+A `TRUSTED_HOSTS` entry with a port matches that port only; one without a
+port is the operator's word for any port.
+
 **Addresses the host vouches for (1.3.0).** A core that runs inside a VM
 or a NAT'd distro is reached at the HOST's LAN address, which no interface
 of the core owns, so the core would refuse to sign for it. The machine
@@ -2887,6 +2896,9 @@ believed only while root owns it and its folder alone. Only IP literals
 count — a source cannot vouch for a name — and an address no source names
 is refused exactly as before. A source must be something only the host
 (root) can write: an address in it is one the core signs its identity for.
+Since 1.3.1 a bare vouched IP counts at the core's own port only (a
+forward that keeps the port, like DomovoiHost's); a source whose forward
+changes the port vouches for it as `ip:port`.
 
 **Why a room couldn't join is said on the dashboard (1.3.0).** When the core
 refuses to sign for the address a room dialled, or refuses a room's hello
@@ -3859,9 +3871,14 @@ reached learned the code.
 
 **What it does now.** Such a device asks EVERY Domovoi server it can find
 (names, the last-known address, then the /24 sweep — `discovery.locate_all`,
-at most eight servers, rediscovered every two minutes, each asked again
-every ten seconds; `satellite/house_pairing.py`) and parks a request with
-each. It accepts an approval only from a server that PROVES it knows the
+rediscovered every two minutes, each asked again every ten seconds;
+`satellite/house_pairing.py`) and parks a request with each. It asks at
+most eight at once, and the eight are not whoever answered first
+(`discovery.choose_houses`): a server that proved its identity at an
+address found by name or as the last-known address always gets a place,
+the rest take turns (sorted by address, the window moving at every
+rediscovery), and a host that proves no identity, or does not SIGN that it
+speaks the proof, takes no place at all. It accepts an approval only from a server that PROVES it knows the
 six digits the person read off the device and typed into that server's
 dashboard. A server that merely says `ready` (or sends a proof that does
 not check out) is ignored and logged, and the device keeps waiting. Once one
@@ -3870,7 +3887,36 @@ into config.toml — from then on it talks only to that key-checked server,
 exactly like a device approved the old way — and withdraws its request from
 every other server it asked (a `hello` with `approval_withdraw: true`,
 authenticated by the token that request was parked with). Requests also
-expire on every server after fifteen minutes without a visit.
+expire on every server after fifteen minutes without a visit — which is
+also how long every server the device asked keeps seeing the room's name
+(and the device's board and kind) in its list of rooms waiting for
+approval. A device set up this way announces its room name to every
+Domovoi server on the network; name the room accordingly.
+
+**Bounded visits.** A visit to one server is bounded as a whole (30 s:
+connect, hello, answer, exchange), not frame by frame, so a server that
+keeps a socket alive with other frames cannot freeze the device. Once the
+device has sent its confirmation it waits 6 s for the server's proof and
+accepts nothing else. Only one exchange runs at a time (so two servers with
+the code typed cannot both bind the device), a challenge waits at most 10 s
+for that, and the round returns the moment one server has proved the code:
+the device adopts it at once and records the approval then, not at the
+first `ready` (a restart in between used to leave it half-paired).
+
+**The advert is signed.** Which servers can prove an approval is in
+`/v1/health`'s `pairing_proof`. A 1.3.1 device asks with a challenge that
+starts with `pairing-proof.`, and a 1.3.1 core then signs
+`pairing_proof=N` as part of its identity proof for the address dialled. A
+host in the middle that strips or changes the field breaks the signature
+instead of passing the server off as an older one. The request rides in the
+challenge, not in a query flag of its own, because a flag could be stripped
+too. A device whose one server was chosen for it (an address typed in the
+portal, a card's key) asks that server again before EVERY session that
+would use the old flow, uses the old flow only after the server signed that
+it cannot prove an approval, and remembers on disk every server it has seen
+sign that it can (`~/.domovoi/approval-proof-servers.json`): such a server
+is never asked the old way again, and the device's code never goes into its
+hello.
 
 **The proof.** Six digits is a million possibilities, which a computer tries
 in under a second, so nothing either side sends may let the other test codes
@@ -3901,11 +3947,11 @@ any other run, with any other key.
 
 | Who | What they can do | Limit |
 |---|---|---|
-| A neighbour's or hostile server the device asks | run the exchange with guessed codes | the device answers at most **5 challenges per 30 minutes**, across every server, kept across restarts (`~/.domovoi/approval-proof-budget.json`): at one in a million each, about 1 in 4,000 per day of waiting |
-| A rogue device parked under your room's name | answer the exchange for the code you typed | each typed code serves **one** run (taken off the row, gone after ten minutes), and the approve route takes five codes per room per five minutes; a failed run is shown on the card ("the room device didn't accept the last code") |
+| A neighbour's or hostile server the device asks | run the exchange with guessed codes | the device answers at most **5 challenges per 30 minutes and 20 a day**, across every server, and a server (its key, and separately its address) whose run did not end in a valid proof is not answered again for 30 s, doubling to 5 minutes. Kept across restarts (`~/.domovoi/approval-proof-budget.json`) and counted in the device's RUNNING time, so a clock that jumps forward (or a server it copies the time from) cannot reset it; a budget file that cannot be read or written counts as spent. At one in a million each, at most about **1 in 50,000 per day of waiting**, however many servers take part |
+| A rogue device parked under your room's name | answer the exchange for the code you typed | each typed code serves **one guess** (a confirmation that does not check out uses it up; gone after ten minutes), and the approve route takes five codes per room per five minutes; a failed run is shown on the card ("the room device didn't accept the last code"). Declining, staying silent or leaving is not a guess: the code is put back and nothing is counted |
 | Someone watching the network | nothing | no message can be tested against a code |
-| Someone relaying between the device and your server | relay the exchange — and win nothing | the device's key check binds the address dialled; the core will not sign for a relay's address |
-| The same hostile server spending the device's budget | delay approval up to 30 minutes | it cannot approve; the typed code keeps waiting for ten minutes and can be typed again |
+| Someone relaying between the device and your server | relay the exchange — and win nothing | the device's key check binds the address dialled, port included; the core will not sign for a relay's address — nor for its own address at a port it does not listen on |
+| Hostile servers spending the device's budget | delay approval | they cannot approve. While the device may not answer it keeps visiting every server (so its requests do not expire) and DECLINES each challenge; the server it was approved on keeps the typed code (the device's decline puts it back) until the device can answer, within its ten minutes, or the code is typed again. The delay is bounded by the budget: 30 minutes of running time at most for the five-per-window cap, and up to a day if many different servers each spend a share and the daily cap is reached. The core caps the arithmetic too: the per-source limit is consulted before any modular exponentiation, which runs off the event loop, and withdrawals count against it |
 
 What the proof does **not** do: it does not encrypt anything, it does not
 protect a room after pairing (the pairing token and the server key do that,
@@ -3914,6 +3960,17 @@ key is out of scope here as everywhere else on the LAN. A device that loses
 power in the half-second between the core binding the room and the device
 saving it comes back unpaired while the core thinks it paired; **Reset
 pairing** in the room's drawer fixes it.
+
+**Root's records.** A prepared card's root-owned records — the server's
+address (`/etc/domovoi/server.url`) and key (`server-identity.json`), which
+the clock helper trusts over the satellite account — are not written at
+setup for a device that asks every server: the first server that answered
+setup's search is nobody's choice, and recording it (and copying its clock)
+used to make the clock helper refuse the real server for good. Instead,
+once a server has proved the code and the device saved its address and key
+in config.toml, the root boot step (`net_settings.refresh_server_pin`)
+writes both records — only when root has none, and only after that address
+has signed, to root itself, for that key.
 
 **One code for every house, and its own token for each.** The device has one
 code — the portal's, shown as the setup network closes, and said out loud —
@@ -3927,10 +3984,10 @@ replaces the device's own.
 
 | Device | Server | What happens |
 |---|---|---|
-| new, address left blank, no key | new (`pairing_proof` in `/v1/health`) | asked, proof required |
+| new, address left blank, no key | new (`pairing_proof` signed in `/v1/health`) | asked, proof required |
 | new, address left blank, no key | older | **never asked**: an approval from it cannot be checked. The device logs that it found one and says to update it — or to type its address in the portal |
-| new, address typed in the portal (or a prepared card's key) | new | that server only, with the proof |
-| new, address typed in the portal (or a prepared card's key) | older | the old flow (the code in the hello): the person chose that server |
+| new, address typed in the portal (or a prepared card's key) | new | that server only, with the proof; remembered, so never the old way again |
+| new, address typed in the portal (or a prepared card's key) | older | the old flow (the code in the hello): the person chose that server — but only once the server has proved its key and signed that it cannot prove an approval, asked again before every session; an answer that does not verify gets nothing |
 | older | new | the old flow, unchanged: the core compares the code it was sent |
 
 Spare computers (enrolled with a room code that pins the server's key) and
