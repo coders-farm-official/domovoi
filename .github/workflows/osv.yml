@@ -25,7 +25,7 @@ name: osv
 
 on:
   push:
-    branches: [main]
+    branches: [main, wf/osv-tools] # TEMP
   pull_request:
     branches: [main]
     paths:
