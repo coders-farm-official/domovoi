@@ -621,21 +621,74 @@ public enum PersonVoiceRooms {
         PeopleStrings.voiceRoomsCount(known: rooms.filter(\.known).count, total: rooms.count)
     }
 
-    /// A room's chip: its name, plus `" · not yet"` when it has no sample
-    /// (`voiceRoomChip`, `PeopleModels.kt:151`).
+    /// A room's chip: its name, then `" · learned"` or `" · not yet learned"`
+    /// (the web's `PersonVoiceRooms`, 838da8b6). Every chip says which, so
+    /// no room reads as one that cannot recognize the person.
     public static func chip(_ room: PersonVoiceRoom) -> String {
-        room.roomID + (room.known ? "" : PeopleStrings.voiceRoomNotYet)
+        room.roomID + (room.known ? PeopleStrings.voiceRoomLearned : PeopleStrings.voiceRoomNotYetLearned)
     }
 
-    /// How to teach the missing rooms, or nil when every room knows the voice
-    /// (`voiceRoomsHint`, `PeopleModels.kt:155`).
+    /// How to teach the rooms that have not learned the voice, or nil when
+    /// every room has (the web's `PersonVoiceRooms` hint, 838da8b6).
     public static func hint(name: String, rooms: [PersonVoiceRoom]) -> String? {
         guard rooms.contains(where: { !$0.known }) else { return nil }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return PeopleStrings.voiceRoomsHint(
+            name: trimmed.isEmpty ? PeopleStrings.voiceRoomsNameUnnamed : trimmed,
             who: trimmed.isEmpty ? PeopleStrings.voiceRoomsWhoUnnamed : trimmed,
             said: trimmed.isEmpty ? PeopleStrings.voiceRoomsSaidUnnamed : trimmed
         )
+    }
+}
+
+// MARK: - where they were last heard (1.3.0 profile header)
+
+/// The profile header's left tile, "last heard in" (owner decision, 1.3.0;
+/// the web People page's `heardIn`, 838da8b6).
+///
+/// The source is the conversations read the detail already makes
+/// (`GET /api/people/{id}/conversations`, ``PersonDetailModel/turnRows``), so
+/// there is no extra request and nothing new to key: those rows are already
+/// held to the person and house they were asked for by the detail model's
+/// generation, captured before the await ([[read-after-await-wrong-key]]).
+public enum PersonLastHeard {
+
+    /// Their newest turn: the latest `at`. The server answers newest first,
+    /// which is all the web relies on (`conversations[0]`); reading the
+    /// clock instead means a reordered answer still names the right room.
+    /// Only rows with a readable time compete, and a tie goes to the earlier
+    /// row; when no row has a readable time, the server's first row wins.
+    public static func newest(_ turns: [PersonTurn]) -> PersonTurn? {
+        var best: PersonTurn?
+        var bestMs: Int64?
+        for turn in turns {
+            guard best != nil else {
+                best = turn
+                bestMs = isoMs(turn.at)
+                continue
+            }
+            guard let ms = isoMs(turn.at) else { continue }
+            if let current = bestMs, ms <= current { continue }
+            best = turn
+            bestMs = ms
+        }
+        return best
+    }
+
+    /// Where one turn was heard: its room with `-`/`_` read as spaces,
+    /// `"the phone"` for a phone's chat mic (room `phone-<device>`),
+    /// `"chat"` for a turn with no room, and `"—"` for no turn at all.
+    public static func place(_ turn: PersonTurn?) -> String {
+        guard let turn else { return PeopleStrings.heardInNever }
+        let room = (turn.roomID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if room.isEmpty { return PeopleStrings.heardInChat }
+        if room.hasPrefix("phone-") { return PeopleStrings.heardInPhone }
+        return room.replacingOccurrences(of: "[-_]+", with: " ", options: .regularExpression)
+    }
+
+    /// Where the newest of `turns` was heard.
+    public static func place(of turns: [PersonTurn]) -> String {
+        place(newest(turns))
     }
 }
 

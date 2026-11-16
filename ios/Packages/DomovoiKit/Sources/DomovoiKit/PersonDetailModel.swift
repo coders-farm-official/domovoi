@@ -353,6 +353,20 @@ public final class PersonDetailModel {
     public var favoriteRows: [PersonFavorite] { favorites.orElse([]) }
     public var preferenceRows: [PersonPreference] { preferences.orElse([]) }
 
+    /// The profile header's "last heard in" (``PersonLastHeard``), from the
+    /// conversations read this model already makes, so it is always the open
+    /// person's: ``show(_:)`` empties the rows and the generation captured
+    /// before the read's await drops a late answer for anybody else.
+    ///
+    /// `"?"` when that read failed, as a failed count is on the tab titles
+    /// (``personCountLabel(_:error:)``): `"—"` there would claim they have
+    /// never been heard. While the read is in flight it is `"—"`, as the
+    /// web's is.
+    public var lastHeardIn: String {
+        if errors.conversations != nil { return "?" }
+        return PersonLastHeard.place(of: turnRows)
+    }
+
     /// The four tab titles, with `"?"` for a list that failed
     /// (`PersonDetail.kt:111-119`).
     public var tabTitles: [String] {

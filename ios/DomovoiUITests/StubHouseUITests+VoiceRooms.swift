@@ -1,14 +1,14 @@
 import XCTest
 
-/// Rooms that know this voice on a person's profile (1.3.0), the port of
-/// Android e6f89545. Every case is named `testVoiceRooms_…` and every piece of
-/// evidence `voicerooms-…`.
+/// Rooms that have learned this voice on a person's profile (1.3.0), the port
+/// of Android e6f89545, worded as the web says it since 838da8b6. Every case
+/// is named `testVoiceRooms_…` and every piece of evidence `voicerooms-…`.
 ///
 /// The stub's `voicerooms` fixture (`batch-2026-11-14/voicerooms/stubhouse.patch`)
 /// mirrors `people.py:401`: every satellite room (kitchen, study) for every
 /// person, plus a room with a sample and no satellite. Jordan knows kitchen
 /// and porch (both current; the server stopped sending `legacy` at V061) and
-/// not study, so `2/3` with one `not yet`
+/// not study, so `2/3` with one `not yet learned`
 /// and the hint; Alex knows both rooms, so `2/2` and no hint.
 /// `POST /api/_test/voice-rooms {"mode": "missing" | "empty"}` makes the route
 /// a 404 (a server before 1.3.0) or an empty list (a house with no rooms);
@@ -17,15 +17,15 @@ extension StubHouseUITests {
 
     /// Spelt out rather than imported, like every string these files match on.
     enum VoiceRoomsUnderTest {
-        static let label = "rooms that know this voice"
+        static let label = "rooms that have learned this voice"
         static let jordanCount = "2/3"
         static let alexCount = "2/2"
-        static let kitchen = "kitchen"
-        static let porch = "porch"
-        static let studyNotYet = "study \u{00B7} not yet"
-        static let kitchenNotYet = "kitchen \u{00B7} not yet"
+        static let kitchen = "kitchen \u{00B7} learned"
+        static let porch = "porch \u{00B7} learned"
+        static let studyNotYet = "study \u{00B7} not yet learned"
+        static let kitchenNotYet = "kitchen \u{00B7} not yet learned"
         static let jordanHint = "Jordan can say \u{201C}my name is Jordan\u{201D} and answer yes."
-        static let hintStart = "Rooms recognize a voice best"
+        static let hintStart = "Every room can recognize"
         /// Jordan's notes: drawn after the section, so a profile that has
         /// these has had its chance to draw the rooms too.
         static let notes = "prefers the kitchen satellite"
@@ -49,8 +49,9 @@ extension StubHouseUITests {
         return found
     }
 
-    /// The section, its `known/total` count, and one chip per room, with
-    /// `· not yet` on the room that has never heard them — and on no other.
+    /// The section, its `known/total` count, and one chip per room:
+    /// `· not yet learned` on the room that has never heard them, and
+    /// `· learned` on every other.
     @MainActor
     func testVoiceRooms_SectionShowsTheCountAndChips() throws {
         let app = peopleLaunch()
@@ -69,21 +70,21 @@ extension StubHouseUITests {
             print(app.debugDescription)
         }
         XCTAssertTrue(counted, "the count does not read \(VoiceRoomsUnderTest.jordanCount)")
-        XCTAssertTrue(marked, "the room that never heard Jordan is not marked not yet")
-        XCTAssertTrue(app.staticTexts[VoiceRoomsUnderTest.kitchen].exists, "no kitchen chip")
+        XCTAssertTrue(marked, "the room that never heard Jordan is not marked not yet learned")
+        XCTAssertTrue(app.staticTexts[VoiceRoomsUnderTest.kitchen].exists, "no `kitchen · learned` chip")
         XCTAssertTrue(
             app.staticTexts[VoiceRoomsUnderTest.porch].exists,
-            "no porch chip — a room with a sample but no "
+            "no `porch · learned` chip — a room with a sample but no "
                 + "satellite is still listed"
         )
         XCTAssertFalse(
             app.staticTexts[VoiceRoomsUnderTest.kitchenNotYet].exists,
-            "a room that knows Jordan is marked not yet"
+            "a room that has learned Jordan is marked not yet learned"
         )
     }
 
-    /// The hint names the person, in their own words, when a room is not yet
-    /// — and is not drawn for somebody every room knows.
+    /// The hint names the person, in their own words, when a room has not
+    /// learned them yet — and is not drawn for somebody every room has learned.
     @MainActor
     func testVoiceRooms_HintNamesThePerson() throws {
         let app = peopleLaunch()

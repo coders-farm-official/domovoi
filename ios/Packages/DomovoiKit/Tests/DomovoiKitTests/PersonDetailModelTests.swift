@@ -341,6 +341,56 @@ final class PersonDetailModelTests: XCTestCase {
         XCTAssertEqual(model.tabTitles[3], "conversations (?)")
     }
 
+    // MARK: - the profile header's "last heard in" (1.3.0)
+
+    /// Read off the conversations the model already holds: no extra request.
+    /// Person 1's newest turn (09:51:50) was in the kitchen; person 2 has
+    /// never said anything.
+    func testLastHeardInIsTheRoomOfTheirNewestTurn() async {
+        let (model, _) = rig()
+        XCTAssertEqual(model.lastHeardIn, "—", "nobody shown is never heard")
+        await showing(model, jordan)
+        XCTAssertEqual(model.lastHeardIn, "kitchen")
+
+        await showing(model, chevy)
+        XCTAssertEqual(model.lastHeardIn, "—")
+    }
+
+    /// A failed conversations read is `?`, never `—`: the dash would claim
+    /// they have never been heard (F-A008's rule, as the tab title keeps it).
+    func testAFailedConversationsReadIsAQuestionMarkNotNeverHeard() async {
+        let house = House()
+        house.failing.set(["conversations": 500])
+        let (model, _) = rig(house)
+        await showing(model, jordan)
+
+        XCTAssertNotNil(model.errors.conversations)
+        XCTAssertEqual(model.lastHeardIn, "?")
+    }
+
+    /// [[read-after-await-wrong-key]]: person 1's conversations answer
+    /// landing after the reader opened person 2 must not say where person 2
+    /// was last heard. The switch happens **inside** the parked request.
+    func testSwitchingInsideTheConversationsRoundTripKeepsLastHeardInStraight() async {
+        let (model, house) = rig()
+        let park = parkRequest(
+            to: "/api/people/1/conversations",
+            answering: { .json(House.conversations) },
+            otherwise: { house.answer($0) }
+        )
+
+        model.show(jordan)
+        await settleUntil({ park.arrived.current }, "person 1's conversations read")
+
+        model.show(chevy)
+        park.release.set(true)
+
+        await settleUntil({ !model.loading && model.person?.id == 2 }, "person 2's reads")
+        XCTAssertFalse(park.ranOut.current, "the park outlasted the session timeout")
+        XCTAssertTrue(model.turnRows.isEmpty, "person 1's turns landed under person 2")
+        XCTAssertEqual(model.lastHeardIn, "—", "person 2 is said to be heard in person 1's room")
+    }
+
     /// One toast per load, naming every failed list **in tab order** and
     /// quoting the first failure.
     func testFailedListsAreNamedInOneToast() async {
