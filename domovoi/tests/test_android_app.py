@@ -713,6 +713,22 @@ def test_a_symlink_in_the_cache_is_never_served(tmp_path, cache, monkeypatch):
     assert aa.cached_file(m, name) is None
 
 
+@pytest.mark.parametrize("tail", [
+    "#Intent;scheme=https;package=com.example.other;S.browser_fallback_url=https%3A%2F%2Fexample.org;end",
+    "^x", "|x", "{x}", "\\x",
+], ids=["intent_block", "caret", "bar", "brace", "backslash"])
+def test_a_room_code_with_characters_no_code_carries_opens_nothing(tail):
+    """CodeQL js/client-side-unvalidated-url-redirection, 2026-11: the page
+    copies the code into the intent link it offers, so a crafted /join link
+    on this server's own address put its own ``#Intent;…;end`` block (another
+    app, another fallback address) ahead of the page's. A code holds only
+    what satellite/enrolment.py's parser takes raw (it refuses a "#" too);
+    anything else is a code the page can't read, and it offers no link."""
+    page = _join("http://192.168.1.20:6370/join#" + PAYLOAD + tail, _app_status())
+    assert not page["bad-code"]["hidden"]
+    assert page["step-room"]["hidden"] and page["open-room"]["href"] is None
+
+
 @pytest.mark.parametrize("no_url", [False, True], ids=["url_parser", "old_browser"])
 def test_a_room_code_for_another_server_is_refused_plainly(no_url):
     """Security review 2026-10-15: the page hands the app only a code that

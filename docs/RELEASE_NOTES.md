@@ -100,6 +100,31 @@ advisories in three packages the server and the rooms install.
   described it is now **Or run the install script yourself**; the old
   `#or-let-the-script-do-it` link lands on the page without the jump.
 
+## 1.3.0 (unreleased) — Security fixes from the code scan
+
+Nothing to do; no migration. GitHub's code scanning (CodeQL) found these,
+each fixed with a test:
+
+- **A crafted reply could freeze the server.** Answering a "did you mean
+  …?" with "yes" and a long run of "sure thing" took the server time that
+  doubled with every repeat; a few hundred characters held it for days.
+  Any paired device (or, before setup, anything on the network) could send
+  one. It now takes a moment, and every reply means what it did before.
+- **A crafted document or chat draft could stall the dashboard.** A save
+  from the document editor made of "<" with no ">", or a chat draft line of
+  "[" with no "]", took time that grew with the square of its length (a
+  large one held the dashboard for minutes to hours). Both now take time in
+  proportion to their length, with the same result as before.
+- **A plugin's table names reached the database as SQL.** The uninstall
+  dialog's row counts put a plugin's table names into a query as written,
+  so a plugin could have had a query of its choosing run, outside its own
+  database role, when an admin opened the dialog. Names are now quoted.
+- **The join page offered a link a crafted address could steer.** A room
+  code with a "#" (or another character no code carries) in a `/join`
+  link now reads as a code the page can't read, instead of being copied
+  into the "open the app" link, where it could name another app or
+  fallback address.
+
 ## 1.3.0 (unreleased) — The installer puts the phone app on the server
 
 - **What changed.** The install now downloads the Android app onto the
