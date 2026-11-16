@@ -1673,6 +1673,16 @@ class Settings(BaseSettings):
     # produce embeddings that match nobody, polluting the audit trail.
     voice_profile_min_utterance_sec: float = 1.0
 
+    # A satellite's introduction collects a few clips of the new voice
+    # (handlers/voice_profile.py: the spelling, counting to ten, one
+    # sentence). A reply clip joins the voiceprint only when its cosine to
+    # the mean of the clips collected so far is at least this, so somebody
+    # else in the room answering ("one, two, three …") isn't mixed into the
+    # person's voice; a clip below it counts as if it were too short.
+    # Below the match threshold on purpose: one person's short clips score
+    # lower against each other than against a voiceprint built from several.
+    voice_profile_intro_clip_min_similarity: float = 0.45
+
     # ONNX Runtime threads for one voice embedding (the speaker model,
     # domovoi/clients/speaker_encoder.py), on the speech executor beside
     # Whisper.

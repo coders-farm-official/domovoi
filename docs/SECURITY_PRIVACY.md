@@ -282,8 +282,9 @@ per introduction, never a recording. The fingerprints of the answers
 (each clip's, made and dropped as every turn's is) are carried in the
 session's pending question until the introduction ends, and the saved
 sample's fingerprint is replaced by all the clips' combined. An answer in
-a voice recognized as somebody else, too short or under music adds
-nothing.
+a voice recognized as somebody else, too short, under music, or unlike
+the clips before it (cosine to their mean under
+`VOICE_PROFILE_INTRO_CLIP_MIN_SIMILARITY`, 0.45) adds nothing.
 
 **"By the way, was that you, X?"** (2026-11-16). A room that scores a
 voice just under the match threshold for one person, clearly ahead of

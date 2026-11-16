@@ -262,16 +262,24 @@ async def test_no_enrols_a_new_namesake_from_the_same_clip(room) -> None:
     priya = await _person("Priya", (PRIYA_OFFICE, "office"))
     asked = await room.say("My name is Priya.", STRANGER)
     assert _reply(asked) == ROOM_QUESTION
-    # The QUESTION's clip is the new person's. (Since 2026-11-16 the answer
-    # is more of their voice too, when it isn't somebody else's: the same
-    # voice answers here.)
-    no = await room.say("No.", STRANGER, trigger="followup")
+    # The QUESTION's clip is the new person's, whoever says the no — and a
+    # no in a voice unlike it isn't mixed in (2026-11-16: an answer that
+    # sounds like the introduction is more of the voice).
+    no = await room.say("No.", PRIYA_HERE, trigger="followup")
     assert _reply(no) == f"{NEW_NAMESAKE} {COUNT_TEXT}"
     people = await _people()
     assert [n for _, n in people] == ["Priya", "Priya"]
     newcomer = people[1][0]
     assert await _samples(priya) == [("satellite", "office")]
     assert await _samples(newcomer) == [("satellite", ROOM)]
+    async with SessionLocal() as s:
+        blob = (await s.execute(
+            text("SELECT embedding FROM voice_profiles WHERE person_id = :p"), {"p": newcomer},
+        )).scalar_one()
+    np.testing.assert_allclose(
+        np.frombuffer(bytes(blob), dtype=np.float32),
+        np.frombuffer(await _vec(STRANGER), dtype=np.float32), atol=1e-6,
+    )
     assert (await room.pending())["stage"] == "count"
 
     # The first Priya, unknown to this room's mic: never guessed.

@@ -385,7 +385,8 @@ speaks for longer gets fewer questions. Your voice is saved as one sample
 as soon as the name is settled, and each answer after that improves it (the
 clips are combined into one voiceprint), so "stop", "never mind" or
 walking away keeps what it already heard, never less than before. A clip
-that's too short, under music or in somebody else's recognized voice adds
+that's too short, under music, in somebody else's recognized voice, or that
+doesn't sound like the clips before it (someone else answering) adds
 nothing. This applies to the re-introduction everyone does after this
 update and to teaching a new room your voice. The phone's chat mic keeps
 the one-clip introduction. Thresholds are unchanged.

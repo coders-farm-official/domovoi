@@ -503,7 +503,8 @@ _WONT_SAVE_TEXT = "Okay, I won't save that."
 # introduction would score the same in that room — but they would outweigh
 # the person's other rooms in their overall centroid, and break "one
 # sample per room" (learning, the room check's cap, "forget me"'s claims).
-# A clip that is too short or under music adds nothing; walking away,
+# A clip that is too short, under music, or unlike the clips so far
+# (somebody else answering: _resembles) adds nothing; walking away,
 # "stop" or "never mind" leaves the sample as it is, never worse than the
 # one-clip introduction. The phone's chat mic keeps the one-clip flow.
 
@@ -602,6 +603,28 @@ def _combined(clips: list[list]) -> np.ndarray | None:
     if not norm:
         return None
     return (mean / norm).astype(np.float32)
+
+
+def _resembles(clips: list[list], clip: list) -> bool:
+    """Whether ``clip`` sounds like the clips collected so far: its cosine to
+    their mean is at least ``voice_profile_intro_clip_min_similarity``.
+    Somebody else answering the spelling or counting must not be mixed into
+    the person's voice; a clip that fails just doesn't count."""
+    mean = _combined(clips)
+    vec = _decode_b64_embedding(clip[0])
+    if mean is None or vec is None:
+        return mean is None and vec is not None
+    norm = float(np.linalg.norm(vec))
+    if not norm:
+        return False
+    similarity = float(np.dot(mean, vec / norm))
+    if similarity < settings.voice_profile_intro_clip_min_similarity:
+        log.info(
+            "introduction: a clip unlike the voice so far (%.3f < %.2f) doesn't count",
+            similarity, settings.voice_profile_intro_clip_min_similarity,
+        )
+        return False
+    return True
 
 
 def _collecting(data: dict) -> bool:
@@ -2009,7 +2032,7 @@ class VoiceProfileHandler(Handler):
             return None, embedding
         clips = _clips(data)
         clip = _turn_clip(ctx, expected=_claimed_by(data))
-        if clip is not None:
+        if clip is not None and _resembles(clips, clip):
             clips.append(clip)
         together = _combined(clips)
         return clips, together if together is not None else embedding
@@ -2156,7 +2179,7 @@ class VoiceProfileHandler(Handler):
             return None
         clips = _clips(data)
         clip = _turn_clip(ctx, expected=person_id)
-        if clip is not None and not await self._is_denylisted(
+        if clip is not None and _resembles(clips, clip) and not await self._is_denylisted(
             _decode_b64_embedding(clip[0]), session,
         ):
             clips.append(clip)

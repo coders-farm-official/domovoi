@@ -27,6 +27,7 @@ its speech length is the recording's.
 
 from __future__ import annotations
 
+import hashlib
 import time
 
 import numpy as np
@@ -74,8 +75,33 @@ COUNTING = "One, two, three, four, five, six, seven, eight, nine, ten."
 
 
 def _pcm(seconds: float, level: int) -> bytes:
-    """``seconds`` of one voice (the stub: its own vector per ``level``)."""
+    """``seconds`` of one voice: ``level`` is the voice (see ``voices``)."""
     return np.full(int(16_000 * seconds), level, dtype=np.int16).tobytes()
+
+
+@pytest.fixture(autouse=True)
+def voices(monkeypatch):
+    """A stub embedder that hears voices: the plain stub gives every PCM an
+    unrelated vector, so two clips of one person would never resemble each
+    other. Here a clip's vector is its voice's (the PCM's level, rounded to
+    hundreds: 601 and 602 are one person) plus a little of the clip's own,
+    about 0.9 apart for one voice and about 0 for two."""
+    from domovoi.clients import voice_embedder
+
+    async def embed_print(self, pcm: bytes):
+        if not pcm:
+            return None
+        level = int(np.frombuffer(pcm[:2], dtype=np.int16)[0])
+        base = np.random.default_rng(level // 100).standard_normal(voice_embedder.EMBEDDING_DIM)
+        own = np.random.default_rng(
+            int.from_bytes(hashlib.sha256(pcm).digest()[:8], "big"),
+        ).standard_normal(voice_embedder.EMBEDDING_DIM)
+        v = (base + 0.3 * own).astype(np.float32)
+        return voice_embedder.VoicePrint(
+            current=v / np.linalg.norm(v), snr_db=None, speech_sec=len(pcm) / 32_000,
+        )
+
+    monkeypatch.setattr(StubVoiceEmbedder, "embed_print", embed_print)
 
 
 async def _vec(pcm: bytes) -> np.ndarray:
@@ -167,6 +193,39 @@ async def test_counting_that_reaches_eight_seconds_ends_it(room) -> None:
 
 
 @requires_db
+async def test_somebody_else_counting_is_not_mixed_in(room) -> None:
+    """Another voice (unknown to the house) counts instead: it would have
+    made eight seconds, but it doesn't sound like the introduction, so it
+    counts as if it were too short and the sentence is asked for."""
+    intro, spelled = _pcm(1.0, 691), _pcm(1.5, 692)
+    await room.say("My name is Sarah.", intro)
+    assert _reply(await room.say("S A R A H", spelled, trigger="followup")) == COUNT
+    other = await room.say(COUNTING, _pcm(6.0, 901), trigger="followup")
+    assert _reply(other) == SENTENCE
+    people = await _people()
+    rows = await _sample_rows(people[0][0])
+    assert len(rows) == 1 and rows[0][2] == pytest.approx(2.5)
+    np.testing.assert_allclose(
+        np.frombuffer(rows[0][0], dtype=np.float32),
+        _together(await _vec(intro), await _vec(spelled)), atol=1e-6,
+    )
+
+
+def test_a_clip_counts_only_when_it_resembles_the_clips_so_far(monkeypatch) -> None:
+    a = np.zeros(voice_profile.EMBEDDING_DIM, dtype=np.float32)
+    a[0] = 1.0
+    near = a.copy()
+    near[1] = 1.0                        # cosine 0.707 to a
+    far = np.zeros_like(a)
+    far[2] = 1.0                         # cosine 0
+    clips = [[voice_profile._b64_embedding(a), 1.0]]
+    assert voice_profile._resembles(clips, [voice_profile._b64_embedding(near), 1.0])
+    assert not voice_profile._resembles(clips, [voice_profile._b64_embedding(far), 1.0])
+    monkeypatch.setattr(voice_profile.settings, "voice_profile_intro_clip_min_similarity", 0.8)
+    assert not voice_profile._resembles(clips, [voice_profile._b64_embedding(near), 1.0])
+
+
+@requires_db
 async def test_stop_keeps_what_was_heard(room) -> None:
     intro, spelled = _pcm(1.0, 621), _pcm(1.0, 622)
     await room.say("My name is Sarah.", intro)
@@ -193,8 +252,8 @@ async def test_never_mind_while_counting_and_before_the_name_is_settled(room) ->
     assert [n for _p, n in await _people()] == ["Sarah"]
 
     # Before the name is settled nothing is saved, as before.
-    await room.say("My name is Priya.", _pcm(1.0, 634))
-    assert _reply(await room.say("Never mind.", _pcm(1.0, 634), trigger="followup")) == (
+    await room.say("My name is Priya.", _pcm(1.0, 834))
+    assert _reply(await room.say("Never mind.", _pcm(1.0, 834), trigger="followup")) == (
         "Okay, I won't save that."
     )
     assert [n for _p, n in await _people()] == ["Sarah"]
