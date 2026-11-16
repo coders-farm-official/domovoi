@@ -460,7 +460,7 @@ def test_at_most_a_few_copies_per_utterance(pipeline) -> None:
 
 
 def test_noisy_capture_discards_the_copy(pipeline) -> None:
-    whisper = pipeline["whisper"] = _WatchedWhisper("pause", delay=0.2)
+    pipeline["whisper"] = _WatchedWhisper("pause", delay=0.2)
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         _connect(ws, hints=True)
         ws.send_text(json.dumps({"type": "utterance_start", "trigger": "wake_word", "utt": 1}))

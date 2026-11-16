@@ -383,10 +383,11 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
   }
   {
     // The phone app on this server (GET /api/satellites/android-app, an
-    // admin read). First-run setup puts it here while the server is online
-    // (owner decision 2026-11-15); until it is here, this stays a reminder
-    // that the server needs the internet once to download it. A server
-    // from before the app (no release) has nothing to say.
+    // admin read). The install puts it here with its other downloads
+    // (owner decision 2026-11-15, scripts/linux/provision.sh phone-app);
+    // when it couldn't, or on a server set up by hand, this stays a
+    // reminder that the server needs the internet once to download it. A
+    // server from before the app (no release) has nothing to say.
     const c = { key: 'phoneapp', part: 'rooms', label: 'phone app', scope: 'admin', order: 11.5,
                 fix: '#settings/phones-and-browsers/get-the-app', fixLabel: 'get the app' };
     const app = phoneApp;
@@ -394,12 +395,7 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     else if (!app) add(unread(c));
     else if (!app.release) add({ ...c, tone: 'idle', text: 'no app release yet' });
     else if (app.fetch && app.fetch.running) add({ ...c, tone: 'idle', text: 'downloading the phone app to this server…' });
-    else if (!app.ready && app.auto && app.auto.setup && app.auto.waiting_for_answer) {
-      add({ ...c, tone: 'warn',
-            text: "the phone app isn't on this server yet · setup downloads it once you say whether this box has internet" });
-    } else if (!app.ready && app.auto && app.auto.setup && app.auto.state === 'waiting' && !(app.auto.tries > 0)) {
-      add({ ...c, tone: 'idle', text: 'setup is about to put the phone app on this server' });
-    } else if (app.ready) {
+    else if (app.ready) {
       add({ ...c, tone: 'ok', text: `on this server · phones can install Domovoi ${app.release.version_name} from here` });
     } else {
       add({ ...c, tone: 'warn',

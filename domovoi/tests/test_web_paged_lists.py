@@ -27,7 +27,6 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 

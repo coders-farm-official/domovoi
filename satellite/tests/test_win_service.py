@@ -5,8 +5,6 @@ log. No real engine is started: the spawn is a fake."""
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 
 import pytest
 

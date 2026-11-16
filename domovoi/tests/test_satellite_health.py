@@ -9,7 +9,6 @@ SimpleNamespace app, `session_scope` replaced), so it cannot hide behind
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import logging

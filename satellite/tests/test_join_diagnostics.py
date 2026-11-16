@@ -19,7 +19,7 @@ from satellite import join_diag
 from satellite import portal_pages
 from satellite import provisioning_mode as pm
 from satellite.tests.test_portal_transport import _get, _post, portal  # noqa: F401
-from satellite.tests.test_wifi_security_matrix import PSK, SECRETS, HINT, SSID, Radio
+from satellite.tests.test_wifi_security_matrix import PSK, SSID, Radio
 
 MAIN = "50:91:e3:12:3c:ef"         # the TP-Link
 SECOND = "a8:42:a1:77:01:9b"       # the second access point
@@ -48,9 +48,9 @@ JOURNAL_WRONG_KEY = "\n".join([
     "wlan0: WPA: 4-Way Handshake failed - pre-shared key may be incorrect",
     f"wlan0: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid=\"{SSID}\" auth_failures=1 duration=10 reason=WRONG_KEY",
     f"wlan0: CTRL-EVENT-DISCONNECTED bssid={SECOND} reason=15",
-    f"<info> device (wlan0): Activation: (wifi) disconnected during association, asking for new key",
+    "<info> device (wlan0): Activation: (wifi) disconnected during association, asking for new key",
     "<info> dhcp4 (wlan0): something irrelevant",
-    f"wlan0: CTRL-EVENT-REGDOM-CHANGE init=USER type=COUNTRY alpha2=US",
+    "wlan0: CTRL-EVENT-REGDOM-CHANGE init=USER type=COUNTRY alpha2=US",
     f"<info> device (wlan0): own address {SELF} psk={PSK}",
 ])
 

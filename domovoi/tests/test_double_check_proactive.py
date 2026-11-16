@@ -23,7 +23,6 @@ from domovoi.db.repositories import (
 )
 from domovoi.handlers.double_check import (
     AUTO_SEARCH_OFFER_THRESHOLD,
-    DoubleCheckHandler,
     _parse_answer_from_sources,
 )
 from domovoi.models import Context, Intent

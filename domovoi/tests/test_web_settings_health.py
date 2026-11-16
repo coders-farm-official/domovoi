@@ -91,24 +91,22 @@ BAD = {
     "plugins": {"plugins": [{"slug": "radio", "name": "Radio", "status": "load_error", "enabled": True}]},
     "version": {"sha": "abc1234def", "last_update": {"status": "failed", "finished_at": "2026-10-20T03:00:00Z"},
                 "restart_required": True},
-    # The phone app isn't on the server (setup couldn't download it).
+    # The phone app isn't on the server (the install couldn't download it).
     "phoneApp": {"release": {"version_name": "1.2.0"}, "ready": False, "fetch": {"running": False},
-                 "auto": {"state": "failed", "tries": 5, "setup": True}},
+                 "auto": {"state": "skipped", "tries": 0}},
 }
-CORE_DOWN ={**GREEN, "health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False}}
+CORE_DOWN = {**GREEN, "health": {"status": "degraded", "db_reachable": True, "domovoi_reachable": False}}
 UNREAD = {"viewer": {**ADMIN, "known": False}, "health": None, "rooms": None, "plugins": None, "pluginErrors": {}, "acq": None,
           "approvals": None, "pending": None, "version": None, "hardware": None, "config": None,
           "internet": None, "guard": {"loaded": False}, "memory": None, "phoneApp": None}
 MEM_LOW = {**GREEN, "memory": MEM_LINUX_LOW}
 MEM_NA = {**GREEN, "memory": MEM_OFF}
-# The phone app during first-run setup (owner decision 2026-11-15).
+# The phone app not on the server: the install couldn't download it, or a
+# server set up by hand (owner decision 2026-11-15).
 APP_MISSING = {"release": {"version_name": "1.2.0"}, "ready": False, "fetch": {"running": False}, "auto": {}}
-APP_SETUP_SOON = {**GREEN, "phoneApp": {**APP_MISSING, "auto": {"state": "waiting", "tries": 0, "setup": True}}}
 APP_DOWNLOADING = {**GREEN, "phoneApp": {**APP_MISSING, "fetch": {"running": True}}}
 APP_NO_RELEASE = {**GREEN, "phoneApp": {"release": None, "ready": False}}
 APP_OLD_SERVER = {**GREEN, "phoneApp": APP_MISSING}
-APP_NEEDS_ANSWER = {**GREEN, "phoneApp": {**APP_MISSING, "auto": {"state": "waiting", "tries": 0, "setup": True,
-                                                                  "waiting_for_answer": True}}}
 
 _CHECKS = r"""
   const w = h.global('window');
@@ -260,11 +258,10 @@ SCENARIOS: dict[str, dict] = {
         "files": [COMPONENTS, HEALTH, HOME], "component": "(window.HomeAttentionRows = HomeAttentionRows, HomePage)",
         "setup": "window.__CASES = " + json.dumps({"green": GREEN, "bad": BAD, "core_down": CORE_DOWN,
                                                    "unread": UNREAD, "mem_low": MEM_LOW,
-                                                   "mem_na": MEM_NA, "app_setup_soon": APP_SETUP_SOON,
+                                                   "mem_na": MEM_NA,
                                                    "app_downloading": APP_DOWNLOADING,
                                                    "app_no_release": APP_NO_RELEASE,
-                                                   "app_old_server": APP_OLD_SERVER,
-                                                   "app_needs_answer": APP_NEEDS_ANSWER}) + ";",
+                                                   "app_old_server": APP_OLD_SERVER}) + ";",
         "script": _CHECKS,
     },
     "search": {
@@ -385,10 +382,11 @@ def test_home_lists_the_problems_among_the_same_checks_linking_into_health(drive
 
 
 def test_home_reminds_until_the_phone_app_is_on_the_server(driven) -> None:
-    """Owner decision 2026-11-15: setup puts the app on the server; when it
-    couldn't, Home keeps the reminder (an admin's row) until it is there.
-    Never while setup is about to try or a download runs, never on a
-    server with no app release, and gone once the app is here."""
+    """Owner decision 2026-11-15: the install puts the app on the server;
+    when it couldn't (or on a server set up by hand), Home and Health keep
+    an admin's reminder row until it is there. Never while a download
+    runs, never on a server with no app release, gone once the app is
+    here, and no "setup" talk."""
     checks = driven["checks"]
     want = "the phone app isn't on this server yet · it needs the internet once to download it"
     for case in ("bad", "app_old_server"):
@@ -396,20 +394,22 @@ def test_home_reminds_until_the_phone_app_is_on_the_server(driven) -> None:
         assert by["phoneapp"]["tone"] == "warn" and by["phoneapp"]["text"] == want, case
         assert by["phoneapp"]["scope"] == "admin" and by["phoneapp"]["fix"] == "#settings/phones-and-browsers/get-the-app"
         assert ("phoneapp", "warn") in [(r["key"], r["tone"]) for r in checks[case]["home"]], case
-    for case, text in (("app_setup_soon", "setup is about to put the phone app on this server"),
-                       ("app_downloading", "downloading the phone app to this server…"),
+    for case, text in (("app_downloading", "downloading the phone app to this server…"),
                        ("app_no_release", "no app release yet")):
         by = {c["key"]: c for c in checks[case]["checks"]}
         assert by["phoneapp"]["tone"] == "idle" and by["phoneapp"]["text"] == text, case
         assert checks[case]["home"] == [], case
-    by = {c["key"]: c for c in checks["app_needs_answer"]["checks"]}
-    assert by["phoneapp"]["tone"] == "warn" and by["phoneapp"]["text"] == (
-        "the phone app isn't on this server yet · setup downloads it once you say whether this box has internet")
     green = {c["key"]: c for c in checks["green"]["checks"]}
     assert green["phoneapp"]["tone"] == "ok" and "phones can install Domovoi 1.2.0 from here" in green["phoneapp"]["text"]
+    for case in checks.values():
+        for c in case["checks"]:
+            if c["key"] == "phoneapp":
+                assert "setup" not in c["text"].lower(), c["text"]
+    health = _src("health.jsx")
+    assert "waiting_for_answer" not in health and "auto.setup" not in health
     home = _src("home.jsx")
     assert "useCachedObject(admin ? '/api/satellites/android-app' : null" in home, "an admin read only"
-    assert "phoneApp: phoneApp.data" in home and "phoneApp: phoneApp.data" in _src("health.jsx")
+    assert "phoneApp: phoneApp.data" in home and "phoneApp: phoneApp.data" in health
 
 
 def test_a_down_core_is_the_only_story_and_the_rest_wait(driven) -> None:

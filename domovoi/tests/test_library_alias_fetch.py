@@ -45,7 +45,6 @@ import pytest
 from sqlalchemy import text
 
 from domovoi import connectivity, lifecycle
-from domovoi.clients import musicbrainz as mbmod
 from domovoi.clients.musicbrainz import (
     HttpMusicBrainzClient,
     MbAlias,

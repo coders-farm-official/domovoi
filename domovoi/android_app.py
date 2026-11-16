@@ -18,13 +18,13 @@ the first release exists, and then every page says so plainly.
 This module is the core's half, shaped like the Windows satellite's
 runtime (domovoi/satellite_windows.py):
 
-* :func:`fetch` — by itself during first-run setup, else when an admin
-  presses the dashboard's button (see **During setup** below), each APK the
-  manifest names is downloaded from that GitHub release only (the URL is
-  fixed by the tag and file name; through the outbound gate,
-  domovoi/net_safety.py) into
+* :func:`fetch` — at install (see **At install** below), or when an admin
+  presses the dashboard's button, each APK the manifest names is
+  downloaded from that GitHub release only (the URL is fixed by the tag
+  and file name; through the outbound gate, domovoi/net_safety.py) into
   ``~/.domovoi/satellite_media/cache/android_app/<versionCode>/`` and kept
-  only if :func:`check_apk` passes. Refused under ``INTERNET_ACCESS=never``.
+  only if :func:`check_apk` passes. Refused under ``INTERNET_ACCESS=never``
+  (the install's fetch aside).
 * :func:`accept_upload` — the same files dropped in by an admin (a house
   with no internet, or a slow line): kept only if one of the manifest's
   entries matches it exactly and :func:`check_apk` passes.
@@ -69,29 +69,23 @@ every phone was told to ask. Now:
 * :func:`auto_refresh` fetches the new release by itself, once per start
   with backoff, ONLY where the app was already on this server (an older
   release in the cache) and internet access is "always"
-  (:func:`auto_fetch_decision`; docs/INTERNET.md). "Sometimes" keeps big
-  automatic downloads off, as it does for podcasts.
+  (:func:`auto_fetch_decision`; docs/INTERNET.md). The core never makes the
+  first download by itself, and "sometimes" keeps big automatic downloads
+  off, as it does for podcasts.
 
-**During setup** (owner decision 2026-11-15, which replaces the 2026-10-15
-rule that the first download is always an admin's button press). First-run
-setup puts the app on the server while it is online, so the household can
-later hand it to phones that have no internet. "Setup" is a core start
-while no admin has claimed the server (domovoi/admin_auth.py
-``ensure_setup_code_if_unclaimed``): every install, Linux, the Windows
-installer's WSL distro and the Mac, starts its core that way, so the one
-hook in domovoi/main.py covers them all. :func:`auto_refresh` then runs with
-``setup=True``: a first try soon after the start (:data:`SETUP_DELAYS`),
-retries with backoff while it fails, in the background, only once the
-internet question is answered "always" or "sometimes" (never under "never";
-an unanswered question is not permission, since the person installing may
-answer "never" a minute later: that try waits, the answer is looked at
-every :data:`SETUP_ANSWER_POLL` seconds and read again before each try),
-and never while the container guard's freeze is on.
-When it can't (no internet, "never", a failed or partial download, a file
-:func:`check_apk` refuses) the dashboard says so and keeps saying it until
-the app is here: the server needs the internet once, at some point, or an
-admin uploads the APKs (:func:`accept_upload`). After setup it is as
-before: an admin's press, or the refresh after an update.
+**At install** (owner decision 2026-11-15, which replaces the 2026-10-15
+rule that the first download is always an admin's button press). The
+installer puts the app on the server with the other install-time downloads
+(the voices, Whisper, the speaker model, the Ollama models): the
+``phone-app`` step of scripts/linux/provision.sh, which the Windows
+installer runs inside its WSL distro too, calls :func:`fetch` with the
+egress gate held open, whatever the internet answer, as provisioning does
+for every download it makes ahead. It is never fatal: an install with no
+internet finishes and says the phone app couldn't be downloaded. Until the
+app is here (that install, or a server set up by hand) the dashboard says
+so: the server needs the internet once, at some point, to download it
+(an admin's "Download the app to this server"), or an admin uploads its
+files (:func:`accept_upload`).
 """
 
 from __future__ import annotations
@@ -682,40 +676,23 @@ def start_fetch(manifest: dict[str, Any]) -> bool:
 # ─── keeping it current after an update ───────────────────────────────────
 # An update that brings a new release.json leaves the old release serving
 # (_fallback) and, where the household allows it, fetches the new one by
-# itself: the app was put on this server, and this keeps it current. Never
-# under "sometimes" (big automatic downloads stay off, docs/INTERNET.md) or
-# "never", never before the question is answered (every default stays as
-# it was), and never while the container guard's freeze is on. Once per
-# start: a first try after AUTO_DELAYS[0], then a retry after each later
-# delay while it fails.
-#
-# First-run setup (owner decision 2026-11-15) is the one time it also makes
-# the FIRST download by itself: setup=True, under "always" or "sometimes"
-# only; unanswered waits for the answer (the module docstring, "During
-# setup").
+# itself: the app was put on this server (at install, or by an admin), and
+# this keeps it current. Never the first download (that is the install's,
+# scripts/linux/provision.sh phone-app, or an admin's), never under "sometimes" (big automatic downloads stay off,
+# docs/INTERNET.md) or "never", never before the question is answered
+# (every default stays as it was), and never while the container guard's
+# freeze is on. Once per start: a first try after AUTO_DELAYS[0], then a
+# retry after each later delay while it fails.
 
 AUTO_DELAYS = (120.0, 600.0, 3600.0, 6 * 3600.0, 24 * 3600.0)
-#: Setup's tries: the first soon after the start (whoever is installing is
-#: about to open the dashboard), then the same backoff.
-SETUP_DELAYS = (15.0, 120.0, 600.0, 3600.0, 6 * 3600.0)
-#: While setup waits for the internet question, how often the answer is
-#: looked at, so the download starts soon after it is answered.
-SETUP_ANSWER_POLL = 5.0
-#: Setup's word while the internet question is unanswered: no download yet.
-WAITING_FOR_ANSWER = "waiting for the internet question in setup (Settings → Internet)"
 
-_auto: dict[str, Any] = {"state": "idle", "reason": None, "tries": 0, "next_at": None, "setup": False,
-                         "waiting_for_answer": False}
+_auto: dict[str, Any] = {"state": "idle", "reason": None, "tries": 0, "next_at": None}
 
 
-def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None, *,
-                        setup: bool = False) -> tuple[bool, str]:
+def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None) -> tuple[bool, str]:
     """Whether :func:`auto_refresh` may fetch this release now, and why
     (or why not), under the internet answer ``policy`` (default: the live
-    one, domovoi/egress.py). ``setup``: this start is first-run setup,
-    which puts the app on the server under "always" or "sometimes"; an
-    unanswered question is not permission (:data:`WAITING_FOR_ANSWER`:
-    the person installing may answer "never" a minute later)."""
+    one, domovoi/egress.py)."""
     from domovoi import egress
 
     rel = manifest.get("release")
@@ -726,11 +703,6 @@ def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None, *,
     pol = egress.policy() if policy is None else policy
     if pol == "never":
         return False, "internet access is turned off for this box (Settings → Internet): upload the APKs instead"
-    if setup and pol not in ("always", "sometimes"):
-        return False, WAITING_FOR_ANSWER
-    if setup:
-        return True, (f"setting up: putting the phone app (Domovoi {rel['version_name']}) on this server, "
-                      "so phones without internet can install it from here")
     if pol == "sometimes":
         return False, ("internet access is “sometimes”, so big downloads wait for an admin: press "
                        "“Download the app to this server”")
@@ -739,64 +711,35 @@ def auto_fetch_decision(manifest: dict[str, Any], policy: str | None = None, *,
                        "for an admin: press “Download the app to this server”")
     fb = _fallback(manifest)
     if fb is None:
-        return False, ("the app isn't on this server yet and setup is over: it needs the internet once to "
-                       "download it (“Download the app to this server”), or an admin uploads its APKs")
+        return False, ("the app isn't on this server yet: it needs the internet once to download it "
+                       "(“Download the app to this server”), or an admin uploads its files")
     return True, f"updating the app on this server from Domovoi {fb['version_name']} to {rel['version_name']}"
 
 
 async def auto_refresh(load: Callable[[], dict[str, Any]] | None = None, *,
-                       delays: tuple[float, ...] | None = None,
+                       delays: tuple[float, ...] = AUTO_DELAYS,
                        sleep: Callable[[float], Awaitable[Any]] | None = None,
                        frozen: Callable[[], Awaitable[bool]] | None = None,
-                       poll: float = 2.0, setup: bool = False,
-                       answer_poll: float = SETUP_ANSWER_POLL) -> str:
+                       poll: float = 2.0) -> str:
     """Fetch the manifest's release in the background when
     :func:`auto_fetch_decision` allows it: once, with a retry after each of
-    ``delays`` (default :data:`AUTO_DELAYS`, or :data:`SETUP_DELAYS` during
-    first-run ``setup``) while it fails. Returns the last word (also in
-    ``_auto``, which the admin card shows). During setup an unanswered
-    internet question skips that try (:data:`WAITING_FOR_ANSWER`), and the
-    wait for the next one ends early once it is answered (looked at every
-    ``answer_poll`` seconds); the answer is read again before every try."""
+    ``delays`` while it fails. Returns the last word (also in ``_auto``,
+    which the admin card shows)."""
     import asyncio
-
-    from domovoi import egress
 
     sleep = sleep or asyncio.sleep
     load = load or load_manifest
-    if delays is None:
-        delays = SETUP_DELAYS if setup else AUTO_DELAYS
-    _auto.update(setup=setup, waiting_for_answer=False)
     why = "not tried"
-
-    async def wait(delay: float) -> None:
-        if not (setup and egress.policy() == ""):
-            await sleep(delay)
-            return
-        waited = 0.0
-        while waited < delay:
-            step = min(answer_poll, delay - waited)
-            await sleep(step)
-            waited += step
-            if egress.policy() != "":
-                return
-
     for i, delay in enumerate(delays):
         _auto.update(state="waiting", next_at=time.time() + delay)
-        await wait(delay)
+        await sleep(delay)
         _auto["next_at"] = None
         try:
             manifest = load()
         except ManifestError as e:
             _auto.update(state="skipped", reason=str(e))
             return str(e)
-        go, why = auto_fetch_decision(manifest, setup=setup)
-        _auto["waiting_for_answer"] = why == WAITING_FOR_ANSWER
-        if not go and why == WAITING_FOR_ANSWER:
-            # Not permission yet: the next step asks again.
-            _auto.update(state="waiting" if i + 1 < len(delays) else "skipped", reason=why)
-            log.info("Android app: %s", why)
-            continue
+        go, why = auto_fetch_decision(manifest)
         if not go:
             _auto.update(state="done" if _complete(manifest) else "skipped", reason=why)
             log.info("Android app: no automatic download: %s", why)
@@ -823,18 +766,14 @@ async def auto_refresh(load: Callable[[], dict[str, Any]] | None = None, *,
 _auto_task: Any = None
 
 
-def schedule_auto_refresh(frozen: Callable[[], Awaitable[bool]] | None = None, *,
-                          setup: bool = False) -> None:
-    """Start :func:`auto_refresh` on the running loop (the core's start).
-    ``setup``: no admin has claimed this server yet, so this start is
-    first-run setup, which puts the app here by itself."""
+def schedule_auto_refresh(frozen: Callable[[], Awaitable[bool]] | None = None) -> None:
+    """Start :func:`auto_refresh` on the running loop (the core's start)."""
     import asyncio
 
     global _auto_task
     if _auto_task is not None and not _auto_task.done():
         return
-    _auto_task = asyncio.get_running_loop().create_task(auto_refresh(frozen=frozen, setup=setup),
-                                                        name="android-app-refresh")
+    _auto_task = asyncio.get_running_loop().create_task(auto_refresh(frozen=frozen), name="android-app-refresh")
 
 
 async def cancel_auto_refresh() -> None:

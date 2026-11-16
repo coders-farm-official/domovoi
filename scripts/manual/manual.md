@@ -1423,8 +1423,8 @@ included. It comes from your own server; no store is needed.
 
 1. On the dashboard, [Settings → Household → Phones & browsers →
    Get the Domovoi app](#settings/phones-and-browsers) shows a QR code.
-   Setup puts the app on the server while it is online. If the card says
-   the app isn't on the server yet, the server needs the internet once to
+   The installer puts the app on the server. If the card says the phone
+   app isn't on this server, the server needs the internet once to
    download it: ask whoever set up Domovoi to press **Download the app to
    this server**, or, with no internet, to **upload an APK** there.
 2. Scan the code with the phone's camera and install. Android asks you to

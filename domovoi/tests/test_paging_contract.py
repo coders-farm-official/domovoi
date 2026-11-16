@@ -266,7 +266,7 @@ def test_memo_computes_once_per_key_and_keeps_a_few():
         s.memo("q", lambda: calls.append(1) or [1, 2])
     assert calls == [1]
     for i in range(20):
-        s.memo(i, lambda: i)
+        s.memo(i, lambda: i)  # noqa: B023 - called inside the iteration, never kept
     assert "q" not in s._memo and len(s._memo) == 8
 
 

@@ -829,7 +829,7 @@ def test_the_followup_capture_opens_only_once_the_question_has_played(room_facto
         room.start()
         room.on_end[1] = reply(followup=True, tts_s=1.5)
         room.say(WAKE_AND_COMMAND)
-        room.wait_until(lambda: len(room.captures) == 2, 20)
+        room.wait_until(lambda: len(room.captures) == 2, 20)  # noqa: B023 - called inside the iteration, never kept
         room.stop()
         drained = room.sat._playback_idle.sets[-1]
         assert room.captures[1]["start"] >= drained, room.timeline()

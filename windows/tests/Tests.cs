@@ -522,6 +522,19 @@ static partial class Tests
             True(ProvisionLine.TryParse(RealFinal).Ai == null, "an older script: unknown");
             True(ReadyWith(false).Ai == false && ReadyWith(true).Ai == true && ReadyWith(null).Ai == null, "status round trip");
         });
+        Run("phone app: provision.sh's phone_app reaches the host's status, for Setup's last page", delegate
+        {
+            var p = ProvisionLine.TryParse(RealFinal.Replace("\"warnings\":2", "\"phone_app\":false,\"warnings\":2"));
+            True(p != null && p.PhoneApp == false && p.Result == "ok", "false: the install still finished");
+            p = ProvisionLine.TryParse(RealFinal.Replace("\"warnings\":2", "\"phone_app\":true,\"warnings\":2"));
+            True(p != null && p.PhoneApp == true, "true");
+            True(ProvisionLine.TryParse(RealFinal).PhoneApp == null, "an older script: unknown");
+            foreach (bool? v in new bool?[] { false, true, null })
+            {
+                var s = new HostStatus(); s.State = "ready"; s.PhoneApp = v;
+                True(HostStatus.FromJson(Json.ParseObject(Json.Serialize(s.ToJson()))).PhoneApp == v, "status round trip " + v);
+            }
+        });
         Run("ai: the record takes provision.sh's reported ai, not the click", delegate
         {
             // Yes clicked (keep), but the household's .env had AI off.

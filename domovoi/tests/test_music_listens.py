@@ -726,7 +726,7 @@ async def test_room_song_that_ran_out_between_looks_finished(clean, room_player,
     from domovoi.config import settings
     from domovoi.workers.listen_logger import ListenLogger
 
-    ids = await _seed()
+    await _seed()
     clock = _Clock()
     worker = ListenLogger(clock=clock)
     _play(room_player, "Otis/Dock.mp3", 7, elapsed=94.0)    # 100 s song, 94 s in

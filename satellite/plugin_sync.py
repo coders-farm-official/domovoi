@@ -42,7 +42,7 @@ from typing import Any
 
 import requests
 
-from satellite.sound_sync import _safe_rel, _sha256, safe_dest
+from satellite.sound_sync import _sha256, safe_dest
 
 log = logging.getLogger("satellite.plugin_sync")
 

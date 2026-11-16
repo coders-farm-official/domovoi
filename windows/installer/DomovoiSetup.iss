@@ -191,6 +191,9 @@ var
   AiSavedDefault, AiSavedFrom: String;
   { What provision.sh reported once Domovoi was up: yes, no, or ''. }
   AiReported: String;
+  { Whether provision.sh put the phone app on the server: yes, no (it
+    couldn't download it: the last page says so), or '' (unknown). }
+  PhoneAppReported: String;
   InternetPage: TWizardPage;
   InternetIntro: TNewStaticText;
   RadioAlways, RadioSometimes, RadioNever: TNewRadioButton;
@@ -1082,6 +1085,10 @@ begin
     if LanName <> '' then
       LanText.Caption := LanText.Caption + 'In a browser on your home network you can also type http://' + LanName + ':6369.' + #13#10;
     LanText.Caption := LanText.Caption + ModelsText(GpuRaw, TierText);
+    { provision.sh's phone-app step is never fatal: when it couldn't
+      download the Android app, its warning, in its words. }
+    if PhoneAppReported = 'no' then
+      LanText.Caption := LanText.Caption + #13#10 + 'The phone app couldn''t be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings).';
   end
   else
   begin
@@ -1222,6 +1229,7 @@ begin
         or the household's domovoi/.env): the last page says that, and the
         install record keeps it, not the click. }
       AiReported := KvValue(Lines, 'ai');
+      PhoneAppReported := KvValue(Lines, 'phone_app');
       if AiReported <> '' then
         if not RunHelper(AppHelper, 'record-ai', Ignored, Code) or (Code <> 0) then
           Log('record-ai did not work: ' + KvValue(Ignored, 'error'));

@@ -260,7 +260,7 @@ def house(**over) -> dict:
         "GET /api/satellites/pending": [],
         "GET /api/config/version": {"restart_required": False, "last_update": None, "bad_sha": None},
         "GET /api/models/hardware": {"disk": {"percent": 40.0}},
-        # The phone app is on the server (setup put it there, 2026-11-15).
+        # The phone app is on the server (the install put it there, 2026-11-15).
         "GET /api/satellites/android-app": {"release": {"version_name": "1.2.0"}, "ready": True,
                                             "fetch": {"running": False}, "auto": {}},
     }

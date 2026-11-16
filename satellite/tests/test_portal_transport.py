@@ -611,7 +611,6 @@ def test_no_wifi_interface_is_a_clear_error(monkeypatch, tmp_path):
     monkeypatch.setattr(pt, "_IFACE_WAIT_SEC", 0.05)
     monkeypatch.setattr(pt, "_IFACE_POLL_SEC", 0.01)
     monkeypatch.setattr(pt.time, "sleep", lambda s: None)
-    calls = []
     t = pt.PortalTransport(
         ap_ssid="x", ap_psk="y", device_profile="xvf3800_usb",
         ip="127.0.0.1", bind_host="127.0.0.1", port=0,

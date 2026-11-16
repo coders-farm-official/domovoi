@@ -11,9 +11,8 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import text
 
-from domovoi.clients.searxng import SearchResult, SearxNGStubClient
+from domovoi.clients.searxng import SearxNGStubClient
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.double_check import (
     DoubleCheckHandler,

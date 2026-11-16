@@ -12,7 +12,7 @@ from domovoi.clients.mpd import MPDNotProvisioned, get_mpd_client_for
 from domovoi.db.repositories import utcnow
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.shared.tool_gate import is_plain_knowledge_question
-from domovoi.models import Context, Intent, Response
+from domovoi.models import Context, Response
 
 log = logging.getLogger(__name__)
 

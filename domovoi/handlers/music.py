@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import random
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,8 +39,6 @@ from domovoi.handlers.shared import phone_play
 from domovoi import music_listens
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Context, Intent, Response
-from domovoi.log_privacy import said
-from domovoi.log_privacy import said
 from domovoi.log_privacy import said
 from domovoi.music_pause import note_paused_by_person
 

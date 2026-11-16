@@ -17,7 +17,6 @@ from sqlalchemy import text
 from domovoi.clients.mpd import MPDStubClient
 from domovoi.config import settings
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
-from domovoi.handlers.music import MusicHandler
 from domovoi.handlers.spoken_audio import (
     SpokenAudioHandler,
     _NEXT_CHAPTER_RE,

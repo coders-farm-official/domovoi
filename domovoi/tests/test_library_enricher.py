@@ -15,7 +15,6 @@ test_enricher_recovery.py. The sweep tests pin a provider as available
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

@@ -290,8 +290,8 @@ def validate_pwg(buf: bytes, *, supported_res: Iterable[str] | None = None,
         if len(h) < PWG_HEADER:
             problems.append("short header")
             break
-        u = lambda o: struct.unpack_from("!I", h, o)[0]  # noqa: E731
-        i32 = lambda o: struct.unpack_from("!i", h, o)[0]  # noqa: E731
+        u = lambda o: struct.unpack_from("!I", h, o)[0]  # noqa: E731, B023 - called inside the iteration
+        i32 = lambda o: struct.unpack_from("!i", h, o)[0]  # noqa: E731, B023 - called inside the iteration
         info = {
             "PwgRaster": h[0:64].split(b"\0")[0].decode("ascii", "replace"),
             "Duplex": u(272), "HWResolution": (u(276), u(280)), "PageSize": (u(352), u(356)),

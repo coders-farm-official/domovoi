@@ -27,7 +27,6 @@ from web.backend.collab.protocol import (
     MSG_AWARENESS,
     MSG_CONTROL,
     MSG_SYNC,
-    SYNC_STEP1,
     SYNC_STEP2,
     SYNC_UPDATE,
     AwarenessEntry,

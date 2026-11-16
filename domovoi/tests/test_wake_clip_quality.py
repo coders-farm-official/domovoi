@@ -8,7 +8,6 @@ selected-only training staging.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from domovoi import wake_clip_quality as wq
 

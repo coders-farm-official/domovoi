@@ -3,7 +3,6 @@ sanity-filtered acquisition enqueue, and bookkeeping writes."""
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
 
 from domovoi.tests.conftest import requires_db
