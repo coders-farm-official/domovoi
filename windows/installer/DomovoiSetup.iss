@@ -19,8 +19,8 @@
 ; then the setup code. Uninstall runs the helper's uninstall, which undoes
 ; all of it, works after a half-finished install too, and shows each step
 ; as it goes. Every error page offers "Copy logs": the logs are in an
-; administrators-only folder, so the helper copies them, redacted, to
-; Documents\Domovoi logs and Explorer opens it.
+; administrators-only folder, so the helper copies them, redacted, to a
+; new folder in Documents\Domovoi logs and Explorer opens that folder.
 ;
 ; Update mode (the Windows update's Windows step, design note
 ; WINDOWS-ONE-UPDATE-2026-10-22): the tray starts this Setup, after checking
@@ -170,7 +170,7 @@ const
     DashboardRoute, above. }
   OpenUrl = 'http://localhost:6369/?installed={#Copy(DomovoiCommit, 1, 7)}-{#BuildStamp}#{#DashboardRoute}';
   InstallPortCheck = 'preflight --ports-only --installing';
-  LogsHint = 'Logs: C:\ProgramData\Domovoi\logs (only administrators can open it). Copy logs puts a copy in Documents\Domovoi logs and opens it.';
+  LogsHint = 'Logs: C:\ProgramData\Domovoi\logs (only administrators can open it). Copy logs puts a copy in a new folder in Documents\Domovoi logs and opens that folder.';
 
 var
   Resumed: Boolean;
@@ -353,21 +353,23 @@ end;
 
 { The logs are in C:\ProgramData\Domovoi, which only administrators can
   open. The helper copies them (redacted: no setup code, no password in a
-  URL) to a new folder under Documents\Domovoi logs, and Explorer opens
-  it. Kind: install or uninstall; UninstallLog: the uninstall's own record
-  in the temp folder, or ''. }
+  URL) to a new folder under Documents\Domovoi logs (install-<time> or
+  uninstall-<time>), and Explorer opens that new folder. Kind: install or
+  uninstall; UninstallLog: the uninstall's own record in the temp folder,
+  or ''. }
 procedure CopyLogs(const Exe, Kind, UninstallLog: String);
 var
   Lines: TArrayOfString;
   Code, Err: Integer;
-  Params, Folder: String;
+  Params, Dest, Folder: String;
 begin
   if not FileExists(Exe) then
   begin
     MsgBox('The logs can''t be copied: ' + Exe + ' is missing.', mbError, MB_OK);
     Exit;
   end;
-  Params := 'copy-logs --kind ' + Kind + ' --dest ' + AddQuotes(ExpandConstant('{userdocs}\Domovoi logs'));
+  Dest := ExpandConstant('{userdocs}\Domovoi logs');
+  Params := 'copy-logs --kind ' + Kind + ' --dest ' + AddQuotes(Dest);
   if UninstallLog <> '' then
     Params := Params + ' --uninstall-log ' + AddQuotes(UninstallLog);
   if not RunHelper(Exe, Params, Lines, Code) or (Code <> 0) then
@@ -375,7 +377,11 @@ begin
     MsgBox('The logs could not be copied: ' + KvValue(Lines, 'error'), mbError, MB_OK);
     Exit;
   end;
+  { The helper's folder= is the new folder; anything but a folder named
+    for this copy directly inside Dest shows Dest itself. }
   Folder := KvValue(Lines, 'folder');
+  if (CompareText(ExtractFileDir(Folder), Dest) <> 0) or (Pos(Kind + '-', ExtractFileName(Folder)) <> 1) then
+    Folder := Dest;
   Log('Copied the logs to ' + Folder);
   { The uninstaller runs elevated and has no way to start anything as the
     signed-in user: opening a path in the user's Documents from there

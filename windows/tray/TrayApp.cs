@@ -604,40 +604,56 @@ namespace Domovoi.Windows.Tray
             });
         }
 
+        // The helper's copy goes to a new folder in dest (install-<time>);
+        // its name comes back in a note (common\LogsFolder.cs), and that
+        // folder, checked, is where this icon's own log goes too and what
+        // Explorer opens. Without it (no helper, no permission, a failed
+        // copy, a note that doesn't check out) both are dest itself.
         void SaveLogs()
         {
             string dest = Admin.LogsFolder();
             string helper = Admin.Helper();
-            string mine = null;
-            try { mine = CopyOwnLog(dest); }
-            catch (IOException e) { log.Write("copying the tray's log: " + e.Message); }
-            catch (UnauthorizedAccessException e) { log.Write("copying the tray's log: " + e.Message); }
             if (helper == null)
             {
+                string mine = CopyOwnLogQuietly(dest);
                 MessageBox.Show("Domovoi's own logs are in C:\\ProgramData\\Domovoi\\logs, which only an administrator can open, and Setup's helper that copies them isn't on this PC."
                     + (mine != null ? "\n\nThis icon's own log is in " + dest + "." : ""), "Save logs for support", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 if (mine != null) OpenFolder(dest);
                 return;
             }
-            if (MessageBox.Show("Domovoi's logs are in a folder only an administrator can open. Windows asks for permission next, then they're copied to " + dest
+            if (MessageBox.Show("Domovoi's logs are in a folder only an administrator can open. Windows asks for permission next, then they're copied to a new folder in " + dest
                     + ".\n\nPasswords, tokens and setup codes are blanked as far as Domovoi can recognise them; look through the files before you share them.",
                     "Save logs for support", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
             {
-                if (mine != null) OpenFolder(dest);
+                if (CopyOwnLogQuietly(dest) != null) OpenFolder(dest);
                 return;
             }
-            string args = Admin.CopyLogsArguments(dest);
+            string note = LogsFolder.NewNoteId();
+            string args = Admin.CopyLogsArguments(dest, note);
             ThreadPool.QueueUserWorkItem(delegate
             {
                 string why = Admin.RunElevated(helper, args, 2 * 60 * 1000);
-                log.Write("copy logs: " + (why ?? "done"));
+                // Taken (and deleted) whatever happened; only a finished
+                // copy's folder is opened.
+                string made = LogsFolder.TakeNote(dest, note);
+                string folder = why == null ? LogsFolder.ToOpen(dest, made) : dest;
+                log.Write("copy logs: " + (why ?? "done") + (why == null ? (folder != dest ? ", in " + folder : ", but its folder's name didn't come back; showing " + dest) : ""));
+                string mine = CopyOwnLogQuietly(folder);
                 ui.BeginInvoke(new Action(delegate
                 {
                     if (why != null && why != "cancelled")
                         MessageBox.Show("The logs weren't copied: " + why + ".", "Save logs for support", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    if (why == null || mine != null) OpenFolder(dest);
+                    if (why == null || mine != null) OpenFolder(folder);
                 }));
             });
+        }
+
+        string CopyOwnLogQuietly(string dest)
+        {
+            try { return CopyOwnLog(dest); }
+            catch (IOException e) { log.Write("copying the tray's log: " + e.Message); }
+            catch (UnauthorizedAccessException e) { log.Write("copying the tray's log: " + e.Message); }
+            return null;
         }
 
         // This icon's log, blanked like Setup's copies, into dest.

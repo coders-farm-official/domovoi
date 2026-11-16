@@ -28,7 +28,7 @@
 //   linux-update [--wait] [--run NAME]              the Linux part of the Windows update (Update.cs)
 //   saved-answers                                   read-only: the answers Setup's update mode keeps
 //   uninstall [--dry-run]                           exit 3: done, with leftovers
-//   copy-logs --kind install|uninstall --dest DIR [--uninstall-log FILE]
+//   copy-logs --kind install|uninstall --dest DIR [--uninstall-log FILE] [--note ID]   (ID: the tray's note, common\LogsFolder.cs)
 
 using System;
 using System.Collections.Generic;
@@ -140,7 +140,7 @@ namespace Domovoi.Windows.Helper
                     case "run-update": return Update.RunUpdate(o, a.Req("--from"), a.Req("--run"), a.Req("--tag"), a.Opt("--commit"), a.Flag("--linuxfirst"));
                     case "saved-answers": Update.SavedAnswers(o); return 0;
                     case "uninstall": return Uninstall.Run(o, dry);
-                    case "copy-logs": Logs.Copy(o, a.Req("--dest"), a.Req("--kind"), a.Opt("--uninstall-log")); return 0;
+                    case "copy-logs": Logs.Copy(o, a.Req("--dest"), a.Req("--kind"), a.Opt("--uninstall-log"), a.Opt("--note")); return 0;
                     default:
                         o.Kv("error", "unknown verb: " + verb);
                         return 2;
