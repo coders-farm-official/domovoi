@@ -844,7 +844,11 @@ garage, stop the music").
   which matches only a group the house has). Voice: "play X everywhere /
   upstairs / in the north wing", "play this in the office too", "share
   this with …", "join the kitchen", "leave the group", "just in here",
-  "which rooms are playing this". Memory is the truth; the tables mirror
+  "which rooms are playing this". "Stop" in a room of a group stops the
+  whole group and ends its shared queue (`MusicHandler._stop_group`), as
+  pause pauses it; "stop here" / "stop the music in here" / "… in the
+  office only" stop one room, which leaves (`STOP_HERE_RE`,
+  `STOP_ONLY_RE`; owner 2026-11-15). Memory is the truth; the tables mirror
   it for the web process (now-playing and the queue show `group`) and for
   a restart.
 * **Podcasts and audiobooks** (`handlers/spoken_audio_rooms.py`, the

@@ -693,6 +693,15 @@ const HomeGroupChipText = (s) => {
   return g.name ? `${g.name}${withText ? ` · ${withText}` : ''}` : withText;
 };
 
+/* The stop button's title: in a group a stop stops every room of it, as
+ * pause pauses them (2026-11-15); "leave the group" in the rooms menu
+ * stops this room alone. */
+const HomeStopTitle = (s) => {
+  const g = s.now_playing && s.now_playing.group;
+  if (!g || !g.rooms || g.rooms.length < 2) return `stop ${s.room_id}`;
+  return `stop ${g.name || 'the group'}: ${g.rooms.join(', ')}`;
+};
+
 /* One room. Not SatCard: that is a single <button>, and a button can't
  * hold the transport buttons. The left part is a link to Settings →
  * Satellites (#settings/rooms, which opens that tab); the buttons sit apart on
@@ -783,7 +792,7 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct,
       actions = (
         <>
           <IconButton name="pause" title={`pause ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'pause'); }}/>
-          <IconButton name="square" title={`stop ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
+          <IconButton name="square" title={HomeStopTitle(s)} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
           <IconButton name="list-music" title={`${s.room_id}'s queue`} aria-label={`open ${s.room_id}'s queue`}
                       onClick={() => { HomeOpenQueue(s.room_id); }}/>
           {groupMenu}
@@ -793,7 +802,7 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct,
       actions = (
         <>
           <IconButton name="play" title={`resume ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'resume'); }}/>
-          <IconButton name="square" title={`stop ${s.room_id}`} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
+          <IconButton name="square" title={HomeStopTitle(s)} disabled={!canAct} onClick={() => { onAct(s.room_id, 'stop'); }}/>
           <IconButton name="list-music" title={`${s.room_id}'s queue`} aria-label={`open ${s.room_id}'s queue`}
                       onClick={() => { HomeOpenQueue(s.room_id); }}/>
           {groupMenu}

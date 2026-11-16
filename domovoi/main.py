@@ -7686,6 +7686,9 @@ _MUSIC_ACTIONS = {
     "next": "next",
     "previous": "previous",
 }
+#: ``scope=room`` on a stop: the room alone — in a group it leaves and the
+#: others play on — as the spoken "stop here" (2026-11-15).
+_STOP_HERE_TRANSCRIPT = "stop the music here"
 
 
 # What a control that did not happen answers, by ``Response.failure``.
@@ -7759,7 +7762,19 @@ def _music_failure_detail(failure: str, room_id: str, response: Response) -> str
     # address (domovoi/guest_queue.py).
     dependencies=[Depends(require_device_or_active_room_guest)],
 )
-async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
+async def admin_music_action(
+    action: str,
+    room_id: str,
+    scope: Literal["group", "room"] | None = Query(
+        None,
+        description=(
+            "stop only: `group` (the default) stops every room of the room's "
+            "group, as pause pauses it; `room` stops this room alone (it "
+            "leaves the group, the others play on). Ignored for the other "
+            "actions and for a room in no group."
+        ),
+    ),
+) -> dict[str, Any]:
     """A room's transport control (the dashboard's, the app's and the
     kiosk's buttons), routed as its spoken equivalent.
 
@@ -7771,8 +7786,15 @@ async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
     took the room for paused (ft, office's MPD frozen). A 200 carries
     ``ok: true``. A 502 or 503 also names the part that failed
     (``failed``: ``music_player`` or ``satellite``, ``_MusicFailure``). A
-    voice turn says what it always said."""
+    voice turn says what it always said.
+
+    A stop in a room of a group stops the whole group (``scope=group``, the
+    default), as a pause pauses it; ``scope=room`` stops this room alone —
+    it leaves the group (owner, 2026-11-15). Before 1.3.0's change a stop
+    was always the room alone."""
     transcript = _MUSIC_ACTIONS.get(action)
+    if action == "stop" and scope == "room":
+        transcript = _STOP_HERE_TRANSCRIPT
     if transcript is None:
         raise HTTPException(
             status_code=400,

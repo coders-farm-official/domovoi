@@ -24,8 +24,10 @@ The rules:
   ``own_mpd_client`` / ``iter_mpd_clients``.
 * **Joining** pauses the room's own player — its queue is kept, like a
   radio switched off — and points its satellite at the host's stream.
-* **Stop** in a room stops only that room: it leaves the group (answer 1).
-  When the host leaves while others listen, the queue is handed to the
+* **Stop** in a room stops the whole group, as pause pauses it, and the
+  shared queue ends (owner, 2026-11-15, reversing answer 1's per-room
+  stop; ``MusicHandler._stop_group``). **"Stop here"** (or "leave the
+  group") stops only that room: it leaves the group. When the host leaves while others listen, the queue is handed to the
   earliest member that joined: the same files from the same place, Up next
   moved along, the other members pointed at the new host's stream (a gap of
   a second or two for them). The last room left plays on alone and the

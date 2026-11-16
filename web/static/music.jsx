@@ -224,7 +224,10 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
             <IconButton name="skip-back" disabled/>
             <IconButton name={playing ? 'pause' : 'play'} onClick={() => playing ? onPause(np.room_id) : onResume(np.room_id)}/>
             <IconButton name="skip-forward" onClick={() => onSkip(np.room_id)}/>
-            {!guest && <IconButton name="square" onClick={() => onStop(np.room_id)}/>}
+            {!guest && <IconButton name="square"
+                                  title={np.group && np.group.rooms && np.group.rooms.length > 1
+                                    ? `stop ${np.group.name || 'the group'}: ${np.group.rooms.join(', ')}` : 'stop'}
+                                  onClick={() => onStop(np.room_id)}/>}
             {!guest && (
               <IconButton name="heart" onClick={() => onFavorite(np.room_id)}
                           style={np.favorited ? { color: 'var(--brand-ink)' } : undefined}

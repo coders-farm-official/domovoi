@@ -289,7 +289,11 @@ it.
   play the same music together)
 - "play jazz upstairs" (a group of rooms you named in Settings → Rooms)
 - "join the kitchen" · "leave the group" · "which rooms are playing this"
-  (stop in a room of a group stops only that room; pause pauses them all)
+- "stop the music" · "stop here" (in a room of a group, stop stops the
+  whole group, as pause pauses it; stop here, or leave the group, stops
+  only that room and the others play on)
+- "stop the music in the office only" (just the office, even when it plays
+  with other rooms)
 - "play the song that goes …" (needs lyrics; see [Lyrics](#node:lyrics))
 - "when I say Gramps I mean Hearth Ensemble" (a nickname for an artist in
   your library)

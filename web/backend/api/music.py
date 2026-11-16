@@ -1253,10 +1253,23 @@ async def resume(room_id: str, request: Request):
 
 
 @router.post("/stop/{room_id}")
-async def stop(room_id: str, request: Request):
-    status, payload = await post_admin(
-        f"/v1/admin/music/stop/{room_id}", headers=auth_forward_headers(request)
-    )
+async def stop(
+    room_id: str,
+    request: Request,
+    scope: Literal["group", "room"] | None = Query(
+        None,
+        description=(
+            "`group` (the default): a room in a group stops the whole group; "
+            "`room`: this room alone stops (it leaves the group)."
+        ),
+    ),
+):
+    """Stop a room's music. A room in a group stops its whole group unless
+    ``scope=room`` (2026-11-15)."""
+    path = f"/v1/admin/music/stop/{room_id}"
+    if scope is not None:
+        path += f"?scope={scope}"
+    status, payload = await post_admin(path, headers=auth_forward_headers(request))
     return bridge_response(status, payload)
 
 
