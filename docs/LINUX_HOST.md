@@ -170,9 +170,101 @@ erroring. CPU, RAM, and disk still come through via `psutil`.
 
 ## Which distro
 
-**Ubuntu Server 26.04 LTS** (verified against this stack, August 2026).
-Any current LTS works; the section below is really about *how to check*,
-because the answer changes with time.
+Domovoi's Linux install (the one command below, and `provision.sh`
+behind it) runs on these x86_64 systems (owner decision 2026-11-15):
+
+| System | Installed as | The venv's Python |
+|---|---|---|
+| **Ubuntu Server 26.04 LTS** | what Domovoi is made for (the Windows installer's distro is the same) | Ubuntu's own `python3`, 3.14 |
+| **Debian 13** (trixie) | Debian: Docker from Docker's Debian repository | Domovoi's own CPython 3.14 ([below](#the-python-the-venv-runs-on)) |
+| **Linux Mint 22.x**, **Pop!_OS 24.04** | the Ubuntu release they are built on (`UBUNTU_CODENAME` in `/etc/os-release`: 24.04, noble), Docker's noble packages | Domovoi's own CPython 3.14 |
+
+- **Another Ubuntu** goes on with a warning (and, from a terminal, asks
+  first): Ubuntu 24.04 gets the noble packages above; a release the pins
+  don't cover gets 26.04's, as it always did, which may not install.
+- **Another Ubuntu derivative** (one whose `ID_LIKE` names `ubuntu`) on
+  24.04 or 26.04 goes on as that Ubuntu, with a warning that Domovoi
+  hasn't been tried on it; one built on another Ubuntu release stops.
+- **Debian other than 13** stops, and so does everything else: Fedora,
+  Arch, openSUSE and the rest are not supported yet. Their packages,
+  Docker's repositories and the paths the units rely on differ, and each
+  would need its own fresh-install test. To ask for one, open an issue:
+  <https://github.com/coders-farm-official/domovoi/issues>.
+
+The check is made twice, before anything is downloaded: `install.sh`'s
+gate and `provision.sh`'s first step (`preflight`), from `/etc/os-release`
+(`ID`, `VERSION_ID`, `ID_LIKE`, `UBUNTU_CODENAME`).
+
+Every system gets the same system packages: each name `provision.sh`
+installs (`python3`, `python3-venv`, `python3-dev`, `build-essential`,
+`pkg-config`, `libasound2-dev`, `git`, `ffmpeg`, `mpg123`,
+`libchromaprint-tools`, `xorriso`, `zstd`, `ca-certificates`, `curl`,
+`gnupg`, `tzdata`, `sudo`) is a package of that name in Debian 13 and
+Ubuntu 24.04 too, so nothing is mapped. What differs is Docker:
+
+| System | Docker's repository | Suite | `docker-ce` pin |
+|---|---|---|---|
+| Ubuntu 26.04 | `https://download.docker.com/linux/ubuntu` | `resolute` | `5:29.8.1-1~ubuntu.26.04~resolute` |
+| Ubuntu 24.04, Mint 22, Pop!_OS 24.04 | `https://download.docker.com/linux/ubuntu` | `noble` | `5:29.8.1-1~ubuntu.24.04~noble` |
+| Debian 13 | `https://download.docker.com/linux/debian` | `trixie` | `5:29.8.1-1~debian.13~trixie` |
+
+The same release everywhere, and one signing key (Docker's Debian and
+Ubuntu key files are the same file), pinned by fingerprint in
+`scripts/linux/provision-manifest.conf` with every package's version.
+
+**Internet "never"** turns the system's own background jobs off on Debian
+as on Ubuntu ([Internet or not](#internet-or-not)): the units installed
+there are apt's two timers (which are what start Debian's unattended
+upgrades) and `unattended-upgrades.service`; Ubuntu's news, Pro, crash
+report and snap timers aren't there, so there is nothing else to mask.
+Debian's `popularity-contest` is a daily cron job that reports only when
+the administrator said yes to it at install (`PARTICIPATE="yes"` in
+`/etc/popularity-contest.conf`; the default is no): that is their answer,
+so it is left as it is, and the os-jobs step says so when it is on
+(`sudo dpkg-reconfigure popularity-contest` turns it off).
+
+A fresh install on Ubuntu 26.04 and on Debian 13, with an update and a
+rollback after it, runs every week and on every change to the Linux
+scripts: [The fresh-install test](CONTRIBUTING.md#the-fresh-install-test).
+
+### The Python the venv runs on
+
+Every Python package is installed hash-checked from
+`requirements-linux-py314.lock`, which is for one Python, CPython 3.14:
+Ubuntu 26.04's own (`python3 3.14.3-0ubuntu2`). Debian 13 ships 3.13 and
+Ubuntu 24.04 3.12, and a lock for each would be another set of wheels to
+check and keep. So on a system whose `python3` is not the lock's Python,
+`provision.sh` installs the CPython 3.14 the manifest pins and builds the
+venv from that instead (`scripts/linux/python-runtime.sh`):
+
+- **What:** CPython as [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+  builds it (the builds `uv` installs), `python_version` and
+  `python_build` in the manifest, installed by
+  [uv](https://github.com/astral-sh/uv) at `uv_version`. uv is MIT or
+  Apache-2.0, the build scripts MIT, CPython PSF-2.0.
+- **Checked:** both downloads by their SHA-256 in the manifest
+  (`uv_sha256`, `python_sha256`) before anything in them runs; uv then
+  installs CPython from that checked file (a local mirror, so it downloads
+  nothing itself) and checks the SHA-256 it carries for it, which is the
+  same one.
+- **Where:** `/usr/local/lib/domovoi-python/<build>/cpython-<version>-linux-x86_64-gnu/`,
+  root's and readable by everyone, which the units' sandbox
+  (`ProtectSystem=strict`) lets the services read. uv itself is not kept.
+  The venv names the interpreter (`home =` in
+  `/opt/domovoi/.venv/pyvenv.cfg`); everything else runs the venv's
+  `python` as on Ubuntu, so the units, the update unit and its re-sync
+  from the lock need nothing different.
+- **A new pin** (a later commit names another build) is installed beside
+  the old one, never over it, and the venv is moved onto it in place
+  (`python -m venv --upgrade`: the same 3.14, so every installed package
+  stays): by the next `provision.sh` run, or by the dashboard's update
+  that brings the commit ([step 4b](#updates-from-the-dashboard)), which
+  moves it back if the update rolls back. Under internet **No** an update
+  doesn't download a build: the venv stays where it is, and the update
+  says so. The old folder stays (about 100 MB each); remove one by hand
+  once no venv names it.
+- **Ubuntu 26.04** never gets any of this: its `python3` is the lock's,
+  and the venv is made from it as it always was.
 
 ### The thing that actually decides it
 
@@ -181,7 +273,9 @@ ships **3.14** (`python3 3.14.3-0ubuntu2`). That matters because this stack
 leans on compiled packages that ship wheels *per Python version*, and a
 brand-new CPython can go months without them. When a wheel is missing, pip
 falls back to building from source and you lose an evening to a compiler
-error that has nothing to do with Domovoi.
+error that has nothing to do with Domovoi. (With the venv on Domovoi's own
+CPython, the system's version no longer decides anything for the venv;
+the lock's Python still does.)
 
 So the rule is: **before committing to a release, check that this repo's
 compiled dependencies publish wheels for the Python it ships.** The
@@ -229,7 +323,9 @@ branches on kernel and architecture rather than Ubuntu release.
 
 ### If the wheels aren't there yet
 
-Don't fight the system Python — sidestep it:
+Don't fight the system Python — sidestep it (on Debian 13 and the Ubuntu
+24.04 systems `provision.sh` already does,
+[above](#the-python-the-venv-runs-on)):
 
 ```bash
 uv venv --python 3.13 .venv
@@ -244,8 +340,9 @@ Picking an older LTS isn't permanent either: LTS-to-LTS
 `do-release-upgrade` opens once the newer release reaches its `.1` point
 release.
 
-Use **Server, not Desktop.** A desktop environment costs you 1–2 GB of RAM
-that models want, and the server has no screen. (The one thing Desktop
+Use **Server, not Desktop**, where you choose. A desktop environment
+costs you 1–2 GB of RAM that models want, and the server has no screen.
+(Linux Mint and Pop!_OS are desktops: that works, and costs that memory.) (The one thing Desktop
 would buy you is USB auto-mounting for the adoption flow — see above, and
 you're not using that.)
 
@@ -255,8 +352,9 @@ you're not using that.)
 
 ### One command
 
-On a fresh Ubuntu 26.04 computer (x86_64; other Ubuntu versions may work,
-and it says so), open a terminal and run:
+On a fresh x86_64 computer running Ubuntu 26.04, Debian 13, or Linux Mint
+22 / Pop!_OS 24.04 ([Which distro](#which-distro); other Ubuntu versions
+may work, and it says so), open a terminal and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
@@ -315,7 +413,8 @@ stops and says what to add.
 
 ### Or run the install script yourself
 
-On a fresh Ubuntu 26.04 box, `scripts/linux/provision.sh` runs this
+On a fresh Ubuntu 26.04 box (or Debian 13, Mint 22, Pop!_OS 24.04:
+[Which distro](#which-distro)), `scripts/linux/provision.sh` runs this
 section, [Make it an appliance](#make-it-an-appliance) and the
 [update unit](#one-time-upgrade-for-existing-installs) for you,
 unattended (run from a terminal, it asks one question first: whether to
@@ -1480,6 +1579,19 @@ does this:
    detail says how long each unit took and how it ended, so a stop that
    needed a kill — systemd's after `TimeoutStopSec`, or this one — shows
    in the version panel instead of hiding in a slow step.
+4b. Where the venv runs on Domovoi's own CPython
+   ([The Python the venv runs on](#the-python-the-venv-runs-on): Debian 13,
+   Ubuntu 24.04 and its derivatives) and the commit's pin manifest names
+   another build of it: install that build beside the old one
+   (`scripts/linux/python-runtime.sh`, both downloads checked against their
+   SHA-256) and move the venv onto it in place (`python -m venv
+   --upgrade`), a `python` step. A failure there rolls the update back,
+   and a rollback for any reason moves the venv back onto the interpreter
+   it ran on (`rollback-python`). Under **No**, a build that is not
+   installed yet is not downloaded: the venv stays where it is (the same
+   Python version), a `python` `warn` says so, and the update goes on. A
+   venv on the system's `python3` (Ubuntu 26.04, the Windows installer's
+   distro) is never touched.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
    changed: re-sync the venv. A change to `pyproject.toml` that only moves
    `[project]`'s `version` line (every release's bump) is not a dependency

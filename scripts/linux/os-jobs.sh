@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# os-jobs.sh: Ubuntu's own background jobs, set to follow the household's
-# internet answer (owner decision 2026-10-11).
+# os-jobs.sh: Ubuntu's (or Debian's) own background jobs, set to follow the
+# household's internet answer (owner decision 2026-10-11).
 #
 #   sudo bash os-jobs.sh --internet never            # mask the jobs that go online
 #   sudo bash os-jobs.sh --internet always           # put them back as Ubuntu ships them
@@ -30,6 +30,13 @@
 #                        apport-autoreport.path apport-autoreport.timer
 #                                                      (crash reports)
 #                        snapd.snap-repair.timer       (snap repairs)
+#                      On Debian 13 those that are installed are the apt
+#                      timers and unattended-upgrades.service (the apt
+#                      timers are what start Debian's unattended upgrades);
+#                      the others are Ubuntu's alone and are skipped as
+#                      not installed. popularity-contest, Debian's usage
+#                      report, is a cron job the administrator opts into:
+#                      left alone, and said when it is on (popcon_note).
 #                      unattended-upgrades.service is only Ubuntu's
 #                      shutdown helper: masked, it is left running until
 #                      the next boot (see "never: stopped" below for why)
@@ -214,6 +221,19 @@ esac
 where() { printf 'internet: %s; WSL: %s' "${INTERNET:-unanswered}" "$([ "$WSL" = 1 ] && echo yes || echo no)"; }
 kept_note() {
   [ "${#KEPT[@]}" -eq 0 ] || printf '; left alone, a unit file of their own in %s: %s' "/etc/systemd/system" "${KEPT[*]}"
+  popcon_note
+}
+# Debian's popularity-contest (and Ubuntu's, where it is installed) is no
+# unit: cron runs it daily, and it reports only when the administrator said
+# yes to it (PARTICIPATE="yes" in /etc/popularity-contest.conf; the
+# installer asks, and the default is no). That is their answer, not one
+# this script takes back: for never it is left alone, and said.
+popcon_note() {
+  local conf=$ROOT/etc/popularity-contest.conf v
+  [ "$INTERNET" = never ] && [ -f "$conf" ] || return 0
+  v=$(sed -n 's/^[[:space:]]*PARTICIPATE[[:space:]]*=[[:space:]]*//p' "$conf" 2>/dev/null | tail -n 1 | tr -d "\"' \r")
+  [ "${v,,}" = yes ] || return 0
+  printf '; left alone, the administrator'"'"'s own choice: popularity-contest reports daily (PARTICIPATE="yes" in /etc/popularity-contest.conf; dpkg-reconfigure popularity-contest turns it off)'
 }
 
 if [ "$CHECK" = 1 ]; then

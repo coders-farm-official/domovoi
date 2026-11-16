@@ -203,10 +203,11 @@ class Lab:
     def sha(self, ref: str) -> str:
         return _bash(f"git rev-parse {ref}", self.origin, self.env).strip()
 
-    def os_release(self, version: str, ident: str = "ubuntu"):
-        (self.root / "etc" / "os-release").write_text(
-            f'ID={ident}\nVERSION_ID="{version}"\nPRETTY_NAME="{ident} {version}"\n', encoding="utf-8"
-        )
+    def os_release(self, version: str, ident: str = "ubuntu", **extra: str):
+        lines = f'ID={ident}\nVERSION_ID="{version}"\nPRETTY_NAME="{ident} {version}"\n'
+        for k, v in extra.items():
+            lines += f'{k.upper()}="{v}"\n'
+        (self.root / "etc" / "os-release").write_text(lines, encoding="utf-8")
 
     def publish(self, tag: str, commit: str, key: str = "key", kind: str = "domovoi-windows-setup",
                 manifest_tag: str | None = None):
@@ -457,10 +458,10 @@ def test_dry_run_passes_through(lab):
 
 
 def test_other_systems(lab):
-    lab.os_release("12", ident="debian")
+    lab.os_release("12", ident="debian", version_codename="bookworm")
     proc = lab.run("--internet", "always", "--yes")
     assert proc.returncode == 1
-    assert "Ubuntu only" in proc.stderr and "#by-hand" in proc.stderr
+    assert "Debian 13 (trixie) only" in proc.stderr and "#which-distro" in proc.stderr
     assert not lab.ran
     # Another Ubuntu: a clear warning, then on (asked at a terminal).
     lab.os_release("24.04")
@@ -470,6 +471,53 @@ def test_other_systems(lab):
     proc = lab.run(answers="n\n")
     assert proc.returncode == 1
     assert "Continue anyway? [y/N]" in proc.stderr
+    assert not lab.ran
+
+
+# The systems provision.sh installs on (owner decision 2026-11-15): no
+# warning, no question.
+@pytest.mark.parametrize("version, ident, extra", [
+    ("26.04", "ubuntu", {"version_codename": "resolute", "ubuntu_codename": "resolute"}),
+    ("13", "debian", {"version_codename": "trixie"}),
+    ("22.1", "linuxmint", {"id_like": "ubuntu debian", "ubuntu_codename": "noble", "version_codename": "xia"}),
+    ("22", "linuxmint", {"id_like": "ubuntu debian", "ubuntu_codename": "noble", "version_codename": "wilma"}),
+    ("24.04", "pop", {"id_like": "ubuntu debian", "ubuntu_codename": "noble", "version_codename": "noble"}),
+])
+def test_supported_systems_go_on_without_a_word(lab, version, ident, extra):
+    lab.os_release(version, ident=ident, **extra)
+    proc = lab.run("--internet", "always", "--yes")
+    assert proc.returncode == 0, _out(proc)
+    assert "WARNING" not in proc.stderr, proc.stderr
+    assert lab.ran
+
+
+def test_an_untried_ubuntu_derivative_is_warned_about(lab):
+    lab.os_release("8", ident="elementary", id_like="ubuntu", ubuntu_codename="noble")
+    proc = lab.run("--internet", "always", "--yes")
+    assert proc.returncode == 0, _out(proc)
+    assert "has not been tried on" in proc.stderr and "as Ubuntu noble" in proc.stderr
+    proc = lab.run(answers="n\n")
+    assert proc.returncode == 1 and not lab.ran
+
+
+@pytest.mark.parametrize("version, ident, extra, says", [
+    # A derivative of an Ubuntu Domovoi has no Docker pins for.
+    ("17", "zorin", {"id_like": "ubuntu", "ubuntu_codename": "jammy"}, "on Ubuntu jammy"),
+    # One that names no Ubuntu release.
+    ("1", "odd", {"id_like": "ubuntu"}, "no UBUNTU_CODENAME"),
+    # Not supported yet: the issue tracker is where to ask.
+    ("43", "fedora", {}, "/issues"),
+    ("", "arch", {}, "/issues"),
+    ("15.6", "opensuse-leap", {"id_like": "suse opensuse"}, "Fedora, Arch and others"),
+    # Debian's derivatives (LMDE) are not Ubuntu's.
+    ("7", "linuxmint", {"id_like": "debian", "debian_codename": "trixie"}, "/issues"),
+])
+def test_unsupported_systems_stop_before_any_download(lab, version, ident, extra, says):
+    lab.os_release(version, ident=ident, **extra)
+    proc = lab.run("--internet", "always", "--yes")
+    assert proc.returncode == 1, _out(proc)
+    assert says in proc.stderr, proc.stderr
+    assert "Looking up the latest Domovoi release" not in proc.stdout
     assert not lab.ran
 
 

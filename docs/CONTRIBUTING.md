@@ -333,7 +333,7 @@ Markdown (and pictures under `docs/`) alone runs the docs gates only.
 | docs gates | ubuntu | `build_manual.py --check` and the file-only gate tests (privacy, licences, version copies, mermaid, the manual, the workflow pins); every push |
 | pytest 1/6 … 6/6 | ubuntu | the whole suite (all three test trees), split by `scripts/dev/ci_shard.py` into six shards of whole files, each `pytest -n 4` on its own migrated Postgres |
 | web | ubuntu | `node scripts/dev/jsxcheck.js` (every `.jsx` compiles with the vendored Babel; no two dashboard scripts share a top-level name), then `web/openapi.json` and `web/static/manual-content.json` regenerated and diffed against the commit |
-| bash harnesses | ubuntu | `scripts/dev/run-linux-harness.sh all`, when `scripts/linux/` changed |
+| bash harnesses | ubuntu | `scripts/dev/run-linux-harness.sh all`, when `scripts/linux/` changed (a real install on each Linux system is its own workflow: [The fresh-install test](#the-fresh-install-test)) |
 | android | ubuntu | `./gradlew testDebugUnitTest assembleDebug`; uploads the debug APK (`domovoi-debug-apk`, 14 days) |
 | windows | windows | `windows/build.ps1 -SkipInstaller` (the exes and the C# tests), then the installers when the image has Inno Setup 6 |
 
@@ -352,6 +352,43 @@ looks flaky; a second red is a real failure, so fix it or add it to
 No workflow uses a secret, and none may: release signing and publishing
 stay on the owner's PC ("Releasing", below). Actions are pinned by commit
 SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
+
+### The fresh-install test
+
+`.github/workflows/linux-install.yml` installs the server for real on each
+supported Linux system that has a cloud image, Ubuntu 26.04 and Debian 13,
+in a throwaway KVM virtual machine on GitHub's runner (one job each, side
+by side, 20-30 minutes; the job stops at 50). It runs weekly (Monday
+04:17 UTC), from the Actions tab ("linux-install" → "Run workflow", on any
+branch), and on a push that changes `scripts/linux/`, a Linux lock, the
+test's script or the workflow. Linux Mint 22 and Pop!_OS 24.04 install as
+Ubuntu 24.04 and have no cloud image there: the provision harness covers
+how they are mapped.
+
+`scripts/dev/linux-install-vm.sh` does the work (its header lists every
+check): it boots the pinned cloud image, runs `provision.sh` in its
+smallest form (`--skip-models --no-ai-models --no-vision-model --tier
+floor`: Ollama, the voices and the images are still installed, the AI
+models are not), checks the final line, the services and both health
+endpoints, which Python the venv runs, and that a second run skips every
+step; then it updates the box through `domovoi-update.service` to a
+commit that changes the dependencies and the pinned CPython build, and to
+one that breaks the core on purpose, which must roll back. Each phase's
+time is in the job's summary.
+
+Reading a red run: the job summary names the check that failed; the
+`linux-install-<system>` artifact has the provision log, both result
+files, the units' journal and the VM's console. To run it by hand, on a
+Linux x86_64 box with KVM (never one that runs Domovoi) with
+`qemu-system-x86`, `qemu-utils` and `genisoimage` installed:
+
+```bash
+scripts/dev/linux-install-vm.sh debian-13            # or ubuntu-26.04
+scripts/dev/linux-install-vm.sh debian-13 --keep-vm  # and leave the VM up to look around
+```
+
+The images are pinned by release and checksum in the script; a new image
+(or the next Ubuntu or Debian) is a new pair of lines there.
 
 **OpenSSF Scorecard** (`.github/workflows/scorecard.yml`) rates the
 repository's supply-chain practices on every push to `main`, weekly and

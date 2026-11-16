@@ -82,7 +82,8 @@ usage_die() { printf 'domovoi install: %s\n(--help lists the options)\n' "$*" >&
 
 usage() {
   cat <<'EOF'
-Install the Domovoi server on this computer (Ubuntu 26.04, x86_64).
+Install the Domovoi server on this computer (x86_64: Ubuntu 26.04,
+Debian 13, or Linux Mint 22 / Pop!_OS 24.04).
 
   curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
 
@@ -195,8 +196,22 @@ harness_setup() {
 
 os_field() { sed -n "s/^$1=//p" "$SYS_ROOT/etc/os-release" 2>/dev/null | tail -n 1 | tr -d '"'; }
 
+# The systems provision.sh installs on (its detect_platform; docs/LINUX_HOST.md,
+# Which distro): Ubuntu 26.04; Debian 13; Ubuntu-based derivatives on
+# Ubuntu 24.04 (noble) or 26.04 (resolute), Linux Mint 22 and Pop!_OS 24.04
+# the ones it was made with. Another Ubuntu, or another derivative on those
+# bases, goes on after a warning (and a question at a terminal); anything
+# else stops here, before anything is downloaded.
+SUPPORTED="Ubuntu 26.04, Debian 13, or Linux Mint 22 / Pop!_OS 24.04"
+untested() {
+  warn "$1"
+  if [ "$HAVE_TTY" = 1 ] && ! confirm "Continue anyway?" n; then
+    die "stopped; nothing was changed"
+  fi
+}
+
 check_system() {
-  local arch id ver name
+  local arch id ver name like base
   if [ "$HARNESS" = 0 ] && [ "$DRY" = 0 ] && [ "$(id -u)" != 0 ]; then
     die "run it as root: curl -fsSL ... | sudo bash"
   fi
@@ -205,15 +220,30 @@ check_system() {
   id=$(os_field ID)
   ver=$(os_field VERSION_ID)
   name=$(os_field PRETTY_NAME)
-  if [ "$id" != ubuntu ]; then
-    die "this installer sets up Ubuntu only (this is ${name:-an unknown system}). Ubuntu 26.04 is the supported system; on another distro, the by-hand steps may work: $DOCS_URL#by-hand"
-  fi
-  if [ "$ver" != 26.04 ]; then
-    warn "this is ${name:-Ubuntu $ver}. Domovoi is made for Ubuntu 26.04; other versions may work, but its Python packages and Docker pins are for 26.04."
-    if [ "$HAVE_TTY" = 1 ] && ! confirm "Continue anyway?" n; then
-      die "stopped; nothing was changed"
-    fi
-  fi
+  like=" $(os_field ID_LIKE) "
+  base=$(os_field UBUNTU_CODENAME)
+  case $id in
+    ubuntu)
+      if [ "$ver" != 26.04 ]; then
+        untested "this is ${name:-Ubuntu $ver}. Domovoi is made for Ubuntu 26.04; other versions may work, but its Docker pins are for 26.04 and 24.04."
+      fi ;;
+    debian)
+      if [ "$ver" != 13 ]; then
+        die "this is ${name:-Debian $ver}: of Debian, Domovoi installs on Debian 13 (trixie) only. Supported: $SUPPORTED ($DOCS_URL#which-distro)"
+      fi ;;
+    *)
+      if [[ $like != *" ubuntu "* ]]; then
+        die "this installer sets up $SUPPORTED (this is ${name:-an unknown system}). Fedora, Arch and others are not supported yet; to ask for yours, open an issue: $REPO_URL/issues"
+      fi
+      case $base in
+        noble|resolute) ;;
+        *) die "this is ${name:-an Ubuntu-based system} on Ubuntu ${base:-(no UBUNTU_CODENAME in /etc/os-release)}, which Domovoi has no packages pinned for. Supported: $SUPPORTED ($DOCS_URL#which-distro)" ;;
+      esac
+      case $id:$ver in
+        linuxmint:22|linuxmint:22.*|pop:24.04) ;;
+        *) untested "this is ${name:-$id $ver}, an Ubuntu derivative Domovoi has not been tried on; it installs it as Ubuntu $base, as it does Linux Mint 22 and Pop!_OS 24.04." ;;
+      esac ;;
+  esac
 }
 
 # git, curl and ssh-keygen (the release check); apt installs any missing.

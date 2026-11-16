@@ -83,7 +83,8 @@ installed from the dashboard as a zip upload or a GitHub URL.
 
 ## Install on Linux
 
-On a computer running Ubuntu 26.04 (other versions may work), open a terminal and run:
+On an x86_64 computer running Ubuntu 26.04, Debian 13, or Linux Mint 22 / Pop!_OS 24.04
+(other Ubuntu versions may work, and it says so), open a terminal and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
@@ -92,6 +93,8 @@ curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable
 It asks whether the server will have internet after setup, its time zone, and whether to include AI chat,
 checks that it downloaded a signed release, installs everything, and ends with the address to open from your phone.
 To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
+Fedora, Arch and other systems are not supported yet ([which systems, and why](docs/LINUX_HOST.md#which-distro));
+to ask for yours, [open an issue](https://github.com/coders-farm-official/domovoi/issues).
 On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md).
 
 ---
@@ -393,7 +396,7 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 
 Three ways in:
 
-- **Ubuntu 26.04, one command:** [Install on Linux](#install-on-linux)
+- **Linux (Ubuntu 26.04, Debian 13, Mint 22, Pop!_OS 24.04), one command:** [Install on Linux](#install-on-linux)
   above. It checks the latest release and runs `scripts/linux/provision.sh`,
   which installs the server, its services and the models in one run, and
   the server then follows the `stable` channel: releases only
