@@ -3987,7 +3987,7 @@ replaces the device's own.
 | new, address left blank, no key | new (`pairing_proof` signed in `/v1/health`) | asked, proof required |
 | new, address left blank, no key | older | **never asked**: an approval from it cannot be checked. The device logs that it found one and says to update it — or to type its address in the portal |
 | new, address typed in the portal (or a prepared card's key) | new | that server only, with the proof; remembered, so never the old way again |
-| new, address typed in the portal (or a prepared card's key) | older | the old flow (the code in the hello): the person chose that server — but only once the server has proved its key and signed that it cannot prove an approval, asked again before every session; an answer that does not verify gets nothing |
+| new, address typed in the portal (or a prepared card's key) | older | the old flow (the code in the hello): the person chose that server — but only once the server has proved its key and signed that it cannot prove an approval, asked again before every session. Without that signed answer (no answer, one that does not verify) the device still connects — so a server that moved is found again — but sends no code; an older server hands out its own |
 | older | new | the old flow, unchanged: the core compares the code it was sent |
 
 Spare computers (enrolled with a room code that pins the server's key) and

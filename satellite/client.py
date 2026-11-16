@@ -8324,7 +8324,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "pairing_token": _effective_pairing_token(),
             # Never to a server this device has seen prove approvals
             # (SAT-16): that one is asked with the proof, or not at all.
-            "approval_code": _legacy_approval_code(self.cfg),
+            "approval_code": (
+                _legacy_approval_code(self.cfg) if self._legacy_allowed else None
+            ),
             # Satellite kind ("voice" | "video") — drives which
             # per-type controls the dashboard offers, and is
             # persisted server-side for offline display.
@@ -8633,10 +8635,14 @@ class Satellite(pc_engine.SpareDeviceEngine):
     async def _start_house_pairing(self) -> None:
         """Decide whether this device asks houses (``_house_pairing_mode``)
         and build the coordinator. A pinned or typed server that PROVED,
-        just now, that it cannot prove approvals leaves the single-server
-        flow in charge; one that did not answer, or whose answer did not
-        verify, or that this device has seen prove approvals before, never
-        gets the old way (``_legacy_allowed`` False: wait, ask again)."""
+        just now, that it cannot prove approvals gets the old way — the
+        code in the hello. Anything else that leaves the single-server flow
+        in charge (no answer, an answer that did not verify, a server this
+        device has seen prove approvals before) gets the session WITHOUT
+        the code (``_legacy_allowed`` False): it still connects, so a
+        server that moved is found again and an older one hands out its
+        own code, but nothing in the hello is worth stripping an advert
+        for."""
         mode = _house_pairing_mode(self.cfg)
         self._house_mode = mode
         self._legacy_allowed = True
@@ -8655,8 +8661,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                                  "servers are asked")
                     else:
                         log.info("the server this device was set up for did not answer "
-                                 "in a way that can be checked: asking again before "
-                                 "anything is sent to it")
+                                 "in a way that can be checked: connecting without "
+                                 "this device's code, and asking again next time")
                 self._one_house_said = status
                 return
         try:
@@ -8671,20 +8677,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
         and whose ONE server was chosen for it (a typed address, a pinned
         key), ask that server again whether it can prove an approval — not
         once per boot. ``"proof"`` (a coordinator is ready: ask it that
-        way), ``"legacy"`` (it signed that it cannot: the old flow) or
-        ``"wait"`` (no checkable answer: send it nothing, ask again soon).
-        Anything else — approved, every-house — is ``"legacy"``: the
-        session the device always opened."""
+        way) or ``"legacy"``: the session the device always opened, with
+        its code in the hello only when the server signed just now that
+        it cannot prove an approval (``_legacy_allowed``)."""
         if self._house_mode != "one-house":
             return "legacy"
         if self._house_probe_stale:
             await self._start_house_pairing()
             if self._house_pairing is not None:
                 return "proof"
-            if self._house_mode != "one-house":
-                return "legacy"
         self._house_probe_stale = True
-        return "legacy" if self._legacy_allowed else "wait"
+        return "legacy"
 
     async def _house_pairing_round(self) -> bool:
         """One round of asking. True once a house has proved this device's
@@ -8929,18 +8932,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                         continue
                     except asyncio.CancelledError:
                         break
-                verdict = await self._before_legacy_session()
-                if verdict == "proof":
+                if await self._before_legacy_session() == "proof":
                     continue            # it proves approvals now: ask it that way
-                if verdict == "wait":
-                    try:
-                        await asyncio.wait_for(self._async_shutdown.wait(),
-                                               timeout=_HOUSE_ASK_EVERY_SEC)
-                        break
-                    except asyncio.TimeoutError:
-                        continue
-                    except asyncio.CancelledError:
-                        break
                 try:
                     await self._run_session()
                     unreachable = 0

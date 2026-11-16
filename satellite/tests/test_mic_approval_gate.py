@@ -117,6 +117,11 @@ def make_sat(
 ) -> Sat:
     sat = object.__new__(client.Satellite)
     rec = Sat(sat)
+    # A device with a typed address that is not approved yet asks that server
+    # whether it proves approvals before each session (1.3.1, SAT-16): here
+    # it is an older server that signed "no", so the old flow runs exactly as
+    # these tests expect — and no probe leaves the process.
+    monkeypatch.setattr(client, "_probe_one_house", lambda cfg: ("legacy", None))
 
     sat.cfg = types.SimpleNamespace(
         # Loopback only, per satellite/tests/conftest.py — though nothing
@@ -1865,3 +1870,21 @@ def test_the_gate_reopens_only_for_the_core_and_not_for_anything_else(
     # reconnect, and a reopen must not stack streams or threads.
     sat._reopen_voice_gate()
     assert rec.mic_opens == 2
+
+
+def test_the_code_goes_in_the_hello_only_when_the_old_way_is_allowed(monkeypatch, tmp_path):
+    """SAT-16: a session opened without a signed "this server cannot prove
+    an approval" carries no approval code."""
+    rec = make_sat(monkeypatch)
+    monkeypatch.setattr(client, "APPROVAL_CODE_SIDECAR", tmp_path / "approval_code")
+    monkeypatch.setattr(client, "APPROVAL_PROOF_SERVERS_PATH", tmp_path / "proof-servers.json")
+    (tmp_path / "approval_code").write_text("481502\n", encoding="utf-8")
+    monkeypatch.setattr(client, "_effective_wake_word", lambda cfg: "hey_domovoi")
+    monkeypatch.setattr(client, "_effective_pairing_token", lambda: "t" * 64)
+    sat = rec.s
+    sat.cfg.early_commit = True
+    sat._prev_health = None
+    sat._legacy_allowed = True
+    assert sat._hello_frame()["approval_code"] == "481502"
+    sat._legacy_allowed = False
+    assert sat._hello_frame()["approval_code"] is None

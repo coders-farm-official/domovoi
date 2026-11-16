@@ -837,3 +837,20 @@ def test_the_old_way_is_decided_again_before_every_session(monkeypatch, tmp_path
     assert _run(client.Satellite._before_legacy_session(sat)) == "legacy"  # the first session
     assert _run(client.Satellite._before_legacy_session(sat)) == "proof"   # asked again
     assert isinstance(sat._house_pairing, house_pairing.Coordinator)
+
+
+def test_an_unverified_answer_still_connects_but_without_the_code(monkeypatch, tmp_path):
+    """No answer, or one that does not verify, must not strand the device
+    (a server that moved is found again by the failing session's own
+    relocation) — but its hello carries no code: only a server that SIGNED
+    that it cannot prove an approval is asked the old way."""
+    monkeypatch.setattr(client, "_probe_one_house", lambda cfg: ("unknown", None))
+    _cfg, sat = _typed(monkeypatch, tmp_path, FP1)
+    sat._start_house_pairing = lambda: client.Satellite._start_house_pairing(sat)
+    _run(client.Satellite._start_house_pairing(sat))
+    assert _run(client.Satellite._before_legacy_session(sat)) == "legacy"
+    assert _run(client.Satellite._before_legacy_session(sat)) == "legacy"
+    assert sat._legacy_allowed is False
+    monkeypatch.setattr(client, "_probe_one_house", lambda cfg: ("legacy", None))
+    assert _run(client.Satellite._before_legacy_session(sat)) == "legacy"
+    assert sat._legacy_allowed is True
