@@ -84,7 +84,7 @@ def picture_blur(src: Path | bytes) -> float | None:
         grey = im.convert("L")
         grey.thumbnail((BLUR_EDGE, BLUR_EDGE), Image.Resampling.BILINEAR)
         w, h = grey.size
-        px = list(grey.getdata())
+        px = list(grey.get_flattened_data())
     rows = [px[y * w:(y + 1) * w] for y in range(h)]
     v = _headsup.blur_variance(rows)
     return None if v == float("inf") else v

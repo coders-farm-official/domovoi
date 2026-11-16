@@ -34,10 +34,12 @@ FLOORS = {
 
 # Floors raised for a published advisory after the dev interpreter was
 # built (OPS-17: urllib3 2.7.0 carries PYSEC-2026-4175/4176/4177, fixed in
-# 2.8.0). pyproject and the lock must hold them; the interpreter running
+# 2.8.0; Pillow 12.3.0 carries the GHSA advisories of 2026-10/11, fixed in
+# 13.0.0). pyproject and the lock must hold them; the interpreter running
 # the suite catches up on its next `pip install -e .`, so it isn't checked.
 ADVISORY_FLOORS = {
     "urllib3": Version("2.8.0"),
+    "pillow": Version("13.0.0"),
 }
 ALL_FLOORS = {**FLOORS, **ADVISORY_FLOORS}
 

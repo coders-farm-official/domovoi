@@ -66,8 +66,9 @@ dependencies = [
     "argon2-cffi>=23.1",
     # Library-image thumbnails (web/backend/api/images.py): Pillow resize →
     # WebP cache in S–XL buckets. Pure-wheel on Windows; the endpoint
-    # degrades to 204/no-thumbs if it were somehow absent.
-    "pillow>=10.4",
+    # degrades to 204/no-thumbs if it were somehow absent. 13.0: the
+    # decoder fixes of 2026-10 (heap overflows in JPEG, TIFF, FPX).
+    "pillow>=13.0",
     # Co-editing (web/backend/collab): pycrdt (MIT), the Python binding of
     # the Yrs CRDT, speaks the same Yjs update format as the browsers.
     # abi3 wheels from CPython 3.11 (cp314 included), x86_64 and aarch64.
