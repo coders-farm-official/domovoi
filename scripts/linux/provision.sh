@@ -88,7 +88,18 @@
 #                PIPER_PINS; a configured voice outside them is left to the core;
 #                and voice ID's speaker model (domovoi/clients/speaker_encoder.py,
 #                MODEL_URL), checked against MODEL_SHA256, into the same folder
-#   images       the database images the compose file pins, and docker build of
+#   phone-app    the Android app phones install from this server: the APKs
+#                android/release.json names (about 100 MB), from the
+#                project's GitHub release, each kept only if its pinned
+#                size, SHA-256 and release-key signature check out
+#                (domovoi/android_app.py fetch and check_apk), into the
+#                core's cache. Like the voices, fetched whatever the
+#                internet answer. Never fatal: when it can't (no internet),
+#                the install finishes, the step and the finish step say
+#                "The phone app couldn't be downloaded: ...", and the
+#                final line's "phone_app" is false; a re-run tries again,
+#                and skips it once it is here
+#   images      the database images the compose file pins, and docker build of
 #                domovoi-mpd exactly as the core builds it: only when the tag
 #                names no image, or this script built the image it names and
 #                Dockerfile.mpd changed since (an image the core or the update
@@ -177,7 +188,7 @@
 #
 # Machine-readable progress for the Windows installer's UI: every line on
 # stdout that starts with "@@DOMOVOI " is one JSON object:
-#   {"v":1,"step":"venv","index":9,"total":22,"state":"start","percent":25,
+#   {"v":1,"step":"venv","index":9,"total":23,"state":"start","percent":25,
 #    "message":"Installing Python packages"}
 # state is start, progress, done, skip or fail (plan in a dry run); the
 # percent never goes down; progress lines of a download add "bytes" and
@@ -192,7 +203,11 @@
 # [] when it runs on the CPU alone, null when that is unknown (no Ollama
 # start in this boot's journal yet, or a run that stopped before it), and
 # "ai": true when AI chat and questions are included, false when they are
-# left out, null when the run stopped before that was settled.
+# left out, null when the run stopped before that was settled; and
+# "phone_app": true when the Android app is on this server for phones,
+# false when the phone-app step couldn't download it (the install is still
+# ok: a warning), null when unknown (no app release yet, or a run that
+# stopped before that step).
 # Only a SIGKILL leaves no final line. Everything else on stdout and stderr
 # is for people. A run that got past the run lock keeps the same final
 # object in /var/lib/domovoi-provision/result.json (a refused one leaves
@@ -218,7 +233,9 @@
 # NVIDIA's (fingerprints; apt then checks the packages against the index
 # that key signs), the compose images and the MPD image's base (digests),
 # each Ollama model (digest),
-# Whisper's model.bin and the Piper voice (SHA-256). Not hashed by this
+# Whisper's model.bin and the Piper voice (SHA-256), the phone app's APKs
+# (android/release.json: size, SHA-256 and the release key's signature).
+# Not hashed by this
 # script: the system's own packages (apt checks them against Ubuntu's or
 # Debian's signed archive, at whatever version it serves), what Dockerfile.mpd installs
 # with apt inside the image build, and Whisper's small files beside
@@ -268,10 +285,10 @@ json_str() {
   printf '"%s"' "$s"
 }
 
-STEP_IDS=(preflight apt user wsl-config media checkout docker gpu-runtime venv env ollama models whisper piper images searxng os-jobs units timezone start update-unit finish)
+STEP_IDS=(preflight apt user wsl-config media checkout docker gpu-runtime venv env ollama models whisper piper phone-app images searxng os-jobs units timezone start update-unit finish)
 declare -A STEP_WEIGHT=(
   [preflight]=1 [apt]=6 [user]=1 [wsl-config]=1 [media]=1 [checkout]=3 [docker]=6 [gpu-runtime]=1
-  [venv]=15 [env]=1 [ollama]=8 [models]=28 [whisper]=4 [piper]=1 [images]=6
+  [venv]=15 [env]=1 [ollama]=8 [models]=26 [whisper]=4 [piper]=1 [phone-app]=2 [images]=6
   [searxng]=4 [os-jobs]=1 [units]=1 [timezone]=1 [start]=6 [update-unit]=2 [finish]=2
 )
 declare -A STEP_TITLE=(
@@ -289,6 +306,7 @@ declare -A STEP_TITLE=(
   [models]="Downloading the AI models"
   [whisper]="Downloading the speech recognition model"
   [piper]="Downloading the voice"
+  [phone-app]="Downloading the phone app"
   [images]="Getting the container images"
   [searxng]="Setting up the search helper"
   [os-jobs]="Setting Ubuntu's background jobs"
@@ -384,11 +402,12 @@ final_line() {
   [ "$result" != ok ] || pct=100
   STEP_ID=finish
   STEP_INDEX=$STEP_TOTAL
-  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"gpu":%s,"ai":%s,"warnings":%d,"dashboard":"%s"}' \
+  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"gpu":%s,"ai":%s,"phone_app":%s,"warnings":%d,"dashboard":"%s"}' \
     "$STEP_TOTAL" "$STEP_TOTAL" "$state" "$pct" "$(json_str "$msg")" "$result" \
     "$RESTART_REQUIRED" "$code" "$fs" "$head" "$(json_str "$TIER_EFF")" \
     "$([ "$WSL" = 1 ] && echo true || echo false)" "$GPU_JSON" \
-    "$(case $AI in yes) echo true ;; no) echo false ;; *) echo null ;; esac)" "$WARNINGS" "$DASHBOARD_URL")
+    "$(case $AI in yes) echo true ;; no) echo false ;; *) echo null ;; esac)" \
+    "$(case ${PHONE_APP:-} in yes) echo true ;; no) echo false ;; *) echo null ;; esac)" "$WARNINGS" "$DASHBOARD_URL")
   printf '%s%s\n' "$PROGRESS_PREFIX" "$obj"
   FINAL_EMITTED=1
   if [ "$STARTED" = 1 ] && [ "$DRY_RUN" = 0 ] && [ -d "$STATE_DIR" ]; then
@@ -1131,7 +1150,7 @@ RERUN_REASON=""
 
 # Steps that read the checkout, and those that read the pin manifest: a
 # dry run before the clone plans them without their inputs.
-after_clone() { case " docker gpu-runtime venv env ollama models whisper piper images searxng os-jobs units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
+after_clone() { case " docker gpu-runtime venv env ollama models whisper piper phone-app images searxng os-jobs units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
 needs_manifest() { case " docker gpu-runtime env models whisper " in *" $1 "*) return 0 ;; esac; return 1; }
 
 plan_details() {
@@ -3873,6 +3892,113 @@ do_piper() {
   fi
 }
 
+# ─── phone-app ───────────────────────────────────────────────────────────
+
+# The Android app phones install from this server (domovoi/android_app.py):
+# the release android/release.json names, from the project's GitHub
+# release, each APK held to its pinned size, SHA-256 and release-key
+# signature (check_apk) before it is kept, into the core's own cache
+# (~/.domovoi/satellite_media/cache/android_app/<versionCode>/). Fetched
+# ahead like the voices, whatever the internet answer (owner decision
+# 2026-11-15): the egress gate is held open for this one call. Never
+# fatal: a box with no internet finishes its install without it, says so
+# here and in the finish step, and an admin downloads or uploads it later
+# from the dashboard (Settings, Phones & browsers, Get the Domovoi app).
+#
+# phone-app-info prints, one value a line: here, missing or none (no app
+# release yet); then, for here and missing, the version, the release's size
+# in bytes and the cache folder.
+PY_PHONE_APP_INFO='#provision:phone-app-info
+from domovoi import android_app as aa
+m = aa.load_manifest()
+rel = m.get("release")
+if not rel:
+    print("none")
+else:
+    print("here" if aa._complete(m) else "missing")
+    print(rel["version_name"])
+    print(sum(int(a["size"]) for a in rel["apks"]))
+    print(aa._bucket_path(m))'
+PY_PHONE_APP_DOWNLOAD='#provision:phone-app-download
+import logging
+from domovoi import egress
+from domovoi import android_app as aa
+logging.basicConfig(level=logging.WARNING, format="%(message)s")
+m = aa.load_manifest()
+with egress.override_policy("always"):
+    ok, message = aa.fetch(m)
+print(message)
+raise SystemExit(0 if ok else 1)'
+# What the install says when the app couldn't be put here: the step's
+# summary and warning, and again in the finish step.
+PHONE_APP_MISSING_MSG="The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings)"
+# yes (on this server), no (couldn't be downloaded) or empty (unknown, or
+# no app release yet): the final line's "phone_app".
+PHONE_APP=""
+PHONE_APP_STATE="" PHONE_APP_VERSION="" PHONE_APP_BYTES=0 PHONE_APP_DIR=""
+phone_app_info() {
+  local -a lines
+  mapfile -t lines < <(svc_py -c "$PY_PHONE_APP_INFO" 2>/dev/null) || return 1
+  PHONE_APP_STATE=${lines[0]:-} PHONE_APP_VERSION=${lines[1]:-} PHONE_APP_BYTES=${lines[2]:-0} PHONE_APP_DIR=${lines[3]:-}
+  [[ $PHONE_APP_BYTES =~ ^[0-9]+$ ]] || PHONE_APP_BYTES=0
+  case $PHONE_APP_STATE in
+    none) return 0 ;;
+    here|missing) [ -n "$PHONE_APP_VERSION" ] && [ -n "$PHONE_APP_DIR" ] ;;
+    *) return 1 ;;
+  esac
+}
+phone_app_mb() { echo "$((($1 + 524288) / 1048576)) MB"; }
+inputs_phone_app() { file_sig "$CHECKOUT/android/release.json"; echo "$SVC_HOME"; }
+# Already here (a re-run, or an install over an earlier one), or no release
+# to fetch: skipped. Missing: fetched again, every run, until it is here.
+check_phone_app() {
+  phone_app_info || return 1
+  case $PHONE_APP_STATE in
+    here) PHONE_APP=yes; return 0 ;;
+    none) return 0 ;;
+  esac
+  return 1
+}
+plan_phone_app() {
+  if [ -x "$VENV_PY" ] && phone_app_info; then
+    case $PHONE_APP_STATE in
+      none) echo "no app release yet (android/release.json): nothing to download" ;;
+      here) echo "Domovoi $PHONE_APP_VERSION for phones is already in $PHONE_APP_DIR" ;;
+      *) echo "Domovoi $PHONE_APP_VERSION for phones ($(phone_app_mb "$PHONE_APP_BYTES")) from the project's GitHub release into $PHONE_APP_DIR,"
+         echo "each APK checked against its pinned size, SHA-256 and the release key; whatever the internet answer; never fatal" ;;
+    esac
+  else
+    echo "the phone app android/release.json names (about 100 MB) from the project's GitHub release, into the core's cache,"
+    echo "each APK checked against its pinned size, SHA-256 and the release key; whatever the internet answer; never fatal"
+  fi
+}
+do_phone_app() {
+  local out=$TMP_DIR/phone-app.out why
+  if ! phone_app_info; then
+    PHONE_APP=no
+    warn "$PHONE_APP_MISSING_MSG (android/release.json could not be read)"
+    STEP_DONE_MSG=$PHONE_APP_MISSING_MSG
+    return 0
+  fi
+  case $PHONE_APP_STATE in
+    none) PHONE_APP=""; STEP_DONE_MSG="No phone app release yet"; return 0 ;;
+    here) PHONE_APP=yes; STEP_DONE_MSG="Phone app Domovoi $PHONE_APP_VERSION already here"; return 0 ;;
+  esac
+  start_watch "$ROOT$PHONE_APP_DIR" "$PHONE_APP_BYTES" "Downloading the phone app (Domovoi $PHONE_APP_VERSION)"
+  if svc_py -c "$PY_PHONE_APP_DOWNLOAD" >"$out" 2>&1 && phone_app_info && [ "$PHONE_APP_STATE" = here ]; then
+    stop_watch
+    emit_bytes "$PHONE_APP_BYTES" "$PHONE_APP_BYTES" "Downloaded the phone app"
+    PHONE_APP=yes
+    STEP_DONE_MSG="Phone app Domovoi $PHONE_APP_VERSION"
+    return 0
+  fi
+  stop_watch
+  why=$(grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n 1 | scrub_log | cut -c1-300) || why=""
+  PHONE_APP=no
+  warn "$PHONE_APP_MISSING_MSG${why:+ ($why)}"
+  STEP_DONE_MSG=$PHONE_APP_MISSING_MSG
+}
+
 # ─── images ──────────────────────────────────────────────────────────────
 
 # The database's images exactly as domovoi/docker-compose.yml pins them
@@ -4809,6 +4935,12 @@ do_finish() {
   else
     log "AI chat and questions: on"
   fi
+  # The phone-app step's word again, at the end where it is read: the
+  # install is done either way.
+  case $PHONE_APP in
+    yes) log "phone app: on this server, for phones that have no internet" ;;
+    no) log "$PHONE_APP_MISSING_MSG" ;;
+  esac
   detect_gpus
   if [ "$RESTART_REQUIRED" = true ]; then
     log "restart required: /etc/wsl.conf changed. Run 'wsl --terminate <this distro>' and start it again."

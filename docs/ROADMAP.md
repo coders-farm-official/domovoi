@@ -52,6 +52,19 @@ Wanted, not yet scheduled.
 - **The previews out of preview:** the phone's own chat, satellites on
   spare devices, and the USB stick for old computers, once they have been
   tried on more real devices ([hardware validation](HARDWARE_VALIDATION.md)).
+- **More than one wake word per room,** up to about five. The limit is
+  the slowest satellite's processor and false wakes, which add up with
+  every extra word.
+- **A screen for room mode:** a phone or tablet in room mode showing the
+  clock, what's playing and timers, not only listening.
+- **Old smart speakers as rooms.** Some early Echo models can be unlocked
+  and reflashed with open firmware; "Add a room" could walk you through
+  turning one into a Domovoi satellite.
+- **An offline kit:** a server that has internet copies its models, the
+  phone app and the installer to a USB drive, for an install that never
+  goes online.
+- **More Linux distributions,** such as Fedora and Arch, if people ask
+  for them. Say so in [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 - **TLS on the household network,** from the
   [hardening backlog](SECURITY_PRIVACY.md#hardening-backlog--deferred-in-v1-on-purpose)
   that v1 deferred on purpose.

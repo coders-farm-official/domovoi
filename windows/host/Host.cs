@@ -423,7 +423,7 @@ namespace Domovoi.Windows.Host
         {
             log.Write(Inv.F("job generation {0} attempt {1}", job.Generation, job.Attempt));
             // What this job's provision.sh reports, not an earlier one's.
-            lock (statusGate) status.Ai = null;
+            lock (statusGate) { status.Ai = null; status.PhoneApp = null; }
             Status("config", HostProgress.PhaseConfig, 0, "Configuring WSL for Domovoi");
             if (!WriteWslConfig(job)) return false;
 
@@ -1387,6 +1387,7 @@ namespace Domovoi.Windows.Host
                         status.Tier = final.Tier;
                         if (final.Gpu != null) { status.Gpu = final.Gpu; status.GpuKnown = true; }
                         if (final.Ai != null) status.Ai = final.Ai;
+                        if (final.PhoneApp != null) status.PhoneApp = final.PhoneApp;
                     }
                 }
                 string why;

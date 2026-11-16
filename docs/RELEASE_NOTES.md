@@ -57,27 +57,30 @@ a way that would otherwise get reported as a bug.
   described it is now **Or run the install script yourself**; the old
   `#or-let-the-script-do-it` link lands on the page without the jump.
 
-## 1.3.0 (unreleased) — Setup puts the phone app on the server
+## 1.3.0 (unreleased) — The installer puts the phone app on the server
 
-- **What changed.** First-run setup now downloads the Android app onto the
-  server by itself (about 100 MB: the release `android/release.json`
-  names, from the project's GitHub release, checked against the release
-  key like an admin's download), in the background, so the server can
-  later hand it to phones that have no internet. It runs while the server
-  is not yet claimed, on every kind of install (Linux, Windows, Mac), once
-  the internet question is answered **Yes, always** or **Sometimes** (not
-  under **No**, and not before it is answered), and tries again for a while if the
-  line isn't up yet. Until 1.3.0 the first download was always an admin's
-  press of **Download the app to this server**.
-- **If setup couldn't** (no internet, internet set to **No**, a failed
-  download), Settings → Phones & browsers → **Get the Domovoi app** and
-  Home's **needs attention** say so, until the app is on the server: it
-  needs the internet once, at some point, or an admin uploads the app's
-  files (**upload an APK**).
+- **What changed.** The install now downloads the Android app onto the
+  server with its other install-time downloads (the voices, Whisper, the
+  speaker model, the AI models): about 100 MB, the release
+  `android/release.json` names, from the project's GitHub release, checked
+  against the release key like an admin's download. So the server can
+  hand it to phones that have no internet. It is the `phone-app` step of
+  `scripts/linux/provision.sh`, which the Windows installer runs too;
+  like the other install downloads it doesn't depend on the internet
+  answer. Until 1.3.0 the first download was always an admin's press of
+  **Download the app to this server**.
+- **If the install couldn't** (no internet then), the install still
+  finishes: its summary says "The phone app couldn't be downloaded: this
+  server needs the internet once, at some point, to put it here (or upload
+  it in Settings)", and so does the Windows installer's last page. Settings
+  → Phones & browsers → **Get the Domovoi app** and Home's **needs
+  attention** keep saying so until the app is on the server; a re-run of
+  the install script tries again, and skips it once it is here.
 - **Nothing to do** on a server that is already set up: nothing is
   downloaded by itself. If the app isn't on it, the same reminder shows.
-- **API:** `GET /v1/admin/android-app` (`/api/satellites/android-app`):
-  `auto` carries `setup` (true when this start is first-run setup).
+- **For scripts reading the install's progress:** the final progress line
+  carries `phone_app` (true, false, or null when unknown), and there is one
+  more step (`phone-app`, after `piper`), so `total` is 23.
 
 ## 1.3.0 (unreleased) — Release files you can check: SBOMs and build provenance
 

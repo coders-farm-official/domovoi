@@ -444,7 +444,15 @@ names the channel it follows (default `stable`). After the checkout, HEAD
 must be the commit `--ref` named, or nothing is installed. On top
 of the manual steps it pre-downloads what the core would otherwise fetch
 at its first boot: the Ollama models for the box's memory (`--tier`), the
-Whisper model, the Piper voice and the room image. The models include the
+Whisper model, the Piper voice and the room image; and the phone app
+(the Android app `android/release.json` names, about 100 MB, from the
+project's GitHub release), so the server can hand it to phones that have
+no internet. The phone app is fetched whatever `--internet` says, like the
+rest, but it never stops the install: without internet the run finishes,
+and its summary says "The phone app couldn't be downloaded: this server
+needs the internet once, at some point, to put it here (or upload it in
+Settings)"; a later run tries again, and Settings → Phones & browsers →
+**Get the Domovoi app** downloads or takes an upload. The models include the
 vision model that reads pictures in chat (`qwen3-vl:2b-instruct-q4_K_M` on
 both tiers, about 1.9 GB more to download); `--no-vision-model` leaves it
 out, and chat then says it isn't installed until an admin installs it from
@@ -479,7 +487,9 @@ models are downloaded only when it is on. What it checks:
   NVIDIA's apt key on a box with an NVIDIA GPU (checked the same way, for
   the NVIDIA Container Toolkit), the compose images and the room image's
   base (digests), each Ollama model (the manifest's digests), Whisper's
-  `model.bin` and the Piper voice (SHA-256).
+  `model.bin` and the Piper voice (SHA-256). The phone app's APKs are held
+  to `android/release.json` (size, SHA-256 and the release key's
+  signature); one that fails is not kept, with a warning, not a stop.
 - **Not hashed:** Ubuntu's own packages (apt checks them against Ubuntu's
   signed archive, at whatever version it serves that day), what
   `domovoi/Dockerfile.mpd` installs with apt inside the room image, and

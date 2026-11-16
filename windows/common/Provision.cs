@@ -10,7 +10,8 @@
 // usage_error, busy, help, stopped), restart_required, exit_code, failed_step,
 // head, tier, wsl, gpu (a list, [] for the CPU alone, null when unknown),
 // ai (true: AI chat and questions are on, false: left out, null: the run
-// stopped before that was settled), warnings and dashboard. Only a SIGKILL leaves no final line, and the
+// stopped before that was settled), phone_app (true: the Android app is on the
+// server, false: the install couldn't download it, a warning; null: unknown), warnings and dashboard. Only a SIGKILL leaves no final line, and the
 // installer treats that as a failure and runs the script again
 // (step1\REPORT.md). Exit codes: 0 done (or "stopped": the run given
 // --stop-before STEP got there), 1 failed, 2 bad usage, 3 WSL without
@@ -48,6 +49,10 @@ namespace Domovoi.Windows
         // "ai": what the run settled for AI chat and questions (from its
         // options or the household's domovoi/.env); null: unknown.
         public bool? Ai;
+        // "phone_app": the Android app on the server for phones (true), or the
+        // install couldn't download it (false: Setup's last page says so);
+        // null: unknown (no release yet, an older script).
+        public bool? PhoneApp;
         public int Warnings;
         public string Dashboard;
 
@@ -94,6 +99,7 @@ namespace Domovoi.Windows
                 p.Wsl = Json.Bool(d, "wsl");
                 p.Gpu = Json.StrList(d, "gpu");
                 p.Ai = Json.Bool(d, "ai");
+                p.PhoneApp = Json.Bool(d, "phone_app");
                 p.Warnings = Json.Int(d, "warnings") ?? 0;
                 p.Dashboard = Json.Str(d, "dashboard");
             }

@@ -3146,13 +3146,15 @@ const SpareWindows = ({ res, fire }) => {
 /* The Android app on this server (2026-10-15, domovoi/android_app.py), the
  * admin's side, shared by Settings → Rooms → add a spare device and
  * Settings → Phones & browsers → get the Domovoi app. The release android/release.json
- * pins comes from the project's GitHub release by itself during first-run
- * setup (owner decision 2026-11-15, android_app.auto_refresh with setup),
- * else when an admin presses "Download the app to this server" (after an
- * update brought a newer release the server may refresh it by itself), or
- * as an APK an admin uploads (internet access off). Until the app is here
- * the card keeps saying so: the server needs the internet once, at some
- * point, to download it, or an admin uploads it. The server
+ * pins comes from the project's GitHub release at install, with the other
+ * install-time downloads (owner decision 2026-11-15: scripts/linux/provision.sh,
+ * the phone-app step), else when an admin presses "Download the app to this
+ * server" (after an update brought a newer release the server may refresh
+ * it by itself, android_app.auto_refresh), or as an APK an admin uploads
+ * (internet access off). Until the app is here (the install couldn't
+ * download it, or a server set up by hand) the card says so: the server
+ * needs the internet once, at some point, to download it, or its files are
+ * uploaded. The server
  * keeps a file only when it is one the release names, signed by the release
  * key. Progress while it downloads; a failure stays on the card until the
  * next try. No release yet: said plainly, no buttons. `app` is the admin
@@ -3184,17 +3186,13 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
   // A fetch an admin started, or the server's own refresh after an update
   // (domovoi/android_app.py auto_refresh): followed the same way.
   const running = !!(app && app.fetch && app.fetch.running);
-  // First-run setup's download still to start: looked at now and then, so
-  // its progress shows without a reload.
-  const setupComing = !running && !!(app && !app.ready && app.auto && app.auto.setup
-    && app.auto.state === 'waiting');
   React.useEffect(() => {
-    if (!running && !setupComing) return undefined;
+    if (!running) return undefined;
     const t = setInterval(async () => {
       try { setApp(await apiGet('/api/satellites/android-app')); } catch (e) { /* keep the last */ }
-    }, running ? 2000 : 10000);
+    }, 2000);
     return () => clearInterval(t);
-  }, [running, setupComing]);
+  }, [running]);
   const ready = !!(app && app.ready);
   React.useEffect(() => { if (ready && onReady) onReady(); }, [ready]);
   React.useEffect(() => { if (adminState.signedIn) setNeedAdmin(false); }, [adminState.signedIn]);
@@ -3257,33 +3255,20 @@ const AppOnServer = ({ app: initial, onReady, onChange }) => {
   // A tab without the admin sign-in (a reload past its window): the
   // server would refuse the download, so say whose step it is.
   const adminNeeded = needAdmin || !adminState.signedIn;
-  // First-run setup's own try (android_app.auto_refresh with setup): still
-  // to come, or tried and not done. Its progress shows like any download.
-  const auto = app.auto || {};
-  const setupWaiting = !!auto.setup && auto.state === 'waiting';
-  // The internet question isn't answered yet: setup doesn't take that as a
-  // yes, and downloads once it is answered (android_app.WAITING_FOR_ANSWER).
-  const needsAnswer = !!auto.setup && !!auto.waiting_for_answer;
-  const setupFirst = setupWaiting && !(auto.tries > 0) && !needsAnswer;
-  const setupMissed = !!auto.setup && !needsAnswer && (auto.state === 'failed' || auto.state === 'skipped'
-    || (setupWaiting && auto.tries > 0));
+  // The reminder (owner decision 2026-11-15): the install puts the app here,
+  // so this shows only when it couldn't (no internet then) or on a server
+  // set up by hand, and stays until the app is here. The way it names is
+  // one this card offers: the download, or the upload when internet access
+  // is off; without the admin sign-in, an admin's step (said below).
+  const how = adminNeeded ? '. An admin does that.'
+    : app.internet_off ? ', or upload its files.'
+    : ': press “Download the app to this server”, or upload its files.';
   return (
     <div className={`spare-app ${app.ready ? 'spare-app-older' : 'spare-app-missing'}`}
          style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {!app.ready && !running && setupFirst && (
-        <div className="spare-app-setup">
-          {`Setup is about to put the phone app on this server (about ${spareMb(remaining)}), so phones that have no internet can install it from here.`}
-        </div>
-      )}
-      {!app.ready && !running && !setupFirst && (
-        // The reminder (owner decision 2026-11-15): stays until the app is
-        // on this server, whatever kept setup from putting it here.
+      {!app.ready && !running && (
         <div role="note" className="spare-app-reminder" style={{ color: 'var(--warn-ink)' }}>
-          {`The phone app isn’t on this server yet${setupMissed ? ': setup couldn’t download it' : ''}. `}
-          {`To give the app to phones that have no internet, this server needs the internet once, at some point, to download it (about ${spareMb(remaining)}).`}
-          {needsAnswer
-            ? ' Setup downloads it once you say whether this server has internet (Settings → Internet).'
-            : setupWaiting ? ' Setup will try again by itself.' : ''}
+          {`The phone app isn’t on this server. To give it to phones that have no internet, this server needs the internet once, at some point, to download it (about ${spareMb(remaining)})${how}`}
         </div>
       )}
       {app.ready && (

@@ -44,6 +44,9 @@
 #     checkout's domovoi/.env, piper-info / piper-download and
 #     whisper-download write fake model files whose hashes the fixture
 #     manifest pins (whisper-content and piper-content override them);
+#     phone-app-info / phone-app-download stand in for the Android app's
+#     fetch into the core's cache (phone-app-fail: no internet;
+#     phone-app-none: no release yet; phone-app-unreadable: a bad manifest);
 #     `-m pip install -r` fails when pip-fail is set.
 #
 # Usage: bash scripts/linux/tests/test-provision.sh [--case NAME|GLOB]... [--list]
@@ -1042,6 +1045,22 @@ if [ "${1-}" = -c ]; then
       [ ! -f "$SHIM_STATE/speaker-fail" ] || { echo "ModelUnavailable: fixture" >&2; exit 1; }
       d=$SHIM_ROOT$3; mkdir -p "$d"
       cat "$SHIM_STATE/speaker-content" >"$d/speaker.onnx"; echo "$d/speaker.onnx"; exit 0 ;;
+    "#provision:phone-app-info")
+      # phone-app-none: android/release.json names no release yet;
+      # phone-app-unreadable: the manifest can't be read.
+      [ ! -f "$SHIM_STATE/phone-app-unreadable" ] || { echo "ManifestError: fixture" >&2; exit 1; }
+      [ ! -f "$SHIM_STATE/phone-app-none" ] || { echo none; exit 0; }
+      d=$HOME/.domovoi/satellite_media/cache/android_app/26111301
+      if [ -f "$SHIM_ROOT$d/domovoi-1.2.0-arm64-v8a.apk" ] && [ -f "$SHIM_ROOT$d/domovoi-1.2.0-armeabi-v7a.apk" ]; then echo here; else echo missing; fi
+      echo 1.2.0; echo 101000000; echo "$d"; exit 0 ;;
+    "#provision:phone-app-download")
+      # phone-app-fail: no internet (what fetch says, then exit 1).
+      grep -q 'override_policy("always")' <<<"$2" || { echo "not held open" >&2; exit 1; }
+      echo phone-app-download >>"$SHIM_STATE/phone-app-fetches"
+      [ ! -f "$SHIM_STATE/phone-app-fail" ] || { echo "2 of 2 app files failed: domovoi-1.2.0-arm64-v8a.apk: ConnectError: fixture"; exit 1; }
+      d=$SHIM_ROOT$HOME/.domovoi/satellite_media/cache/android_app/26111301; mkdir -p "$d"
+      echo arm64 >"$d/domovoi-1.2.0-arm64-v8a.apk"; echo v7a >"$d/domovoi-1.2.0-armeabi-v7a.apk"
+      echo "2 app files verified (2 downloaded)"; exit 0 ;;
     "#provision:whisper-download")
       d=$SHIM_ROOT$HOME/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/$4
       mkdir -p "$d"; cat "$SHIM_STATE/whisper-content" >"$d/model.bin"; echo "$d"; exit 0 ;;
@@ -1175,7 +1194,7 @@ final_field() { grep '"final":true' "$CASE/progress.jsonl" | tail -n 1 | sed -n 
 progress_ok() {
   [ -s "$CASE/progress.jsonl" ] || { echo "      no progress lines"; return 1; }
   if [ -z "$JSON_PY" ]; then
-    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":22,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
+    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":23,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
       && { echo "      a progress line does not match the protocol"; return 1; }
     return 0
   fi
@@ -1188,7 +1207,7 @@ for n, l in enumerate(lines, 1):
     o = json.loads(l)
     for k in ("v", "step", "index", "total", "state", "percent", "message"):
         assert k in o, "line %d lacks %s: %s" % (n, k, l)
-    assert o["v"] == 1 and o["total"] == 22, l
+    assert o["v"] == 1 and o["total"] == 23, l
     assert o["state"] in ("start", "progress", "done", "skip", "fail", "plan"), l
     assert 0 <= o["percent"] <= 100, l
     if o["state"] != "fail" and not o.get("final"):
@@ -1223,7 +1242,7 @@ end_case() {
   fi
 }
 
-STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng os-jobs units timezone start update-unit)
+STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper phone-app images searxng os-jobs units timezone start update-unit)
 
 # ─── cases ───────────────────────────────────────────────────────────────
 
@@ -1335,7 +1354,12 @@ case_dry_run_changes_nothing() {
   check "plans the vision model" said "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
   check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M afc393e3572c07db0bc84aa460d928a16c75f3fbb9ca9e0dccc4fbd2dafb573e"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
-  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 20
+  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 21
+  check "the phone app is listed among the downloads" \
+    grep -q '"step":"phone-app".*"state":"plan".*"message":"run: Downloading the phone app"' "$CASE/progress.jsonl"
+  check "with what it fetches" said "the phone app android/release.json names (about 100 MB) from the project's GitHub release"
+  check "whatever the internet answer, never fatal" said "whatever the internet answer; never fatal"
+  check "nothing fetched" absent "$STATE/phone-app-fetches"
   check "the GPU step: a skip, asked of the helper beside the script" \
     grep -q '"step":"gpu-runtime".*"state":"plan".*"message":"skip: no NVIDIA GPU visible (WSL: no /dev/dxg' "$CASE/progress.jsonl"
   check "the preflight runs for real" eq "$(state_of preflight)" done
@@ -1493,6 +1517,13 @@ case_full_run_wsl() {
   check "and the other two" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-ljspeech-medium.onnx"
   check "voice ID's speaker model, beside them" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/speaker.onnx"
   check "no espeak-ng installed" not_called "espeak-ng"
+  # phone-app: the Android app in the core's cache, for phones with no internet
+  check "phone app in the core's cache" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-arm64-v8a.apk"
+  check "both APKs" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-armeabi-v7a.apk"
+  check "phone app step's summary" grep -q '"step":"phone-app".*"state":"done".*"message":"Phone app Domovoi 1.2.0"' "$CASE/progress.jsonl"
+  check "phone_app true in the final line" eq "$(final_field phone_app)" true
+  check "the finish step says it is here" said "phone app: on this server, for phones that have no internet"
+  check "no phone-app warning" not_said "The phone app couldn't be downloaded"
   # images, search helper
   check "database images pulled as compose pins them" called "docker compose pull postgres flyway"
   check "MPD image built as the core does" called " -t domovoi-mpd:latest -f $CHECKOUT/domovoi/Dockerfile.mpd $CHECKOUT/domovoi"
@@ -1555,6 +1586,8 @@ case_second_run_skips_everything() {
     check "step $s skipped" eq "$(state_of "$s")" skip
   done
   check "only preflight and finish start" eq "$(grep -c '"state":"start"' "$CASE/progress.jsonl")" 2
+  check "the phone app fetched once, on the first run" eq "$(grep -c . "$STATE/phone-app-fetches")" 1
+  check "and still here" eq "$(final_field phone_app)" true
   check "every file as it was" eq "$(tree_sig)" "$sig"
   check ".env untouched" eq "$(cksum <"$CHECKOUT/domovoi/.env")" "$env_before"
   check "no apt" not_called "apt-get"
@@ -1956,6 +1989,89 @@ case_piper_sha_mismatch_stops() {
   check "exit 1" eq "$RC" 1
   check "piper failed" eq "$(state_of piper)" fail
   check "says it does not match" said "does not match its pin"
+  end_case
+}
+
+# The phone app (owner decision 2026-11-15): fetched at install like the
+# voices, whatever the internet answer, and never fatal. A box with no
+# internet finishes, says so plainly in the step and again at the end, and
+# a later run (a repair) tries again.
+case_phone_app_failure_is_not_fatal() {
+  new_case phone_app_failure_is_not_fatal
+  : >"$STATE/phone-app-fail"
+  run_prov "${wsl_args[@]}"
+  check "exit 0: the install finishes" eq "$RC" 0
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "progress format" progress_ok
+  check "the step is done, not failed" eq "$(state_of phone-app)" done
+  check "its summary says why, plainly" grep -qF '"step":"phone-app","index":15,"total":23,"state":"done","percent":' "$CASE/progress.jsonl"
+  check "in these words" grep -qF "\"message\":\"The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings)\"" "$CASE/progress.jsonl"
+  check "a warning, with fetch's own word" said "WARNING: The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings) (2 of 2 app files failed"
+  check "counted with the warnings" eq "$(final_field warnings)" 3
+  check "the end of the install repeats it" eq "$(grep -v '^@@DOMOVOI ' "$CASE/output.log" | grep -cF "The phone app couldn't be downloaded")" 2
+  check "the second time in the finish step" eq "$(sed -n '/dashboard: http:\/\/localhost:6369/,$p' "$CASE/output.log" | grep -c "^provision: The phone app couldn't be downloaded: this server needs the internet once")" 1
+  check "phone_app false in the final line" eq "$(final_field phone_app)" false
+  check "the steps after it ran" eq "$(state_of start)" done
+  check "nothing in the cache" absent "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-arm64-v8a.apk"
+  # The line is back: the next run fetches it, and only it.
+  rm -f "$STATE/phone-app-fail"
+  run_prov "${wsl_args[@]}"
+  check "rerun exit 0" eq "$RC" 0
+  check "fetched on the rerun" eq "$(grep -c . "$STATE/phone-app-fetches")" 2
+  check "here now" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-arm64-v8a.apk"
+  check "phone_app true" eq "$(final_field phone_app)" true
+  check "no warning about it now" not_said "The phone app couldn't be downloaded"
+  check "the other steps skipped" eq "$(state_of piper)" skip
+  end_case
+}
+
+# Whatever the internet answer: never is the household's answer for later,
+# not for what the install puts on the box (the egress gate held open for
+# this one call, as for the voices).
+case_phone_app_fetched_under_never() {
+  new_case phone_app_fetched_under_never
+  run_prov --internet never --skip-models
+  check "exit 0" eq "$RC" 0
+  check "fetched" eq "$(grep -c . "$STATE/phone-app-fetches")" 1
+  check "here" test -f "$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301/domovoi-1.2.0-armeabi-v7a.apk"
+  check "phone_app true" eq "$(final_field phone_app)" true
+  check "the snippet holds the gate open" grep -qF 'with egress.override_policy("always"):' <<<"$(sed -n "/^PY_PHONE_APP_DOWNLOAD=/,/^raise SystemExit/p" "$SCRIPT")"
+  end_case
+}
+
+# Already on the server (an earlier install, or an admin's download): the
+# step skips it and fetches nothing.
+case_phone_app_already_here_skips() {
+  new_case phone_app_already_here_skips
+  local d=$ROOT/home/domovoi/.domovoi/satellite_media/cache/android_app/26111301
+  mkdir -p "$d"
+  echo arm64 >"$d/domovoi-1.2.0-arm64-v8a.apk"; echo v7a >"$d/domovoi-1.2.0-armeabi-v7a.apk"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "nothing fetched" absent "$STATE/phone-app-fetches"
+  check "says it is here" grep -q '"step":"phone-app".*"state":"done".*"message":"Phone app Domovoi 1.2.0 already here"' "$CASE/progress.jsonl"
+  check "phone_app true" eq "$(final_field phone_app)" true
+  end_case
+}
+
+# No app release yet, or a manifest the core refuses: nothing to fetch, or
+# a warning; the install goes on either way.
+case_phone_app_no_release_or_unreadable() {
+  new_case phone_app_no_release_or_unreadable
+  : >"$STATE/phone-app-none"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "nothing fetched" absent "$STATE/phone-app-fetches"
+  check "says so" grep -q '"step":"phone-app".*"state":"done".*"message":"No phone app release yet"' "$CASE/progress.jsonl"
+  check "phone_app null" eq "$(final_field phone_app)" null
+  check "no warning about it" not_said "The phone app couldn't be downloaded"
+  rm -f "$STATE/phone-app-none"
+  : >"$STATE/phone-app-unreadable"
+  run_prov "${wsl_args[@]}"
+  check "unreadable: exit 0" eq "$RC" 0
+  check "unreadable: the step is done" eq "$(state_of phone-app)" done
+  check "unreadable: says so" said "WARNING: The phone app couldn't be downloaded: this server needs the internet once, at some point, to put it here (or upload it in Settings) (android/release.json could not be read)"
+  check "unreadable: phone_app false" eq "$(final_field phone_app)" false
   end_case
 }
 
@@ -5107,6 +5223,10 @@ CASES=(
   case_whisper_sha_mismatch_stops
   case_piper_speaker_model_failure_stops
   case_piper_sha_mismatch_stops
+  case_phone_app_failure_is_not_fatal
+  case_phone_app_fetched_under_never
+  case_phone_app_already_here_skips
+  case_phone_app_no_release_or_unreadable
   case_piper_unpinned_voice_with_a_space
   case_piper_empty_configured_voice
   case_model_digest_mismatch_stops

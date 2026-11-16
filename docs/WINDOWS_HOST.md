@@ -221,7 +221,14 @@ signature, before it runs it.
    processor when there is none), speech recognition always on the
    processor; with AI chat and questions left out (as `provision.sh`
    reported it), it says so and where to
-   turn them on (**Settings > Chat & AI > Models**). Domovoi's icon appears beside the clock for the account that
+   turn them on (**Settings > Chat & AI > Models**). `provision.sh` also
+   puts the phone app (the Android app, about 100 MB) on the server for
+   phones that have no internet; when it couldn't download it (no
+   internet then), the install still finishes and the page says "The
+   phone app couldn't be downloaded: this server needs the internet once,
+   at some point, to put it here (or upload it in Settings)" (its final
+   progress line's `phone_app`, which only a pinned `provision.sh` with
+   the `phone-app` step reports). Domovoi's icon appears beside the clock for the account that
    ran Setup, and starts at every account's sign-in from then on
    ([The tray icon](#the-tray-icon)).
 
