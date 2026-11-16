@@ -3786,6 +3786,11 @@ const SatellitesPage = ({ embedded = false } = {}) => {
     wasDown.current = coreDown;
   }, [coreDown, refresh]);
   const { items: approvals, refresh: refreshApprovals } = useApiList('/api/satellites/approvals');
+  // Why a room couldn't join, when only the server knows (a dialled
+  // address it can't prove is its own, a room paired with another device):
+  // otherwise the room's ring just stays red. Admin read, like approvals.
+  const { data: joinDoc, refresh: refreshJoin } = useApiObject('/api/satellites/join-problems', { quiet: true });
+  const joinProblems = (joinDoc && Array.isArray(joinDoc.problems)) ? joinDoc.problems : [];
   const [approvalBusy, setApprovalBusy] = React.useState('');
   // {room_id, tone, text} — the refusal that belongs beside THAT room's
   // code box. One at a time: the operator is standing at one satellite.
@@ -3794,9 +3799,9 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   // The satellite retries on its own, so this list settles without a push
   // channel; poll while the page is open.
   React.useEffect(() => {
-    const t = setInterval(refreshApprovals, 5000);
+    const t = setInterval(() => { refreshApprovals(); refreshJoin(); }, 5000);
     return () => clearInterval(t);
-  }, [refreshApprovals]);
+  }, [refreshApprovals, refreshJoin]);
 
   const decide = async (a, action, code) => {
     if (action === 'reject' && !window.confirm(
@@ -3890,6 +3895,25 @@ const SatellitesPage = ({ embedded = false } = {}) => {
               The rooms below are as they were last heard from. They reconnect by themselves once the core is back.
             </div>
             {downWhy === 'frozen' && <CoreRestart onBack={() => { refreshHealth(); refresh(); }}/>}
+          </div>
+        </Card>
+      )}
+      {joinProblems.length > 0 && (
+        <Card>
+          <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="label">couldn’t join</div>
+            {joinProblems.map(p => (
+              <div key={`${p.kind}:${p.subject}`} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                <StatusDot tone="warn"/>
+                <span style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  {p.text}
+                  <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
+                    {' '}· {p.at ? new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                    {p.count > 1 ? ` · ${p.count} times` : ''}
+                  </span>
+                </span>
+              </div>
+            ))}
           </div>
         </Card>
       )}

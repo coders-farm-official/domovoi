@@ -2433,6 +2433,13 @@ class SatellitePairingRepository:
 # the endpoint accepts digits only.
 _CODE_DECOY = "\x00no-code-on-file"
 
+#: A pending request nobody has refreshed for this long is gone (1.3.0). A
+#: device that is still waiting re-asks far more often than this (a Pi at
+#: least every minute, a phone every 35 s), so only a request whose device
+#: was switched off or set up again elsewhere expires — and with it the
+#: room name it was holding.
+APPROVAL_EXPIRY_SEC = 900.0
+
 
 class SatelliteApprovalRepository:
     """CRUD for `satellite_approvals` — satellites waiting on a human (V009).
@@ -2483,7 +2490,11 @@ class SatelliteApprovalRepository:
         device bumps ``attempts`` and refreshes the metadata rather than
         piling up rows, and it keeps the code the customer was already
         shown: whatever they are holding must stay the thing that works.
+
+        A request nobody refreshed for :data:`APPROVAL_EXPIRY_SEC` is
+        deleted first, so it holds its room name against nobody.
         """
+        await self.purge_expired()
         # Every SET expression reads the row as it was before this
         # statement, so "same device" below is the parked device's hash.
         same = "satellite_approvals.token_hash = EXCLUDED.token_hash"
@@ -2532,7 +2543,9 @@ class SatelliteApprovalRepository:
         at the device that made the request — printing it on the same page
         as the approve button would make it a label again rather than
         something only the room's device can tell them. ``has_code`` says
-        whether there is anything to type."""
+        whether there is anything to type. Expired requests are deleted
+        before the list is read."""
+        await self.purge_expired()
         rows = (
             await self.s.execute(
                 text(
@@ -2577,6 +2590,7 @@ class SatelliteApprovalRepository:
         The comparison is :func:`secrets.compare_digest` and runs even when
         there is nothing on file, so the answers cost the same.
         """
+        await self.purge_expired()
         pending = (
             await self.s.execute(
                 text(
@@ -2645,6 +2659,17 @@ class SatelliteApprovalRepository:
                 },
             )
         return "approved"
+
+    async def purge_expired(self, expiry_sec: float = APPROVAL_EXPIRY_SEC) -> int:
+        """Delete requests nobody has refreshed for ``expiry_sec``."""
+        result = await self.s.execute(
+            text(
+                "DELETE FROM satellite_approvals WHERE last_seen_at < now() - "
+                "make_interval(secs => CAST(:e AS double precision))"
+            ),
+            {"e": float(expiry_sec)},
+        )
+        return int(result.rowcount or 0)
 
     async def reject(self, room_id: str) -> bool:
         """Drop a pending request. The device keeps retrying — rejection is

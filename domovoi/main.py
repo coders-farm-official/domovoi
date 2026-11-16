@@ -43,7 +43,7 @@ from domovoi import self_restart  # noqa: E402
 from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
-from domovoi import server_identity  # noqa: E402
+from domovoi import join_problems, server_identity  # noqa: E402
 from domovoi import crypto_backend  # noqa: E402
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
@@ -1443,6 +1443,8 @@ async def health(
                 "it in TRUSTED_HOSTS; otherwise something between a "
                 "satellite and this server is relaying its questions.", addr,
             )
+            # And where an admin looks: Settings → Rooms says it too.
+            join_problems.addr_refused(addr)
             block: dict[str, Any] = identity.public_document()
             block["challenge"] = challenge
             block["addr_refused"] = addr
@@ -4875,6 +4877,34 @@ async def admin_satellite_approve(
         )
     log.info("pairing: room=%s APPROVED by an operator", room_id)
     return {"approved": True, "room_id": room_id}
+
+
+@app.get(
+    "/v1/admin/satellites/join-problems",
+    # Admin READ, like the approvals list: the lines name rooms and the
+    # addresses devices dialled.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_satellite_join_problems() -> dict[str, Any]:
+    """Why room devices could not join lately, newest first — the reasons
+    only the server knows (domovoi/join_problems.py): it would not sign its
+    identity for the address a device dialled, the room is paired with a
+    different device, too many requests from one address. At most five
+    lines, each kept a day; a restart clears them."""
+    from datetime import datetime, timezone
+
+    return {
+        "problems": [
+            {
+                "kind": p["kind"],
+                "subject": p["subject"],
+                "text": p["text"],
+                "count": p["count"],
+                "at": datetime.fromtimestamp(p["at"], timezone.utc).isoformat(),
+            }
+            for p in join_problems.recent()
+        ]
+    }
 
 
 @app.post(

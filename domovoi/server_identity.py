@@ -285,7 +285,52 @@ def _configured_host_entries() -> list[tuple[str, int | None]]:
 _WILDCARD_WARNED: set[str] = set()
 
 
-def dialed_address_is_ours(addr: str, *, can_bind=None) -> bool:
+def _lan_name_report_addresses() -> list[str]:
+    """The LAN addresses in the host's network-name report — the
+    root-owned file the machine hosting this core writes when the core
+    itself is not the one on the home network (DomovoiHost on Windows,
+    whose core runs in a private WSL distro; a Mac host adds its own file
+    to ``domovoi.lan_name.service.REPORT_FILES``). Already checked there:
+    believed only while root owns it, every address a usable LAN one."""
+    from domovoi.lan_name import service
+
+    report = service.read_report()
+    return list(report[1].get("addresses") or []) if report else []
+
+
+#: Where "addresses the host vouches for" come from: functions returning IP
+#: literals that reach THIS core although no interface here owns them —
+#: the host's own LAN address when the core runs inside a VM or a NAT'd
+#: distro behind a port-forward. Each source must be something only the
+#: host (root) can write: an address in here is one the core will sign
+#: its identity proof for. A host integration appends its source; a source
+#: that fails is skipped.
+VOUCHED_ADDRESS_SOURCES: list[Any] = [_lan_name_report_addresses]
+
+
+def host_vouched_addresses() -> set[str]:
+    """Every IP literal some :data:`VOUCHED_ADDRESS_SOURCES` entry vouches
+    for, normalised (names are dropped: a name is never vouched for here,
+    for the same reason it is never resolved)."""
+    out: set[str] = set()
+    for source in list(VOUCHED_ADDRESS_SOURCES):
+        try:
+            values = list(source() or [])
+        except Exception as e:  # noqa: BLE001 — one broken source vouches for nothing
+            log.debug("vouched-address source %r failed: %s", source, e)
+            continue
+        for value in values:
+            try:
+                ip = ipaddress.ip_address(str(value).strip().strip("[]"))
+            except ValueError:
+                continue
+            if ip.is_unspecified or ip.is_multicast:
+                continue
+            out.add(str(ip))
+    return out
+
+
+def dialed_address_is_ours(addr: str, *, can_bind=None, vouched=None) -> bool:
     """Whether ``addr`` — the ``host:port`` a satellite says it dialed — is
     an address this server is actually reachable at, and so one it may
     sign for.
@@ -304,6 +349,12 @@ def dialed_address_is_ours(addr: str, *, can_bind=None) -> bool:
     the Host-header guard keeps honouring it, but here it would sign for
     any name under the suffix — ``evil.local``, which anyone on the LAN can
     claim over mDNS — and reopen the relay. It is skipped, and said so once.
+
+    Last, an IP literal no interface here owns is still ours when the
+    machine hosting this core VOUCHES for it (:func:`host_vouched_addresses`,
+    ``vouched`` in tests): the host's LAN address in front of a core that
+    runs in a VM or a NAT'd distro, forwarded to it. Any port, like a
+    ``TRUSTED_HOSTS`` entry without one.
     """
     can_bind = _can_bind if can_bind is None else can_bind
     host, port = split_host_port(addr)
@@ -334,7 +385,10 @@ def dialed_address_is_ours(addr: str, *, can_bind=None) -> bool:
         return True
     if ip.is_unspecified or ip.is_multicast:
         return False
-    return can_bind(ip)
+    if can_bind(ip):
+        return True
+    known = host_vouched_addresses() if vouched is None else set(vouched)
+    return str(ip) in known
 
 
 # ─── the identity itself ──────────────────────────────────────────────────

@@ -483,7 +483,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
-from domovoi import ai_features, command_captures, lan_address
+from domovoi import ai_features, command_captures, join_problems, lan_address
 from domovoi import fast_lane
 from domovoi import voice_activity
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
@@ -2834,6 +2834,7 @@ class StreamSession:
             # digits only), and no device says one of any other length — so
             # parking it would only take the room name away from the device
             # that IS there.
+            join_problems.bad_code(self.room_id)
             log.warning(
                 "pairing: room=%s approval request refused — the code it "
                 "brought is not %d digits (or the %d of an older satellite)",
@@ -2849,6 +2850,7 @@ class StreamSession:
             })
             return False
         if not APPROVAL_HELLO_LIMITER.allow(self._hello_source()):
+            join_problems.throttled(self._hello_source())
             log.warning(
                 "pairing: room=%s approval request throttled for this source",
                 self.room_id,
@@ -2876,6 +2878,7 @@ class StreamSession:
             takeover_after_sec=APPROVAL_TAKEOVER_SEC,
         )
         if outcome == "conflict":
+            join_problems.name_taken(self.room_id)
             log.warning(
                 "pairing: room=%s REFUSED — a different device is already "
                 "waiting for approval under that room name",
@@ -3000,17 +3003,20 @@ class StreamSession:
                         self.token_authenticated = True
                         return True
                     # Case 3 — a token, but the WRONG one.
+                    join_problems.paired_elsewhere(self.room_id)
                     return await _reject("pairing_token mismatch (possible impostor)")
                 # No token presented.
                 if row is not None:
                     # Case 4 — a paired room must present its token; a
                     # tokenless impostor must not take over.
+                    join_problems.paired_elsewhere(self.room_id)
                     return await _reject(
                         "paired room connected without a pairing_token "
                         "(possible impostor)"
                     )
                 # Case 5 — no token, no row.
                 if settings.satellite_pairing_strict:
+                    join_problems.no_key(self.room_id)
                     return await _reject(
                         "no pairing_token and strict pairing is enabled"
                     )

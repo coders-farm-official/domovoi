@@ -284,3 +284,41 @@ def test_retrying_never_extends_the_window_or_swaps_the_code():
     ) == ("parked", CODE)
     again = _run(_pending())[0]
     assert again["first_seen_at"] == first and again["attempts"] == 2
+
+
+# ─── expiry (1.3.0) ───────────────────────────────────────────────────────
+
+
+async def _age(minutes: int):
+    async with session_scope() as s:
+        await s.execute(text(
+            "UPDATE satellite_approvals SET last_seen_at = now() - make_interval(mins => :m)"
+        ), {"m": minutes})
+
+
+def test_a_request_nobody_refreshes_expires():
+    """A device that was switched off, or set up again elsewhere, no longer
+    holds its row (or its room name) for good."""
+    _run(_request(code=CODE))
+    _run(_age(16))
+    assert _run(_pending()) == []
+    assert _run(_get()) is None
+
+
+def test_an_expired_request_frees_the_name_for_another_device():
+    _run(_request(code=CODE))
+    _run(_age(16))
+    assert _run(_request(token_hash=HASH_B, code=OTHER_CODE)) == ("parked", OTHER_CODE)
+
+
+def test_an_expired_request_cannot_be_approved():
+    _run(_request(code=CODE))
+    _run(_age(16))
+    assert _run(_approve()) == "not_pending"
+    assert _run(_pairing()) is None
+
+
+def test_a_request_still_being_refreshed_does_not_expire():
+    _run(_request(code=CODE))
+    _run(_age(14))
+    assert len(_run(_pending())) == 1
