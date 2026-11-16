@@ -362,6 +362,10 @@ may work, and it says so), open a terminal and run:
 curl -fsSL https://raw.githubusercontent.com/coders-farm-official/domovoi/stable/scripts/linux/install.sh | sudo bash
 ```
 
+> **From Domovoi 1.3.0.** Until 1.3.0 is released, `stable` has no
+> `install.sh` and this command answers 404: use
+> [the install script by hand](#or-run-the-install-script-yourself), below.
+
 It asks two questions: **will this server have internet after setup**
 (yes always, sometimes, or no: [what each means](#will-your-domovoi-have-internet);
 you can change it later in Settings → Privacy → Internet), and its **time

@@ -194,17 +194,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # 3.12 or 3.13 only: from 3.14 the Windows CPython builds ship zlib-ng,
-      # whose deflate output differs from zlib's, so apksigcopier can't find
-      # the APK's compression level ("Unsupported compresslevel") and the
-      # copy check refuses every release (1.3.0's first run, 2026-11-16).
-      - name: Python 3.13 or 3.12 from the runner's tool cache (zlib, not zlib-ng)
+      # 3.12 only. apksigcopier compare recompresses the APK's entries to copy
+      # the signature onto the unsigned build, so its Python's deflate must
+      # be the one Gradle's matches. 3.15 (zlib-ng) can't find the level at
+      # all ("Unsupported compresslevel"); 3.13.17 finds one but writes
+      # different bytes (CHUNKED_SHA512 digest mismatch). 3.12.10, the last
+      # 3.12 Windows build, passes on the same APKs (1.3.0's runs, 2026-11-16).
+      - name: Python 3.12 from the runner's tool cache (apksigcopier's deflate)
         shell: pwsh
         run: |
           $dir = Get-ChildItem (Join-Path $env:RUNNER_TOOL_CACHE 'Python') -Directory |
-            Where-Object { $_.Name -match '^3\.1[23]\.\d+$' } |
+            Where-Object { $_.Name -match '^3\.12\.\d+$' } |
             Sort-Object { [version]$_.Name } | Select-Object -Last 1
-          if (-not $dir) { throw 'no Python 3.13 or 3.12 in the tool cache (3.14+ ships zlib-ng, which apksigcopier compare cannot use)' }
+          if (-not $dir) { throw 'no Python 3.12 in the tool cache (apksigcopier compare needs its deflate: 3.13+ writes different bytes)' }
           $py = Join-Path $dir.FullName 'x64'
           & (Join-Path $py 'python.exe') --version
           Add-Content -LiteralPath $env:GITHUB_PATH -Value $py -Encoding utf8
