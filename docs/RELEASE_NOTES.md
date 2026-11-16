@@ -4,6 +4,43 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.3.0 (unreleased) — The server signs with `cryptography`, not its own code
+
+Nothing to do: the update installs it. The server's identity (the key a
+prepared satellite trusts, the signed `/v1/health` answer, the signed
+satellite code, plugin, sound and wake-word lists) and the signature check
+of the Android app it serves now run on
+[`cryptography`](https://cryptography.io/) 50.0.2 (Apache-2.0 or
+BSD-3-Clause, OpenSSL inside) instead of Domovoi's own pure-Python Ed25519
+and RSA code, which wasn't constant-time. Before, a server used
+`cryptography` only if someone had installed the optional `signing` extra;
+now it is a core dependency in both server locks, and the `signing` extra
+is gone.
+
+- **Same keys, same signatures.** The identity file is untouched and
+  every prepared card keeps trusting the server: Ed25519 gives the same
+  signature from either code, and the tests hold them to it.
+- **The server never signs with the fallback.** A server missing the
+  package (a broken install) says so at ERROR at boot, makes no key and
+  signs nothing, so satellites refuse it until the dependencies are
+  reinstalled from the lock. Signature checks still answer, in pure Python.
+- **Where it's said.** Each server process logs the library and OpenSSL
+  versions once at boot, and `GET /v1/admin/version` reports `crypto`:
+  `{backend, cryptography, openssl, signing}`.
+- **Satellites are unchanged**: they check with `cryptography` where their
+  Python has it and with the vendored pure-Python Ed25519 otherwise (the
+  32-bit Pi OS case), and now say once in the journal which.
+- **One verdict for every input.** OpenSSL accepts a public key written in
+  a non-canonical way that Domovoi's code refused: written so, the
+  identity key took one forged signature as valid over any message. Every
+  verifier now runs Domovoi's encoding checks before handing a signature to
+  `cryptography`, so both give the same answer. A satellite only trusts
+  the key whose fingerprint it pinned, so no pinned device was exposed;
+  a device with nothing pinned trusts the first key it meets anyway.
+- **Developers:** reinstall from the lock (`pip install --require-hashes
+  -r requirements.lock`, or `pip install -e .`): the suite now signs with
+  `cryptography`, and without it the identity and APK tests fail.
+
 ## 1.3.0 (unreleased) — Security updates: Pillow, certifi, filelock
 
 Nothing to do: these come with the update. They fix published security

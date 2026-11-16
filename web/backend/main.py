@@ -213,6 +213,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     image_safety.configure_pillow()
 
+    # This process signs too (satellite-media prepare bakes the server
+    # identity into a card): say once at boot which library does it, or,
+    # at ERROR, that cryptography is missing (domovoi/crypto_backend.py).
+    from domovoi import crypto_backend
+
+    crypto_backend.backend()
+
     # Fonts: a download a restart cut short leaves a staging folder behind.
     try:
         from web.backend.api import fonts as _fonts_api

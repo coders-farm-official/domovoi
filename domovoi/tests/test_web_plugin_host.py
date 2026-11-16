@@ -90,6 +90,7 @@ def test_import_guard_preloads_lazily_imported_request_modules():
             # source-derived scan that follows could not see it either. The
             # refusal reached the owner as a failed Prepare job.
             "domovoi.server_identity",
+            "domovoi.crypto_backend",
             "domovoi._ed25519",
         ):
             assert importlib.import_module(mod) is not None, mod
