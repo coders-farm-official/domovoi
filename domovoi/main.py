@@ -44,6 +44,7 @@ from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
 from domovoi import turn_watchdog  # noqa: E402
 from domovoi import join_problems, server_identity  # noqa: E402
+from domovoi import crypto_backend  # noqa: E402
 try:  # noqa: E402 — the satellite tree ships beside the core (it serves it to rooms)
     from satellite.pairing_proof import VERSION as PAIRING_PROOF_VERSION
 except ImportError:  # pragma: no cover — a core without it advertises no proof
@@ -1413,7 +1414,7 @@ async def health(
         "speech": turn_watchdog.speech_health(),
     }
     if PAIRING_PROOF_VERSION:
-        # 1.3.0: this server can PROVE an approval to a room device — the
+        # 1.3.1: this server can PROVE an approval to a room device — the
         # exchange in satellite/pairing_proof.py. A device that asks every
         # server it finds for approval asks only those that say so.
         doc["pairing_proof"] = PAIRING_PROOF_VERSION
@@ -4871,7 +4872,7 @@ async def admin_satellite_approve(
             ),
         )
     if result == "entered":
-        # A device that proves approvals (1.3.0) never sent its code: the
+        # A device that proves approvals (1.3.1) never sent its code: the
         # core cannot say yet whether this one is right. The DEVICE checks
         # it on its next visit (every ten seconds while it waits), and the
         # room is bound only if it confirms. Not "approved", so the

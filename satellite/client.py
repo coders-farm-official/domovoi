@@ -8667,7 +8667,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         if legacy and legacy != self._legacy_reported:
             log.warning(
                 "found Domovoi server(s) at %s that cannot prove an approval (older "
-                "than 1.3.0). This device does not ask them: update that server, "
+                "than 1.3.1). This device does not ask them: update that server, "
                 "or set its address in the setup portal to use it as it is",
                 ", ".join(sorted(legacy)),
             )
@@ -9925,7 +9925,7 @@ def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) 
                         "it shows the old one until it is restarted")
 
 
-# ─── asking every house (1.3.0, satellite/house_pairing.py) ───────────────
+# ─── asking every house (1.3.1, satellite/house_pairing.py) ───────────────
 
 # What the device remembers of the challenges it answered (its budget).
 APPROVAL_BUDGET_PATH = CONFIG_DIR / "approval-proof-budget.json"

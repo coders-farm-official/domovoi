@@ -562,7 +562,7 @@ APPROVAL_HELLO_LIMITER = SlidingWindowLimiter(
     max_per_window=APPROVAL_HELLO_MAX_PER_WINDOW,
     window_sec=APPROVAL_HELLO_WINDOW_SEC,
 )
-# 1.3.0 — a device that PROVES approvals (satellite/pairing_proof.py) comes
+# 1.3.1 — a device that PROVES approvals (satellite/pairing_proof.py) comes
 # back every ten seconds while it waits, because the code typed on the
 # dashboard is checked on its next visit, not at the click. Its visits
 # refresh its OWN request — they add no room name to the list — so they
@@ -2928,7 +2928,7 @@ class StreamSession:
         return False
 
     async def _proof_pairing(self, ctrl: dict[str, Any], token_hash: str) -> bool | None:
-        """The hello of a device that PROVES approvals (1.3.0).
+        """The hello of a device that PROVES approvals (1.3.1).
 
         Such a device (``approval_pake`` in its hello: its half of the
         exchange in ``satellite/pairing_proof.py``) never sends its code.
@@ -3180,7 +3180,7 @@ class StreamSession:
             )
             return False
 
-        # 1.3.0 — a device that proves approvals (``approval_pake``) or asks
+        # 1.3.1 — a device that proves approvals (``approval_pake``) or asks
         # to withdraw a request (``approval_withdraw``). Outside the try
         # below on purpose: that handler ACCEPTS on an error when strict
         # pairing is off, and nothing about this path may ever fail open.

@@ -560,7 +560,7 @@ connect re-pairs — needed after re-flashing a Pi or moving a room to new
 hardware. Full model + the first-connect race caveat:
 [../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
-### An approval the device can check (1.3.0)
+### An approval the device can check (1.3.1)
 
 A device with no server address and no server key asks every server whose
 `/v1/health` carries `pairing_proof` (satellite/house_pairing.py) and

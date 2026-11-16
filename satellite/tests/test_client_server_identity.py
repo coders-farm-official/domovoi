@@ -60,7 +60,7 @@ def config_file(tmp_path):
 
 # ─── a discovered address is a candidate, not configuration ───────────────
 #
-# Since 1.3.0 a device that has never been approved and has neither an
+# Since 1.3.1 a device that has never been approved and has neither an
 # address nor a key asks EVERY server (satellite/house_pairing.py), so the
 # single pick below is the path of a device a core HAS accepted whose
 # address still lives in the pending sidecar (approved, but config.toml

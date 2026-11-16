@@ -3825,7 +3825,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       // binds the room to that device, so an approve without one is refused.
       const r = await apiPost(`/api/satellites/approvals/${a.room_id}/${action}`,
                               action === 'approve' ? { code } : {});
-      // A room device that checks the code itself (1.3.0) hasn't said yes
+      // A room device that checks the code itself (1.3.1) hasn't said yes
       // yet: it confirms on its next visit, within seconds. Don't call it
       // approved before it is.
       fire(action !== 'approve' ? `${a.room_id} rejected`

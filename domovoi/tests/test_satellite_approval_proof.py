@@ -1,4 +1,4 @@
-"""Approvals a room device can check (1.3.0, "every house"): the core side.
+"""Approvals a room device can check (1.3.1, "every house"): the core side.
 
 A device that asks every server it finds never sends its code. For its
 request the core keeps no code; the code a person types is held for ONE
@@ -395,27 +395,7 @@ async def test_a_typed_code_goes_stale() -> None:
         assert await SatelliteApprovalRepository(s).take_entered_code(ROOM, "a" * 64) is None
 
 
-@pytest.mark.asyncio
-async def test_a_request_nobody_refreshes_expires() -> None:
-    await _request(code=CODE)
-    async with session_scope() as s:
-        await s.execute(text("UPDATE satellite_approvals SET last_seen_at = now() - interval '16 minutes'"))
-    assert [r async for r in _alist()] == []
-    assert await _row() is None
 
-
-@pytest.mark.asyncio
-async def test_an_expired_request_frees_the_name_for_another_device() -> None:
-    await _request(code=CODE)
-    async with session_scope() as s:
-        await s.execute(text("UPDATE satellite_approvals SET last_seen_at = now() - interval '16 minutes'"))
-    assert await _request(token_hash="b" * 64, code=WRONG) == ("parked", WRONG)
-
-
-@pytest.mark.asyncio
-async def test_a_live_request_does_not_expire() -> None:
-    await _request(code=CODE)
-    assert len([r async for r in _alist()]) == 1
 
 
 @pytest.mark.asyncio

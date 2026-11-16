@@ -1,4 +1,4 @@
--- V062 — Approvals a room device can check (1.3.0, "every house").
+-- V062 — Approvals a room device can check (1.3.1, "every house").
 --
 -- A room device set up through the Wi-Fi portal with no server address
 -- now asks EVERY Domovoi server it finds for approval, and accepts only an

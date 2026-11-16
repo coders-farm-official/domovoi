@@ -472,7 +472,7 @@ def locate(
     return Located(f"{scheme}://{host}:{last_port}", "scan", host)
 
 
-# ─── every house, not the first (1.3.0) ───────────────────────────────────
+# ─── every house, not the first (1.3.1) ───────────────────────────────────
 #
 # A device set up with no server address (``auto``) and not pinned to one
 # asks EVERY Domovoi server it finds for approval (satellite/house_pairing.py)

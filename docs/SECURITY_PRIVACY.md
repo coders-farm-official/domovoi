@@ -3839,7 +3839,14 @@ a **boot-time** gate and the edges matter:
   None of those can exist on a parked device: the core refuses an unpaired
   room's `hello` before the socket carries anything it could act on.
 
-### Asking every house: an approval the device can check (1.3.0)
+**Pending requests expire (1.3.0).** A request on the approvals list that
+no device has refreshed for 15 minutes is deleted, and with it its hold on
+the room name: a device that was switched off, or set up again elsewhere,
+no longer keeps a name for good. A device that is still waiting re-asks far
+more often (a Pi at least every minute, a phone every 35 s) and keeps its
+row, its code and its place.
+
+### Asking every house: an approval the device can check (1.3.1)
 
 **The problem.** A room device set up through the Wi-Fi portal with the
 server-address field left blank (`domovoi_url = "auto"`) and no server key

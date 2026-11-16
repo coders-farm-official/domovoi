@@ -66,9 +66,9 @@ address it found isn't usable (a server with several network cards), tick
 A spare device always knows which server it belongs to (the enrolment code
 pins the server's key), so it asks only that one, and its approval works
 the way it always has. The "ask every server, join the one that proves the
-code" flow of 1.3.0 is for Raspberry Pi rooms set up through the Wi-Fi
+code" flow of 1.3.1 is for Raspberry Pi rooms set up through the Wi-Fi
 portal with the server address left blank
-([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-130)).
+([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-131)).
 If a device cannot join for a reason only the server knows (it reached the
 server at an address the server can't prove is its own, or the room name is
 paired with another device), **Settings → Rooms** says so in a line above

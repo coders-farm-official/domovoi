@@ -1,4 +1,4 @@
-"""Ask every house; trust only the one that proves the code (1.3.0).
+"""Ask every house; trust only the one that proves the code (1.3.1).
 
 The device's side: discovery that collects every server instead of the
 first, a request parked with each, the proof checked before anything is

@@ -1,4 +1,4 @@
-"""Ask every house; trust only the one that proves the code (1.3.0).
+"""Ask every house; trust only the one that proves the code (1.3.1).
 
 A room device set up through the Wi-Fi portal with no server address
 (``auto``) and nothing pinned used to keep the FIRST Domovoi server that
