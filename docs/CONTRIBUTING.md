@@ -358,10 +358,11 @@ SHA (`domovoi/tests/test_ops_ci_workflow.py` holds the line).
 `.github/workflows/linux-install.yml` installs the server for real on each
 supported Linux system that has a cloud image, Ubuntu 26.04 and Debian 13,
 in a throwaway KVM virtual machine on GitHub's runner (one job each, side
-by side, 20-30 minutes; the job stops at 50). It runs weekly (Monday
-04:17 UTC), from the Actions tab ("linux-install" → "Run workflow", on any
-branch), and on a push that changes `scripts/linux/`, a Linux lock, the
-test's script or the workflow. Linux Mint 22 and Pop!_OS 24.04 install as
+by side, about 8 minutes each; the job stops at 50). It runs weekly
+(Monday 04:17 UTC), from the Actions tab ("linux-install" → "Run
+workflow", on any branch: do that on a branch before a change to the
+Linux scripts goes to `main`), and on a push to `main` that changes
+`scripts/linux/`, a Linux lock, the test's script or the workflow. Linux Mint 22 and Pop!_OS 24.04 install as
 Ubuntu 24.04 and have no cloud image there: the provision harness covers
 how they are mapped.
 

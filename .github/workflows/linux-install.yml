@@ -14,9 +14,10 @@
 # no cloud image to boot here; the provision harness covers their mapping.
 #
 # When: weekly (Monday 04:17 UTC, so a moved archive or a pulled pin shows
-# up without a commit), by hand from the Actions tab, and on a push that
-# changes what it tests (the Linux scripts, the locks, this file). Not on
-# every push: an install takes 20-30 minutes.
+# up without a commit), by hand from the Actions tab (on any branch: run
+# it there before a change to the Linux scripts goes to main), and on a
+# push to main that changes what it tests (the Linux scripts, the locks,
+# this file). Not on every push: a run takes about 8 minutes a system.
 #
 # Least privilege: the token reads the repository and nothing else; no
 # secrets; every action pinned by commit SHA (the comment names its
@@ -29,6 +30,7 @@ on:
     - cron: "17 4 * * 1"
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - "scripts/linux/**"
       - "requirements-linux-py314*"

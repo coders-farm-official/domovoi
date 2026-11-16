@@ -504,6 +504,8 @@ def test_the_fresh_install_test_is_smallest_and_pinned():
     wf = (REPO_ROOT / ".github" / "workflows" / "linux-install.yml").read_text(encoding="utf-8")
     assert "system: [ubuntu-26.04, debian-13]" in wf
     assert "schedule:" in wf and "workflow_dispatch:" in wf and '"scripts/linux/**"' in wf
+    # Pushes to main only; a branch runs it by hand.
+    assert "  push:\n    branches: [main]\n    paths:\n" in wf
     assert "secrets." not in wf
     timeout = re.search(r"timeout-minutes: (\d+)", wf)
     assert timeout and int(timeout.group(1)) <= 50
