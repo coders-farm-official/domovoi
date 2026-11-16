@@ -119,7 +119,7 @@ from domovoi import person_names
 from domovoi import voice_history
 from domovoi.models import Context, Intent, Response, is_phone_room
 from domovoi.person_names import read_name_reply, sound_alike_people, sounds_like_name, spell_out
-from domovoi.voice_identifier import claims_by_this_voice, is_own_voice
+from domovoi.voice_identifier import claims_by_this_voice, is_own_voice, unheard_text
 
 log = logging.getLogger(__name__)
 
@@ -2017,6 +2017,12 @@ class VoiceProfileHandler(Handler):
                 )
             elif voice_id_unavailable():
                 text = UNAVAILABLE_SPOKEN
+            elif (unheard := unheard_text(ctx.voice_outcome, f"who am I, {ctx.bot_name}?")) is not None:
+                # The voice was never scored (too little speech, no
+                # embedding, identification didn't finish): that says
+                # nothing about whether this person is known, so neither
+                # does the reply.
+                text = unheard
             else:
                 text = "I don't recognize your voice yet."
                 if await self._relearn_pending(session):
