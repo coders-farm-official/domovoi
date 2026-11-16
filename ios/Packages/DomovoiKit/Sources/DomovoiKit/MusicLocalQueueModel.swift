@@ -102,6 +102,11 @@ public final class MusicLocalQueueModel {
 
     public var isRemote: Bool { castingTo != nil }
 
+    /// The group the stop (and "Stop and close") reaches while casting to a
+    /// room of one — every room of it stops — or nil
+    /// (``castStopGroup(target:remote:)``).
+    public var stopGroup: NowPlayingGroup? { castStopGroup(target: target, remote: engine?.remote) }
+
     /// Whether anything is drawn at all: the empty state is "nothing queued",
     /// and a casting phone with an empty local queue still has a head to show
     /// (`PlayerTab.kt:167`).

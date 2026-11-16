@@ -141,6 +141,9 @@ public struct MusicRemoteNowPlaying: Equatable, Sendable {
     /// the library.
     public let trackID: Int64?
     public let readAtMs: Int64
+    /// The shared queue the room hears (V060); nil outside a group
+    /// (``castStopGroup(target:remote:)``).
+    public let group: NowPlayingGroup?
 
     public init(
         roomID: String,
@@ -150,7 +153,8 @@ public struct MusicRemoteNowPlaying: Equatable, Sendable {
         elapsedSec: Double = 0,
         durationSec: Double? = nil,
         trackID: Int64? = nil,
-        readAtMs: Int64 = 0
+        readAtMs: Int64 = 0,
+        group: NowPlayingGroup? = nil
     ) {
         self.roomID = roomID
         self.state = state
@@ -160,6 +164,7 @@ public struct MusicRemoteNowPlaying: Equatable, Sendable {
         self.durationSec = durationSec
         self.trackID = trackID
         self.readAtMs = readAtMs
+        self.group = group
     }
 
     public var isPlaying: Bool { state == "play" }
@@ -433,7 +438,8 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
             // in, because the server's clock cannot be subtracted from this
             // phone's `now` — re-stamping it here would make every room
             // position a little wrong and in a way nothing could see.
-            readAtMs: reading.readAtMs
+            readAtMs: reading.readAtMs,
+            group: reading.group
         )
     }
 

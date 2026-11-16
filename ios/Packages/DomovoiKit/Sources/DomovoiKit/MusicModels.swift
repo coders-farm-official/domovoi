@@ -79,6 +79,10 @@ public struct NowPlayingRoom: Equatable, Sendable, Decodable {
     /// outside the library.
     public let trackID: Int64?
 
+    /// The shared queue the room hears (V060), host first; nil outside a
+    /// group. Its stop button names it (``groupStopLabel(_:plain:)``).
+    public let group: NowPlayingGroup?
+
     public init(
         roomID: String = "",
         state: String? = nil,
@@ -87,7 +91,8 @@ public struct NowPlayingRoom: Equatable, Sendable, Decodable {
         favorited: Bool = false,
         source: String? = nil,
         sourceURL: String? = nil,
-        trackID: Int64? = nil
+        trackID: Int64? = nil,
+        group: NowPlayingGroup? = nil
     ) {
         self.roomID = roomID
         self.state = state
@@ -97,11 +102,12 @@ public struct NowPlayingRoom: Equatable, Sendable, Decodable {
         self.source = source
         self.sourceURL = sourceURL
         self.trackID = trackID
+        self.group = group
     }
 
     private enum CodingKeys: String, CodingKey {
         case roomID = "room_id"
-        case state, song, favorited, source
+        case state, song, favorited, source, group
         case elapsedSec = "elapsed_sec"
         case sourceURL = "source_url"
         case trackID = "track_id"
@@ -117,6 +123,8 @@ public struct NowPlayingRoom: Equatable, Sendable, Decodable {
         source = try values.decodeIfPresent(String.self, forKey: .source)
         sourceURL = try values.decodeIfPresent(String.self, forKey: .sourceURL)
         trackID = try values.decodeIfPresent(Int64.self, forKey: .trackID)
+        // Lenient: an odd group must not throw the whole now-playing away.
+        group = try? values.decodeIfPresent(NowPlayingGroup.self, forKey: .group)
     }
 
     /// Sound is coming out of this room now.
