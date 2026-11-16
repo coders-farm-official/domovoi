@@ -189,35 +189,54 @@ def ensure_dataset() -> None:
     log("cache download complete; sentinel written.")
 
 
+def rir_to_int16(path):
+    """One impulse response WAV as 16-bit PCM samples, the way the notebook
+    wrote them: read as floats, scaled by 32767, cut to int16. A stereo
+    file is averaged to mono. soundfile does the reading (it is in the
+    image); the sample rate is not changed (the files are 16 kHz)."""
+    import numpy as np
+    import soundfile as sf
+
+    array, _rate = sf.read(str(path), dtype="float64")
+    if array.ndim > 1:
+        array = array.mean(axis=1)
+    return (array * 32767).astype(np.int16)
+
+
 def ensure_rirs() -> None:
     """Download the MIT environmental impulse responses into <cache>/mit_rirs as
     16 kHz 16-bit PCM WAVs (verbatim from the notebook's RIR cell). The
     --augment_clips stage os.scandir()s rir_paths for real WAVs; pointing it at
-    the feature .npy dir would crash it. Sentinel-gated so reruns skip."""
+    the feature .npy dir would crash it. Sentinel-gated so reruns skip.
+
+    The repo is a plain folder of WAVs, fetched at its pinned commit with
+    huggingface_hub (as the feature files are), not through the `datasets`
+    library: `datasets` 4 and later decode audio through torchcodec, which
+    the image does not have, and the trainer has no other use for it."""
     if RIR_SENTINEL.is_file() and any(RIR_DIR.glob("*.wav")):
         log(f"RIR cache HIT: {RIR_DIR} (sentinel exists) — skipping download.")
         return
     log(f"RIR cache MISS: downloading MIT impulse responses -> {RIR_DIR} ...")
     RIR_DIR.mkdir(parents=True, exist_ok=True)
+    staging = CACHE / "mit_rirs_download"
     try:
-        import datasets
-        import numpy as np
         import scipy.io.wavfile
-        rir = datasets.load_dataset(
-            RIRS_REPO, revision=RIRS_REVISION,
-            split="train", streaming=True,
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            RIRS_REPO,
+            repo_type="dataset",
+            revision=RIRS_REVISION,
+            allow_patterns=["*.wav"],
+            local_dir=str(staging),
         )
         n = 0
-        for row in rir:
-            name = row["audio"]["path"].split("/")[-1]
-            scipy.io.wavfile.write(
-                str(RIR_DIR / name), 16000,
-                (row["audio"]["array"] * 32767).astype(np.int16),
-            )
+        for wav in sorted(staging.rglob("*.wav")):
+            scipy.io.wavfile.write(str(RIR_DIR / wav.name), 16000, rir_to_int16(wav))
             n += 1
     except Exception as e:
         die(f"RIR download failed: {e}. The augment stage needs real WAVs under "
             f"{RIR_DIR}; check container network access to huggingface.co.", 4)
+    shutil.rmtree(staging, ignore_errors=True)
     if n == 0:
         die(f"RIR download produced 0 files in {RIR_DIR}.", 4)
     RIR_SENTINEL.write_text("ok\n")

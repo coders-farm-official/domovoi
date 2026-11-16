@@ -187,10 +187,9 @@ holds the rest of the tree):
 | `speechbrain` | 1.1.0 | `data.py` (`read_audio`, `reverberate` — 1.1.0 keeps the `.dataio`/`.processing` import paths the trainer uses) |
 | `torch-audiomentations` | 0.12.0 | `data.py` (GPU augmentation) |
 | `acoustics` | 0.2.6 | `data.py` (`acoustics.generator.noise`) |
-| `datasets` | **3.6.0** | entrypoint RIR download |
 | `scipy` | **<1.15** (1.14.x) | pin reason below |
 
-Two non-obvious pins and the patches below make it work — keep these if you bump
+Two non-obvious notes and the patches below make it work — keep these if you bump
 anything:
 
 1. **`scipy<1.15`** — `acoustics 0.2.6` (newest on PyPI) imports
@@ -198,10 +197,13 @@ anything:
    still ships it and keeps `librosa`/`numba` happy. (We never use the
    `acoustics.directivity` submodule that needs it — only `generator.noise` —
    but the top-level `import acoustics` fails regardless.)
-2. **`datasets==3.6.0`** — `datasets` **4.x/5.x** moved `Audio` decoding to
-   `torchcodec` (needs a torch-matched FFmpeg build); streaming the MIT RIRs
-   then raises *"please install 'torchcodec'"*. 3.6.0 decodes via `soundfile`
-   and co-exists with the image's `huggingface_hub` 1.x.
+2. **No `datasets` package.** `datasets` **4.x/5.x** decode audio through
+   `torchcodec` (a torch-matched FFmpeg build; even iterating the rows raises
+   *"please install 'torchcodec'"*), and 3.6.0, the last version that did not,
+   has an advisory fixed only in 5.0.1 (GHSA-379c-qx7v-6h59). So the entrypoint
+   downloads the MIT RIRs' WAV files at the pinned commit with
+   `huggingface_hub` and reads them with `soundfile`; nothing else in the image
+   uses `datasets`.
 3. **piper-sample-generator = the `dscripka` FORK, not `rhasspy` upstream.**
    `train.py` does `from generate_samples import generate_samples` and calls it
    with `auto_reduce_batch_size=...` and no `model=`. Only the dscripka fork has
