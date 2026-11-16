@@ -75,7 +75,7 @@ struct PersonDetailView: View {
             detail.show(person)
         }
         // A room may just have learned their voice: the same person with a
-        // new sample count re-reads the rooms that know it
+        // new sample count re-reads the rooms that have learned it
         // (`LaunchedEffect(personId, tick, voiceSamples)`, `PeopleModels.kt:320`).
         // ``PersonDetailModel/show(_:)`` re-reads only the rooms for that.
         .onChange(of: person.voiceProfileCount) { _, _ in
@@ -129,7 +129,7 @@ struct PersonDetailView: View {
                 namesake(note)
             }
             // Not recognized by voice yet: between the same-name note and the
-            // stats, as Android and the web order it (`PersonDetail.kt:267-268`).
+            // header tiles, as Android and the web order it (`PersonDetail.kt:267-268`).
             if let relearn = PeopleVoiceId.personNotice(person, voiceId: people.voiceId) {
                 PeopleVoiceNoticeView(notice: relearn, wash: .warn)
                     .accessibilityIdentifier("person.voiceRelearnNotice")
@@ -145,7 +145,7 @@ struct PersonDetailView: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            // Rooms that know this voice (1.3.0), after the stats and before
+            // Rooms that have learned this voice (1.3.0), after the stats and before
             // the notes (`PersonDetail.kt:289`). Hidden when there are none,
             // while they relearn, and while voice ID is off.
             PersonVoiceRoomsSection(person: person, rooms: detail.voiceRooms, voiceId: people.voiceId)
@@ -298,12 +298,16 @@ struct PersonTabBar: View {
     }
 }
 
-/// The profile's four numbers (`PersonDetail.kt:253-270`).
+/// The profile header: where they were last heard, and when (owner
+/// decision, 1.3.0; the web People page's `ProfileTab`, 838da8b6).
 ///
-/// Two by two, and one column at an accessibility size. The session and turn
-/// counts come from the **detail model**, so a failed read shows the rows it
-/// really has rather than a number from somewhere else; the `"?"` rule lives
-/// on the tab titles, which is where Android puts it too.
+/// "last heard in" on the left is the room of their newest conversation row
+/// (``PersonDetailModel/lastHeardIn``): "the phone" for a phone's chat mic,
+/// "chat" for a turn with no room, "—" before they have said anything. "last
+/// heard" on the right is how long ago, with their presence under it. The
+/// voice profiles, sessions and turns tiles are gone.
+///
+/// Side by side, and one column at an accessibility size.
 struct PersonStatGrid: View {
 
     let person: Person
@@ -312,46 +316,33 @@ struct PersonStatGrid: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let tiles = [
-            (
-                PeopleStrings.statLastHeard,
-                relTime(person.lastSeenAt, nowMs: Int64(Date().timeIntervalSince1970 * 1000)),
-                PeopleStrings.presenceIs(person.presenceTier)
-            ),
-            (
-                PeopleStrings.statVoiceProfiles,
-                "\(person.voiceProfileCount)",
-                PeopleStrings.enrolled
-            ),
-            (PeopleStrings.statSessions, "\(detail.sessionRows.count)", PeopleStrings.recent),
-            (
-                PeopleStrings.statTurns,
-                "\(detail.turnRows.count)",
-                PeopleStrings.conversationLogRows
-            ),
-        ]
+        let heardIn = PersonStatTile(label: PeopleStrings.statLastHeardIn, value: detail.lastHeardIn)
+            .accessibilityIdentifier("person.lastHeardIn")
+        let heard = PersonStatTile(
+            label: PeopleStrings.statLastHeard,
+            value: relTime(person.lastSeenAt, nowMs: Int64(Date().timeIntervalSince1970 * 1000)),
+            sub: PeopleStrings.presenceIs(person.presenceTier)
+        )
+        .accessibilityIdentifier("person.lastHeard")
         if typeSize.isAccessibilitySize {
             VStack(spacing: 10) {
-                ForEach(Array(tiles.enumerated()), id: \.offset) { _, tile in
-                    PersonStatTile(label: tile.0, value: tile.1, sub: tile.2)
-                }
+                heardIn
+                heard
             }
+            .fixedSize(horizontal: false, vertical: true)
         } else {
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    PersonStatTile(label: tiles[0].0, value: tiles[0].1, sub: tiles[0].2)
-                    PersonStatTile(label: tiles[1].0, value: tiles[1].1, sub: tiles[1].2)
-                }
-                HStack(spacing: 10) {
-                    PersonStatTile(label: tiles[2].0, value: tiles[2].1, sub: tiles[2].2)
-                    PersonStatTile(label: tiles[3].0, value: tiles[3].1, sub: tiles[3].2)
-                }
+            // Equal heights, so the two borders line up although only the
+            // right tile has a third line.
+            HStack(alignment: .top, spacing: 10) {
+                heardIn
+                heard
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
 
-/// One tile: what it measures, the number, and a line of detail.
+/// One tile: what it measures, the value, and an optional line of detail.
 ///
 /// **Stroked, not filled.** ``MusicStatTileView`` fills its tile with
 /// `secondarySystemBackground` and puts `fgMuted` on it, and that pairing is
@@ -362,7 +353,7 @@ struct PersonStatTile: View {
 
     let label: String
     let value: String
-    let sub: String
+    var sub: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -373,24 +364,26 @@ struct PersonStatTile: View {
             Text(value)
                 .font(.title3.monospacedDigit())
                 .fixedSize(horizontal: false, vertical: true)
-            Text(sub)
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+            if let sub {
+                Text(sub)
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.fgMuted.opacity(0.35), lineWidth: 1)
         )
-        // One stop per tile: "voice profiles, 3, enrolled" rather than three
-        // stops whose middle one is a bare number.
+        // One stop per tile: "last heard, 2m ago, presence: high" rather
+        // than three stops whose middle one is a bare value.
         .accessibilityElement(children: .combine)
     }
 }
 
-/// Rooms that know this voice (`VoiceRoomsSection`, `PersonDetail.kt:310-343`;
+/// Rooms that have learned this voice (`VoiceRoomsSection`, `PersonDetail.kt:310-343`;
 /// the web People page's `PersonVoiceRooms`). **Read-only**: rooms never use a
 /// phone's samples, so the phone records nothing; the hint says how the
 /// person teaches a room themselves.

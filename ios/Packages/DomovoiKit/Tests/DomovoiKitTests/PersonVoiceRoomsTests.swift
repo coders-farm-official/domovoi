@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import DomovoiKit
 
-/// Rooms that know this voice (`GET /api/people/{id}/voice-rooms`, 1.3.0),
+/// Rooms that have learned this voice (`GET /api/people/{id}/voice-rooms`, 1.3.0),
 /// on the person page's profile tab.
 ///
 /// The first half mirrors Android's `PersonVoiceRoomsTest` one case for one
@@ -27,9 +27,12 @@ final class PersonVoiceRoomsTests: XCTestCase {
         PersonVoiceRooms.read(Data(json.utf8))
     }
 
-    private static func hintFor(_ who: String, _ said: String) -> String {
-        "Rooms recognize a voice best once they have heard it themselves. In each room "
-            + "marked \u{201C}not yet\u{201D}, \(who) can say \u{201C}my name is \(said)\u{201D} and answer yes."
+    /// Spelt out, not built from ``PeopleStrings``: the web's hint (838da8b6)
+    /// word for word.
+    private static func hintFor(_ name: String, _ who: String, _ said: String) -> String {
+        "Every room can recognize \(name) from any sample. A room recognizes a voice more "
+            + "reliably once it has learned it there: in a room marked \u{201C}not yet learned\u{201D}, "
+            + "\(who) can say \u{201C}my name is \(said)\u{201D} and answer yes."
     }
 
     override func setUp() {
@@ -64,8 +67,11 @@ final class PersonVoiceRoomsTests: XCTestCase {
     func testARoomIsKnownOnlyWhenCurrent() {
         let parsed = rooms(#"[{"room_id":"kitchen","current":true},{"room_id":"garage","current":false}]"#)
         XCTAssertEqual(PersonVoiceRooms.count(parsed), "1/2")
-        XCTAssertEqual(parsed.map(PersonVoiceRooms.chip), ["kitchen", "garage \u{00B7} not yet"])
-        XCTAssertEqual(PersonVoiceRooms.hint(name: "Priya", rooms: parsed), Self.hintFor("Priya", "Priya"))
+        XCTAssertEqual(
+            parsed.map(PersonVoiceRooms.chip),
+            ["kitchen \u{00B7} learned", "garage \u{00B7} not yet learned"]
+        )
+        XCTAssertEqual(PersonVoiceRooms.hint(name: "Priya", rooms: parsed), Self.hintFor("Priya", "Priya", "Priya"))
     }
 
     /// The legacy flag is still read and still counts (see ``PersonVoiceRoom``).
@@ -73,7 +79,7 @@ final class PersonVoiceRoomsTests: XCTestCase {
         let parsed = rooms(#"[{"room_id":"den","current":false,"legacy":true}]"#)
         XCTAssertEqual(parsed, [oldBuildRoom])
         XCTAssertEqual(PersonVoiceRooms.count(parsed), "1/1")
-        XCTAssertEqual(parsed.map(PersonVoiceRooms.chip), ["den"])
+        XCTAssertEqual(parsed.map(PersonVoiceRooms.chip), ["den \u{00B7} learned"])
         XCTAssertNil(PersonVoiceRooms.hint(name: "Priya", rooms: parsed))
     }
 
@@ -112,30 +118,30 @@ final class PersonVoiceRoomsTests: XCTestCase {
         XCTAssertEqual(PersonVoiceRooms.count([kitchen, office]), "2/2")
     }
 
-    func testChipsMarkOnlyRoomsWithNeitherSample() {
-        XCTAssertEqual(PersonVoiceRooms.chip(kitchen), "kitchen")
-        XCTAssertEqual(PersonVoiceRooms.chip(office), "office")
-        XCTAssertEqual(PersonVoiceRooms.chip(garage), "garage \u{00B7} not yet")
-        XCTAssertEqual(PeopleStrings.voiceRoomsLabel, "rooms that know this voice")
+    func testChipsSayLearnedOrNotYetLearned() {
+        XCTAssertEqual(PersonVoiceRooms.chip(kitchen), "kitchen \u{00B7} learned")
+        XCTAssertEqual(PersonVoiceRooms.chip(office), "office \u{00B7} learned")
+        XCTAssertEqual(PersonVoiceRooms.chip(garage), "garage \u{00B7} not yet learned")
+        XCTAssertEqual(PeopleStrings.voiceRoomsLabel, "rooms that have learned this voice")
     }
 
-    func testHintOnlyWhenARoomIsNotYet() {
+    func testHintOnlyWhenARoomHasNotLearnedIt() {
         XCTAssertNil(PersonVoiceRooms.hint(name: "Priya", rooms: [kitchen, office]))
         XCTAssertEqual(
             PersonVoiceRooms.hint(name: "Priya", rooms: [kitchen, garage]),
-            Self.hintFor("Priya", "Priya")
+            Self.hintFor("Priya", "Priya", "Priya")
         )
         // Trimmed, as Android's `name.trim()` is.
         XCTAssertEqual(
             PersonVoiceRooms.hint(name: " Priya ", rooms: [garage]),
-            Self.hintFor("Priya", "Priya")
+            Self.hintFor("Priya", "Priya", "Priya")
         )
     }
 
-    func testHintWithoutANameSaysTheyAndAnEllipsis() {
+    func testHintWithoutANameSaysThisPersonTheyAndAnEllipsis() {
         XCTAssertEqual(
             PersonVoiceRooms.hint(name: "  ", rooms: [garage]),
-            Self.hintFor("they", "\u{2026}")
+            Self.hintFor("this person", "they", "\u{2026}")
         )
     }
 

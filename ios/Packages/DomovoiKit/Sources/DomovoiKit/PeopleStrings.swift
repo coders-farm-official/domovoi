@@ -110,15 +110,24 @@ public enum PeopleStrings {
 
     // MARK: - the profile tab's tiles and notes
 
-    /// `PersonDetail.kt:253-270`.
+    /// The profile header's two tiles (owner decision, 1.3.0; the web People
+    /// page's `ProfileTab`, 838da8b6): **where** they were last heard on the
+    /// left, **when** on the right with their presence under it. The voice
+    /// profiles, sessions and turns tiles are gone.
+    public static let statLastHeardIn = "last heard in"
     public static let statLastHeard = "last heard"
     public static func presenceIs(_ tier: String?) -> String { "presence: \(tier ?? "—")" }
-    public static let statVoiceProfiles = "voice profiles"
-    public static let enrolled = "enrolled"
+
+    /// What ``PersonLastHeard/place(_:)`` says for a turn from a phone's chat
+    /// mic (room `phone-<device>`), a turn with no room (typed chat), and a
+    /// person who has never said anything (the web's `heardIn`).
+    public static let heardInPhone = "the phone"
+    public static let heardInChat = "chat"
+    public static let heardInNever = "—"
+
+    /// The history tabs' accessibility labels for their counts.
     public static let statSessions = "sessions"
-    public static let recent = "recent"
     public static let statTurns = "turns"
-    public static let conversationLogRows = "conversation_log rows"
 
     /// `PersonDetail.kt:273`, `:276`.
     public static let notes = "notes"
@@ -146,27 +155,35 @@ public enum PeopleStrings {
     public static let namesakeFixIsOnTheDashboard =
         "If they are different people, rename one of them on the dashboard."
 
-    // MARK: - rooms that know this voice (1.3.0)
+    // MARK: - rooms that have learned this voice (1.3.0)
 
-    /// `VOICE_ROOMS_LABEL` (`PeopleModels.kt:114`).
-    public static let voiceRoomsLabel = "rooms that know this voice"
+    /// The section's label (the web's `PersonVoiceRooms`, 838da8b6). It says
+    /// which rooms have **learned** the voice, never which rooms "know" the
+    /// person: every room can recognize them from any sample, and "not yet"
+    /// read as "this room can't recognize me" (owner device check, 1.3.0).
+    public static let voiceRoomsLabel = "rooms that have learned this voice"
 
-    /// `VOICE_ROOM_NOT_YET` (`PeopleModels.kt:115`): what a room's chip adds
-    /// when it has no sample of the voice. U+00B7, as everywhere else here.
-    public static let voiceRoomNotYet = " \u{00B7} not yet"
+    /// What a room's chip adds after its name: `" · learned"` when it has a
+    /// sample of the voice, `" · not yet learned"` when it has none. U+00B7,
+    /// as everywhere else here.
+    public static let voiceRoomLearned = " \u{00B7} learned"
+    public static let voiceRoomNotYetLearned = " \u{00B7} not yet learned"
 
     /// `"known/total"`, e.g. `"2/3"` (`voiceRoomsCount`, `PeopleModels.kt:148`).
     public static func voiceRoomsCount(known: Int, total: Int) -> String { "\(known)/\(total)" }
 
-    /// How to teach the rooms marked not yet (`voiceRoomsHint`,
-    /// `PeopleModels.kt:155-161`). `who` and `said` are already the trimmed
-    /// name or its stand-in (`they`, `…`); see ``PersonVoiceRooms/hint(name:rooms:)``.
-    public static func voiceRoomsHint(who: String, said: String) -> String {
-        "Rooms recognize a voice best once they have heard it themselves. In each room "
-            + "marked \u{201C}not yet\u{201D}, \(who) can say \u{201C}my name is \(said)\u{201D} and answer yes."
+    /// How to teach the rooms marked not yet learned (the web's
+    /// `PersonVoiceRooms` hint, 838da8b6). `name`, `who` and `said` are
+    /// already the trimmed name or its stand-in (`this person`, `they`, `…`);
+    /// see ``PersonVoiceRooms/hint(name:rooms:)``.
+    public static func voiceRoomsHint(name: String, who: String, said: String) -> String {
+        "Every room can recognize \(name) from any sample. A room recognizes a voice more "
+            + "reliably once it has learned it there: in a room marked \u{201C}not yet learned\u{201D}, "
+            + "\(who) can say \u{201C}my name is \(said)\u{201D} and answer yes."
     }
 
-    /// The stand-ins for a blank name (`PeopleModels.kt:157-158`).
+    /// The stand-ins for a blank name (the web's `person.name || …`).
+    public static let voiceRoomsNameUnnamed = "this person"
     public static let voiceRoomsWhoUnnamed = "they"
     public static let voiceRoomsSaidUnnamed = "\u{2026}"
 

@@ -56,7 +56,14 @@ extension StubHouseUITests {
 
         static let notes = "prefers the kitchen satellite"
         static let noNotes = "no notes yet"
-        static let voiceProfiles = "voice profiles"
+        /// The profile header's left tile (1.3.0, the web's 838da8b6): the
+        /// room of their newest turn. Jordan's newest is in the kitchen;
+        /// Chevy has never said anything, so a dash (U+2014).
+        static let lastHeardIn = "last heard in"
+        static let jordanHeardIn = "kitchen"
+        static let neverHeard = "\u{2014}"
+        /// The tiles the header no longer has.
+        static let goneTiles = ["voice profiles", "conversation_log rows"]
         static let personTwoLine = "person · #2 ·"
         static let namesakeNote = "2 people are called Alex"
         static let whereRenamingIs = "renaming and forgetting someone are done on the dashboard"
@@ -489,24 +496,39 @@ extension StubHouseUITests {
         )
     }
 
-    /// The stats and the notes are **this** person's.
+    /// The `last heard in` tile, read as one combined accessibility element.
+    @MainActor
+    func peopleHeardInTile(_ app: XCUIApplication, _ place: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(
+                NSPredicate(
+                    format: "label CONTAINS %@ AND label CONTAINS %@",
+                    PeopleUnderTest.lastHeardIn, place
+                )
+            )
+            .firstMatch
+    }
+
+    /// The header and the notes are **this** person's: `last heard in` names
+    /// the room of their newest turn, a dash for somebody never heard, and
+    /// the voice profiles / sessions / turns tiles are gone.
     @MainActor
     func testPeople_ProfileShowsTheirOwnStats() throws {
         let app = peopleLaunch()
         XCTAssertTrue(peopleOpen(app, PeopleUnderTest.jordan), "Jordan's detail did not open")
-        let tile = app.descendants(matching: .any)
-            .matching(
-                NSPredicate(
-                    format: "label CONTAINS %@ AND label CONTAINS %@",
-                    PeopleUnderTest.voiceProfiles, "3"
-                )
-            )
-            .firstMatch
-        let counted = tile.waitForExistence(timeout: 15)
+        let tile = peopleHeardInTile(app, PeopleUnderTest.jordanHeardIn)
+        let placed = tile.waitForExistence(timeout: 15)
         let noted = app.staticTexts[PeopleUnderTest.notes].exists
         evidence(app, "people-profile-jordan")
-        XCTAssertTrue(counted, "the voice-profiles tile does not read 3 for a person with three")
+        if !placed {
+            print("=== NO `last heard in` KITCHEN TILE — tree follows ===")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(placed, "`last heard in` does not read kitchen for Jordan, whose newest turn was there")
         XCTAssertTrue(noted, "Jordan's notes are not on the profile")
+        for gone in PeopleUnderTest.goneTiles {
+            XCTAssertFalse(containing(app, gone).exists, "the profile still has a `\(gone)` tile")
+        }
 
         app.buttons[PeopleUnderTest.back].tap()
         XCTAssertTrue(peopleOpen(app, PeopleUnderTest.chevy), "Chevy's detail did not open")
@@ -514,6 +536,14 @@ extension StubHouseUITests {
         let saidNone = placeholder.waitForExistence(timeout: 15)
         evidence(app, "people-profile-chevy")
         XCTAssertTrue(saidNone, "a person with no notes does not get the `no notes yet` line")
+        XCTAssertTrue(
+            peopleHeardInTile(app, PeopleUnderTest.neverHeard).waitForExistence(timeout: 10),
+            "`last heard in` is not a dash for Chevy, who has never said anything"
+        )
+        XCTAssertFalse(
+            peopleHeardInTile(app, PeopleUnderTest.jordanHeardIn).exists,
+            "Chevy's `last heard in` names Jordan's room"
+        )
         XCTAssertFalse(
             app.staticTexts[PeopleUnderTest.notes].exists,
             "Chevy's profile is showing Jordan's notes — the tiles and the notes are reading a "
