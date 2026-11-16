@@ -41,17 +41,23 @@ public struct PhoneCalendarInfo: Equatable, Sendable {
     public let id: String
     /// `title`.
     public let name: String
-    /// `source.title` — iCloud, Gmail, an Exchange address. **Shown on this
-    /// phone only** (the panel's second line), never sent.
+    /// `source.title` — iCloud, Gmail, an Exchange address. Only keeps one
+    /// account's calendars together in the picker: **never shown and never
+    /// sent** (the row says ``source``'s label instead).
     public let accountName: String?
     /// `#rrggbb`, from `cgColor`.
     public let colorHex: String?
+    /// Where it comes from — the row's second line ("iCloud", "On this
+    /// iPhone"). On this phone only; never sent.
+    public let source: PhoneCalendarSource
 
-    public init(id: String, name: String, accountName: String? = nil, colorHex: String? = nil) {
+    public init(id: String, name: String, accountName: String? = nil, colorHex: String? = nil,
+                source: PhoneCalendarSource = .otherAccount) {
         self.id = id
         self.name = name
         self.accountName = accountName
         self.colorHex = colorHex
+        self.source = source
     }
 }
 

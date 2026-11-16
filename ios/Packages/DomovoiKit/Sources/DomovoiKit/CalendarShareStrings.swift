@@ -123,14 +123,11 @@ public enum CalendarShareStrings {
         return "last sent \(relative(sent))\(left)"
     }
 
-    /// `Work · alex@example.com`: the account under the name, when it says
-    /// something the name does not. On this phone only; never sent.
+    /// `Calendar` over `On this iPhone`: where the calendar comes from under
+    /// its name (``PhoneCalendarSource``), never the account's own name or
+    /// email. On this phone only; never sent.
     public static func label(_ c: PhoneCalendarInfo) -> (name: String, account: String?) {
-        let account: String? = c.accountName.flatMap { (a: String) -> String? in
-            let t = a.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (t.isEmpty || t == c.name) ? nil : t
-        }
-        return (c.name, account)
+        (c.name, c.source.label)
     }
 
     /// `PRIVACY_CALENDAR_POINT` (`PrivacyCard.kt:74-76`), **verbatim**: the
