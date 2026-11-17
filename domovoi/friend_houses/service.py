@@ -200,7 +200,7 @@ async def _reconcile() -> None:
                 await rt.stop()
         if _folder().root.exists():
             _folder().forget_onion("hs-pairing")  # the next friend file gets a new address
-        _STATE.update(applied=w, onion=None, pairing=None,
+        _STATE.update(applied=w, onion=None, pairing=None, was_on=False,
                       status="off" if not enabled else "stopped",
                       detail=None if not enabled else _why_stopped(policy, len(peers)))
         return
@@ -234,7 +234,13 @@ async def _reconcile() -> None:
     await _write_listener_files(keys, onion, peers)
     await _ensure_listener(folder)
     _start_retries()
-    _STATE.update(status="on", detail=None)
+    came_online = onion is not None and not _STATE.get("was_on")
+    _STATE.update(status="on", detail=None, was_on=onion is not None)
+    if came_online:
+        from domovoi.friend_houses import messages
+
+        # "I'm back": friends flush their outboxes to this house now.
+        spawn(_after_reconcile_then(messages.say_im_back), "friend-houses-im-back")
 
 
 def _why_stopped(policy: str, friends: int) -> str:
@@ -355,6 +361,7 @@ async def _run_listener(folder: tc.TorFolder) -> None:
             "--keys", str(fid.keys_path()), "--folder", str(_listener_folder()),
             "--socket", str(folder.main_socket),
             "--pairing-socket", str(folder.pairing_socket),
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         _LISTENER["proc"] = proc
@@ -396,10 +403,49 @@ def handle_event(event: dict) -> None:
     elif kind in ("request", "accepted"):
         from domovoi.friend_houses import friending
 
-        _spawn(friending.on_event(event), "friend-houses-event")
+        spawn(friending.on_event(event), "friend-houses-event")
+    elif kind == "message":
+        spawn(_store_and_answer(event), "friend-houses-message")
+    if kind == "im_back":
+        from domovoi.friend_houses import messages
+
+        try:
+            spawn(messages.flush(bytes.fromhex(str(event.get("house", "")))), "friend-houses-flush")
+        except ValueError:
+            pass
 
 
-def _spawn(coro, name: str) -> None:
+async def _store_and_answer(event: dict) -> None:
+    """Store a message, then tell the listener whether to acknowledge it.
+    The ack goes only after the row is committed: a crash in between means
+    the sender sends it again, and the copy is de-duplicated."""
+    from domovoi.friend_houses import messages
+
+    stored = False
+    try:
+        stored = await messages.on_message(event)
+    except Exception:  # noqa: BLE001 — not acknowledged: the sender keeps it
+        log.exception("Friend Houses: storing a message failed")
+    msg_id = _msg_id_of(event)
+    proc = _LISTENER["proc"]
+    if msg_id and proc is not None and proc.stdin is not None and proc.returncode is None:
+        try:
+            answer = "stored" if stored else "refused"
+            proc.stdin.write((f"{answer} {msg_id}" + chr(10)).encode("ascii"))
+            await proc.stdin.drain()
+        except (ConnectionError, RuntimeError):
+            pass
+
+
+def _msg_id_of(event: dict) -> str | None:
+    try:
+        raw = bytes.fromhex(str(event.get("envelope", "")))
+        return raw[66:82].hex() if len(raw) >= 82 else None
+    except ValueError:
+        return None
+
+
+def spawn(coro, name: str) -> None:
     task = asyncio.get_running_loop().create_task(coro, name=name)
     _PENDING.add(task)
     task.add_done_callback(_PENDING.discard)
@@ -420,7 +466,7 @@ def schedule_deliveries() -> None:
         return
     from domovoi.friend_houses import friending
 
-    _spawn(_after_reconcile(friending.deliver_pending), "friend-houses-deliver")
+    spawn(_after_reconcile(friending.deliver_pending), "friend-houses-deliver")
 
 
 async def _after_reconcile(fn) -> None:
@@ -432,12 +478,18 @@ async def _after_reconcile(fn) -> None:
         log.exception("Friend Houses: delivering pending requests failed")
 
 
+async def _after_reconcile_then(fn) -> None:
+    await asyncio.sleep(5)  # let the listener settle first
+    await _after_reconcile(fn)
+
+
 async def _retry_loop() -> None:
-    from domovoi.friend_houses import friending
+    from domovoi.friend_houses import friending, messages
 
     while True:
         await asyncio.sleep(RETRY_EVERY_SEC)
         await _after_reconcile(friending.deliver_pending)
+        await _after_reconcile(messages.flush_all)
 
 
 def _start_retries() -> None:

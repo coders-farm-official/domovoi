@@ -66,6 +66,10 @@ class Kind(enum.IntEnum):
     # the Tor client key it authorized, so the asker can reach its onion.
     ACCEPT = 0x40
     ACCEPT_OK = 0x41
+    # Messages (F3): one signed envelope (envelope.py) per frame, and the
+    # receiver's ack, sent only after the message is safely stored.
+    MESSAGE = 0x50
+    MESSAGE_ACK = 0x51
     BYE = 0x7F
 
 
@@ -76,6 +80,8 @@ _BODY_SIZES: dict[Kind, int | tuple[int, int]] = {
     Kind.IM_BACK: 0,
     Kind.ACCEPT: 32,
     Kind.ACCEPT_OK: 0,
+    Kind.MESSAGE: (1, 63 * 1024),
+    Kind.MESSAGE_ACK: 16,
     Kind.BYE: 0,
 }
 
