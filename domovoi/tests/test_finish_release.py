@@ -786,11 +786,166 @@ def test_without_github_digests_each_file_is_downloaded_and_checked(tmp_path, mo
 
 
 @requires_git
-def test_docs_release_at_the_tag_is_the_summary(tmp_path, monkeypatch):
-    w = World(tmp_path, monkeypatch, hand_notes="## Hand-written\n\nThe summary for this release.\n")
+def test_docs_release_at_the_tag_is_the_full_notes_and_its_glance_the_page(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch, hand_notes=FULL_NOTES)
     assert w.run("--no-publish") == 0
     notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
-    assert "The summary for this release." in notes and "What's new since" not in notes
+    assert "- **A highlight**, in a line." in notes and "## Security fixes\n" in notes
+    assert "The long intro" not in notes and "The long story" not in notes, "the full notes stay in the file"
+    assert "# Domovoi" not in notes.replace("## ", "")
+    blob = f"https://github.com/coders-farm-official/domovoi/blob/{w.tag}"
+    assert (f"## What's new since 1.0.0-rc1\n\n**More detail:** [the full 1.0.0-rc2 release notes]"
+            f"({blob}/docs/release/{w.tag}.md) and [every change in 1.0.0-rc2]({blob}/docs/RELEASE_NOTES.md).") in notes
+    # The house order: the lead (a candidate's), Download, What's new, the glance, the files last.
+    order = [notes.index(s) for s in ("is a candidate for", "## Download", "## What's new", "**More detail:**",
+                                      "A highlight", "## Security fixes", "## Files and checksums",
+                                      "| DomovoiSetup.exe |")]
+    assert order == sorted(order)
+
+
+FULL_NOTES = """# Domovoi 1.0.0-rc2
+
+The long intro of the full notes.
+
+## At a glance
+
+- **A highlight**, in a line.
+- Another.
+
+### Security fixes
+
+- **package 1.2.3:** one line.
+
+```
+### not a heading: code
+```
+
+## What is new since 1.0.0-rc1
+
+The long story.
+"""
+
+
+@requires_git
+@pytest.mark.parametrize("hand, why", [
+    ("# Domovoi 1.0.0\n\nOnly the long form.\n", "needs exactly one \"## At a glance\" section (it has 0)"),
+    ("## At a glance\n\n- x\n\n## At a glance\n\n- y\n", "(it has 2)"),
+    ("## At a glance\n\nProse first.\n\n- x\n", "must start with the highlights"),
+    ("## At a glance\n\n- x\n\n### Download\n\n- y\n", "has a \"Download\" heading"),
+    ("## At a glance\n\n- x\n\n### Files\n\n- y\n", "has a \"Files\" heading"),
+    ("## At a glance\n\n- x\n\n### What's new in rooms\n\n- y\n", "has a \"What's new in rooms\" heading"),
+])
+def test_a_docs_release_not_in_the_house_style_is_refused(tmp_path, monkeypatch, hand, why):
+    w = World(tmp_path, monkeypatch, hand_notes=hand)
+    with pytest.raises(fr.Refused, match=re.escape(why)):
+        w.run("--no-publish")
+    assert w.calls("edit") == [] and w.calls("upload") == []
+
+
+def test_the_house_style_check_takes_full_notes_with_a_glance():
+    assert fr.release_doc_problems(FULL_NOTES) == []
+    assert fr.release_doc_problems(FULL_NOTES.replace("\n", "\r\n")) == []
+    page = fr.glance_notes(FULL_NOTES, since="v1.0.0-rc1")
+    assert page.startswith("## What's new since 1.0.0-rc1\n\n- **A highlight**")
+    assert "\n## Security fixes\n" in page and "\n### not a heading: code\n" in page, "code stays as it is"
+    assert "long" not in page
+
+
+def test_more_detail_links_the_full_notes_and_the_release_s_dated_section():
+    """The real 1.3.0 notes: the anchor GitHub gives ``## 2026-11-16 — 1.3.0``
+    (the line the live 1.3.0 page carries)."""
+    text = (REPO / "docs" / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+    assert fr.notes_anchor(text, "1.3.0") == "2026-11-16--130"
+    assert fr.notes_anchor(text, "9.9.9") is None
+    rel = _release(tag="v1.3.0", version="1.3.0", full_notes=True, notes_anchor="2026-11-16--130",
+                   notes="## What's new since 1.2.1\n\n- A highlight.\n")
+    line = ("**More detail:** [the full 1.3.0 release notes](https://github.com/coders-farm-official/domovoi/blob/"
+            "v1.3.0/docs/release/v1.3.0.md) and [every change in 1.3.0](https://github.com/coders-farm-official/"
+            "domovoi/blob/v1.3.0/docs/RELEASE_NOTES.md#2026-11-16--130).")
+    assert fr.more_detail(rel) == line
+    assert f"## What's new since 1.2.1\n\n{line}\n\n- A highlight.\n" in fr.body(rel)
+    # Without docs/release/<tag>.md (a summary of RELEASE_NOTES.md), only the dated section.
+    rel.full_notes = False
+    assert fr.more_detail(rel) == ("**More detail:** [every change in 1.3.0](https://github.com/coders-farm-official/"
+                                   "domovoi/blob/v1.3.0/docs/RELEASE_NOTES.md#2026-11-16--130).")
+
+
+@requires_git
+def test_a_summary_release_gets_the_more_detail_line_under_what_s_new(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    assert w.run("--no-publish") == 0
+    notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
+    assert "## What's new since v1.0.0-rc1\n\n**More detail:** [every change in 1.0.0-rc2](" in notes
+    assert "docs/release/" not in notes
+
+
+def _release(**kw) -> "fr.Release":
+    base = dict(tag="v2.0.0", version="2.0.0", prerelease=False, tag_commit="a" * 40, cert=CERT,
+                apks=[{"abi": "arm64-v8a", "file": "domovoi-2.0.0-arm64-v8a.apk", "sha256": "1" * 64},
+                      {"abi": "armeabi-v7a", "file": "domovoi-2.0.0-armeabi-v7a.apk", "sha256": "2" * 64}],
+                setup_sha256="3" * 64, satellite_setup_sha256="4" * 64, tray_sha256="5" * 64,
+                linux_install="curl -fsSL https://example.invalid/scripts/linux/install.sh | sudo bash",
+                notes="## What's new\n\n- Something.\n")
+    base.update(kw)
+    return fr.Release(**base)
+
+
+def test_download_comes_first_with_a_direct_link_to_each_file():
+    text = fr.body(_release())
+    assert text.startswith("## Download\n"), "right under the title: no lead for a plain release"
+    dl = text[:text.index("## What's new")]
+    get = "https://github.com/coders-farm-official/domovoi/releases/download/v2.0.0/"
+    for name in ("DomovoiSetup.exe", "domovoi-2.0.0-arm64-v8a.apk", "domovoi-2.0.0-armeabi-v7a.apk",
+                 "DomovoiSatelliteSetup.exe"):
+        assert f"[{name}]({get}{name})" in dl
+    assert "Windows 11 PC — the server" in dl and "Which one?" in dl and fr.PLAY_URL in dl
+    assert "  curl -fsSL https://example.invalid/scripts/linux/install.sh | sudo bash\n" in dl
+    assert fr.UPDATE_LINE in dl and "Raspberry Pi room" in dl
+    assert "Windows protected your PC" in dl
+    # Everything else comes after the summary: the checks, then the files.
+    assert text.index("## What's new") < text.index("## Files and checksums") < text.index("| DomovoiSetup.exe |")
+    assert "<summary>Every file, with its SHA-256</summary>\n\n|" in text, "a blank line, or GitHub shows raw Markdown"
+
+
+def test_download_without_a_room_setup_or_a_linux_line_still_says_where():
+    text = fr.body(_release(satellite_setup_sha256=None, linux_install=None))
+    dl = text[:text.index("## What's new")]
+    assert "DomovoiSatelliteSetup.exe" not in dl and "Raspberry Pi room" in dl
+    assert "curl" not in dl and "/blob/v2.0.0/docs/LINUX_HOST.md#one-command" in dl
+    assert "The Windows Setup is not code-signed" in dl
+
+
+def test_a_server_only_release_links_the_apks_on_the_release_that_holds_them():
+    app_from = {"version_name": "1.9.0", "version_code": 26101602, "tag": "v1.9.0",
+                "apks": [{"abi": "arm64-v8a", "file": "domovoi-1.9.0-arm64-v8a.apk"},
+                         {"abi": "armeabi-v7a", "file": "domovoi-1.9.0-armeabi-v7a.apk"}]}
+    text = "\n".join(fr.download(_release(apks=[], app_from=app_from)))
+    assert "/releases/download/v1.9.0/domovoi-1.9.0-arm64-v8a.apk" in text
+    assert "/releases/download/v1.9.0/domovoi-1.9.0-armeabi-v7a.apk" in text
+    assert "/releases/download/v2.0.0/domovoi-" not in text
+
+
+def test_the_linux_line_is_copied_from_linux_host_md_not_retyped():
+    doc = (REPO / "docs" / "LINUX_HOST.md").read_text(encoding="utf-8")
+    line = fr.linux_install_line(doc)
+    assert line and line in doc.splitlines() and line.endswith("install.sh | sudo bash")
+    assert fr.linux_install_line("no command here") is None
+
+
+@pytest.mark.parametrize("doc", [fr.LINUX_DOC, fr.PI_ROOM_DOC])
+def test_the_docs_the_download_links_have_their_headings(doc):
+    path, heading = doc
+    text = (REPO / path).read_text(encoding="utf-8")
+    assert heading in [fr._heading_text(h) for _, _, h in fr._headings(text)], f"{path} has no heading {heading!r}"
+
+
+def test_release_docs_after_1_3_0_are_in_the_house_style():
+    """docs/release/v<version>.md after 1.3.0 (1.3.0 and before are the full
+    notes their tags hold, from before the glance; their pages are set)."""
+    for p in sorted((REPO / "docs" / "release").glob("v*.md")):
+        v = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)(-.*)?", p.stem)
+        if v and tuple(int(x) for x in v.groups()[:3]) > (1, 3, 0):
+            assert fr.release_doc_problems(p.read_text(encoding="utf-8")) == [], p.name
 
 
 # ─── the notes, piece by piece ───────────────────────────────────────────
@@ -1079,6 +1234,8 @@ def test_a_server_only_dry_run_tags_nothing_and_ships_no_apks(tmp_path, monkeypa
     notes = (w.stage / "NOTES.md").read_text(encoding="utf-8")
     assert head in notes and "still 1.0.0 (versionCode 26101602)" in notes and "releases/tag/v1.0.0" in notes
     assert ".apk |" not in notes
+    assert "(https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0/domovoi-1.0.0-arm64-v8a.apk)" \
+        in notes, "Download links the app's APKs on the release that holds them"
     assert (w.work / "android" / "release.json").read_bytes() == before
     assert any("the app is unchanged" in m for m in w.said)
 
@@ -1318,6 +1475,17 @@ def test_plan_a_server_only_release_finishes_at_head(tmp_path, monkeypatch):
 
 
 @requires_git
+def test_plan_refuses_a_release_doc_not_in_the_house_style(tmp_path, monkeypatch):
+    """Before anyone approves the run: the page part of the full notes is checked."""
+    w = World(tmp_path, monkeypatch, version="1.0.0")
+    _write(w.work, "docs/release/v1.0.1.md", "# Domovoi 1.0.1\n\nIntro.\n")
+    _git(w.work, "add", "docs/release/v1.0.1.md")
+    _server_only(w)
+    with pytest.raises(fr.Refused, match="docs/release/v1.0.1.md: it needs exactly one"):
+        _plan(w)
+
+
+@requires_git
 def test_plan_an_app_release_signs_it_first(tmp_path, monkeypatch):
     w = World(tmp_path, monkeypatch, version="1.0.0")
     head = _server_only(w, gradle=APP_1_0_1)
@@ -1507,3 +1675,22 @@ def test_the_sbom_names_are_the_generator_s():
     sbom = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sbom)
     assert (sbom.ASSET_NAMES["server"], sbom.ASSET_NAMES["web"], sbom.ASSET_NAMES["android"]) == fr.SBOM_ASSETS
+
+
+@pytest.mark.parametrize("script", ["android/scripts/release.ps1", "android/scripts/release.sh"])
+def test_a_failed_signing_tool_shows_its_whole_error_without_secrets(script):
+    """A failed apksigner prints a headline and then its whole output (stdout
+    and stderr, the last 60 lines), not one matching line: the 1.3.0 release
+    hid "does not contain a key" and "Failed to load signer" that way. Any
+    secret's value is masked before it is shown."""
+    text = (REPO / script).read_text(encoding="utf-8")
+    for name in ("DOMOVOI_RELEASE_KS_PASS", "DOMOVOI_RELEASE_KEY_PASS", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_PASSWORD"):
+        assert name in text.split("signing", 1)[0] or name in text, name
+    assert "***" in text and "60" in text
+    if script.endswith(".ps1"):
+        assert "Select-Object -Last $max" in text and "function Hide-Secrets" in text
+        assert "Select-Object -First 1\n    if ($why) { Write-Host \"  $why\" }\n}" not in text
+    else:
+        assert "show_tool_error()" in text
+        assert text.count('show_tool_error "$') == 2, "signing and verifying both show the whole output"
+        assert "2>&1 >/dev/null" not in text, "signing's stdout is kept too"

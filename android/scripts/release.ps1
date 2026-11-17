@@ -125,10 +125,33 @@ function Invoke-Tool([string]$exe, [string[]]$arguments) {
     return , $script:LastToolOutput
 }
 
-# The first line of the last tool's output that says why it failed.
+# Why the last tool failed: a headline (the first line that says so), then
+# its whole output, stdout and stderr, the last 60 lines at most. The
+# signing passwords reach the tools only through the environment and the
+# tools don't print them, but any secret's value that did turn up is
+# replaced here before anything is shown.
+$script:SecretEnvNames = @('DOMOVOI_RELEASE_KS_PASS', 'DOMOVOI_RELEASE_KEY_PASS', 'ANDROID_KEYSTORE_PASSWORD',
+    'ANDROID_KEY_PASSWORD', 'GH_TOKEN', 'GITHUB_TOKEN')
+function Hide-Secrets([string]$line) {
+    foreach ($name in $script:SecretEnvNames) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) { $line = $line.Replace($value, '***') }
+    }
+    return $line
+}
 function Show-ToolError {
-    $why = $script:LastToolOutput | Where-Object { $_ -match 'ERROR|Exception|Failed|failed' } | Select-Object -First 1
+    $lines = @($script:LastToolOutput | ForEach-Object { Hide-Secrets $_ })
+    if ($lines.Count -eq 0) { return }
+    $why = $lines | Where-Object { $_ -match 'ERROR|Exception|Failed|failed' } | Select-Object -First 1
     if ($why) { Write-Host "  $why" }
+    $max = 60
+    if ($lines.Count -gt $max) {
+        Write-Host "  (the tool's output, last $max of $($lines.Count) lines)"
+        $lines = $lines | Select-Object -Last $max
+    } else {
+        Write-Host "  (the tool's whole output)"
+    }
+    $lines | ForEach-Object { Write-Host "    $_" }
 }
 
 # The exit code of a native program, its output thrown away.
