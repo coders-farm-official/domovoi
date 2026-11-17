@@ -16,6 +16,25 @@ object RoomLockRules {
     fun mayRun(holdsHouseholdToken: Boolean, deviceSecure: Boolean): Boolean =
         !holdsHouseholdToken || deviceSecure
 
+    /**
+     * Whether the room screen holds the screen on (FLAG_KEEP_SCREEN_ON,
+     * RoomModeActivity is the only place that sets it, and only through
+     * this). Only on the charger, and only while the phone is locked: then
+     * the room shows over the lock screen and Home or Recents meets the
+     * lock. While someone has it unlocked the screen times out as the phone
+     * says, the phone locks itself, and when it wakes the room is back over
+     * the lock screen with the screen held on. A phone with no secure lock
+     * (a room-only phone may have none) has nothing to lock behind, so on
+     * the charger it stays on as before.
+     */
+    fun keepScreenOn(keyguardLocked: Boolean, plugged: Boolean, deviceSecure: Boolean): Boolean =
+        plugged && (keyguardLocked || !deviceSecure)
+
+    /** Whether the room screen shows [RoomStatusText.LOCK_HINT]: a phone
+     *  with a lock that is unlocked right now. */
+    fun showLockHint(keyguardLocked: Boolean, deviceSecure: Boolean): Boolean =
+        deviceSecure && !keyguardLocked
+
     /** How leaving room mode is guarded. */
     enum class Exit { DEVICE_CREDENTIAL, CONFIRM_NO_LOCK, SET_A_LOCK_FIRST }
 

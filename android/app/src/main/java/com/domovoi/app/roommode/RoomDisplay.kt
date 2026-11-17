@@ -123,6 +123,8 @@ fun RoomDisplay(
     approvalCode: String?,
     wakeWord: String,
     needsLock: Boolean,
+    /** The phone has a lock and is unlocked: one line says how to lock it. */
+    lockHint: Boolean = false,
     onMute: () -> Unit,
     onResume: () -> Unit,
     onSetLock: () -> Unit,
@@ -165,6 +167,7 @@ fun RoomDisplay(
                 nowMs = now, elapsedMs = elapsed, zone = ZoneId.systemDefault(), locale = locale,
                 use24h = DateFormat.is24HourFormat(context),
                 widthDp = maxWidth.value.toInt(), heightDp = maxHeight.value.toInt(),
+                lockHint = lockHint,
             ),
         )
         val c = roomColors(s.night)
@@ -515,6 +518,10 @@ private fun StatusBlock(s: RoomDisplayModel.State, c: RoomColors, a: DisplayActi
     s.detail?.let {
         Spacer(Modifier.height(12.dp))
         Text(it, color = c.text2, fontSize = if (s.compact) 15.sp else 17.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
+    }
+    s.lockHint?.let {
+        Spacer(Modifier.height(8.dp))
+        Text(it, color = c.text2, fontSize = if (s.compact) 13.sp else 15.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
     }
     s.approvalCode?.let { code ->
         Spacer(Modifier.height(12.dp))

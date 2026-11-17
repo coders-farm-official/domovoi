@@ -221,7 +221,10 @@ internal val EXPLAINER: List<Pair<String, String>> = listOf(
         "and guests can control the room's music while it plays.",
     "Power and heat" to
         "Keep it on its charger and turn on the phone's battery-protection setting if it has one. Keep it off soft " +
-        "surfaces and out of the sun. The screen dims; that is expected. Never use a phone whose battery has swollen.",
+        "surfaces and out of the sun. The screen dims; that is expected. Never use a phone whose battery has swollen. " +
+        "On the charger the room stays on over the lock screen. After you unlock the phone, press the power button " +
+        "once to lock it again: when it wakes, the room is back over the lock screen and stays on. Left unlocked, " +
+        "the screen turns off as the phone's settings say.",
     "Android's rules" to
         "A notification stays while the room listens and cannot be hidden, and the green microphone dot stays on. " +
         "Its Stop listening turns the microphone off but does not leave room mode: the normal app stays locked " +

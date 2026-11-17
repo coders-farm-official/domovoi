@@ -4667,7 +4667,16 @@ microphone streamed to another room) is accepted only on a phone with an
 echo canceller and only when the core says the call is full duplex. The
 room screen shows over the lock screen so anyone in the room can see its
 state and mute it; leaving room mode takes the device credential (on a
-phone with no screen lock, a confirmation that says so). **A phone that
+phone with no screen lock, a confirmation that says so). **The screen
+stays on only while the phone is locked and on its charger**
+(`RoomLockRules.keepScreenOn`, the one place the room screen sets
+`FLAG_KEEP_SCREEN_ON`): over the lock screen, Home or Recents meets the
+lock. Once someone unlocks it, the screen times out as the phone's
+settings say and the phone locks itself; the room screen says so in one
+line ("press the power button to lock this phone"). A phone with no
+secure lock has nothing to lock behind and stays on while charging. The
+decision is re-made on screen on/off, unlock, focus change, plug and
+unplug, and every few seconds while shown. **A phone that
 holds a household token needs a screen lock to be a room**: room mode
 does not start without one, and stops listening if it is removed while it
 runs (re-checked at every start and return to the room screen); a
