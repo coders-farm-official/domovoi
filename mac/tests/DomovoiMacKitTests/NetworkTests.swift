@@ -241,6 +241,8 @@ final class NetworkTests: XCTestCase {
         var guestOut = "addr 192.168.64.5/24\ngw 192.168.64.1\ndefault-dev lima0\nrule ok\n"
         var vmUp = true
         var lanWrites: [Data] = []
+        var shortWrites: [Data] = []
+        var port80: MacPort80 = .free
         let sync: NetworkSync
 
         init() throws {
@@ -261,14 +263,20 @@ final class NetworkTests: XCTestCase {
             pf = f
             sync = s
             sync.readInterfaces = { [unowned self] in self.interfaces }
+            sync.checkPort80 = { [unowned self] in self.port80 }
             runner.on { [unowned self] c in
                 guard c.executable == "/L/limactl", c.arguments.first == "shell" else { return nil }
                 let inner = Array(c.arguments.dropFirst(4))
                 guard self.vmUp else { return CommandResult(status: 255, stderr: "ssh: connect refused") }
                 if inner.count == 4, inner[3] == GuestNet.script { return CommandResult(status: 0, stdout: self.guestOut) }
                 if inner.count == 4, inner[3].contains(HostFiles.lanFile) { self.lanWrites.append(c.stdin ?? Data()); return CommandResult(status: 0) }
+                if inner.count == 4, inner[3].contains(HostFiles.shortAddressFile) { self.shortWrites.append(c.stdin ?? Data()); return CommandResult(status: 0) }
                 return nil
             }
+        }
+
+        var lastShort: [String: Any]? {
+            shortWrites.last.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
         }
 
         var lastLan: String? {
@@ -335,6 +343,111 @@ final class NetworkTests: XCTestCase {
         XCTAssertTrue(s.problem?.contains("isn't on a home network") == true)
         XCTAssertEqual(w.lanWrites.count, 3)
         XCTAssertEqual(w.pf.refs.count, 1, "one reference throughout")
+    }
+
+    // ─── the short address: port 80, only while the Mac's own is free ──
+
+    func testPort80IsRedirectedOnlyWhenTheCallerSaysItIsFree() throws {
+        let off = try PfRules.text(interfaces: [en0], vm: vm)
+        XCTAssertTrue(off.contains("port { 6369 6370 7676 8050:8099 8096 9467 } -> 192.168.64.5"), "by default 80 is left alone")
+        let on = try PfRules.text(interfaces: [en0], vm: vm, shortAddress: true)
+        XCTAssertTrue(on.contains("rdr pass on en0 inet proto tcp from 192.168.1.0/24 to (en0) port { 80 6369 6370 7676 8050:8099 8096 9467 } -> 192.168.64.5"))
+        XCTAssertEqual(PfRules.portList(shortAddress: false), "6369 6370 7676 8050:8099 8096 9467")
+        XCTAssertEqual(PfRules.portWords(), "80, 6369, 6370, 7676, 8050-8099, 8096, 9467", "the consent page names 80 too")
+        // The fence and the filter don't depend on it.
+        XCTAssertEqual(off.split(separator: "\n").filter { $0.hasPrefix("block") }, on.split(separator: "\n").filter { $0.hasPrefix("block") })
+    }
+
+    func testLsofsAnswerSaysWhoServesPort80() {
+        XCTAssertEqual(ShortAddressPort.parse(status: 1, stdout: "", stderr: ""), .free, "lsof lists nothing: exit 1, quiet")
+        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p321\nchttpd\nn*:80\n", stderr: ""), .taken(holder: "httpd"))
+        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p9\nccom.docker.backend\nn192.168.1.20:80\n", stderr: ""),
+                       .taken(holder: "com.docker.backend"), "a listener on the LAN address is in the way too")
+        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p1\ncnginx\nn127.0.0.1:80\np2\ncnode\nn[::1]:80\n", stderr: ""), .free,
+                       "loopback-only listeners never see the redirected connections")
+        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p1\ncnginx\nn127.0.0.1:80\np2\ncnode\nn[::]:80\n", stderr: ""),
+                       .taken(holder: "node"), "the second process listens everywhere")
+        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p1\nbad\u{7}name;rm\nn*:80\n", stderr: ""), .taken(holder: nil),
+                       "a field that isn't c or n names nobody")
+        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p1\ncbad\u{7}na/me;rm\nn*:80\n", stderr: ""), .taken(holder: "badnamerm"),
+                       "the name the dashboard shows is plain")
+        if case .unchecked = ShortAddressPort.parse(status: 1, stdout: "", stderr: "lsof: no permission\n") {} else {
+            XCTFail("an error on stderr is no answer: unchecked, so 80 stays out")
+        }
+        if case .unchecked = ShortAddressPort.parse(status: 2, stdout: "", stderr: "") {} else { XCTFail("another exit: unchecked") }
+        XCTAssertFalse(MacPort80.unchecked("x").redirects)
+        XCTAssertFalse(MacPort80.taken(holder: nil).redirects)
+        XCTAssertTrue(MacPort80.free.redirects)
+    }
+
+    func testTheCheckAsksLsofReadOnlyAndATimeoutIsNoAnswer() {
+        let r = FakeRunner()
+        r.on { c in c.executable == ShortAddressPort.lsof ? CommandResult(status: 1) : nil }
+        XCTAssertEqual(ShortAddressPort.check(runner: r), .free)
+        XCTAssertEqual(r.calls.last?.arguments, ["-nP", "-iTCP:80", "-sTCP:LISTEN", "-Fcn"])
+        r.on { c in c.executable == ShortAddressPort.lsof ? CommandResult(status: 0, timedOut: true) : nil }
+        if case .unchecked = ShortAddressPort.check(runner: r) {} else { XCTFail("a timeout: unchecked") }
+    }
+
+    func testTheShortAddressReportIsWhatTheDashboardReads() throws {
+        let d = try ShortAddressReport(.taken(holder: "httpd")).json(at: Date(timeIntervalSince1970: 1_800_000_000))
+        let o = try XCTUnwrap(try JSONSerialization.jsonObject(with: d) as? [String: Any])
+        XCTAssertEqual(o["schema"] as? Int, 1)
+        XCTAssertEqual(o["state"] as? String, "taken")
+        XCTAssertEqual(o["holder"] as? String, "httpd")
+        XCTAssertNotNil(o["written_at"] as? String)
+        let free = try XCTUnwrap(try JSONSerialization.jsonObject(with: try ShortAddressReport(.free).json(at: Date())) as? [String: Any])
+        XCTAssertEqual(free["state"] as? String, "on")
+        XCTAssertTrue(free["holder"] is NSNull)
+        XCTAssertEqual(ShortAddressReport(.unchecked("lsof: x")).state, "unchecked")
+    }
+
+    func testPort80FollowsWhateverElseOnTheMacServesIt() throws {
+        let w = try World()
+        w.interfaces = [en0]
+        var s = try w.sync.sync(refreshVM: true)
+        XCTAssertTrue(w.pf.anchor.contains("port { 80 6369"), "free: redirected")
+        XCTAssertEqual(s.shortAddress, "on")
+        XCTAssertEqual(w.lastShort?["state"] as? String, "on")
+
+        // Someone starts Apache on the Mac: 80 is theirs from the next sync.
+        w.port80 = .taken(holder: "httpd")
+        s = try w.sync.sync(refreshVM: false)
+        XCTAssertFalse(w.pf.anchor.contains("{ 80 "), "never steals the Mac's own port 80")
+        XCTAssertTrue(w.pf.anchor.contains("port { 6369 6370 7676 8050:8099 8096 9467 }"), "the other ports unchanged")
+        XCTAssertTrue(s.redirect)
+        XCTAssertNil(s.problem, "not a problem: the dashboard on 6369 works either way")
+        XCTAssertEqual(s.shortAddress, "taken: httpd")
+        XCTAssertEqual(w.lastShort?["state"] as? String, "taken")
+        XCTAssertEqual(w.lastShort?["holder"] as? String, "httpd")
+
+        // Nothing changed: the report isn't rewritten.
+        let writes = w.shortWrites.count
+        try w.sync.sync(refreshVM: false)
+        XCTAssertEqual(w.shortWrites.count, writes)
+
+        // lsof can't say: 80 stays out.
+        w.port80 = .unchecked("lsof took too long")
+        s = try w.sync.sync(refreshVM: false)
+        XCTAssertFalse(w.pf.anchor.contains("{ 80 "))
+        XCTAssertEqual(w.lastShort?["state"] as? String, "unchecked")
+
+        // Apache stopped: Domovoi gets 80 back.
+        w.port80 = .free
+        s = try w.sync.sync(refreshVM: false)
+        XCTAssertTrue(w.pf.anchor.contains("port { 80 6369"))
+        XCTAssertEqual(w.lastShort?["state"] as? String, "on")
+
+        // The VM down when the report changes: tried again at the next sync.
+        w.port80 = .taken(holder: nil)
+        w.vmUp = false
+        let before = w.shortWrites.count
+        try w.sync.sync(refreshVM: false)
+        XCTAssertEqual(w.shortWrites.count, before)
+        w.vmUp = true
+        try w.sync.sync(refreshVM: false)
+        XCTAssertEqual(w.lastShort?["state"] as? String, "taken")
+        XCTAssertTrue(w.lastShort?["holder"] is NSNull)
     }
 
     func testTheVMsNewAddressAfterARestartIsFollowedAndAQuietVMKeepsTheOldOne() throws {

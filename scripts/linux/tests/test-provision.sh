@@ -2810,6 +2810,7 @@ case_host_stt_url_reaches_only_the_core() {
   check "Ollama still in both" eq "$(grep -c 'tcp dport 11500 accept' "$f")" 2
   check "URL in .env (no trailing slash)" has_line "$envf" "WHISPER_REMOTE_URL=http://host.lima.internal:6371"
   check "model in .env" has_line "$envf" "WHISPER_REMOTE_MODEL=small.en"
+  check "no --host-stt-shares-gpu: false" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=false"
   check "the core's own Whisper stays" has_line "$envf" "WHISPER_DEVICE=cpu"
   check "the record marks the script's write" has_line "$rec" "_HOST_STT=1"
   # Idempotent.
@@ -2824,7 +2825,22 @@ case_host_stt_url_reaches_only_the_core() {
   check "dropped: URL blank" has_line "$envf" "WHISPER_REMOTE_URL="
   check "dropped: not left behind" eq "$(grep -c '^WHISPER_REMOTE_URL=http' "$envf")" 0
   check "dropped: the marker is gone" eq "$(grep -c '^_HOST_STT=' "$rec")" 0
+  # The Mac's way (its whisper-server shares Metal with Ollama): true.
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371 --host-stt-model small.en --host-stt-shares-gpu
+  check "shares: exit 0" eq "$RC" 0
+  check "shares: true in .env" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=true"
+  check "shares: once" eq "$(grep -c '^WHISPER_REMOTE_SHARES_GPU=' "$envf")" 1
+  # Dropped again: back to false (a bool is never left blank).
+  run_prov "${vm_guard_args[@]}"
+  check "shares dropped: exit 0" eq "$RC" 0
+  check "shares dropped: false" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=false"
+  # The household's own value stays theirs.
+  run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371 --host-stt-shares-gpu
+  sed -i 's/^WHISPER_REMOTE_SHARES_GPU=true$/WHISPER_REMOTE_SHARES_GPU=false/' "$envf"
+  run_prov "${vm_guard_args[@]}"
+  check "theirs: still false, untouched" has_line "$envf" "WHISPER_REMOTE_SHARES_GPU=false"
   # Bad values are usage errors.
+  run_prov "${vm_guard_args[@]}" --host-stt-shares-gpu; check "shares without a URL: 2" eq "$RC" 2
   run_prov "${vm_guard_args[@]}" --host-stt-url host.lima.internal:6371; check "no scheme: 2" eq "$RC" 2
   run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal; check "no port: 2" eq "$RC" 2
   run_prov "${vm_guard_args[@]}" --host-stt-url http://host.lima.internal:6371 --host-stt-model 'a b'; check "bad model: 2" eq "$RC" 2
@@ -2845,13 +2861,13 @@ case_vm_guard_lan_lets_in_only_the_lan_ports() {
   run_prov "${vm_guard_args[@]}" --vm-guard-lan lima0
   check "exit 0" eq "$RC" 0
   check "the new option re-runs the step" eq "$(state_of vm-guard)" done
-  check "says so" said "new connections on lima0 reach only TCP 6369, 6370, 7676, 8050-8099, 8096, 9467"
+  check "says so" said "new connections on lima0 reach only TCP 80, 6369, 6370, 7676, 8050-8099, 8096, 9467"
   check "a prerouting chain, before Docker's DNAT" has_line "$f" $'		type filter hook prerouting priority -150; policy accept;'
   check "other interfaces untouched" has_line "$f" $'		iifname != "lima0" accept'
   check "replies pass" eq "$(grep -c 'ct state established,related accept' "$f")" 3
   check "ICMP passes" has_line "$f" $'		meta l4proto { icmp, ipv6-icmp } accept'
   check "DHCP passes" has_line "$f" $'		udp dport { 68, 546 } accept'
-  check "the LAN ports" has_line "$f" $'		tcp dport { 6369, 6370, 7676, 8050-8099, 8096, 9467 } accept'
+  check "the LAN ports" has_line "$f" $'		tcp dport { 80, 6369, 6370, 7676, 8050-8099, 8096, 9467 } accept'
   check "the rest dropped" has_line "$f" $'		drop'
   check "the host fence unchanged" has_line "$f" $'		ip daddr 192.168.5.0/24 drop'
   check "still one table, replaced whole" has_line "$f" "delete table inet domovoi_vm_guard"

@@ -610,7 +610,10 @@ final class InstallerTests: XCTestCase {
         XCTAssertNil(helperJob.userName)
         XCTAssertEqual(helperJob.programArguments, [l.helperProgram.path, "serve", "--system"])
         XCTAssertTrue(helperJob.keepAlive)
-        XCTAssertTrue(pf.anchor.contains("rdr pass on en0 inet proto tcp from 192.168.1.0/24 to (en0) port { 6369 6370 7676 8050:8099 8096 9467 } -> 192.168.64.5"))
+        XCTAssertTrue(pf.anchor.contains("rdr pass on en0 inet proto tcp from 192.168.1.0/24 to (en0) port { 80 6369 6370 7676 8050:8099 8096 9467 } -> 192.168.64.5"),
+                      "nothing on this Mac answers lsof for port 80, so the short address is redirected too")
+        let short = try XCTUnwrap(guestFiles[HostFiles.shortAddressFile], "the VM is told about the Mac's port 80")
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: short) as? [String: Any])?["state"] as? String, "on")
         XCTAssertTrue(pf.anchor.contains("block drop in quick on en0 inet from any to <\(PfRules.fenceTable)>"), "and nothing else forwarded")
         XCTAssertEqual(pf.refs.count, 1)
         XCTAssertEqual(pf.forwarding, "1")

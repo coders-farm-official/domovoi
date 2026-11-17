@@ -178,7 +178,9 @@ final class SttPinsTests: XCTestCase {
         XCTAssertFalse(without.contains("--host-stt-url"))
         let with = ProvisionArgs.build(source: src, answers: answers, ollamaURL: "http://host.lima.internal:11434",
                                        sttURL: "http://host.lima.internal:6371", sttModel: "small.en")
-        XCTAssertNotNil(with.firstRange(of: ["--host-stt-url", "http://host.lima.internal:6371", "--host-stt-model", "small.en"]))
+        XCTAssertNotNil(with.firstRange(of: ["--host-stt-url", "http://host.lima.internal:6371", "--host-stt-model", "small.en",
+                                             "--host-stt-shares-gpu"]), "Metal is shared with Ollama: the core is told")
+        XCTAssertFalse(without.contains("--host-stt-shares-gpu"), "no speech service on the Mac: nothing shares the chip")
     }
 
     func testTheSpeechJobRendersForTheRoleAccountOnLoopbackOnly() throws {
