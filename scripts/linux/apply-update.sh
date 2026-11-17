@@ -197,6 +197,18 @@
 # /etc/domovoi/cache-trim.conf says otherwise). DOMOVOI_MANAGE_CACHE_TRIM=0
 # leaves all of it alone. Never fatal.
 #
+# Then Friend Houses' firewall (reconcile_fh_firewall; docs/LINUX_HOST.md,
+# "Friend Houses' firewall"): the checkout's scripts/linux/fh-firewall.sh
+# becomes /usr/local/lib/domovoi-fh-firewall/fh-firewall.sh (root's, in a
+# folder only root can write) and units/domovoi-fh-firewall.service goes
+# into /etc/systemd/system; when either changed, or the unit isn't enabled,
+# systemctl daemon-reload, enable --now, and try-restart when a file changed,
+# so the rules apply now. They
+# keep the Tor container Friend Houses runs off this box's own ports and
+# the home network (threat-model finding 22), and are installed whether or
+# not Friend Houses is ever turned on; provision.sh installs the same
+# files. DOMOVOI_MANAGE_FH_FIREWALL=0 leaves all of it alone. Never fatal.
+#
 # Then Docker's order at boot (reconcile_docker_media_order): on a box
 # whose /etc/fstab has provision.sh's Domovoi media block (the Windows
 # installer's WSL distro), docker.service.d/50-domovoi-media.conf makes
@@ -364,6 +376,14 @@ CACHE_TRIM_LIB=$CACHE_TRIM_LIB_DIR/cache-trim.py
 CACHE_TRIM_UNIT_DIR=$TEST_ROOT/etc/systemd/system
 CACHE_TRIM_UNITS=(domovoi-cache-trim.service domovoi-cache-trim.timer)
 CACHE_TRIM_TIMER=domovoi-cache-trim.timer
+# Friend Houses' firewall (reconcile_fh_firewall): the root-owned copy of
+# the script and its unit, under the harness's root in the tests.
+MANAGE_FH_FIREWALL=${DOMOVOI_MANAGE_FH_FIREWALL:-1}
+FH_FIREWALL_SRC=$SCRIPT_DIR/fh-firewall.sh
+FH_FIREWALL_LIB_DIR=$TEST_ROOT/usr/local/lib/domovoi-fh-firewall
+FH_FIREWALL_LIB=$FH_FIREWALL_LIB_DIR/fh-firewall.sh
+FH_FIREWALL_UNIT_DIR=$TEST_ROOT/etc/systemd/system
+FH_FIREWALL_UNIT=domovoi-fh-firewall.service
 
 # The search helper (docs/INTERNET.md): the compose service and the
 # container it runs as. DOMOVOI_MANAGE_SEARXNG=0 (or false/no/off) in
@@ -3022,6 +3042,58 @@ install_if_changed() {
 
 # See the header. A step only when it installed something (ok) or could not
 # (warn); everything already in place is nothing to do.
+reconcile_fh_firewall() {
+  local t0 rc changed=() why=""
+  case "$(printf '%s' "$MANAGE_FH_FIREWALL" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "Friend Houses' firewall left alone (DOMOVOI_MANAGE_FH_FIREWALL=$MANAGE_FH_FIREWALL)"; return 0 ;;
+  esac
+  if [ "$(id -u)" != 0 ] && [ -z "$TEST_ROOT" ]; then log "not root: Friend Houses' firewall left as it is"; return 0; fi
+  if [ ! -f "$FH_FIREWALL_SRC" ]; then log "no $FH_FIREWALL_SRC: Friend Houses' firewall left as it is"; return 0; fi
+  if [ ! -f "$SCRIPT_DIR/units/$FH_FIREWALL_UNIT" ]; then log "no $SCRIPT_DIR/units/$FH_FIREWALL_UNIT: Friend Houses' firewall left as it is"; return 0; fi
+  t0=$(now_ms)
+  if [ ! -d "$FH_FIREWALL_LIB_DIR" ]; then mkdir -p "$FH_FIREWALL_LIB_DIR" && chmod 0755 "$FH_FIREWALL_LIB_DIR" || true; fi
+  if ! root_dir "$FH_FIREWALL_LIB_DIR"; then
+    why="$FH_FIREWALL_LIB_DIR is not a folder only root can write, so the firewall script was not put there"
+  else
+    rc=0; install_if_changed "$FH_FIREWALL_SRC" "$FH_FIREWALL_LIB" 0755 || rc=$?
+    case $rc in
+      0) changed+=("$FH_FIREWALL_LIB") ;;
+      2) why="$FH_FIREWALL_LIB could not be written" ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    mkdir -p "$FH_FIREWALL_UNIT_DIR" || true
+    rc=0; install_if_changed "$SCRIPT_DIR/units/$FH_FIREWALL_UNIT" "$FH_FIREWALL_UNIT_DIR/$FH_FIREWALL_UNIT" 0644 || rc=$?
+    case $rc in
+      0) changed+=("$FH_FIREWALL_UNIT") ;;
+      2) why="$FH_FIREWALL_UNIT_DIR/$FH_FIREWALL_UNIT could not be written" ;;
+    esac
+  fi
+  local enabled=1
+  if command -v systemctl >/dev/null 2>&1 && ! systemctl is-enabled --quiet "$FH_FIREWALL_UNIT" 2>/dev/null; then
+    enabled=0
+  fi
+  if [ -z "$why" ] && [ "${#changed[@]}" -eq 0 ] && [ "$enabled" = 1 ]; then return 0; fi
+  if [ -z "$why" ] && [ "$enabled" = 0 ] && [ "${#changed[@]}" -eq 0 ]; then changed+=("$FH_FIREWALL_UNIT enabled"); fi
+  if [ -z "$why" ] && command -v systemctl >/dev/null 2>&1; then
+    # enable --now starts it when it isn't running; try-restart applies
+    # changed rules when it already was.
+    local files_changed=1
+    case " ${changed[*]} " in *" $FH_FIREWALL_UNIT enabled "*) files_changed=0 ;; esac
+    if ! { systemctl daemon-reload && systemctl enable --now "$FH_FIREWALL_UNIT"         && { [ "$files_changed" = 0 ] || systemctl try-restart "$FH_FIREWALL_UNIT"; }; }; then
+      why="the files are in place but $FH_FIREWALL_UNIT could not be started"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    add_step fh-firewall warn "$t0" "$why; Friend Houses' Tor container is not fenced off"
+    log "step fh-firewall: $why; not fatal, the run goes on"
+  else
+    add_step fh-firewall ok "$t0" "Friend Houses' firewall is installed (${changed[*]}): its Tor container reaches the internet only"
+    log "step fh-firewall: installed ${changed[*]}"
+  fi
+  return 0
+}
+
 reconcile_cache_trim() {
   local t0 u rc changed=() why=""
   case "$(printf '%s' "$MANAGE_CACHE_TRIM" | tr '[:upper:]' '[:lower:]')" in
@@ -3562,6 +3634,7 @@ main() {
   reconcile_short_address
   reconcile_journal
   reconcile_cache_trim
+  reconcile_fh_firewall
   reconcile_docker_media_order
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then

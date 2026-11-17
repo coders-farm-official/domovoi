@@ -197,6 +197,7 @@ build_origin() {
   cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO"/scripts/linux/units/*.timer \
     "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" "$o/scripts/linux/units/"
   cp "$REAL_REPO/scripts/linux/cache-trim.py" "$o/scripts/linux/cache-trim.py"
+  cp "$REAL_REPO/scripts/linux/fh-firewall.sh" "$o/scripts/linux/fh-firewall.sh"
   # The real helpers: provision.sh runs them from the checkout, under the
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
@@ -2893,6 +2894,42 @@ case_cache_trim_installed() {
   end_case
 }
 
+# Friend Houses' firewall (2026-11-17, threat-model finding 22): the units
+# step installs root's copy of the script and its unit, enables and starts
+# it, once; an edited copy is put back; DOMOVOI_MANAGE_FH_FIREWALL=0 leaves
+# it alone.
+case_fh_firewall_installed() {
+  new_case fh_firewall_installed
+  local lib=$ROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the script is the commit's" cmp -s "$lib" "$REAL_REPO/scripts/linux/fh-firewall.sh"
+  check "executable" test -x "$lib"
+  check "the unit" cmp -s "$ROOT/etc/systemd/system/domovoi-fh-firewall.service" "$REAL_REPO/scripts/linux/units/domovoi-fh-firewall.service"
+  check "enabled and started" called "systemctl enable --now domovoi-fh-firewall.service"
+  check "no Domovoi restart on a first run" not_called "systemctl restart domovoi"
+  check "said so" said "installed Friend Houses' firewall"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run: units skipped" eq "$(state_of units)" skip
+  printf '#!/bin/sh\nexit 0\n' >"$lib"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "an edited copy: units ran again" eq "$(state_of units)" done
+  check "and put it back" cmp -s "$lib" "$REAL_REPO/scripts/linux/fh-firewall.sh"
+  end_case
+}
+
+case_fh_firewall_opt_out() {
+  new_case fh_firewall_opt_out
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_MANAGE_FH_FIREWALL=0\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "no script" absent "$ROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh"
+  check "no unit started" not_called "domovoi-fh-firewall.service"
+  check "says why" said "Friend Houses' firewall left as it is (DOMOVOI_MANAGE_FH_FIREWALL in /etc/default/domovoi-update)"
+  end_case
+}
+
 case_cache_trim_opt_out() {
   new_case cache_trim_opt_out
   mkdir -p "$ROOT/etc/default"
@@ -5332,6 +5369,8 @@ CASES=(
   case_journal_kept_on_disk
   case_cache_trim_installed
   case_cache_trim_opt_out
+  case_fh_firewall_installed
+  case_fh_firewall_opt_out
   case_starts_do_not_block_on_ready
   case_a_unit_that_fails_after_a_no_block_start_stops_the_wait
   case_the_database_failing_after_a_no_block_start_stops_the_wait

@@ -825,6 +825,8 @@ run_update() {
   # Off unless a case asks (the cache_trim_* cases), so every other case's
   # step list stays as it is.
   gpu_env+=(DOMOVOI_MANAGE_CACHE_TRIM="${MANAGE_CACHE_TRIM:-0}")
+  # Off unless a case asks (the fh_firewall_* cases), the same way.
+  gpu_env+=(DOMOVOI_MANAGE_FH_FIREWALL="${MANAGE_FH_FIREWALL:-0}")
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   # The script as the update verifier runs it (scripts/linux/update-verifier.sh):
@@ -1764,6 +1766,81 @@ case_cache_trim_installed_once() {
   : >"$STATE/calls.log"
   MANAGE_CACHE_TRIM=1 run_update
   check "then left alone" not_called "enable --now domovoi-cache-trim.timer"
+  end_case
+}
+
+# Friend Houses' firewall (2026-11-17, threat-model finding 22): an install
+# from before it gets root's copy of fh-firewall.sh and its unit with the
+# next update, enabled and started once; a second run has nothing to do; an
+# edited copy is put back and the unit started again to apply it.
+case_fh_firewall_installed_once() {
+  new_case fh_firewall_installed_once
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local lib=$OSROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh units=$OSROOT/etc/systemd/system
+  MANAGE_FH_FIREWALL=1 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the script is the commit's" cmp -s "$lib" "$HERE/../fh-firewall.sh"
+  check "executable by root, not writable by others" eq "$(stat -c %a "$lib")" 755
+  check "its folder 0755" eq "$(stat -c %a "$(dirname "$lib")")" 755
+  check "the unit" cmp -s "$units/domovoi-fh-firewall.service" "$HERE/../units/domovoi-fh-firewall.service"
+  check "the unit runs the root-owned copy" grep -qx 'ExecStart=/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply' "$units/domovoi-fh-firewall.service"
+  check "it follows Docker" grep -qx 'PartOf=docker.service' "$units/domovoi-fh-firewall.service"
+  check "daemon-reload" called "systemctl daemon-reload"
+  check "enabled and started" called "systemctl enable --now domovoi-fh-firewall.service"
+  check "and its rules applied now" called "systemctl try-restart domovoi-fh-firewall.service"
+  check "an ok step" step_is fh-firewall ok
+  check "where it sits" eq "$(step_names)" "signature fh-firewall stop-services start-services health searxng"
+  : >"$STATE/calls.log"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "second run ok" eq "$(field status)" '"ok"'
+  check "no second start" not_called "enable --now domovoi-fh-firewall.service"
+  check "no step the second time" eq "$(step_names)" "signature stop-services start-services health searxng"
+  printf '#!/bin/sh\nexit 0\n' >"$lib"
+  : >"$STATE/calls.log"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "an edited copy is put back" cmp -s "$lib" "$HERE/../fh-firewall.sh"
+  check "and the rules applied again" called "systemctl try-restart domovoi-fh-firewall.service"
+  : >"$STATE/disabled-domovoi-fh-firewall.service"
+  : >"$STATE/calls.log"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "a disabled unit is enabled" called "systemctl enable --now domovoi-fh-firewall.service"
+  check "nothing changed, so no try-restart" not_called "try-restart domovoi-fh-firewall.service"
+  check "an ok step that says so" grep -qF "domovoi-fh-firewall.service enabled" "$RESULT"
+  end_case
+}
+
+case_fh_firewall_start_failure_is_a_warn() {
+  new_case fh_firewall_start_failure_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "enable --now domovoi-fh-firewall.service" >"$STATE/fail-systemctl"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "the restart still ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is fh-firewall warn
+  check "that says so" grep -qF "could not be started" "$RESULT"
+  end_case
+}
+
+case_fh_firewall_refuses_a_folder_others_can_write() {
+  new_case fh_firewall_refuses_a_folder_others_can_write
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local dir=$OSROOT/usr/local/lib/domovoi-fh-firewall
+  mkdir -p "$dir" && chmod 0777 "$dir"
+  MANAGE_FH_FIREWALL=1 run_update
+  check "the restart still ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is fh-firewall warn
+  check "nothing put there" test ! -e "$dir/fh-firewall.sh"
+  check "the unit not started" not_called "enable --now domovoi-fh-firewall.service"
+  end_case
+}
+
+case_fh_firewall_opt_out() {
+  new_case fh_firewall_opt_out
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  MANAGE_FH_FIREWALL=0 run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no script" test ! -e "$OSROOT/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh"
+  check "no unit started" not_called "domovoi-fh-firewall.service"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
   end_case
 }
 
@@ -5568,6 +5645,10 @@ CASES=(
   case_journal_restart_failure_is_a_warn
   case_journal_opt_out
   case_cache_trim_installed_once
+  case_fh_firewall_installed_once
+  case_fh_firewall_start_failure_is_a_warn
+  case_fh_firewall_refuses_a_folder_others_can_write
+  case_fh_firewall_opt_out
   case_cache_trim_enable_failure_is_a_warn
   case_cache_trim_refuses_a_folder_others_can_write
   case_cache_trim_opt_out

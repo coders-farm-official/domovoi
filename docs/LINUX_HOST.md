@@ -1282,6 +1282,67 @@ Windows-install setting, through DomovoiHost
 ([WINDOWS_HOST.md](WINDOWS_HOST.md#how-much-of-this-pc-domovoi-may-use)). A
 Linux server has no such ceiling in Domovoi.
 
+### Friend Houses' firewall
+
+Friend Houses ("serverless messaging and friend system between
+households") is off until an admin turns it on. When it runs, the core
+starts C tor in a container of its own, `domovoi-tor`, on a Docker network
+of its own: `domovoi-fh`, subnet `172.31.254.0/24`, bridge interface
+`domovoi-fh0`. Tor needs the internet, so that container can't go without
+a network. A container on an ordinary Docker bridge, though, can open
+connections to the host's own services (the dashboard, the core, Postgres,
+Ollama) and to the rest of the home network. A Tor daemon that someone
+broke into would then be inside the house.
+
+So the installer fences that one network off. `domovoi-fh-firewall.service`
+is a oneshot that runs, as root,
+`/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply`, a root-owned
+copy of [`scripts/linux/fh-firewall.sh`](../scripts/linux/fh-firewall.sh).
+It adds three things and nothing else:
+
+1. **`INPUT`:** nothing from `domovoi-fh0` reaches the host itself. That
+   traffic is the host's own, so Docker's `DOCKER-USER` chain never sees
+   it.
+2. **`DOCKER-USER`:** traffic from `172.31.254.0/24` goes to a chain of its
+   own, `DOMOVOI-FH`. That chain drops anything addressed to private,
+   shared, link-local, loopback or multicast ranges: the home network,
+   other containers, and the Windows or Mac host behind a WSL or VM
+   gateway.
+3. **IPv6:** the same rules, should the network ever get IPv6.
+
+Tor relays have public addresses, so the internet still works. `apply`
+refills `DOMOVOI-FH` from scratch and inserts each jump only once, so
+running it again changes nothing. The unit is `PartOf=docker.service` and
+`WantedBy=docker.service`: it runs whenever Docker starts or restarts,
+which matters because Docker rebuilds its own chains then. After it has
+applied the rules it writes `/run/domovoi-fh-firewall/applied`.
+
+The core reads that file. Settings → Household → Friend Houses shows a
+plain warning while it is missing, and the core logs one if it starts the
+Tor container without it.
+
+The installer puts the files in place, enables the unit and starts it,
+whether or not Friend Houses is ever turned on, so the fence is up before
+the network exists. The update unit does the same on an install made
+before the fence existed (`reconcile_fh_firewall`, step `fh-firewall`; not
+fatal if it fails). This covers every host kind:
+
+- **Native Linux:** as described above.
+- **Windows:** the WSL distro runs the same scripts.
+- **Mac:** the Lima VM runs the same scripts.
+
+To check it by hand:
+
+```bash
+sudo /usr/local/lib/domovoi-fh-firewall/fh-firewall.sh check && echo in place
+sudo iptables -S DOMOVOI-FH
+```
+
+`DOMOVOI_MANAGE_FH_FIREWALL=0` in `/etc/default/domovoi-update` leaves the
+script and unit to you, in the installer and in updates alike. If you use
+it, fence the network yourself before turning Friend Houses on: the
+dashboard will keep showing the warning.
+
 ### Internet or not
 
 The internet answer needs nothing from the units. Saving it in Settings →

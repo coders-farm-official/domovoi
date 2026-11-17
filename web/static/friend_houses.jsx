@@ -151,15 +151,28 @@ const FhStatusLine = ({ status }) => {
   );
 };
 
+/* The installer's firewall for the Tor container (status.firewall:
+   in_place | missing | unknown). Without it the container could reach this
+   server's own ports and the home network, so say so plainly. */
+const FhFirewallNote = ({ status }) => (
+  status && status.firewall === 'missing' ? (
+    <div className="chat-note" role="note">
+      This server doesn’t have the firewall rules that keep Friend Houses’ private connection away from
+      the rest of your home network. Update Domovoi (or run its installer again) before using Friend Houses.
+    </div>
+  ) : null
+);
+
 /* ---- off ------------------------------------------------------------ */
 
-const FhOffCard = ({ internetNever, detail, busy, onTurnOn }) => (
+const FhOffCard = ({ internetNever, detail, busy, onTurnOn, status }) => (
   <Card title="Friend Houses" sub={FH_DESCRIPTION}>
     <div style={{ ...fhStack, padding: '12px 16px' }}>
       <div style={{ fontSize: 13, lineHeight: 1.5 }}>
         Become friends with other Domovoi houses. Messages go house to house through the Tor network;
         no Coders Farm server is involved. Where using Tor is restricted, leave this off.
       </div>
+      <FhFirewallNote status={status}/>
       {internetNever ? (
         <div className="chat-note info" role="note">
           {detail ? String(detail) : 'This Domovoi stays off the internet, so Friend Houses can’t run.'}
@@ -198,6 +211,7 @@ const FhHouseCard = ({ status, fire, onSaved, onTurnOff, busy }) => {
           action={<Button icon="power" disabled={busy} onClick={onTurnOff}>{busy ? 'Turning off…' : 'Turn off'}</Button>}>
       <div style={{ ...fhStack, padding: '12px 16px' }}>
         <FhStatusLine status={status}/>
+        <FhFirewallNote status={status}/>
         <div style={fhRow}>
           <label htmlFor="fh-house-name" style={{ fontSize: 13 }}><strong>The name friends see</strong></label>
           <input id="fh-house-name" value={name} maxLength={FH_NAME_MAX} disabled={saving}
@@ -1032,7 +1046,7 @@ const FriendHousesPanel = () => {
     return (
       <div className="friend-houses" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {toastNode}
-        <FhOffCard internetNever={internetNever} detail={status.detail} busy={switching} onTurnOn={() => turn(true)}/>
+        <FhOffCard internetNever={internetNever} detail={status.detail} busy={switching} onTurnOn={() => turn(true)} status={status}/>
       </div>
     );
   }
