@@ -5,24 +5,38 @@ someone opens Settings".
 
 It asks, for a few seconds, for the PTR records of ``_ipp._tcp``,
 ``_ipps._tcp``, ``_uscan._tcp`` and ``_uscans._tcp`` and reads whatever
-answers, two ways at once (P0, 2026-10-21):
+answers, two ways AT ONCE: both sockets are opened, and both send their
+query at 0, 1 and 2 s of the same window, so neither waits for the other
+and one that fails costs nothing (P0, 2026-10-21; re-checked 2026-11-16):
 
-1. **Group mode first.** Bind UDP 5353 with ``SO_REUSEADDR`` (so it sits
-   beside Avahi, Windows' own responder or anything else), join
-   224.0.0.251 on the LAN interface and send an ordinary query. Answers
-   come back to the group. On the Windows install's WSL distro, WSL's own
-   Hyper-V rule (``WslCore-Allow-Inbound-mDNS-IPv4``: inbound UDP to
-   224.0.0.251:5353) already lets those in, so no new firewall rule is
-   needed.
-2. **Legacy unicast second.** A query from an ordinary ephemeral port,
-   which a responder MUST answer by unicast to that port (RFC 6762 §6.7).
-   It needs no group membership, so it still works where binding 5353
-   fails; but no Hyper-V rule admits it, so on the Windows install it is
-   the one most likely to be dropped.
+* **Group mode** (listed first because it is the one the Windows install
+  is known to admit). Bind UDP 5353 with ``SO_REUSEADDR`` (so it sits
+  beside Avahi, the core's own network-name responder, Windows' dnscache
+  or DomovoiHost's responder: every one of them sets it too), join
+  224.0.0.251 on the LAN interface and send an ordinary (QM) query, which
+  is answered by multicast, so every socket sharing 5353 hears it. On the
+  Windows install's WSL distro, WSL's own Hyper-V rule
+  (``WslCore-Allow-Inbound-mDNS-IPv4``: inbound UDP to 224.0.0.251:5353)
+  already lets those answers in, so no new firewall rule is needed.
+* **Legacy unicast.** A query from an ordinary ephemeral port, which a
+  responder MUST answer by unicast to that port (RFC 6762 §6.7). It needs
+  no group membership, so it still works where binding 5353 fails (a
+  responder that holds 5353 exclusively); but no Hyper-V rule admits a
+  unicast reply to an ephemeral port, and a host firewall can't match it to
+  the query (that went to the group, not to the printer), so on the Windows
+  install, or behind ufw, it is the one most likely to be dropped.
+
+Why not legacy unicast first, as the plan first said: it would only change
+which socket is opened first, and on the Windows install it is the
+half with no firewall rule letting replies in (P0's read of the Hyper-V
+rules). Running both at once covers each failure of the other.
 
 The result says which socket heard each device, which is what Settings
 shows as "by multicast / by unicast" — the owner's live install proves the
-question P0-A left open.
+question P0-A left open. ``python3 mdns.py --iface <LAN address> --mode
+group|legacy|both`` runs one look by hand and prints what each socket
+heard: this file imports nothing but the standard library, so it can be
+copied on its own into a throwaway test VM.
 
 Every TXT value is a hint only: what is stored comes from the printer's
 own Get-Printer-Attributes / ScannerCapabilities answer. Names and TXT
@@ -32,6 +46,8 @@ loop (name-pointer depth, record counts) so a hostile packet costs nothing.
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
 import select
 import socket
@@ -322,3 +338,30 @@ def browse(iface_ip: str | None, seconds: float = 3.0, modes: tuple[str, ...] = 
     result = collect(packets)
     result.errors.extend(errors)
     return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    """One look by hand, for the P0-A check: what each socket heard, as JSON
+    lines. Read-only: it asks, it never answers or announces."""
+    ap = argparse.ArgumentParser(prog="mdns.py", description="Look for printers and scanners once (mDNS).")
+    ap.add_argument("--iface", required=True, help="this machine's LAN address, like 192.168.1.20")
+    ap.add_argument("--mode", choices=("group", "legacy", "both"), default="both")
+    ap.add_argument("--secs", type=float, default=4.0)
+    args = ap.parse_args(argv)
+    modes = ("group", "legacy") if args.mode == "both" else (args.mode,)
+    result = browse(args.iface, max(0.5, min(args.secs, 30.0)), modes)
+    for svc in result.services:
+        print(json.dumps({
+            "heard_by": sorted("group (multicast)" if k == "multicast" else "legacy (unicast)" for k in svc.heard_on),
+            "service": svc.service_type, "name": svc.label, "address": svc.address, "port": svc.port,
+        }))
+    for err in result.errors:
+        print(json.dumps({"error": err}))
+    by = {k: sum(1 for s in result.services if k in s.heard_on) for k in ("multicast", "unicast")}
+    print(json.dumps({"modes": list(modes), "services": len(result.services),
+                      "heard_by_group": by["multicast"], "heard_by_legacy": by["unicast"]}))
+    return 0 if result.services else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

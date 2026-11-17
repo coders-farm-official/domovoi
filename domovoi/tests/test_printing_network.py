@@ -83,6 +83,151 @@ def test_srv_before_ptr_still_pairs_up():
     assert svc.heard_on == {"unicast", "multicast"}
 
 
+# ─── mDNS: both ways in one window, on fake sockets (no traffic) ─────────
+
+
+class _FakeUdp:
+    """Stands in for a UDP socket: records options, binds and sends; after
+    its first send, hands back the answers queued for its kind."""
+
+    made: list["_FakeUdp"] = []
+    answers: dict[str, list[tuple[bytes, str]]] = {}
+    refuse_5353 = False
+
+    def __init__(self, *_a):
+        self.opts: list[tuple[int, int]] = []
+        self.bound = None
+        self.opts_at_bind: list[tuple[int, int]] = []
+        self.sent: list[tuple[bytes, tuple[str, int]]] = []
+        self.queue: list[tuple[bytes, tuple[str, int]]] = []
+        self.closed = False
+        _FakeUdp.made.append(self)
+
+    @property
+    def kind(self) -> str:
+        return "group" if self.bound and self.bound[1] == mdns.PORT else "legacy"
+
+    def setsockopt(self, level, opt, _val):
+        self.opts.append((level, opt))
+
+    def bind(self, addr):
+        if addr[1] == mdns.PORT and _FakeUdp.refuse_5353:
+            raise OSError(98, "Address already in use")
+        self.bound = addr
+        self.opts_at_bind = list(self.opts)
+
+    def setblocking(self, _flag):
+        pass
+
+    def sendto(self, data, addr):
+        if not self.sent:
+            self.queue.extend((pkt, (src, 5353)) for pkt, src in _FakeUdp.answers.get(self.kind, []))
+        self.sent.append((data, addr))
+
+    def recvfrom(self, _n):
+        return self.queue.pop(0)
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def fake_net(monkeypatch):
+    import time as _time
+    import types
+
+    _FakeUdp.made = []
+    _FakeUdp.answers = {}
+    _FakeUdp.refuse_5353 = False
+    fake_socket = types.SimpleNamespace(**{k: getattr(socket, k) for k in dir(socket) if k.isupper()})
+    fake_socket.socket = _FakeUdp
+    fake_socket.inet_aton = socket.inet_aton
+    fake_socket.inet_ntoa = socket.inet_ntoa
+    fake_socket.inet_ntop = socket.inet_ntop
+
+    def fake_select(r, _w, _x, _t):
+        _time.sleep(0.005)
+        return [s for s in r if s.queue], [], []
+
+    monkeypatch.setattr(mdns, "socket", fake_socket)
+    monkeypatch.setattr(mdns, "select", types.SimpleNamespace(select=fake_select))
+    return _FakeUdp
+
+
+def test_group_and_legacy_ask_in_the_same_window(fake_net):
+    """2026-11-16 follow-up: the two ways are not a fallback chain. Both
+    send at once, so a window shorter than the 1 s resend still sends
+    each once; group mode shares 5353, legacy never binds it."""
+    res = mdns.browse("192.168.1.20", 0.3)
+    group, legacy = fake_net.made
+    assert group.kind == "group" and group.bound == ("", mdns.PORT)
+    assert (socket.SOL_SOCKET, socket.SO_REUSEADDR) in group.opts_at_bind
+    assert legacy.bound == ("192.168.1.20", 0)
+    assert [a for _d, a in group.sent] == [(mdns.GROUP, mdns.PORT)]
+    assert [a for _d, a in legacy.sent] == [(mdns.GROUP, mdns.PORT)]
+    assert group.closed and legacy.closed
+    assert res.services == [] and res.errors == []
+
+
+def test_5353_held_exclusively_still_finds_by_legacy_unicast(fake_net):
+    fake_net.refuse_5353 = True
+    fake_net.answers = {"legacy": [(_answer(), "192.168.1.50")]}
+    res = mdns.browse("192.168.1.20", 0.3)
+    assert len(fake_net.made) == 2 and fake_net.made[0].bound is None and fake_net.made[0].closed
+    assert any(e.startswith("multicast: couldn't listen on port 5353") for e in res.errors)
+    [svc] = res.services
+    assert svc.heard_on == {"unicast"} and svc.address == "192.168.1.50"
+
+
+def test_each_socket_says_what_it_heard(fake_net):
+    fake_net.answers = {
+        "group": [(_answer(), "192.168.1.50")],
+        "legacy": [(_answer(instance="Den Printer._ipp._tcp.local", host="den.local", ip="192.168.1.51"),
+                    "192.168.1.51")],
+    }
+    res = mdns.browse("192.168.1.20", 0.3)
+    heard = {s.label: s.heard_on for s in res.services}
+    assert heard == {"Office Printer": {"multicast"}, "Den Printer": {"unicast"}}
+    assert res.heard == {"192.168.1.50": {"multicast"}, "192.168.1.51": {"unicast"}}
+
+
+def test_the_by_hand_look_prints_what_each_way_heard(monkeypatch, capsys):
+    import json
+
+    asked = {}
+
+    def fake_browse(iface, secs, modes):
+        asked.update(iface=iface, secs=secs, modes=modes)
+        return mdns.collect([(_answer(), "192.168.1.50", "multicast"), (_answer(), "192.168.1.50", "unicast")])
+
+    monkeypatch.setattr(mdns, "browse", fake_browse)
+    assert mdns.main(["--iface", "192.168.1.20", "--mode", "group", "--secs", "4"]) == 0
+    assert asked == {"iface": "192.168.1.20", "secs": 4.0, "modes": ("group",)}
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert lines[0]["heard_by"] == ["group (multicast)", "legacy (unicast)"]
+    assert lines[0]["address"] == "192.168.1.50" and lines[0]["port"] == 631
+    assert lines[-1] == {"modes": ["group"], "services": 1, "heard_by_group": 1, "heard_by_legacy": 1}
+    monkeypatch.setattr(mdns, "browse", lambda *_a: mdns.BrowseResult([], {}, ["multicast: couldn't listen"]))
+    assert mdns.main(["--iface", "192.168.1.20"]) == 1
+
+
+def test_mdns_py_runs_on_its_own():
+    """The P0-A check copies this one file into a throwaway VM: standard
+    library imports only."""
+    import ast
+    import sys
+    from pathlib import Path
+
+    tree = ast.parse(Path(mdns.__file__).read_text(encoding="utf-8"))
+    mods = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            mods |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            mods.add((node.module or "").split(".")[0])
+    assert mods <= set(sys.stdlib_module_names) | {"__future__"}, mods
+
+
 # ─── The LAN-only check ──────────────────────────────────────────────────
 
 

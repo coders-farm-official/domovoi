@@ -544,7 +544,8 @@ class PrintingHandler(Handler):
         if not fresh:
             if any(f["already_added"] for f in result["found"]):
                 return self._reply(ctx, "Every printer I can find is already set up.")
-            return self._reply(ctx, "I couldn't find a printer. Make sure it's switched on and on the same Wi-Fi, "
+            return self._reply(ctx, "I couldn't find a printer. Domovoi works with Wi-Fi and network printers, "
+                                    "not USB ones. Make sure it's switched on and on the same Wi-Fi, "
                                     "or add it by its address in Settings, Printers and scanners.")
         if len(fresh) == 1:
             f = fresh[0]

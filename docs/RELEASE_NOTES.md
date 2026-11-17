@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Printers: "network printers only" said where you add one
+
+- **What changed.** Domovoi has only ever printed to Wi-Fi and network
+  printers (AirPrint, IPP Everywhere or Mopria); USB printers, printers that
+  need a maker's driver, the Windows print spooler and a Linux box's own
+  CUPS queues are not supported, on any host. That is now said where people
+  add a printer, not only in the manual: under **Add by address** in
+  **Settings → Household → Printers & scanners**, in the answer when a typed
+  address isn't a printer ("Nothing at that address answered like a printer
+  or a scanner. Domovoi works with Wi-Fi and network printers…"), and in
+  the spoken answer when "set up the printer" finds none.
+- **What to know.** Looking for printers asks both ways at once, as it
+  already did: from UDP 5353 (answers come back to the group, which the
+  Windows install's WSL already lets in) and from an ordinary port. Nothing
+  changed in what it sends. `domovoi/printing/mdns.py` can now be run on
+  its own (`python3 mdns.py --iface <this machine's LAN address> --mode
+  group|legacy|both`) to see which way a network answers; it only asks,
+  never announces.
+
 ## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
 
 - **What changed.** Plugins can turn text into speech without playing it

@@ -183,6 +183,7 @@ async def test_something_that_is_not_a_printer_is_not_saved(house):
                              headers=house["device"])
             assert r.status_code == 409
             assert "answered like a printer" in r.json()["detail"]
+            assert "USB printers aren't supported" in r.json()["detail"]
             assert (await c.get("/v1/printers", headers=house["device"])).json()["printers"] == []
     finally:
         server.close()

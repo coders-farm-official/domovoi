@@ -2601,8 +2601,9 @@ printer itself, and never fetched by the server.
 **Discovery.** One 3-second mDNS look when Settings → Printers & scanners opens, on
 "Look again", and for "set up the printer". It binds UDP 5353 with
 `SO_REUSEADDR` beside any other responder and joins 224.0.0.251 on the LAN
-interface, and also sends a legacy-unicast query from an ephemeral port.
-It never answers anyone. On the Windows install, WSL's own Hyper-V rule
+interface, and in the same 3 seconds also sends a legacy-unicast query
+from an ephemeral port (both at once, not one after the other, so either
+failing costs nothing). It never answers anyone. On the Windows install, WSL's own Hyper-V rule
 already lets multicast answers in, so no firewall rule was added. The /24
 sweep (TCP 631, then one IPP question; eSCL on 80/443 of what answered)
 runs only when someone presses "Look again" or says it, at most once a

@@ -30,6 +30,13 @@ CERT_MESSAGE = (
     "{the}'s security certificate changed. An admin needs to check it. "
     "Firmware updates and factory resets also cause this."
 )
+# Said when a typed address isn't a printer. It also tells the household
+# the one rule that most often explains it (owner, 2026-11-16: network
+# printers only, ever; a USB printer shared by a PC never answers IPP).
+NOT_A_PRINTER = (
+    "Nothing at that address answered like a printer or a scanner. Domovoi works with Wi-Fi and network "
+    "printers (AirPrint, IPP Everywhere or Mopria). USB printers aren't supported."
+)
 STATUS_FRESH_SEC = 50.0
 OFFLINE_AFTER_MISSES = 2
 
@@ -101,7 +108,7 @@ async def probe_ipp(target: lan_target.Target, *, timeout: float = 8.0) -> tuple
     attrs = await client.get_printer_attributes()
     uuid = str(ipp.first(attrs, "printer-uuid", "") or "")
     if not uuid:
-        raise DeviceError("Nothing at that address answered like a printer or a scanner.")
+        raise DeviceError(NOT_A_PRINTER)
     return attrs, client.last_cert_sha256
 
 
@@ -110,11 +117,11 @@ async def probe_escl(target: lan_target.Target, *, timeout: float = 8.0) -> tupl
     resp = await http11.request(ep, "GET", target.path.rstrip("/") + "/ScannerCapabilities",
                                 max_bytes=escl.MAX_XML, timeout=timeout)
     if resp.status != 200:
-        raise DeviceError("Nothing at that address answered like a printer or a scanner.")
+        raise DeviceError(NOT_A_PRINTER)
     try:
         return escl.parse_capabilities(resp.body), resp.cert_sha256
     except escl.EsclError as e:
-        raise DeviceError("Nothing at that address answered like a printer or a scanner.") from e
+        raise DeviceError(NOT_A_PRINTER) from e
 
 
 async def add_device(
@@ -140,7 +147,7 @@ async def add_device(
             errors.append(e)
             escl_target = None
     if attrs is None and scan_caps is None:
-        raise DeviceError("Nothing at that address answered like a printer or a scanner.")
+        raise DeviceError(NOT_A_PRINTER)
     caps = caps_mod.summarize(attrs) if attrs is not None else {}
     uuid = caps.get("uuid") or (scan_caps.uuid if scan_caps else "")
     existing = await store.find_by_uuid(uuid) if uuid else None
