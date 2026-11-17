@@ -4,6 +4,17 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
+
+- **What changed.** **Settings → Household → Queue history** (an admin
+  only, on the dashboard) lists every Up next session, newest first, with
+  the songs it picked in order and the reason for each, and downloads a
+  session's picks as a CSV or JSON file. It only reads: nothing there ends
+  or deletes a session.
+- **What to know.** An ended session and its picks are deleted after a
+  while (the page says when for each). Under "Keep listening history:
+  Don't keep" the page still shows the picks but not how long each played.
+
 ## 1.4.0 (unreleased) — Documents: Download gives a Word file
 
 - **What changed.** In Files, Documents, **Download** on a document made in
@@ -13,10 +24,12 @@ a way that would otherwise get reported as a bug.
   several files and choosing **Download as zip** now puts such documents in
   the zip as `.docx` too. Markdown, text, spreadsheets, PDFs and pictures
   download as before.
-- **Document editor: paste a picture.** Pasting a picture from the clipboard
-  (a screenshot, "Copy image") or dropping a picture file onto the page puts
-  it in at the cursor, the same as Insert photo. Text copied together with a
-  picture pastes as before.
+- **Document editor: paste a picture.** Pasting and dropping in the
+  editor are tidied: a picture pasted from the clipboard (a screenshot,
+  "Copy image") or a picture file dropped onto the page goes in at the
+  cursor, the same as Insert photo. Text copied together with a picture
+  pastes as before. (Pasting a picture already worked; this is
+  housekeeping, and the Download is the real fix.)
 - **What to know.** The phone apps' own Files lists still save a formatted
   document as `.html`; the zip is fixed on the server for them.
 
@@ -48,7 +61,7 @@ a way that would otherwise get reported as a bug.
   own player does the same and says what happened. Playing a song whose
   row or file is gone says so in plain words ("That song isn't in the
   library any more.") instead of an internal error.
-- **An offline room no longer looks like it's playing.** Settings → Rooms
+- **An offline room no longer looks like it's playing.** Settings → Household → Rooms
   showed an offline room's song with its progress bar still counting (its
   player on the server plays on to nobody). It now says the room is offline
   and its music isn't reaching it.
@@ -66,7 +79,7 @@ a way that would otherwise get reported as a bug.
   --no-remove`, on fresh package lists only), and a failed run records the
   reason in plain words, which the room's log and its card show. The card
   no longer promises that a reboot installs them. Rooms get this with their
-  next code upgrade from Settings → Rooms.
+  next code upgrade from Settings → Household → Rooms.
 - **Wi-Fi recovery fits the room's network.** A room whose Wi-Fi dropped
   used `wpa_cli` even where NetworkManager runs the network, which can't
   work there, so only the watchdog's restart brought it back. The recovery
@@ -152,7 +165,7 @@ a way that would otherwise get reported as a bug.
   codes behind the other's back. Once one server approves it, the device
   withdraws its request from the others. Details and the threat model:
   [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
-- **What you see.** Typing the code on **Settings → Rooms** now says "Code
+- **What you see.** Typing the code on **Settings → Household → Rooms** now says "Code
   sent" for such a device, and the room appears within about ten seconds,
   when the device next checks in — not at the click. A code the device did
   not accept says so on its card; type it again.
@@ -224,21 +237,23 @@ signed out and says "Signed out after 1 hour without admin activity".
 
 ### Up to five wake words per room
 
-* **A room can wake on more than one word.** In a room's **Settings**
-  (the room drawer, "wake word"), an admin with the room online can **Add
-  another wake word**, reorder the words and remove them, then **Save**:
+* **A room can wake on more than one word.** In a room's
+  drawer, on the **Overview** tab ("wake word"), an admin with the room
+  online can **Add another wake word**, reorder the words and remove them,
+  then **Save**:
   the room restarts to load them. Up to 5 per room, main word first. Most
   homes need only one, and nothing changes for a room nobody edits. The
   page says it plainly: each extra word makes accidental wake-ups a little
   more likely (every word fires on its own, at its own threshold).
 * **As many as the device can run.** A satellite now says in its hello how
   many words it runs at once (`wake_words_max`): a **Pi Zero 2 W runs 3**,
-  a bigger Pi or a spare PC 5. The server never sends more, and the
-  dashboard offers no "add" past that and says why instead. Satellite
-  software from before 1.4.0, and the phone apps until they learn it, run
-  one word: they are sent the main word only, in the frame they already
-  understand, and keep working. Upgrade a room (Settings → Rooms →
-  Upgrade) to give it more.
+  a bigger Pi or a spare PC 5, and a phone in room mode says its own number (the
+  Android app: 5, or 3 on a 32-bit or small-memory phone). The server
+  never sends more, and the dashboard offers no "add" past that and says
+  why instead. Satellite software from before 1.4.0 runs one word: it is
+  sent the main word only, in the frame it already understands, and keeps
+  working. Upgrade a room (Settings → Household → Rooms → the room's
+  **Overview** tab → Upgrade) to give it more.
 * **Which word woke the room** is kept with each turn
   (`conversation_log.wake_word`) and in the core's log ("woken by …"); a
   room's history names the word once more than one word has woken it,
@@ -259,7 +274,7 @@ signed out and says "Signed out after 1 hour without admin activity".
 ### Videos in chat (dashboard)
 
 - **What changed.** A home-server chat takes one short video a message
-  (MP4, MOV or WebM, up to 3 minutes and 2 GB) from the dashboard's
+  (MP4, MOV or WebM, up to 3 minutes and 2 GiB) from the dashboard's
   paperclip. The server watches it in the background ("Watching your
   video… about 4 minutes left", with stop) while you keep chatting, then
   writes a short summary into the chat and answers questions about it from
@@ -5036,7 +5051,8 @@ are unchanged.
   `/v1/satellite-windows/files/…`; otherwise a laptop downloads the same
   pinned files itself.
 * **Never on the PC that runs the server**: the installer refuses there.
-  "Use this PC as a room" will come with the server's own tray.
+  The PC that runs the server can't be a room yet: nothing in its tray
+  does that.
 * **A tray icon** (filled red while audio leaves for the server, mute, the
   approval code, Allow / Not now for "ask me" with every change listed),
   power questions (plugged-in sleep and lid, each default No, undone on

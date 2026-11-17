@@ -172,8 +172,8 @@ outright ([Unsigned](WINDOWS_HOST.md#unsigned)).
 Not with the spare-device installer: it refuses on the server PC. The
 server runs whether or not anyone is signed in, a room needs a signed-in
 account for the microphone, and two programs would compete for the sound
-devices. "Use this PC as a room" is planned as part of the server's own
-tray icon on Windows.
+devices. The server PC can't be a room yet; nothing in the server's tray
+icon on Windows does that.
 
 ## Can another device on my network pretend to be one of my rooms?
 
