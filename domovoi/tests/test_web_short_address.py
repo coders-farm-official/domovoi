@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -143,7 +144,7 @@ def test_a_path_that_looks_like_a_host_stays_a_path() -> None:
         status, h, _ = ask(get(target, "domovoi.local"))
         assert status == 302
         assert h["location"] == "http://domovoi.local:6369" + target
-        assert h["location"].startswith("http://domovoi.local:6369/")
+        assert urlsplit(h["location"]).netloc == "domovoi.local:6369"
 
 
 def test_no_host_or_two_hosts_is_refused() -> None:
@@ -387,8 +388,9 @@ def test_trusted_hosts_exact_names_count_patterns_dont(tmp_path, monkeypatch) ->
     monkeypatch.setattr(sa, "configured_hosts", lambda: ("home.example.net", "*.example.org"))
     svc = _svc(tmp_path, _free_port())
     svc.set_lan_labels([])
-    assert "home.example.net" in svc.names()
-    assert not any("example.org" in n for n in svc.names())
+    names = set(svc.names())
+    assert {"home.example.net"} <= names
+    assert not any(n == "example.org" or n.endswith(".example.org") for n in names)
 
 
 def test_children_dont_inherit_the_capability_call_is_harmless() -> None:

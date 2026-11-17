@@ -74,7 +74,7 @@ const SHELL_ASSETS = [
   '/styles.css',
   '/auth.js',
   '/data.js',
-  // The header's address to share (components.jsx ShareAddressButton).
+  // The address to share in the header (components.jsx ShareAddressButton).
   '/share_address.js',
   '/components.jsx',
   '/player.jsx',

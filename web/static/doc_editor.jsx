@@ -1314,15 +1314,18 @@
   };
   /* True when the clipboard's HTML is just picture(s) in wrappers (what
    * "Copy image" on a web page puts there), with no words or tables. */
+  /* Repeat a removal until nothing changes, so a pattern that only appears
+   * once an inner match is gone (`<scr<script></script>ipt>`) goes too. */
+  const removeAll = (s, re) => { let prev; do { prev = s; s = s.replace(re, ''); } while (s !== prev); return s; };
   const htmlIsOnlyPictures = (html) => {
-    const src = String(html || '')
-      .replace(/<!--[\s\S]*?-->/g, '').replace(/<(head|style|script|title)\b[\s\S]*?<\/\1>/gi, '');
+    const src = removeAll(removeAll(String(html || ''), /<!--[\s\S]*?-->/g),
+      /<(head|style|script|title)\b[\s\S]*?<\/\1>/gi);
     if (!src.trim()) return true;
     const ok = /^(html|body|meta|img|picture|source|p|div|span|br|figure|a)$/i;
     let bad = false;
     src.replace(/<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi, (m, tag) => { if (!ok.test(tag)) bad = true; return ''; });
     if (bad) return false;
-    const text = src.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/gi, ' ').trim();
+    const text = removeAll(src, /<[^>]*>/g).replace(/[<>]/g, '').replace(/&nbsp;|&#160;/gi, ' ').trim();
     return !text;
   };
   // PASTE-HELPERS-END
