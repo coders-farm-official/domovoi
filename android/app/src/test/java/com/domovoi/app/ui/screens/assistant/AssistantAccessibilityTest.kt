@@ -141,7 +141,7 @@ class AssistantAccessibilityTest {
     }
 
     @Test fun theRoomScreensAnnounceTheirStateAndHeadings() {
-        val display = source("roommode/RoomModeActivity.kt")
+        val display = source("roommode/RoomDisplay.kt")
         // The ring and the mic chip are one node each, read out as they change.
         assertEquals(2, Regex("""clearAndSetSemantics \{[^}]*liveRegion = LiveRegionMode.Polite""").findAll(display).count())
         assertTrue("exit is reachable from a screen reader's actions", display.contains("CustomAccessibilityAction(EXIT_ACTION)"))
