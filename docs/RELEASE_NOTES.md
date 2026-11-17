@@ -4,6 +4,16 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
+
+- **What changed.** Plugins can turn text into speech without playing it
+  (`sdk.speech.render(text, room_id=None)`), in the voice that room's own
+  replies use (no room: the server's voice), and can read which model the
+  house uses for questions (`core_config.ollama_url` / `ollama_model`; the
+  AI features switch still applies). The Sleep plugin's Storytime needs it.
+- **What to know.** A plugin that asks for SDK 1.9 won't install on an older
+  server: update Domovoi first.
+
 ## 2026-11-16 — 1.3.0
 
 Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows
