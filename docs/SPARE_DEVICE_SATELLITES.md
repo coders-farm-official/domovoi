@@ -1,14 +1,17 @@
 # Satellites on spare devices
 
-A room doesn't need a Raspberry Pi. A spare **Linux laptop or mini PC** can
-be one, a **Windows laptop or PC** too, an old **phone or tablet**
-through the Android app's room mode, and an **old computer** you are done
-with (a PC, a laptop, an Intel Mac) from a **USB stick** your server makes
+A room is a place in the house; its satellite is the device that listens
+and plays there, and today a room has exactly one. The satellite doesn't
+have to be a Raspberry Pi. A spare **Linux laptop or mini PC** can be one,
+a **Windows laptop or PC** too, an old **phone or tablet** through the
+Android app's room mode (which turns it into a satellite for a room: voice,
+plus the room screen), and an **old computer** you are done with (a PC, a
+laptop, an Intel Mac) from a **USB stick** your server makes
 ([below](#old-computers-usb-stick)). Each speaks the same protocol to the
-Domovoi server as a Pi, joins through the same approval code, and becomes a
-room like any other: wake word, answers, music, intercom, timers.
+Domovoi server as a Pi, joins through the same approval code, and gives its
+room everything a Pi does: wake word, answers, music, intercom, timers.
 
-Laptops, PCs and phones work as rooms like a Pi. The one exception is the
+Laptops, PCs and phones work as satellites like a Pi. The one exception is the
 **USB stick for old computers**, which is still a preview (see its section
 below).
 
@@ -19,7 +22,7 @@ device", "The local control channel"); the security model:
 
 ## Before you start, whatever the device
 
-A spare device makes a good room only if it stays awake, stays cool and
+A spare device makes a good satellite only if it stays awake, stays cool and
 doesn't wear out its battery.
 
 | | Laptops and mini PCs | Phones and tablets |
@@ -29,7 +32,7 @@ doesn't wear out its battery.
 | **Heat** | On a hard surface with its vents clear, never closed on a cushion. | Out of direct sun and off soft surfaces while it charges. |
 | **Power** | Several to tens of watts (a Pi Zero 2 W uses about one). | A watt or two on the charger. |
 | **Sound** | A laptop's mics are tuned for someone in front of it: a counter or a desk works, across the room is weak. A USB speakerphone helps a lot. | Fine on a nightstand or a counter. |
-| **Privacy** | Use a fresh user account (or a fresh Linux install) just for the satellite. | Factory-reset it and use it only as a room. |
+| **Privacy** | Use a fresh user account (or a fresh Linux install) just for the satellite. | Factory-reset it and use it only as a satellite. |
 
 ## How a spare device joins
 
@@ -54,7 +57,7 @@ doesn't wear out its battery.
    six-digit **approval code** on its screen.
 4. Back in **Settings → Household → Rooms**, the device is under **waiting for
    approval**: type its code and press **approve**. That is the moment it
-   becomes a room.
+   becomes that room's satellite.
 
 The address in the code must be on your home network (a private address,
 or a name ending in `.local`, `.home.arpa`, `.lan` or `.internal`): a code
@@ -65,7 +68,7 @@ address it found isn't usable (a server with several network cards), tick
 
 A spare device always knows which server it belongs to (the enrolment code
 pins the server's key), so it asks only that one. (Asking every server in
-the house, coming in 1.4.0, is for Raspberry Pi rooms set up through the
+the house, coming in 1.4.0, is for Raspberry Pi satellites set up through the
 Wi-Fi portal with the server address left blank:
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).)
 If a device cannot join for a reason only the server knows (it reached the
@@ -88,9 +91,9 @@ needs it, and the installer says so before it downloads anything. An older Debia
 needs nothing extra: see [Older Linux, and Fedora, openSUSE,
 Arch](#older-linux-and-fedora-opensuse-arch) below.
 
-**An old Windows 10 laptop** can be a room as it is
+**An old Windows 10 laptop** can be a satellite as it is
 ([Windows](#windows-laptops-and-pcs), below). One that can't run Windows 11
-and will only ever be a room makes a better one on Linux: write the Debian
+and will only ever be a satellite makes a better one on Linux: write the Debian
 or Ubuntu installer to a USB stick
 (their download pages explain how), boot from it, and install. Create a
 user account just for the satellite while you're at it.
@@ -214,7 +217,7 @@ updates, so prefer Debian 12 on a laptop you reinstall anyway.
 The code is on the terminal, in a pop-up ("Waiting for approval, code
 123456"), and in the tray. Type it into the dashboard's approval card. The
 pop-up then says **Approved: this device is now the Kid's Room** and the
-room answers to the household's wake word ("Domovoi" on a new install;
+laptop answers to the household's wake word ("Domovoi" on a new install;
 "Hey Jarvis" while the server doesn't have that model).
 
 Missed it? `cd ~/.local/share/domovoi-satellite && venv/bin/python -m
@@ -303,7 +306,7 @@ calls and chat mode then work for this room. Leave it off for built-in
 speakers — a wrong "true" lets a call hear itself.
 
 Sound with nobody signed in: the installer puts the account in the
-`audio` group; for a laptop used only as a room, turning on automatic
+`audio` group; for a laptop used only as a satellite, turning on automatic
 sign-in for its account is the most reliable.
 
 ### Keeping it awake, and the battery
@@ -322,12 +325,12 @@ The installer's three questions:
 The dashboard shows the battery in the room's health block and suggests a
 charge limit when it sits at 98 % or more on the charger.
 
-### What a laptop room can and can't do
+### What a laptop satellite can and can't do
 
 It does what a Pi does with its voice: the wake word, answers, music
 (through its speakers), timers and reminders, announcements, intercom
 *into* it, wake-word recording and pushes, the live log, settings from the
-dashboard. **Guests** on your Wi-Fi can control a laptop room's music while
+dashboard. **Guests** on your Wi-Fi can control its room's music while
 it plays, like any other room's ([FAQ](FAQ.md#can-a-guest-change-the-music)).
 
 It does not do Pi things: no LED ring, no mic-gain tuning, no Wi-Fi
@@ -402,11 +405,12 @@ music player, which the container guard would otherwise keep expecting.
 
 ## Phones and tablets (room mode)
 
-An old phone or tablet on its charger can be a **room**: it listens for the
+**Room mode** turns an old phone or tablet on its charger into a
+**satellite for a room** (voice, plus the room screen): it listens for the
 wake word, sends what you say after it to your Domovoi server, speaks the
 answer, plays the room's music and takes drop-ins and announcements, like a
-Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
-**room mode**, with its own home-screen icon, **Domovoi Room**.
+Raspberry Pi satellite. It runs inside the normal Domovoi Android app,
+with its own home-screen icon, **Domovoi Room**.
 
 ### What you need
 
@@ -414,7 +418,7 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
 |---|---|
 | A phone or tablet | Android 8.0 or later, 32-bit or 64-bit (the join page offers the app for most phones first and the 32-bit one, for older or cheaper phones, under it: [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)). About 1-2 GB of RAM is enough; room mode loads none of the on-device assistant's libraries. |
 | The Domovoi app | From your own server: the QR code's page offers it. The server gets it when Domovoi is installed ([below](#getting-the-app-onto-the-server)). |
-| Its charger | A room listens all day. Turn on the phone's battery-protection (charge limit) setting if it has one, and never use a phone whose battery has swollen. |
+| Its charger | A satellite listens all day. Turn on the phone's battery-protection (charge limit) setting if it has one, and never use a phone whose battery has swollen. |
 | Your home Wi-Fi | Room mode uses Wi-Fi (or a wired dock) only, never mobile data: with no Wi-Fi it is offline. |
 | The server's wake-word models | The phone runs the same openWakeWord models as a Pi, fetched from your server. On the dashboard, **Settings → Household → Rooms → prepare a room's SD card → Refresh caches** once (it downloads them; it needs the internet that one time). A Pi you prepared already did this. |
 | A room code | On the dashboard, **Settings → Household → Rooms → add a spare device**: a QR code (a link to your server's join page with the code in it) and a line of text that starts `domovoi-room:1?…`. It names your server, the server's key and the room. It holds no secret. |
@@ -470,19 +474,19 @@ button.
    **check now** to skip the wait).
 8. Say it, then "what time is it?".
 
-A household phone (not a room) gets the app the same way: **Settings →
+A household phone (not in room mode) gets the app the same way: **Settings →
 Household → Phones & browsers → get the Domovoi app** shows a QR code and a link to the same
 page without a room code; open it on the phone, install, then open
 Domovoi, which finds your server on the Wi-Fi.
 
 The phone starts on `hey_jarvis` and the server then gives it the
 household's wake word ("Domovoi" on a new install), as it does every new
-room; a wake word you train and push from the dashboard (Settings → Voice →
+satellite; a wake word you train and push from the dashboard (Settings → Voice →
 Wake words) reaches the phone the same way it reaches a Pi. From 1.4.0 a
-phone room can wake on up to five words, like a Pi (three on a 32-bit or
+phone in room mode can wake on up to five words, like a Pi (three on a 32-bit or
 small-memory phone): see [More than one wake word in a
 room](SATELLITE_HARDWARE.md#more-than-one-wake-word-in-a-room). Phone and
-PC rooms start at the same wake defaults as a Pi: **Wake sensitivity** 0.7
+PC satellites start at the same wake defaults as a Pi: **Wake sensitivity** 0.7
 and **Wake confirmation** 2, both in the room's Settings tab (set
 confirmation to 1 if the room misses you from across it).
 
@@ -502,10 +506,10 @@ words under it, and:
 - **exit room mode**: hold it, then unlock with the phone's PIN, pattern or
   fingerprint, and choose to **keep this room** (come back to it later) or
   **forget this room** (its key is deleted from the phone). A phone used
-  only as a room may have no screen lock: Exit then asks for a
+  only as a satellite may have no screen lock: Exit then asks for a
   confirmation, which anyone can give. A phone that is also paired with
-  your household **needs a screen lock to be a room**: without one room
-  mode does not start, and if the lock is removed while it runs the room
+  your household **needs a screen lock for room mode**: without one room
+  mode does not start, and if the lock is removed while it runs, room mode
   stops listening and asks for one.
 
 The screen moves its contents a few pixels every minute so a display left
@@ -516,7 +520,7 @@ pause, resume, skip and back) and the room's timers and alarms counting
 down, with a stop button when one goes off. Reminders never appear on it:
 anyone in the room can read it.
 
-### What a phone room does
+### What a phone in room mode does
 
 | | |
 |---|---|
@@ -526,18 +530,18 @@ anyone in the room can read it.
 | Timer, reminder and intercom announcements | yes |
 | The room's music | yes, in its own player (not the app's); paused for an answer, resumed by the server after |
 | Volume ("turn it up") | yes: the phone's media volume |
-| Drop-ins | on phones with an echo canceller only (most phones; the app checks). The room says so to the server, which refuses a drop-in otherwise |
+| Drop-ins | on phones with an echo canceller only (most phones; the app checks). The phone says so to the server, which refuses a drop-in otherwise |
 | Chat mode | no (not in this version) |
 | Restart, upgrade, live log, wake-word clip recording on the dashboard | no: the app updates from its store or a new APK; the dashboard greys these out for an "Android room" |
 | Settings tab | only the two battery switches below; everything else is set on the phone |
 
 The dashboard shows the room with an **Android room** badge, its battery
 and % on the card (with a charging marker), and its health block shows the
-battery and **mic blocked** when Android is handing the room silence.
+battery and **mic blocked** when Android is handing the phone silence.
 
 ### The battery
 
-Keep the phone on its charger: rooms are always on. The phone sends its
+Keep the phone on its charger: satellites are always on. The phone sends its
 battery with its health sample once a minute, and again when the charger
 goes on or off or the level moves 5 % (1 % under 20 %, off its charger).
 Off its charger, at **20 %** and again at **10 %**, once per charge:
@@ -546,10 +550,10 @@ Off its charger, at **20 %** and again at **10 %**, once per charge:
   and the Domovoi app on the household's phones notifies "Den is at 15%.
   Plug it in." (**Room batteries** channel). The notification goes away
   once the room charges.
-- The room itself says "This is Den. My battery is low. Please plug me
+- The phone itself says "This is Den. My battery is low. Please plug me
   in." Not during the room's quiet hours (Settings → Advanced → Voice & speech, or
   the room's Settings tab); then only the notice and the notification go.
-- A phone room that went offline after a last report at 5 % or less, off
+- A phone in room mode that went offline after a last report at 5 % or less, off
   its charger, reads **probably out of battery** instead of a plain
   offline line.
 
@@ -577,7 +581,7 @@ server. Pis and laptops have none of this.
 
 ### A phone that is also your household phone
 
-You can turn your own phone into a room for a while. Then:
+You can turn your own phone into a room's satellite for a while. Then:
 
 - the normal app is **locked** (no files, browsing, chat, assistant)
   until you exit room mode with the phone's unlock;
@@ -585,9 +589,9 @@ You can turn your own phone into a room for a while. Then:
   request carries it while room mode is on, the app's player stops and its
   live connection to the server closes (timer alerts for the household
   stop reaching this phone until you exit);
-- the room has its **own key**, made on the phone, and the server knows
-  the room by it alone. Removing the room on the dashboard and forgetting
-  the phone as a household device are two separate things.
+- room mode has its **own key**, made on the phone, and the server knows
+  the satellite by it alone. Removing the room on the dashboard and
+  forgetting the phone as a household device are two separate things.
 
 ### When something is wrong
 
@@ -615,18 +619,18 @@ and what the phone holds in [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#a-room-pho
 ## Windows laptops and PCs
 
 A Windows 10 or 11 laptop or PC (64-bit, Intel or AMD, a processor from
-about 2009 or later, as for Linux) can be a room for
+about 2009 or later, as for Linux) can be a room's satellite for
 **the account that is signed in on it**: the satellite runs in that
 person's session, because that is where Windows lets a program use the
 microphone. Nothing is installed for other accounts, nothing needs an
 administrator, and **it stops when that account signs out** (it starts
-again at the next sign-in). A laptop that is only a room works best with
+again at the next sign-in). A laptop that is only a satellite works best with
 an account of its own that signs in automatically.
 
 **Not on the PC that runs your Domovoi server.** The installer refuses
 there (it looks for the server's Windows service, its install record, its
 data folder, a server's own files in your account, and a server answering on
-this PC). The server PC can't be a room yet; its own tray icon shows
+this PC). The server PC can't be a satellite yet; its own tray icon shows
 Domovoi's state, opens the dashboard and prepares Raspberry Pi satellite
 cards ([WINDOWS_HOST.md, The tray icon](WINDOWS_HOST.md#the-tray-icon)).
 
@@ -842,7 +846,7 @@ As on Linux (the table above). Either way the satellite runs as the
 signed-in account with that account's rights and nothing more: no
 administrator, no service, no scheduled task. With "automatic", your
 server's key can run code as that account — which is why a dedicated
-account is the better choice for a laptop that is only a room. Change it
+account is the better choice for a laptop that is only a satellite. Change it
 later in `%LOCALAPPDATA%\Domovoi\Satellite\.domovoi\config.toml`
 (`[pc] permissions`), then stop and start the satellite from the tray.
 
@@ -949,9 +953,9 @@ same question as on every Pi; see the wake-word notes).
 ## Old computers (USB stick)
 
 An old **64-bit PC, laptop or mini PC**, or an **Intel Mac from 2012 to
-2017**, can become a room that does nothing else: your Domovoi server makes
-a USB stick for the room, the computer starts from it, you type one word,
-and about half an hour later it is a room. No terminal, no password, no
+2017**, can become a satellite that does nothing else: your Domovoi server
+makes a USB stick for the room, the computer starts from it, you type one
+word, and about half an hour later it is that room's satellite. No terminal, no password, no
 account to make. The stick puts a fresh system on the computer
 ([Debian](https://www.debian.org/) 13, with no desktop) and the satellite
 on top of it, the same headless install a Linux mini PC gets.
@@ -972,7 +976,7 @@ real computers.
 | **Network** | A **network cable** from your router to the computer while it sets up (or a USB network adapter). Wi-Fi on the stick comes later, once it has been tried on real laptops; without a cable the stick says "plug in a network cable" before anything is erased. |
 | **Internet** | The computer downloads part of Debian (~155 MB) and the satellite's libraries while it sets up. |
 | **The stick** | 2 GB or more (everything on it is replaced; the image is about 793 MB). |
-| **The computer's disk** | 8 GB or more. An installed room uses about 1.6 GB. |
+| **The computer's disk** | 8 GB or more. An installed satellite uses about 1.6 GB. |
 | **Your server** | Linux, or the Windows install (its Linux side). It downloads Debian's installer image from Debian the first time (793 MB, kept for the next stick) and keeps each stick's image (about 800 MB, removable on the card); it needs `xorriso`, which the installer and updates install. |
 
 **Not suitable:** 32-bit-only PCs; tablets and netbooks with 32-bit UEFI
@@ -980,10 +984,10 @@ real computers.
 recognises them and stops); and, until a firmware setting is changed, the
 "Secured-core" PCs that refuse it (see Secure Boot below).
 
-**What it costs to run.** A room runs day and night. An old desktop tower
+**What it costs to run.** A satellite runs day and night. An old desktop tower
 draws about 30-80 W, $50-130 a year at US prices: more than a new Pi
 satellite costs. An old laptop (6-15 W, $10-25 a year) or a mini PC is the
-better room.
+better satellite.
 
 ### 1. Prepare the stick
 
@@ -1058,7 +1062,7 @@ one, then the largest. To be sure, unplug any other external disk first
 (an eSATA one can't be told from an internal one, nor a Thunderbolt one on
 some computers from before about 2019: see Known limits), and read the
 disk's name on the page before you type. It also says whether your
-Domovoi server answered (a server that is off just now is fine: the room
+Domovoi server answered (a server that is off just now is fine: the satellite
 keeps trying after it is set up). Anything but ERASE, three times, or **Go
 Back**: "Nothing was changed", and the computer turns off.
 
@@ -1067,7 +1071,7 @@ when the computer has no usable disk, its disks are joined together (LVM or
 RAID: the page names them), its processor is too old, it is a T2
 Mac, or it is not on the internet. If the computer is **already a room**
 (the stick was left in and it started from it again), the page says so:
-turn it off, take the stick out, and it stays that room.
+turn it off, take the stick out, and it stays that room's satellite.
 
 If it says **"Network autoconfiguration failed"** (Debian's own page, when
 no network answered at all): plug in the cable and choose **Retry network
@@ -1089,7 +1093,7 @@ room …" and turns off a minute later.
 
 - **Satellite updates** come from your server, signed by its key, as on a
   Pi: the stick installs with **automatic** permissions (this computer is a
-  room, not someone's laptop).
+  satellite, not someone's laptop).
 - **Debian's security updates** install every day by themselves
   (unattended-upgrades), and the computer restarts at **03:30** when one
   needs it (a new kernel).
@@ -1113,10 +1117,10 @@ signed by Microsoft with both its **2011** and its **2023** certificates.
 - **The boot loader is frozen.** Microsoft's 2011 certificate expired in
   June 2026 and new shims are signed with the 2023 one only; firmware that
   never got the 2023 certificate (no maker update, and Windows, which would
-  have brought it, is gone) would not start a room that an update moved to
-  such a shim, with nobody at a keyboard. So the room keeps the shim and
+  have brought it, is gone) would not start a satellite that an update moved to
+  such a shim, with nobody at a keyboard. So the satellite keeps the shim and
   GRUB the stick installed: their packages are held (`apt-mark hold`) and
-  kept out of the automatic updates, and nothing on the room changes the
+  kept out of the automatic updates, and nothing on the satellite changes the
   firmware's certificates (no fwupd). Kernels still update.
 - **The dashboard warns** on the room's health card ("firmware needs the
   2023 certificate") when Secure Boot is on and the firmware lacks
@@ -1163,7 +1167,7 @@ way.
 
 ### Reusing the computer, or retiring the room
 
-The room is the whole computer. To use it for something else, install
+The satellite is the whole computer. To use it for something else, install
 another system over it (or start it from a new stick for another room).
 Retire the room in the dashboard too (**Settings → Household → Rooms → the room →
 Retire room**).
@@ -1175,7 +1179,7 @@ Retire room**).
 | The computer starts as before | It didn't start from the stick: the boot-menu key (above), or USB first in its firmware settings. |
 | "Access Denied", "Secure Boot violation" | Secure Boot with Microsoft's third-party certificate off: see Secure Boot. |
 | "Plug in a network cable" | No internet: a cable from the router (or a USB network adapter), then start again. |
-| "This computer's processor is too old" | Older than about 2009: it can't be a room. |
+| "This computer's processor is too old" | Older than about 2009: it can't be a satellite. |
 | "There is no disk to put the room on" | No internal disk of 8 GB or more. |
 | "This computer's disks are joined together" | Its disk holds part of an LVM volume or a RAID, and so does another disk (a USB one counts). The stick erases only one disk. Unplug or take out the others, or wipe the ones you don't need first (see Known limits), then start again. |
 | "Something on this network tried to set up this computer" | A device on the network handed the installer setup answers (a "DHCP boot file"). Start again with a cable straight to your router. |

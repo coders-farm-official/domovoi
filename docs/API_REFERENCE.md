@@ -2041,8 +2041,8 @@ installed **Image Generation plugin** (Coders Farm,
 `domovoi-plugin-imagegen`), which manages a local ComfyUI engine
 (in-dashboard install + supervised process), curated model downloads,
 and its own Images page/history under `/api/plugins/imagegen/…`. The
-plugin declares the `imagegen` capability, which gates the Android
-Images screen.
+plugin declares the `imagegen` capability, which gates the apps' own
+Images screen (the plugin adds no code to the apps).
 
 | Method & path | Request | Purpose |
 |---|---|---|
