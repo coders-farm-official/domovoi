@@ -756,7 +756,7 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    `android/release.json` alone, and that GitHub has no tag
    `v<version>` yet.
    Refresh the public status pages in the same commit: the README's
-   "Status and roadmap" (**This release**, **Coming in**, **Previews**)
+   "Status and roadmap" (**This release**, **Coming in**)
    and `docs/ROADMAP.md` (move what shipped out of **Now**, **Next** and
    **Later**, and name the next work). The docs gates fail on a stale
    version in either (`domovoi/tests/test_version_copies.py`); whether the
