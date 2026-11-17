@@ -42,7 +42,6 @@ import asyncio
 import base64
 import json
 import logging
-import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -631,7 +630,7 @@ class Runner:
                     done.add(i)
                     continue
             jpeg = img.read_bytes()
-            said = await self.model_step(job, lambda: self.brains.describe(jpeg))
+            said = await self.model_step(job, lambda jpeg=jpeg: self.brains.describe(jpeg))
             job.note_time("frame_s", time.monotonic() - t0)
             await _save_row(job, "chat_video_frames", i, {"at_s": t, "description": _clean_said(said)})
             img.unlink(missing_ok=True)
