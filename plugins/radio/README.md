@@ -101,8 +101,7 @@ file, `~/.domovoi/plugins/radio.env` (in the home of the user the core
 runs as; on a server installed with the Windows installer that is inside
 its private Linux environment). The dashboard has no editor for plugin
 settings yet: edit the file, then restart the core. A `RADIO_*` variable
-in the core process's
-own environment overrides the file. `RADIO_*` lines in `domovoi/.env` are
+in the core process's own environment overrides the file. `RADIO_*` lines in `domovoi/.env` are
 **not** read — that file is the core's, and the core has no radio settings
 of its own. The interesting ones:
 
@@ -125,8 +124,7 @@ A track whose file the decoder refuses (or that gives no hashes) is marked at on
 
 Radio follows the server's internet answer (`INTERNET_ACCESS`, Settings →
 Internet; see `docs/INTERNET.md` in the main repository), which it reads
-through `sdk.connectivity` (SDK 1.4, so this plugin needs a core with SDK
-`>=1.4`).
+through `sdk.connectivity`.
 
 * **FM over an RTL-SDR keeps working** with no internet at all: "play 97.5
   FM", the FM stations you imported earlier, and the local-fingerprint
@@ -192,8 +190,10 @@ This plugin is the worked example the Domovoi plugin-dev guide walks
 through — it exercises every extension plane:
 
 * **voice**: a handler at priority band 280 with anchored fast paths,
-  per-path `offline_ok`, a reachable `fallback_offline`, and a
-  namespaced confirmation kind (`radio.station_choice`);
+  per-path `offline_ok`, a reachable `fallback_offline`, station names
+  matched with `domovoi.sdk.spoken_names`, and a namespaced choice
+  (`radio.station_choice`, in both `confirmation_kinds` and
+  `choice_kinds`) whose free-text reply is read with `domovoi.sdk.choices`;
 * **background work**: four poll workers, two connectivity-gated
   startup hooks, and an in-process hardware manager shared via
   `sdk.state`;
@@ -204,14 +204,20 @@ through — it exercises every extension plane:
 * **UI**: a web router at `/api/plugins/radio`, a zero-build JSX page
   registered through `window.DomovoiPlugins.radio`, manifest-declared
   realtime channels, and a sidebar badge;
-* **auth tiers**: the everyday mutations (play, favorite, edit, forget,
-  simulcast lookup) are `@device_endpoint` — any paired phone or browser —
-  while the FCC bulk import keeps the admin default; nothing is open to
-  the whole LAN;
+* **auth tiers**: the everyday mutations (play, play in a room, favorite,
+  edit, forget, simulcast lookup) are `@device_endpoint` — any paired phone
+  or browser — while the FCC bulk import keeps the admin default; nothing
+  is open to the whole LAN;
 * **couplings**: detections published as `plugin.radio.detection_recorded`
   events (no provider vocabulary anywhere), now-playing stamping via
-  `sdk.playback.play_url(source="radio")`, and a favorites matcher via
-  `sdk.now_playing.register_matcher`.
+  `sdk.playback.play_url(source="radio")`, a favorites matcher via
+  `sdk.now_playing.register_matcher`, and playing in a room outside a voice
+  turn (`POST /api/plugins/radio/stations/{id}/play-in-room`, the player
+  source's `room_play_template`) through `sdk.playback.ensure_room` and
+  `dispatch`.
+
+This version of the plugin (1.5.0) declares `domovoi_api = ">=1.10,<2.0"`,
+so it loads only on a Domovoi with SDK 1.10 or later (Domovoi 1.4.0).
 
 Layout, manifest spec, and test-harness docs:
 [`docs/PLUGIN_DEVELOPMENT.md`](../../docs/PLUGIN_DEVELOPMENT.md) in the

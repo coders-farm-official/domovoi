@@ -91,16 +91,17 @@ Out of scope:
 
 Domovoi trusts the household's network: anything on the LAN can see what
 the server is, and the daily features need the household **device token**
-that every enrolled client presents. A **setup code** lets a new device or
-satellite join. One **admin password** gates anything that runs code,
+that every enrolled client presents. A one-time **setup code**, readable
+only on the server, decides who sets the admin password, and a new room
+joins only once an admin approves it. The **admin password** gates anything that runs code,
 reaches a credential, or changes what the server or a satellite runs.
-There is no TLS on the LAN in v1, and port forwarding 6369 or 6370 is not
+There is no TLS on the LAN, and port forwarding 6369 or 6370 is not
 supported. What leaves the house is up to the household's internet answer
 (Yes, Sometimes or No), and every outbound host is listed in
 [docs/INTERNET.md](docs/INTERNET.md#egress-inventory).
 
 The full threat model, what each credential protects, the outbound-fetch
-rules and the hardening deliberately deferred in v1 are in
+rules and the hardening deliberately deferred are in
 [docs/SECURITY_PRIVACY.md](docs/SECURITY_PRIVACY.md).
 
 ## Verifying a release

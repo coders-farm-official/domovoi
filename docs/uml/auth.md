@@ -73,7 +73,7 @@ sequenceDiagram
     W->>PG: sha256 lookup — a READ moves nothing,<br/>an admin WRITE restarts the hour
 ```
 
-The idle hour (`ADMIN_IDLE_TIMEOUT_MIN`, 2026-11-16) counts only admin
+The idle hour (`ADMIN_IDLE_TIMEOUT_MIN`, 1.4.0) counts only admin
 actions: a `POST`/`PUT`/`PATCH`/`DELETE` that passed an admin write gate
 with the Bearer (`admin_auth.is_admin_activity`). Polls, the status probe,
 the device tier, sockets and reloads never move it, so a tab left open
@@ -105,6 +105,7 @@ they accept and in what happens **before setup has ever run**:
 |---|---|---|---|
 | `require_admin` (`domovoi/auth.py`) | Bearer only | **Fails closed — 501 "auth not configured"** | Plugin management (install/confirm/enable/disable/uninstall/upgrade). Installing a plugin is code execution, so there is no grace period. Local dev uses the `domovoi plugin dev` CLI, which never crosses HTTP. |
 | `require_admin_security` (`domovoi/admin_auth.py`) | Bearer only | **Fails closed — 501** | Config writes, service restart, satellite code push, pairing preseed and reset, approving a parked satellite, satellite delete, device-token rotation, opening a drop-in from HTTP, pulling new code, clearing a container-guard tamper incident, the command recordings. These reach code, the microphone or the whole house, so `--reset-admin` closes them again until a new password exists. |
+| `require_admin_security_read` | Bearer only | **Fails closed — 501** | The read half of the security tier: showing the household device token, and the command recordings' list and audio. The cookie never reads these: it reaches every port of the host. |
 | `require_admin_mutation` | Bearer only | LAN-trust grace (allowed) | Other admin-only changes (for example stopping wake-word training or acknowledging a container-guard failure) — a fresh clone works before setup, and the moment a password exists the gate is real. |
 | `require_device` / `require_device_read` | `X-Device-Token` (the household token, `household_device_tokens`) **or** an admin Bearer; the read half also takes the dashboard cookie and a `?device_token=` query for URLs a browser fetches | LAN-trust grace; the live-microphone socket has none | Ordinary household actions: playback, the room queue, chat, announcements, and reading back conversations and files. A room that is playing also lets a person with no credential at all pause, skip and edit its queue (guests; see [SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md#guests-on-a-playing-room)). Wrong tokens are throttled like wrong passwords. |
 | `require_admin_read` | Bearer **or** cookie | LAN-trust grace | Gated GETs whose responses carry secrets (e.g. config reads) — the cookie may render state, never mutate. |
@@ -119,7 +120,7 @@ sequenceDiagram
     CL->>G: request with credentials (or not)
     G->>PG: classify: check_admin_request()
     alt valid Bearer
-        G-->>CL: proceed (expiry slid forward)
+        G-->>CL: proceed (an admin write restarts the idle hour)
     else no admin_auth row yet
         alt plugin management
             G-->>CL: 501 — complete first-run setup first

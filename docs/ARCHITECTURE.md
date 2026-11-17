@@ -106,7 +106,11 @@ prose:
    satellite. A new room boots on `hey_jarvis` and, the first time it
    connects, the server pushes it the household's wake word
    (`domovoi/wake_default.py`: "Domovoi" on a new install); rooms that
-   already have a word keep it. On a wake it acknowledges first — a spoken greeting, a chime
+   already have a word keep it. A room can wake on up to five words (V063,
+   `room_wake_words.slugs`), capped by what the device says it can run
+   (`wake_words_max` in its hello: 3 on a Pi Zero 2 W); the word that woke
+   it rides on `utterance_start` and is kept as `conversation_log.wake_word`.
+   On a wake it acknowledges first — a spoken greeting, a chime
    or the LED alone (`[wake] ack_mode`, per satellite) — plays that to the
    end, drops what its mic heard meanwhile, and only then listens.
    Captured audio streams to the core as 16 kHz mono int16 PCM between
@@ -192,14 +196,13 @@ prose:
    read for this check.
 5. **Routing** (`domovoi/router.py`) — the stages below.
 6. **TTS.** The response text is split into sentences and synthesized through
-   the engine chain **piper → system** (both local; the Microsoft Edge
-   online voices were dropped in October 2026) — per-sentence fallback. The Piper rung runs the
-   voice's ONNX model directly, fed by Domovoi's own text-to-phoneme
-   converter (`domovoi/phonemizer`: CMUdict, rules, a small model for
-   unknown words and the owner's "say it like" list; no espeak-ng). A
-   sentence rendered at a
-   different native rate is resampled to the announced rate. Sentence synthesis is pipelined so the Pi's playback buffer never
-   drains between sentences.
+   the engine chain **piper → system**, both local, with per-sentence
+   fallback. The Piper rung runs the voice's ONNX model directly, fed by
+   Domovoi's own text-to-phoneme converter (`domovoi/phonemizer`: CMUdict,
+   rules, a small model for unknown words and the household's "say it
+   like" list; no espeak-ng). A sentence rendered at a different native
+   rate is resampled to the announced rate. Sentence synthesis is pipelined
+   so the Pi's playback buffer never drains between sentences.
 7. **Post-turn coordination.** `response_end` carries `expect_followup` /
    `pi_action`; music suppressed by wake capture auto-resumes; intercom
    announcements fan out to target rooms.
@@ -302,7 +305,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 210 | `intercom` | Before voice_notes ("tell the kitchen X") |
 | 220 | `chat_mode` | |
 | 222 | `printing` | "Print …", "scan this", ink and paper, "set up the printer"; anchored at the verb, after `chat_mode` and before `voice_notes`; "scan for new music" stays music's |
-| 225 | `documents` | "Read me the lease", "take a letter to the landlord" (documents plan D7); before `voice_notes`, whose "write …" note capture took "write a letter" as a note; the read path claims a turn only when it will answer it: a document's exact name, a strong document word (document, file, PDF, lease, contract, …), or "letter" with a letter in Documents that fits, decided from an in-memory index of Documents' names; notes, news and its "the latest", books, podcasts, the calendar, reminders, timers and lists are never its |
+| 225 | `documents` | "Read me the lease", "take a letter to the landlord"; before `voice_notes`, whose "write …" note capture took "write a letter" as a note; the read path claims a turn only when it will answer it: a document's exact name, a strong document word (document, file, PDF, lease, contract, …), or "letter" with a letter in Documents that fits, decided from an in-memory index of Documents' names; notes, news and its "the latest", books, podcasts, the calendar, reminders, timers and lists are never its |
 | 230 | `voice_notes` | |
 | 240 | `memory` | |
 | 250 | `homelab` | |
@@ -365,42 +368,51 @@ with `domovoi/media_tags`, 2), `pictures` (3), `sheets` (1) and `documents`
 (2). A saturated pool makes only its own work wait; the default pool, which
 database connects need, stays free. The web process uses the same pools.
 
-Core's own workers live in `domovoi/workers/`: the timer watcher, library
-indexer + enricher, playback-state sweeper, media-plays pruner, news fetcher,
-podcast feed poller, audiobook indexer, memory extractor, wake-word trainer,
-the pruners for command recordings, guest sightings and voice history, the
-per-room audiobook positions, the MusicBrainz alias fetch, the **Up next
-extender** (`up_next_extender`, `domovoi/workers/up_next_extender.py`,
-V053/P4: the rooms' listen logger with Up next on top — one read of each
-room's music player every `playback_sweeper_interval_sec` writes the
-listening history and, for a room with an active Up next session, finds the
-session's picks in the queue, takes out picks removed by "less like this"
-or Autoplay off (never the song playing), appends the next batch by exact
-file once five or fewer songs are left, trims the queue to 50 songs behind
-the current one, and ends the session when the room stopped, sat idle two
-hours or had its queue replaced; the logic is `domovoi/up_next/rooms.py`,
-which the room start paths call too; a streaming-search provider's song
-(`sdk.playback.play_url` from a plugin holding that capability) arms the
-room's session as it is queued (`rooms.follow_stream`: a `continue` mix
-over the library songs of the stream's artist when they match, else
-`library` with no seed, the listener's taste), and the extender appends the
-first batch after the stream once it has played 15 s and, when its length
-is known, has a minute or less left — the player moves on by itself, so the
-sweeper never sees a stop; a playlist played in a room is the
-room's whole queue since 2026-11-12 — `handlers/shared/room_playlist.py`
-loads it, the first 50 songs at once and the rest in the background, and
-arms a `continue` session with the playlist as its source; no picks join
-while the rest is loading. The queue is a copy: nothing that edits a room's
-queue writes the playlist it came from; the old one-song-at-a-time
-playlist state, `app.state.current_playlist`, is gone), the three lyrics
-workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics"), the
-three printing workers (§6 "Printing and scanning"), and the container guard (`container_guard`, `domovoi/container_guard/`): every
-30 s it compares the Docker containers the core expects — the compose
-stack, each room's music player, every plugin's declared containers —
-against what Docker reports, records failures and signs of tampering in
-`container_incidents` (V024), and while a tamper incident is open freezes
-plugin installs, satellite upgrades and updates. See
-[CONTAINER_GUARD.md](CONTAINER_GUARD.md).
+Core's own workers live in `domovoi/workers/`:
+
+* **Voice and the house:** the timer watcher, memory extractor, wake-word
+  trainer, news fetcher, the calendar-link refresher
+  (`calendar_feed_refresher`, V055), the chat video runner (`chat_video`,
+  V064; §6 "Chat"), and the pruners for command recordings, guest
+  sightings and voice history.
+* **Library and media:** the library indexer and enricher, the playback-state
+  sweeper, the media-plays and listening-history pruners
+  (`media_plays_pruner`, `music_listens_pruner`), the podcast feed poller,
+  the audiobook indexer and per-room audiobook positions, the MusicBrainz
+  alias, year and genre fetches (`library_alias_fetch`,
+  `library_year_fetch`), the tag backfill (`library_tag_backfill`), cover
+  art (`library_cover_art`, V058), ListenBrainz similar artists and
+  popularity (`listenbrainz_fetch`, V056), the three lyrics workers
+  (`lyrics_scan`, `lyrics_fetch`, `lyrics_index`; §6 "Lyrics") and the three
+  printing workers (§6 "Printing and scanning").
+* **The Up next extender** (`up_next_extender`, V053): the rooms' listen
+  logger (`listen_logger.py`, which it replaces in `domovoi/main.py`) with Up
+  next on top. One read of each room's music player every
+  `playback_sweeper_interval_sec` writes the listening history and, for a
+  room with an active Up next session, finds the session's picks in the
+  queue, takes out picks removed by "less like this" or Autoplay off (never
+  the song playing), appends the next batch by exact file once five or fewer
+  songs are left, trims the queue to 50 songs behind the current one, and
+  ends the session when the room stopped, sat idle two hours or had its
+  queue replaced. The logic is `domovoi/up_next/rooms.py`, which the room
+  start paths call too. A streaming-search provider's song
+  (`sdk.playback.play_url` from a plugin holding that capability) arms the
+  room's session as it is queued (`rooms.follow_stream`: a `continue` mix
+  over the library songs of the stream's artist when they match, else
+  `library` with no seed), and the extender appends the first batch once the
+  stream has played 15 s and, when its length is known, has a minute or less
+  left. A playlist played in a room is the room's whole queue
+  (`handlers/shared/room_playlist.py` loads the first 50 songs at once and
+  the rest in the background, then arms a `continue` session with the
+  playlist as its source). The queue is a copy: nothing that edits a room's
+  queue writes the playlist it came from.
+* **The container guard** (`container_guard`, `domovoi/container_guard/`):
+  every 30 s it compares the Docker containers the core expects — the
+  compose stack, each room's music player, every plugin's declared
+  containers — against what Docker reports, records failures and signs of
+  tampering in `container_incidents` (V024), and while a tamper incident is
+  open freezes plugin installs, satellite upgrades and updates. See
+  [CONTAINER_GUARD.md](CONTAINER_GUARD.md).
 
 ---
 
@@ -560,7 +572,7 @@ MPD text search that was always there.
   "title artist" phrase per title for requests whose "by" Whisper dropped.
   Forms of three letters or fewer match exactly only (TI, U2). ~0.3 s to build
   for 5,232 tracks; queries p50 ≈ 10 ms / p95 ≈ 25 ms there (gate run, dev i9).
-* **The scorer** is the 2026-10-02 audit's untuned ranker with fixed
+* **The scorer** is an untuned ranker with fixed
   constants: exact spoken form = 1.0, else 0.6 × spelling + 0.4 × sound; an
   entity that leaves a content word of the request unexplained is never played
   outright; "X by Y" weighs title 0.6 / artist 0.4 and also scores the whole
@@ -680,7 +692,7 @@ MPD text search that was always there.
   frozen held-out request set, parsed as production parses it, measures the
   resolver — and is never used to tune it. It reports every group over all
   transcripts and over the ones production routes to music (the ordinary
-  floor is on the latter: a misheard "play" is the parser's loss, Phase 4),
+  floor is on the latter: a misheard "play" is the parser's loss),
   and in production mode with the dialog on and off.
 
 ### Lyrics (`domovoi/lyrics/`, `workers/lyrics_*.py`, `handlers/shared/lyric_search.py`)
@@ -808,7 +820,7 @@ garage, stop the music").
   token may only pause, resume, skip, go back or ask what's playing, and
   only while that room is actively playing (the guest rule,
   `guest_queue.py`); a play, a stop or a volume change there is refused,
-  as intercom and drop-in refuse it (CORE-11). A play, resume, skip or
+  as intercom and drop-in refuse it. A play, resume, skip or
   volume change needs the target's satellite connected. A play in a room
   without a running music player starts one (`mpd_provisioner.ensure_room`
   by the room's own id — one container per room, as the container guard
@@ -825,7 +837,7 @@ garage, stop the music").
   asking room's own music resumes after the turn as after any other.
   Playlists go through too ("play my road trip playlist in the garage").
 * **Groups** (1.3.0, `music_groups.py`, V060): rooms that share one
-  queue. Model A of SHARED-QUEUES-PLAN: one room's MPD is the HOST, and
+  queue. One room's MPD is the HOST, and
   each MEMBER's satellite plays the host's stream (no new container, no
   satellite change). `clients/mpd.get_mpd_client_for` and
   `mpd_stream_url_for` route a member to its host, so "play X", skip,
@@ -862,9 +874,11 @@ garage, stop the music").
   words before it name nothing else, is that show or book, here. It plays
   with the target room's own resume position for the person (positions
   never roam) and without the asking conversation's session; only
-  commands that start playback take a room. Radio stations don't: the
-  radio plugin's paths (band 280) take the place as part of a station's
-  name, and a plugin has no room surface in the SDK yet.
+  commands that start playback take a room. Radio stations by voice don't:
+  the radio plugin's paths (band 280) take the place as part of a station's
+  name. A station is played in another room from the plugin's Stations page
+  or a phone, through a plugin route that checks the room with
+  `sdk.playback.ensure_room` (SDK 1.10).
 * **Everywhere.** A stop or a pause applies to every room that is playing;
   a play is "one room at a time".
 * **The tool.** The `music` tool's optional `room` argument takes the same
@@ -952,6 +966,14 @@ described here, which every paired device shares.
   server only to read a PDF's text (`POST /api/chat/documents/extract`,
   nothing kept) or to run a private summary job that lives in the web
   process's memory and is deleted when it ends.
+* **Videos (V064).** A home-server chat takes one short video a message
+  (`web/backend/api/chat_videos.py`: MP4, MOV or WebM, up to 3 minutes and
+  2 GB). The core's `chat_video` worker (`domovoi/chat_video/`) watches one
+  video at a time in the house, at the lowest priority and pausing for any
+  voice turn: it transcribes the sound with the server's speech-to-text and
+  has the vision model describe a few frames, then writes a summary into
+  the chat. The video and its frame grabs are deleted once it has been
+  watched; only the text stays. It needs ffmpeg on the server.
 * **Exact sums and heads-ups.** The model is not asked to add up numbers it
   was given. For "calculate exactly" over a spreadsheet or a long document it
   only lists the numbers or dates the question needs, each with the passage
@@ -1044,6 +1066,15 @@ base models (`/v1/wake-base`). Each has a `manifest.sig` envelope carrying
 the list, a per-channel `serial` and `issued_at`, so a pinned satellite
 refuses a list its server did not sign and an older list replayed to it.
 The plain `manifest` endpoints remain for devices that predate signing.
+
+A new room device set up with the server address left blank asks every
+Domovoi server it finds for approval and joins only the one that proves it
+knows the six-digit code the device shows, through a SPAKE2 exchange over
+the room socket (`satellite/pairing_proof.py`, imported by the core too;
+V062). The health challenge's `pairing_proof` line, signed with the rest,
+says which exchange the server speaks, so it cannot be stripped on the way.
+Threat model:
+[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#asking-every-house-an-approval-the-device-can-check-140).
 
 ---
 
@@ -1181,9 +1212,11 @@ bug even if nothing fails immediately.
 * **The DB is migration-only.** Core: Flyway, append-only, `V001` frozen.
   Plugins: own schema, own runner, checksummed, both DBs. Nobody mutates
   schema at runtime.
-* **Tests must use the test DB.** `domovoi/tests/conftest.py` derives
-  `<dbname>_test` from `DATABASE_URL` and refuses to run otherwise. It also
-  forces `USE_STUBS=true`, making Whisper/Ollama/TTS deterministic fakes.
+* **Tests must use the test DB.** `domovoi/tests/conftest.py` takes
+  `TEST_DATABASE_URL` (or derives `<dbname>_test` from `DATABASE_URL`),
+  stops when neither is set, and refuses a database whose name doesn't end
+  in `_test` (`domovoi/tests/db_guard.py`). It also forces `USE_STUBS=true`,
+  making Whisper/Ollama/TTS deterministic fakes.
 * **MPD is lazy-provisioned per room** by `domovoi/mpd_provisioner.py`; the
   `mpd_rooms` table is the source of truth for port/container assignments.
   Not in the compose file.

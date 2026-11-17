@@ -31,7 +31,7 @@ sequenceDiagram
     Pi->>WS: binary PCM (16 kHz mono int16, streamed)
     Note over WS: first ~240 ms pause after speech<br/>(speech_pause, or judged from the frames)
     WS->>STT: transcribe(copy so far) — speculative
-    WS->>VID: embed(copy so far) — alongside, no side effects
+    WS->>VID: embed(copy so far) — after the decode, no side effects
     Pi->>WS: binary PCM (the rest of the silence timeout)
     STT-->>WS: transcript (held)
     Pi->>WS: utterance_end {greeting_played, greeting_clip,<br/>ack_before_capture, frames, last_voiced_frame}

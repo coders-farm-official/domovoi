@@ -4,10 +4,10 @@ Domovoi is the home computer system that keeps it in the house, so let's
 be straight about what it actually guards — and what it doesn't. This page is the threat model in plain words,
 what the admin password really protects, exactly what data lives where,
 what leaves your network (and how to turn each thing off), and an honest
-list of the hardening work that was **deliberately deferred** in v1.
+list of the hardening work that is **deliberately deferred**.
 
 Everything below is written against the shipped code, not aspiration. Where
-v1 accepts a risk, it says so out loud.
+Domovoi accepts a risk, it says so out loud.
 
 Related: [ARCHITECTURE.md](ARCHITECTURE.md) for the process/port layout,
 [FAQ.md](FAQ.md) for the short versions, and
@@ -31,7 +31,7 @@ presents — the dashboard, the app, the satellites — which those daily
 actions require) and a single **admin tier** (one password, set on first
 run) that gates the dangerous stuff: anything that executes code, reaches a
 credential, or changes what the server or a satellite runs. There are no
-per-user accounts, no roles, and — in v1 — no TLS. Domovoi is **not designed
+per-user accounts, no roles, and no TLS. Domovoi is **not designed
 to be exposed to the internet**. Don't port-forward 6369 or 6370. If a
 hostile device is already inside your Wi-Fi, the honest answer is that it
 can listen to unencrypted LAN traffic — including the household token as a
@@ -63,7 +63,7 @@ flowchart TB
         v5["Subscribe to a podcast, poll feeds now,<br/>attach or re-test a news feed"]
         v6["On the dashboard: the calendar, playlists,<br/>chat, news, podcasts and audiobooks,<br/>a person's memories and favorites"]
         v7["Satellite room label, timer cancel,<br/>announce, volume, and<br/>'Only reminders for this device'"]
-        v8["Plugin routes marked @device_endpoint —<br/>radio: play, favorite, edit, forget,<br/>simulcast lookup"]
+        v8["Plugin routes marked @device_endpoint —<br/>radio: play, play in a room, favorite,<br/>edit, forget, simulcast lookup"]
         v9["READING what the household said:<br/>conversations, voice notes, chat,<br/>wake-word recordings — and a person's<br/>memories, favorites, preferences"]
         v10["READING who is home: the people<br/>roster, rooms, session lists,<br/>play history, the calendar,<br/>the speech latency summary"]
     end
@@ -211,8 +211,8 @@ accepted here and refused one process later; now the first hop answers.
 this gate — `require_device`, with the same `401` / cookie-only `403` /
 `429` answers and the same pre-setup grace — in both processes, instead of
 the admin default. The bundled radio plugin uses it for its everyday
-mutations: play, favorite, the interval / stream-URL edit and unfavorite,
-forget, and the simulcast lookup (web and core hop alike — the web hop
+mutations: play, play in a room (1.4.0), favorite, the interval / stream-URL
+edit and unfavorite, forget, and the simulcast lookup (web and core hop alike — the web hop
 forwards the caller's household token). Its FCC bulk import stays admin.
 Forget sits here because the core's nearest precedents do: unsubscribing
 from a podcast drops that show's episode rows and deleting a news topic
@@ -470,7 +470,8 @@ two-way sync, no sign-in with Google, Microsoft, Apple or Samsung):
   themselves. Removing the calendar deletes the address and its events.
 * **From a phone.** A person can switch on "Share this phone's calendars
   with the house" in the Android app (off by default; it asks
-  `READ_CALENDAR` then) and pick calendars. The phone sends each event's
+  `READ_CALENDAR` then), or in the iPhone app, which asks for calendar
+  access then, and pick calendars. The phone sends each event's
   title, time, place and the calendar's name and colour (never
   descriptions or guests) for 30 days back to 180 ahead, to its own
   household server only, over the house's network with the household
@@ -486,7 +487,7 @@ two-way sync, no sign-in with Google, Microsoft, Apple or Samsung):
   it, and an upload made earlier that lands after the delete is refused
   (`410`). Calendars left behind (an uninstalled app, a lost phone, a
   server the phone forgot) show as stale after a day without an update
-  (phones send every 6 hours) and are deleted after 7 days by the
+  (an Android phone sends every 6 hours; an iPhone when the app is open) and are deleted after 7 days by the
   calendar refresher; an admin can remove one, or all of a phone's,
   sooner (Settings → Household → Calendars), and replacing the household
   device token removes every phone's. The list gives a phone's device id
@@ -528,7 +529,8 @@ every read, so a paired client sees what it saw before. An unpaired
 browser's Home renders without its rooms and its week, and the sidebar
 shows no counts for them; nothing prompts until somebody opens one of
 those pages. The video satellite's kiosk reads its room's row too, which
-is why it is now paired by its URL (see *Daily tier*).
+is why it is now paired by its URL (the kiosk table under
+[Guests on a playing room](#guests-on-a-playing-room)).
 
 **Left open, on purpose, pending a decision.** Next to those lists sit
 reads that carry no words anybody said and no presence, and they still
@@ -852,12 +854,12 @@ much in a single request. Saving a spreadsheet in place
 (`PUT /api/documents/sheet/{path}`) is the same class: the whole workbook
 is loaded and rewritten in memory, several times its size on disk (S6).
 The Piper voice upload already streams to disk under a running budget,
-and so do the Files uploads since wf/folder-upload: `POST
+and so do the Files uploads: `POST
 /api/files/upload-stream` (one file per request, the body written to disk a
 chunk at a time, at most 8 GiB a file) and `POST /api/files/upload`, which
 copies each part from the parser's disk spool in 1 MiB chunks instead of
 reading it whole. Doing the same for the rest is the fix (WEB-19, a
-documented limit for 1.0).
+known limit).
 `MAX_REQUEST_BYTES` moves the default.
 
 Two smaller bounds go with it. `Intent.transcript` and `room_id` are
@@ -879,7 +881,7 @@ never sees a connection that sends nothing, and has not been built; a
 per-source connection limit in the host's firewall on ports 6370 and 6369
 is the way to get one today. On the Windows install the Hyper-V firewall
 rules can't limit connections per source, so there is no workaround there
-(CORE-15, a documented limit for 1.0). Relatedly, a second connect for a room now **closes** the socket
+(CORE-15, a known limit). Relatedly, a second connect for a room now **closes** the socket
 it replaced (1001) instead of leaving it open and unread.
 
 ### Daily tier (LAN-trust)
@@ -1130,8 +1132,7 @@ kiosk's buttons. A **guest** ban (2026-10-10) does cover a guest's
 transport presses as well as its queue edits; it is the same kind of
 household policy, keyed on the same self-asserted id plus the guest's
 address. Binding a device id to a
-per-device token belongs with the kiosk read tokens in the hardening
-backlog. The same goes for the chat's message details: "sent from" names the
+per-device credential would close that; nothing does yet. The same goes for the chat's message details: "sent from" names the
 device id the sending client put on the message (kept only when it is a
 well-formed id), which any household-token holder can set to another
 device's.
@@ -1199,8 +1200,8 @@ sampler, the model pull):
 - Redirects are followed **one hop at a time** (five at most), each target
   re-checked — and its connection pinned the same way — before it is
   opened: a public URL cannot bounce the server into your LAN. One gap in
-  the certificate check, not the address check (REV-21, a documented limit
-  for 1.0): within one fetch, two https hops whose names share an address
+  the certificate check, not the address check (REV-21, a known
+  limit): within one fetch, two https hops whose names share an address
   reuse the first hop's TLS connection, so the second name's certificate
   is not checked; each hop's address is still vetted. A fresh connection
   per hop when the name changes is the fix.
@@ -1339,7 +1340,7 @@ lock and opts the box in to locked updates (`DOMOVOI_USE_LOCK=1` in
 ([LINUX_HOST.md, The hash-pinned lock](LINUX_HOST.md#the-hash-pinned-lock)).
 Once opted in, the update unit's re-sync installs from the same lock, so a
 tampered package fails the update and it rolls back. What is not
-hash-checked, said plainly (OPS-9, a documented limit for 1.0):
+hash-checked, said plainly (OPS-9, a known limit):
 
 - **An update on a box that hasn't opted in.** A server built by hand
   without `DOMOVOI_USE_LOCK=1` (or one whose administrator set it to 0)
@@ -1457,7 +1458,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Documents: deleting one, or zipping a selection** (not saving one) | Dashboard: `POST /api/documents/delete` and `POST /api/documents/download-zip`. Everything else on that surface is **device tier**: the reads (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`, `/drawings/read`) AND the saves (`POST /api/documents/create`, `/upload`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`), and the same saves through `/api/files` when the target library is `core:documents`. | Pre-setup grace. Saving is a household action — a phone or a tablet writes a shopping list without the admin password (2026-09-24). Deleting is not, and neither is `/download-zip`: it is the one request that turns "can read the library" into "holds a copy of the library". |
 | **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
 | **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. The block also covers `/api/documents` saves — the same folder through the other door. The caller is identified from the request, not only from the body: body `device_id`, `X-Device-Id`, `?device_id=`, or the `domovoi-device-id` cookie the server sets on `POST /api/devices/register`. A browser is therefore covered without any client change; the Android app keeps no cookie jar and stays unidentified there until it sends the header. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
-| **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` (but for the training switch, the next row) and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
+| **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core routes behind them (`/v1/admin/wake/*` but for the training switch, the next row, and `/v1/admin/sounds/regenerate`) take the same admin tier, so both hops refuse. |
 | **Wake-word training on and off** (on: builds and runs a Docker image as the service user, downloads the training data, and writes `WAKE_WORD_TRAIN_COMMAND` into `.env`; off: writes the two settings off and removes the image, its build cache and the cache volume) | Core: `POST /v1/admin/wake/trainer/enable` and `POST /v1/admin/wake/trainer/disable`, Bearer-only. Their status, `GET /v1/admin/wake/trainer`, and what turning off would free, `GET /v1/admin/wake/trainer/footprint`, are admin **reads** (Bearer or cookie): they name the server's free disk, memory, Docker, GPUs and Docker's sizes, nothing more. Dashboard: `POST /api/wake-words/trainer/enable`, `POST /api/wake-words/trainer/disable`, `GET /api/wake-words/trainer` and `GET /api/wake-words/trainer/footprint`, at the same tiers, forwarding the caller's credentials. Stopping a training (`POST /v1/admin/wake/train/stop`, `POST /api/wake-words/{id}/train/stop`) and removing a deleted word's training files (`POST /v1/admin/wake/forget`) are the admin tier, like Train. | **Fails closed** — 501 until setup (the reads keep the pre-setup grace). |
 | **Voice history** (how long what people say is kept, and deleting all of it; see [Voice history](#voice-history-whats-kept-for-how-long)) | "Keep voice history" is the setting `voice_history_keep`, written through the configuration row above (Core: `POST /v1/admin/config`; Dashboard: `PATCH /api/config/editable`). Delete all: Core `POST /v1/admin/voice-history/delete-all`, Dashboard `POST /api/voice-history/delete-all` (forwards your credentials; both gate). What is kept and since when, `GET /api/voice-history`, is a **paired device's** read (no words in it). | **Fails closed** — 501 until setup, for the setting (every configuration write) and for Delete all (review 2026-10-17: on an unclaimed box nobody on the LAN can wipe the history; the version pull's rule). |
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles, and deletes what they said: their turns), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
@@ -1977,7 +1978,7 @@ the other:
   viewer's browser send a blind GET to another host on your network.
   Previewing a note somebody else wrote is visiting a page they chose the
   images for; limiting preview images to the server's own URLs is the fix
-  (a documented limit for 1.0). Chat replies render no images at all
+  (a known limit). Chat replies render no images at all
   (`web/static/chat_markdown.js`), so an answer from the language model
   can't do this.
   Without the sanitiser loaded there is no preview at all.
@@ -2057,7 +2058,7 @@ Privacy → **Listening history** and each person's People page.
 | **Each person clears their own** | People → a person → **listening history · clear** deletes that person's songs, everywhere (`DELETE /api/music/listens/people/{id}`). The server allows it to **an admin** (Bearer, or a box before setup), and to **a phone or browser claimed as that person** that is not a shared screen, **presents its claim key** (below), and said "this is me" **more than 10 minutes ago**. Anything else is refused (`403`, saying why and who may) and the dashboard offers the admin password. The household's songs and other people's stay. |
 | **Deleting it all** | Settings → Privacy → Listening history → **Delete all listening history** (`POST /api/music/listens/delete-all`): every song, everyone's and the household's, from every room and device, and whose each room's music was. **Admin, security tier**: Bearer only, `501` before setup, like "Delete all voice history". |
 | **Forgetting a person** | Deletes their listening history with them (`ON DELETE CASCADE`), whichever way the person is forgotten; a room whose music was for them becomes the household's, and a phone or browser claimed as them becomes nobody's. |
-| **Who can read it** | `GET /api/music/listens/summary` (how long it is kept and how many songs each person has, never a song) is the **device read** tier, like the rest of the People page. Up next reads the songs on the server. The one route that returns them is the admin's **Queue history** (`GET /api/music/up-next/history/…`, **admin read**, 1.3.1): one Up next session's picks with how long each played and how it ended, read-only. |
+| **Who can read it** | `GET /api/music/listens/summary` (how long it is kept and how many songs each person has, never a song) is the **device read** tier, like the rest of the People page. Up next reads the songs on the server. The one route that returns them is the admin's **Queue history** (`GET /api/music/up-next/history/…`, **admin read**, 1.4.0): one Up next session's picks with how long each played and how it ended, read-only. |
 | **What it doesn't reach** | A phone's outbox of songs not yet sent (on the phone, until sent or 7 days old) and a browser's (`domovoi-listen-outbox` in that browser's storage, at most 500 rows); database backups taken before a delete, until they are replaced ([Data at rest](#data-at-rest)). |
 | **What it sends anywhere** | Nothing. The log line for a delete says how many rows went, and whether an admin or the person's own device did it. |
 
@@ -2131,7 +2132,7 @@ is `domovoi/command_captures.py`, `web/backend/api/captures.py` and V016.
 | **What is never kept** | Wake-word **training clips** (their own pipeline, never routed). **Chat-mode** turns (open conversation, not commands; the design never ends those early). **Barge-ins** (the capture opens while the satellite is still talking, so it carries the reply's own audio). **Push-to-talk** (a button ends it, not silence). Any command captured **during a drop-in call**, judged over the whole capture: a call live when it opened, one that started while it was open, or one hung up before it closed (the speaker was playing the other room, whose people never opted in). A blank capture, a self-echo, a turn that was only the wake greeting coming back through the mic, or a turn whose speech-to-text is down. |
 | **Where** | `COMMAND_CAPTURES_DIR`, default `~/.domovoi/captures/<room>/` on the Domovoi server; files `0600` in `0700` directories on Linux. **No web file route serves it**: the only reader is the admin API below. The core refuses to write at all (and the dashboard refuses to turn a room on) when the directory is inside, or around, a media library, the sounds / wake-model / wake-clip channels, the plugin directory, the repo, the home or config directory itself, and when the setting is not an absolute path (the core writes and the dashboard deletes, each from its own working directory). The Files surface refuses any path into `~/.domovoi` except its media subdirectories, even through a library rooted above it, and any path into `COMMAND_CAPTURES_DIR` wherever it points (a removable drive or a plugin's library root included); a folder listing, a folder zip and an import copy leave both out of what they walk. |
 | **How long** | 14 days (`COMMAND_CAPTURE_RETENTION_DAYS` may shorten it, never lengthen it), swept hourly by the core's `command_capture_pruner` and, at most as often, on the write path too (so a core running without workers still forgets); recordings past it are hidden from the list and refused by the audio route immediately. Disk cap `COMMAND_CAPTURE_MAX_MB` (500 MB) for all rooms together, oldest first, enforced on every write. |
-| **Who can read it** | An admin: `GET /api/captures` (list, with transcripts) and `GET /api/captures/clips/{room}/{id}/audio`, with the admin Bearer only (not the dashboard cookie alone), **501 before setup**. Not the household token and not `?device_token=` — the rest of the household's speech is readable by any paired device; this is not. Settings → Voice history plays, labels ("cut off too early" / "fine" / "waited too long") and deletes them. |
+| **Who can read it** | An admin: `GET /api/captures` (list, with transcripts) and `GET /api/captures/clips/{room}/{id}/audio`, with the admin Bearer only (not the dashboard cookie alone), **501 before setup**. Not the household token and not `?device_token=` — the rest of the household's speech is readable by any paired device; this is not. Settings → Privacy → Voice history plays, labels ("cut off too early" / "fine" / "waited too long") and deletes them. |
 | **Who can see that it is on** | Everyone. The open satellites list carries `capture_commands` / `capture_since` (true exactly when the core would keep that room's commands: opted in and an admin credential exists, so a room `--reset-admin` paused reads as off), and the dashboard marks the room *recording commands for tuning* on its satellite card, in its drawer and on Home's room row. |
 | **How it goes away** | Turning a room off deletes its row and then every recording it kept, in the same request (the core re-checks the opt-in after each write, and the pruner sweeps any room with files but no row, so a write that raced the opt-out does not survive it). Retiring a room does the same. An admin can delete one at a time. Deletion only ever touches capture-shaped names. Moving `COMMAND_CAPTURES_DIR` leaves the old directory to the operator. |
 | **What it sends anywhere** | Nothing. The files stay on the Domovoi server; the log line for a kept recording carries the room, the id, the length and the end reason, never the words. |
@@ -2841,7 +2842,7 @@ watch the server's traffic under **No**.
 | **LRCLIB synced lyrics** — for library songs with no timed lyrics of their own (no `.lrc` next to them, none in their tags), the song's **title, artist credit and primary performer, album and length in seconds** go to lrclib.net, which answers with its lyrics, timed when it has them (`domovoi/workers/lyrics_fetch.py`, `domovoi/clients/lrclib.py`; [Lyrics](#lyrics-household-tier-only) above) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. Then about one request a second (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down), only while the connectivity probe reports online; a song LRCLIB didn't have is asked about again after 4, 8 and then 16 weeks | Set `lyrics_lrclib_enabled` off (Settings → Advanced → Library → "Synced lyrics from LRCLIB") to keep it off anyway; switching it off stops the lookup before its next request. Lyrics in `.lrc` files and in the songs' own tags never need it. |
 | **Cover Art Archive** — for an identified library song (song recognition's checked match, a "Needs review" choice, or the file's own MusicBrainz id), the album's MusicBrainz release or release-group id goes to coverartarchive.org, which redirects to archive.org's storage; the front cover that comes back is written into MP3 and FLAC files (with Undo) or kept in Domovoi's own copy (`domovoi/workers/library_cover_art.py`; [Music files Domovoi changes](#music-files-domovoi-changes-cover-art-and-the-duplicates-trash)) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. About one request a second, only while the connectivity probe reports online; a song the archive has no cover for is asked again after 30 days or after **Rescan library** | Set `library_cover_art_enabled` off (Settings → Advanced → Library → "Cover art from the Cover Art Archive"); switching it off stops it before its next request. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
-| **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
+| **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. A device set up with the server address left blank never sends its code at all: it checks the approval itself ([Asking every house](#asking-every-house-an-approval-the-device-can-check-140)). |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
 | **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. |
@@ -3343,7 +3344,7 @@ from it as from `/usr/bin/python3`. **Both copies get an empty
 standard library is its own: CPython looks for that file in every folder
 above its `bin/`, so without it a library planted higher up (`/tmp/lib/…`
 by any local account) would have been imported first, `-I` or not
-(security review of wf/sat-pc-python). Every Python the installer runs,
+(found in security review). Every Python the installer runs,
 the first copy included, runs with `-I`; root runs only `/usr/bin/python3`
 or its own copy (root's folders all the way down, no link, nobody else may
 write), and refuses any other (the record and the purge helper below).
@@ -3442,7 +3443,7 @@ when its install command is run again, as on Windows.
   there included; that is the trust any installed program gets, and the
   installer does not ask for more. A dedicated account keeps it apart, and
   is uninstalled from an administrator's account (`--account`, below). Whatever the permission, the device itself refuses what a
-  frame must not do (security review of wf/sat-pc, B1/B2): a `set_config`
+  frame must not do (security review findings B1/B2): a `set_config`
   may carry only the settings the dashboard's own form has, as exact
   `section.key` names (a key with a space, a capital or an extra dot is
   refused, not tidied up), never the pin, the server address, the
@@ -3660,8 +3661,7 @@ command. It is only a wizard in front of the same install
   history or a log can keep it: it expires, and guessing one gains
   nothing the server's `/v1/health` doesn't already say. Joining still
   needs the device's six-digit approval code typed into the dashboard.
-* **The answer is bound to your server** (review of wf/win-sat-installer,
-  round 1). The Setup asks for the code with a fresh 16-byte challenge.
+* **The answer is bound to your server** (security review). The Setup asks for the code with a fresh 16-byte challenge.
   The answer must carry a payload whose own hash **is** that code, the
   public key whose fingerprint that payload names, and that key's Ed25519
   signature over the challenge, the code, the payload and the bundle's
@@ -3787,8 +3787,8 @@ SD card.
 from a DHCP server's boot-file name (`network-preseed`) and load it over
 the stick's own answers: a rogue DHCP server on the network could then
 replace the ERASE page, erase the disk without asking and run its own
-commands as root in the new system (security review of wf/usb-stick, shown
-in QEMU). The stick's first command in the installer (`installer/early.sh`)
+commands as root in the new system (found in security review and
+shown in QEMU). The stick's first command in the installer (`installer/early.sh`)
 records `network-preseed` as installed, so it is never unpacked or run, and
 wraps udhcpc's script so the boot-file name is dropped before the lease is
 written; the ERASE step refuses ("Something on this network tried to set up
@@ -4459,6 +4459,12 @@ socket, and removes the household app's task from Recents (no screenshot
 of it stays there). A room the phone was casting to plays on: the phone
 detaches, it does not stop another room's music.
 
+**The room display (1.4.0):** a room phone that asks for it in its hello
+shows what its room is playing and its timers and alarms, sent over the
+room's own socket and nothing else; never a reminder, since anyone in the
+room can read the screen ([Timers and reminders](#timers-and-reminders-house-wide),
+"On a room phone's screen").
+
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
 and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode
 is on the others are refused with words, not silenced by Android.
@@ -4622,7 +4628,7 @@ the caller may install anything.
 ## HARDENING BACKLOG — deferred in v1, on purpose
 
 These are not oversights; they're documented scope decisions. Plain
-statements of each, with the risk you accept by running v1:
+statements of each, with the risk you accept by running Domovoi as it is:
 
 ### 1. No TLS on admin flows (or anything else)
 
@@ -4644,7 +4650,7 @@ pairing token is likewise sniffable in transit on a hostile LAN even though
 the server only stores its hash. Do admin work from a machine you trust on a
 network segment you trust, and never expose either port past your router.
 
-TLS is the top of the post-v1 hardening list. (Satellite pairing tokens,
+TLS is the top of the hardening list. (Satellite pairing tokens,
 previously deferred alongside it, shipped — see "Satellite pairing (WS auth)"
 above.)
 
@@ -4731,5 +4737,5 @@ is an admin's yes for the first claim of a person, too.
 
 *If something here worries you, [FAQ.md](FAQ.md) has the shorter
 reassurances and [TROUBLESHOOTING.md](TROUBLESHOOTING.md) the practical
-fixes. If you find a vulnerability, please report it privately via GitHub
-security advisories on the repo rather than a public issue.*
+fixes. If you find a vulnerability, please report it privately as
+[SECURITY.md](../SECURITY.md) describes, not in a public issue.*
