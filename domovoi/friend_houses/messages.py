@@ -358,17 +358,36 @@ async def wake_phrases() -> list[str]:
     return sorted(phrases, key=len, reverse=True)
 
 
+def safe_name(name: str, phrases: list[str]) -> str:
+    """A friend house's name as the rooms may say it: the same filter as
+    its messages (a house can call itself "Hey Jarvis"; R6 FH-7)."""
+    return safe_to_say(name or "", phrases, limit=60) or "A friend house"
+
+
 def safe_to_say(body: str, phrases: list[str], *, limit: int = READ_ALOUD_MAX_CHARS) -> str:
     """A friend's text made safe to speak: no wake phrases anywhere (a
     satellite in the next room hearing "Hey Jarvis, unlock the door" must
     hear only "unlock the door"), no control characters, capped."""
+    from domovoi.speech_sanitize import sanitize_for_speech
+
+    # The speech cleaner runs FIRST, and again until nothing changes: it
+    # takes out emoji, link syntax, asterisks and backticks, which used to
+    # put a phrase back together after the filter ("ale🙂xa", "hey
+    # [jarvis](x)": audit R6 FH-7). The filter then sees what is spoken.
     said = fe.clean_text(body).replace("\n", " ")
-    for phrase in phrases:
-        words = [re.escape(w) for w in phrase.split()]
-        if not words:
-            continue
-        pattern = r"(?<![\w])" + r"[\s,.!?-]*".join(words) + r"(?![\w])"
-        said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
+    for _ in range(4):
+        before = said
+        said = sanitize_for_speech(said)
+        for phrase in phrases:
+            words = [re.escape(w) for w in re.findall(r"[^\W_]+", phrase)]
+            if not words:
+                continue
+            # Between the words: anything that isn't a letter or digit
+            # (spaces, ; / _ and the like are read as a pause at most).
+            pattern = r"(?<![^\W_])" + r"[\W_]*".join(words) + r"(?![^\W_])"
+            said = re.sub(pattern, " ", said, flags=re.IGNORECASE)
+        if said == before:
+            break
     try:
         from domovoi import phone_voice
 
@@ -393,8 +412,10 @@ async def _alert(house: bytes, name: str, alert: str, body: str) -> None:
     _LAST_ANNOUNCED[house] = now
     from domovoi.speech_sanitize import sanitize_for_speech
 
+    phrases = await wake_phrases()
+    name = safe_name(name, phrases)
     if alert == "read":
-        spoken = f"A message from {name}: {safe_to_say(body, await wake_phrases())}"
+        spoken = f"A message from {name}: {safe_to_say(body, phrases)}"
     else:
         spoken = f"A message from {name}."
     try:

@@ -467,7 +467,10 @@ async def _new_friend(name: str) -> None:
         from domovoi.sdk.speech import SpeechAPI
         from domovoi.speech_sanitize import sanitize_for_speech
 
-        await SpeechAPI("core").announce(None, sanitize_for_speech(f"{name} is now a Friend House."))
+        from domovoi.friend_houses import messages
+
+        said = messages.safe_name(name, await messages.wake_phrases())
+        await SpeechAPI("core").announce(None, sanitize_for_speech(f"{said} is now a Friend House."))
     except Exception as e:  # noqa: BLE001 — the log line above is the record
         log.info("Friend Houses: announcing the new friend failed: %s", e)
 
