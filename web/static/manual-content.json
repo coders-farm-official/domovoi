@@ -953,7 +953,7 @@
        "text": "The **app** brings the everyday pages to your phone, with its own music player and Chat. Chat holds your chats on the home server and chats that run on the phone itself, with no server."
       },
       {
-       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages plugins add there, like Stations) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
+       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages your plugins add) and **Tools** (News, Calendar, Lists, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
       },
       {
        "text": "That menu is the same in every browser, and an admin can change it in [Settings → System → App layout](route:settings/app-layout) → **Menu**: rename the groups, add or delete one, move any page into a group or to the top, and put things in another order. **Reset to default** brings the usual menu back. Nothing needs changing there; the phone app keeps its own layout."

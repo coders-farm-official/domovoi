@@ -181,7 +181,7 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
   player and Chat. Chat holds your chats on the home server and chats
   that run on the phone itself, with no server.
 - The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts,
-  Audiobooks, Videos, and pages plugins add there, like Stations) and
+  Audiobooks, Videos, and pages your plugins add) and
   **Tools** (News, Calendar, Lists, Files), each opening in place, then
   **Plugins**. On a phone, Home's "everything" grid has the same groups.
 - That menu is the same in every browser, and an admin can change it in

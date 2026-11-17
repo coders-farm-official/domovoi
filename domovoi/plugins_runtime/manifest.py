@@ -215,6 +215,11 @@ class WebPageDecl:
 class PlayerSourceDecl:
     kind: str
     stream_url_template: str
+    # SDK 1.10, optional: where the browser player's cast POSTs
+    # ``{"room_id": ...}`` to play one of this kind's items in a room
+    # instead of refusing it ("only library songs can be cast"). One of the
+    # plugin's own dashboard routes, ``{id}`` standing for the item's id.
+    room_play_template: str | None = None
 
 
 @dataclass(frozen=True)
@@ -629,6 +634,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
             stream_url_template=_req_str(
                 s, "stream_url_template", "web.player_sources"
             ),
+            room_play_template=_room_play_template(s, slug),
         )
         for s in sources_raw
         if isinstance(s, dict) or _bad_table("web.player_sources")
@@ -893,6 +899,23 @@ def _parse_containers(raw: Any, warnings: tuple[str, ...]) -> tuple[ContainerDec
             )
         )
     return tuple(out)
+
+
+def _room_play_template(source: dict, slug: str) -> str | None:
+    """``[[web.player_sources]].room_play_template`` (SDK 1.10): one of the
+    plugin's OWN dashboard routes with an ``{id}`` in it. The browser
+    player POSTs a room to it with the household's credentials, so it may
+    not point anywhere else."""
+    val = _opt_str(source, "room_play_template", "web.player_sources")
+    if val is None:
+        return None
+    prefix = f"/api/plugins/{slug}/"
+    if not val.startswith(prefix) or "{id}" not in val or ".." in val or "?" in val:
+        raise ManifestError(
+            f"web.player_sources.room_play_template must be one of the "
+            f"plugin's own routes ({prefix}...) containing {{id}}"
+        )
+    return val
 
 
 def _bad_table(where: str) -> bool:

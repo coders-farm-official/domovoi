@@ -998,8 +998,9 @@ async def test_the_bundled_radio_routers_match_their_source_walk() -> None:
     check_route_tiers(routers, report, package)
     assert report.errors == []
     # The same routers against a walk that lists nothing: every device
-    # route is reported, so the empty answer above is not vacuous.
-    assert len(webkit.unlisted_tier_routes(routers, radio_dir / "missing")) == 6
+    # route is reported, so the empty answer above is not vacuous (8: the
+    # room play, 1.3.1, is device tier on both hops).
+    assert len(webkit.unlisted_tier_routes(routers, radio_dir / "missing")) == 8
 
 
 # ─── the web→core hop carries the household token ─────────────────────────
