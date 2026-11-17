@@ -282,6 +282,19 @@ async def say_im_back() -> None:
 # ─── receiving ────────────────────────────────────────────────────────────
 
 
+BIGINT_MAX = (1 << 63) - 1
+SENT_AT_MAX = 253_402_300_799  # 9999-12-31: the last second a date can show
+
+
+def _display_time(sent_at: int) -> int:
+    """The sender's clock is unsigned 64-bit and the sender's to choose: a
+    value no date can show (2^62 crashed the Android app; 2^63 and up
+    failed the insert, so the message was never acked and everything the
+    friend sent after it waited behind it) becomes the time it arrived.
+    The signed envelope keeps the original, for the export."""
+    return sent_at if 0 < sent_at <= SENT_AT_MAX else int(time.time())
+
+
 async def on_message(event: dict[str, Any]) -> bool:
     """The listener's ``message`` event. Returns whether it is stored (a
     repeat of a stored message counts: the sender just missed our ack)."""
@@ -324,7 +337,8 @@ async def on_message(event: dict[str, Any]) -> bool:
             "msg_id, epoch, seq, sent_at, body, envelope, state) VALUES "
             "(:h, :f, :n, 'in', :m, :e, :q, :t, :b, :env, 'unread')"),
             {"h": house, "f": friend.id, "n": friend.local_name, "m": env.msg_id, "e": env.epoch,
-             "q": env.seq, "t": env.sent_at, "b": fe.clean_text(env.text), "env": env.to_bytes()})
+             "q": min(env.seq, BIGINT_MAX), "t": _display_time(env.sent_at),
+             "b": fe.clean_text(env.text), "env": env.to_bytes()})
         alert = await _alert_for(s, friend.id)
     log.info("Friend Houses: a message from %s", friend.local_name)
     _service().spawn(_alert(friend.house_key, friend.local_name, alert, env.text), "friend-houses-alert")
