@@ -1412,31 +1412,35 @@ Ollama) and to the rest of the home network. A Tor daemon that someone
 broke into would then be inside the house.
 
 So the installer fences that one network off. `domovoi-fh-firewall.service`
-is a oneshot that runs, as root,
-`/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh apply`, a root-owned
-copy of [`scripts/linux/fh-firewall.sh`](../scripts/linux/fh-firewall.sh).
-It adds three things and nothing else:
+runs, as root, `/usr/local/lib/domovoi-fh-firewall/fh-firewall.sh`, a
+root-owned copy of [`scripts/linux/fh-firewall.sh`](../scripts/linux/fh-firewall.sh):
+`apply` before Docker starts, then `watch`. It adds these and nothing
+else:
 
 1. **`INPUT`:** nothing from `domovoi-fh0` reaches the host itself. That
    traffic is the host's own, so Docker's `DOCKER-USER` chain never sees
    it.
-2. **`DOCKER-USER`:** traffic from `172.31.254.0/24` goes to a chain of its
-   own, `DOMOVOI-FH`. That chain drops anything addressed to private,
-   shared, link-local, loopback or multicast ranges: the home network,
-   other containers, and the Windows or Mac host behind a WSL or VM
-   gateway.
+2. **`DOCKER-USER` and `FORWARD`:** traffic from `172.31.254.0/24` goes
+   to a chain of its own, `DOMOVOI-FH`. That chain drops anything
+   addressed to private, shared, link-local, loopback or multicast ranges:
+   the home network, other containers, and the Windows or Mac host behind
+   a WSL or VM gateway. The jump is in `FORWARD` as well as `DOCKER-USER`,
+   so it holds where Docker hooks no `DOCKER-USER` (its nftables backend).
 3. **IPv6:** the same rules, should the network ever get IPv6.
 
 Tor relays have public addresses, so the internet still works. `apply`
 refills `DOMOVOI-FH` from scratch and inserts each jump only once, so
-running it again changes nothing. The unit is `PartOf=docker.service` and
-`WantedBy=docker.service`: it runs whenever Docker starts or restarts,
-which matters because Docker rebuilds its own chains then. After it has
-applied the rules it writes `/run/domovoi-fh-firewall/applied`.
+running it again changes nothing. The unit is `Before=docker.service`,
+`PartOf=docker.service` and `WantedBy=docker.service`: the rules go in
+before Docker starts (so after a reboot no container Docker brings back is
+up without them), and again whenever Docker restarts. Its main process,
+`watch`, then checks every minute, puts back anything another tool
+flushed, and rewrites `/run/domovoi-fh-firewall/applied` with the time it
+last saw every rule in place.
 
-The core reads that file. Settings → Household → Friend Houses shows a
-plain warning while it is missing, and the core logs one if it starts the
-Tor container without it.
+The core reads that file. If it is missing, or more than five minutes
+old, Settings → Household → Friend Houses says so plainly and the core
+does not start the Tor container (it stops one that is running).
 
 The installer puts the files in place, enables the unit and starts it,
 whether or not Friend Houses is ever turned on, so the fence is up before
@@ -1457,8 +1461,9 @@ sudo iptables -S DOMOVOI-FH
 
 `DOMOVOI_MANAGE_FH_FIREWALL=0` in `/etc/default/domovoi-update` leaves the
 script and unit to you, in the installer and in updates alike. If you use
-it, fence the network yourself before turning Friend Houses on: the
-dashboard will keep showing the warning.
+it, fence the network yourself before turning Friend Houses on, and set
+`DOMOVOI_MANAGE_FH_FIREWALL=0` in the core's environment too: without the
+state file the core otherwise refuses to start Tor.
 
 ### Internet or not
 
