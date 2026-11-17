@@ -21,6 +21,7 @@ from domovoi.friend_houses import service as svc
 from domovoi.friend_houses import store
 from domovoi.friend_houses import tor_config as tc
 from domovoi.friend_houses import tor_runtime as rt
+from domovoi.tests.friend_houses_testkit import no_tasks_left_behind  # noqa: F401  (autouse)
 
 linux_only = pytest.mark.skipif(sys.platform == "win32", reason="Friend Houses runs on Linux")
 
@@ -94,6 +95,16 @@ def house(tmp_path, monkeypatch):
     monkeypatch.setattr("domovoi.db.session.session_scope", fake_scope)
     monkeypatch.setattr(svc, "_inputs", fake_inputs)
     monkeypatch.setattr(svc, "_start_retries", lambda: None)
+    # Background work a reconcile starts ("I'm back" to every friend, event
+    # handling) is recorded, not run: a task left running would touch the
+    # database after the next test's TRUNCATE.
+    spawned: list[str] = []
+
+    def no_spawn(coro, name):
+        spawned.append(name)
+        coro.close()
+
+    monkeypatch.setattr(svc, "spawn", no_spawn)
     monkeypatch.setattr(svc, "_wait_for_onion", fake_onion)
     monkeypatch.setattr(svc, "current_epoch", fake_epoch)
     monkeypatch.setattr(svc, "_ensure_listener", fake_ensure)
@@ -111,6 +122,7 @@ def house(tmp_path, monkeypatch):
     h = House()
     h.docker, h.friends, h.listener, h.policy, h.root = docker, friends, listener, policy, tmp_path
     h.invites = invites
+    h.spawned = spawned
     h.enable = lambda on=True: monkeypatch.setattr(settings, "friend_houses_enabled", on, raising=False)
     return h
 
@@ -148,6 +160,7 @@ async def test_the_first_friend_starts_tor_with_the_friend_already_authorized(ho
     assert house.listener["running"]
     assert svc.tor_wanted() and svc.status()["status"] == "on"
     assert (house.root / "friend-houses" / "house-keys.json").exists()
+    assert house.spawned == ["friend-houses-im-back"]  # friends hear it's online, once
 
 
 @linux_only

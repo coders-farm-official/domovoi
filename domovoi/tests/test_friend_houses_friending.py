@@ -21,6 +21,7 @@ from domovoi.friend_houses import identity as fid
 from domovoi.friend_houses import pairing as fp
 from domovoi.friend_houses import session as fs
 from domovoi.tests.conftest import requires_db
+from domovoi.tests.friend_houses_testkit import no_tasks_left_behind  # noqa: F401  (autouse)
 
 pytestmark = requires_db
 
@@ -156,7 +157,12 @@ async def test_a_request_on_a_cancelled_file_leaves_nothing(house) -> None:
 async def test_a_malformed_event_is_dropped(house) -> None:
     made = await fr.make_invite()
     event = _request_event(made["id"], _other(house.tmp, "b"))
-    event["statement"] = event["statement"][:-2] + "00"  # breaks the signature
+    # Flip a bit of the signature: always broken. (Writing "00" over the last
+    # byte left it valid whenever that byte already was 00: 1 run in 256 that
+    # stored a real request, the CI flake of 2026-11-17.)
+    raw = bytearray.fromhex(event["statement"])
+    raw[-1] ^= 0x01
+    event["statement"] = raw.hex()
     await fr.on_request(event)
     await fr.on_request({"event": "request"})
     assert await fr.list_requests() == []

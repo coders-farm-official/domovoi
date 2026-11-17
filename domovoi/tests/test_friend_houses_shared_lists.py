@@ -19,6 +19,7 @@ from domovoi.friend_houses import shared_lists as sl
 from domovoi.friend_houses import spaces as sp
 from domovoi.friend_houses import store
 from domovoi.tests.conftest import requires_db
+from domovoi.tests.friend_houses_testkit import no_tasks_left_behind  # noqa: F401  (autouse)
 
 pytestmark = requires_db
 
