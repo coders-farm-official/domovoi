@@ -40,9 +40,9 @@ nothing in the left column applies to it.
 
 ## What to know going in
 
-Four differences. Two need something from you; two are already handled
-in-repo and are listed so you know why you don't have to think about
-them.
+Five differences. The first three may need something from you; the last
+two are already handled and are listed so you know why you don't have to
+think about them.
 
 ### 1. The system-voice fallback is optional on Linux
 
@@ -51,9 +51,9 @@ OS's own synthesizer — pyttsx3/SAPI on Windows, `say` on macOS, and on
 Linux **`espeak-ng` if you install it**. It's robotic, and it is only the
 floor beneath the Piper voice for when that voice is missing or broken.
 
-Domovoi no longer installs `espeak-ng` (since 2026-10): its voices are
-spoken by its own text-to-phoneme converter on ONNX Runtime, with no
-espeak-ng anywhere, and espeak-ng is GPL. Without a system synthesizer
+Domovoi doesn't install `espeak-ng`: its voices are spoken by its own
+text-to-phoneme converter on ONNX Runtime, and espeak-ng is GPL. Without
+a system synthesizer
 the chain simply ends at Piper. If you want the floor anyway:
 
 ```bash
@@ -87,7 +87,7 @@ or point the scanner at a fixed mountpoint:
 export SATELLITE_ADOPTION_SCAN_DIRS=/media/domovoi/setup
 ```
 
-**My advice: don't start here.** USB adoption is the bench route. A new
+**You rarely need it.** USB adoption is the bench route. A new
 room's default is the Wi-Fi setup portal, which never touches the server's
 USB ports ([SATELLITE_HARDWARE.md](SATELLITE_HARDWARE.md)). And if the
 server can't mount the card, pick **download overlay zip** when you prepare
@@ -97,7 +97,7 @@ from another computer. USB adoption still has an open checklist of its own
 [`satellite/PROVISIONING.md`](../satellite/PROVISIONING.md) is the proven
 fallback.
 
-### 2b. Restart-from-the-dashboard needs one sudoers line
+### 3. Restart-from-the-dashboard needs one sudoers line
 
 The version panel's **Restart to apply changes** button bounces both
 services so pulled code actually loads, and **Restart Domovoi** (an admin's,
@@ -133,22 +133,20 @@ sudo -n -l /usr/bin/systemctl --no-block restart domovoi-core.service domovoi-we
 
 That's the same probe the server runs to decide whether to offer the
 button; `domovoi/self_restart.py` reports `restart_capable` from it. Skip
-this and nothing breaks — the panel shows the manual `systemctl` command
-instead of a button, which is exactly the pre-existing behaviour.
+this and nothing breaks: the panel shows the manual `systemctl` command
+instead of a button.
 
 > Both units are bounced together on purpose: a pull moves the whole
 > checkout, and core and web import from the same tree, so restarting one
 > would leave the other serving stale code — the confusion the version
 > panel exists to end.
 
-### 3. `host.docker.internal` doesn't exist (handled)
+### 4. `host.docker.internal` doesn't exist (handled)
 
 Chat mode's Letta container reaches the host's Ollama at
 `host.docker.internal`, which Docker Desktop provides and native Docker
 Engine does not. Affects `OLLAMA_BASE_URL` in the `letta` service and the
-`letta_tool_callback_url` setting.
-
-**This is now handled in-repo** — the `letta` service in
+`letta_tool_callback_url` setting. The `letta` service in
 `domovoi/docker-compose.yml` maps the name explicitly:
 
 ```yaml
@@ -160,7 +158,7 @@ Docker Desktop provides the name natively and ignores the mapping, so the
 one compose file works on both platforms. Nothing to do; noted here because
 any *new* container that needs to reach the host wants the same two lines.
 
-### 4. Cosmetic: no GPU readout (nothing to do)
+### 5. Cosmetic: no GPU readout without NVIDIA (nothing to do)
 
 The dashboard's Models page reads GPU stats from `nvidia-smi`. It's
 guarded by `shutil.which()`, so it degrades cleanly to blank rather than
@@ -171,7 +169,7 @@ erroring. CPU, RAM, and disk still come through via `psutil`.
 ## Which distro
 
 Domovoi's Linux install (the one command below, and `provision.sh`
-behind it) runs on these x86_64 systems (owner decision 2026-11-15):
+behind it) runs on these x86_64 systems:
 
 | System | Installed as | The venv's Python |
 |---|---|---|
@@ -268,64 +266,39 @@ venv from that instead (`scripts/linux/python-runtime.sh`):
 - **Ubuntu 26.04** never gets any of this: its `python3` is the lock's,
   and the venv is made from it as it always was.
 
-### The thing that actually decides it
+### Checking a new Python release
 
-Ubuntu's system Python moves with the release — 24.04 ships 3.12, 26.04
-ships **3.14** (`python3 3.14.3-0ubuntu2`). That matters because this stack
-leans on compiled packages that ship wheels *per Python version*, and a
-brand-new CPython can go months without them. When a wheel is missing, pip
-falls back to building from source and you lose an evening to a compiler
-error that has nothing to do with Domovoi. (With the venv on Domovoi's own
-CPython, the system's version no longer decides anything for the venv;
-the lock's Python still does.)
-
-So the rule is: **before committing to a release, check that this repo's
-compiled dependencies publish wheels for the Python it ships.** The
-long pole is `ctranslate2` (the engine under `faster-whisper`); `torch`
-left with Resemblyzer in 1.3.0 and `numba`, the slowest of all to land,
-with `librosa` on 2026-10-15; the check below still lists both for older
-checkouts.
+This only matters if you move the venv to a Python the lock doesn't cover.
+The stack leans on compiled packages that ship wheels *per Python
+version*, and a brand-new CPython can go months without them. When a wheel
+is missing, pip falls back to building from source and you lose an evening
+to a compiler error that has nothing to do with Domovoi. So **before moving
+to a new Python, check that the compiled dependencies publish wheels for
+it.** The long pole is `ctranslate2` (the engine under `faster-whisper`):
 
 ```bash
-python3 -c "import json,urllib.request as u,re; [print(p, sorted({m.group(1) for f in json.load(u.urlopen(f'https://pypi.org/pypi/{p}/json'))['urls'] for m in [re.search(r'-(cp3\d+)-',f['filename'])] if m and 'manylinux' in f['filename'] and 'x86_64' in f['filename']})) for p in ('numba','torch','ctranslate2','shazamio-core')]"
+python3 -c "import json,urllib.request as u,re; [print(p, sorted({m.group(1) for f in json.load(u.urlopen(f'https://pypi.org/pypi/{p}/json'))['urls'] for m in [re.search(r'-(cp3\d+)-',f['filename'])] if m and 'manylinux' in f['filename'] and 'x86_64' in f['filename']})) for p in ('ctranslate2','onnxruntime','numpy','scipy','asyncpg')]"
 ```
 
-If your target Python's tag is in all three lists, you're clear.
+If your target Python's tag is in every list, you're clear. Walk the
+*transitive* compiled dependencies too, not just the ones `pyproject.toml`
+names: a pure-Python wrapper can hide a compiled extension. Two packages
+compile from source today:
 
-### Where that stood in August 2026
+- **`metaphone`** publishes no wheels on any Python; it is small and
+  builds with `python3-dev` and `build-essential`.
+- **`shazamio-core`**, under the optional `shazam` extra (the song
+  recognizer's second stage; not installed by default), is a Rust
+  extension that binds ALSA. Without a prebuilt wheel for your Python, pip
+  compiles it, which needs `pkg-config`, `libasound2-dev` and a Rust
+  toolchain, and `pyproject.toml` explains why a source build may still
+  crash at import.
 
-Every compiled dependency had cp314 manylinux x86_64 wheels: `torch`
-2.13.0, `ctranslate2` 4.8.2, `numba` 0.67.0, `numpy` 2.5.2, `scipy`
-1.18.1, `asyncpg` 0.31.0, plus `pillow`, `psutil`, `sqlalchemy`,
-`miniaudio` and `lameenc` (until 2026-10), `soxr`, `llvmlite`. `piper-tts` (the voice engine
-until 2026-10) shipped `cp39-abi3`; its replacement, `onnxruntime`, has
-cp314 wheels. The NVIDIA
-CUDA wheels are `py3-none-manylinux` — no Python tag at all.
-
-Two dependencies still compile from source, and both are worth knowing
-about because **neither shows up if you only check the packages named in
-`pyproject.toml`** — they are transitive:
-
-- **`webrtcvad`** (via `resemblyzer`) — sdist-only on *every* Python
-  version. It hasn't been installed since 2026-10-15, and `resemblyzer`
-  itself left in 1.3.0 (voice ID runs an ONNX model now).
-- **`shazamio-core`** (via `shazamio`, the library-enricher fallback) — a
-  Rust/pyo3 extension binding ALSA. `shazamio` itself is pure Python, which
-  makes this easy to miss. When its prebuilt wheel is absent for your
-  Python, pip compiles it, and that needs `pkg-config` + `libasound2-dev`
-  from the prerequisites above plus a Rust toolchain (pip fetches one
-  automatically).
-
-The lesson generalizes: when checking wheel coverage for a new Python,
-walk the *transitive* compiled dependencies, not just the direct ones. A
-pure-Python wrapper can hide a Rust extension.
-
-Docker publishes native `resolute` packages, and Ollama's installer
-branches on kernel and architecture rather than Ubuntu release.
+The NVIDIA CUDA wheels are `py3-none-manylinux`, with no Python tag at all.
 
 ### If the wheels aren't there yet
 
-Don't fight the system Python — sidestep it (on Debian 13 and the Ubuntu
+Don't fight the system Python; sidestep it (on Debian 13 and the Ubuntu
 24.04 systems `provision.sh` already does,
 [above](#the-python-the-venv-runs-on)):
 
@@ -334,19 +307,15 @@ uv venv --python 3.13 .venv
 ```
 
 `uv` (or deadsnakes) installs its own interpreter, so the distro's version
-stops mattering and the systemd units below work unchanged — they already
-point at the venv's `python`. This is also the escape hatch if a future
-release jumps to a Python the ecosystem hasn't caught up with.
-
-Picking an older LTS isn't permanent either: LTS-to-LTS
-`do-release-upgrade` opens once the newer release reaches its `.1` point
-release.
+stops mattering, and the systemd units below work unchanged: they already
+point at the venv's `python`. There is no hash-pinned lock for such a venv
+([No lock for your Python?](#by-hand)).
 
 Use **Server, not Desktop**, where you choose. A desktop environment
 costs you 1–2 GB of RAM that models want, and the server has no screen.
-(Linux Mint and Pop!_OS are desktops: that works, and costs that memory.) (The one thing Desktop
-would buy you is USB auto-mounting for the adoption flow — see above, and
-you're not using that.)
+Linux Mint and Pop!_OS are desktops: that works, and costs that memory.
+The one thing a desktop adds is USB auto-mounting for the adoption flow
+above, which you rarely need.
 
 ---
 
@@ -384,9 +353,8 @@ programs pin, `windows/installer/release-signing.pub`, which the script
 carries too), and name that same commit. Only then does it run
 `provision.sh` from that download, telling it that exact commit, so the
 copy it installs into `/opt/domovoi` is the one that was checked. It never
-pipes anything else into a shell. Before the first release it installs
-`main` and follows it, as the script below does; `main` has no release
-signature, and it says so.
+pipes anything else into a shell. `main` (`--channel main`, below) has no
+release signature, and it says so.
 
 **Read it before you run it.** Piping a script from the internet into
 `sudo bash` means trusting it unseen. To look first, download it, read it,
@@ -435,10 +403,7 @@ It clones the repository again into `/opt/domovoi` as the `domovoi` user
 (an account it creates with no password login; an existing `--user` is
 used as it is, and one in `sudo`, `admin` or `wheel` is refused), at the
 latest release, and the box then follows the `stable` channel: releases
-only ([Release channels](#release-channels)). Before the repository's first
-release there is no `stable` branch yet; the script then installs `main`,
-follows it, and says so, and the Version card says when the first release
-is out. `--ref` picks something else: a branch (`--ref main`), a release
+only ([Release channels](#release-channels)). `--ref` picks something else: a branch (`--ref main`), a release
 tag (`--ref v1.0.0`, read as a tag only, never a branch of that name; any
 other name is the tag of that name when there is one, `stable` and `main`
 always the branches) or a full commit SHA (that commit only); with a tag or a SHA, `--track-branch`
@@ -565,12 +530,11 @@ provides `fpcalc` for library enrichment, and
 (`metaphone`) compile. (No
 `espeak-ng`: see [the system-voice fallback](#1-the-system-voice-fallback-is-optional-on-linux).)
 
-`pkg-config` and `libasound2-dev` are there for **`shazamio-core`** — a
-Rust/pyo3 extension that binds ALSA. It's a transitive dependency of
-`shazamio` (the library-enricher fallback), and on any Python new enough
-to be missing its prebuilt wheel, pip compiles it from source. Without
-these two the build dies with *"The pkg-config command could not be
-found"* and takes the whole install down with it.
+`pkg-config` and `libasound2-dev` are only needed if you add the optional
+`shazam` extra: its compiled core, **`shazamio-core`**, binds ALSA, and on
+a Python without its prebuilt wheel pip builds it from source, which fails
+with *"The pkg-config command could not be found"* without them
+([Checking a new Python release](#checking-a-new-python-release)).
 
 Docker Engine — follow Docker's official apt-repository instructions for
 your release, then:
@@ -654,7 +618,7 @@ python3 -m venv .venv && source .venv/bin/activate
 
 **Install from the hash-pinned lock.** `requirements-linux-py314.lock` at
 the repo root is the whole production set (the core, the dashboard, the
-`real-clients` and `voice-profile` extras; no torch since 1.3.0), every
+`real-clients` and `voice-profile` extras; no torch), every
 package at an exact version with its SHA-256s, so a substituted or
 tampered download fails the install instead of running. Beside it,
 `requirements-linux-py314-no-deps.lock` pins and hashes `faster-whisper`,
@@ -691,9 +655,8 @@ what `--no-build-isolation` is for, and why the `python3-dev` and
 from the second. The fourth installs Domovoi itself and
 nothing else. No `dev` extra: a server doesn't run the test suite.
 
-Nothing in the lock is a CUDA runtime, and since 1.3.0 there is no torch
-at all (voice ID ran Resemblyzer on CPU torch, about 550 MB of it, until
-then). The `cuda` extra below only covers the wheels `ctranslate2` wants.
+Nothing in the lock is a CUDA runtime, and there is no torch at all. The
+`cuda` extra below only covers the wheels `ctranslate2` wants.
 
 Check speech recognition loads, and fetch voice ID's speaker model (a
 25 MB file the core would otherwise fetch on its first start; pinned by
@@ -729,9 +692,8 @@ bash scripts/linux/compile-linux-lock.sh` (pip-compile in a pinned
 machine with Docker, starting from the suite's tested versions) after any
 change to `pyproject.toml`, and commit both.
 
-> **CUDA wheels are opt-in.** They used to ride along with `real-clients`;
-> they now live in a separate `cuda` extra, so the lock pulls nothing
-> NVIDIA. On a machine that *does* have an NVIDIA GPU, add
+> **CUDA wheels are opt-in.** They live in a separate `cuda` extra, so the
+> lock pulls nothing NVIDIA. On a machine that *does* have an NVIDIA GPU, add
 > `pip install -e ".[cuda]"` (resolved from the index, not hash-checked:
 > the lock is the CPU set).
 
@@ -739,8 +701,8 @@ change to `pyproject.toml`, and commit both.
 > recognizer that follows each command while it is spoken; today it only
 > runs in *shadow* mode, logging what it would have done next to what
 > Whisper heard ([CPU_HOST.md](CPU_HOST.md#the-streaming-fast-lane)).
-> Domovoi does not install its recognizer, `sherpa-onnx`, any more
-> (2026-10): the `sherpa-onnx` wheels on PyPI compile in espeak-ng
+> Domovoi does not install its recognizer, `sherpa-onnx`: the
+> `sherpa-onnx` wheels on PyPI compile in espeak-ng
 > (GPL-3.0) for their own text to speech. To try the lane, install a
 > sherpa-onnx built with `SHERPA_ONNX_ENABLE_TTS=OFF`, or the PyPI wheel
 > knowing it carries that GPL code ([CPU_HOST.md](CPU_HOST.md#the-streaming-fast-lane)):
@@ -878,8 +840,7 @@ Three details worth not skipping:
   `SHUTDOWN_DEADLINE_SEC` (20) after the signal it logs every thread's stack
   and exits — so `TimeoutStopSec` is only systemd's backstop, and it has to
   stay above that deadline or the journal gets a bare SIGKILL instead of
-  the stacks. Without it systemd waits 90 s. (Until 2026-09-30 the core
-  swallowed SIGTERM and every update and restart waited out exactly that.)
+  the stacks. Without it systemd waits 90 s.
 
   `control-group` is systemd's default, written out because `mixed` looks
   tempting and is worse here. The core's one long-lived child is Python's
@@ -956,7 +917,7 @@ What is deliberately left out, and why:
 
 - **Everything that implies `NoNewPrivileges` on the core.** The version
   panel's Restart runs `sudo -n systemctl ...` from the core
-  ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)), and on a
+  ([Restart from the dashboard](#3-restart-from-the-dashboard-needs-one-sudoers-line)), and on a
   box with the [update unit](#updates-from-the-dashboard) that is
   `sudo -n systemctl start domovoi-update.service`, the box's only update
   path. sudo works only while its set-uid bit is honoured, and the kernel's
@@ -984,7 +945,7 @@ What is deliberately left out, and why:
   They hide device nodes: a GPU, an SDR stick for the radio, the block
   devices the dashboard reads a satellite card's label from.
 - **`MemoryDenyWriteExecute` on core and web.** The speech and audio stack
-  (numba, torch, onnxruntime) compiles code at run time.
+  (onnxruntime) compiles code at run time.
 - **The Docker socket.** No unit setting can narrow it: the core needs it
   for the room players, and through it the service user can still do
   anything as root ([Install](#install)). The sandbox narrows the direct
@@ -1000,10 +961,9 @@ ReadWritePaths=/data/music
 ```
 
 **Check it** after `daemon-reload` and a restart: `systemd-analyze security
-domovoi-core` scores the exposure (the units this page listed before
-scored 9.0 "UNSAFE" each; the shipped ones score about 3.5 for the web and
-1.8 for `domovoi-db`, and the core, which keeps only the file-system part,
-scores higher than both), Settings → System → About & updates still offers
+domovoi-core` scores the exposure (the shipped units score about 3.5 for
+the web and 1.8 for `domovoi-db`; the core, which keeps only the
+file-system part, scores higher; unsandboxed units score 9.0 "UNSAFE"), Settings → System → About & updates still offers
 **Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
 satellite turn answers, and a room's music starts (the core runs
 `docker`). The quick check for the sudo path on its own, as root:
@@ -1026,13 +986,11 @@ roll everything back ([Updates from the dashboard](#updates-from-the-dashboard))
 
 ### The loop watchdog
 
-On 2026-10-14 the core froze: port 6370 still took connections, nothing
-answered, every satellite went offline, and the dashboard's Restart could
-not help, because it asks the core to restart itself. It stayed that way
-until a power cycle, which also wiped the journal (that box kept it in RAM
-only). Two causes were found and fixed (the radio plugin decoding audio on
-the core's event loop, and database connects queuing behind a full thread
-pool); these pieces are for the next one.
+A core can freeze in a way that leaves port 6370 taking connections while
+nothing answers: every satellite goes offline, and the dashboard's Restart
+can't help, because it asks the core to restart itself. Without the pieces
+below that lasts until a power cycle, which on a box that keeps its journal
+in memory also wipes the record of what happened.
 
 **The core watches itself.** A thread outside the event loop
 (`domovoi/loop_watchdog.py`) checks a heartbeat the loop beats every
@@ -1108,7 +1066,7 @@ truly stuck, never one that is busy, slow or missing its database:
   a core truly frozen has usually ended itself first. The page reads the
   status every 5 s while the core is silent, and that silence counts, so a
   press after a minute of watching acts at once; otherwise the button says
-  *making sure it's stuck* while it waits. Only silence somebody watched
+  *making sure it's stuck, then restarting* while it waits. Only silence somebody watched
   counts: more than 12 s between two silent reads (the page was closed;
   the core may have answered meanwhile) starts the count again.
 - **Not while it starts.** A core systemd reports as starting, one that
@@ -1132,7 +1090,7 @@ it again. It needs no sudoers line: core and web run as the same user.
 Where it can't work (a unit systemd wouldn't restart, a core under another
 account, no systemd), the dashboard shows why and the command to run by
 hand. When the process can't be signalled but the web may use the core's
-[restart grant](#2b-restart-from-the-dashboard-needs-one-sudoers-line)
+[restart grant](#3-restart-from-the-dashboard-needs-one-sudoers-line)
 (a web unit you wrote without `NoNewPrivileges`), it runs that instead.
 
 **The journal is kept on disk.** Without that, the record of a freeze is
@@ -1161,12 +1119,10 @@ sudo kill -USR1 "$(systemctl show -p MainPID --value domovoi-core)"   # every st
 
 ### The voice turn watchdog
 
-On 2026-11-09 speech recognition on the server wedged and every room sat
-in its yellow "thinking" ring for good: the satellite had sent its
-request, and the core never said what it heard, never answered and never
-sent an error. Nothing between the end of a request and its reply had a
-time limit, and a speech thread that never returns can't be stopped.
-Now every stage before the reply has one (`domovoi/turn_watchdog.py`):
+If speech recognition on the server wedges, a room would sit in its yellow
+"thinking" ring for good: a speech thread that never returns can't be
+stopped. So every stage between the end of a request and its reply has a
+time limit (`domovoi/turn_watchdog.py`):
 
 | Stage | Limit | Setting |
 |---|---|---|
@@ -1233,9 +1189,9 @@ too.
 Linux keeps every file it read in memory (the page cache) until a program
 needs the room. On a dedicated box that is free speed. Inside the Windows
 installer's WSL VM it isn't: the cache holds memory Windows wants back, and
-WSL returns it only once the VM is idle, which a house assistant rarely is
-(on 2026-11-10 a house had 51 GB of cache in a 63 GB VM next to 5 GB of
-programs, and Windows was compressing and paging around it).
+WSL returns it only once the VM is idle, which a house assistant rarely is (a
+63 GB VM has been seen holding 51 GB of cache next to 5 GB of programs,
+with Windows compressing and paging around it).
 
 So Domovoi trims it. `domovoi-cache-trim.timer` starts
 `domovoi-cache-trim.service` every 2 minutes, a oneshot that runs, as
@@ -1279,7 +1235,7 @@ root, `/usr/bin/python3 -I -S
 
 `provision.sh` (the units step) and every update run install the script
 and the two units, and enable the timer whenever it isn't enabled, so an
-install from before the trim gets it with its next update. There is no
+older install gets it with its next update. There is no
 dashboard setting: the defaults are meant to need none.
 
 **For an operator**, `/etc/domovoi/cache-trim.conf` (root's, not writable
@@ -1517,22 +1473,20 @@ domovoi_oww_cache`, `docker builder prune`.
 
 ## Updates from the dashboard
 
-(The button was called **Pull the latest** until 2026-10-22. Where the
-update unit can restart unattended (`restart_mode` `update` and the
-sudoers grant), **Update Domovoi** is one press: the pull, then the
+The version panel's **Update Domovoi** fetches, verifies the fetched
+tip's signature (see [Signed updates](#signed-updates)), and fast-forwards
+to it. Where the update unit below can restart unattended (`restart_mode`
+`update` and the sudoers grant), that is one press: the pull, then the
 restart through the unit, asked once. Elsewhere it pulls, and **Restart to
 apply changes** follows. A press while an update is under way says
 **already updating** and follows it. On a Windows install the press also
 updates the Windows side:
-[WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves).)
+[WINDOWS_HOST.md](WINDOWS_HOST.md#update-domovoi-both-halves).
 
-The version panel's **Update Domovoi** (the pull) fetches, verifies the fetched tip's
-signature (see [Signed updates](#signed-updates)), and fast-forwards to
-it. A pull can bring new Python dependencies, a new Flyway migration or a
+A pull can bring new Python dependencies, a new Flyway migration or a
 new MPD image, and a bare restart of core and web applies none of them:
-`domovoi-db` runs Flyway only when *it* starts. A migration that never ran
-looks like a broken release (the V013 device-token table was the first
-time this bit).
+`domovoi-db` runs Flyway only when *it* starts, and a migration that never
+ran looks like a broken release.
 
 A fourth unit closes that gap. `domovoi-update.service` is a root oneshot
 that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh),
@@ -1556,8 +1510,8 @@ does this:
    health-check them, usually in a few seconds. No backup, no dependency
    sync, no MPD rebuild, and `domovoi-db` is left alone, unless Postgres
    doesn't answer or its Flyway history is missing a migration the checkout
-   ships: then `domovoi-db` is restarted first (compose up plus Flyway),
-   as every plain restart did before 2026-10-05. While core and web are
+   ships: then `domovoi-db` is restarted first (compose up plus Flyway).
+   While core and web are
    stopped, Docker's GPU runtime is checked as in step 7 (and when that
    restarted Docker, `domovoi-db` is restarted too); a healthy plain
    restart ends with steps 11-13.
@@ -1611,8 +1565,8 @@ does this:
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
    changed: re-sync the venv. A change to `pyproject.toml` that only moves
    `[project]`'s `version` line (every release's bump) is not a dependency
-   change: no re-sync, and a box answered **No** still takes the release. By default that is pip's resolver, as it
-   was before the lock existed (without its CPU torch step since 1.3.0):
+   change: no re-sync, and a box answered **No** still takes the release.
+   By default the re-sync is pip's resolver,
    `pip install -e ".[real-clients,voice-profile]"` from the index; when
    the checkout has `requirements-linux-py314.lock`, the step's detail
    says it is there to opt into. With `DOMOVOI_USE_LOCK=1`
@@ -1862,7 +1816,7 @@ runs: `sudo -u domovoi rm /opt/domovoi/.git/index.lock`.
 earlier update was interrupted; Domovoi cleaned up and is trying
 again").
 
-Before 2026-10-22, `docker-compose.yml` mounted the checkout's
+Older builds' `docker-compose.yml` mounted the checkout's
 `domovoi/searxng/` at `/etc/searxng` in the search helper's container,
 read-write. The SearXNG image's entrypoint runs as root and, unless
 `FORCE_OWNERSHIP` is off, chowns `/etc/searxng` to its own user (uid
@@ -1909,15 +1863,14 @@ Since the fix:
 
 [`scripts/linux/update-verifier.sh`](../scripts/linux/update-verifier.sh),
 installed root-owned as `/usr/local/lib/domovoi-update/verify-update.sh`,
-is the only way root takes code from the checkout (delta security review
-2026-10-16, S4). The checkout belongs to the service user, and so does
-everything running as that user: the core, the dashboard, every plugin. Code
-running there could edit the checkout, commit or not (an edit hidden from
-`git status` by `git update-index --skip-worktree` included), swap a file
-for a symbolic link, or plant a `refs/replace`, and before the verifier
-root ran `apply-update.sh`, `os-jobs.sh` and `gpu-runtime.sh` and copied
-the journald drop-in straight from that tree at the next Restart, signed
-updates or not. Now, before every run (`ExecStartPre`):
+is the only way root takes code from the checkout. The checkout belongs to
+the service user, and so does everything running as that user: the core,
+the dashboard, every plugin. Code running there could edit the checkout,
+commit or not (an edit hidden from `git status` by `git update-index
+--skip-worktree` included), swap a file for a symbolic link, or plant a
+`refs/replace`. So root never runs `apply-update.sh`, `os-jobs.sh`,
+`gpu-runtime.sh` or the journald drop-in from that tree. Before every run
+(`ExecStartPre`):
 
 1. HEAD is fetched into a bare mirror only root can write,
    `/var/lib/domovoi-update/mirror.git`, with `transfer.fsckObjects`: every
@@ -2015,7 +1968,7 @@ layout on this page, so you only need the file to change one:
 # Extras for the venv re-sync. The lock covers real-clients and voice-profile; any other
 # (an NVIDIA host's cuda, fastlane) is resolved from the index after it, without hash checks.
 # DOMOVOI_PIP_EXTRAS=real-clients,voice-profile
-# 1: the re-sync installs from the hash-pinned lock. Default: off, pip's resolver as before.
+# 1: the re-sync installs from the hash-pinned lock. Default: off, pip's resolver.
 # Re-seed the lock from this box's pip freeze first (The hash-pinned lock, below).
 # provision.sh sets it to 1 on the boxes it installs (they were installed from the lock).
 # DOMOVOI_USE_LOCK=1
@@ -2075,7 +2028,7 @@ layout on this page, so you only need the file to change one:
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,
-alongside (not instead of) the restart rule in [2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line):
+alongside (not instead of) the restart rule in [Restart from the dashboard](#3-restart-from-the-dashboard-needs-one-sudoers-line):
 
 ```bash
 sudo visudo -f /etc/sudoers.d/domovoi-update
@@ -2096,7 +2049,7 @@ How the core decides which restart to run: it looks for
 check, no sudo). Found, the button starts the unit, and only if the rule
 above exists. Without that rule the panel says so and shows the manual
 command; it does not fall back to a plain bounce, which would skip the
-migrations. Not found, the button bounces core and web exactly as before.
+migrations. Not found, the button bounces core and web.
 `systemctl mask domovoi-update.service` switches back to the plain bounce.
 
 ### Release channels
@@ -2111,9 +2064,9 @@ and two branches a box can follow for updates:
 | `stable` | The latest release's commit, nothing else. It only ever fast-forwards, once a release is complete (`git push origin "v1.0.1^{commit}:refs/heads/stable"`), and never gets a release candidate. | New installs: `provision.sh`'s default, and a release build of the Windows installer. |
 | `main` | Every change, as it lands. Release candidates are tags on it. | Boxes installed before the channels, until someone switches them; whoever wants changes before they are released. |
 
-The channel is the branch the checkout tracks, so the check, **Pull the
-latest**, the rolled-back `bad_sha` and the update unit's pin all work as
-before. Settings → System → About & updates shows:
+The channel is the branch the checkout tracks, so the check, **Update
+Domovoi**, the rolled-back `bad_sha` and the update unit's pin all follow
+it. Settings → System → About & updates shows:
 
 - the release label of the code that runs: `1.0.0` on a release, `1.0.0 +
   14 (abc1234)` past one (`git describe --tags --match "v[0-9]*"`);
@@ -2159,11 +2112,10 @@ The update unit can re-sync the venv from `requirements-linux-py314.lock`
 instead of pip's resolver, so that a substituted or tampered download
 fails the update and it rolls back. That is opt-in: until
 `/etc/default/domovoi-update` sets `DOMOVOI_USE_LOCK=1`, the re-sync
-resolves from the index exactly as it did before the lock existed, and
-its step says the lock is there. The reason is the first locked re-sync:
+resolves from the index, and its step says the lock is there. The reason is the first locked re-sync:
 it moves every package to the lock's version, and the lock in the
 repository is seeded from the test suite's set, not from what your box
-runs (torch, faster-whisper and the rest of the speech stack are the
+runs (faster-whisper and the rest of the speech stack are the
 newest that resolved).
 
 **A box `provision.sh` installed is opted in already.** It was installed
@@ -2173,8 +2125,7 @@ writes `DOMOVOI_USE_LOCK=1` into `/etc/default/domovoi-update` (a file
 that already sets `DOMOVOI_USE_LOCK`, to anything, is left as it is, with
 a warning when that is not `1`), and its updates install the way it was
 installed. Set it to `0` to go back to the resolver. A box set up by hand
-from the resolver, like the first Linux servers, keeps the default, off,
-until you opt it in.
+from the resolver keeps the default, off, until you opt it in.
 
 The locked re-sync installs the build tools the way the manual install
 does: the lock's own entries for `setuptools`, `wheel` and what they need
@@ -2182,8 +2133,7 @@ in the lock (found through its `# via` lines; today `packaging`), with
 their hashes, as a requirements file (`pip install --require-hashes -r`).
 Not `pip install --require-hashes -c <lock> setuptools wheel`: the pip in
 Ubuntu 26.04's venv (25.1) takes no hashes from a constraints file and
-refuses that, so before 2026-10-11 an opted-in Ubuntu 26.04 box rolled
-back every update that changed its dependencies.
+refuses that.
 
 To opt in a box you installed by hand from the resolver, re-seed the lock
 from it first:
@@ -2230,7 +2180,7 @@ from the lock, every package hash-checked ([step 5](#updates-from-the-dashboard)
 A package that does not match its hash fails the update, and it rolls
 back. If a later update can't use the lock at all (the venv moved to a
 newer Python, the lock was renamed, `DOMOVOI_DEPS_LOCK` was emptied), it
-does not stop: it resolves from the index as before, but its `sync-deps`
+does not stop: it resolves from the index, but its `sync-deps`
 step is a `warn`, the journal says WARNING, and Settings → System → About & updates shows
 **lock not applied: <reason>** under the last update until the next run.
 Re-seed and commit a lock for the new Python to go back to hash-checked
@@ -2299,7 +2249,7 @@ sudo -u domovoi git -C /opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/a
 ```
 
 (After a pull by hand, run `env_bootstrap --repair` before you restart
-anything yourself; see [Helper-container secrets](#two-more-linux-notes).)
+anything yourself; see [Helper-container secrets](#more-linux-notes).)
 
 With signing enforced and the verifier in the unit, that bound holds
 against code running as the service user too, as far as the update goes:
@@ -2396,11 +2346,10 @@ signature check always sees the commit HEAD names.
 Until signed updates are switched on, the pin catches a mistake (a
 checkout pointed at the wrong branch), not code on the box: the branches
 it checks HEAD against are the ones the checkout last fetched, copied into
-root's mirror from the checkout, and the service user can rewrite those
-(the review of the root verifier, case R4). With signing enforced it is
-the signature that bounds what runs. What signing doesn't block yet
-(planned with 1.1's signed releases): moving HEAD back to an older commit
-that was signed too.
+root's mirror from the checkout, and the service user can rewrite those.
+With signing enforced it is the signature that bounds what runs. What
+signing doesn't block yet: moving HEAD back to an older commit that was
+signed too.
 Keep the file readable by the service user (`0644`; it holds no secrets):
 the core reads the pin and the signers path from it, and while it can't,
 the dashboard offers no channel switch and says why. All four settings are optional and read from that
@@ -2528,8 +2477,7 @@ runs the whole pipeline, and **last update** in the version panel shows how
 it went. The old restart rule in `/etc/sudoers.d/domovoi-restart` can stay.
 It's used only if the unit is ever removed or masked.
 
-A box whose update unit predates the verifier (installed before
-2026-10-16) needs none of this again: its next **Restart to apply changes**
+A box whose update unit predates the verifier needs none of this again: its next **Restart to apply changes**
 moves it over by itself ([The update verifier](#the-update-verifier),
 "Existing installs").
 
@@ -2629,7 +2577,9 @@ in this order.
 
 ---
 
-## Two more Linux notes
+<a id="two-more-linux-notes"></a>
+
+## More Linux notes
 
 **Firewall.** If `ufw` is on, satellites need `6370` and browsers need
 `6369` from the LAN:
@@ -2718,9 +2668,9 @@ alone.
 **Helper-container secrets.** `docker-compose.yml` takes the Letta server
 password from `LETTA_TOKEN` and SearXNG's signing key from `SEARXNG_SECRET`
 in `domovoi/.env`. `LETTA_TOKEN` is also what the core signs in to Letta
-with, so the two always match. There is no fallback: until October 2026
-an `.env` without them got values that were the same on every install,
-so compose now refuses every command (`domovoi-db`'s `compose up postgres`
+with, so the two always match. There is no fallback (older versions gave
+an `.env` without them values that were the same on every install), so
+compose refuses every command (`domovoi-db`'s `compose up postgres`
 included) while either is missing, and says how to add them. A fresh
 `.env` gets random values from `python -m domovoi.env_bootstrap`. An older
 one gets them from

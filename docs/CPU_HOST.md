@@ -32,15 +32,15 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | `whisper_cpu_threads` | `0` (one per physical core; ignored on `cuda`) | `0` — unchanged |
 | `ollama_tool_model` | `qwen2.5:14b` | **`qwen3:8b`** with thinking off (the installers' pick; [below](#qwen257b-instead-of-qwen2514b)), or `qwen2.5:7b` |
 | `ollama_model` | `llama3.2:3b` | `llama3.2:3b` — unchanged, already small |
-| `ollama_vision_model` (pictures in chat) | **`qwen2.5vl:7b`** — pick it in **Models** | `qwen3-vl:2b-instruct-q4_K_M` — the default, already the CPU pick |
+| `ollama_vision_model` (pictures in chat) | `qwen3-vl:2b-instruct-q4_K_M`; with a GPU, `qwen2.5vl:7b` is worth picking in **Models** | `qwen3-vl:2b-instruct-q4_K_M` — unchanged |
 | `tts_engine` | `piper` | `piper` — unchanged, but read the note below |
 | Chat mode (Letta) | opt-in | **leave off** |
 
 All of these are dashboard settings: **Settings → System → Advanced** (its
 *Speech-to-text* group) for the Whisper ones, **Settings → Chat & AI → Models** and
-Advanced's *Models* group for the Ollama ones. The vision model is the one row where
-the default is already the CPU host's: it answers chat messages with
-pictures, and `qwen2.5vl:7b` takes minutes per picture without a GPU. The
+Advanced's *Models* group for the Ollama ones. The vision model answers chat
+messages with pictures; its default is already the CPU pick, because
+`qwen2.5vl:7b` takes minutes per picture without a GPU. The
 Whisper settings are restart-tier (the model loads once at boot). The
 Ollama model settings are hot — they take effect on the next turn with no
 restart, which makes them cheap to experiment with. Try a model, say
@@ -164,7 +164,7 @@ second time). A turn heard twice records `stt_rechecked` and
 
 > These are ballparks, not promises — core count, memory bandwidth, and
 > what else the box is doing all move them. Measure yours rather than
-> trusting the table: see [Measuring turn latency](#measuring-turn-latency)
+> trusting these figures: see [Measuring turn latency](#measuring-turn-latency)
 > below.
 
 ### `whisper_cpu_threads = 0`: every core
@@ -338,14 +338,12 @@ a cold load plus two calls, then the room apologises and listens again
 
 `tts_engine` is `piper`, which renders every spoken response locally —
 on this box, that means on the same CPU already doing Whisper and the
-language models. (There is no online voice to offload it to: the
-Microsoft Edge voices were dropped in October 2026.)
+language models. Domovoi has no online voice to hand it to.
 
 **It is rarely the bottleneck.** Piper is fast — a `medium` voice renders a
 typical one- or two-sentence reply in well under a second on eight modern
 cores — and it runs after the answer is already decided, so it lands at
-the tail of the turn rather than in the middle of it. For most households
-it simply isn't the bottleneck.
+the tail of the turn rather than in the middle of it.
 
 If you measure otherwise, the `system` engine is cheaper still, at the
 cost of a robotic voice. (On Linux it exists only if you installed
@@ -373,8 +371,7 @@ the second for a true figure.
 The voice-identification encoder and the Piper voices load in the
 background right after boot (the default voice at once, each room's own
 voice when its satellite connects), so the first command after a restart
-doesn't pay for them — before, it paid about 0.6 s for each, and the
-encoder's load stalled every room while it ran:
+doesn't pay for them:
 
 ```bash
 journalctl -u domovoi-core | grep "speech warm-up"
@@ -417,9 +414,9 @@ a second hearing).
 
 `total_ms` starts when the satellite decides you have stopped talking,
 which is `listen.silence_timeout` (1.2 s by default) after your last word.
-`endpoint_silence_ms` is that wait, when the core can know it: satellites
-from this release report their last voiced frame, and for an older one it
-is worked out from the timeout it reported on connect; otherwise the two
+`endpoint_silence_ms` is that wait, when the core can know it: a satellite
+reports its last voiced frame, and for one too old to do that it is worked
+out from the timeout the satellite reported on connect; otherwise the two
 stages that need it are missing from the line.
 
 **Speculative transcription** (`speculative_stt_enabled`, on by default)
@@ -436,8 +433,7 @@ ready when the satellite stops listening. Each pause somebody talks past
 costs one extra decode of CPU (at most three per utterance); the summary's
 `speculative` block counts how often the early transcript was used.
 
-**Early commit** (`early_commit_enabled`, on by default; satellites from
-this release only) goes one step further for simple commands: when the
+**Early commit** (`early_commit_enabled`, on by default) goes one step further for simple commands: when the
 early transcript is a whole closed command, the core stops the satellite
 listening without waiting out its silence timeout and answers. The core
 logs each one:
@@ -465,10 +461,10 @@ mini PC — measured on a desktop through a simulated satellite, not
 yet on the server — and only if the satellite's pause report arrives on
 time. The decode must finish inside the satellite's own silence timeout
 (0.78 s with `silence_timeout` 0.8): 240 ms for the pause plus ~280 ms of
-decode leaves about 260 ms for the pause to be late. A satellite from
-before 2026-09-30 is later than that on a short command after the wake
-greeting (300-420 ms measured), so short commands from such a satellite
-mostly won't commit early until it is upgraded: see
+decode leaves about 260 ms for the pause to be late. A satellite older
+than 1.0.0 is later than that on a short command after the wake
+greeting (300-420 ms measured), so short commands from it mostly won't
+commit early until it is upgraded: see
 [When the early transcript starts late](#when-the-early-transcript-starts-late).
 
 Whatever is said after the capture ends is lost ("set a timer for ten
@@ -478,8 +474,7 @@ alone would have waited 0.78 s — a pause between those is the new risk.
 When the person was still talking, the core logs `early commit … cut in on
 speech` and records it on the turn: `post_commit_voiced_ms` (speech in
 the frames already on their way when the satellite stopped — only the
-first 30-90 ms) and, from a satellite from 2026-09-30 on,
-`post_commit_resume_ms` — such a satellite keeps listening, silently,
+first 30-90 ms) and `post_commit_resume_ms` — the satellite keeps listening, silently,
 until its own silence timeout would have ended the capture
 (`post_commit_listened_ms` says how far past the stop it heard) and
 reports whether speech came back. The summary's `early_commit` block
@@ -491,7 +486,7 @@ turn the room's **Stop listening early on a whole command** off
 whole house.
 
 The same stages are stored on each turn's `intents_log` row
-(`timings`, a JSON column; migration V015), and the dashboard's **Models**
+(`timings`, a JSON column), and the dashboard's **Models**
 page shows the recent medians under speech-to-text. For the whole
 breakdown, per stage p50 / p95 / max:
 
@@ -534,14 +529,11 @@ when it did (per turn it is on the row, and the turn's log line carries
 well past 240, the other keys say who held it up:
 
 * `sat_start_backlog_ms` / `sat_pause_backlog_ms` past a frame or two
-  (30-60 ms): the satellite itself was behind — the person was talking while it was still busy, and
-  the capture went out in a burst. (Before 2026-09-30 every satellite is
-  expected to do this after the wake greeting: its wake model's reset runs
-  the embedding model over 4 s of noise, 26-29 wake predictions' worth —
-  about 0.1 s on a desktop i9, and by that ratio over a second on a Pi Zero
-  2 W, though that is not measured on a Pi yet. Upgrade the satellite; an
-  upgraded one reports `sat_start_backlog_ms`, which should then read
-  0-60.)
+  (30-60 ms): the satellite itself was behind — the person was talking
+  while it was still busy, and the capture went out in a burst. A
+  satellite older than 1.0.0 does this after every wake greeting (its
+  wake model's reset is slow); upgrade it, and `sat_start_backlog_ms`
+  should then read 0-60.
 * `frame_lag_max_ms` / `pause_net_ms` high with no satellite backlog: the
   network held the frames up (Wi-Fi power save, a weak link) — or the
   core itself: frames and pauses are stamped when the core's receive loop
@@ -567,8 +559,7 @@ For now it only runs in **shadow mode**: it writes down what it would
 have done and whether Whisper agreed, and every reply is exactly what it
 would have been without it. Those records decide whether it may ever act.
 
-Turn it on. Domovoi does not install the recognizer, sherpa-onnx, since
-2026-10: its wheels on PyPI (and `sherpa-onnx-core` under them) compile in
+Turn it on. Domovoi does not install the recognizer, sherpa-onnx: its wheels on PyPI (and `sherpa-onnx-core` under them) compile in
 espeak-ng, GPL-3.0, for their own text to speech, and Domovoi's own
 dependencies are permissive only. Build sherpa-onnx with
 `SHERPA_ONNX_ENABLE_TTS=OFF` (the Android app's copy is built that way:
@@ -623,7 +614,7 @@ curl -s http://localhost:6370/v1/stats/latency | python3 -m json.tool   # the "f
 docker exec -i domovoi-postgres psql -U domovoi domovoi -c "SELECT at, room_id, transcript, timings->>'fastlane_text' AS lane FROM intents_log WHERE timings->>'fastlane_agree' = 'false' ORDER BY at DESC LIMIT 20;"
 ```
 
-**Measured, on the dev box** (i9-14900KF, 333 Piper-TTS command clips in
+**Measured on a desktop development PC** (i9-14900KF, 333 Piper-TTS command clips in
 nine voices shaped like a satellite capture; not yet on a CPU-only
 server, and TTS voices are not a household):
 

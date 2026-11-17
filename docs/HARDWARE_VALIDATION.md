@@ -1,17 +1,16 @@
 # Hardware validation — satellite onboarding + video satellite
 
-Everything below shipped with full off-hardware test coverage (unit +
-API + fake-volume/fake-gadget harnesses), but these flows touch kernels,
-USB controllers, panels, and Wi-Fi radios — the following checklists are
-what still needs a pass on real devices before calling the features
-released. Check items off in a PR that records board, OS image, and
-kernel version.
+A checklist for contributors testing on real devices. These flows are
+covered by tests off hardware (unit, API, and fake-volume and fake-gadget
+harnesses), but they touch kernels, USB controllers, panels and Wi-Fi
+radios, which only real devices exercise. Record the board, OS image and
+kernel version with each pass.
 
 Section A is the **USB adoption** route (a prepared card, the Pi plugged
-into the server's USB port). A new room's default is the Wi-Fi setup portal,
-which does not use the USB gadget and is not what the items below test; and
-USB adoption isn't offered on the Windows install, which can't see USB
-drives.
+into the server's USB port). A new room's default is the Wi-Fi setup
+portal, which does not use the USB gadget and is not what these items
+test. USB adoption isn't offered on the Windows install, which can't see
+USB drives.
 
 ## A. Pi Zero 2 W — prepared media + USB adoption
 
@@ -96,7 +95,7 @@ Armbian and/or Radxa Debian (record which).
 8. [ ] 24 h soak: no Chromium OOM (≥ 2 GB board), progress drift < 2 s
        after a day, WS reconnect overlay appears/clears across a server
        restart.
-9. [ ] **USB adoption on RK3566 (investigation, phase 2):** whether the
+9. [ ] **USB adoption on RK3566 (open question):** whether the
        USB-C port enters peripheral mode (dr_mode) and enumerates the
        mass-storage gadget on this image — result decides when the Radxa
        board flips `supported=true` in
