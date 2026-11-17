@@ -6,6 +6,7 @@ import com.domovoi.app.net.ApiException
 import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.net.isDeviceTokenRefusal
 import com.domovoi.app.player.PlayItem
+import com.domovoi.app.player.PlayKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -213,11 +214,16 @@ internal sealed class DeviceAction {
     val afterReply: Boolean get() = this is Play
 }
 
-/** The actions the app understands, in order; anything else is skipped. */
-internal fun parseDeviceActions(raw: List<JsonObject>): List<DeviceAction> = raw.mapNotNull { a ->
+/** The actions the app understands, in order; anything else is skipped.
+ *  [stations]: whether the server runs our Radio plugin
+ *  (Capabilities.has(CAP_STATIONS)); without it a station item is left out,
+ *  as the app neither shows nor plays stations then. */
+internal fun parseDeviceActions(raw: List<JsonObject>, stations: Boolean = false): List<DeviceAction> = raw.mapNotNull { a ->
     when (a.str("type")) {
         "play" -> {
-            val items = (a["items"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::playItemFor) }
+            val items = (a["items"] as? JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonObject)?.let(::playItemFor) }
+                .filter { stations || it.kind != PlayKind.Radio }
             val resume = (a["resume"] as? JsonPrimitive)?.booleanOrNull == true
             if (items.isEmpty()) null else DeviceAction.Play(items, resume)
         }

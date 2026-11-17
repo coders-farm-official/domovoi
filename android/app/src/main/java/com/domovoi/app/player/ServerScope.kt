@@ -64,14 +64,20 @@ object ServerSwitch {
     /** Media that came from a server, by path; everything but the phone's own. */
     fun fromServer(item: PlayItem): Boolean = item.kind != PlayKind.Device && item.savedKey == null
 
-    fun plan(queue: List<PlayItem>, index: Int): ServerSwitchPlan {
-        val kept = queue.filterNot(::fromServer)
-        val removed = queue.indices.filter { fromServer(queue[it]) }.sortedDescending()
+    fun plan(queue: List<PlayItem>, index: Int): ServerSwitchPlan = planDropping(queue, index, ::fromServer)
+
+    /** What taking every entry that [goes] out of [queue] leaves (the same
+     *  plan as a server move's, for any kind of entry): our Radio plugin
+     *  leaving the server takes its stations out
+     *  ([PlayerController.dropStations]). */
+    fun planDropping(queue: List<PlayItem>, index: Int, goes: (PlayItem) -> Boolean): ServerSwitchPlan {
+        val kept = queue.filterNot(goes)
+        val removed = queue.indices.filter { goes(queue[it]) }.sortedDescending()
         val current = queue.getOrNull(index)
-        val currentGoes = current == null || fromServer(current)
-        // The phone's songs before the play head: the current one's place
+        val currentGoes = current == null || goes(current)
+        // The kept entries before the play head: the current one's place
         // among them, or (when the current one goes) the next one's.
-        val before = queue.take(index.coerceIn(0, queue.size)).count { !fromServer(it) }
+        val before = queue.take(index.coerceIn(0, queue.size)).count { !goes(it) }
         val keptIndex = if (kept.isEmpty()) 0 else before.coerceAtMost(kept.lastIndex)
         return ServerSwitchPlan(kept, keptIndex, removed, currentGoes)
     }

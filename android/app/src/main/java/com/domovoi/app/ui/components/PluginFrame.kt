@@ -3,7 +3,6 @@ package com.domovoi.app.ui.components
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.HorizontalDivider
@@ -28,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -42,16 +41,18 @@ import com.domovoi.app.ui.theme.LocalDomovoiColors
 
 /*
  * The plugin screen frame — the dashboard's PluginPageFrame
- * (web/static/components.jsx) for the app's screens that a plugin provides
- * (Stations, Images). A screen a plugin provides reads as that plugin's,
- * not as part of Domovoi: one band across the top with the screen's icon,
- * the plugin's name and publisher, a "plugin" badge and a link to its row
- * on the dashboard's Plugins page (version, update, disable live there; the
- * app has no plugin management of its own). Inside the frame the brand
- * colours are the plugin's accent, as the server derived and checked them
- * (/api/capabilities, plugins_runtime/accent.py), so the screen's buttons,
- * starred icons and selection washes take its colour; the shell around it
- * keeps Domovoi's amber.
+ * (web/static/components.jsx), for the app's own screens that use a plugin
+ * of ours (Stations uses Radio, Images uses Image Generation;
+ * net/Capabilities.kt AppScreenPlugins). A plugin can't ship app code: the
+ * screen is the app's, and the server's plugin is what it talks to. The
+ * frame says so: one band across the top with the screen's icon, "Uses the
+ * <plugin> plugin", the publisher after it, muted, and a link to the
+ * plugin's row on the dashboard's Plugins page (version, update, disable
+ * live there; the app has no plugin management of its own). Inside the
+ * frame the brand colours are the plugin's accent, as the server derived
+ * and checked them (/api/capabilities, plugins_runtime/accent.py), so the
+ * screen's buttons, starred icons and selection washes take its colour;
+ * the shell around it keeps Domovoi's amber.
  */
 
 /** `#rrggbb` or `#rrggbbaa` (the server's form) → a Color; null otherwise. */
@@ -85,9 +86,20 @@ fun pluginTint(base: DomovoiColors, plugin: CapabilityPlugin?): PluginTint {
     return PluginTint(colors, tok("brand_ink", colors.fg))
 }
 
-/** Wraps a plugin-provided screen in its frame. [capability] names the
- *  plugin (the one whose manifest declares it); without one on this server
- *  the screen renders bare, as before. */
+/** The plugin's name as the frame shows it: the manifest's, else its slug. */
+fun pluginDisplayName(plugin: CapabilityPlugin): String = plugin.name?.takeIf { it.isNotBlank() } ?: plugin.slug
+
+/** The frame's main line: "Uses the Radio plugin". */
+fun pluginFrameLine(plugin: CapabilityPlugin): String = "Uses the ${pluginDisplayName(plugin)} plugin"
+
+/** What a screen reader says for the band: the line, then the publisher. */
+fun pluginFrameDescription(plugin: CapabilityPlugin): String =
+    pluginFrameLine(plugin) + (plugin.publisher?.takeIf { it.isNotBlank() }?.let { ", by $it" } ?: "")
+
+/** Wraps one of the app's screens that uses a plugin of ours in its frame.
+ *  [capability] names the plugin ([com.domovoi.app.net.Capabilities.pluginFor]);
+ *  without it on this server the screen renders bare (the router doesn't
+ *  route there then). */
 @Composable
 fun PluginScreenFrame(
     capability: String,
@@ -121,7 +133,7 @@ private fun PluginFrameBand(plugin: CapabilityPlugin, icon: ImageVector, tint: P
     val c = tint.colors
     val app = LocalApp.current
     val context = LocalContext.current
-    val name = plugin.name?.takeIf { it.isNotBlank() } ?: plugin.slug
+    val name = pluginDisplayName(plugin)
     Column(Modifier.fillMaxWidth().background(c.canvas)) {
         Row(
             Modifier
@@ -134,13 +146,16 @@ private fun PluginFrameBand(plugin: CapabilityPlugin, icon: ImageVector, tint: P
         ) {
             Icon(icon, contentDescription = null, tint = tint.ink, modifier = Modifier.size(18.dp))
             Row(
-                Modifier.weight(1f),
+                Modifier
+                    .weight(1f)
+                    // One line for a screen reader: "Uses the Radio plugin, by Coders Farm".
+                    .clearAndSetSemantics { contentDescription = pluginFrameDescription(plugin) },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    name, color = c.fg, fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                    pluginFrameLine(plugin), color = c.fg, fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 plugin.publisher?.takeIf { it.isNotBlank() }?.let {
                     Text(
@@ -148,16 +163,6 @@ private fun PluginFrameBand(plugin: CapabilityPlugin, icon: ImageVector, tint: P
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
                     )
                 }
-                Text(
-                    "plugin",
-                    color = tint.ink,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .background(c.card, RoundedCornerShape(6.dp))
-                        .border(1.dp, c.border, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
-                )
             }
             // The Plugins page is the dashboard's (version, update, disable);
             // this opens it in the browser at the plugin's row.
@@ -172,7 +177,7 @@ private fun PluginFrameBand(plugin: CapabilityPlugin, icon: ImageVector, tint: P
                         }
                     }
                     .padding(horizontal = 12.dp)
-                    .semantics { contentDescription = "manage $name on the dashboard's Plugins page" },
+                    .semantics { contentDescription = "manage the $name plugin on the dashboard's Plugins page" },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {

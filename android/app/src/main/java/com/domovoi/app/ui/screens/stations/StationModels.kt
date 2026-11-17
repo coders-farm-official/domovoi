@@ -3,10 +3,11 @@ package com.domovoi.app.ui.screens.stations
 import kotlinx.serialization.Serializable
 
 // ---------------------------------------------------------------------------
-// Wire models for the radio plugin's router (/api/plugins/radio/*) —
-// property names mirror the JSON exactly. This whole screen is gated on
-// the "stations" capability (design §8), so these endpoints exist whenever
-// it renders. A search hit from radio-browser comes back in the same
+// Wire models for our Radio plugin's router (/api/plugins/radio/*) —
+// property names mirror the JSON exactly. This whole screen shows only
+// while the server runs that plugin of ours (net/Capabilities.kt
+// AppScreenPlugins: slug "radio", our publisher, the "stations"
+// capability), so these endpoints exist whenever it renders. A search hit from radio-browser comes back in the same
 // Station shape with id == 0 until it's persisted via POST
 // /api/plugins/radio/stations.
 // ---------------------------------------------------------------------------
