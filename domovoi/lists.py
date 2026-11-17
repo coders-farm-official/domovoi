@@ -326,7 +326,7 @@ async def add_item(
     *,
     person_id: int | None = None,
     room: str | None = None,
-    via: Literal["voice", "screen"] = "screen",
+    via: Literal["voice", "screen", "friend"] = "screen",
 ) -> tuple[ItemRow, AddOutcome]:
     """Add ``item_text`` to the end of the list (see the module note for
     "already" and "reopened")."""

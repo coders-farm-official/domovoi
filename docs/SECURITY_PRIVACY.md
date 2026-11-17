@@ -2650,8 +2650,13 @@ service for requests (the pairing address), rate-limited and answering
 only for open files; it is deleted, and a new address made for the next
 file, as soon as none is left. The file's secret isn't stored: it is
 derived from the house key when needed, so a database dump can't be used
-to answer a file. Making, listing and cancelling files, and every other
-Friend Houses route, is admin security tier, reads included.
+to answer a file. Making, listing and cancelling files, and everything that changes who is
+trusted or what the house does (accepting, alert levels, verifying codes,
+renaming or removing a friend, sharing lists, deleting or exporting a
+conversation) is admin security tier, reads included. What makes sense
+with friends the house already has is open to every household phone (the
+household token): reading the house inbox, sending a message, marking a
+conversation read, and seeing the friend list and the shared lists.
 
 **The 4-digit code.** Both houses compute the same 4-digit code from
 random values each side committed to before seeing the other's, so
@@ -2687,12 +2692,23 @@ to the chat model.
 Removing a friend keeps the conversation, marked "no longer a friend", so
 it can be read or exported before it is deleted.
 
+**Shared lists.** An admin can share a household list with a friend house.
+Each house keeps its own copy in its own Lists, and the two exchange
+signed changes (items added, edited, ticked off, removed; not the list's
+name, its order or who in the house did what). A friend's changes can
+only touch the one list its share is linked to here. A list a friend
+offers waits for an admin to accept it, and declining tells nobody. Text a
+friend adds to a list is cleaned, cut at 200 characters, and has every
+wake phrase taken out before it is stored, because the Lists voice
+handler reads items aloud. Either house can stop sharing at any time;
+both keep their copy.
+
 **What's stored, and where.**
 
 - The house's keys: a file in `~/.domovoi/friend-houses/`, mode 0600,
   never in Postgres (so the update unit's database dump never holds them).
   Losing it means friending everyone again.
-- Friends, friend files, requests and messages: Postgres (`friend_houses_*`). A key
+- Friends, friend files, requests, messages and shared-list changes: Postgres (`friend_houses_*`). A key
   this house gives a friend to reach it, and a friend file it is still
   trying to send, are kept only until delivered.
 - Encryption is **between houses**, not end to end between people: the

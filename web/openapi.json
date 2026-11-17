@@ -17570,6 +17570,167 @@
         }
       }
     },
+    "/api/friend-houses/shared-lists": {
+      "get": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Shared Lists",
+        "description": "Lists shared with friend houses, both ways, and offers waiting here.",
+        "operationId": "friend_houses_shared_lists_api_friend_houses_shared_lists_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Share List",
+        "description": "Share one of this house's lists with a friend.",
+        "operationId": "friend_houses_share_list_api_friend_houses_shared_lists_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/shared-lists/{space_id}/accept": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Accept List",
+        "description": "Take a friend's list: it becomes a new list here (``name`` optional).",
+        "operationId": "friend_houses_accept_list_api_friend_houses_shared_lists__space_id__accept_post",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/shared-lists/{space_id}/decline": {
+      "post": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Decline List",
+        "description": "Forget a friend's offer (they aren't told).",
+        "operationId": "friend_houses_decline_list_api_friend_houses_shared_lists__space_id__decline_post",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/friend-houses/shared-lists/{space_id}": {
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Leave List",
+        "description": "Stop sharing. Both houses keep their own copy as an ordinary list.",
+        "operationId": "friend_houses_leave_list_api_friend_houses_shared_lists__space_id__delete",
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Space Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/podcasts/subscriptions": {
       "get": {
         "tags": [

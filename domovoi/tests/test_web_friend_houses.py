@@ -1,4 +1,4 @@
-"""Friend Houses on the dashboard (F2: friending; F3: messages): Settings → Household →
+"""Friend Houses on the dashboard (F2: friending; F3: messages; F4: shared lists): Settings → Household →
 Friend Houses (web/static/friend_houses.jsx) and its proxy to the core
 (web/backend/api/friend_houses.py).
 
@@ -34,6 +34,7 @@ ADMIN_TOKEN = "admin-session-token"
 XRW = {"X-Requested-With": "XMLHttpRequest"}
 SECRET_FILE = "DOMOVOI-FRIEND-FILE v1 not-a-real-one-0123456789abcdef"
 HOUSE = "ab" * 32
+SPACE = "cd" * 16
 MESSAGE = "Dinner on Sunday?\nBring the cat."
 
 
@@ -116,22 +117,44 @@ ROUTES: dict[str, tuple[str, str, dict | None]] = {
     "export": ("GET", f"/api/friend-houses/conversations/{HOUSE}/export", None),
     "delete-conversation": ("DELETE", f"/api/friend-houses/conversations/{HOUSE}", None),
     "send": ("POST", "/api/friend-houses/messages", {"friend_id": "fr0123abcd", "text": MESSAGE}),
+    # F4: shared lists
+    "shared-lists": ("GET", "/api/friend-houses/shared-lists", None),
+    "share-list": ("POST", "/api/friend-houses/shared-lists", {"list_id": 7, "friend_id": "fr0123abcd"}),
+    "accept-list": ("POST", f"/api/friend-houses/shared-lists/{SPACE}/accept", {"name": "Groceries (Smiths)"}),
+    "decline-list": ("POST", f"/api/friend-houses/shared-lists/{SPACE}/decline", None),
+    "stop-sharing": ("DELETE", f"/api/friend-houses/shared-lists/{SPACE}", None),
 }
 _IDS = sorted(ROUTES)
 
 
-def test_every_route_wears_the_security_tier() -> None:
-    seen = 0
+# Owner decision 17: what every household phone may do with existing
+# friends wears the device tier; everything else the security tier.
+HOUSEHOLD_ROUTES = {
+    ("GET", "/api/friend-houses"), ("GET", "/api/friend-houses/friends"),
+    ("GET", "/api/friend-houses/conversations"), ("GET", "/api/friend-houses/conversations/{house}"),
+    ("POST", "/api/friend-houses/conversations/{house}/read"), ("POST", "/api/friend-houses/messages"),
+    ("GET", "/api/friend-houses/shared-lists"),
+}
+
+
+def test_every_route_wears_its_tier() -> None:
+    seen, household = 0, set()
     for r in iter_route_contexts(web_app.routes):
         if not getattr(r, "path", "").startswith("/api/friend-houses"):
             continue
         seen += 1
         deps = {d.call for d in r.dependant.dependencies}
-        if r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
+        method = next(iter(r.methods))
+        if (method, r.path) in HOUSEHOLD_ROUTES:
+            household.add((method, r.path))
+            assert admin_auth.require_device in deps, r.path
+            assert admin_auth.require_admin_security not in deps, r.path
+        elif r.methods & {"POST", "PUT", "PATCH", "DELETE"}:
             assert admin_auth.require_admin_security in deps, r.path
         else:
             assert admin_auth.require_admin_security_read in deps, r.path
     assert seen == len(ROUTES)
+    assert household == HOUSEHOLD_ROUTES
 
 
 @pytest.fixture
@@ -143,7 +166,11 @@ def forwarded(monkeypatch):
 
     def fake(method):
         async def call(path, body=None, timeout=10.0, headers=None):
-            assert headers and headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
+            # The caller's own credential goes on: the admin Bearer, or a
+            # household phone's token on the household routes.
+            assert headers and (headers.get("Authorization") == f"Bearer {ADMIN_TOKEN}"
+                                or headers.get(admin_auth.DEVICE_TOKEN_HEADER) == HOUSEHOLD_TOKEN
+                                or headers.get("Authorization") is None)
             calls.append((method, path, body))
             return 200, {"ok": True}
         return call
@@ -191,8 +218,38 @@ async def test_before_setup_everything_is_501(name, monkeypatch, forwarded) -> N
     install_fake_db(monkeypatch, admin=False)
     async with _client() as c:
         r = await _send(c, name)
+    if _is_household(name):
+        # The device tier keeps its pre-setup LAN grace; harmless here,
+        # since Friend Houses can't be turned on before an admin exists.
+        assert r.status_code != 501, r.text
+        return
     assert r.status_code == 501, r.text
     assert forwarded == []
+
+
+def _is_household(name: str) -> bool:
+    method, path, _ = ROUTES[name]
+    pattern = path.replace(HOUSE, "{house}")
+    return (method, pattern) in HOUSEHOLD_ROUTES
+
+
+HOUSEHOLD_TOKEN = "household-token-for-tests"
+
+
+@pytest.mark.parametrize("name", _IDS)
+@pytest.mark.asyncio
+async def test_the_household_token_reaches_only_the_household_routes(name, monkeypatch, forwarded) -> None:
+    # Owner decision 17: a household phone reads the inbox, sends, sees the
+    # friends and shared lists; trust and settings stay with the admin.
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=HOUSEHOLD_TOKEN)
+    async with _client({admin_auth.DEVICE_TOKEN_HEADER: HOUSEHOLD_TOKEN}) as c:
+        r = await _send(c, name)
+    if _is_household(name):
+        assert r.status_code == 200, r.text
+        assert len(forwarded) == 1
+    else:
+        assert r.status_code in (401, 403), (name, r.status_code)
+        assert forwarded == []
 
 
 @pytest.mark.parametrize("name", _IDS)
@@ -207,7 +264,8 @@ async def test_an_admin_bearer_reaches_the_cores_route(name, monkeypatch, forwar
     f_method, f_path, f_body = forwarded[0]
     assert f_method == method
     assert f_path.split("?")[0] == path.replace("/api/friend-houses", "/v1/admin/friend-houses")
-    if method in ("PUT", "PATCH") or name in ("make", "preview", "ask", "accept", "send"):
+    if method in ("PUT", "PATCH") or name in ("make", "preview", "ask", "accept", "send",
+                                                   "share-list", "accept-list"):
         assert f_body == body
 
 
@@ -333,3 +391,65 @@ def test_the_page_warns_when_the_installer_firewall_is_missing() -> None:
     assert "status.firewall === 'missing'" in page
     assert "Update Domovoi (or run its installer again) before using Friend Houses." in page
     assert page.count("<FhFirewallNote status={status}/>") == 2
+
+
+# ─── F4: shared lists ────────────────────────────────────────────────────
+
+
+def test_shared_lists_are_plain_text_and_addressed_by_id_only() -> None:
+    src = _code(_page())
+    start = src.index("/* ---- shared lists (F4)") if "/* ---- shared lists (F4)" in src else src.index("const FH_SHARE_EXPLAIN")
+    part = src[start:src.index("const FriendHousesPanel")]
+    for banned in ("dangerouslySetInnerHTML", "innerHTML", "localStorage", "console."):
+        assert banned not in part, banned
+    # Every shared-list URL interpolates only the 32-hex id.
+    urls = re.findall(r"`\$\{FH_API\}/shared-lists[^`]*`", part)
+    assert urls
+    for url in urls:
+        assert re.findall(r"\$\{([^}]*)\}", url)[1:] in ([], ["share.id"]), url
+    assert "const fhSpaceOk = (id) => /^[0-9a-f]{32}$/.test(String(id || ''));" in part
+    # The list and friend are chosen in the body, never in the address.
+    assert "apiPost(`${FH_API}/shared-lists`, { list_id: Number(listId), friend_id: friendId })" in part
+
+
+def test_the_page_says_how_shared_lists_work() -> None:
+    src = _page()
+    for words in ("Changes either house makes show up in both, usually within a minute. "
+                  "Each house keeps its own copy and its own name for it.",
+                  "shared a list:", " — shared with ", " — from ",
+                  "Stop sharing ${listName} with ${who}? You both keep your own copy.",
+                  "waiting to send", "Shared lists", "Share a list"):
+        assert words in src, words
+
+
+@pytest.mark.asyncio
+async def test_a_shared_list_id_that_isnt_one_never_reaches_the_core(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        for bad in ("cd" * 15, "CD" * 16, "zz" * 16, "cd" * 17, "ab" * 32):
+            for method, path in (("POST", f"/api/friend-houses/shared-lists/{bad}/accept"),
+                                 ("POST", f"/api/friend-houses/shared-lists/{bad}/decline"),
+                                 ("DELETE", f"/api/friend-houses/shared-lists/{bad}")):
+                r = await c.request(method, path, json={} if method == "POST" else None)
+                assert r.status_code in (404, 405), (method, bad, r.status_code)
+    assert forwarded == []
+
+
+@pytest.mark.asyncio
+async def test_sharing_a_list_checks_the_list_and_the_friend(monkeypatch, forwarded) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN})
+    async with _client(bearer(ADMIN_TOKEN)) as c:
+        for body in ({"list_id": 0, "friend_id": "fr0123abcd"},
+                     {"list_id": -3, "friend_id": "fr0123abcd"},
+                     {"list_id": "7", "friend_id": "fr0123abcd"},
+                     {"list_id": True, "friend_id": "fr0123abcd"},
+                     {"list_id": 1.5, "friend_id": "fr0123abcd"},
+                     {"list_id": 7, "friend_id": "bad.id"},
+                     {"list_id": 7},
+                     {"friend_id": "fr0123abcd"}):
+            r = await c.post("/api/friend-houses/shared-lists", json=body)
+            assert r.status_code in (400, 404), (body, r.text)
+        r = await c.post(f"/api/friend-houses/shared-lists/{SPACE}/accept", json={"name": ["Groceries"]})
+        assert r.status_code == 400 and "Groceries" not in r.text
+        assert (await c.post(f"/api/friend-houses/shared-lists/{SPACE}/accept", json={})).status_code == 200
+    assert forwarded == [("POST", f"/v1/admin/friend-houses/shared-lists/{SPACE}/accept", {})]

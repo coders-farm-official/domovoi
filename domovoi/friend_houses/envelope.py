@@ -41,7 +41,10 @@ from domovoi.friend_houses import identity as fid
 
 VERSION = 1
 KIND_TEXT = 1
-KINDS = frozenset({KIND_TEXT})
+# A batch of changes to something two houses share (a list, F4): the body is
+# binary, in the layout of domovoi/friend_houses/spaces.py.
+KIND_SPACE = 2
+KINDS = frozenset({KIND_TEXT, KIND_SPACE})
 TEXT_MAX_CHARS = 2000            # Limits p4
 ENVELOPE_MAX = 63 * 1024          # one Noise message with room to spare
 _HEADER = struct.Struct(">BB32s32s16s8sQQH")
@@ -97,8 +100,19 @@ def text_message(keys: fid.HouseKeys, *, to: bytes, text: str, epoch: bytes, seq
         raise ValueError("a message needs some text")
     if len(cleaned) > TEXT_MAX_CHARS:
         raise ValueError(f"a message is at most {TEXT_MAX_CHARS} characters")
-    draft = Envelope(KIND_TEXT, keys.house_key, to, secrets.token_bytes(16), epoch, seq,
-                     sent_at, cleaned.encode("utf-8"))
+    return signed(keys, kind=KIND_TEXT, to=to, body=cleaned.encode("utf-8"), epoch=epoch,
+                  seq=seq, sent_at=sent_at)
+
+
+def signed(keys: fid.HouseKeys, *, kind: int, to: bytes, body: bytes, epoch: bytes, seq: int,
+           sent_at: int) -> Envelope:
+    """Any envelope, signed. Callers check their own body first."""
+    if kind not in KINDS:
+        raise ValueError("unknown kind")
+    if len(body) > ENVELOPE_MAX - _HEADER.size - SIGNATURE:
+        raise ValueError("body too large")
+    draft = Envelope(kind, keys.house_key, to, secrets.token_bytes(16), epoch, seq,
+                     sent_at, body)
     return Envelope(draft.kind, draft.sender, draft.recipient, draft.msg_id, draft.epoch,
                     draft.seq, draft.sent_at, draft.body,
                     keys.sign(fid.CTX_MESSAGE, draft.signed_part()))
@@ -118,16 +132,17 @@ def parse(data: bytes, *, sender: bytes, recipient: bytes) -> Envelope:
         raise BadEnvelope("length")
     if not (secrets.compare_digest(frm, sender) and secrets.compare_digest(to, recipient)):
         raise BadEnvelope("not from this sender to this house")
-    signed, signature = bytes(data[: -SIGNATURE]), bytes(data[-SIGNATURE:])
-    if not fid.verify(frm, fid.CTX_MESSAGE, signed, signature):
+    signed_part, signature = bytes(data[: -SIGNATURE]), bytes(data[-SIGNATURE:])
+    if not fid.verify(frm, fid.CTX_MESSAGE, signed_part, signature):
         raise BadEnvelope("signature")
-    body = signed[_HEADER.size:]
-    try:
-        text = body.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise BadEnvelope("encoding") from exc
-    if kind == KIND_TEXT and not (0 < len(text) <= TEXT_MAX_CHARS):
-        raise BadEnvelope("text length")
+    body = signed_part[_HEADER.size:]
+    if kind == KIND_TEXT:
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise BadEnvelope("encoding") from exc
+        if not (0 < len(text) <= TEXT_MAX_CHARS):
+            raise BadEnvelope("text length")
     return Envelope(kind, frm, to, msg_id, epoch, seq, sent_at, body, signature)
 
 

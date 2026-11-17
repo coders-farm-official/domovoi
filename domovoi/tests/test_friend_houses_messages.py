@@ -20,6 +20,7 @@ from domovoi.friend_houses import messages as fm
 from domovoi.friend_houses import session as fs
 from domovoi.friend_houses import store
 from domovoi.tests.conftest import requires_db
+from domovoi.tests.friend_houses_testkit import no_tasks_left_behind  # noqa: F401  (autouse)
 
 # ─── the envelope ─────────────────────────────────────────────────────────
 

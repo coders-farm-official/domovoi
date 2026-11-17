@@ -1,4 +1,4 @@
-/* Settings → Household → Friend Houses (F2: friending; F3: messages).
+/* Settings → Household → Friend Houses (F2: friending; F3: messages; F4: shared lists).
  *
  * Serverless messaging and friend system between households. This
  * section turns it on or off (the friend_houses_enabled setting, off by
@@ -30,6 +30,11 @@
  *   GET    /api/friend-houses/conversations/{house}/export  · saved as a file
  *   DELETE /api/friend-houses/conversations/{house}
  *   POST   /api/friend-houses/messages              · {friend_id, text}
+ *   GET    /api/friend-houses/shared-lists          · shared both ways, offers waiting
+ *   POST   /api/friend-houses/shared-lists          · {list_id, friend_id}
+ *   POST   /api/friend-houses/shared-lists/{id}/accept|decline
+ *   DELETE /api/friend-houses/shared-lists/{id}     · stop sharing (both keep a copy)
+ * The household's lists for the share picker: GET /api/lists (lists.jsx).
  * Turning it on or off is the same PATCH /api/config/editable every other
  * switch uses.
  *
@@ -663,7 +668,7 @@ const FhAlertChoice = ({ friend, fire, onChanged }) => {
   );
 };
 
-const FhFriend = ({ friend, fire, onChanged, onMessage }) => {
+const FhFriend = ({ friend, fire, onChanged, onMessage, onShare }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(String(friend.name || ''));
   const [busy, setBusy] = React.useState(false);
@@ -703,6 +708,7 @@ const FhFriend = ({ friend, fire, onChanged, onMessage }) => {
             {fhHouseOk(friend.house) && (
               <Button icon="message-square" onClick={() => onMessage(friend.house)}>Message</Button>
             )}
+            {onShare && <Button icon="share-2" onClick={() => onShare(friend)}>Share a list</Button>}
           </>
         )}
       </div>
@@ -730,13 +736,13 @@ const FhFriend = ({ friend, fire, onChanged, onMessage }) => {
   );
 };
 
-const FhFriendsCard = ({ friends, fire, onChanged, onMessage }) => {
+const FhFriendsCard = ({ friends, fire, onChanged, onMessage, onShare }) => {
   const list = (friends && friends.friends) || [];
   return (
     <Card title="Friends" sub="Houses this house is friends with.">
       <div style={{ padding: '0 16px 4px' }}>
         {!list.length && <div style={{ ...fhMuted, padding: '12px 0' }}>no friends yet</div>}
-        {list.map((f) => <FhFriend key={f.id} friend={f} fire={fire} onChanged={onChanged} onMessage={onMessage}/>)}
+        {list.map((f) => <FhFriend key={f.id} friend={f} fire={fire} onChanged={onChanged} onMessage={onMessage} onShare={onShare}/>)}
       </div>
     </Card>
   );
@@ -941,6 +947,202 @@ const FhInboxCard = ({ conversations, friends, open, setOpen, fire, onChanged })
   );
 };
 
+/* ---- shared lists (F4) ---------------------------------------------- */
+/* A list shared with a friend house: changes either house makes show up in
+ * both. Its title, the friend's name and the list's name are plain text;
+ * a shared list is addressed only by its 32-hex id. */
+
+const FH_SHARE_EXPLAIN = 'Changes either house makes show up in both, usually within a minute. Each house keeps its own copy and its own name for it.';
+const fhSpaceOk = (id) => /^[0-9a-f]{32}$/.test(String(id || ''));
+const fhFriendName = (s) => (s.friend ? String(s.friend) : 'a former friend');
+const fhChanges = (n) => `${n} ${n === 1 ? 'change' : 'changes'} waiting to send`;
+
+// Open a list on the Lists page (lists.jsx remembers which list is open).
+const fhOpenList = (listId) => {
+  try { if (typeof listsSaveSelected === 'function') listsSaveSelected(Number(listId)); } catch { /* a convenience */ }
+};
+
+const FhListOffer = ({ share, fire, onChanged }) => {
+  const [naming, setNaming] = React.useState(false);
+  const [name, setName] = React.useState(String(share.title || ''));
+  const [problem, setProblem] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [confirm, setConfirm] = React.useState(false);
+  const accept = async () => {
+    setBusy(true); setProblem(null);
+    try {
+      const body = naming && name.trim() ? { name: name.trim() } : {};
+      const r = await apiPost(`${FH_API}/shared-lists/${share.id}/accept`, body);
+      fire(`added to Lists as ${String((r && r.name) || share.title || 'a new list')}`, { tone: 'ok' });
+      onChanged();
+    } catch (e) {
+      if (isAuthFailure(e)) return;
+      // A name taken here: say so, and offer a name to try instead.
+      if (e && e.status === 400) {
+        setNaming(true);
+        setProblem(fhErr(e));
+      } else fhFail(fire, e);
+    } finally { setBusy(false); }
+  };
+  const decline = async () => {
+    setBusy(true);
+    try {
+      await apiPost(`${FH_API}/shared-lists/${share.id}/decline`, {});
+      fire('list declined', { tone: 'ok' });
+      setConfirm(false);
+      onChanged();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  return (
+    <div style={fhItem}>
+      <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
+        <strong>{fhFriendName(share)}</strong> shared a list: <strong>“{String(share.title || '')}”</strong>
+      </div>
+      {naming ? (
+        <div style={fhRow}>
+          <label htmlFor={`fh-list-name-${share.id}`} style={{ fontSize: 13 }}>Call it here</label>
+          <input id={`fh-list-name-${share.id}`} value={name} disabled={busy} autoComplete="off" maxLength={120}
+                 style={{ ...fhFieldStyle, flex: '1 1 180px' }}
+                 onChange={(e) => { setName(e.target.value); setProblem(null); }}
+                 onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) accept(); }}/>
+        </div>
+      ) : (
+        <div>
+          <button type="button" className="home-link" style={{ fontSize: 12 }} onClick={() => setNaming(true)}>
+            give it another name here
+          </button>
+        </div>
+      )}
+      {problem && <div role="alert" style={{ fontSize: 12, color: 'var(--warn-ink)' }}>{String(problem)}</div>}
+      <div style={fhRow}>
+        <Button variant="primary" icon="check" disabled={busy || (naming && !name.trim())} onClick={accept}>Accept</Button>
+        <Button icon="x" disabled={busy} onClick={() => setConfirm(true)}>Decline</Button>
+      </div>
+      <DeleteConfirmDialog open={confirm} title="Decline this list?" icon="x" confirmLabel="Decline" busy={busy}
+                           onCancel={() => setConfirm(false)} onConfirm={decline}>
+        <div>{`“${String(share.title || 'This list')}” won’t be added here. ${fhFriendName(share)} isn’t told.`}</div>
+      </DeleteConfirmDialog>
+    </div>
+  );
+};
+
+const FhSharedList = ({ share, fire, onChanged }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [confirm, setConfirm] = React.useState(false);
+  const listName = String(share.list_name || share.title || 'this list');
+  const who = fhFriendName(share);
+  const stop = async () => {
+    setBusy(true);
+    try {
+      await apiDelete(`${FH_API}/shared-lists/${share.id}`);
+      fire('stopped sharing — you both keep your own copy', { tone: 'ok' });
+      setConfirm(false);
+      onChanged();
+    } catch (e) { fhFail(fire, e); } finally { setBusy(false); }
+  };
+  const waiting = Number(share.waiting_to_send) || 0;
+  const offered = share.state === 'invited';   // ours, not accepted yet
+  return (
+    <div style={fhItem}>
+      <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
+        <strong>{listName}</strong>
+        {share.origin === 'us' ? ` — shared with ${who}` : ` — from ${who}`}
+        {offered && <span style={fhMuted}> · waiting for them to accept</span>}
+      </div>
+      {share.origin === 'them' && share.title && String(share.title) !== listName && (
+        <div style={fhMuted}>{`they call it “${String(share.title)}”`}</div>
+      )}
+      {waiting > 0 && <div style={fhMuted}>{fhChanges(waiting)}</div>}
+      <div style={fhRow}>
+        {Number.isInteger(share.list_id) && share.list_id > 0 && (
+          <a href="#lists" className="home-link" style={{ fontSize: 12 }} onClick={() => fhOpenList(share.list_id)}>open in Lists</a>
+        )}
+        <Button icon="x" disabled={busy} onClick={() => setConfirm(true)}>Stop sharing</Button>
+      </div>
+      <DeleteConfirmDialog open={confirm} title="Stop sharing?" icon="x" confirmLabel="Stop sharing" busy={busy}
+                           onCancel={() => setConfirm(false)} onConfirm={stop}>
+        <div>{`Stop sharing ${listName} with ${who}? You both keep your own copy.`}</div>
+      </DeleteConfirmDialog>
+    </div>
+  );
+};
+
+const FhShareList = ({ lists, friends, shares, shareFor, fire, onChanged }) => {
+  const [listId, setListId] = React.useState('');
+  const [friendId, setFriendId] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [problem, setProblem] = React.useState(null);
+  // A friend row's "Share a list" picks that friend here.
+  React.useEffect(() => { if (shareFor && shareFor.id) { setFriendId(shareFor.id); setProblem(null); } }, [shareFor]);
+  const taken = new Set(shares.map((s) => s.list_id).filter((id) => id != null));
+  const ours = (Array.isArray(lists) ? lists : []).filter((l) => l && Number.isInteger(l.id) && !taken.has(l.id));
+  const friendList = (friends && friends.friends) || [];
+  const share = async () => {
+    setBusy(true); setProblem(null);
+    try {
+      await apiPost(`${FH_API}/shared-lists`, { list_id: Number(listId), friend_id: friendId });
+      fire('list shared — it shows up for them once they accept', { tone: 'ok' });
+      setListId('');
+      onChanged();
+    } catch (e) {
+      if (!isAuthFailure(e)) setProblem(fhErr(e));
+    } finally { setBusy(false); }
+  };
+  if (!friendList.length) return <div style={fhMuted}>Make a friend first to share a list with them.</div>;
+  if (!ours.length) {
+    return <div style={fhMuted}>Every list here is already shared, or there are none yet. <a href="#lists" className="home-link">Lists</a></div>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="label">share a list</div>
+      <div style={fhRow}>
+        <select aria-label="the list to share" value={listId} disabled={busy} style={fhFieldStyle}
+                onChange={(e) => { setListId(e.target.value); setProblem(null); }}>
+          <option value="">choose a list…</option>
+          {ours.map((l) => <option key={l.id} value={String(l.id)}>{String(l.name || '')}</option>)}
+        </select>
+        <span style={fhMuted}>with</span>
+        <select aria-label="the friend to share it with" value={friendId} disabled={busy} style={fhFieldStyle}
+                onChange={(e) => { setFriendId(e.target.value); setProblem(null); }}>
+          <option value="">choose a friend…</option>
+          {friendList.map((f) => <option key={f.id} value={String(f.id)}>{String(f.name || '')}</option>)}
+        </select>
+        <Button variant="primary" icon="share-2" disabled={busy || !listId || !friendId} onClick={share}>
+          {busy ? 'Sharing…' : 'Share'}
+        </Button>
+      </div>
+      {problem && <div role="alert" style={{ fontSize: 12, color: 'var(--warn-ink)' }}>{String(problem)}</div>}
+    </div>
+  );
+};
+
+const FhSharedListsCard = ({ shared, lists, friends, shareFor, fire, onChanged }) => {
+  const all = ((shared && shared.shared_lists) || []).filter((s) => fhSpaceOk(s.id));
+  const offers = all.filter((s) => s.origin === 'them' && s.state === 'invited');
+  const current = all.filter((s) => !(s.origin === 'them' && s.state === 'invited'));
+  return (
+    <Card title="Shared lists" sub="Lists this house shares with friend houses.">
+      <div style={{ ...fhStack, padding: '12px 16px' }}>
+        <div style={fhMuted}>{FH_SHARE_EXPLAIN}</div>
+        {offers.length > 0 && (
+          <div>
+            <div className="label" style={{ marginBottom: 4 }}>offered to this house</div>
+            {offers.map((s) => <FhListOffer key={s.id} share={s} fire={fire} onChanged={onChanged}/>)}
+          </div>
+        )}
+        {current.length > 0 && (
+          <div>
+            <div className="label" style={{ marginBottom: 4 }}>shared now</div>
+            {current.map((s) => <FhSharedList key={s.id} share={s} fire={fire} onChanged={onChanged}/>)}
+          </div>
+        )}
+        {!all.length && <div style={fhMuted}>no shared lists yet</div>}
+        <FhShareList lists={lists} friends={friends} shares={all} shareFor={shareFor} fire={fire} onChanged={onChanged}/>
+      </div>
+    </Card>
+  );
+};
+
 /* ---- the section ---------------------------------------------------- */
 
 const FriendHousesPanel = () => {
@@ -955,6 +1157,8 @@ const FriendHousesPanel = () => {
   const [switching, setSwitching] = React.useState(false);
   const [open, setOpen] = React.useState(null);   // the open conversation's house key
   const inboxRef = React.useRef(null);
+  const listsRef = React.useRef(null);
+  const [shareFor, setShareFor] = React.useState(null);   // {id} from a friend row
 
   const field = ((cfg.data && cfg.data.fields) || []).find((f) => f.name === 'friend_houses_enabled');
   const status = st.data;
@@ -969,12 +1173,22 @@ const FriendHousesPanel = () => {
   const req = useApiObject(live && enabled ? `${FH_API}/requests` : null, opts);
   const fr = useApiObject(live && enabled ? `${FH_API}/friends` : null, opts);
   const convs = useApiObject(live && enabled ? `${FH_API}/conversations` : null, opts);
-  const refreshAll = () => { st.refresh(); inv.refresh(); req.refresh(); fr.refresh(); convs.refresh(); };
+  const shared = useApiObject(live && enabled ? `${FH_API}/shared-lists` : null, opts);
+  const lists = useApiObject(live && enabled ? '/api/lists' : null, opts);
+  const refreshAll = () => {
+    st.refresh(); inv.refresh(); req.refresh(); fr.refresh(); convs.refresh(); shared.refresh(); lists.refresh();
+  };
   useFhEvery(FH_POLL_MS, refreshAll, live);
 
   const toInbox = () => {
     setTimeout(() => {
       try { if (inboxRef.current) inboxRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch { /* gone */ }
+    }, 0);
+  };
+  const shareWith = (friend) => {
+    setShareFor({ id: friend.id, at: Date.now() });
+    setTimeout(() => {
+      try { if (listsRef.current) listsRef.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch { /* gone */ }
     }, 0);
   };
   const openConversation = (house) => {
@@ -1060,11 +1274,15 @@ const FriendHousesPanel = () => {
         <FhInboxCard conversations={convs.data} friends={fr.data} open={open} setOpen={setOpen} fire={fire}
                      onChanged={() => { convs.refresh(); st.refresh(); }}/>
       </div>
+      <div ref={listsRef}>
+        <FhSharedListsCard shared={shared.data} lists={lists.data} friends={fr.data} shareFor={shareFor} fire={fire}
+                           onChanged={() => { shared.refresh(); lists.refresh(); }}/>
+      </div>
       {workable && <FhInvitesCard status={status} invites={inv.data} fire={fire} onChanged={() => { inv.refresh(); st.refresh(); }}/>}
       {workable && <FhAddCard fire={fire} onSent={() => { req.refresh(); st.refresh(); }}/>}
       <FhRequestsCard requests={req.data} fire={fire} onChanged={() => { req.refresh(); fr.refresh(); st.refresh(); }}/>
       <FhFriendsCard friends={fr.data} fire={fire} onChanged={() => { fr.refresh(); st.refresh(); }}
-                     onMessage={openConversation}/>
+                     onMessage={openConversation} onShare={shareWith}/>
     </div>
   );
 };
