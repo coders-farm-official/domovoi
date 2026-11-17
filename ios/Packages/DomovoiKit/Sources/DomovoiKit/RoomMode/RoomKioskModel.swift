@@ -49,8 +49,11 @@ public struct RoomDrift: Equatable, Sendable {
 ///   passcode went stops with ``RoomStatusText/needsLock``);
 /// - Mute, Resume, check now, and Exit (held, then the phone's unlock, then
 ///   Keep / Forget);
-/// - keeps the screen awake only while the room runs on screen (§3.3), dims
-///   it after 60 s with nothing to show (D9), drifts it once a minute;
+/// - keeps the screen awake while the room runs on screen, on battery too
+///   (§3.3: a locked screen is a room that stopped listening), dims it after
+///   60 s with nothing to show (D9), drifts it once a minute;
+/// - the room display's feed (``RoomDisplaySource``): this room's music, its
+///   timers and a timer going off, with their controls;
 /// - the heat response (D8) and the Guided Access tip (§3.5).
 ///
 /// The engine is anything that is ``RoomEngineControl`` — R2's `RoomEngine`
@@ -74,6 +77,9 @@ public final class RoomKioskModel: ObservableObject {
     @Published public private(set) var drift = RoomDrift.zero
     @Published public private(set) var guidedAccessOn = false
     @Published public private(set) var guidedTipDismissed: Bool
+    /// The server's latest `room_display` while an engine runs that has one
+    /// (``RoomDisplaySource``); nil otherwise.
+    @Published public private(set) var feed: RoomFeed? = nil
 
     public let label: String
 
@@ -88,6 +94,7 @@ public final class RoomKioskModel: ObservableObject {
 
     private var engine: (any RoomEngineControl)?
     private var watching: Task<Void, Never>?
+    private var watchingDisplay: Task<Void, Never>?
     private var foreground = false
     private var lastActivity: TimeInterval
     private var lastDrift: TimeInterval
@@ -243,6 +250,14 @@ public final class RoomKioskModel: ObservableObject {
                 self.statusChanged(s)
             }
         }
+        if let d = e as? any RoomDisplaySource {
+            watchingDisplay = Task { @MainActor [weak self] in
+                for await f in d.displayUpdates() {
+                    guard let self, self.engine === e else { return }
+                    self.displayChanged(f)
+                }
+            }
+        }
         if !e.start() { status = e.status }
         applyAwake()
     }
@@ -250,10 +265,13 @@ public final class RoomKioskModel: ObservableObject {
     private func stopEngine() {
         watching?.cancel()
         watching = nil
+        watchingDisplay?.cancel()
+        watchingDisplay = nil
         engine?.stop()
         engine = nil
         if engineUp { engineUp = false }
         if status != nil { status = nil }
+        if feed != nil { feed = nil }
         interruptedSince = nil
         applyAwake()
     }
@@ -270,8 +288,22 @@ public final class RoomKioskModel: ObservableObject {
         }
     }
 
+    private func displayChanged(_ f: RoomFeed?) {
+        // A timer or an alarm going off brings the person's brightness back.
+        if let ringing = f?.ringing, ringing.fireID != feed?.ringing?.fireID { noteActivity() }
+        if f != feed { feed = f }
+    }
+
     private func applyAwake() {
-        screen.keepAwake(foreground && engineUp)
+        screen.keepAwake(Self.keepsAwake(foreground: foreground, engineUp: engineUp))
+    }
+
+    /// The screen stays on while the room runs on screen, charger or not: on
+    /// iOS a locked screen sends the app to the background, and the room
+    /// stops listening there (§3.1). Night dimming, the idle dimming (D9) and
+    /// the slow redraw save the battery instead (owner decision 2026-11-16).
+    public static func keepsAwake(foreground: Bool, engineUp: Bool) -> Bool {
+        foreground && engineUp
     }
 
     // MARK: - the buttons
@@ -300,6 +332,34 @@ public final class RoomKioskModel: ObservableObject {
     public func checkNow() {
         noteActivity()
         engine?.retryNow()
+    }
+
+    // MARK: - the room display (``RoomDisplaySource``)
+
+    private var display: (any RoomDisplaySource)? { engine as? any RoomDisplaySource }
+
+    /// This room's output level while an engine with a display runs.
+    public var volume: Int? { display?.volumeLevel }
+
+    /// Pause, resume, skip, previous, or Stop on a ringing timer. No reply:
+    /// the next `room_display` shows the result.
+    public func control(_ action: RoomControl) {
+        noteActivity()
+        display?.roomControl(action)
+    }
+
+    /// Quieter (-1) or louder (+1), a step at a time.
+    public func stepVolume(_ direction: Int) {
+        noteActivity()
+        guard let d = display else { return }
+        d.setVolumeLevel(RoomDisplayModel.stepVolume(d.volumeLevel, direction: direction))
+        objectWillChange.send()
+    }
+
+    /// A cover from the room's own server, for the now-playing card.
+    public func art(_ path: String) async -> Data? {
+        guard let d = display else { return nil }
+        return await d.art(path)
     }
 
     // MARK: - leaving (`RoomModeActivity.askToLeave`, `leave`)
@@ -364,7 +424,8 @@ public final class RoomKioskModel: ObservableObject {
                 y: Double(Int.random(in: -RoomDrift.reach...RoomDrift.reach))
             )
         }
-        if !dimmed, foreground, dialog == nil, !RoomStatusText.isTurn(ring), t - lastActivity >= Self.dimAfterSeconds {
+        if !dimmed, foreground, dialog == nil, !RoomStatusText.isTurn(ring), feed?.ringing == nil,
+           t - lastActivity >= Self.dimAfterSeconds {
             dimmed = true
             screen.dim(true)
         }

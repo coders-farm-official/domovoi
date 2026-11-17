@@ -77,7 +77,20 @@ final class RoomProtocolTests: XCTestCase {
         guard let ready = d["ready"], case let .ready(features, _, _, _) = RoomProtocol.parse(ready.serialized) else {
             return XCTFail("the fixture's ready did not parse")
         }
-        XCTAssertEqual(["speech_pause", "end_capture", "music_failed", "health", "log_push"], features)
+        XCTAssertEqual(["speech_pause", "end_capture", "music_failed", "health", "log_push", "room_display"], features)
+        // The room display (1.4.0): the core sends `room_display` only to a
+        // room that declared it, and takes `room_control` only from one whose
+        // ready listed it.
+        XCTAssertTrue(RoomProtocol.maySend(RoomDisplayFeed.control(.music(.pause)), features: features))
+        XCTAssertFalse(RoomProtocol.maySend(RoomDisplayFeed.control(.music(.pause)), features: ["speech_pause"]))
+        guard case .array(let gate)? = try fixtures()["frame_gates"]?["room_display"] else {
+            return XCTFail("the fixture has no frame gate for room_display")
+        }
+        let ours = Set(RoomProtocol.supports(echoCanceller: true))
+        XCTAssertFalse(gate.isEmpty)
+        for ability in gate.compactMap(\.stringValue) {
+            XCTAssertTrue(ours.contains(ability), "room_display is gated on \(ability), which the hello does not declare")
+        }
         let pause: RoomProtocol.Frame = ["type": .string("speech_pause")]
         XCTAssertTrue(RoomProtocol.maySend(pause, features: features))
         XCTAssertFalse(RoomProtocol.maySend(pause, features: []))
