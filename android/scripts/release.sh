@@ -72,6 +72,27 @@ while [ $# -gt 0 ]; do
 done
 
 die() { echo "release: $*" >&2; exit 1; }
+
+# Why a tool failed: a headline (the first line that says so), then its whole
+# output, stdout and stderr, the last 60 lines at most. The signing passwords
+# reach the tools only through the environment and the tools don't print them,
+# but any secret's value that did turn up is replaced before anything is shown.
+show_tool_error() {
+  local out="$1" name value total
+  [ -n "$out" ] || return 0
+  for name in DOMOVOI_RELEASE_KS_PASS DOMOVOI_RELEASE_KEY_PASS ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_PASSWORD GH_TOKEN GITHUB_TOKEN; do
+    value="${!name:-}"
+    [ -n "$value" ] && out="${out//"$value"/***}"
+  done
+  printf '%s\n' "$out" | grep -m1 -E 'ERROR|Exception|Failed|failed' | sed 's/^/  /' >&2 || true
+  total="$(printf '%s\n' "$out" | wc -l)"
+  if [ "$total" -gt 60 ]; then
+    echo "  (the tool's output, last 60 of $total lines)" >&2
+  else
+    echo "  (the tool's whole output)" >&2
+  fi
+  printf '%s\n' "$out" | tail -n 60 | sed 's/^/    /' >&2
+}
 say() { echo "release: $*"; }
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -474,9 +495,8 @@ for abi in "${ABIS[@]}"; do
   say "signing $name…"
   if ! err="$("$java" -jar "$apksigner_jar" sign --ks "$keystore" --ks-key-alias "$alias_name" \
       --ks-pass env:DOMOVOI_RELEASE_KS_PASS --key-pass env:DOMOVOI_RELEASE_KEY_PASS \
-      --v4-signing-enabled false --alignment-preserved --out "$signed/$name" "$out_unsigned/app-$abi-release-unsigned.apk" 2>&1 >/dev/null)"; then
-    # apksigner's own first line says why (it never prints a password).
-    printf '%s\n' "$err" | grep -m1 -E 'ERROR|Exception|Failed' >&2 || true
+      --v4-signing-enabled false --alignment-preserved --out "$signed/$name" "$out_unsigned/app-$abi-release-unsigned.apk" 2>&1)"; then
+    show_tool_error "$err"
     die "signing $name failed (wrong password or alias?)"
   fi
 done
@@ -486,8 +506,8 @@ unset DOMOVOI_RELEASE_KS_PASS DOMOVOI_RELEASE_KEY_PASS
 cert=""
 for abi in "${ABIS[@]}"; do
   apk="$signed/domovoi-$version_name-$abi.apk"
-  report="$("$java" -jar "$apksigner_jar" verify --verbose --print-certs --min-sdk-version 26 "$apk")" \
-    || die "apksigner does not verify $apk"
+  report="$("$java" -jar "$apksigner_jar" verify --verbose --print-certs --min-sdk-version 26 "$apk" 2>&1)" \
+    || { show_tool_error "$report"; die "apksigner does not verify $apk"; }
   report="${report//$'\r'/}"
   printf '%s\n' "$report" | grep -q '^Verified using v2 scheme (APK Signature Scheme v2): true' \
     || die "$apk has no v2 signature (Android 8 needs it)"

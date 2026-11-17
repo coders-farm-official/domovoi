@@ -1507,3 +1507,22 @@ def test_the_sbom_names_are_the_generator_s():
     sbom = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sbom)
     assert (sbom.ASSET_NAMES["server"], sbom.ASSET_NAMES["web"], sbom.ASSET_NAMES["android"]) == fr.SBOM_ASSETS
+
+
+@pytest.mark.parametrize("script", ["android/scripts/release.ps1", "android/scripts/release.sh"])
+def test_a_failed_signing_tool_shows_its_whole_error_without_secrets(script):
+    """A failed apksigner prints a headline and then its whole output (stdout
+    and stderr, the last 60 lines), not one matching line: the 1.3.0 release
+    hid "does not contain a key" and "Failed to load signer" that way. Any
+    secret's value is masked before it is shown."""
+    text = (REPO / script).read_text(encoding="utf-8")
+    for name in ("DOMOVOI_RELEASE_KS_PASS", "DOMOVOI_RELEASE_KEY_PASS", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_PASSWORD"):
+        assert name in text.split("signing", 1)[0] or name in text, name
+    assert "***" in text and "60" in text
+    if script.endswith(".ps1"):
+        assert "Select-Object -Last $max" in text and "function Hide-Secrets" in text
+        assert "Select-Object -First 1\n    if ($why) { Write-Host \"  $why\" }\n}" not in text
+    else:
+        assert "show_tool_error()" in text
+        assert text.count('show_tool_error "$') == 2, "signing and verifying both show the whole output"
+        assert "2>&1 >/dev/null" not in text, "signing's stdout is kept too"
