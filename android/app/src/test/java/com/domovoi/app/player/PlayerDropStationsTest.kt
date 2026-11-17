@@ -4,6 +4,13 @@ import android.content.ContextWrapper
 import androidx.media3.common.MediaItem
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.CAP_IMAGEGEN
+import com.domovoi.app.net.CAP_STATIONS
+import com.domovoi.app.net.Capabilities
+import com.domovoi.app.net.LoadedManifest
+import com.domovoi.app.net.ServerIdentity
+import com.domovoi.app.net.dropsStations
+import com.domovoi.app.testing.ourCaps
 import com.domovoi.app.testing.StatefulExoPlayer
 import com.domovoi.app.testing.allocateWithoutConstructor
 import com.domovoi.app.testing.field
@@ -89,6 +96,41 @@ class PlayerDropStationsTest {
         assertEquals(before, player.queue.value)
         assertTrue(exo.playing)
         assertEquals(emptyList<String>(), exoLog.toList())
+    }
+
+    /** The reset of a server switch is not a manifest that loaded
+     *  (net/Capabilities.kt dropsStations): the same server at another
+     *  address keeps its queue, stations included, until ITS manifest says
+     *  our Radio is gone. */
+    @Test fun aServerSwitchsResetDoesNotWipeTheQueue() {
+        val pin = ServerIdentity.Pin("key-home", "SHA256:home")
+        val before = server.url("/").toString()
+        val after = "http://192.168.1.20:6369"
+        player.serverChanged(ServerScope.of(before, pin))
+        val songs = libraryQueue("Roses")
+        player.playItems(listOf(jazz, songs[0]), 0)
+
+        // The same server, moved: the player keeps everything (ServerScope).
+        player.serverChanged(ServerScope.of(after, pin))
+        // The shell's fetch helper still holds the old address's answer —
+        // even one without Radio — and the shell shows EMPTY: nothing goes.
+        for (stale in listOf(LoadedManifest(before, ourCaps(CAP_IMAGEGEN)), LoadedManifest(before, ourCaps(CAP_STATIONS)), null)) {
+            assertFalse(dropsStations(stale, after))
+            if (dropsStations(stale, after)) player.dropStations()
+        }
+        assertEquals(listOf(jazz, songs[0]), player.queue.value)
+        assertTrue(exo.playing)
+
+        // Its own manifest loads with our Radio: still nothing goes.
+        val withRadio = LoadedManifest(after, ourCaps(CAP_STATIONS))
+        if (dropsStations(withRadio, after)) player.dropStations()
+        assertEquals(listOf(jazz, songs[0]), player.queue.value)
+
+        // Its manifest loads WITHOUT it: the station goes, the song stays.
+        val without = LoadedManifest(after, Capabilities.EMPTY)
+        assertTrue(dropsStations(without, after))
+        player.dropStations()
+        assertEquals(songs, player.queue.value)
     }
 
     @Test fun thePlanKeepsTheRestInOrder() {

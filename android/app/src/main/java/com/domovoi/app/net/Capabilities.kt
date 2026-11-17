@@ -160,8 +160,36 @@ data class Capabilities(
  *  [Capabilities.EMPTY] (gated screens hidden) until the fetch lands. */
 val LocalCapabilities = staticCompositionLocalOf { Capabilities.EMPTY }
 
-/** Fetch the capability manifest for the active server. Errors decode to
- *  `data == null`; callers treat that as [Capabilities.EMPTY].
+/** A manifest as it loaded, with the server address it came from (Prefs'
+ *  `serverUrl` when the fetch began). */
+data class LoadedManifest(val server: String, val caps: Capabilities)
+
+/**
+ * The manifest that holds for [activeServer]: the last one loaded, but only
+ * when it came from that server; [Capabilities.EMPTY] (gated screens hidden)
+ * otherwise. The shared fetch helper ([rememberApi]) keeps its last answer
+ * when its key (the server address) changes and while a new fetch runs or
+ * after it fails, so on a server switch the PREVIOUS server's manifest would
+ * otherwise stay in force: its Stations on a server without our Radio. Now
+ * a switch is EMPTY until the new server's manifest loads, and stays EMPTY
+ * if that fetch fails. The same server's own manifest outlives a failed
+ * re-fetch (a socket reconnect), as before.
+ */
+fun manifestFor(loaded: LoadedManifest?, activeServer: String): Capabilities =
+    loaded?.takeIf { it.server == activeServer }?.caps ?: Capabilities.EMPTY
+
+/** Whether the phone's queued stations should go ([com.domovoi.app.player.PlayerController.dropStations]):
+ *  only on a manifest that actually LOADED for [activeServer] and lacks our
+ *  Radio. Never on the EMPTY of a server switch, a failed fetch or one not
+ *  landed yet (a blip must not stop the radio; a move to the same server at
+ *  another address must not wipe its queue). */
+fun dropsStations(loaded: LoadedManifest?, activeServer: String): Boolean =
+    loaded != null && loaded.server == activeServer && !loaded.caps.has(CAP_STATIONS)
+
+/** Fetch the capability manifest for the active server, tagged with that
+ *  server ([LoadedManifest]; read it through [manifestFor]). Errors leave
+ *  `data` as it was (null at first); [manifestFor] treats a missing or
+ *  other server's manifest as [Capabilities.EMPTY].
  *
  *  Through [ApiClient.getUntracked], not `get`: `/api/capabilities` is an
  *  **Open** route, so it answers 200 to an unpaired phone — and this fetch
@@ -172,7 +200,8 @@ val LocalCapabilities = staticCompositionLocalOf { Capabilities.EMPTY }
  *  [ApiClient.getUntracked] was written for (found 2026-10-29 while porting
  *  this layer to iOS, which does it the other way round). */
 @Composable
-fun rememberCapabilities(): ApiState<Capabilities> =
+fun rememberCapabilities(): ApiState<LoadedManifest> =
     rememberApi {
-        it.api.getUntracked("/api/capabilities").decode<Capabilities>()
+        val server = it.prefs.serverUrl.value
+        LoadedManifest(server, it.api.getUntracked("/api/capabilities").decode<Capabilities>())
     }
