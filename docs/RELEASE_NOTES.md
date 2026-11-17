@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Windows Setup: no dead end when it can't copy itself before a restart
+
+- **What changed.** When Windows has to restart to finish turning on WSL,
+  Setup copies itself to `C:\Program Files\Domovoi\resume` to start again
+  afterwards. When Windows refused that copy (usually an antivirus: this
+  preview isn't code-signed), Setup ended with *Runtime error ... Setup
+  could not copy itself ...* and no reason. Now it says what happened with
+  Windows' own error, what to do (check the antivirus's quarantine, close
+  any other Domovoi Setup window), where its log is, and offers **Try
+  again**; **Stop Setup** says to restart Windows and run Setup again. A
+  copy already there that is the same Setup (same size and SHA-256) is used
+  as it is; one still open from an earlier try is retried for a few
+  seconds, then passed by for `DomovoiSetup-2.exe` in the same folder. The
+  restart entry still only ever runs a copy in that administrators-only
+  folder, never the one in Downloads, and Setup now sets that folder's
+  access itself (SYSTEM and Administrators full, everyone else read).
+- **What to know.** Setup now always keeps its own log, `Setup Log <date>
+  #<n>.txt` in the temporary folder of the account that ran it (`%TEMP%`);
+  the message names it. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#on-the-windows-installer).
+
 ## 1.4.0 (unreleased) — Queue history: what Up next picked, and why
 
 - **What changed.** **Settings → Household → Queue history** (an admin
