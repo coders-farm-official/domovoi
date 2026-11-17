@@ -3774,18 +3774,197 @@ class _AdminChatToolBody(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
-@app.get(
-    "/v1/admin/friend-houses",
-    # Admin-only, GET included: Friend Houses status says whether this house
-    # can be reached and by whom (threat-model finding 10).
-    dependencies=[Depends(require_admin_security_read)],
-)
+# ─── Friend Houses (domovoi/friend_houses/) ───────────────────────────────
+# "Serverless messaging and friend system between households". Every route
+# is admin security tier, GETs included: friend files are bearer secrets,
+# and who this house's friends are is the household's business
+# (threat-model finding 10). FriendingError / BadFriendFile messages are
+# written for the person at the dashboard.
+
+_FH_READ = [Depends(require_admin_security_read)]
+_FH_WRITE = [Depends(require_admin_security)]
+
+
+def _fh_error(e: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(e))
+
+
+class _FhSettingsBody(BaseModel):
+    house_name: str | None = None
+    invite_days: int | None = None
+
+
+class _FhInviteBody(BaseModel):
+    days: int | None = None
+    label: str | None = None
+
+
+class _FhFileBody(BaseModel):
+    # Plain str: a validation error must never echo a friend file back.
+    file: str
+    name: str | None = None
+
+
+class _FhNameBody(BaseModel):
+    name: str
+
+
+@app.get("/v1/admin/friend-houses", dependencies=_FH_READ)
 async def admin_friend_houses_status() -> dict[str, Any]:
     """Friend Houses at a glance: whether its private connection runs, why
-    not, and this house's fingerprint (public; no keys, no addresses)."""
+    not, this house's public fingerprint and name, the default friend-file
+    length and the limits. No keys, no addresses."""
+    from domovoi.friend_houses import friending
     from domovoi.friend_houses import service as friend_houses_service
 
-    return friend_houses_service.status()
+    out = friend_houses_service.status()
+    out["house_name"] = await friending.house_name()
+    out["invite_days"] = await friending.invite_days_default()
+    out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
+                     "max_open_files": friending.MAX_OPEN_INVITES}
+    return out
+
+
+@app.put("/v1/admin/friend-houses/settings", dependencies=_FH_WRITE)
+async def admin_friend_houses_settings(body: _FhSettingsBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        if body.house_name is not None:
+            await friending.set_house_name(body.house_name)
+        if body.invite_days is not None:
+            await friending.set_invite_days_default(body.invite_days)
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+    return {"house_name": await friending.house_name(),
+            "invite_days": await friending.invite_days_default()}
+
+
+@app.get("/v1/admin/friend-houses/invites", dependencies=_FH_READ)
+async def admin_friend_houses_invites() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"invites": await friending.list_invites()}
+
+
+@app.post("/v1/admin/friend-houses/invites", dependencies=_FH_WRITE)
+async def admin_friend_houses_make_invite(body: _FhInviteBody) -> dict[str, Any]:
+    """Make a friend file. ``file`` is null while the pairing address is
+    still being set up (the first time, the Tor image is built): fetch it
+    again from ``GET .../invites/{id}``."""
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.make_invite(days=body.days, label=body.label, created_by="admin")
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+
+
+@app.get("/v1/admin/friend-houses/invites/{invite_id}", dependencies=_FH_READ)
+async def admin_friend_houses_invite(invite_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.invite_with_file(invite_id)
+    except friending.FriendingError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.delete("/v1/admin/friend-houses/invites/{invite_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_cancel_invite(invite_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.cancel_invite(invite_id):
+        raise HTTPException(status_code=404,
+                            detail="That friend file is already used, cancelled or expired.")
+    return {"cancelled": True}
+
+
+@app.post("/v1/admin/friend-houses/preview", dependencies=_FH_WRITE)
+async def admin_friend_houses_preview(body: _FhFileBody) -> dict[str, Any]:
+    """What a friend file says. Nothing is sent (POST, so the file never
+    sits in a URL or an access log)."""
+    from domovoi.friend_houses import friend_file, friending
+
+    try:
+        return await friending.preview(body.file)
+    except (friending.FriendingError, friend_file.BadFriendFile) as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/requests", dependencies=_FH_WRITE)
+async def admin_friend_houses_send_request(body: _FhFileBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friend_file, friending
+
+    try:
+        return await friending.send_request(body.file, local_name=body.name or "", by="admin")
+    except (friending.FriendingError, friend_file.BadFriendFile) as e:
+        raise _fh_error(e) from e
+
+
+@app.get("/v1/admin/friend-houses/requests", dependencies=_FH_READ)
+async def admin_friend_houses_requests() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"requests": await friending.list_requests()}
+
+
+@app.post("/v1/admin/friend-houses/requests/{request_id}/accept", dependencies=_FH_WRITE)
+async def admin_friend_houses_accept(request_id: str, body: _FhNameBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        return await friending.accept(request_id, local_name=body.name, by="admin")
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+
+
+@app.post("/v1/admin/friend-houses/requests/{request_id}/decline", dependencies=_FH_WRITE)
+async def admin_friend_houses_decline(request_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.decline(request_id):
+        raise HTTPException(status_code=404, detail="That request isn't waiting any more.")
+    return {"declined": True}
+
+
+@app.get("/v1/admin/friend-houses/friends", dependencies=_FH_READ)
+async def admin_friend_houses_friends() -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    return {"friends": await friending.list_friends()}
+
+
+@app.post("/v1/admin/friend-houses/friends/{friend_id}/verified", dependencies=_FH_WRITE)
+async def admin_friend_houses_verified(friend_id: str) -> dict[str, Any]:
+    """Someone compared the 4-digit codes and they matched."""
+    from domovoi.friend_houses import friending
+
+    if not await friending.mark_verified(friend_id):
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"verified": True}
+
+
+@app.patch("/v1/admin/friend-houses/friends/{friend_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_rename(friend_id: str, body: _FhNameBody) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    try:
+        renamed = await friending.rename(friend_id, body.name)
+    except friending.FriendingError as e:
+        raise _fh_error(e) from e
+    if not renamed:
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"renamed": True}
+
+
+@app.delete("/v1/admin/friend-houses/friends/{friend_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_unfriend(friend_id: str) -> dict[str, Any]:
+    from domovoi.friend_houses import friending
+
+    if not await friending.unfriend(friend_id):
+        raise HTTPException(status_code=404, detail="No such friend house.")
+    return {"removed": True}
 
 
 @app.get(
