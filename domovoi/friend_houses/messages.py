@@ -154,6 +154,9 @@ async def flush(house_key: bytes) -> int:
         except (fc.Unreachable, fs.SessionRefused) as e:
             await _note_failure([r[0] for r in queued], str(e))
             return 0
+        from domovoi.friend_houses import presence
+
+        await presence.saw(house_key, sess.peer.statement)
         try:
             for row_id, msg_id, env, _attempts in queued:
                 await sess.send(fs.Kind.MESSAGE, bytes(env))
@@ -250,6 +253,13 @@ async def say_im_back() -> None:
             await sess.send(fs.Kind.IM_BACK)
         finally:
             await sess.close()
+        from domovoi.friend_houses import presence
+
+        await presence.saw(f.house_key, sess.peer.statement)
+        async with _db() as s:  # it now has this house's current address
+            await s.execute(text(
+                "UPDATE friend_houses_friends SET announce_needed = FALSE WHERE house_key = :h"),
+                {"h": f.house_key})
 
     await asyncio.gather(*(one(f) for f in friends), return_exceptions=True)
     await flush_all()

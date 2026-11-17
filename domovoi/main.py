@@ -4117,6 +4117,43 @@ async def admin_friend_houses_leave_list(space: str) -> dict[str, Any]:
     return {"stopped": True}
 
 
+class _FhBlockBody(BaseModel):
+    keep_messages: bool = True
+    new_address: bool = True
+
+
+@app.post("/v1/admin/friend-houses/friends/{friend_id}/block", dependencies=_FH_WRITE)
+async def admin_friend_houses_block(friend_id: str, body: _FhBlockBody) -> dict[str, Any]:
+    """Block a friend house: it is removed and refused for good, and (by
+    default) this house moves to a new address its remaining friends are
+    told about. The conversation is kept unless ``keep_messages`` is false."""
+    from domovoi.friend_houses import blocking
+
+    try:
+        return await blocking.block(friend_id, keep_messages=body.keep_messages,
+                                    new_address=body.new_address)
+    except blocking.BlockError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/v1/admin/friend-houses/blocked", dependencies=_FH_READ)
+async def admin_friend_houses_blocked() -> dict[str, Any]:
+    from domovoi.friend_houses import blocking
+
+    return {"blocked": await blocking.blocked()}
+
+
+@app.delete("/v1/admin/friend-houses/blocked/{house}", dependencies=_FH_WRITE)
+async def admin_friend_houses_unblock(house: str) -> dict[str, Any]:
+    """Unblock a house. It isn't a friend again: it can ask with a new
+    friend file, and an admin can accept."""
+    from domovoi.friend_houses import blocking
+
+    if not await blocking.unblock(house):
+        raise HTTPException(status_code=404, detail="That house isn't blocked.")
+    return {"unblocked": True}
+
+
 @app.get(
     "/v1/admin/device-token",
     # Security-tier READ: the household token is a credential. Bearer-only
