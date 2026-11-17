@@ -59,6 +59,8 @@ import androidx.compose.foundation.layout.widthIn
 import com.domovoi.app.ui.screens.printing.PrintIo
 import com.domovoi.app.ui.screens.printing.PrintOffer
 import com.domovoi.app.ui.screens.printing.PrintSheet
+import com.domovoi.app.ui.screens.printing.ScanJob
+import com.domovoi.app.ui.screens.printing.ScanReadSheet
 import com.domovoi.app.ui.screens.printing.ScanSheet
 import com.domovoi.app.ui.screens.printing.printOffer
 import androidx.compose.material.icons.filled.Movie
@@ -298,6 +300,8 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     }
     var printEntry by remember { mutableStateOf<FileEntry?>(null) }
     var scanning by remember { mutableStateOf(false) }
+    // "What does it say?" from the Scan sheet: the sheet closes, this opens.
+    var readingScan by remember { mutableStateOf<ScanJob?>(null) }
     // A scan WRITES into Documents: not offered where this device may not write.
     val canScanHere = printers?.hasScanner == true && selectedId == DOCUMENTS_LIBRARY_ID && canWrite
 
@@ -953,8 +957,13 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             },
             onSaved = { pager.reload() },
             onDismiss = { scanning = false },
+            onWhatDoesItSay = { s ->
+                scanning = false
+                readingScan = s
+            },
         )
     }
+    readingScan?.let { s -> ScanReadSheet(scan = s, onDismiss = { readingScan = null }) }
 }
 
 @Composable

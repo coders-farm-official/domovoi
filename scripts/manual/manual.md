@@ -1408,10 +1408,10 @@ plain summary of what it says, and the whole text if you want it.
 
 **How to**
 
-- **Dashboard:** after a scan, press **What does it say?** on the Scan
-  sheet. While Domovoi is still reading, the button says how far it has
-  got ("reading page 2 of 3"); press it and the answer appears when it's
-  ready. Older scans have the same button in [Settings → Household →
+- After a scan, press **What does it say?** on the Scan sheet (on the
+  dashboard, or in the app's Files → Documents). While Domovoi is still
+  reading, the button says how far it has got ("reading page 2 of 3");
+  press it and the answer appears when it's ready. Older scans have the same button in [Settings → Household →
   Printers & scanners](#settings/printers), under **recent jobs**.
 - **By voice:** "scan this letter". When it's saved, Domovoi asks
   "Want me to tell you what it says?". Say yes for the short summary, then

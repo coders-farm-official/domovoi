@@ -93,13 +93,22 @@ every check has passed):
 3. One ``SHA256SUMS`` (LF line endings) for every asset: the APKs (from
    the manifest; path a only), the Setup and its signatures and manifest, the tray,
    the satellite Setup and the SBOMs.
-4. The release notes: ``docs/release/v<version>.md`` at the tag if there is
-   one, otherwise a summary of the ``docs/RELEASE_NOTES.md`` entries added
-   since the previous tag (a release candidate counts from the tag before
-   it; a release from the release before it), with links into the full
-   file at the tag. Then the files, their SHA-256, the commit the tag is,
-   how the Setup was built, the app's signing certificate. Kept under
-   20 KB, and never over GitHub's 125,000-character cap.
+4. The release notes, in the house order (docs/CONTRIBUTING.md,
+   "Releasing"): first a Download section, each file a direct link on
+   the release with what it is for (the Linux one-liner copied from the
+   tag's docs/LINUX_HOST.md, Google Play and the APKs, the room Setup, how
+   an installed Domovoi updates). Then What's new, with a line linking
+   the release's full notes and its RELEASE_NOTES.md section at the tag:
+   the ``## At a glance`` section of ``docs/release/v<version>.md`` at the
+   tag if there is one (the file is the full notes; see
+   :func:`release_doc_problems`; refused otherwise), else a summary of the
+   ``docs/RELEASE_NOTES.md`` entries added since the previous tag (a
+   release candidate counts from the tag before it; a release from the
+   release before it), with links into the full file at the tag. Last,
+   how to check a download, then (collapsed) the files and their SHA-256,
+   the commit the tag is, how the Setup was built, the app's signing
+   certificate. Kept under 20 KB, and never over GitHub's 125,000-character
+   cap.
 5. Path b, a tag made here: push it (never forced), then create the
    GitHub release with the files (``--prerelease`` marks it one).
    Otherwise: upload the Setup, the tray, the satellite Setup, the SBOMs and ``SHA256SUMS`` (``--clobber``, so a second run
@@ -124,7 +133,8 @@ before pushing it.
 
 For the release workflow (``.github/workflows/release.yml``) there are two
 opt-in flags; the owner's local runs never need them. ``--plan FILE`` is
-its gate: it checks HEAD is a release to make or to finish and writes what
+its gate: it checks HEAD is a release to make or to finish (a new one's
+``docs/release/v<version>.md`` in the house style, too) and writes what
 to run to FILE as JSON (see :func:`plan`), changing nothing.
 ``--signing-agent`` signs with the release key an ssh-agent holds
 (``SSH_AUTH_SOCK``) instead of a key file: ssh-keygen is handed the tag's
@@ -372,14 +382,167 @@ class Release:
     app_from: dict[str, Any] | None = None
     sboms: dict[str, str] | None = None  # the SBOMs attached -> their SHA-256
     provenance: bool = False  # the release workflow attests every file (--provenance)
+    #: The one-line Linux install, exactly as the tag's docs/LINUX_HOST.md has
+    #: it (:func:`linux_install_line`); None when it has none.
+    linux_install: str | None = None
+    full_notes: bool = False          # docs/release/<tag>.md at the tag: the full notes
+    notes_anchor: str | None = None   # this release's section of RELEASE_NOTES.md (:func:`notes_anchor`)
 
 
 def _who(abi: str) -> str:
     return "the Android app, most phones (64-bit)" if abi == "arm64-v8a" else "the Android app, older or cheaper phones (32-bit)"
 
 
+#: The app on Google Play (README.md links the same page).
+PLAY_URL = "https://play.google.com/store/apps/details?id=com.domovoi.app"
+#: Where the release body sends people, as (file at the tag, heading). The
+#: tests hold each heading to the file, so a renamed one fails there.
+LINUX_DOC = ("docs/LINUX_HOST.md", "One command")
+PI_ROOM_DOC = ("scripts/manual/manual.md", "A Raspberry Pi room")
+#: How an installed Domovoi updates (Settings → System → About & updates).
+UPDATE_LINE = ("**Already installed?** Update from the dashboard: "
+               "Settings → System → About & updates → **Update Domovoi**.")
+#: The one-line install in docs/LINUX_HOST.md, whole.
+LINUX_INSTALL_RE = re.compile(r"^curl -fsSL https://\S+/scripts/linux/install\.sh \| sudo bash$", re.M)
+#: The section of docs/release/v<version>.md (the release's FULL notes)
+#: that goes on the release page: the highlights, then short sections.
+GLANCE = "At a glance"
+#: Headings the script writes on the page itself: never in the page part.
+GENERATED_HEADINGS = ("Download", "What's new", "Files", "Files and checksums", "Install or update")
+
+
+def linux_install_line(linux_host: str | None) -> str | None:
+    """The one-line install command, copied from docs/LINUX_HOST.md (never
+    retyped): its first ``curl … install.sh | sudo bash`` line."""
+    m = LINUX_INSTALL_RE.search((linux_host or "").replace("\r\n", "\n"))
+    return m.group(0) if m else None
+
+
+def _glance(text: str) -> list[Entry]:
+    return [e for e in entries(text) if _heading_text(e.heading).strip() == GLANCE]
+
+
+def release_doc_problems(text: str) -> list[str]:
+    """What keeps a ``docs/release/v<version>.md`` from the house style
+    (docs/CONTRIBUTING.md, "The release page"). The file is the release's
+    full notes, title, intro and all; only its one ``## At a glance``
+    section goes on the page, under the What's new heading the script
+    writes after Download, so Download stays first. That section starts
+    with the highlights (a list), and its own headings (``###``, shown as
+    ``##`` on the page) are none of the script's."""
+    text = text.replace("\r\n", "\n")
+    found = _glance(text)
+    if len(found) != 1:
+        return [f"it needs exactly one \"## {GLANCE}\" section (it has {len(found)}): the page carries that "
+                "section, the file the full notes"]
+    problems = []
+    lines = [line for line in found[0].body.split("\n") if line.strip()]
+    if not lines or not re.match(r"^[*+-]\s", lines[0].strip()):
+        problems.append(f"\"## {GLANCE}\" must start with the highlights, a list of one-line items")
+    for _, _level, heading in _headings(found[0].body):
+        if _heading_text(heading).strip() in GENERATED_HEADINGS or heading.startswith("What's new"):
+            problems.append(f"\"## {GLANCE}\" has a \"{heading}\" heading, which finish_release.py writes itself")
+    return problems
+
+
+def glance_notes(text: str, *, since: str | None) -> str:
+    """The page's part of the full notes: ``## What's new since <since>``,
+    then the ``## At a glance`` section with its ``###`` headings as ``##``."""
+    body = _glance(text.replace("\r\n", "\n"))[0].body
+    out, fence = [], None
+    for line in body.split("\n"):
+        m = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if m:
+            fence = None if fence else m.group(1)[0]
+        elif fence is None and line.startswith("### "):
+            line = line[1:]
+        out.append(line)
+    head = "## What's new"
+    if since:
+        head += f" since {since[1:] if since.startswith('v') else since}"
+    return head + "\n\n" + "\n".join(out).strip("\n") + "\n"
+
+
+def notes_anchor(release_notes: str, version: str) -> str | None:
+    """GitHub's anchor of RELEASE_NOTES.md's dated heading for this
+    release (``## 2026-11-16 — 1.3.0`` is ``2026-11-16--130``)."""
+    for e in entries(release_notes):
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2} — " + re.escape(version), _heading_text(e.heading).strip()):
+            return e.anchor
+    return None
+
+
+def more_detail(rel: Release) -> str:
+    """The line under What's new: the release's full notes, and its section
+    of RELEASE_NOTES.md, both at the tag."""
+    links = []
+    if rel.full_notes:
+        links.append(f"[the full {rel.version} release notes]({REPO_URL}/blob/{rel.tag}/docs/release/{rel.tag}.md)")
+    changes = f"{REPO_URL}/blob/{rel.tag}/docs/RELEASE_NOTES.md" + (f"#{rel.notes_anchor}" if rel.notes_anchor else "")
+    links.append(f"[every change in {rel.version}]({changes})")
+    return "**More detail:** " + " and ".join(links) + "."
+
+
+def _with_more_detail(notes: str, line: str) -> str:
+    """``line`` right under the notes' What's new heading (on top without one)."""
+    rows = notes.strip("\n").split("\n")
+    for i, row in enumerate(rows):
+        if row.startswith("## What's new"):
+            return "\n".join(rows[:i + 1] + ["", line] + rows[i + 1:])
+    return "\n".join([line, "", *rows])
+
+
+def _asset_url(tag: str, name: str) -> str:
+    return f"{REPO_URL}/releases/download/{tag}/{name}"
+
+
+def _doc_url(tag: str, doc: tuple[str, str]) -> str:
+    return f"{REPO_URL}/blob/{tag}/{doc[0]}#{github_slug(doc[1], {})}"
+
+
+def download(rel: Release) -> list[str]:
+    """The Download section, first on the page: each item a direct link to
+    its file on this release (the app's APKs: on the release that holds
+    them), and one plain line on what it is for."""
+    out = ["## Download", ""]
+    out.append(f"- **Windows 11 PC — the server:** [{SETUP_ASSET}]({_asset_url(rel.tag, SETUP_ASSET)})")
+    linux_doc = _doc_url(rel.tag, LINUX_DOC)
+    if rel.linux_install:
+        out += [f"- **Linux — the server:** run this in a terminal ([what it does]({linux_doc}))", "",
+                "  ```bash", f"  {rel.linux_install}", "  ```", ""]
+    else:
+        out.append(f"- **Linux — the server:** [docs/LINUX_HOST.md]({linux_doc})")
+    apk_tag = rel.app_from["tag"] if rel.app_from else rel.tag
+    apks = (rel.app_from or {}).get("apks") or rel.apks
+    by_abi = {e["abi"]: e["file"] for e in apks}
+    links = [f"[{by_abi[abi]}]({_asset_url(apk_tag, by_abi[abi])})" for abi in ("arm64-v8a", "armeabi-v7a")
+             if abi in by_abi]
+    app = f"- **Android phones:** [Google Play]({PLAY_URL})"
+    if links:
+        app += f", or the APK: {' or '.join(links)}"
+        app += (". Which one? 64-bit (arm64-v8a) for almost every phone; 32-bit (armeabi-v7a) for an old or "
+                "budget one.")
+    else:
+        app += "."
+    out.append(app + " Your own server's join page offers the app too.")
+    pi_doc = _doc_url(rel.tag, PI_ROOM_DOC)
+    if rel.satellite_setup_sha256:
+        out.append(f"- **Rooms:** [{SATELLITE_SETUP_ASSET}]({_asset_url(rel.tag, SATELLITE_SETUP_ASSET)}) makes a "
+                   f"spare Windows PC a room. A Raspberry Pi room is set up from your dashboard: "
+                   f"[how]({pi_doc}).")
+    else:
+        out.append(f"- **Rooms:** a Raspberry Pi room is set up from your dashboard: [how]({pi_doc}).")
+    out.append(f"- {UPDATE_LINE}")
+    setups = "The Windows Setups are" if rel.satellite_setup_sha256 else "The Windows Setup is"
+    out += ["", f"{setups} not code-signed yet: when Windows says \"Windows protected your PC\", choose "
+                "More info, then Run anyway."]
+    return out
+
+
 def body(rel: Release) -> str:
-    """The whole release body: the summary, how to install, the files."""
+    """The whole release body: Download first, then the summary (what's
+    new and the rest, hand-written or from RELEASE_NOTES.md), then every
+    file with its SHA-256 and how to check one, last."""
     if rel.candidate_of:
         lead = (f"**Domovoi {rel.version}** is a candidate for {rel.candidate_of}, for testing before it. "
                 "Servers that follow `stable` don't get it.")
@@ -387,8 +550,9 @@ def body(rel: Release) -> str:
         lead = (f"**Domovoi {rel.version}** is a pre-release. "
                 "Servers that follow `stable` don't get it.")
     else:
-        lead = f"**Domovoi {rel.version}**."
-    files = ["## Files", "", "| file | what | SHA-256 |", "|---|---|---|"]
+        lead = ""
+    files = ["<details>", "<summary>Every file, with its SHA-256</summary>", "",
+             "| file | what | SHA-256 |", "|---|---|---|"]
     for e in rel.apks:
         files.append(f"| {e['file']} | {_who(e['abi'])} | `{e['sha256']}` |")
     files.append(f"| {SETUP_ASSET} | the Windows installer (preview, not code-signed) | `{rel.setup_sha256}` |")
@@ -422,8 +586,8 @@ def body(rel: Release) -> str:
     else:
         app_line = ("Its `android/release.json` names the two APKs above, which a server hands to the household's "
                     "phones.")
+    files += ["", "</details>"]
     facts = [
-        "",
         f"- The tag `{rel.tag}` is commit `{rel.tag_commit}`: the code a server installed from this release runs. "
         + app_line,
         f"- `{SETUP_ASSET}` installs that commit. {how} It is not code-signed, so Windows says \"Unknown publisher\": "
@@ -432,34 +596,22 @@ def body(rel: Release) -> str:
              "release key its own programs pin (`ssh-keygen -Y verify`, namespace "
              f"`{SETUP_NAMESPACE}`; [docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md))."]
           if rel.signatures else []),
+        *([f"- A Windows install from before the tray icon: run `{TRAY_ASSET}` once, from any folder: "
+           "Domovoi's icon appears beside the clock and starts at every sign-in from then on "
+           f"([docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md#the-tray-icon))."]
+          if rel.tray_sha256 else []),
         f"- The Android app's signing certificate SHA-256: `{rel.cert}` (check with `apksigner verify --print-certs <file>`).",
-        "- Check a download: `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), "
-        "or `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) against the line in `SHA256SUMS`.",
-        *([f"- Check that a file was built by Domovoi's release workflow: `gh attestation verify <file> -R {REPO_SLUG}` "
-           f"([SECURITY.md, Verifying a release]({REPO_URL}/blob/{rel.tag}/SECURITY.md#verifying-a-release))."]
-          if rel.provenance else []),
     ]
-    install = [
-        "## Install or update",
-        "",
-        f"- **A Domovoi server** updates from its dashboard: Settings, System, About & updates, then check for updates. "
-        f"A new Linux server: [docs/LINUX_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/LINUX_HOST.md).",
-        "- **Phones** get the app from their own server (the join page, or Settings, Household, Phones & browsers), "
-        "where the installer puts it (else an admin presses \"Download the app to this server\" there, "
-        "or uploads it).",
-        f"- **Windows (preview):** `{SETUP_ASSET}` puts the server on a Windows 11 PC.",
-    ]
-    if rel.satellite_setup_sha256:
-        install.append(f"- **A spare Windows PC as a room (preview):** `{SATELLITE_SETUP_ASSET}`, from your own "
-                       "server's dashboard (Settings, Household, Rooms, add a spare device) or from here. It is not "
-                       "code-signed, so Windows SmartScreen says \"Windows protected your PC\": More info, then "
-                       f"Run anyway ([docs/SPARE_DEVICE_SATELLITES.md]({REPO_URL}/blob/{rel.tag}/docs/"
-                       "SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).")
-    if rel.tray_sha256:
-        install.append(f"- **A Windows install from before the tray icon:** run `{TRAY_ASSET}` once, from any folder: "
-                       "Domovoi's icon appears beside the clock and starts at every sign-in from then on "
-                       f"([docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md#the-tray-icon)).")
-    parts = [lead, "", rel.notes.strip(), "", *install, "", *files, *facts]
+    check = ["## Files and checksums", "",
+             "Check a download: `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), "
+             "or `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) against the line in `SHA256SUMS`."]
+    if rel.provenance:
+        check += ["", f"Check that a file was built by Domovoi's release workflow: "
+                      f"`gh attestation verify <file> -R {REPO_SLUG}` "
+                      f"([SECURITY.md, Verifying a release]({REPO_URL}/blob/{rel.tag}/SECURITY.md#verifying-a-release))."]
+    where = ["<details>", "<summary>Where these files come from</summary>", "", *facts, "", "</details>"]
+    parts = [*([lead, ""] if lead else []), *download(rel), "", _with_more_detail(rel.notes, more_detail(rel)), "",
+             *check, "", *files, "", *where]
     return "\n".join(parts).rstrip("\n") + "\n"
 
 
@@ -945,7 +1097,9 @@ def plan(t: Tools, repo: Path, tag_arg: str | None = None) -> dict[str, Any]:
       version and leaves ``android/release.json`` alone). The app changed
       when its versionName or versionCode differ from the ones
       ``android/release.json`` names: ``sign_app`` (release.ps1 first, then
-      finish-release); otherwise finish-release alone (it tags HEAD).
+      finish-release); otherwise finish-release alone (it tags HEAD). Its
+      ``docs/release/v<version>.md``, if it has one, must be in the house
+      style (:func:`release_doc_problems`).
     - **A run to finish** (the tag is on GitHub already, from a run that
       stopped): the tag is HEAD (path b's tag, or path a's release commit
       dispatched again), or HEAD plus ``android/release.json`` alone (path
@@ -997,6 +1151,11 @@ def plan(t: Tools, repo: Path, tag_arg: str | None = None) -> dict[str, Any]:
         if app_changed and not code > released:
             die(f"the app's versionCode {code} is not above the last release's ({released}): "
                 "raise it with versionName, or put both back")
+        hand = t.git_bytes("show", f"{head}:docs/release/{tag}.md")
+        problems = release_doc_problems(hand.decode("utf-8")) if hand is not None else []
+        if problems:
+            die(f"docs/release/{tag}.md: " + "; ".join(problems)
+                + " (docs/CONTRIBUTING.md, \"The release page\", has the template)")
         doc.update(path="app" if app_changed else "server", sign_app=app_changed, finish_at=head)
         if app_changed:
             doc["app"] = {"version_name": name, "version_code": code}
@@ -1185,7 +1344,8 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
             die(f"the app at {tag} is {name or '?'} ({code or '?'}), but android/release.json hands phones "
                 f"{rel.get('version_name')} ({_released_base(rel)}) from {app_tag}: the app changed, so release it "
                 "first with android/scripts/release.ps1 (path a), or put its versionName and versionCode back")
-        app_from = {"version_name": rel.get("version_name"), "version_code": rel.get("version_code"), "tag": app_tag}
+        app_from = {"version_name": rel.get("version_name"), "version_code": rel.get("version_code"), "tag": app_tag,
+                    "apks": [{"abi": e["abi"], "file": e["file"]} for e in apks]}
         app_release = _release_json(t, app_tag) if (publish or t.gh_cmd) else None
         if app_release is None and not publish:
             say(f"warning: can't read the GitHub release {app_tag} (or no gh): its APKs go unchecked")
@@ -1335,12 +1495,20 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
                    tray_sha256=sha256_file(staged_tray) if staged_tray.is_file() else None,
                    satellite_setup_sha256=sha256_file(staged_sat) if staged_sat.is_file() else None,
                    signatures=signatures, candidate_of=m.group(1) if by_name else None, app_from=app_from,
-                   sboms=sboms, provenance=args.provenance)
+                   sboms=sboms, provenance=args.provenance,
+                   linux_install=linux_install_line((t.git_bytes("show", f"{tag_commit}:docs/LINUX_HOST.md")
+                                                     or b"").decode("utf-8", "replace")))
+    current = (t.git_bytes("show", f"{tag_commit}:docs/RELEASE_NOTES.md") or b"").decode("utf-8")
+    info.notes_anchor = notes_anchor(current, version)
     if hand is not None:
-        info.notes = hand.decode("utf-8")
-        say(f"the notes: docs/release/{tag}.md at the tag")
+        problems = release_doc_problems(hand.decode("utf-8"))
+        if problems:
+            die(f"docs/release/{tag}.md at the tag: " + "; ".join(problems)
+                + " (docs/CONTRIBUTING.md, \"The release page\", has the template)")
+        info.full_notes = True
+        info.notes = glance_notes(hand.decode("utf-8"), since=since)
+        say(f"the notes: docs/release/{tag}.md at the tag (its \"{GLANCE}\" on the page, linked in full)")
     else:
-        current = (t.git_bytes("show", f"{tag_commit}:docs/RELEASE_NOTES.md") or b"").decode("utf-8")
         previous = t.git_bytes("show", f"{since}:docs/RELEASE_NOTES.md") if since else None
         new = new_entries(current, previous.decode("utf-8") if previous is not None else None)
         info.notes = ""

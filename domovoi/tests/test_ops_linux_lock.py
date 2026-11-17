@@ -124,7 +124,9 @@ def test_lock_covers_everything_a_server_runs() -> None:
     # radio plugin's fingerprinter (librosa brought it until 2026-10-15).
     for name in ("setuptools", "wheel", "scipy"):
         assert name in blocks, f"{name} is not in the lock"
-    assert blocks["setuptools"][0] < Version("82")
+    # Both setuptools advisories (GHSA-h35f-9h28-mq5c, GHSA-xmj3-9gf7-h52w) are
+    # fixed from 84.1; the osv-scanner allowlist entries were removed with this.
+    assert blocks["setuptools"][0] >= Version("84.1")
 
 
 def _no_deps_requirements() -> list[Requirement]:

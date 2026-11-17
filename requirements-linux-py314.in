@@ -24,8 +24,10 @@ scipy>=1.11
 # The build backend: of this project (pip install --no-deps -e .) and of the
 # few pins that publish only an sdist. The install builds them with
 # --no-build-isolation against this hash-checked copy, so no build step
-# downloads an unchecked setuptools of its own. Below 82: webrtcvad, which
-# imports pkg_resources (gone in setuptools 82), was built this way until
-# 2026-10-15; the bound stays until a lock is tested with 82.
-setuptools>=68,<82
+# downloads an unchecked setuptools of its own. At least 84.1: both setuptools
+# advisories (GHSA-h35f-9h28-mq5c, GHSA-xmj3-9gf7-h52w) are fixed there. It was
+# held below 82 for webrtcvad, which imports pkg_resources (gone in setuptools
+# 82); webrtcvad left this lock on 2026-10-15 (the server uses none; the
+# satellite's own locks carry the webrtcvad-wheels build).
+setuptools>=84.1
 wheel>=0.43

@@ -104,6 +104,10 @@ struct FilesView: View {
     @State private var printingFile: FileEntry?
     @State private var scanning = false
 
+    /// The saved scan "What does it say?" was asked about. Set as the Scan
+    /// sheet is closed, so one sheet gives way to the other.
+    @State private var readingScan: PrintingScanJob?
+
     /// `onAppear`/`onDisappear`, for ``HomeView``'s reason: this screen is
     /// inside the workspace's `NavigationStack`, so a pushed destination
     /// fires `onDisappear` while this view stays in the hierarchy.
@@ -187,7 +191,12 @@ struct FilesView: View {
                     closePrinting: {
                         printingFile = nil
                         scanning = false
-                    }
+                    },
+                    openScanRead: { saved in
+                        scanning = false
+                        readingScan = saved
+                    },
+                    closeScanRead: { readingScan = nil }
                 )
             }
         }
@@ -259,6 +268,7 @@ struct FilesView: View {
         // race against each other.
         if let entry = printingFile { return .printFile(entry) }
         if scanning { return .scanIn }
+        if let saved = readingScan { return .readScan(saved) }
         return nil
     }
 
@@ -288,6 +298,7 @@ struct FilesView: View {
         case .share: files?.saves.taken()
         case .printFile: printingFile = nil
         case .scanIn: scanning = false
+        case .readScan: readingScan = nil
         }
     }
 

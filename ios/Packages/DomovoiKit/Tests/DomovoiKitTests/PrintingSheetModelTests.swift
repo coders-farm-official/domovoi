@@ -44,7 +44,12 @@ final class PrintingSheetModelTests: XCTestCase {
                 asked.mutate { $0.append(ms) }
                 for _ in 0..<settleYieldLimit {
                     if permits.mutate({ (value: inout Int) -> Bool in
-                        guard value > 0 else { return false }
+                        // Cancellation under the permits' lock, before the
+                        // take: a cancelled waiter must not spend a permit
+                        // meant for its successor. This closure runs off the
+                        // main actor; `RoomsModelTests.Waits` has the story
+                        // (its poll flake, 2026-11-17).
+                        guard !Task.isCancelled, value > 0 else { return false }
                         value -= 1
                         return true
                     }) { return }
