@@ -24,8 +24,8 @@ ANNOUNCES it (:func:`mode`):
        "written_at": "<UTC>"}
 
   believed only while root owns it and its folder alone (as ``limits.json``
-  is). The Mac (phase 4) adds ``("mac", "/var/lib/domovoi-mac/lan_name.json")``
-  to :data:`REPORT_FILES`; its helper reads the same request file.
+  is). The Mac's helper writes ``/var/lib/domovoi-mac/lan_name.json`` (the
+  second entry of :data:`REPORT_FILES`) and reads the same request file.
 * ``none`` — anything else (a development box on Windows or a Mac, WSL
   without DomovoiHost): nothing announces, Settings says so (``no_host``).
   A DomovoiHost from before this feature writes no report: also ``no_host``.
@@ -57,7 +57,11 @@ from domovoi.lan_name.responder import STATES, Out, Responder, lan_address_ok
 
 log = logging.getLogger(__name__)
 
-REPORT_FILES: tuple[tuple[str, str], ...] = (("windows", "/var/lib/domovoi-windows/lan_name.json"),)
+REPORT_FILES: tuple[tuple[str, str], ...] = (
+    ("windows", "/var/lib/domovoi-windows/lan_name.json"),
+    # The Mac helper, inside the Lima VM (root 0644 in a root 0755 folder).
+    ("mac", "/var/lib/domovoi-mac/lan_name.json"),
+)
 _REPORT_MAX_BYTES = 4096
 _STATE_MAX_BYTES = 4096
 REQUEST_NAME = "request.json"

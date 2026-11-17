@@ -230,6 +230,39 @@ class PlaybackAPI:
         await dispatch_music(app, response, room_id)
         return True
 
+    async def ensure_room(self, room_id: str) -> bool:
+        """SDK 1.10: whether ``room_id`` is a room this house has, and if so
+        make sure its music player is running (idempotent, quick when it
+        already is). A plugin route that plays in a room someone NAMED (a
+        page's room picker, a phone) asks this first: False means "no such
+        room" (answer 404), never a new room — a room is created by a
+        satellite's accepted hello, not by a name in a URL (CORE-13). The
+        same check the dashboard's own play buttons make.
+
+        A room lookup that fails raises (the caller answers 503); a music
+        player that won't start is only logged, and the play that follows
+        reports it."""
+        from domovoi.clients import mpd as mpd_module
+        from domovoi.config import settings
+        from domovoi.db.repositories import SatellitesRepository
+
+        room_id = (room_id or "").strip()
+        if not room_id:
+            return False
+        if room_id not in mpd_module._room_ports:
+            async with session_scope() as s:
+                if not await SatellitesRepository(s).room_is_known(room_id):
+                    return False
+        if settings.use_stubs:
+            return True
+        try:
+            from domovoi.mpd_provisioner import ensure_room
+
+            await ensure_room(room_id)
+        except Exception as e:  # noqa: BLE001 — the play surfaces it
+            log.warning("playback.ensure_room(%s) failed: %s", room_id, e)
+        return True
+
     async def mpd_client_for(self, room_id: str) -> MPDClient:
         """Escape hatch (search_only, seek, ...) — same client the core
         media handlers use."""

@@ -9,11 +9,28 @@ the tray icon, the satellite Setup this server hands out) changes only when
 a newer ``DomovoiSetup.exe`` repairs the install. This module joins them:
 
 * **What runs there.** DomovoiHost writes ``/var/lib/domovoi-windows/side.json``
-  as root at every bring-up (``windows/common/WindowsSide.cs``): its version
-  and build commit. :func:`read_side` believes the file only while root owns
-  it and its folder and nobody else can write either, so the service user,
-  the core, the dashboard and the plugins can't fake it. No file: a
-  Linux-only install, with no Windows rows and no Windows step.
+  as root (``windows/common/WindowsSide.cs``): its version and build commit,
+  and how the last Setup's bring-up went (``setup``: ``ok``, or ``failed``
+  with provision.sh's step and error, for the card). It writes it before
+  and after every bring-up attempt, whatever the result, and again whenever
+  what it last wrote isn't its own build's report (2026-11-16: a failed
+  provisioning left the file at 1.2.0 under 1.2.1 programs, and the tray
+  downloaded and refused the 1.2.1 Setup on every "Update Domovoi").
+  :func:`read_side` believes the file only while root owns it and its
+  folder and nobody else can write either, so the service user, the core,
+  the dashboard and the plugins can't fake it. No file: a Linux-only
+  install, with no Windows rows and no Windows step.
+* **Which report is authoritative.** side.json, always. The tray also says
+  its version on every poll (``?tray=``, :func:`note_tray`), but any
+  process on the PC can send that over loopback: believed, a higher one
+  would hide a needed Windows step (an update skipped), and a lower one
+  would ask for a step that isn't needed. So the tray's word is shown on
+  the card and never decides ``step_needed``. A side.json that lags behind
+  the programs is the tray's to see through: it compares the target with
+  its own build (``Updater.cs`` WindowsStep.AlreadyCurrent), answers "the
+  Windows side is current" without a download, and still runs the Linux
+  part; it can't be talked into a downgrade, since a Setup that isn't newer
+  than the tray itself is never run (``SetupCheck``).
 * **What the Linux side expects.** The newest release tag the RUNNING code
   includes (:func:`target_release`; on ``stable`` without ``-rc`` tags): the
   Windows side updates on releases only. On ``main`` the Linux side follows
@@ -82,6 +99,9 @@ TRAY_FRESH_SEC = 120
 _VERSION_RE = re.compile(r"^v?([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(?:-([0-9A-Za-z.]{1,40}))?(?:\+[0-9A-Za-z.]*)?$")
 _TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.]{1,40})?$")
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+# provision.sh's step ids (windows/common/Provision.cs ProvisionLine.StepId).
+_STEP_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+_AT_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 # A Windows path the tray names for a log: a drive, then no control or
 # reserved characters.
@@ -153,10 +173,34 @@ def _root_only(st: os.stat_result) -> bool:
     return st.st_uid == 0 and not (st.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
 
 
+def _read_setup(doc: object) -> dict | None:
+    """side.json's ``setup``: ``{result, version, step, error, at,
+    generation}`` (``result`` ``ok`` or ``failed``), or None for none or
+    anything else. Words for the card only; checked again here though root
+    wrote them (the error is provision.sh's, which may quote the checkout)."""
+    if not isinstance(doc, dict) or doc.get("result") not in ("ok", "failed"):
+        return None
+    at = doc.get("at")
+    if not isinstance(at, str) or not _AT_RE.match(at):
+        return None
+    step = doc.get("step")
+    gen = doc.get("generation")
+    failed = doc["result"] == "failed"
+    return {
+        "result": doc["result"],
+        "version": doc["version"] if valid_version(doc.get("version")) else None,
+        "step": step if isinstance(step, str) and _STEP_RE.match(step) else None,
+        "error": (_clean_text(doc.get("error"), 300) or "no reason was given") if failed else None,
+        "at": at,
+        "generation": gen if isinstance(gen, int) and not isinstance(gen, bool) and 0 <= gen < 2**31 else 0,
+    }
+
+
 def read_side() -> dict | None:
-    """``{version, build_commit, written_at}`` as DomovoiHost last wrote it,
-    or None: no file (a Linux-only install), or one this module can't
-    trust or read. Never raises."""
+    """``{version, build_commit, written_at, setup}`` as DomovoiHost last
+    wrote it (``setup``: :func:`_read_setup`, None from a host before
+    1.3.1), or None: no file (a Linux-only install), or one this module
+    can't trust or read. Never raises."""
     path = side_file()
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -190,6 +234,7 @@ def read_side() -> dict | None:
         "version": doc["version"],
         "build_commit": commit if isinstance(commit, str) and _COMMIT_RE.match(commit) else None,
         "written_at": written if isinstance(written, str) and len(written) <= 40 else None,
+        "setup": _read_setup(doc.get("setup")),
     }
 
 
@@ -598,6 +643,9 @@ async def card_state() -> dict:
         "version": f["side"]["version"],
         "build_commit": f["side"]["build_commit"],
         "reported_at": f["side"]["written_at"],
+        # How the last Setup on the PC went (DomovoiHost's word, root's
+        # file): a failed one is said on the card with what to do.
+        "setup": f["side"].get("setup"),
         "target": f["target"],
         "step_needed": f["step_needed"],
         "why_not": f["why_not"],

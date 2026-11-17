@@ -81,7 +81,8 @@ def test_no_file_is_a_linux_only_install(tmp_path) -> None:
 
 def test_a_root_owned_report_is_read(tmp_path, monkeypatch) -> None:
     _side(tmp_path, GOOD_SIDE, monkeypatch=monkeypatch)
-    assert windows_side.read_side() == {"version": "1.0.0", "build_commit": C, "written_at": "2026-10-22T21:30:00Z"}
+    assert windows_side.read_side() == {"version": "1.0.0", "build_commit": C, "written_at": "2026-10-22T21:30:00Z",
+                                        "setup": None}
 
 
 def test_a_report_anyone_but_root_could_write_is_not_believed(tmp_path, monkeypatch) -> None:
@@ -117,6 +118,48 @@ def test_a_report_that_is_not_one_is_ignored(tmp_path, monkeypatch, doc) -> None
 def test_a_bad_build_commit_is_dropped_not_shown(tmp_path, monkeypatch) -> None:
     _side(tmp_path, {**GOOD_SIDE, "build_commit": "HEAD; echo"}, monkeypatch=monkeypatch)
     assert windows_side.read_side()["build_commit"] is None
+
+
+FAILED_SETUP = {"result": "failed", "version": "1.2.1", "step": "checkout",
+                "error": "provision-manifest.conf line 54: unknown key docker_debian_key_url",
+                "at": "2026-11-15T22:32:00Z", "generation": 13}
+
+
+def test_the_last_setups_outcome_rides_along(tmp_path, monkeypatch) -> None:
+    """2026-11-16: a failed Setup showed only in host.log. DomovoiHost now
+    puts its outcome in side.json (windows/common/WindowsSide.cs
+    SetupOutcome), for the card."""
+    _side(tmp_path, {**GOOD_SIDE, "version": "1.2.1", "setup": FAILED_SETUP}, monkeypatch=monkeypatch)
+    side = windows_side.read_side()
+    assert side["version"] == "1.2.1"
+    assert side["setup"] == FAILED_SETUP
+    ok = {"result": "ok", "version": "1.3.0", "step": None, "error": None, "at": "2026-11-16T08:00:00Z", "generation": 14}
+    _side(tmp_path, {**GOOD_SIDE, "setup": ok}, monkeypatch=monkeypatch)
+    assert windows_side.read_side()["setup"] == ok
+
+
+@pytest.mark.parametrize("setup,expect", [
+    ({"result": "maybe", "at": "2026-11-15T22:32:00Z"}, None),
+    ({"result": "failed", "at": "yesterday"}, None),
+    ("failed", None),
+    ({"result": "failed", "at": "2026-11-15T22:32:00Z", "step": "../x", "version": "1 2",
+      "error": "a\x00b" + "x" * 500, "generation": True},
+     {"result": "failed", "version": None, "step": None, "at": "2026-11-15T22:32:00Z", "generation": 0}),
+    ({"result": "failed", "at": "2026-11-15T22:32:00Z", "error": 7, "generation": -1},
+     {"result": "failed", "version": None, "step": None, "error": "no reason was given",
+      "at": "2026-11-15T22:32:00Z", "generation": 0}),
+])
+def test_a_setup_outcome_is_checked_again(tmp_path, monkeypatch, setup, expect) -> None:
+    _side(tmp_path, {**GOOD_SIDE, "setup": setup}, monkeypatch=monkeypatch)
+    side = windows_side.read_side()
+    assert side is not None and side["version"] == "1.0.0", "a bad outcome never costs the version"
+    got = side["setup"]
+    if expect is None:
+        assert got is None
+        return
+    for k, v in expect.items():
+        assert got[k] == v, k
+    assert isinstance(got["error"], str) and 0 < len(got["error"]) <= 300 and got["error"].isprintable()
 
 
 # ─── the target ─────────────────────────────────────────────────────────
@@ -176,7 +219,7 @@ def server(tmp_path, monkeypatch):
     def side():
         d = s["side"]
         return None if d is None else {"version": d["version"], "build_commit": d.get("build_commit"),
-                                       "written_at": d.get("written_at")}
+                                       "written_at": d.get("written_at"), "setup": d.get("setup")}
 
     monkeypatch.setattr(windows_side, "read_side", side)
     monkeypatch.setattr(windows_side, "target_release", lambda sha, ch: s["target"])
@@ -212,6 +255,32 @@ async def test_why_there_is_no_step(server, change, why) -> None:
     assert st["step_needed"] is False and st["why_not"] == why
     card = await windows_side.card_state()
     assert card == {"present": False} if why == "no_windows_side" else card["why_not"] == why
+
+
+@pytest.mark.asyncio
+async def test_the_card_says_a_setup_didnt_finish(server) -> None:
+    assert (await windows_side.card_state())["setup"] is None
+    server["side"]["setup"] = FAILED_SETUP
+    card = await windows_side.card_state()
+    assert card["setup"]["result"] == "failed" and card["setup"]["step"] == "checkout"
+    assert "setup" not in (await windows_side.tray_state()), "the tray reads its own copy from DomovoiHost"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tray", ["9.9.9", "0.0.1", "1.0.1", None])
+async def test_the_trays_word_never_decides_the_step(server, tray) -> None:
+    """side.json (root's) is authoritative. Any process on the PC can say
+    ?tray= over loopback: believed, a higher version would hide a needed
+    step, a lower one would ask for one that isn't needed. A lagging
+    side.json is the tray's to see through (Updater.cs AlreadyCurrent)."""
+    windows_side.note_tray(tray)
+    st = await windows_side.tray_state()
+    assert st["step_needed"] is True and st["windows"]["version"] == "1.0.0"
+    server["target"] = {"tag": "v1.0.0", "version": "1.0.0", "commit": C}
+    windows_side._TARGET_CACHE.clear()
+    assert (await windows_side.tray_state())["why_not"] == "up_to_date"
+    card = await windows_side.card_state()
+    assert card["version"] == "1.0.0" and card["tray"]["version"] == tray
 
 
 @pytest.mark.asyncio

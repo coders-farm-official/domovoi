@@ -8,8 +8,9 @@ development** — see the note for developers at the bottom.
 
 * **Internet radio.** Search a community station directory
   (radio-browser.info) from the dashboard's Stations page, favorite
-  stations, and play them by voice ("stream KEXP", "tune to the news
-  station") in any room, or in the browser via the page's player.
+  stations, and play them by voice ("stream KEXP", "play lofi radio") in
+  any room, in a room picked on the page (the **play in** room chips, or
+  casting from the player), or in the browser via the page's player.
 * **Play without favoriting.** Clicking any station — a search hit, a
   favorite, a Recent entry — starts it. Favoriting is a separate act (the
   star), because a favorite also puts the station on the background
@@ -46,14 +47,22 @@ development** — see the note for developers at the bottom.
 
 | Say | Does |
 |---|---|
-| "stream KEXP" / "tune to the jazz station" | play a favorited station by name |
+| "stream KEXP" / "tune to the jazz station" | play a station by name |
+| "play lofi radio" / "play the station Lofi 24/7" | the same, said another way |
 | "play 97.5 FM" | tune a frequency (FM/SDR, or a favorited simulcast) |
+| "add this to my favorites" / "favorite this station" | star the station playing in the room |
 | "stop the radio" / "stop streaming" | stop playback in the room |
 
-Station-name commands work on **favorited** stations — favorite them on
-the Stations page first. (Clicking a station on the page plays it without
-favoriting, so voice by name and one-off listening are deliberately
-different things.)
+A station name is looked for in your favorites first, then among the other
+stations the plugin knows (played before, imported from the FCC list), and
+then, when the household lets Domovoi on the internet (Settings →
+Internet), in the station directory, which offers its best one or two
+("Online there's Groove Salad or Groove Salad Classic. Which one?").
+Names are compared by how they are said, so "lo-fi 24 slash 7" finds
+"Lofi 24/7"; when it is close but not sure, Domovoi asks "Did you mean
+Lofi 24/7?" and "yes", "no", "the second one" or another name answers.
+"Play radio …" ("play radio paradise") looks only at saved stations,
+because "play radio ga ga" is a song.
 
 ## Hardware notes (FM / RTL-SDR)
 

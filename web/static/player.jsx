@@ -650,8 +650,19 @@ const _noop = () => {};
 const _castTrackIds = (items) => (items || [])
   .filter((it) => it && it.kind === 'library' && it.trackId != null)
   .map((it) => it.trackId);
+/* A plugin's live item (a radio station) its plugin can start in a room by
+ * itself: the source's `room_play_template` (SDK 1.10, seeded by index.html
+ * from the plugin manifest) with the item's id filled in. The room is sent
+ * that one item, by the plugin's own route, with `{ room_id }`. Null for
+ * anything else, so a library song still goes as track ids. */
+const _castRoomPlayPath = (item) => {
+  if (!item || item.kind === 'library' || item.itemId == null) return null;
+  const src = (window.DomovoiPlayerSources || {})[item.kind];
+  const tpl = src && src.room_play_template;
+  return tpl ? tpl.replace('{id}', encodeURIComponent(item.itemId)) : null;
+};
 const _castRefused = () => {
-  const e = new Error('only library songs can be cast to a room — nothing from here on is in the library');
+  const e = new Error('nothing from here on can play in a room — podcasts, audiobooks and files outside the library play in this browser only');
   e.castRefused = true;
   return e;
 };
@@ -1694,6 +1705,9 @@ const PlaybackProvider = ({ children }) => {
   const castRoomJump = React.useCallback(async (roomId, i) => {
     // Re-cast from the chosen index onward so "play this queue item" works remotely.
     const items = queueRef.current.slice(i);
+    // A station the room plays through its plugin (SDK 1.10).
+    const roomPlay = _castRoomPlayPath(items[0]);
+    if (roomPlay) { await apiPost(roomPlay, { room_id: roomId }); return; }
     await castRoomLoad(roomId, items);
   }, [castRoomLoad]);
 
@@ -1754,12 +1768,17 @@ const PlaybackProvider = ({ children }) => {
         sourcePlaying = liveEl ? !liveEl.paused : statusRef.current === 'playing';
       }
       const items = queue.slice(at);
+      // A station (a plugin item with a room route, SDK 1.10) goes to the
+      // room by its plugin's route, alone: it is live, so it starts playing
+      // there whatever this browser was doing.
+      const roomPlay = _castRoomPlayPath(items[0]);
       // Nothing a room can play: say so before touching playback, and never
       // switch the target to a room that was sent nothing.
-      if (!_castTrackIds(items).length) throw _castRefused();
-      const paused = !sourcePlaying;
+      if (!roomPlay && !_castTrackIds(items).length) throw _castRefused();
+      const paused = !sourcePlaying && !roomPlay;
       try {
-        await castRoomLoad(nextTarget.roomId, items, startSec, { paused });
+        if (roomPlay) await apiPost(roomPlay, { room_id: nextTarget.roomId });
+        else await castRoomLoad(nextTarget.roomId, items, startSec, { paused });
       } catch (e) {
         // The room refused: this browser (or the old room) plays on.
         console.warn('cast to room failed', e);

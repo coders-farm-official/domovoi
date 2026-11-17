@@ -153,6 +153,22 @@ namespace Domovoi.Windows.Tray
             string[] note = notifier.Next(v);
             if (note != null && icon.Visible)
                 icon.ShowBalloonTip(8000, note[0], note[1], v.Up ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            else NoteSetup(f.Setup);
+        }
+
+        // A Setup that didn't finish: one notification per failure (this
+        // account remembers which it showed), then the menu's second line.
+        public const string SetupNoticePref = "SetupFailureShown";
+
+        void NoteSetup(SetupOutcome s)
+        {
+            string[] words = s != null ? s.Notification() : null;
+            if (words == null || !icon.Visible || Program.Snapshotting) return;
+            int id = s.NoticeId();
+            if (store.Dword(SetupNoticePref) == id) return;
+            store.SetDword(SetupNoticePref, id);
+            log.Write("the last Setup didn't finish: " + words[1]);
+            icon.ShowBalloonTip(30000, words[0], words[1], ToolTipIcon.Warning);
         }
 
         void ShowState()
@@ -221,7 +237,7 @@ namespace Domovoi.Windows.Tray
             var logs = new ToolStripMenuItem("Save logs for support...");
             logs.Click += delegate { SaveLogs(); };
             items.Add(logs);
-            bool finish = updateState != null && updateState.RequestId != null && updateState.StepNeeded;
+            bool finish = updateState != null && updateState.RequestId != null && WindowsStep.WindowsNeeded(updateState, BuildVersion.Version);
             var update = new ToolStripMenuItem(stepRunning ? "Updating Domovoi..." : finish ? "Finish updating Domovoi..." : "Update Domovoi...")
             {
                 Enabled = opt.Service != null && !stepRunning,
@@ -363,7 +379,7 @@ namespace Domovoi.Windows.Tray
                 {
                     // An earlier run's outcome first, then the state: never
                     // a decision on a state read before that outcome landed.
-                    act = UpdatePoll.Run(updates, updatesRoot, UpdateRun.AdminRoot, DateTime.UtcNow, seen, running, out st, out done);
+                    act = UpdatePoll.Run(updates, updatesRoot, UpdateRun.AdminRoot, DateTime.UtcNow, seen, running, BuildVersion.Version, out st, out done);
                 }
                 catch (Exception e) { log.Write("update poll failed: " + e.Message); }
                 finally { Interlocked.Exchange(ref updating, 0); }
@@ -378,7 +394,7 @@ namespace Domovoi.Windows.Tray
             // reminder keeps what it knew until the core says otherwise.
             if (st != null)
             {
-                string waiting = RequestReminder.Waiting(st, stepRunning, PendingRun.Load(updatesRoot) != null);
+                string waiting = RequestReminder.Waiting(st, stepRunning, PendingRun.Load(updatesRoot) != null, BuildVersion.Version);
                 if (waiting != null) waitingState = st;
                 TrackRequest(waiting);
             }
@@ -391,8 +407,9 @@ namespace Domovoi.Windows.Tray
             }
             if (act == UpdateAction.Nothing || stepRunning || st == null || st.RequestId == seenRequest) return;
             seenRequest = st.RequestId;
-            log.Write("the dashboard asked for the Windows step (" + (st.RequestOnThisPc ? "on this PC" : "from another device") + ", " + st.TargetTag + ")");
-            if (act == UpdateAction.StartNow) { StartWindowsStep(st, false, false); return; }
+            log.Write("the dashboard asked for the Windows step (" + (st.RequestOnThisPc ? "on this PC" : "from another device") + ", " + st.TargetTag + ")"
+                + (act == UpdateAction.AlreadyCurrent ? "; this PC already has " + BuildVersion.Version + ", so it is answered without a download" : ""));
+            if (act == UpdateAction.StartNow || act == UpdateAction.AlreadyCurrent) { StartWindowsStep(st, false, false); return; }
             // UpdateAction.Notify: the reminder (TrackRequest, Remind) shows it.
             Remind();
         }
@@ -583,7 +600,7 @@ namespace Domovoi.Windows.Tray
                 else { p.Shown = true; p.Save(updatesRoot); }
             }
             UpdateState now = kind == "linux" && r.Outcome == Outcome.Ok ? updates.State() : null;
-            bool windowsNext = UpdateDecision.WindowsAfterLinux(kind, r, now);
+            bool windowsNext = UpdateDecision.WindowsAfterLinux(kind, r, now, BuildVersion.Version);
             string words = WindowsStep.Words(r, afterLinux);
             Invoke(delegate
             {
