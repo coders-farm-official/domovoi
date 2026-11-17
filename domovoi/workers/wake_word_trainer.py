@@ -383,12 +383,14 @@ def _env_file_trainer_keys() -> dict[str, str]:
 
 
 def trainer_env(timeout: int, pronunciations: str = "", synth_ipa: str = "", *,
-                synthetic_only: bool = False) -> dict[str, str]:
+                synthetic_only: bool = False, extra_negatives: str = "") -> dict[str, str]:
     """The command's environment: the core's own, the trainer knobs from
     the settings and ``.env``, the wrapper's deadline and the phrase's
     pronunciations. The process environment wins over ``.env`` (as it does
     for the settings themselves), except ``WAKE_SYNTHETIC_ONLY``, which is
-    the word's own: "1" for a synthetic-voices-only word, absent otherwise."""
+    the word's own: "1" for a synthetic-voices-only word, absent otherwise,
+    and ``WAKE_EXTRA_NEGATIVES``, the near misses of the published word a
+    household copy tunes (absent for any other word)."""
     env = dict(os.environ)
     for key, value in _env_file_trainer_keys().items():
         env.setdefault(key, value)
@@ -403,7 +405,10 @@ def trainer_env(timeout: int, pronunciations: str = "", synth_ipa: str = "", *,
         env["WAKE_TRAINER_MEMORY"] = f"{mem}g"
     env["WAKE_TRAINER_DEADLINE_SEC"] = str(max(60, int(timeout) - 60))
     for key, value in (("WAKE_PRONUNCIATIONS", pronunciations), ("WAKE_SYNTH_IPA", synth_ipa),
-                       ("WAKE_SYNTHETIC_ONLY", "1" if synthetic_only else "")):
+                       ("WAKE_SYNTHETIC_ONLY", "1" if synthetic_only else ""),
+                       # A household copy of a published word ("Tune Domovoi"):
+                       # that word's own near misses (domovoi/wake_tuning.py).
+                       ("WAKE_EXTRA_NEGATIVES", extra_negatives)):
         if value:
             env[key] = value
         else:
@@ -733,7 +738,10 @@ class WakeWordTrainer(Worker):
         timeout = wake_trainer_setup.train_timeout_sec()
         pron = await asyncio.to_thread(phrase_pronunciations, phrase)
         synth = await asyncio.to_thread(synthesis_ipa, phrase)
-        env = trainer_env(timeout, pron, synth, synthetic_only=synthetic_only)
+        from domovoi import wake_tuning
+
+        env = trainer_env(timeout, pron, synth, synthetic_only=synthetic_only,
+                          extra_negatives=wake_tuning.extra_negatives_env(slug))
         if wake_trainer_setup.recorded_gpu():
             # Set up for the GPU: refuse the CPU rather than train for over
             # an hour under a limit sized for the GPU (review, 2026-10-13).
@@ -842,6 +850,13 @@ class WakeWordTrainer(Worker):
             except Exception as e:  # noqa: BLE001 - never fails a trained word
                 log.warning("wake-word trainer: no model-card record for slug=%s (%s)", slug, e)
             log.info("wake-word trainer: slug=%s trained → %s", slug, out_path)
+            # "Tune Domovoi": the household copy is ready, so the rooms on
+            # the published word move to it (domovoi/wake_tuning.py).
+            if wake_tuning.is_tuned(slug):
+                try:
+                    await wake_tuning.after_trained(slug)
+                except Exception as e:  # noqa: BLE001 - never fails a trained word
+                    log.warning("wake-word trainer: rooms not moved to %s (%s)", slug, e)
         else:
             # Surface the tail of the output so the dashboard shows
             # something diagnosable without exposing the full multi-MB log

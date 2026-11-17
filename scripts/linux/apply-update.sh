@@ -117,7 +117,8 @@
 #      in Settings takes effect at the next Restart. DOMOVOI_MANAGE_OS_JOBS=0
 #      leaves the jobs alone.
 #  11b. Ubuntu packages a newer Domovoi needs that this box lacks
-#      (reconcile_added_packages: xorriso, for old computers' room sticks)
+#      (reconcile_added_packages: xorriso, for old computers' room sticks;
+#      tesseract-ocr and tesseract-ocr-eng, for reading scans)
 #      are installed from Ubuntu's archive, --no-install-recommends, not
 #      held. Not under never; never fatal (a warn step); a step only when
 #      something was missing. A healthy plain restart ends with it too.
@@ -383,10 +384,25 @@ GPU_DOCKER_RESTARTED=0
 # Ubuntu packages a newer Domovoi needs that a box installed before them
 # lacks (provision.sh's apt step puts them on a new one): xorriso, the
 # program the core runs to make old computers' room sticks (2026-10-16,
-# domovoi/usb_stick/). DOMOVOI_MANAGE_PACKAGES=0 (or false/no/off) leaves
-# them to the administrator.
+# domovoi/usb_stick/); tesseract-ocr and its English data, what the core
+# runs to read scanned pages (1.4.0, domovoi/scan_reader/).
+# DOMOVOI_MANAGE_PACKAGES=0 (or false/no/off) leaves them to the
+# administrator.
 MANAGE_PACKAGES=${DOMOVOI_MANAGE_PACKAGES:-1}
-ADDED_PACKAGES=(xorriso)
+ADDED_PACKAGES=(xorriso tesseract-ocr tesseract-ocr-eng)
+
+# What each added package is for, said when it can't be installed.
+added_package_needs() {
+  local p out=() tess=0
+  for p in "$@"; do
+    case "$p" in
+      xorriso) out+=("USB sticks for old computers need xorriso") ;;
+      tesseract-ocr*) [ "$tess" -eq 1 ] || out+=("reading scans needs tesseract-ocr"); tess=1 ;;
+    esac
+  done
+  local IFS=';'
+  printf '%s' "${out[*]}" | sed 's/;/; /g'
+}
 
 # The wake-word trainer image (scripts/wake_word/docker), rebuilt when it is
 # out of date and only where a household built it (switched training on).
@@ -2511,7 +2527,7 @@ reconcile_added_packages() {
   [ "${#missing[@]}" -gt 0 ] || return 0
   policy=$(internet_policy 2>/dev/null || true)
   if [ "$policy" = never ]; then
-    log "not installed while internet access is turned off: ${missing[*]} (USB sticks for old computers need xorriso)"
+    log "not installed while internet access is turned off: ${missing[*]} ($(added_package_needs "${missing[@]}"))"
     return 0
   fi
   t0=$(now_ms)
@@ -2528,7 +2544,7 @@ reconcile_added_packages() {
   if [ -n "$out" ]; then printf '%s\n' "$out" | tail -n 20 | sed 's/^/    /'; fi
   if [ "$rc" -ne 0 ]; then
     # The core shows this detail on the Version card: our words, not apt's.
-    add_step added-packages warn "$t0" "not installed: ${missing[*]} (apt-get failed, exit $rc, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. USB sticks for old computers need xorriso"
+    add_step added-packages warn "$t0" "not installed: ${missing[*]} (apt-get failed, exit $rc, or another program was using apt; journalctl -u domovoi-update says why). The next update or Restart tries again. $(added_package_needs "${missing[@]}")"
     log "step added-packages failed (exit $rc); not fatal, the run goes on"
   else
     add_step added-packages ok "$t0" "installed ${missing[*]}"

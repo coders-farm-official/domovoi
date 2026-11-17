@@ -143,6 +143,9 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.workers.library_indexer",
     "domovoi.workers.podcast_feed_poller",
     "domovoi.host_time",
+    # Wake-word tuning (the household's own copy of the published word):
+    # the wake-words router imports it lazily inside request handlers.
+    "domovoi.wake_tuning",
     # Satellite-media prepare (SAT-1) bakes this server's Ed25519 fingerprint
     # into the image, so the WEB process signs and therefore needs the
     # identity module, the crypto backend it signs through, and the

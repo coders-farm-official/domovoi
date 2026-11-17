@@ -183,7 +183,11 @@ def strip_running(pages: list[list[str]], zone: int = 2) -> tuple[list[list[str]
     return out, headers, footers
 
 
-def extract(path: Path, max_pages: int, max_chars: int | None = None) -> dict[str, Any]:
+def extract(path: Path, max_pages: int, max_chars: int | None = None,
+            scan_text: dict[int, str] | None = None) -> dict[str, Any]:
+    """``scan_text``: ``{page: text}`` the scan reader read from this file's
+    page pictures (domovoi/scan_reader); a scanned page with an entry is
+    read from it instead of being listed as a picture."""
     import pypdfium2 as pdfium
 
     try:
@@ -200,6 +204,7 @@ def extract(path: Path, max_pages: int, max_chars: int | None = None) -> dict[st
             raise Refused(f"That PDF has {total:,} pages, more than Domovoi reads ({max_pages:,}).")
         pages: list[list[str]] = []
         scanned: list[int] = []
+        scan_read: list[int] = []
         garbled: list[int] = []
         two_col: list[int] = []
         read_chars = 0
@@ -219,8 +224,13 @@ def extract(path: Path, max_pages: int, max_chars: int | None = None) -> dict[st
                 text = " ".join(lines)
                 visible = len(re.sub(r"\s", "", text))
                 if visible < SCAN_VISIBLE_CHARS and _page_has_image(page):
-                    scanned.append(i + 1)
-                    lines = []
+                    read = (scan_text or {}).get(i + 1)
+                    if read and read.strip():
+                        scan_read.append(i + 1)
+                        lines = [normalize(x).strip() for x in read.splitlines() if x.strip()]
+                    else:
+                        scanned.append(i + 1)
+                        lines = []
                 elif gibberish_share(text) > GIBBERISH_SHARE:
                     garbled.append(i + 1)
                     lines = []
@@ -241,5 +251,6 @@ def extract(path: Path, max_pages: int, max_chars: int | None = None) -> dict[st
             parts.append({"label": f"p. {i + 1}", "page": i + 1, "text": "\n".join(lines)})
     if footers:
         parts.append({"label": "page footer", "text": "\n".join(footers)})
-    return {"pages": total, "parts": parts, "scanned_pages": scanned, "garbled_pages": garbled,
+    return {"pages": total, "parts": parts, "scanned_pages": scanned, "scan_read_pages": scan_read,
+            "garbled_pages": garbled,
             "two_column_pages": two_col, "truncated": cut}

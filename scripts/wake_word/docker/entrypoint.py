@@ -334,6 +334,201 @@ def near_misses(phrase: str) -> list[str]:
     return phrases
 
 
+# ── Extra training material (optional mounts) ───────────────────────────
+#
+# A run may be handed more than the cache's datasets, all of it synthetic
+# or recorded-free (the published models' recipe uses these; a household
+# word normally doesn't):
+#   /data/synthetic            more synthetic positives (other voices,
+#                              speeds, pitches), copied into positive_train
+#   /data/synthetic_negatives  more synthetic near misses ("domino", "the
+#                              movie"), copied into negative_train
+#   /data/rirs                 more room impulse responses (WAVs)
+#   /data/background           more background noise / music beds (WAVs)
+# and two environment knobs:
+#   WAKE_EXTRA_NEGATIVES  more near-miss phrases for the generator to speak
+#                         ("domino;do move;the movie"), on top of the ones
+#                         worked out from the phrase
+#   WAKE_SKIP_MIT_RIRS=1  leave out the MIT impulse responses (no licence
+#                         stated) when /data/rirs holds impulse responses
+#   WAKE_FP_VAL_NPY       a false-wake validation features file to use
+#                         instead of the dataset's (which includes MUSDB18)
+# None of these is ever a household recording: WAKE_SYNTHETIC_ONLY does not
+# turn them off.
+EXTRA_POS_IN = Path("/data/synthetic")
+EXTRA_NEG_IN = Path("/data/synthetic_negatives")
+EXTRA_RIRS_IN = Path("/data/rirs")
+EXTRA_BACKGROUND_IN = Path("/data/background")
+EXTRA_FINGERPRINT = ".extra_clips.sha256"
+EXTRA_PREFIX = "extra_"
+_EXTRA_PHRASE_RE = None
+MAX_EXTRA_NEGATIVES = 500
+
+
+def extra_negative_phrases(raw: str | None, phrase: str = "") -> list[str]:
+    """WAKE_EXTRA_NEGATIVES, split on ";" or new lines: lower case, letters,
+    digits, spaces and , . ' - only, no repeats, never the phrase itself."""
+    import re
+
+    global _EXTRA_PHRASE_RE
+    if _EXTRA_PHRASE_RE is None:
+        _EXTRA_PHRASE_RE = re.compile(r"^[a-z0-9][a-z0-9 ,.'-]{0,79}$")
+    out: list[str] = []
+    own = " ".join((phrase or "").lower().split())
+    for part in re.split(r"[;\n]", raw or ""):
+        p = " ".join(part.lower().split())
+        if p and p != own and _EXTRA_PHRASE_RE.match(p) and p not in out:
+            out.append(p)
+        if len(out) >= MAX_EXTRA_NEGATIVES:
+            break
+    return out
+
+
+def custom_negatives(phrase: str) -> list[str]:
+    """The phrase's near misses, then the extra ones (no repeats)."""
+    out = list(near_misses(phrase))
+    for p in extra_negative_phrases(os.environ.get("WAKE_EXTRA_NEGATIVES", ""), phrase):
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def _has_wavs(d: Path) -> bool:
+    try:
+        return d.is_dir() and any(d.rglob("*.wav"))
+    except OSError:
+        return False
+
+
+def _wav_dirs(root: Path) -> list[str]:
+    """``root`` and every folder under it holding WAVs (train.py's augment
+    stage scandir()s each path, not recursively)."""
+    found = []
+    for d in sorted({p.parent for p in root.rglob("*.wav")}):
+        found.append(str(d))
+    return found
+
+
+def augmentation_dirs() -> tuple[list[str], list[str]]:
+    """(rir_paths, background_paths) for the config: the cache's own, then
+    the extra mounts'. The MIT impulse responses are left out only when
+    WAKE_SKIP_MIT_RIRS=1 and extra impulse responses are there."""
+    rirs: list[str] = []
+    extra_rirs = _wav_dirs(EXTRA_RIRS_IN) if _has_wavs(EXTRA_RIRS_IN) else []
+    if not (skip_mit_rirs() and extra_rirs):
+        rirs.append(str(RIR_DIR))
+    rirs += extra_rirs
+    background = [str(BACKGROUND_DIR)]
+    if _has_wavs(EXTRA_BACKGROUND_IN):
+        background += _wav_dirs(EXTRA_BACKGROUND_IN)
+    return rirs, background
+
+
+def skip_mit_rirs() -> bool:
+    return os.environ.get("WAKE_SKIP_MIT_RIRS", "") == "1" and _has_wavs(EXTRA_RIRS_IN)
+
+
+def extra_clips() -> tuple[list[Path], list[Path]]:
+    pos = sorted(EXTRA_POS_IN.rglob("*.wav")) if EXTRA_POS_IN.is_dir() else []
+    neg = sorted(EXTRA_NEG_IN.rglob("*.wav")) if EXTRA_NEG_IN.is_dir() else []
+    return pos, neg
+
+
+def extra_fingerprint(pos: list[Path], neg: list[Path]) -> str:
+    """Names and sizes of the extra clips (they are many and synthetic: a
+    changed set is what matters, not every byte)."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for tag, files in (("pos", pos), ("neg", neg)):
+        for f in files:
+            try:
+                size = f.stat().st_size
+            except OSError:
+                size = -1
+            h.update(f"{tag}\0{f.as_posix()}\0{size}\n".encode("utf-8"))
+    return h.hexdigest()
+
+
+def inject_extra_clips(model_dir: Path) -> tuple[int, int]:
+    """Copy the extra synthetic positives and negatives into the run's
+    positive_train / negative_train (``extra_*.wav``, 16 kHz mono), after
+    removing the previous run's copies. When the set differs from the one
+    the stored features were computed from, the features are dropped so
+    --augment_clips computes them again. Returns (positives, negatives)."""
+    pos, neg = extra_clips()
+    stamp = model_dir / EXTRA_FINGERPRINT
+    want = extra_fingerprint(pos, neg)
+    before = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else ""
+    stale = False
+    for sub in ("positive_train", "negative_train"):
+        d = model_dir / sub
+        if d.is_dir():
+            for old in d.glob(f"{EXTRA_PREFIX}*.wav"):
+                old.unlink()
+                stale = True
+    # No extras now and none before (and nothing a killed run left): done.
+    if not pos and not neg and not before and not stale:
+        return 0, 0
+    if before != want or (not pos and not neg):
+        for name in FEATURE_FILES:
+            f = model_dir / name
+            if f.is_file():
+                f.unlink()
+        if stamp.is_file():
+            stamp.unlink()
+        log("extra synthetic clips changed since the last run; features are computed again.")
+    written = []
+    for files, sub in ((pos, "positive_train"), (neg, "negative_train")):
+        d = model_dir / sub
+        d.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for i, w in enumerate(files):
+            try:
+                _copy_16k(w, d / f"{EXTRA_PREFIX}{i:06d}.wav")
+                n += 1
+            except Exception as e:  # noqa: BLE001
+                log(f"  skip {w.name}: {e}")
+        written.append(n)
+    log(f"extra synthetic clips: {written[0]} positives, {written[1]} negatives")
+    return written[0], written[1]
+
+
+def mark_extra_current(model_dir: Path) -> None:
+    pos, neg = extra_clips()
+    if pos or neg:
+        (model_dir / EXTRA_FINGERPRINT).write_text(
+            extra_fingerprint(pos, neg) + "\n", encoding="utf-8")
+
+
+def drop_extra_copies(model_dir: Path) -> None:
+    """The extra clips' copies go at the end of a run (they can be tens of
+    thousands of files; the next run copies them again)."""
+    for sub in ("positive_train", "negative_train"):
+        d = model_dir / sub
+        if d.is_dir():
+            for f in d.glob(f"{EXTRA_PREFIX}*.wav"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+
+def _copy_16k(src: Path, dst: Path) -> None:
+    import soundfile as sf
+
+    data, sr = sf.read(str(src))
+    if getattr(data, "ndim", 1) > 1:
+        data = data.mean(axis=1)
+    if sr != 16000:
+        from math import gcd
+
+        from scipy.signal import resample_poly
+        g = gcd(int(sr), 16000)
+        data = resample_poly(data, 16000 // g, int(sr) // g)
+    sf.write(str(dst), data, 16000, subtype="PCM_16")
+
+
 def render_config(slug: str, phrase: str, device: str, work: Path) -> Path:
     n_samples = os.environ.get("WAKE_N_SAMPLES", "5000")
     n_samples_val = os.environ.get("WAKE_N_SAMPLES_VAL", "1000")
@@ -346,9 +541,15 @@ def render_config(slug: str, phrase: str, device: str, work: Path) -> Path:
     fp_val = discover(FEATURES_DIR, "validation_set_features.npy", "*validation*features*.npy")
     neg_feat = (discover(FEATURES_DIR, "*ACAV*.npy", "*negative*features*.npy")
                 or _first_npy_excluding(FEATURES_DIR, fp_val))
-    # RIR + background point at the REAL-WAV dirs we downloaded (NOT FEATURES_DIR).
-    rir = str(RIR_DIR)
-    background = str(BACKGROUND_DIR)
+    own_val = os.environ.get("WAKE_FP_VAL_NPY", "").strip()
+    if own_val:
+        if not Path(own_val).is_file():
+            die(f"WAKE_FP_VAL_NPY={own_val} is not a file in the container.", 2)
+        fp_val = own_val
+        log(f"false-wake validation features: {own_val} (instead of the dataset's)")
+    # RIR + background point at the REAL-WAV dirs we downloaded (NOT FEATURES_DIR),
+    # plus any extra mounts.
+    rirs, backgrounds = augmentation_dirs()
 
     text = TEMPLATE.read_text(encoding="utf-8")
     repl = {
@@ -361,9 +562,10 @@ def render_config(slug: str, phrase: str, device: str, work: Path) -> Path:
         "__OUTPUT_DIR__": str(work),
         "__FP_VAL_NPY__": fp_val,
         "__NEG_FEATURES_NPY__": neg_feat,
-        "__BACKGROUND_DIR__": background,
-        "__RIR_DIR__": rir,
-        "__CUSTOM_NEGATIVES__": json.dumps(near_misses(phrase), ensure_ascii=False),
+        "__BACKGROUND_PATHS__": json.dumps(backgrounds),
+        "__BACKGROUND_DUP__": json.dumps([1] * len(backgrounds)),
+        "__RIR_PATHS__": json.dumps(rirs),
+        "__CUSTOM_NEGATIVES__": json.dumps(custom_negatives(phrase), ensure_ascii=False),
     }
     for k, v in repl.items():
         text = text.replace(k, v)
@@ -878,7 +1080,10 @@ def main() -> int:
     log(f"training wake word: slug={slug!r} phrase={phrase!r}")
     device = detect_device()
     ensure_dataset()       # ~17.5 GB precomputed feature .npy's (negatives + FP val)
-    ensure_rirs()          # MIT impulse-response WAVs for augmentation
+    if skip_mit_rirs():
+        log("MIT impulse responses left out (WAKE_SKIP_MIT_RIRS=1, /data/rirs given).")
+    else:
+        ensure_rirs()      # MIT impulse-response WAVs for augmentation
     ensure_background()    # background-noise WAVs for augmentation
 
     # Copies a stopped or killed earlier run (of any word) left behind.
@@ -898,15 +1103,19 @@ def main() -> int:
         run_stage(cfg, "--generate_clips", device)
         # 2) inject real clips into <slug>/positive_train BEFORE augment.
         inject_real_clips(work, slug)
+        # 2b) extra synthetic positives / near misses (other voices), if mounted.
+        inject_extra_clips(work / slug)
         # 3) augment (varies acoustics, resamples to 16 kHz training set).
         run_stage(cfg, "--augment_clips", device)
         mark_features_current(work / slug, real_wavs())
+        mark_extra_current(work / slug)
         # 4) train + ONNX export.
         run_stage(cfg, "--train_model", device)
         # 5) place <slug>.onnx where the host worker will find it.
         export_model(work, slug)
     finally:
         drop_real_copies(work / slug)
+        drop_extra_copies(work / slug)
 
     log(f"DONE: /data/models/{slug}.onnx ready.")
     return 0

@@ -369,9 +369,12 @@ def _md_escape(text: str) -> str:
 def build_card(row: dict[str, Any], *, model: Path, companion: Path | None,
                cfg: dict[str, Any], record: dict[str, Any],
                trained_marker: dict[str, Any] | None) -> str:
+    from domovoi import wake_tuning
+
     slug = row["slug"]
     phrase = _md_escape(row["phrase"])
     synthetic = bool(row.get("synthetic_only"))
+    tuned_from = wake_tuning.base_of(slug)
     size = model.stat().st_size
     digest = sha256_file(model)
     training = record.get("training") if isinstance(record.get("training"), dict) else None
@@ -434,7 +437,23 @@ def build_card(row: dict[str, Any], *, model: Path, companion: Path | None,
         a(f"| Companion file | `{companion.name}`, SHA-256 `{sha256_file(companion)}` |")
     a(f"| Trained | {trained_at} |")
     a(f"| Licence when shared | {MODEL_LICENCE} ({MODEL_LICENCE_URL}); see LICENSE-NOTICE.md |")
+    if tuned_from:
+        a(f"| Tuned from | Domovoi's published `{tuned_from}` wake word: the same phrase and "
+          "training recipe, plus this household's recordings |")
+        a("| Private | yes: includes this household's recordings; made to stay in this house |")
     a("")
+    if tuned_from:
+        a("## Private: this household's own copy")
+        a("")
+        a(f"This is the household's own copy of Domovoi's published `{tuned_from}` wake "
+          "word (\"Tune Domovoi to your household\"). It was trained on "
+          + (f"{int(recordings)} recordings of this household" if recordings
+             else "recordings of this household")
+          + " saying the phrase, as well as synthetic voices. It is private: the "
+          "recordings and this model are kept on the household's own server and its "
+          "rooms, and Domovoi never uploads or publishes either. It is not the "
+          f"published `{tuned_from}`, and should not be passed off as it.")
+        a("")
     a("## How it was trained")
     a("")
     a("| | |")
@@ -525,6 +544,10 @@ def build_card(row: dict[str, Any], *, model: Path, companion: Path | None,
           "saying the phrase, as well as synthetic voices.")
     else:
         a("This model was trained on synthetic voices only: nobody's recordings went into it.")
+    if tuned_from:
+        a("")
+        a("It is private to this household: it includes the household's recordings. "
+          "Keep it in the house. Domovoi's published word is the one to share.")
     if used_recordings:
         a("")
         a("The `.onnx` file holds learned weights, not the recordings: they can't be "

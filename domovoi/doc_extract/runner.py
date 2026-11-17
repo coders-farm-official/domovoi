@@ -56,6 +56,21 @@ def _semaphore() -> asyncio.Semaphore:
     return gate
 
 
+async def scan_text(path: Path) -> dict[int, str] | None:
+    """The scan reader's text for this PDF's exact bytes (V065,
+    :func:`domovoi.scan_reader.store.text_by_sha`): a read scan, or a copy
+    of one, is searched and read aloud like any document. None when the
+    file was never read, or the lookup fails (the PDF reads as before)."""
+    try:
+        from domovoi.scan_reader import store as scan_store
+
+        sha = await asyncio.to_thread(scan_store.sha256_of, path)
+        return await scan_store.text_by_sha(sha)
+    except Exception as e:  # noqa: BLE001 — a document reads without it
+        log.debug("scan text lookup skipped: %s", type(e).__name__)
+        return None
+
+
 async def extract(path: Path, kind: str, *, timeout: float | None = None,
                   single_pass: int | None = None) -> dict[str, Any]:
     """The extraction of ``path`` (see :func:`domovoi.doc_extract.extract`),
@@ -72,6 +87,10 @@ async def _extract_now(path: Path, kind: str, timeout: float, single_pass: int |
     try:
         request = {"path": str(Path(path).resolve()), "kind": kind, "single_pass": single_pass,
                    "memory_bytes": limits.worker_memory_bytes(), "cpu_seconds": int(timeout)}
+        if kind == "pdf":
+            scan = await scan_text(Path(path))
+            if scan:
+                request["scan_text"] = {str(k): v for k, v in scan.items()}
         (work / "request.json").write_text(json.dumps(request), encoding="utf-8")
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
