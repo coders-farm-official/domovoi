@@ -1272,8 +1272,8 @@ shared lists (`ui/screens/friendhouses/`, `friendhouses/`).
   back to the app, every minute while it is on screen and at every
   background tick (`FhGate`, `FriendHouses`).
 - **Admin-only things are words, never controls** ("Only an admin can …,
-  on the dashboard"): friending, codes, alert levels, removing, sharing,
-  export and delete. A 403 from any call shows that sentence; a 400 or
+  on the dashboard"): friending, codes, alert levels, removing, blocking
+  and the blocked list, sharing, export and delete. A 403 from any call shows that sentence; a 400 or
   404 shows the server's `detail` as written.
 - **Notifications** follow each friend's alert level, set on the
   dashboard: `inbox` is the badge only, `sender` posts "A message from
@@ -1282,6 +1282,10 @@ shared lists (`ui/screens/friendhouses/`, `friendhouses/`).
   tick above (`FriendHouseAlerts`, Wi-Fi or Ethernet only, on its own
   "Friend houses" channel); the first look at a server is a baseline,
   not a notification. No push, nothing hosted.
+- **Presence:** under each friend, "Online" (their house heard from in
+  the last 15 minutes), else "Last seen <2m ago…>", else "Not reached
+  yet": the house running, never who is home. A server without it shows
+  nothing.
 - **Hostile text:** every name, body, title and `last_error` comes from
   another house. Shown as a plain-String `Text` only (`FhPlain`): no
   links, markup, previews or fetches; line breaks kept. Never logged, and

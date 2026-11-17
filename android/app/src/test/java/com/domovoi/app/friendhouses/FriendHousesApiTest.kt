@@ -381,6 +381,38 @@ class FriendHousesApiTest {
         assertTrue(words.none { it.contains("gam", ignoreCase = true) })
     }
 
+    @Test fun presenceSaysWhetherTheHouseIsRunning() = runBlocking {
+        val minutesAgo = java.time.Instant.now().minusSeconds(5 * 60).toString()
+        answer("GET", "/api/friend-houses/friends", """{"friends":[
+            {"id":"f1","name":"A","house":"$house","online":true,"last_seen_at":"$minutesAgo"},
+            {"id":"f2","name":"B","house":"$house","online":false,"last_seen_at":"$minutesAgo"},
+            {"id":"f3","name":"C","house":"$house","online":false,"last_seen_at":null},
+            {"id":"f4","name":"D","house":"$house"}]}""")
+        val (a, b, c, d) = api.friends()
+        assertEquals(true, a.online)
+        assertEquals("Online", FhWords.presence(a))
+        assertEquals("Last seen 5m ago", FhWords.presence(b))
+        assertEquals("Not reached yet", FhWords.presence(c))
+        // A server before presence sends neither field: nothing is shown.
+        assertNull(d.online)
+        assertNull(d.lastSeenAt)
+        assertNull(FhWords.presence(d))
+        // The app's relative-time words, whatever the age.
+        val now = java.time.Instant.now()
+        assertEquals("Last seen just now", FhWords.presence(FhFriend(online = false, lastSeenAt = now.minusSeconds(10).toString())))
+        assertEquals("Last seen 3h ago", FhWords.presence(FhFriend(online = false, lastSeenAt = now.minusSeconds(3 * 3600).toString())))
+        assertEquals("Last seen 2d ago", FhWords.presence(FhFriend(online = false, lastSeenAt = now.minusSeconds(2 * 86_400).toString())))
+        assertEquals("Not reached yet", FhWords.presence(FhFriend(online = false, lastSeenAt = "")))
+        // It describes the house, never a person.
+        listOf(a, b, c).mapNotNull { FhWords.presence(it) }.forEach {
+            assertFalse(it, Regex("""\b(home|away|he|she|they|someone|person)\b""", RegexOption.IGNORE_CASE).containsMatchIn(it))
+        }
+    }
+
+    @Test fun blockingIsAnAdminsAndSaidSo() {
+        assertTrue(FhWords.FRIENDS_ADMIN.contains("block"))
+    }
+
     @Test fun alertLevelsAreWords() {
         assertEquals("New messages: only in the inbox", FhWords.alert("inbox"))
         assertEquals("New messages: the rooms say who it's from", FhWords.alert("sender"))
