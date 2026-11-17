@@ -52,8 +52,8 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     ),
     "internet-off": _e(
         "The internet is turned off for Domovoi",
-        "This Domovoi is set to never use the internet (Settings → Internet), so anything that "
-        "would go online is refused. An admin can change the answer to Yes or Sometimes.",
+        "This Domovoi is set to never use the internet (Settings → Privacy → Internet), so anything "
+        "that would go online is refused. An admin can change the answer to Yes or Sometimes.",
         "internet",
     ),
     # ── chat replies (stats.error_code) ──────────────────────────────────
@@ -66,7 +66,7 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     "model_unreachable": _e(
         "The model service isn't answering",
         "Domovoi couldn't reach Ollama, the service that runs its models. Restarting the server "
-        "usually brings it back (Settings → Configuration → Restart).",
+        "usually brings it back (Settings → System → About & updates → Restart Domovoi).",
         "troubleshooting",
     ),
     "model_timeout": _e(
@@ -222,7 +222,7 @@ ERROR_CODES: dict[str, ErrorHelp] = {
     "video_no_room": _e(
         "The home server is short of disk space",
         "There isn't room on the server for the video while it is watched. Free some space (Settings → "
-        "Health shows the disks), then attach it again.",
+        "System → Health shows the disks), then attach it again.",
         "ask-video",
     ),
     "video_no_tools": _e(
@@ -335,8 +335,8 @@ ERROR_CODES: dict[str, ErrorHelp] = {
                          "Something went wrong while installing; nothing was left half-installed." + _PLUGIN_RETRY,
                          "plugins"),
     "internet_off": _e("Installing from the internet is turned off",
-                       "This Domovoi is set to never use the internet (Settings → Internet). Install the "
-                       "plugin from a zip file instead.", "plugins"),
+                       "This Domovoi is set to never use the internet (Settings → Privacy → Internet). Install "
+                       "the plugin from a zip file instead.", "plugins"),
     "layout_invalid": _e("The plugin's files aren't laid out right", "The plugin's folders are wrong." + _PLUGIN_ZIP,
                          "plugins"),
     "lockfile_unreadable": _e("The plugin's requirements list can't be read",
