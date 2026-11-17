@@ -3654,6 +3654,10 @@ class StreamSession:
             self._followup_hold_until = 0.0
             self._last_audio_at = time.monotonic()
             self.utterance_active = True
+            # From the wake word on, a background job (a video being
+            # watched in chat) holds off: this capture counts as voice
+            # activity while it is live (domovoi/voice_activity.py).
+            voice_activity.watch_capture(self)
             self.dropped_overflow = False
             self.audio_buf.clear()
             # Latch the trigger now; utterance_end reads it to decide

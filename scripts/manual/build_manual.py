@@ -152,6 +152,7 @@ PIECES: dict[str, tuple] = {
     "Radio": ("radio", "stations you star", ["radio", "station", "fm", "stream"], {"plugin": "radio"}),
     # Chat and help
     "Chat": ("chat", "type to Domovoi, at home or on the phone", ["chat", "text", "pictures", "vision", "images", "screenshot", "new chat", "rename", "archive"], {}),
+    "Ask about a video": ("ask-video", "attach a clip, ask what's in it", ["video", "clip", "mp4", "mov", "attach a video", "transcript", "what did they say", "might show", "watching your video"], {}),
     "Look things up": ("lookups", "online only when you say yes", ["look up", "search", "internet", "wikipedia", "web", "allow once", "always allow internet", "searxng", "brave", "sources", "kiwix"], {}),
     "What Domovoi is good and not so good at": ("good-and-not", "where to trust the answers, and where to check", ["trust", "accurate", "accuracy", "reliable", "wrong", "mistakes", "heads-up", "warning", "limits", "good at", "bad at", "weak"], {}),
     "When AI is off": ("ai-off", "what still works without the AI models", ["ai off", "no ai", "without ai", "turn off ai", "ai features", "optional", "commands only", "set up for home commands"], {}),

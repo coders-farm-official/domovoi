@@ -559,6 +559,7 @@
    ],
    "pieces": [
     "chat",
+    "ask-video",
     "lookups",
     "good-and-not",
     "ai-off",
@@ -2229,6 +2230,9 @@
        "text": "**Documents:** the paperclip takes those too, up to 4 a message. See [Ask about a document](node:ask-document)."
       },
       {
+       "text": "**Videos:** the paperclip takes one short video a message (up to 3 minutes). See [Ask about a video](node:ask-video)."
+      },
+      {
        "text": "**Drafts and letters:** Chat can write drafts for you. Read them before you send them; it can get details wrong. See [Write a draft](node:drafts) and [Letters](node:letters)."
       },
       {
@@ -2291,6 +2295,105 @@
     "text": "More detail",
     "target": "doc:docs/FAQ.md#can-i-send-pictures-in-chat"
    }
+  },
+  {
+   "id": "ask-video",
+   "topic": "chat-and-help",
+   "title": "Ask about a video",
+   "subtitle": "attach a clip, ask what's in it",
+   "keywords": [
+    "video",
+    "clip",
+    "mp4",
+    "mov",
+    "attach a video",
+    "transcript",
+    "what did they say",
+    "might show",
+    "watching your video"
+   ],
+   "blocks": [
+    {
+     "type": "p",
+     "text": "Attach a short video to a chat and ask about it. Domovoi watches it on your home server, keeps what it heard and saw as text, and deletes the video."
+    },
+    {
+     "type": "label",
+     "role": "how",
+     "text": "How to"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "In [Chat](route:chat), the paperclip takes one video a message: MP4, MOV or WebM, up to 3 minutes and 2 GB. Add a question if you like.",
+       "only": "dashboard"
+      },
+      {
+       "text": "Videos are attached from the dashboard. What Domovoi found is in the chat on the phone too.",
+       "only": "app"
+      },
+      {
+       "text": "While Domovoi watches, the video says \"Watching your video… about 4 minutes left\", with **stop**. You can keep chatting meanwhile, or leave the page."
+      },
+      {
+       "text": "When it's done, Domovoi writes a short summary in the chat, and answers the question you sent with the video. Then ask anything about it."
+      },
+      {
+       "text": "What was said comes from a transcript, with times. What the pictures show is a small model's guess, so Domovoi says what a frame \"might show\", not what is there."
+      },
+      {
+       "text": "Only the text stays, with the chat. The video and every picture taken from it are deleted once it has been watched, or stopped. Deleting the chat deletes the text."
+      },
+      {
+       "text": "A question asked in a room goes first: watching pauses from the wake word until the answer has been spoken, then carries on."
+      },
+      {
+       "text": "One video is watched at a time in the house; another waits its turn."
+      }
+     ]
+    },
+    {
+     "type": "p",
+     "text": "**In a chat, type**"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"what's this video about?\""
+      },
+      {
+       "text": "\"what did they say about the cake?\""
+      },
+      {
+       "text": "\"is there a dog in it?\""
+      }
+     ]
+    },
+    {
+     "type": "label",
+     "role": "wrong",
+     "text": "If something's wrong"
+    },
+    {
+     "type": "list",
+     "ordered": false,
+     "items": [
+      {
+       "text": "\"Videos up to 3 minutes can be attached\": trim it on the phone first, or send the part you want to ask about."
+      },
+      {
+       "text": "The paperclip doesn't offer videos: AI chat is off for your home (see [When AI is off](node:ai-off)), or the server has no ffmpeg."
+      },
+      {
+       "text": "\"I couldn't finish watching it\": the message says why. Attach the video again to try once more."
+      }
+     ]
+    }
+   ]
   },
   {
    "id": "lookups",

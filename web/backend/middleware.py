@@ -54,6 +54,9 @@ BODY_LIMITS: tuple[tuple[str, int], ...] = (
     # _MAX_UPLOAD_BYTES); the transport guard's 64 MB ceiling for it is
     # narrowed to that plus its form, so nothing bigger is spooled first.
     ("/api/chat/uploads", 21 * MB),
+    # A chat video: the body is the file (domovoi/chat_video/limits.py
+    # MAX_BYTES, 2 GiB), streamed to disk; nothing bigger is read.
+    ("/api/chat/videos", 2048 * MB + MB // 16),
     # One release APK on its way to the core, which checks it against
     # android/release.json (domovoi/android_app.py caps an APK at 200 MiB).
     ("/api/satellites/android-app/upload", 210 * MB),

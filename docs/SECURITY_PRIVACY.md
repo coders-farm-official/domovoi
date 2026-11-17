@@ -2361,6 +2361,54 @@ letter and write drafts. Who may, where it lives, and what can't happen:
   with no phone watching, and a restart forgets them), and nothing is
   written to the database.
 
+## Videos in chat
+
+A home-server chat can take one short video a message (at most 3 minutes
+and 2 GiB) and answer questions about it (1.4.0). Who may, where it lives,
+and what can't happen:
+
+* **Who.** Sending a video is a household action (device tier) and needs AI
+  features on: with them off the server takes no video and the dashboard
+  offers none. Reading a job's progress and what was kept is the same read
+  as the thread itself (a paired device or an admin session); stopping one
+  is device tier. The video itself is never served back by any route.
+* **The file is checked before it is accepted.** The upload is the request
+  body, streamed to disk and cut off at 2 GiB (the transport guard refuses a
+  larger declared size before reading anything). ffprobe, run as its own
+  program at the lowest CPU priority, must find a phone format (MP4, MOV
+  or WebM; H.264, HEVC, VP8, VP9 or AV1) of at most 3 minutes, or the file
+  is deleted and the upload refused. The video is never written inside a
+  media library folder: it waits in `~/.domovoi/chat_uploads/videos/`
+  under a random name, and the job's frame grabs and sound in a folder of
+  its own beside it.
+* **The video is deleted once it has been watched.** When the job ends,
+  whether it finished, failed or was stopped, the video file and every frame
+  grab and sound file it made are deleted, and the job's row records when.
+  A video picked in the composer and never sent goes after an hour; one a
+  crash left behind goes at the next start. Only text is kept: the
+  transcript with times, a short description of each of at most 12 frames,
+  and a summary, in the database with the chat (`chat_video_jobs`,
+  `chat_video_segments`, `chat_video_frames`, V064). Deleting the chat
+  deletes them; stopping a job deletes what it had understood so far.
+* **On the household's server only.** What was said is transcribed by the
+  server's own speech model; the frames are described by the chat's vision
+  model (Settings → Models) and the summary written by the chat model, all
+  through the server's Ollama. Nothing goes anywhere else, unless the house
+  points `OLLAMA_URL` at a model off the box, the case the internet switch
+  warns about. Videos are outside "Keep voice history", and the copies in
+  the update unit's database dumps ([Data at rest](#data-at-rest)) keep what
+  a chat held until they are replaced.
+* **Voice answers come first.** The job runs one video at a time in the
+  house, at the lowest priority, and holds off from a room's wake word until
+  the reply has been spoken; a frame being described when a voice turn
+  starts is cancelled and asked again after it, and ffmpeg is held still
+  during the turn.
+* **Text from a video is data, never instructions.** What anyone in the
+  video says, or a sign in a frame, reaches a model inside a marked block it
+  is told never to obey. A frame description is a small model's guess and
+  is always shown as what a frame "might show"; no face is recognised and
+  nobody is named.
+
 ## Looking things up (chat lookups)
 
 A chat may look things up. Who decides, what goes where, and what can't
