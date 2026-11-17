@@ -44,6 +44,44 @@ extension StubHouseUITests {
         static let typed = "See you at six"
         static let typedCounter = "14 / 2000"
         static let smithsHouse = String(repeating: "ab", count: 32)
+
+        /// **The elements the audit's Dynamic Type finding may name, by
+        /// screen, every one measured growing** by
+        /// `testFriendHouses_TheTextGrowsWithTheTypeSize` — the one list both
+        /// that case and the audit case read, as ChatMore's
+        /// `StubChatMore.auditNamedLeaves` is. Apple's checker reports these
+        /// one element at a time (I066 the body, I067-I068 the state, I069
+        /// the time), all text styles with nothing pinning their size; this
+        /// is every text element each screen draws in the audited state, so
+        /// the next run does not stop on the next one.
+        static let inboxMeasured = [
+            "fh.title", "fh.description",
+            "fh.tab.messages", "fh.tab.friends", "fh.tab.shared",
+            // The inbox row: the name, "no longer a friend" and the unread
+            // and not-delivered pills are this one button's words.
+            "fh.conversation",
+        ]
+        static let conversationMeasured = [
+            "fh.conversation.name", "fh.conversation.note",
+            "fh.message.body",
+            // The time, and "sent … (their clock)" when the clocks disagree:
+            // one text.
+            "fh.message.when",
+            // "Delivered", "Waiting to send", "Still trying: …", "Not
+            // delivered: …": one text.
+            "fh.message.state",
+            "fh.counter", "fh.send",
+        ]
+    }
+
+    /// The audit's lines with this one finding on exactly these measured
+    /// ids taken out; everything else stays and fails its case.
+    static func friendHousesUnmeasured(_ lines: [String], ids: [String]) -> (excused: [String], rest: [String]) {
+        let excused = lines.filter { line in
+            line.hasPrefix("Dynamic Type font sizes are partially unsupported")
+                && ids.contains { line.contains("id='\($0)'") }
+        }
+        return (excused, lines.filter { !excused.contains($0) })
     }
 
     // MARK: - the house's switch
@@ -90,7 +128,7 @@ extension StubHouseUITests {
             return (app, false)
         }
         tile.tap()
-        let said = app.staticTexts[FriendHousesUnderTest.description]
+        let said = app.staticTexts["fh.description"]
         guard said.waitForExistence(timeout: 30) else {
             print("=== FRIEND HOUSES NEVER DREW — tree follows ===")
             print(app.debugDescription)
@@ -375,7 +413,7 @@ extension StubHouseUITests {
         defer { friendHouses(nil) }
         XCTAssertTrue(landed, "Friend houses did not open")
         control("friendhouses", #"{"mode": "off"}"#, port: 6601, what: "friend houses off")
-        let gone = app.staticTexts[FriendHousesUnderTest.description].waitForNonExistence(timeout: 45)
+        let gone = app.staticTexts["fh.description"].waitForNonExistence(timeout: 45)
         evidence(app, "fh-11-off")
         XCTAssertTrue(gone, "the screen stayed after the house turned it off")
         XCTAssertTrue(app.buttons["Lists"].waitForExistence(timeout: 20), "the shell did not go home")
@@ -383,6 +421,18 @@ extension StubHouseUITests {
     }
 
     /// Apple's audit on the inbox and on a conversation.
+    ///
+    /// **One finding, on measured ids only.** "Dynamic Type font sizes are
+    /// partially unsupported" is excused on exactly the elements in
+    /// ``FriendHousesUnderTest/inboxMeasured`` and
+    /// ``FriendHousesUnderTest/conversationMeasured``, and only because
+    /// `testFriendHouses_TheTextGrowsWithTheTypeSize` measures every one of
+    /// them growing at AX5 — each a text style with no point size, no
+    /// `minimumScaleFactor`, no fixed frame, no `dynamicTypeSize` clamp and
+    /// no horizontal `fixedSize`, as Chat's per-message lines are, which this
+    /// audit names the same way and ChatMore excuses after the same
+    /// measurement. Any other element, or any other finding on these, still
+    /// fails.
     @MainActor
     func testFriendHouses_PassesTheAudit() throws {
         let (app, landed) = openFriendHouses()
@@ -390,67 +440,90 @@ extension StubHouseUITests {
         XCTAssertTrue(landed, "Friend houses did not open")
         evidence(app, "fh-12-audit-inbox")
         let inbox = Self.floorAndRest(try auditIssues(app, "friend-houses-inbox"))
-        print("FRIEND HOUSES AUDIT inbox floor=\(inbox.floor) rest=\(inbox.rest.count)")
-        XCTAssertTrue(inbox.rest.isEmpty, "Apple's audit on the inbox: " + inbox.rest.joined(separator: " | "))
+        let inboxSplit = Self.friendHousesUnmeasured(inbox.rest, ids: FriendHousesUnderTest.inboxMeasured)
+        print(
+            "FRIEND HOUSES AUDIT inbox floor=\(inbox.floor) rest=\(inbox.rest.count)"
+                + " measured=\(inboxSplit.excused.count) ours=\(inboxSplit.rest.count)"
+        )
+        XCTAssertTrue(inboxSplit.rest.isEmpty, "Apple's audit on the inbox: " + inboxSplit.rest.joined(separator: " | "))
         XCTAssertTrue(friendHousesOpen(app, FriendHousesUnderTest.smiths))
         evidence(app, "fh-12-audit-conversation")
         let thread = Self.floorAndRest(try auditIssues(app, "friend-houses-conversation"))
-        // **One element, one headline, and measured.** Trains I067 and I068
-        // named the message's state line (`fh.message.state`: "Still trying:
-        // …", then "Delivered") with "Dynamic Type font sizes are partially
-        // unsupported". It is a `.caption2` text style with nothing that
-        // pins its size — no point size, no `minimumScaleFactor`, no fixed
-        // frame, no `dynamicTypeSize` clamp, no `fixedSize` across — styled
-        // as `ChatBubbleView`'s per-message line, which this same audit names
-        // on Chat and ChatMore excuses after measuring it
-        // (`testChatMore_TheConversationsTextGrowsWithTheTypeSize`). So it is
-        // excused here the same way and no wider: only that headline, only
-        // with that element id, and only because
-        // `testFriendHouses_TheMessageStateGrowsWithTheTypeSize` measures the
-        // element growing — if it ever stops, that case fails. Any other
-        // element, or any other finding on this one, still fails this case.
-        let measuredState = thread.rest.filter { line in
-            line.hasPrefix("Dynamic Type font sizes are partially unsupported")
-                && line.contains("id='fh.message.state'")
-        }
-        let rest = thread.rest.filter { !measuredState.contains($0) }
+        let threadSplit = Self.friendHousesUnmeasured(thread.rest, ids: FriendHousesUnderTest.conversationMeasured)
         print(
             "FRIEND HOUSES AUDIT conversation floor=\(thread.floor) rest=\(thread.rest.count)"
-                + " state-measured=\(measuredState.count) ours=\(rest.count)"
+                + " measured=\(threadSplit.excused.count) ours=\(threadSplit.rest.count)"
         )
-        XCTAssertTrue(rest.isEmpty, "Apple's audit on a conversation: " + rest.joined(separator: " | "))
+        XCTAssertTrue(
+            threadSplit.rest.isEmpty,
+            "Apple's audit on a conversation: " + threadSplit.rest.joined(separator: " | ")
+        )
     }
 
-    /// The message's state line, measured at `large` and at AX5: it grows
-    /// (``chatMoreGrew(_:_:)``'s bar, 1.8x for a line of text), which is what
-    /// stands behind the audit case's one excused finding.
+    /// Every element the audit case excuses, measured at `large` and at AX5
+    /// on the screen it is drawn on: each must grow by
+    /// ``chatMoreGrew(_:_:)``'s bar (1.8x for a line of text, 1.25x or the
+    /// area for a 44-point control). If one ever stops scaling, this fails
+    /// and the audit case's excuse for it is no longer true. The state line
+    /// is measured on its "Delivered" row, the one I068 named.
     @MainActor
-    func testFriendHouses_TheMessageStateGrowsWithTheTypeSize() throws {
+    func testFriendHouses_TheTextGrowsWithTheTypeSize() throws {
         defer { friendHouses(nil) }
-        var sizes: [String: CGSize] = [:]
+        var sizes: [String: [String: CGSize]] = [:]
         for (label, mode) in [
             ("large", StubHouseUITests.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
             let (app, landed) = openFriendHouses(typeSize: mode)
-            guard landed, friendHousesOpen(app, FriendHousesUnderTest.smiths) else {
-                return XCTFail("Friend houses did not open at \(label)")
+            guard landed else { return XCTFail("Friend houses did not open at \(label)") }
+            var seen: [String: CGSize] = [:]
+            for id in FriendHousesUnderTest.inboxMeasured {
+                seen["inbox/" + id] = friendHousesSize(app, id)
             }
-            let state = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier == %@ AND label == %@",
-                                      "fh.message.state", FriendHousesUnderTest.delivered))
-                .firstMatch
-            guard state.waitForExistence(timeout: 20) else {
-                print(app.debugDescription)
-                return XCTFail("no Delivered state line at \(label)")
+            guard friendHousesOpen(app, FriendHousesUnderTest.smiths) else {
+                return XCTFail("the Smiths did not open at \(label)")
             }
-            sizes[label] = state.frame.size
-            print("FRIEND HOUSES STATE [\(label)] size=\(state.frame.size)")
-            evidence(app, "fh-13-state-\(label)")
+            for id in FriendHousesUnderTest.conversationMeasured {
+                let words = id == "fh.message.state" ? FriendHousesUnderTest.delivered : nil
+                seen["conversation/" + id] = friendHousesSize(app, id, label: words)
+            }
+            for (key, size) in seen.sorted(by: { $0.key < $1.key }) {
+                print("FRIEND HOUSES SIZE [\(label)] \(key) = \(size)")
+            }
+            evidence(app, "fh-13-sizes-\(label)")
+            sizes[label] = seen
             app.terminate()
         }
-        let small = try XCTUnwrap(sizes["large"])
-        let big = try XCTUnwrap(sizes["AX5"])
-        XCTAssertTrue(chatMoreGrew(small, big), "the state line does not scale: \(small) -> \(big)")
+        let small = sizes["large"] ?? [:]
+        let big = sizes["AX5"] ?? [:]
+        var stuck: [String] = []
+        var missing: [String] = []
+        let all = FriendHousesUnderTest.inboxMeasured.map { "inbox/" + $0 }
+            + FriendHousesUnderTest.conversationMeasured.map { "conversation/" + $0 }
+        for key in all {
+            guard let was = small[key], let grown = big[key], was != .zero, grown != .zero else {
+                missing.append(key)
+                continue
+            }
+            if !chatMoreGrew(was, grown) { stuck.append("\(key) \(was) -> \(grown)") }
+        }
+        XCTAssertEqual([], missing, "an excused element was not found to measure")
+        XCTAssertEqual([], stuck, "an excused element does not scale after all")
+    }
+
+    /// The first element with this id (and these words, when given), its
+    /// size; `.zero` when absent. A conversation is a plain `VStack`, so a
+    /// line scrolled out of view is still in the tree with its frame.
+    @MainActor
+    func friendHousesSize(_ app: XCUIApplication, _ id: String, label: String? = nil) -> CGSize {
+        let predicate = label.map { NSPredicate(format: "identifier == %@ AND label == %@", id, $0) }
+            ?? NSPredicate(format: "identifier == %@", id)
+        let element = app.descendants(matching: .any).matching(predicate).firstMatch
+        guard element.waitForExistence(timeout: 15) else {
+            print("=== NO `\(id)` TO MEASURE — tree follows ===")
+            print(app.debugDescription)
+            return .zero
+        }
+        return element.frame.size
     }
 }

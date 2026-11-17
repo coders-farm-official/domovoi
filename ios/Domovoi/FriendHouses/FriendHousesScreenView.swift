@@ -122,7 +122,9 @@ struct FhHeader: View {
         VStack(alignment: .leading, spacing: 4) {
             FhPlainText(text: FhWords.title, font: .title2)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("fh.title")
             FhPlainText(text: fhDescription, font: .footnote, colour: Color.fgMuted)
+                .accessibilityIdentifier("fh.description")
             if let status, let line = fhStatusLine(status) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     ToneDot(tone: status.status == "starting" ? .idle : .warn)

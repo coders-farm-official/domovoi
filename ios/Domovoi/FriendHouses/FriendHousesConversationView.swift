@@ -84,8 +84,10 @@ struct FhConversationHead: View {
                 FhPlainText(text: model.name, font: .headline)
                     .layoutPriority(1)
                     .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("fh.conversation.name")
             }
             FhMutedLine(text: model.former ? FhWords.formerFriend : FhWords.conversationAdmin)
+                .accessibilityIdentifier("fh.conversation.note")
             if let problem = model.problem {
                 FhProblemLine(text: problem)
             }
@@ -214,7 +216,7 @@ struct FhMessageMeta: View {
                     // `attribution`: `.caption2`, `fgMuted`, a vertical
                     // `fixedSize`), which Apple's audit names the same way and
                     // which measures growing; see
-                    // `testFriendHouses_TheMessageStateGrowsWithTheTypeSize`.
+                    // `testFriendHouses_TheTextGrowsWithTheTypeSize`.
                     FhPlainText(text: state.words, font: .caption2, colour: Color.fgMuted)
                         .accessibilityIdentifier("fh.message.state")
                 }
