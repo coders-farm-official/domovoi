@@ -50,6 +50,8 @@ internal data class ChatModelsInfo(
     val default_model: String? = null,
     val vision_model: String? = null,
     val vision_installed: Boolean? = null,
+    /** Whether a video can be attached (1.4.0, ChatVideo.kt); null from an older server: no. */
+    val video: ServerVideoInfo? = null,
 )
 
 /** What the paperclip takes: the server's upload allowlist, plus the phone
