@@ -54,16 +54,31 @@ internal object ServerFileTransfer {
         return if (isDir && !name.endsWith(".zip", ignoreCase = true)) "$name.zip" else name
     }
 
-    /** Save [path] (a server route) as Downloads/Domovoi/[fileName], reporting progress through [report]. */
-    fun download(context: Context, app: AppContainer, path: String, fileName: String, report: (String) -> Unit) {
+    /** Save [path] (a server route) as Downloads/Domovoi/[fileName], reporting
+     *  progress through [report]. [mime]: the type to record when the name's
+     *  own extension isn't enough (null: the system infers it from the name). */
+    fun download(
+        context: Context,
+        app: AppContainer,
+        path: String,
+        fileName: String,
+        report: (String) -> Unit,
+        mime: String? = null,
+    ) {
         val ctx = context.applicationContext
         report("downloading \"$fileName\"…")
         scope.launch {
-            runCatching { saveToDownloads(ctx, app, path, fileName) }
+            runCatching { saveToDownloads(ctx, app, path, fileName, mime) }
                 .onSuccess { where -> report("saved \"$fileName\" to $where") }
-                .onFailure { report(failureText("download", it)) }
+                .onFailure { report(downloadFailureText(it)) }
         }
     }
+
+    /** A failed download in the server's own words (`{"detail": ...}`, e.g. a
+     *  document Word conversion that failed), else the usual failure text. */
+    fun downloadFailureText(e: Throwable): String =
+        (e as? ApiException)?.let { apiDetail(it) }?.let { "download failed: $it" }
+            ?: failureText("download", e)
 
     /** Fetch [path] into the cache and open it with whatever app views [mime]. */
     fun open(context: Context, app: AppContainer, path: String, fileName: String, mime: String, report: (String) -> Unit) {
@@ -103,12 +118,19 @@ internal object ServerFileTransfer {
     }
 
     /** Returns where it landed, as the person would look for it. */
-    suspend fun saveToDownloads(context: Context, app: AppContainer, path: String, fileName: String): String =
+    suspend fun saveToDownloads(
+        context: Context,
+        app: AppContainer,
+        path: String,
+        fileName: String,
+        mime: String? = null,
+    ): String =
         withContext(Dispatchers.IO) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val resolver = context.contentResolver
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    if (mime != null) put(MediaStore.MediaColumns.MIME_TYPE, mime)
                     put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Domovoi")
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
