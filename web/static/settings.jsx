@@ -1363,8 +1363,8 @@ const VersionSection = () => {
 
   const pull = async () => {
     if (!window.confirm(
-      'Pull the latest domovoi code (git pull --ff-only)?\n\n' +
-      'This updates the files on the Domovoi host but does not load them — ' +
+      'Update Domovoi?\n\n' +
+      'This puts the newest version on the Domovoi server but does not start it yet — ' +
       'this panel will then offer the restart that does. Rooms can be ' +
       'upgraded individually afterwards.'
     )) return;
@@ -5725,7 +5725,7 @@ const SETTINGS_SECTIONS = [
   { id: 'music-mix', label: 'Music mix', optional: true, aliases: ['mix', 'up-next'],
     sub: 'How Up next picks the songs that follow: discovery or favorites, close or wandering, autoplay, repeats, similar artists.',
     words: 'music mix up next autoplay shuffle discovery favorites favourites wander similar artists popularity listenbrainz repeats radio station' },
-  // queue_history.jsx registers it (1.3.1): what Up next picked, and why
+  // queue_history.jsx registers it (1.4.0): what Up next picked, and why
   // (admin; read-only).
   { id: 'queue-history', label: 'Queue history', optional: true,
     sub: 'What Up next picked in each room and on each phone, why, and how each song went — admins only.',

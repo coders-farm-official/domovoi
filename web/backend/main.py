@@ -430,7 +430,7 @@ app.include_router(library_tools_api.router)
 # clearing a person's and deleting all. Literal paths, its own module.
 app.include_router(music_listens_api.router)
 app.include_router(up_next_api.router)
-# Queue history (1.3.1): /api/music/up-next/history — admin reads of
+# Queue history (1.4.0): /api/music/up-next/history — admin reads of
 # what Up next picked and why; read-only, its own literal prefix.
 app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)

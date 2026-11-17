@@ -84,7 +84,7 @@ ROUTES: dict[str, dict] = {
     # Listening history (2026-11-12): the app has no tab for it yet.
     "settings/listening-history": {"dashboard": "#settings/listening-history", "app": {"dashboard": True}},
     "settings/music-mix": {"dashboard": "#settings/music-mix", "app": {"dashboard": True}},
-    # Queue history (1.3.1): admin, on the dashboard only.
+    # Queue history (1.4.0): admin, on the dashboard only.
     "settings/queue-history": {"dashboard": "#settings/queue-history", "app": {"dashboard": True}},
     "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
     "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
