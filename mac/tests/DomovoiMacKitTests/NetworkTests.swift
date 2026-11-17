@@ -361,7 +361,7 @@ final class NetworkTests: XCTestCase {
     func testLsofsAnswerSaysWhoServesPort80() {
         XCTAssertEqual(ShortAddressPort.parse(status: 1, stdout: "", stderr: ""), .free, "lsof lists nothing: exit 1, quiet")
         XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p321\nchttpd\nn*:80\n", stderr: ""), .taken(holder: "httpd"))
-        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p9\ncom.docker.backend\nn192.168.1.20:80\n", stderr: ""),
+        XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p9\nccom.docker.backend\nn192.168.1.20:80\n", stderr: ""),
                        .taken(holder: "com.docker.backend"), "a listener on the LAN address is in the way too")
         XCTAssertEqual(ShortAddressPort.parse(status: 0, stdout: "p1\ncnginx\nn127.0.0.1:80\np2\ncnode\nn[::1]:80\n", stderr: ""), .free,
                        "loopback-only listeners never see the redirected connections")
