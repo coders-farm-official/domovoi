@@ -49,23 +49,18 @@ from typing import Any, Awaitable, Callable, Protocol
 
 from sqlalchemy import text
 
-from domovoi import ai_features, voice_activity
+from domovoi import ai_features
 from domovoi.chat_video import context, limits, media, plan
 from domovoi.config import settings
 from domovoi.db.session import session_scope
+from domovoi.voice_first import POLL_SEC, QUIET_SEC, STEP_TRIES, VoiceFirst  # noqa: F401
 
 log = logging.getLogger(__name__)
 
-#: How often a waiting job looks again; how long the house must have been
-#: quiet before a job carries on after a voice turn.
-POLL_SEC = 0.1
-QUIET_SEC = 2.0
 #: How often a running step checks whether the person pressed stop.
 CANCEL_CHECK_SEC = 1.0
 #: How often the runner looks for a new job when it has none.
 IDLE_POLL_SEC = 2.0
-#: How many times one step is tried when the model service fails in passing.
-STEP_TRIES = 3
 
 
 class Brains(Protocol):
@@ -308,100 +303,35 @@ async def _cancel_requested(job: Job, force: bool = False) -> bool:
 
 
 # ─── The runner ─────────────────────────────────────────────────────────
-class Runner:
-    """Runs the queued jobs one at a time (:meth:`run_forever`)."""
+class Runner(VoiceFirst):
+    """Runs the queued jobs one at a time (:meth:`run_forever`). The
+    voice-first rules (wait for quiet, a model step a turn cancels, ffmpeg
+    held still) are :class:`domovoi.voice_first.VoiceFirst`'s, shared with
+    the scan reader."""
+
+    label = "chat video"
 
     def __init__(self, brains: Brains | None = None, *, quiet_sec: float = QUIET_SEC,
                  poll_sec: float = POLL_SEC) -> None:
+        super().__init__(quiet_sec=quiet_sec, poll_sec=poll_sec)
         self.brains = brains or default_brains()
-        self.quiet_sec = quiet_sec
-        self.poll_sec = poll_sec
         #: The job being watched now (None between jobs).
         self.current: str | None = None
-        #: Steps cancelled because a voice turn started (for tests and logs).
-        self.voice_cancels = 0
-        self.voice_waits = 0
 
-    # ── voice first ─────────────────────────────────────────────────────
-    def _quiet(self) -> bool:
-        """No voice turn under way, and none ended in the last ``quiet_sec``."""
-        snap = voice_activity.snapshot()
-        if snap["busy"]:
-            return False
-        since = snap.get("since_last_ms")
-        return since is None or since >= self.quiet_sec * 1000
+    # ── voice first: this job's hooks ───────────────────────────────────
+    passthrough = (ModelMissing, _Cancelled, _Gone)
+    stopped = _Cancelled
 
-    async def wait_for_quiet(self, job: Job) -> None:
-        """Return once no voice turn has been under way for ``quiet_sec``;
-        the row says ``waiting_for_voice`` meanwhile (the attachment's
-        "paused while someone talks to Domovoi")."""
-        while not self._quiet():
-            if voice_activity.busy() and not job.waiting:
-                job.waiting = True
-                self.voice_waits += 1
-                await _update(job, waiting_for_voice=True)
-            if await _cancel_requested(job):
-                raise _Cancelled()
-            await asyncio.sleep(self.poll_sec)
-        if job.waiting:
-            job.waiting = False
-            await _update(job, waiting_for_voice=False)
+    async def _mark_waiting(self, job: Job, waiting: bool) -> None:
+        """The row says ``waiting_for_voice`` (the attachment's "paused
+        while someone talks to Domovoi")."""
+        await _update(job, waiting_for_voice=waiting)
 
-    async def hold_while_voice(self, proc: media.Proc) -> None:
-        """For a running ffmpeg: held still while a voice turn runs."""
-        if not voice_activity.busy():
-            return
-        proc.suspend()
-        try:
-            while voice_activity.busy():
-                await asyncio.sleep(self.poll_sec)
-        finally:
-            proc.resume()
+    async def _stop_requested(self, job: Job) -> bool:
+        return await _cancel_requested(job)
 
-    async def model_step(self, job: Job, make: Callable[[], Awaitable[Any]]) -> Any:
-        """One model call that a voice turn cancels: started when the house
-        is quiet, cancelled the moment a turn starts (or stop is pressed),
-        and started again once the turn is over. Passing failures of the
-        model service are tried :data:`STEP_TRIES` times."""
-        tries = 0
-        while True:
-            await self.wait_for_quiet(job)
-            self._check_ai()
-            task = asyncio.ensure_future(make())
-            interrupted = False
-            try:
-                while not task.done():
-                    await asyncio.wait({task}, timeout=self.poll_sec)
-                    if task.done():
-                        break
-                    if voice_activity.busy():
-                        interrupted = True
-                        break
-                    if await _cancel_requested(job):
-                        task.cancel()
-                        raise _Cancelled()
-            finally:
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):  # noqa: BLE001 — cancelled on purpose
-                        pass
-            if interrupted:
-                self.voice_cancels += 1
-                log.info("chat video %s: a voice turn started; the step stops and runs again after it",
-                         job.id[:8])
-                continue
-            try:
-                return task.result()
-            except (ModelMissing, _Cancelled, _Gone):
-                raise
-            except Exception as e:  # noqa: BLE001
-                tries += 1
-                if tries >= STEP_TRIES:
-                    raise
-                log.warning("chat video %s: a step failed (%s); trying again", job.id[:8], type(e).__name__)
-                await asyncio.sleep(min(10.0, 2.0 * tries))
+    def _before_model_step(self) -> None:
+        self._check_ai()
 
     @staticmethod
     def _check_ai() -> None:

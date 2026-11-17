@@ -166,6 +166,7 @@ PIECES: dict[str, tuple] = {
     # Files, printing and calendar
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive", "from chat", "scans"], {}),
     "Documents and spreadsheets": ("documents", "write, edit and share, together", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "editor", "word", "docx", "pdf", "fonts", "photo", "picture", "caption", "crop", "co-editing", "together", "version history", "restore", "read-only"], {}),
+    "What does this scan say?": ("scan-reader", "a short summary of a scanned letter", ["scan", "scanned letter", "what does it say", "read my mail", "ocr", "letter", "handwriting", "might say", "read the scan"], {}),
     "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page", "print a draft", "print it"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
     "Lists": ("lists", "to-do, shopping, any list", ["list", "lists", "to-do", "todo", "to do", "shopping", "groceries", "grocery", "cross off", "check off", "tick off"], {}),
@@ -343,6 +344,7 @@ PHRASES: dict[str, tuple] = {
     "is the printer out of paper": ("printing", "fast", {}),
     "set up the printer": ("printing", "fast", {}),
     "scan this to Documents": ("printing", "fast", {}),
+    "scan this letter": ("printing", "fast", {}),
     "stop printing": ("printing", "fast", {}),
     "read me the lease": ("documents", "fast", {}),
     "read it back": ("documents", "fast", {}),

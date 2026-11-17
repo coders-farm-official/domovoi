@@ -70,6 +70,12 @@ MAX_PAGES = 5000
 MAX_TEXT_CHARS = 4_000_000
 
 
+#: The note on a scan whose pages the scan reader read (domovoi/scan_reader).
+SCAN_READ_NOTE = {"code": "scan_read",
+                  "text": "This is a scan: Domovoi read its words from the page pictures on this server, so a word "
+                          "or a number can be misread. Check anything important against the paper."}
+
+
 def kind_for(name: str) -> str | None:
     return KIND_BY_EXT.get(Path(name or "").suffix.lower())
 
@@ -91,11 +97,13 @@ def sniff(head: bytes, kind: str) -> str | None:
     return None
 
 
-def extract(path: Path, kind: str, *, single_pass: int | None = None) -> dict[str, Any]:
+def extract(path: Path, kind: str, *, single_pass: int | None = None,
+            scan_text: dict[int, str] | None = None) -> dict[str, Any]:
     """The parts of ``path`` and what is known about them. Raises
     :class:`~.safe.Refused` with a sentence for the person. Reads hostile
     bytes: call it in the worker (:func:`.runner.extract`), not in a
-    server process."""
+    server process. ``scan_text``: a PDF's scanned pages as the scan
+    reader read them (``{page: text}``), used for those pages."""
     from domovoi.doc_qa import notes as doc_notes
     from domovoi.doc_qa.answer import SINGLE_PASS_CHARS
 
@@ -110,7 +118,7 @@ def extract(path: Path, kind: str, *, single_pass: int | None = None) -> dict[st
     if kind == "pdf":
         from domovoi.doc_extract import pdf
 
-        result = pdf.extract(path, MAX_PAGES, max_chars=MAX_TEXT_CHARS)
+        result = pdf.extract(path, MAX_PAGES, max_chars=MAX_TEXT_CHARS, scan_text=scan_text)
     elif kind == "docx":
         from domovoi.doc_extract import word
 
@@ -149,6 +157,8 @@ def extract(path: Path, kind: str, *, single_pass: int | None = None) -> dict[st
             raise Refused(doc_notes.NO_TEXT_SCANNED)
         raise Refused(doc_notes.NO_TEXT)
     result["notes"] = doc_notes.attach_notes(result, single_pass or SINGLE_PASS_CHARS)
+    if result.get("scan_read_pages"):
+        result["notes"].append(SCAN_READ_NOTE)
     result["truncated"] = cut
     if cut:
         pages_read = max((int(p["page"]) for p in parts if p.get("page")), default=None) if kind == "pdf" else None

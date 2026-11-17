@@ -16526,6 +16526,209 @@
         }
       }
     },
+    "/api/scan/reads": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read For Path",
+        "description": "The newest reading of a scan in Documents/Scans (``read`` null when\nit was never read) and whether this server can read scans.",
+        "operationId": "scan_read_for_path_api_scan_reads_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Start",
+        "description": "Read a scan in Documents/Scans (or return the reading already under\nway or done for those bytes).",
+        "operationId": "scan_read_start_api_scan_reads_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanReadBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Get",
+        "operationId": "scan_read_get_api_scan_reads__read_id__get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}/summary": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Summary",
+        "description": "\"What does it say?\": a short summary (made once by the chat model;\nthe start of the text with AI features off).",
+        "operationId": "scan_read_summary_api_scan_reads__read_id__summary_get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scan/reads/{read_id}/text": {
+      "get": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "Scan Read Text",
+        "description": "The scan's full text, page by page.",
+        "operationId": "scan_read_text_api_scan_reads__read_id__text_get",
+        "parameters": [
+          {
+            "name": "read_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Read Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/podcasts/subscriptions": {
       "get": {
         "tags": [
@@ -31512,6 +31715,21 @@
         },
         "type": "object",
         "title": "ScanBody"
+      },
+      "ScanReadBody": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "ScanReadBody"
       },
       "SearchTestRequest": {
         "properties": {

@@ -1051,7 +1051,10 @@ the document, and shows you where.
 - "pictures of text (scanned)": some pages are scans, and Domovoi can't
   read those yet. The answer names the pages it skipped. A PDF that is all
   scan is refused ("pictures of text (a scan)"). Save the document from
-  its own program as a PDF with text, or type the part you need.
+  its own program as a PDF with text, or type the part you need. Scans
+  from your own scanner are different: Domovoi reads them itself (see
+  [What does this scan say?](#node:scan-reader)), and then you can ask
+  about them like any document.
 - A file that isn't what its name says, or is built to overwhelm a
   reader, is refused, with a sentence saying why.
 - Documents can't be added while AI chat and questions are off.
@@ -1358,7 +1361,8 @@ too (often called AirScan or eSCL).
 - **A draft from Chat:** **print** on the draft, or type "print it". You
   see the preview first.
 - **Scan** sits at the top of Documents when a scanner is set up. Scans
-  are saved as one PDF in **Documents → Scans**, named by date.
+  are saved as one PDF in **Documents → Scans**, named by date. Domovoi
+  then reads them: see [What does this scan say?](#node:scan-reader).
 - Renaming or removing a printer needs the admin password *(admin)*.
 
 **Try saying**
@@ -1385,6 +1389,50 @@ too (often called AirScan or eSCL).
 - Each job is limited to 100 pages and 20 copies, and the house to 500
   sheets a day; an admin can change the limits. The list of recent jobs
   is kept 90 days, and an admin can clear it.
+
+### What does this scan say?
+
+Scan a letter, and Domovoi reads it for you on your home server: a short
+plain summary of what it says, and the whole text if you want it.
+
+**How to**
+
+- **Dashboard:** after a scan, press **What does it say?** on the Scan
+  sheet. While Domovoi is still reading, the button says how far it has
+  got ("reading page 2 of 3"); press it and the answer appears when it's
+  ready. Older scans have the same button in [Settings → Household →
+  Printers & scanners](#settings/printers), under **recent jobs**.
+- **By voice:** "scan this letter". When it's saved, Domovoi asks
+  "Want me to tell you what it says?". Say yes for the short summary, then
+  yes again to hear all of it.
+- **Show the full text** shows every page's words.
+- Once a scan is read, [Ask about a document](#node:ask-document) works
+  on it, and "read me" reads it aloud, like any document.
+- Domovoi reads the printed words itself (OCR). A page it can't read
+  well, such as handwriting or a photo, goes to the picture model, and
+  Domovoi says what the page "might say": a guess, not the page's words.
+  Check names, dates and amounts against the paper.
+- Dates and amounts in the summary are the letter's own sentences,
+  quoted.
+- Everything happens on your server; nothing about the letter leaves the
+  house.
+- A question asked in a room goes first: reading pauses from the wake
+  word until the answer has been spoken.
+
+**Try saying**
+
+- "scan this letter"
+
+**If something's wrong**
+
+- **No button:** the server can't read scans yet. Domovoi installs the
+  reader (Tesseract) with its next update or Restart.
+- **"couldn't read this page":** the page was too faint, handwritten, or
+  a photo, and the picture model wasn't asked: AI features are off, or
+  there's no picture model. Rescan it in better light, or read the paper.
+- **AI features off:** Domovoi still reads printed pages, but there's no
+  summary: you get the start of the text, and the full text.
+- English only for now.
 
 ### Calendar
 

@@ -485,7 +485,21 @@ async def test_a_loaded_feeder_is_used_and_the_reader_seam(house):
             assert "Grayscale8" in fake.settings[0]
             scans.register_reader(reader)
             done = (await c.post("/v1/scan/jobs/%s/finish" % s["id"], headers=house["device"])).json()
-            assert done["readable"] is True
+            # Saved, and queued for the scan reader: readable only once read.
+            assert done["readable"] is False
+            assert done["read"]["state"] == "queued" and done["read"]["reading"] is True
+            from domovoi.scan_reader import ocr
+            from domovoi.scan_reader import runner as read_runner
+
+            async def fake_ocr(png, *, hold=None, langs=None):
+                return ocr.parse_tsv("\n".join("5\t1\t1\t1\t1\t%d\t0\t0\t9\t9\t95\tword%d" % (i, i)
+                                                for i in range(1, 6)))
+
+            await read_runner.Runner(ocr_fn=fake_ocr, poll_sec=0.01, quiet_sec=0).run_next()
+            got = (await c.get("/v1/scan/jobs/%s" % s["id"], headers=house["device"])).json()
+            assert got["readable"] is True and got["read"]["pages_done"] == 3
+            log = (await c.get("/v1/print/jobs", headers=house["device"])).json()["scans"]
+            assert log[0]["readable"] is True and log[0]["read"]["id"] == got["read"]["id"]
     finally:
         scans.register_reader(None)
         fake.close()

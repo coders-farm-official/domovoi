@@ -1343,6 +1343,13 @@ do_preflight() {
 # build (1:1.5.6-1.1ubuntu4 when this was written) is the one tested; an
 # install from before it gets the same package from apply-update.sh
 # (ADDED_PACKAGES, reconcile_added_packages).
+# tesseract-ocr (Apache-2.0) and its English data tesseract-ocr-eng
+# (Apache-2.0, tessdata_fast) read scanned pages (domovoi/scan_reader,
+# 1.4.0): run as a separate program, never bundled; apt brings their
+# libraries (libtesseract5 Apache-2.0, liblept5 the BSD-style Leptonica
+# licence) and tesseract-ocr-osd (Apache-2.0). Other languages are not
+# installed: Domovoi has no household language setting yet. Boxes installed
+# before 1.4.0 get both from apply-update.sh's ADDED_PACKAGES.
 # The same names on every system this installs on: each of them is a
 # package of that name in Debian 13 (trixie) and Ubuntu 24.04 (noble) too
 # (checked against both archives on 2026-11-15; Debian's pkg-config is the
@@ -1352,7 +1359,7 @@ do_preflight() {
 # it (/usr/bin/python3: the cache trim, the checkout-owner check), and the
 # list stays one list.
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
-  git ffmpeg mpg123 libchromaprint-tools xorriso
+  git ffmpeg mpg123 libchromaprint-tools xorriso tesseract-ocr tesseract-ocr-eng
   zstd ca-certificates curl gnupg tzdata sudo)
 
 pkgs_installed() {
