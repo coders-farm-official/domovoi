@@ -36,8 +36,8 @@ public enum RoomArtImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) > 0,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = (properties[kCGImagePixelWidth] as? NSNumber)?.intValue,
-              let height = (properties[kCGImagePixelHeight] as? NSNumber)?.intValue
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue
         else { return nil }
         return (width, height)
     }
