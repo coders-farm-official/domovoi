@@ -108,7 +108,30 @@ def firewall_state() -> str:
         text = FIREWALL_STATE.read_text(encoding="ascii")
     except OSError:
         return "missing"
-    return "in_place" if "subnet=172.31.254.0/24" in text and "bridge=domovoi-fh0" in text else "missing"
+    if "subnet=172.31.254.0/24" not in text or "bridge=domovoi-fh0" not in text:
+        return "missing"
+    # The unit's watcher rewrites the file every minute while the rules are
+    # in place; an old one means nobody is watching (audit R6 FH-14).
+    import re as _re
+
+    m = _re.search(r"^checked=(\d+)$", text, _re.MULTILINE)
+    if m is None or time.time() - int(m.group(1)) > FIREWALL_STALE_SEC:
+        return "missing"
+    return "in_place"
+
+
+FIREWALL_STALE_SEC = 300
+
+
+def _firewall_blocks_start() -> bool:
+    """On a Linux server, Tor doesn't start without the firewall rules
+    (audit R6 FH-14), unless the administrator manages the firewall
+    themself (DOMOVOI_MANAGE_FH_FIREWALL=0, the installer's opt-out)."""
+    import os
+
+    if sys.platform == "win32" or os.environ.get("DOMOVOI_MANAGE_FH_FIREWALL") == "0":
+        return False
+    return firewall_state() == "missing"
 
 
 def status() -> dict[str, Any]:
@@ -268,9 +291,17 @@ async def _reconcile() -> None:
     folder.write_torrc(w)
     _sync_key_files(folder, peers)
 
-    if firewall_state() == "missing":
-        log.warning("Friend Houses: starting its Tor container without the firewall rules "
-                    "(%s is missing): update Domovoi or run the installer again", FIREWALL_STATE)
+    if _firewall_blocks_start():
+        log.warning("Friend Houses: not starting its Tor container without the firewall rules "
+                    "(%s is missing or old)", FIREWALL_STATE)
+        if await rt.state() == "running":
+            with holds.holding(GUARD_HOLD, "Friend Houses is stopping", settle_sec=60):
+                await rt.stop()
+        _STATE.update(applied=None, onion=None, pairing=None, was_on=False, status="error",
+                      detail="The firewall rules that keep Friend Houses away from your home network "
+                             "aren't in place. Update Domovoi, or run its installer again.")
+        _retry_reconcile_later()
+        return
     _STATE.update(status="starting", detail=None)
     with holds.holding(GUARD_HOLD, "Friend Houses is starting its connection", settle_sec=120):
         if action == "start":
