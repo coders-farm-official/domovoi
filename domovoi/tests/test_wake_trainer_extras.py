@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import wave
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 
 DOCKER_DIR = Path(__file__).resolve().parents[2] / "scripts" / "wake_word" / "docker"
 
@@ -28,7 +28,11 @@ ep = _entrypoint()
 
 def _wav(path: Path, rate: int = 16000) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(path), np.zeros(rate // 10, dtype="float32"), rate, subtype="PCM_16")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.zeros(rate // 10, dtype="int16").tobytes())
     return path
 
 
@@ -89,7 +93,7 @@ def test_extra_clips_are_copied_and_a_changed_set_recomputes_features(monkeypatc
     assert not any((model_dir / n).exists() for n in ep.FEATURE_FILES)
     copied = sorted(p.name for p in (model_dir / "positive_train").glob("extra_*.wav"))
     assert copied == ["extra_000000.wav", "extra_000001.wav"]
-    assert sf.info(str(model_dir / "positive_train" / "extra_000000.wav")).samplerate == 16000
+    assert wave.open(str(model_dir / "positive_train" / "extra_000000.wav")).getframerate() == 16000
     assert (model_dir / "positive_train" / "synth_1.wav").exists()
     ep.mark_extra_current(model_dir)
     # Same set again: the features (recomputed by augment) are kept.
