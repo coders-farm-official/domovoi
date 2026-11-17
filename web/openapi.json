@@ -12174,6 +12174,84 @@
         }
       }
     },
+    "/api/wake-words/tuning": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Status",
+        "description": "Whether Domovoi can be tuned here, the copy's state (off, recording,\ntraining, failed, in_use, standard), its word id for recording and\ntraining, and the rooms on each word.",
+        "operationId": "tuning_status_api_wake_words_tuning_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Start",
+        "description": "\"Tune Domovoi to your household\": make the copy's word, ready for\nclips. Rooms keep the standard word until it is trained. 409 with the\nreason when it can't start (training off, word not published).",
+        "operationId": "tuning_start_api_wake_words_tuning_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/tuning/undo": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Undo",
+        "description": "\"Go back to the standard Domovoi word\" in every room.",
+        "operationId": "tuning_undo_api_wake_words_tuning_undo_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/tuning/use": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Tuning Use",
+        "description": "Use the tuned copy again after going back.",
+        "operationId": "tuning_use_api_wake_words_tuning_use_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/train/stop": {
       "post": {
         "tags": [
@@ -33922,6 +34000,17 @@
               }
             ],
             "title": "Trained Clips From"
+          },
+          "tuned_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tuned From"
           }
         },
         "type": "object",

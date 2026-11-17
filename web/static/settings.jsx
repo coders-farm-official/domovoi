@@ -3623,6 +3623,127 @@ const HouseholdWakeCard = ({ rooms, trained, onPushTrained, fire }) => {
   );
 };
 
+/* ---- "Tune Domovoi to your household" (GET/POST /api/wake-words/tuning) ----
+ * A household copy of the published Domovoi word, trained with the house's
+ * own recordings (domovoi/wake_tuning.py). Rooms keep the standard word
+ * until the copy is trained, then switch; "Go back to the standard Domovoi
+ * word" undoes it. The clips and the copy never leave the house. No button
+ * that can't work: when training isn't on here, the card says so instead. */
+
+const TuneDomovoiCard = ({ items, rooms, minClips, onRecordStart, onRecordStop, onTrain, fire }) => {
+  const { data: st, refresh } = useApiObject('/api/wake-words/tuning',
+    { eventTypes: ['wake_words.changed'], quiet: true, refetchOnAuth: true });
+  const [busy, setBusy] = React.useState(false);
+  const [room, setRoom] = React.useState('');
+  if (!st || !st.state) return null;
+  const word = (items || []).find((x) => x.id === st.wake_word_id) || null;
+  const pick = room || (rooms[0] && rooms[0].room_id) || '';
+  const act = async (path, ok) => {
+    setBusy(true);
+    try {
+      const out = await apiPost(path, {});
+      const moved = (out && out.moved && out.moved.moved) || [];
+      fire(moved.length ? `${ok} (${moved.join(', ')} switched)` : ok);
+    } catch (e) {
+      if (!isAuthFailure(e)) fire(apiErrorText(e));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+  const onTuned = st.rooms_on_tuned || [];
+  const onStandard = st.rooms_on_standard || [];
+  const clips = word ? word.clip_count : st.clip_count;
+  const recording = st.state === 'recording' || st.state === 'failed';
+  return (
+    <Card title="Tune Domovoi to your household"
+          sub="Teach the “Domovoi” wake word how the people in this home say it.">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px', fontSize: 13 }}>
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          Record a few clips of everyone saying “Domovoi”, in the rooms you use, then train.
+          Your rooms keep the standard word until the tuned one is ready, then switch to it.
+          The recordings and the tuned word stay on this server and its rooms: they are never
+          uploaded or shared.
+        </div>
+        {st.state === 'off' && (st.can_start ? (
+          <div>
+            <Button variant="primary" disabled={busy}
+                    onClick={() => act('/api/wake-words/tuning', 'ready to record “Domovoi”')}>
+              Tune Domovoi to your household</Button>
+          </div>
+        ) : (
+          <div role="status" style={{ fontSize: 12 }}>Not available yet: {st.reason}.</div>
+        ))}
+        {recording && word && (
+          <React.Fragment>
+            <div>
+              {clips} clip{clips === 1 ? '' : 's'} recorded; {minClips} or more to train.
+              Ask each person to say “Domovoi” a few times, at their usual distance.
+            </div>
+            {st.state === 'failed' && st.error && (
+              <div role="alert" style={{ fontSize: 12, color: 'var(--danger, #c0392b)' }}>
+                The last training didn’t finish: {st.error}</div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {rooms.length > 0 ? (
+                <React.Fragment>
+                  <select value={pick} disabled={busy} style={_wakeFieldStyle}
+                          onChange={(e) => setRoom(e.target.value)} aria-label="room to record in">
+                    {rooms.map((r) => <option key={r.room_id} value={r.room_id}>{r.room_id}</option>)}
+                  </select>
+                  <Button variant="secondary" disabled={busy || !pick}
+                          onClick={() => onRecordStart(word, pick)}>Record</Button>
+                  <Button variant="ghost" disabled={busy || !pick}
+                          onClick={() => onRecordStop(word, pick)}>Stop</Button>
+                </React.Fragment>
+              ) : (
+                <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                  No room is online to record in.</span>
+              )}
+              {clips >= minClips && (
+                <Button variant="primary" disabled={busy} onClick={() => onTrain(word)}>
+                  Train the tuned word</Button>
+              )}
+            </div>
+          </React.Fragment>
+        )}
+        {st.state === 'training' && (
+          <div role="status">
+            Training the tuned word… Your rooms keep {st.ready ? 'the word they have' : 'the standard word'} until it is done.
+          </div>
+        )}
+        {st.state === 'in_use' && (
+          <React.Fragment>
+            <div>
+              <Pill tone="ok">in use</Pill>{' '}
+              {onTuned.length ? `Rooms on the tuned word: ${onTuned.join(', ')}.` : 'New rooms get the tuned word.'}
+              {onStandard.length > 0 && ` Still switching: ${onStandard.join(', ')} (offline rooms switch when they connect).`}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button variant="secondary" disabled={busy}
+                      onClick={() => act('/api/wake-words/tuning/undo', 'back to the standard Domovoi word')}>
+                Go back to the standard Domovoi word</Button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              To improve it, record more clips on “{st.name}” in the list below and train it again.
+            </div>
+          </React.Fragment>
+        )}
+        {st.state === 'standard' && (
+          <React.Fragment>
+            <div>Your rooms use the standard Domovoi word. The tuned word is kept on this server.</div>
+            <div>
+              <Button variant="secondary" disabled={busy}
+                      onClick={() => act('/api/wake-words/tuning/use', 'using the tuned Domovoi word')}>
+                Use the tuned word again</Button>
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+    </Card>
+  );
+};
+
 const WakeWordsPanel = () => {
   // Live clip-count/status updates ride the net-new `wake_words.changed`
   // channel (the streaming clip-write, the trainer, and these CRUD routes all
@@ -3743,6 +3864,10 @@ const WakeWordsPanel = () => {
       <HouseholdWakeCard rooms={rooms} trained={items} onPushTrained={push} fire={fire}/>
 
       <WakeTrainerCard status={trainer} error={trainerError} refresh={refreshTrainer} fire={fire}/>
+
+      <TuneDomovoiCard items={items} rooms={rooms.filter((r) => satCan(r, 'wake_clips'))}
+                       minClips={minClips} onRecordStart={recordStart} onRecordStop={recordStop}
+                       onTrain={train} fire={fire}/>
 
       <Card title="Create a wake word"
             sub="Name it, then record clips in a room and train, or train on synthetic voices only.">

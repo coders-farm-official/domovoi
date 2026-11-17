@@ -4714,11 +4714,22 @@ class StreamSession:
         async def push(slug: str, threshold: float | None) -> None:
             await self.request_set_wake_word(slug=slug, threshold=threshold)
 
-        task = asyncio.create_task(
-            wake_default.on_hello(self.room_id, reported,
-                                  self.abilities.allows("wake_models"), push,
-                                  wake_max=getattr(self, "wake_max", None), record_max=True),
-            name=f"wake-default:{self.room_id}")
+        from domovoi import wake_tuning
+
+        can_push = self.abilities.allows("wake_models")
+
+        async def both() -> None:
+            await wake_default.on_hello(self.room_id, reported, can_push, push,
+                                        wake_max=getattr(self, "wake_max", None),
+                                        record_max=True)
+            # "Tune Domovoi": a room with the word the household moved away
+            # from (offline when it moved) is given the other one now, in
+            # that word's place in its list (V063).
+            await wake_tuning.on_hello(
+                self.room_id, reported, can_push, wake_tuning.session_push(self),
+                reported_list=getattr(self, "wake_words_reported", None))
+
+        task = asyncio.create_task(both(), name=f"wake-default:{self.room_id}")
         _TIMING_WRITES.add(task)
         task.add_done_callback(_TIMING_WRITES.discard)
 

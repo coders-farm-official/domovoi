@@ -223,6 +223,15 @@ mode the phone also sends the room's health to the server: battery level,
 whether it is charging, Wi-Fi signal and speed, memory, temperature and
 whether the microphone is working.
 
+**Wake-word recordings, only if your household makes them.** When an admin
+records clips for a wake word (Settings → Voice → Wake words), including
+"Tune Domovoi to your household", a room in room mode sends those clips of
+people saying the word to your Domovoi server. They stay there, and so does
+the wake word trained from them: the server gives the trained word only to
+your own rooms. Neither is ever sent to Coders Farm or anywhere else.
+Domovoi's published "Domovoi" wake word, which your server downloads, is
+trained on synthetic voices only and holds nobody's recordings.
+
 **Your phone's calendars, only if you choose to share them.** Off unless
 you turn on "Share this phone's calendars with the house" (Settings →
 Household → Phone calendars) and pick calendars. Then the app sends

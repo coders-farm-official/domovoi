@@ -832,6 +832,22 @@ it, so sharing it is the household's call; a **Synthetic voices only**
 word carries nobody's voice
 ([`scripts/wake_word/README.md`, section 5](../scripts/wake_word/README.md#5-licence-sharing-a-model-trained-here)).
 
+**"Tune Domovoi to your household" (1.4.0).** A household can make its own
+copy of the published "Domovoi" word, trained the same way plus its own
+recordings (`domovoi/wake_tuning.py`). It is an ordinary trained word under
+a reserved name (`domovoi_v1_tuned`, which no other word may take), so
+everything above holds for it: the clips stay under `wake_clips/`, the model
+under `wake_models/`, served only to this server's own rooms over the signed
+wake-model channel, and nothing uploads either. It is never one of the
+published words: "use a published word" and the default-word download
+refuse it. Its **Download** is the same admin-only zip as any trained word's,
+and its model card says it includes the household's recordings and is
+private. The routes (`GET /v1/admin/wake/tuning`, admin read;
+`POST /v1/admin/wake/tuning`, `/tuning/undo`, `/tuning/use`, admin mutation)
+sit at the trainer's own tiers. Rooms move to the copy only once it is
+trained, and back with "Go back to the standard Domovoi word"; the copy
+can't be deleted while rooms use it.
+
 ### How much a request may weigh
 
 Both processes refuse a request body over 1 MiB with `413`, before it is

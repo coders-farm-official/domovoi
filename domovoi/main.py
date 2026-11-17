@@ -752,6 +752,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Kept across a disconnect, like the word above.
     app.state.satellite_wake_words = {}
     app.state.satellite_wake_max = {}
+    # "Tune Domovoi": the trainer worker moves the rooms to the household's
+    # copy when it finishes training (domovoi/wake_tuning.py).
+    from domovoi import wake_tuning as _wake_tuning
+
+    _wake_tuning.attach(app)
     # The satellite upgrades this core asked for and how each ended
     # (domovoi/satellite_upgrades.py): room → record, from the request until
     # the satellite says hello again, then kept a while. NOT cleared on
@@ -4105,6 +4110,10 @@ def _wake_room_words() -> dict[str, str]:
     return dict(getattr(app.state, "satellite_wake_word", None) or {})
 
 
+def _wake_room_lists() -> dict[str, list[str]]:
+    return dict(getattr(app.state, "satellite_wake_words", None) or {})
+
+
 async def _room_words_with_main(room_id: str, slug: str) -> tuple[list[str], list[dict] | None]:
     """A room's words after ``slug`` is pushed the old way (one word): it
     becomes the main word, the extras stay. ``(slugs, words)``: ``words``
@@ -4258,6 +4267,75 @@ async def admin_wake_use(body: _AdminWakeUseBody) -> dict[str, Any]:
     async with session_scope() as s:
         await wake_default.mark_chosen(s, body.room_id, slug, slugs)
     return {"pushed": True, "room_id": body.room_id, "slug": slug}
+
+
+# ─── "Tune Domovoi to your household" (domovoi/wake_tuning.py) ───────────
+# A household copy of the published Domovoi word, trained with the house's
+# own recordings, used only in this house. Same tier as the trainer's own
+# create/train routes (admin mutation; reading it is an admin read).
+
+
+@app.get("/v1/admin/wake/tuning", dependencies=[Depends(require_admin_read)])
+async def admin_wake_tuning_status() -> dict[str, Any]:
+    """Whether the household can tune Domovoi, its copy's state, and which
+    rooms wake on the standard word and on the copy."""
+    from domovoi import wake_tuning
+
+    async with session_scope() as s:
+        return await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+
+
+@app.post("/v1/admin/wake/tuning", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_tuning_start() -> dict[str, Any]:
+    """Start tuning: the copy's word is made (ready for clips: record
+    everyone saying "Domovoi", then Train). Rooms keep the standard word
+    until the copy is trained. 409 with the reason when it can't start."""
+    from domovoi import wake_tuning
+
+    async with session_scope() as s:
+        st = await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+        if not st["can_start"] and st["wake_word_id"] is None:
+            raise HTTPException(status_code=409, detail=st["reason"])
+        try:
+            await wake_tuning.start(s, st["base"])
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        await s.execute(text("SELECT pg_notify('wake_words_changed', 'tuning')"))
+    moved = await wake_tuning.apply(app.state.active_sessions, _wake_room_words(), _wake_room_lists())
+    async with session_scope() as s:
+        out = await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+    out["moved"] = moved
+    return out
+
+
+async def _wake_tuning_use(use: bool) -> dict[str, Any]:
+    from domovoi import wake_tuning
+
+    async with session_scope() as s:
+        if await wake_tuning.set_use(s, use) is None:
+            raise HTTPException(status_code=409,
+                                detail="Domovoi hasn't been tuned to this household")
+        await s.execute(text("SELECT pg_notify('wake_words_changed', 'tuning')"))
+    moved = await wake_tuning.apply(app.state.active_sessions, _wake_room_words(), _wake_room_lists())
+    async with session_scope() as s:
+        out = await wake_tuning.status(s, _wake_room_words(), _wake_room_lists())
+    out["moved"] = moved
+    return out
+
+
+@app.post("/v1/admin/wake/tuning/undo", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_tuning_undo() -> dict[str, Any]:
+    """"Go back to the standard Domovoi word": every room on the copy is
+    given the published word again (an offline room on its next hello), and
+    the household default goes back with them. The copy and its clips stay."""
+    return await _wake_tuning_use(False)
+
+
+@app.post("/v1/admin/wake/tuning/use", dependencies=[Depends(require_admin_mutation)])
+async def admin_wake_tuning_use() -> dict[str, Any]:
+    """Use the tuned copy again (after an undo): rooms on the standard word
+    move to it, once it is trained."""
+    return await _wake_tuning_use(True)
 
 
 @app.post(

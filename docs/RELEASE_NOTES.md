@@ -23,6 +23,27 @@ a way that would otherwise get reported as a bug.
   older server, simply doesn't show it. Protocol: docs/uml/satellite-protocol.md,
   "The room display".
 
+## 1.4.0 (unreleased) — Tune Domovoi to your household
+
+- **What changed.** Settings → Voice → Wake words has a new card, **Tune
+  Domovoi to your household**. Record a few clips of everyone saying
+  "Domovoi" (any room, as for any wake word), then train: the server makes
+  the household's own copy of the published "Domovoi" word, trained the
+  same way plus your recordings, and the near misses the published word is
+  trained against ("domino", "the movie", ...). Rooms keep the standard
+  word until the copy is trained, then switch to it (an offline room when
+  it next connects), and new rooms get it too. **Go back to the standard
+  Domovoi word** undoes it in every room; **Use the tuned word again**
+  switches back.
+- **What to know.** Wake-word training must be turned on (same card as
+  before). The recordings and the tuned word stay on your server and its
+  rooms: nothing uploads them, and the tuned word's model card says it
+  includes your recordings and is private. The tuned word appears in the
+  list as "Domovoi (tuned to this home)"; it can't be deleted while rooms
+  use it. The trainer also takes optional extra synthetic clips, near-miss
+  phrases, room echoes and noise beds (`scripts/wake_word/README.md`),
+  which the published models' recipe uses.
+
 ## 1.4.0 (unreleased) — Plugin SDK 1.9: speech in a room's voice
 
 - **What changed.** Plugins can turn text into speech without playing it
