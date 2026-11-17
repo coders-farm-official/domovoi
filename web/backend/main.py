@@ -606,7 +606,8 @@ async def health(challenge: str | None = None) -> HealthResponse:
                 # through (only the known keys), the same signal-not-cause.
                 if isinstance(doc, dict) and isinstance(doc.get("stt_engine"), dict):
                     stt_engine = {k: doc["stt_engine"].get(k) for k in (
-                        "active", "host_state", "local_standby", "use_host", "down_since")}
+                        "active", "host_state", "local_standby", "use_host", "down_since",
+                        "shares_gpu", "last_engine", "last_reason", "last_at")}
                 # The turn watchdog's speech-recognition block (ok / slow /
                 # stalled), for the Health page's row; absent from an older
                 # core.

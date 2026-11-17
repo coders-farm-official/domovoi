@@ -211,9 +211,18 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       add({ ...c, tone: 'err', fix: '#settings/about', fixLabel: 'restart',
             text: `speech recognition is stuck (for ${mins} min) · the rooms can't understand anyone until Domovoi restarts` });
     } else if (eng && eng.active === 'host' && eng.use_host !== false) {
+      // Which one heard the latest request: on a Mac whose language models
+      // share the graphics chip, a request that comes while they are
+      // answering is heard on the processor instead (core
+      // whisper_remote_shares_gpu).
+      const last = eng.last_engine === 'local'
+        ? (eng.last_reason === 'gpu_shared_llm_busy'
+          ? ' · the last request was heard on the processor while the language model was busy'
+          : ' · the last request was heard on the processor')
+        : '';
       add(stt === 'unavailable'
         ? { ...c, tone: 'warn', text: "ready · on this Mac's graphics chip only · the processor's backup didn't load" }
-        : { ...c, tone: 'ok', text: "ready · on this Mac's graphics chip" });
+        : { ...c, tone: 'ok', text: "ready · on this Mac's graphics chip" + last });
     } else if (eng && stt !== 'unavailable' && eng.use_host !== false && eng.host_state === 'down') {
       add({ ...c, tone: 'warn', text: "working on the processor · the Mac's speech service isn't answering" });
     } else if (eng && stt !== 'unavailable' && eng.host_state === 'refused') {

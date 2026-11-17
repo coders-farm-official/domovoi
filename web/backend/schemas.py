@@ -1454,8 +1454,11 @@ class HealthResponse(BaseModel):
     # Who hears the turns, when the core uses a speech service on the host
     # (a Mac's graphics chip; mac-installer PHASE8A-STT.md): {active: host |
     # local, host_state: ok | down | unknown | refused, local_standby,
-    # use_host, down_since}. None everywhere else, and when the core did
-    # not answer. `stt` keeps meaning the core's own Whisper.
+    # use_host, down_since, shares_gpu, last_engine: host | local | null
+    # (who heard the latest turn), last_reason (why it was local:
+    # gpu_shared_llm_busy | host_down | host_failed | switched_off),
+    # last_at}. None everywhere else, and when the core did not answer.
+    # `stt` keeps meaning the core's own Whisper.
     stt_engine: dict[str, Any] | None = None
     # The core's turn watchdog on speech recognition (domovoi/turn_watchdog.py
     # speech_health): `state` ok | slow | stalled, `workers`,

@@ -85,11 +85,16 @@ every check has passed):
    without signatures, and the Windows side then has no update step.
    ``--mac-pkg FILE`` (absent by default, and then nothing below changes):
    ``DomovoiSetup-mac.pkg``, the macOS installer, which builds on a Mac
-   only (mac-installer PLAN 4.12), handed in with its build record
-   (``DomovoiSetup-mac.build.json`` beside it, or ``--mac-build-record``:
-   kind, tag, the commit it was built from, the package's size and
-   SHA-256). The record must name this tag and its commit and describe that
-   very file, or the run stops. It is attached as ``DomovoiSetup-mac.pkg``,
+   only (the release workflow's ``build-mac`` job, on a macOS runner),
+   handed in with its build record (``DomovoiSetup-mac.build.json`` beside
+   it, or ``--mac-build-record``: kind, tag, the commit it was built from,
+   the ref it installs, the package's size and SHA-256). The record must
+   name this tag and describe that very file, and its commit must be the
+   tag's, or, when the app changed (path a), the commit the tag's
+   ``android/release.json`` commit sits on (the workflow builds the package
+   while it waits for approval, before that commit exists; the package
+   holds nothing of ``android/``), with the tag as the ref it installs.
+   Anything else stops the run. It is attached as ``DomovoiSetup-mac.pkg``,
    and when the Windows Setup is signed, signed the same way (key file or
    agent) under its own namespaces (``domovoi-mac-setup``,
    ``domovoi-mac-setup-manifest``): ``DomovoiSetup-mac.manifest.json`` and
@@ -427,6 +432,14 @@ PLAY_URL = "https://play.google.com/store/apps/details?id=com.domovoi.app"
 LINUX_DOC = ("docs/LINUX_HOST.md", "One command")
 PI_ROOM_DOC = ("scripts/manual/manual.md", "A Raspberry Pi room")
 #: How an installed Domovoi updates (Settings → System → About & updates).
+#: The Mac package is signed ad hoc (no Apple Developer ID yet), so
+#: Gatekeeper stops it the first time; Apple's steps for macOS 26 ("Open a
+#: Mac app from an unknown developer"): System Settings, Privacy & Security,
+#: Security, Open Anyway, for about an hour after the try.
+MAC_GATEKEEPER_LINE = ("The Mac package is not from an identified developer yet, so the first time you open it, "
+                       "macOS won't. Open System Settings → Privacy & Security, go to Security and click "
+                       "**Open Anyway** (it is there for about an hour after you tried), then enter your "
+                       "login password.")
 UPDATE_LINE = ("**Already installed?** Update from the dashboard: "
                "Settings → System → About & updates → **Update Domovoi**.")
 #: The one-line install in docs/LINUX_HOST.md, whole.
@@ -534,7 +547,7 @@ def download(rel: Release) -> list[str]:
     out = ["## Download", ""]
     out.append(f"- **Windows 11 PC — the server:** [{SETUP_ASSET}]({_asset_url(rel.tag, SETUP_ASSET)})")
     if rel.mac_setup_sha256:
-        out.append(f"- **Mac — the server (preview; Apple Silicon, macOS 26 or later):** "
+        out.append(f"- **Mac (Apple silicon, macOS 26 or later) — the server:** "
                    f"[{MAC_SETUP_ASSET}]({_asset_url(rel.tag, MAC_SETUP_ASSET)})")
     linux_doc = _doc_url(rel.tag, LINUX_DOC)
     if rel.linux_install:
@@ -566,6 +579,8 @@ def download(rel: Release) -> list[str]:
     setups = "The Windows Setups are" if rel.satellite_setup_sha256 else "The Windows Setup is"
     out += ["", f"{setups} not code-signed yet: when Windows says \"Windows protected your PC\", choose "
                 "More info, then Run anyway."]
+    if rel.mac_setup_sha256:
+        out += ["", MAC_GATEKEEPER_LINE]
     return out
 
 
@@ -597,8 +612,8 @@ def body(rel: Release) -> str:
         files.append(f"| {SATELLITE_SETUP_ASSET} | makes a spare Windows PC a room (preview, not code-signed) | "
                      f"`{rel.satellite_setup_sha256}` |")
     if rel.mac_setup_sha256:
-        files.append(f"| {MAC_SETUP_ASSET} | the macOS installer (preview; Apple Silicon, macOS 26 or later) | "
-                     f"`{rel.mac_setup_sha256}` |")
+        files.append(f"| {MAC_SETUP_ASSET} | the Mac installer (Apple silicon, macOS 26 or later; signed ad hoc, "
+                     f"not by an identified developer) | `{rel.mac_setup_sha256}` |")
         for name, what in ((MAC_SETUP_SIG_ASSET, "the Mac package's Ed25519 signature by Domovoi's release key, for the Mac update"),
                            (MAC_MANIFEST_ASSET, "what the Mac package is (version, commit, size, SHA-256), for the Mac update"),
                            (MAC_MANIFEST_SIG_ASSET, "the Mac manifest's Ed25519 signature by Domovoi's release key")):
@@ -638,8 +653,10 @@ def body(rel: Release) -> str:
            "Domovoi's icon appears beside the clock and starts at every sign-in from then on "
            f"([docs/WINDOWS_HOST.md]({REPO_URL}/blob/{rel.tag}/docs/WINDOWS_HOST.md#the-tray-icon))."]
           if rel.tray_sha256 else []),
-        *([f"- `{MAC_SETUP_ASSET}` installs that commit on a Mac; it was built on a Mac from the tag's own files and "
-             "handed to this script with its build record, which names that commit."
+        *([f"- `{MAC_SETUP_ASSET}` installs that commit on a Mac. The release workflow built it on a macOS runner "
+             "from the tag's own files (for a release that changes the app: from the commit the tag adds "
+             "`android/release.json` to, which the package doesn't hold), with no secrets, and handed it to this "
+             "script with its build record. It is signed ad hoc, not with an Apple Developer ID."
              + (f" Its signatures are made the same way, namespace `{MAC_SETUP_NAMESPACE}`." if rel.mac_signatures else "")]
           if rel.mac_setup_sha256 else []),
         f"- The Android app's signing certificate SHA-256: `{rel.cert}` (check with `apksigner verify --print-certs <file>`).",
@@ -1064,11 +1081,20 @@ def setup_manifest(tag: str, version: str, tag_commit: str, setup: Path, *,
     return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("ascii")
 
 
-def check_mac_build_record(record: Path, pkg: Path, *, tag: str, tag_commit: str) -> None:
+def check_mac_build_record(record: Path, pkg: Path, *, tag: str, tag_commit: str,
+                           built_on: str | None = None) -> None:
     """The Mac build's record (``DomovoiSetup-mac.build.json``, written
     beside the package by the Mac build) names this tag and its commit, and
     the package it describes is this file (size and SHA-256). The package
-    can't be built here, so this is what ties it to the tag."""
+    can't be built here, so this is what ties it to the tag.
+
+    ``built_on``: an app release's tag is a commit the signing job makes
+    (``android/release.json`` on the dispatched commit; the caller has
+    checked it changes that file alone), so the release workflow builds the
+    Mac package from the dispatched commit, while it waits for approval.
+    That commit is accepted too, but only from a build that installs the
+    tag itself (its ``ref`` is the tag): the Mac side's files are the same
+    in both commits, and the Linux side it installs is the tag's."""
     try:
         doc = json.loads(record.read_bytes().decode("utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
@@ -1076,9 +1102,15 @@ def check_mac_build_record(record: Path, pkg: Path, *, tag: str, tag_commit: str
             f"{MAC_BUILD_RECORD} beside the package)")
     if not isinstance(doc, dict) or doc.get("kind") != MAC_BUILD_KIND or doc.get("schema") != 1:
         die(f"{record} is not a Mac build record (kind {MAC_BUILD_KIND}, schema 1)")
-    if doc.get("tag") != tag or doc.get("commit") != tag_commit:
-        die(f"the Mac package was built from {doc.get('tag') or 'no tag'} at {str(doc.get('commit') or 'no commit')[:12]}, "
-            f"not {tag} at {tag_commit[:12]}: build it on the Mac from this tag")
+    commit = doc.get("commit")
+    on_parent = built_on is not None and commit == built_on and commit != tag_commit
+    if doc.get("tag") != tag or (commit != tag_commit and not on_parent):
+        also = f" or {built_on[:12]} (the commit the tag's android/release.json commit is on)" if built_on else ""
+        die(f"the Mac package was built from {doc.get('tag') or 'no tag'} at {str(commit or 'no commit')[:12]}, "
+            f"not {tag} at {tag_commit[:12]}{also}: build it from this tag")
+    if on_parent and doc.get("ref") != tag:
+        die(f"the Mac package was built from {commit[:12]}, the commit under {tag}, but installs "
+            f"{doc.get('ref') or 'that commit'}, not {tag}: build it with --ref {tag}")
     if doc.get("size") != pkg.stat().st_size or doc.get("sha256") != sha256_file(pkg):
         die(f"{record} describes another package than {pkg} (size or SHA-256 differ)")
 
@@ -1496,8 +1528,9 @@ def _run(argv: list[str], *, tools: Tools | None, repo: Path | None,
             die(f"no Mac package at {args.mac_pkg}")
         record = Path(args.mac_build_record).resolve() if args.mac_build_record else mac_pkg.parent / MAC_BUILD_RECORD
         shutil.copyfile(mac_pkg, staged_mac)
-        check_mac_build_record(record, staged_mac, tag=tag, tag_commit=tag_commit)
-        say(f"using {mac_pkg} (--mac-pkg: its build record names {tag} at {tag_commit[:12]})")
+        built_on = t.git("rev-parse", "--verify", "--quiet", f"{tag_commit}^", check=False).strip() if app_changed else None
+        check_mac_build_record(record, staged_mac, tag=tag, tag_commit=tag_commit, built_on=built_on or None)
+        say(f"using {mac_pkg} (--mac-pkg: its build record names {tag}, built from the tag's files)")
 
     if args.tray and not args.setup:
         die("--tray goes with --setup")

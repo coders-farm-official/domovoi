@@ -15,6 +15,11 @@ Pure file checks, no network, no DB:
 * The ``sbom`` job makes the three SBOMs with a read-only token and no
   secret, and the signing job hands them to finish-release (``--sbom-dir``,
   ``--provenance``).
+* The ``build-mac`` job builds DomovoiSetup-mac.pkg on macOS with a
+  read-only token, no environment and no secret, from the dispatched
+  commit, with the pinned Xcode (the same as ci.yml's mac job); the signing
+  job waits for it and hands its package to finish-release (``--mac-pkg``),
+  so the Mac files are in SHA256SUMS and so among the attested subjects.
 """
 
 from __future__ import annotations
@@ -154,6 +159,7 @@ def _every_kind() -> dict[str, bytes]:
         fr.SETUP_ASSET: b"MZ setup", **{n: n.encode() for n in fr.SIGNATURE_ASSETS},
         fr.TRAY_ASSET: b"MZ tray", fr.SATELLITE_SETUP_ASSET: b"MZ sat",
         **{n: b'{"bomFormat": "CycloneDX"}' + n.encode() for n in fr.SBOM_ASSETS},
+        fr.MAC_SETUP_ASSET: b"xar! mac", **{n: n.encode() for n in fr.MAC_SIGNATURE_ASSETS},
     }
 
 
@@ -165,7 +171,9 @@ def _sums_for(files: dict[str, bytes]) -> bytes:
                      setup_sha256=sha[fr.SETUP_ASSET], tray_sha256=sha[fr.TRAY_ASSET],
                      satellite_setup_sha256=sha[fr.SATELLITE_SETUP_ASSET],
                      signatures={n: sha[n] for n in fr.SIGNATURE_ASSETS},
-                     sboms={n: sha[n] for n in fr.SBOM_ASSETS})
+                     sboms={n: sha[n] for n in fr.SBOM_ASSETS},
+                     mac_setup_sha256=sha[fr.MAC_SETUP_ASSET],
+                     mac_signatures={n: sha[n] for n in fr.MAC_SIGNATURE_ASSETS})
     return fr.sums_text(rel).encode("ascii")
 
 
@@ -197,7 +205,8 @@ def test_every_kind_of_asset_becomes_a_subject(tmp_path):
     want = {**{n: hashlib.sha256(d).hexdigest() for n, d in files.items()}, "SHA256SUMS": hashlib.sha256(sums).hexdigest()}
     assert sorted(subjects) == sorted(f"{sha}  {n}" for n, sha in want.items())
     for kind in (".apk", fr.SETUP_ASSET, fr.SETUP_SIG_ASSET, fr.MANIFEST_ASSET, fr.TRAY_ASSET,
-                 fr.SATELLITE_SETUP_ASSET, *fr.SBOM_ASSETS, "SHA256SUMS"):
+                 fr.SATELLITE_SETUP_ASSET, *fr.SBOM_ASSETS, fr.MAC_SETUP_ASSET, *fr.MAC_SIGNATURE_ASSETS,
+                 "SHA256SUMS"):
         assert any(s.endswith(kind) for s in subjects), kind
 
 
@@ -251,6 +260,68 @@ def test_the_signing_job_attaches_the_sboms_through_finish_release():
     assert "env" not in down, "the download step is handed no secret"
     (finish,) = [s for s in job["steps"] if str(s.get("name", "")).startswith("Finish the release")]
     assert '--sbom-dir "$RUNNER_TEMP/sboms" --provenance' in finish["run"]
+
+
+# ─── the Mac package ─────────────────────────────────────────────────────
+
+XCODE = "/Applications/Xcode_16.4.app"
+
+
+def test_the_mac_build_job_is_read_only_and_secret_free():
+    job = JOBS["build-mac"]
+    assert job["permissions"] == {"contents": "read"}
+    assert "environment" not in job and "secrets." not in _job_text("build-mac")
+    assert job["needs"] == "plan" and job["runs-on"] == "macos-15"
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    (co,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+    assert co["with"] == {"ref": "${{ github.sha }}", "fetch-depth": 0, "persist-credentials": False}
+    for step in job["steps"]:
+        assert "env" not in step, "no step of the Mac build is handed anything"
+    text = _job_text("build-mac")
+    assert XCODE in text and "xcode-select -s" in text and "sort -V" not in text, "Xcode by its path, never the newest"
+    (build,) = [s for s in job["steps"] if "mac/build.sh" in str(s.get("run", ""))]
+    assert '--tag "$TAG" --ref "$TAG" --cmake pinned' in build["run"]
+    (up,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert up["with"]["name"] == "release-mac-pkg" and up["with"]["if-no-files-found"] == "error"
+    assert "DomovoiSetup-mac.pkg" in up["with"]["path"] and fr.MAC_BUILD_RECORD in up["with"]["path"]
+
+
+def test_the_mac_build_names_the_tag_only_on_the_dispatched_commit_or_under_its_app_commit():
+    (step,) = [s for s in JOBS["build-mac"]["steps"] if s.get("name") == "The tag, named here on the dispatched commit"]
+    run = step["run"]
+    assert 'git tag -f "$TAG" "$GITHUB_SHA"' in run
+    assert '[ "$(git rev-parse "$tagged^")" = "$GITHUB_SHA" ]' in run
+    assert '= android/release.json' in run
+
+
+def test_the_signing_job_waits_for_the_mac_build_and_hands_it_to_finish_release():
+    job = JOBS["release"]
+    assert "build-mac" in job["needs"] and "needs.build-mac.result == 'success'" in job["if"]
+    (down,) = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/download-artifact@")
+               and (s.get("with") or {}).get("name") == "release-mac-pkg"]
+    assert down["with"] == {"name": "release-mac-pkg", "path": "${{ runner.temp }}/mac"}
+    assert "env" not in down and "if" not in down, "every release carries it; the download sees no secret"
+    (finish,) = [s for s in job["steps"] if str(s.get("name", "")).startswith("Finish the release")]
+    assert '--mac-pkg "$RUNNER_TEMP/mac/DomovoiSetup-mac.pkg"' in finish["run"]
+
+
+def test_only_the_signing_job_runs_in_the_release_environment():
+    assert [n for n, j in JOBS.items() if "environment" in j] == ["release"]
+
+
+def test_ci_builds_the_mac_package_with_the_same_xcode():
+    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    job = ci["jobs"]["mac"]
+    text = yaml.safe_dump(job)
+    assert job["runs-on"] == "macos-15" and job["if"] == "needs.changes.outputs.mac == 'true'"
+    assert XCODE in text and "sort -V" not in text and "secrets." not in text
+    (step,) = [s for s in job["steps"] if s.get("working-directory") == "mac"]
+    assert step["run"] == "swift build && swift test"
+    assert "mac" in ci["jobs"]["ci-ok"]["needs"]
+    assert ci["jobs"]["changes"]["outputs"]["mac"] == "${{ steps.filter.outputs.mac }}"
+    (flt,) = [s for s in ci["jobs"]["changes"]["steps"] if s.get("id") == "filter"]
+    assert "mac=$(has '^(mac/|" in flt["run"] and "/workflows/)')" in flt["run"]
+    assert "windows ios mac; do" in flt["run"], "a run started by hand runs it too"
 
 
 def test_every_artifact_action_is_pinned_by_sha():

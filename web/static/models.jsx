@@ -223,6 +223,8 @@ const SttEngineCard = ({ stt, onSet, hostKind }) => {
   if (e.host_state === 'refused') line = 'The speech service address was refused, so this Mac’s processor hears every turn.';
   else if (!useHost) line = 'Off: this Mac’s processor hears every turn (a little slower).';
   else if (e.active === 'host') line = 'On: turns are heard on this Mac’s graphics chip.'
+    + (e.shares_gpu && e.local_standby
+      ? ' While the language model is answering, a request is heard on the processor instead, so it doesn’t wait.' : '')
     + (e.local_standby ? '' : ' The processor’s backup didn’t load, so there is no fallback.');
   else line = 'On, but the speech service isn’t answering: this Mac’s processor hears the turns until it does.';
   const run = async (v) => { setBusy(true); try { await onSet(v); } finally { setBusy(false); } };

@@ -1700,7 +1700,7 @@ def test_a_failed_signing_tool_shows_its_whole_error_without_secrets(script):
 
 
 def _mac_pkg(w: "World", *, tag: str | None = None, commit: str | None = None, sha: str | None = None,
-             where: Path | None = None) -> Path:
+             where: Path | None = None, ref: str | None = None) -> Path:
     """A DomovoiSetup-mac.pkg as the Mac build leaves it: the package and
     its build record beside it."""
     d = where or (w.tmp / "mac-build")
@@ -1710,6 +1710,8 @@ def _mac_pkg(w: "World", *, tag: str | None = None, commit: str | None = None, s
     rec = {"kind": "domovoi-mac-setup-build", "schema": 1, "tag": tag or w.tag, "commit": commit or w.tag_commit,
            "file": "DomovoiSetup-mac.pkg", "size": pkg.stat().st_size,
            "sha256": sha or hashlib.sha256(pkg.read_bytes()).hexdigest()}
+    if ref is not None:
+        rec["ref"] = ref
     (d / "DomovoiSetup-mac.build.json").write_text(json.dumps(rec), encoding="utf-8")
     return pkg
 
@@ -1738,7 +1740,7 @@ def test_the_mac_package_is_attached_summed_and_noted(tmp_path, monkeypatch):
     names = [Path(a).name for a in upload[3:upload.index("--repo")]]
     assert "DomovoiSetup-mac.pkg" in names and names[-1] == "SHA256SUMS"
     notes = w.state["releases"][w.tag]["body"]
-    assert "| DomovoiSetup-mac.pkg |" in notes and sha in notes and "**Mac — the server" in notes
+    assert "| DomovoiSetup-mac.pkg |" in notes and sha in notes and "**Mac (Apple silicon, macOS 26 or later) — the server:**" in notes
     assert "/releases/download/" + w.tag + "/DomovoiSetup-mac.pkg" in notes, "the Download section links it"
     rel = w.load()["releases"][w.tag]
     assert "DomovoiSetup-mac.pkg" in [a["name"] for a in rel["assets"]]
@@ -1758,6 +1760,32 @@ def test_a_mac_package_not_built_from_the_tag_is_refused(tmp_path, monkeypatch, 
     with pytest.raises(fr.Refused, match=why):
         w.run("--no-publish", "--mac-pkg", str(pkg))
     assert w.calls("upload") == []
+
+
+@requires_git
+def test_the_release_page_says_how_to_open_the_ad_hoc_signed_mac_package(tmp_path, monkeypatch):
+    w = World(tmp_path, monkeypatch)
+    assert w.run("--mac-pkg", str(_mac_pkg(w))) == 0
+    notes = w.load()["releases"][w.tag]["body"]
+    dl = notes[:notes.index("## Files and checksums")]
+    assert fr.MAC_GATEKEEPER_LINE in dl
+    assert "Privacy & Security" in dl and "**Open Anyway**" in dl
+    assert "Windows protected your PC" in dl, "beside the Windows line"
+    assert "signed ad hoc" in notes
+
+
+@requires_git
+def test_an_app_releases_mac_package_may_come_from_the_commit_under_the_tag(tmp_path, monkeypatch):
+    """The workflow builds it from the dispatched commit (w.build), which the
+    app release's tag (w.tag_commit) adds android/release.json to; it must
+    install the tag itself."""
+    w = World(tmp_path, monkeypatch)
+    assert _git(w.work, "rev-parse", f"{w.tag_commit}^") == w.build
+    assert w.run("--no-publish", "--mac-pkg", str(_mac_pkg(w, commit=w.build, ref=w.tag))) == 0
+    with pytest.raises(fr.Refused, match=f"build it with --ref {w.tag}"):
+        w.run("--no-publish", "--mac-pkg", str(_mac_pkg(w, commit=w.build, ref=w.build)))
+    with pytest.raises(fr.Refused, match="built from"):
+        w.run("--no-publish", "--mac-pkg", str(_mac_pkg(w, commit=w.rc1, ref=w.tag)))
 
 
 @requires_git

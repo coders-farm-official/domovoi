@@ -97,7 +97,8 @@ Then open that address, [claim the admin account](#2-claim-the-admin-account) an
 To read the script first, run it without questions, or install by hand: [Running the server on Linux](docs/LINUX_HOST.md#install).
 Fedora, Arch and other systems are not supported yet ([which systems, and why](docs/LINUX_HOST.md#which-distro));
 to ask for yours, [open an issue](https://github.com/coders-farm-official/domovoi/issues).
-On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md).
+On Windows 11, use [the Windows installer](docs/WINDOWS_HOST.md). On a Mac with Apple silicon and
+macOS 26 or later, use the Mac installer, `DomovoiSetup-mac.pkg`, from the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest).
 
 ---
 
@@ -169,6 +170,11 @@ changed when is in the [release notes](docs/RELEASE_NOTES.md).
 - **A Windows installer:** `DomovoiSetup.exe` turns a Windows 11 PC into a
   Domovoi server. It is not code-signed yet, so Windows asks before it runs
   ([Windows installer](docs/WINDOWS_HOST.md)).
+- **A Mac installer:** `DomovoiSetup-mac.pkg` turns a Mac with Apple silicon
+  (macOS 26 or later) into a Domovoi server: the server runs in a small
+  Linux virtual machine, and the AI models and speech recognition use the
+  Mac's graphics chip. It isn't from an identified developer yet, so macOS
+  asks once before it opens ([latest release](https://github.com/coders-farm-official/domovoi/releases/latest)).
 - **Satellites on spare devices:** a spare laptop or PC, or an old phone or
   tablet in the app's room mode, can be a room instead of a Raspberry Pi
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
@@ -340,7 +346,7 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 
 ### 1. Install the server
 
-Three ways in:
+Four ways in:
 
 - **Linux (Ubuntu 26.04, Debian 13, Mint 22, Pop!_OS 24.04), one command:** [Install on Linux](#install-on-linux)
   above. It installs the latest release, its services and the models in
@@ -353,6 +359,13 @@ Three ways in:
   the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest),
   or build it with `windows\build.ps1`
   ([Windows installer](docs/WINDOWS_HOST.md)).
+- **Mac (Apple silicon, macOS 26 or later), the installer.**
+  `DomovoiSetup-mac.pkg` from the [latest release](https://github.com/coders-farm-official/domovoi/releases/latest) sets up the
+  same server in a small Linux virtual machine, with the AI models and
+  speech recognition on the Mac's graphics chip. The first time, macOS
+  won't open it (it isn't from an identified developer yet): open System
+  Settings → Privacy & Security, click **Open Anyway** under Security, and
+  enter your login password.
 - **By hand, on Windows or Linux:** the commands below.
 
 ```powershell

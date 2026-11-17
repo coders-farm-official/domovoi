@@ -993,6 +993,17 @@ def _with_remote(local: WhisperClient | None) -> WhisperClient | None:
     return wrapped
 
 
+def for_turn(client: Any) -> Any:
+    """``client`` for one voice turn: with a remote speech service in
+    front (clients/whisper_remote.py), the engine that hears the turn is
+    chosen once, here, and every decode of the turn (the early one, the
+    final one, the second hearing) goes to it. Any other client is
+    returned as it is."""
+    if _remote is not None and client is _remote:
+        return _remote.for_turn()
+    return client
+
+
 def get_whisper_client() -> WhisperClient:
     """The loaded client. The core loads it at boot; a first call before
     that loads it here. Raises :class:`SttUnavailableError` once a load
@@ -1074,6 +1085,9 @@ def whisper_runtime() -> dict[str, Any]:
         # Who heard the latest call (before any: who would hear the next).
         engine = _remote.last_engine or _remote.active
         doc["engine"] = engine
+        # Why the latest call was heard locally (gpu_shared_llm_busy: the
+        # shared graphics chip was generating), None when the host heard it.
+        doc["engine_reason"] = _remote.last_reason if _remote.last_engine else None
         if engine == "host":
             doc.update(model=_remote.remote.model, device="host", compute_type="remote",
                        cpu_threads=None)

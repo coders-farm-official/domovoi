@@ -226,16 +226,21 @@ class RealLettaClient:
         # ``streaming=True, stream_tokens=True`` is the documented shape;
         # some SDK builds expose ``messages.create_stream(...)`` instead.
         # Prefer the documented kwargs and let the wiring surface drift.
-        stream = await self._acreate_message(
-            agent_id=agent_id,
-            user_text=user_text,
-        )
-        async for chunk in stream:
-            mtype = getattr(chunk, "message_type", None)
-            if mtype == "assistant_message":
-                content = getattr(chunk, "content", "") or ""
-                if content:
-                    yield content
+        from domovoi import llm_activity
+
+        # Letta's model is the household's Ollama: a generation in flight
+        # for as long as the reply streams (domovoi/llm_activity.py).
+        async with llm_activity.generating("letta"):
+            stream = await self._acreate_message(
+                agent_id=agent_id,
+                user_text=user_text,
+            )
+            async for chunk in stream:
+                mtype = getattr(chunk, "message_type", None)
+                if mtype == "assistant_message":
+                    content = getattr(chunk, "content", "") or ""
+                    if content:
+                        yield content
             # tool_call_message / tool_return_message: Letta runs the proxy tool
             # SERVER-SIDE (the tool POSTs to /v1/admin/chat-tool) and folds the
             # result back into a later assistant_message itself — nothing to

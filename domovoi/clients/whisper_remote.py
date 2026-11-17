@@ -32,6 +32,18 @@ Two parts:
   :meth:`FallbackWhisperClient.engine_doc` says which one is hearing
   turns and why (``stt_status()["engine"]``), the per-turn record names
   it (device ``host``), and the switch is logged both ways.
+
+**A shared graphics chip** (``whisper_remote_shares_gpu``, the Mac): the
+service and the household's Ollama run on the same chip, and a decode
+there waits behind a generation (the GPU contention check failed with
+Ollama at 61%). With the setting on, a turn that starts while this core
+is waiting on a language model (:mod:`domovoi.llm_activity`: one of its
+requests to Ollama is open) is heard by the local Whisper instead,
+reason :data:`REASON_LLM_BUSY`. The choice is made once per turn
+(:meth:`FallbackWhisperClient.for_turn`): every decode of one utterance
+(the early one at a pause, the final one, the second hearing) goes to
+the same engine, so a turn never switches halfway and the engines don't
+alternate inside it. Off (every other install), nothing of this runs.
 """
 
 from __future__ import annotations
@@ -73,6 +85,12 @@ SHORT_AUDIO_CTX = SHORT_WINDOW_SEC * AUDIO_CTX_PER_SEC
 # doubtful to the full path instead).
 FULL_TEMPERATURE_INC = 0.2
 CONNECT_TIMEOUT_SEC = 0.5
+# Why a turn was heard locally (``engine_doc()["last_reason"]``,
+# ``whisper_runtime()["engine_reason"]``).
+REASON_LLM_BUSY = "gpu_shared_llm_busy"     # the shared chip was generating
+REASON_HOST_DOWN = "host_down"              # the service failed lately
+REASON_HOST_FAILED = "host_failed"          # it failed this very request
+REASON_SWITCHED_OFF = "switched_off"        # the household's switch
 HEALTH_TIMEOUT_SEC = 1.0
 _MAX_ERROR_CHARS = 300
 
@@ -332,12 +350,18 @@ class FallbackWhisperClient:
         retry_sec: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
+        llm_busy: Callable[[], bool] | None = None,
     ) -> None:
         self.remote = remote
         self.local = local
         self.retry_sec = max(0.0, float(retry_sec))
         self._clock = clock
         self._wall = wall
+        if llm_busy is None:
+            from domovoi import llm_activity
+
+            llm_busy = llm_activity.busy
+        self._llm_busy = llm_busy
         self._state = "unknown"          # unknown | ok | down
         self._retry_at = 0.0
         self._down_since: float | None = None
@@ -345,6 +369,11 @@ class FallbackWhisperClient:
         self.host_calls = 0
         self.local_calls = 0
         self.last_engine: str | None = None   # host | local: who heard the latest call
+        # Why the latest call was heard locally (None when the host heard it).
+        self.last_reason: str | None = None
+        self._last_at: float | None = None
+        # Turns sent to the local Whisper because the shared chip was busy.
+        self.llm_busy_turns = 0
 
     # ─── state ──────────────────────────────────────────────────────────
 
@@ -360,6 +389,34 @@ class FallbackWhisperClient:
         if not self.owner_wants_host() and self.local is not None:
             return False
         return self._state != "down" or self._clock() >= self._retry_at
+
+    @staticmethod
+    def shares_gpu() -> bool:
+        """``whisper_remote_shares_gpu`` (hot): the service and the
+        household's language models share a graphics chip."""
+        return bool(settings.whisper_remote_shares_gpu)
+
+    def choose(self) -> tuple[str, str | None]:
+        """Who should hear a turn starting now, and why not the host:
+        ``("host", None)`` or ``("local", reason)``. With no local Whisper
+        a busy chip is waited out on the host (it is the only ear left)."""
+        if not self._host_usable():
+            if self.local is None:
+                return "host", None      # _call says it's unavailable
+            return "local", REASON_HOST_DOWN if self.owner_wants_host() else REASON_SWITCHED_OFF
+        if self.local is not None and self.shares_gpu() and self._llm_busy():
+            return "local", REASON_LLM_BUSY
+        return "host", None
+
+    def for_turn(self) -> "TurnWhisper":
+        """This client with the engine chosen once, now, for every decode
+        of one turn (:class:`TurnWhisper`)."""
+        engine, reason = self.choose()
+        if reason == REASON_LLM_BUSY:
+            self.llm_busy_turns += 1
+            log.info("Speech recognition: the language model is busy on the shared graphics "
+                     "chip; this turn is heard on the processor")
+        return TurnWhisper(self, engine, reason)
 
     @property
     def active(self) -> str:
@@ -412,6 +469,13 @@ class FallbackWhisperClient:
             "host_calls": self.host_calls,
             "local_calls": self.local_calls,
             "use_host": self.owner_wants_host(),
+            # The shared graphics chip (whisper_remote_shares_gpu), and who
+            # heard the latest turn and why: Health's speech line.
+            "shares_gpu": self.shares_gpu(),
+            "last_engine": self.last_engine,
+            "last_reason": self.last_reason,
+            "last_at": _iso(self._last_at),
+            "llm_busy_turns": self.llm_busy_turns,
         }
 
     async def refresh(self) -> None:
@@ -444,53 +508,123 @@ class FallbackWhisperClient:
 
     # ─── calls ──────────────────────────────────────────────────────────
 
-    async def _call(self, host: Callable[[], Awaitable[Any]], local: Callable[[], Awaitable[Any]]) -> Any:
-        if self._host_usable():
+    async def _call(
+        self,
+        host: Callable[[], Awaitable[Any]],
+        local: Callable[[], Awaitable[Any]],
+        pick: tuple[str, str | None] | None = None,
+    ) -> Any:
+        """One decode. ``pick`` is a turn's choice (:class:`TurnWhisper`);
+        without one, the choice is made for this call alone. A host that
+        failed earlier in the turn isn't asked again within its retry
+        wait: the rest of the turn is local."""
+        engine, reason = pick if pick is not None else self.choose()
+        if engine == "host" and self._host_usable():
             try:
                 result = await host()
             except RemoteSttError as e:
                 self.mark_down(str(e))
+                reason = REASON_HOST_FAILED
             else:
                 self.mark_up()
                 self.host_calls += 1
-                self.last_engine = "host"
+                self._heard("host", None)
                 return result
+        elif engine == "host":
+            reason = REASON_HOST_DOWN
         if self.local is None:
             raise SttUnavailableError(
                 f"the speech service at {self.remote.url} isn't answering and "
                 "no local Whisper is loaded"
             )
         self.local_calls += 1
-        self.last_engine = "local"
+        self._heard("local", reason)
         return await local()
 
-    async def transcribe_with_window(self, pcm_bytes: bytes) -> tuple[str, int | None]:
+    def _heard(self, engine: str, reason: str | None) -> None:
+        self.last_engine = engine
+        self.last_reason = reason
+        self._last_at = self._wall()
+
+    async def transcribe_with_window(
+        self, pcm_bytes: bytes, *, pick: tuple[str, str | None] | None = None,
+    ) -> tuple[str, int | None]:
         async def local() -> tuple[str, int | None]:
             fn = getattr(self.local, "transcribe_with_window", None)
             if callable(fn):
                 return await fn(pcm_bytes)
             return await self.local.transcribe(pcm_bytes), None
 
-        return await self._call(lambda: self.remote.transcribe_with_window(pcm_bytes), local)
+        return await self._call(lambda: self.remote.transcribe_with_window(pcm_bytes), local, pick)
 
-    async def transcribe_full_window(self, pcm_bytes: bytes) -> tuple[str, int | None]:
+    async def transcribe_full_window(
+        self, pcm_bytes: bytes, *, pick: tuple[str, str | None] | None = None,
+    ) -> tuple[str, int | None]:
         async def local() -> tuple[str, int | None]:
             fn = getattr(self.local, "transcribe_full_window", None)
             if callable(fn):
                 return await fn(pcm_bytes)
             return await self.local.transcribe(pcm_bytes), None
 
-        return await self._call(lambda: self.remote.transcribe_full_window(pcm_bytes), local)
+        return await self._call(lambda: self.remote.transcribe_full_window(pcm_bytes), local, pick)
 
-    async def transcribe(self, pcm_bytes: bytes) -> str:
-        text, _window = await self.transcribe_with_window(pcm_bytes)
+    async def transcribe(self, pcm_bytes: bytes, *, pick: tuple[str, str | None] | None = None) -> str:
+        text, _window = await self.transcribe_with_window(pcm_bytes, pick=pick)
         return text
 
-    async def transcribe_wav_bytes(self, wav_bytes: bytes) -> str:
+    async def transcribe_wav_bytes(
+        self, wav_bytes: bytes, *, pick: tuple[str, str | None] | None = None,
+    ) -> str:
         return await self._call(
             lambda: self.remote.transcribe_wav_bytes(wav_bytes),
             lambda: self.local.transcribe_wav_bytes(wav_bytes),
+            pick,
         )
+
+
+class TurnWhisper:
+    """One turn's view of a :class:`FallbackWhisperClient`: the engine is
+    chosen once (:meth:`FallbackWhisperClient.for_turn`) and every decode
+    of the turn goes to it. A turn heard locally because the shared chip
+    was busy stays local even if the model finishes meanwhile; a turn
+    given to the host still falls back to the local Whisper when the host
+    fails (as every call always has), and stays local for the rest of the
+    turn. Same methods as the client, so the streaming layer can't tell
+    them apart."""
+
+    def __init__(self, client: FallbackWhisperClient, engine: str, reason: str | None) -> None:
+        self.client = client
+        self.engine = engine
+        self.reason = reason
+
+    @property
+    def pick(self) -> tuple[str, str | None]:
+        return self.engine, self.reason
+
+    # What whisper_runtime() and the short-window checks read off a client.
+    @property
+    def short_window(self) -> Any:
+        if self.engine == "local":
+            return getattr(self.client.local, "short_window", None)
+        return self.client.short_window
+
+    @property
+    def cpu_threads(self) -> int | None:
+        if self.engine == "local":
+            return getattr(self.client.local, "cpu_threads", None)
+        return self.client.cpu_threads
+
+    async def transcribe_with_window(self, pcm_bytes: bytes) -> tuple[str, int | None]:
+        return await self.client.transcribe_with_window(pcm_bytes, pick=self.pick)
+
+    async def transcribe_full_window(self, pcm_bytes: bytes) -> tuple[str, int | None]:
+        return await self.client.transcribe_full_window(pcm_bytes, pick=self.pick)
+
+    async def transcribe(self, pcm_bytes: bytes) -> str:
+        return await self.client.transcribe(pcm_bytes, pick=self.pick)
+
+    async def transcribe_wav_bytes(self, wav_bytes: bytes) -> str:
+        return await self.client.transcribe_wav_bytes(wav_bytes, pick=self.pick)
 
 
 def build_from_settings(local: Any) -> FallbackWhisperClient:

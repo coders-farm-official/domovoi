@@ -512,6 +512,7 @@ from domovoi.clients.whisper import (
     SHORT_WINDOW_SEC,
     SttUnavailableError,
     can_decode_full_window,
+    for_turn as stt_for_turn,
     get_whisper_client,
     transcribe_full_window,
     transcribe_with_window,
@@ -2168,6 +2169,9 @@ class StreamSession:
         one is transcribed early."""
         self._utt_serial += 1
         self._utt_frames = 0
+        # This utterance's speech-to-text engine, chosen at its first
+        # decode (_turn_whisper).
+        self._stt_turn = None
         self._pi_pause = None
         self._pause_rx = None
         self._pause_clock = {}
@@ -2273,6 +2277,19 @@ class StreamSession:
             # is already long enough by the time the transcript exists.
             self._maybe_commit()
 
+    def _turn_whisper(self) -> Any:
+        """The Whisper client for this utterance: ``get_whisper_client()``
+        with, on a Mac whose speech service shares the graphics chip with
+        the language models, the engine chosen once at the utterance's
+        first decode (clients.whisper.for_turn), so the early decode, the
+        final one and the second hearing all go to the same one. Raises
+        SttUnavailableError like get_whisper_client."""
+        turn = getattr(self, "_stt_turn", None)
+        if turn is None:
+            turn = stt_for_turn(get_whisper_client())
+            self._stt_turn = turn
+        return turn
+
     async def _speculate(self, spec: _Speculation, pcm: bytes) -> _Heard | None:
         """Transcribe a copy of the capture so far, then start embedding
         the voice in it. Never raises: None means "no speculative
@@ -2287,7 +2304,7 @@ class StreamSession:
         first instead costs ~60 ms of the decode's start. The turn awaits
         the embedding only at voice identification."""
         try:
-            whisper = get_whisper_client()
+            whisper = self._turn_whisper()
         except SttUnavailableError:
             return None
         marks: dict[str, Any] = {}
@@ -4311,7 +4328,7 @@ class StreamSession:
         whisper: Any = None
         if reuse is None or reuse.task is None:
             try:
-                whisper = get_whisper_client()
+                whisper = self._turn_whisper()
             except SttUnavailableError as e:
                 # Whisper didn't load at boot. Explain out loud and end the
                 # turn; the helper sends its own response_end.
@@ -4327,7 +4344,7 @@ class StreamSession:
                     heard = await asyncio.shield(reuse.task)
                 if heard is None and whisper is None:
                     try:
-                        whisper = get_whisper_client()
+                        whisper = self._turn_whisper()
                     except SttUnavailableError as e:
                         await self._respond_stt_unavailable(e, trigger=trigger)
                         return None
@@ -4563,7 +4580,7 @@ class StreamSession:
         (``stt_deadline``): past it, the first hearing is routed — the
         turn watchdog notes the stall, the room still gets its answer."""
         try:
-            whisper = get_whisper_client()
+            whisper = self._turn_whisper()
         except SttUnavailableError:
             return heard, transcript
         if not can_decode_full_window(whisper):

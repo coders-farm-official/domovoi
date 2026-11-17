@@ -547,3 +547,208 @@ def test_the_switch_endpoint_saves_and_applies(monkeypatch) -> None:
     assert saved == [{"whisper_remote_enabled": False}]
     assert settings.whisper_remote_enabled is False
     assert out["use_host"] is False and out["engine"]["active"] == "local"
+
+
+# ─── option C: a graphics chip shared with the language models ───────────
+#
+# whisper_remote_shares_gpu (the Mac writes true): a turn that starts while
+# this core is waiting on Ollama is heard by the local Whisper; the choice
+# is made once per turn and kept for every decode of it.
+
+
+class _Busy:
+    """The language-model signal (domovoi.llm_activity.busy), by hand."""
+
+    def __init__(self, busy: bool = False) -> None:
+        self.busy = busy
+
+    def __call__(self) -> bool:
+        return self.busy
+
+
+def _shared(srv: _Server, local=None, *, busy: bool = False, retry: float = 30.0):
+    clock = _Clock()
+    llm = _Busy(busy)
+    remote = wr.RemoteWhisperClient(URL, transport=srv.transport())
+    fb = wr.FallbackWhisperClient(remote, local, retry_sec=retry, clock=clock,
+                                  wall=lambda: 0.0, llm_busy=llm)
+    return fb, llm, clock
+
+
+@pytest.fixture
+def _shares_gpu(monkeypatch):
+    monkeypatch.setattr(settings, "whisper_remote_enabled", True)
+    monkeypatch.setattr(settings, "whisper_remote_shares_gpu", True)
+
+
+def test_the_shared_chip_setting_is_off_by_default() -> None:
+    from domovoi.config import Settings
+
+    assert Settings.model_fields["whisper_remote_shares_gpu"].default is False
+
+
+def test_not_shared_a_busy_model_changes_nothing(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "whisper_remote_enabled", True)
+    monkeypatch.setattr(settings, "whisper_remote_shares_gpu", False)
+    local = _Local()
+    srv = _Server(_verbose("Stop."), _verbose("Next."))
+    fb, _llm, _ = _shared(srv, local, busy=True)
+    assert asyncio.run(fb.for_turn().transcribe_with_window(_pcm(1.0))) == ("Stop.", 10)
+    assert asyncio.run(fb.transcribe_with_window(_pcm(1.0))) == ("Next.", 10)
+    assert local.calls == [] and len(srv.requests) == 2
+    doc = fb.engine_doc()
+    assert (doc["shares_gpu"], doc["last_engine"], doc["last_reason"], doc["llm_busy_turns"]) == (
+        False, "host", None, 0)
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_shared_and_idle_the_host_hears() -> None:
+    local = _Local()
+    srv = _Server(_verbose("Stop."))
+    fb, _llm, _ = _shared(srv, local, busy=False)
+    turn = fb.for_turn()
+    assert turn.pick == ("host", None)
+    assert asyncio.run(turn.transcribe_with_window(_pcm(1.0))) == ("Stop.", 10)
+    assert local.calls == []
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_shared_and_busy_the_turn_is_heard_locally_and_says_why() -> None:
+    local = _Local()
+    srv = _Server()
+    fb, _llm, _ = _shared(srv, local, busy=True)
+    turn = fb.for_turn()
+    assert turn.pick == ("local", wr.REASON_LLM_BUSY)
+    assert asyncio.run(turn.transcribe_with_window(_pcm(1.0))) == ("local text", 10)
+    assert srv.requests == [], "the busy chip isn't asked"
+    doc = fb.engine_doc()
+    assert (doc["shares_gpu"], doc["last_engine"], doc["last_reason"], doc["llm_busy_turns"]) == (
+        True, "local", wr.REASON_LLM_BUSY, 1)
+    # The service itself is fine: Health still says the chip hears turns.
+    assert (doc["active"], doc["host_state"]) == ("host", "unknown")
+    assert turn.cpu_threads == 4 and turn.short_window is local.short_window
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_the_choice_holds_for_the_whole_turn_and_changes_only_between_turns() -> None:
+    local = _Local()
+    srv = _Server(_verbose("Play music."), _verbose("Play the music."), _verbose("Lights off."))
+    fb, llm, _ = _shared(srv, local, busy=True)
+
+    # Turn 1 starts while the model answers: every decode of it is local,
+    # even after the model finishes halfway through.
+    t1 = fb.for_turn()
+    assert asyncio.run(t1.transcribe_with_window(_pcm(1.0))) == ("local text", 10)   # early decode
+    llm.busy = False
+    assert asyncio.run(t1.transcribe_with_window(_pcm(1.5))) == ("local text", 10)   # final
+    assert asyncio.run(t1.transcribe_full_window(_pcm(1.5))) == ("local full", 30)   # second hearing
+    assert srv.requests == []
+
+    # Turn 2 starts idle: the host, and it stays the host when the model
+    # starts answering something else halfway through.
+    t2 = fb.for_turn()
+    assert asyncio.run(t2.transcribe_with_window(_pcm(1.0))) == ("Play music.", 10)
+    llm.busy = True
+    assert asyncio.run(t2.transcribe_with_window(_pcm(1.5))) == ("Play the music.", 10)
+    assert local.calls == ["with_window", "with_window", "full"]
+
+    # Turn 3 starts busy again: local. A call outside any turn (a chat
+    # video's soundtrack) decides for itself.
+    assert fb.for_turn().pick == ("local", wr.REASON_LLM_BUSY)
+    llm.busy = False
+    assert asyncio.run(fb.transcribe(_pcm(1.0))) == "Lights off."
+    assert fb.engine_doc()["llm_busy_turns"] == 2
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_a_host_failure_inside_a_turn_falls_back_and_the_turn_stays_local() -> None:
+    local = _Local()
+    srv = _Server(httpx.ConnectError("refused"), _verbose("never asked"))
+    fb, _llm, _ = _shared(srv, local, busy=False)
+    turn = fb.for_turn()
+    assert turn.pick == ("host", None)
+    assert asyncio.run(turn.transcribe_with_window(_pcm(1.0))) == ("local text", 10)
+    doc = fb.engine_doc()
+    assert (doc["last_engine"], doc["last_reason"], doc["host_state"]) == ("local", wr.REASON_HOST_FAILED, "down")
+    # The second hearing doesn't wait out the failed host again.
+    assert asyncio.run(turn.transcribe_full_window(_pcm(1.0))) == ("local full", 30)
+    assert len(srv.requests) == 1
+    assert fb.engine_doc()["last_reason"] == wr.REASON_HOST_DOWN
+    # The next turn: still within the retry wait, local for that reason.
+    assert fb.for_turn().pick == ("local", wr.REASON_HOST_DOWN)
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_with_no_local_whisper_a_busy_chip_is_waited_out_on_the_host() -> None:
+    srv = _Server(_verbose("Stop."))
+    fb, _llm, _ = _shared(srv, None, busy=True)
+    turn = fb.for_turn()
+    assert turn.pick == ("host", None)
+    assert asyncio.run(turn.transcribe(_pcm(1.0))) == "Stop."
+    assert fb.engine_doc()["llm_busy_turns"] == 0
+
+
+def test_switched_off_the_reason_is_the_switch(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "whisper_remote_enabled", False)
+    monkeypatch.setattr(settings, "whisper_remote_shares_gpu", True)
+    fb, _llm, _ = _shared(_Server(), _Local(), busy=True)
+    assert fb.for_turn().pick == ("local", wr.REASON_SWITCHED_OFF)
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_for_turn_binds_only_the_remote_client(monkeypatch) -> None:
+    local = _Local()
+    fb, _llm, _ = _shared(_Server(), local, busy=True)
+    monkeypatch.setattr(whisper_mod, "_remote", None)
+    assert whisper_mod.for_turn(local) is local          # every other install
+    monkeypatch.setattr(whisper_mod, "_remote", fb)
+    turn = whisper_mod.for_turn(fb)
+    assert isinstance(turn, wr.TurnWhisper) and turn.pick == ("local", wr.REASON_LLM_BUSY)
+    assert whisper_mod.for_turn(local) is local
+    # The full-window path is still offered (the second hearing).
+    assert whisper_mod.can_decode_full_window(turn)
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_the_latency_record_says_why_a_turn_was_local(monkeypatch) -> None:
+    local = _Local()
+    fb, _llm, _ = _shared(_Server(), local, busy=True)
+    monkeypatch.setattr(whisper_mod, "_remote", fb)
+    monkeypatch.setattr(whisper_mod, "_client", fb)
+    asyncio.run(fb.for_turn().transcribe(_pcm(1.0)))
+    rt = whisper_mod.whisper_runtime()
+    assert (rt["engine"], rt["engine_reason"]) == ("local", wr.REASON_LLM_BUSY)
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_the_core_health_carries_the_last_turn(monkeypatch) -> None:
+    local = _Local()
+    fb, _llm, _ = _shared(_Server(), local, busy=True)
+    asyncio.run(fb.for_turn().transcribe(_pcm(1.0)))
+    monkeypatch.setattr(whisper_mod, "_remote", fb)
+    monkeypatch.setattr(whisper_mod, "_remote_error", None)
+    eng = whisper_mod.engine_status()
+    assert {"shares_gpu", "last_engine", "last_reason", "last_at"} <= set(eng)
+    assert (eng["last_engine"], eng["last_reason"]) == ("local", wr.REASON_LLM_BUSY)
+
+
+@pytest.mark.usefixtures("_shares_gpu")
+def test_a_streams_utterance_keeps_one_engine(monkeypatch) -> None:
+    """streaming.StreamSession._turn_whisper: chosen at the utterance's
+    first decode, kept until the next utterance starts."""
+    from domovoi import streaming
+
+    fb, llm, _ = _shared(_Server(), _Local(), busy=True)
+    monkeypatch.setattr(whisper_mod, "_remote", fb)
+    monkeypatch.setattr(streaming, "get_whisper_client", lambda: fb)
+
+    class _Room:
+        _stt_turn = None
+        _turn_whisper = streaming.StreamSession._turn_whisper
+
+    room = _Room()
+    first = room._turn_whisper()
+    llm.busy = False
+    assert room._turn_whisper() is first and first.pick == ("local", wr.REASON_LLM_BUSY)
+    room._stt_turn = None                     # what _reset_utterance_tracking does
+    assert room._turn_whisper().pick == ("host", None)

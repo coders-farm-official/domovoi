@@ -16,6 +16,14 @@
 #            Linux image (android/build-env), the same bytes CI's
 #            reproducibility check and F-Droid build (android/README.md,
 #            "Reproducible builds"). An artifact for the release job.
+#   build-mac  no secrets, read-only, beside the wait for approval: the Mac
+#            server's installer, DomovoiSetup-mac.pkg, built on a macOS
+#            runner by mac/build.sh --tag from the dispatched commit, with
+#            the pinned Xcode, CMake, Lima and whisper.cpp, and its build
+#            record (DomovoiSetup-mac.build.json). Signed ad hoc only (no
+#            Apple Developer ID). An artifact for the release job, whose
+#            finish-release checks the record and signs and attaches it
+#            (--mac-pkg).
 #   release  the `release` environment: GitHub waits for the owner's
 #            approval before this job starts or sees a secret. On Windows:
 #            when the app changed, android/scripts/release.ps1 -SkipBuild
@@ -24,8 +32,24 @@
 #            android/release.json on main, tags it and publishes the APKs;
 #            then, always, scripts/release/finish_release.py builds the
 #            Windows Setup from the tag, signs it with the release key held
-#            only by an ssh-agent for that one step, publishes the release
-#            files and fast-forwards stable.
+#            only by an ssh-agent for that one step, and the Mac package
+#            beside it, publishes the release files and fast-forwards stable.
+#
+# Why build-mac builds the dispatched commit, not the tag: the tag doesn't
+# exist before approval. A release that doesn't change the app is tagged
+# on the dispatched commit itself (by finish-release, after approval); one
+# that does is tagged on a commit the signing job makes, the dispatched
+# commit plus android/release.json (which holds the signed APKs' digests,
+# so it can't be made earlier). Building after the tag would need a second
+# job in the release environment, and a second approval. So build-mac
+# builds the dispatched commit and names the tag there locally (it can
+# push nothing), with --ref <tag>: the package installs the tag itself.
+# finish-release then takes the package only when its record names the tag,
+# describes that very file, and was built from the tag's commit, or, for an
+# app release, from the commit the tag's android/release.json commit sits
+# on (checked to change that one file, which the package doesn't hold).
+# One approval, and the signing job still signs only a package built from
+# the tag's files.
 #   sbom     no secrets, read-only, beside the wait for approval: the
 #            software bills of materials (scripts/release/sbom.py, CycloneDX):
 #            the server's Python packages, the dashboard's vendored browser
@@ -68,6 +92,9 @@
 # written into the workspace; the keystore is written to RUNNER_TEMP for
 # apksigner and deleted in the same step and again at the end, whatever
 # happened.
+#
+# build-mac adds no action beyond checkout and upload-artifact; the release
+# job's download-artifact takes its package (no token, no secret).
 #
 # The SBOMs and the provenance add three actions, pinned the same way:
 # upload-artifact (sbom) and download-artifact (release, a step that is
@@ -183,13 +210,14 @@ jobs:
 
   release:
     name: sign and publish (approval)
-    needs: [plan, build-app, sbom]
+    needs: [plan, build-app, sbom, build-mac]
     # build-app is skipped for a release that doesn't change the app; with
     # !cancelled(), not always(), a cancelled run stops this job too. The sbom
-    # check matters: !cancelled() would otherwise sign after a failed SBOM.
+    # and build-mac checks matter: !cancelled() would otherwise sign after a
+    # failed SBOM or Mac build.
     if: >-
       !cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success'
-      && needs.sbom.result == 'success'
+      && needs.sbom.result == 'success' && needs.build-mac.result == 'success'
       && (needs.build-app.result == 'success' || needs.build-app.result == 'skipped')
     runs-on: windows-2025
     environment: release
@@ -427,6 +455,13 @@ jobs:
           name: release-sboms
           path: ${{ runner.temp }}/sboms
 
+      # build-mac's package and its build record, outside the checkout too;
+      # finish-release checks the record against the tag and the file.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-mac-pkg
+          path: ${{ runner.temp }}/mac
+
       # ── always: the Windows Setup, signed by the key in an ssh-agent ────
       - name: Finish the release (finish-release, the key in ssh-agent only)
         env:
@@ -465,7 +500,7 @@ jobs:
             GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           # finish-release.sh's Python, named (the tool cache's, put on PATH above).
           python scripts/release/finish_release.py --tag "$TAG" --signing-agent \
-            --sbom-dir "$RUNNER_TEMP/sboms" --provenance
+            --sbom-dir "$RUNNER_TEMP/sboms" --provenance --mac-pkg "$RUNNER_TEMP/mac/DomovoiSetup-mac.pkg"
           {
             echo "### Released $TAG"
             echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
@@ -496,6 +531,73 @@ jobs:
           Remove-Item -Force -Path (Join-Path $env:RUNNER_TEMP 'release-askpass.sh*') -ErrorAction SilentlyContinue
           Get-Process ssh-agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           exit 0
+
+  # The Mac server's installer, built from the dispatched commit while the
+  # release waits for approval (why not from the tag: the top of this
+  # file): no secrets, a read-only token, no cache. Xcode by its path, the
+  # one ci.yml's mac job uses; mac/build.sh downloads CMake, Lima and
+  # whisper.cpp at pinned versions and checks each (SHA-256, or the tag's
+  # commit), and with --tag stops if a program holds a path of this runner.
+  build-mac:
+    name: build the Mac package (no secrets)
+    needs: plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Xcode 16.4 (pinned; the same as ci.yml's mac job)
+        run: |
+          xcode=/Applications/Xcode_16.4.app
+          [ -d "$xcode" ] || { echo "::error::no $xcode on this image: move the pin here and in ci.yml"; exit 1; }
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          xcodebuild -version
+
+      # Here only (this job can push nothing): the tag on the dispatched
+      # commit, which mac/build.sh --tag wants. A run that finishes a
+      # release finds the tag already: it must be this commit, or this
+      # commit plus android/release.json alone (an app release).
+      - name: The tag, named here on the dispatched commit
+        run: |
+          set -euo pipefail
+          if tagged=$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}"); then
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              [ "$(git rev-parse "$tagged^")" = "$GITHUB_SHA" ] \
+                && [ "$(git diff --name-only "$GITHUB_SHA" "$tagged")" = android/release.json ] \
+                || { echo "::error::the tag $TAG is $tagged: neither this commit nor its android/release.json commit"; exit 1; }
+            fi
+          fi
+          git tag -f "$TAG" "$GITHUB_SHA"
+
+      - name: DomovoiSetup-mac.pkg (mac/build.sh --tag)
+        run: |
+          set -euo pipefail
+          bash mac/build.sh --out "$RUNNER_TEMP/mac" --repo-url "https://github.com/$GITHUB_REPOSITORY" \
+            --tag "$TAG" --ref "$TAG" --cmake pinned
+          {
+            echo "### DomovoiSetup-mac.pkg for $TAG, built from $GITHUB_SHA"
+            echo '```'
+            (cd "$RUNNER_TEMP/mac" && shasum -a 256 DomovoiSetup-mac.pkg && cat DomovoiSetup-mac.build.json)
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-mac-pkg
+          path: |
+            ${{ runner.temp }}/mac/DomovoiSetup-mac.pkg
+            ${{ runner.temp }}/mac/DomovoiSetup-mac.build.json
+          if-no-files-found: error
+          retention-days: 3
 
   # The software bills of materials, made from the dispatched commit while
   # the release waits for approval: no secrets, a read-only token, no
@@ -531,10 +633,10 @@ jobs:
           # The Gradle the wrapper downloads, held to Gradle's published
           # SHA-256, as in the release job.
           props=gradle/wrapper/gradle-wrapper.properties
-          grep -qF gradle-8.14.3-bin.zip "$props" \
-            || { echo "::error::the wrapper moved off Gradle 8.14.3: update its pinned SHA-256 in release.yml"; exit 1; }
+          grep -qF gradle-8.14.6-bin.zip "$props" \
+            || { echo "::error::the wrapper moved off Gradle 8.14.6: update its pinned SHA-256 in release.yml"; exit 1; }
           grep -qF distributionSha256Sum "$props" \
-            || echo 'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531' >>"$props"
+            || echo 'distributionSha256Sum=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24' >>"$props"
           export JAVA_HOME="$JAVA_HOME_17_X64"
           chmod +x gradlew
           ./gradlew --no-daemon --no-configuration-cache --init-script ../scripts/release/sbom-android.init.gradle \
