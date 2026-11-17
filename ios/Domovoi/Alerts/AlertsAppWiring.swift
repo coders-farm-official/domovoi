@@ -51,7 +51,13 @@ final class AlertsAppWiring {
     /// first tap.
     private let tapDelegate: AlertsTapDelegate
 
-    init(container: AppContainer) {
+    /// - Parameter onTap: run on the main actor after a tap has asked for a
+    ///   screen. The shell takes a waiting route in ``ShellModel/refresh()``,
+    ///   which a return to the app calls; a banner tapped while the app is
+    ///   already open is no return, so without this the screen it asked for
+    ///   waited for the next refresh. Friend houses' notifications come only
+    ///   while the app is open, so for them that is every tap.
+    init(container: AppContainer, onTap: @MainActor @Sendable @escaping () -> Void = {}) {
         let centre = AlertsCenter(container: container)
         self.centre = centre
         hint = AlertsHintModel(centre: centre) {
@@ -62,7 +68,7 @@ final class AlertsAppWiring {
             guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
             UIApplication.shared.open(url)
         }
-        tapDelegate = AlertsTapDelegate(centre: centre)
+        tapDelegate = AlertsTapDelegate(centre: centre, onTap: onTap)
         UNUserNotificationCenter.current().delegate = tapDelegate
         // After the delegate, so a notification posted by the catch-up that
         // `start()` kicks off cannot be delivered with nobody to present it.
@@ -98,9 +104,11 @@ final class AlertsTapDelegate: NSObject, UNUserNotificationCenterDelegate, @unch
     /// anything here is unsafe: the one stored property is a `let` of a
     /// `Sendable` type.
     private let centre: AlertsCenter
+    private let onTap: @MainActor @Sendable () -> Void
 
-    init(centre: AlertsCenter) {
+    init(centre: AlertsCenter, onTap: @MainActor @Sendable @escaping () -> Void = {}) {
         self.centre = centre
+        self.onTap = onTap
         super.init()
     }
 
@@ -118,7 +126,9 @@ final class AlertsTapDelegate: NSObject, UNUserNotificationCenterDelegate, @unch
         // Which of the three routes, and whether a help thread belongs to
         // this house, are both ``AlertsCenter/handleTap(_:)``'s and are
         // package-tested; this is the line that reaches them.
-        centre.handleTap(response.notification.request.content.userInfo)
+        if centre.handleTap(response.notification.request.content.userInfo) {
+            await onTap()
+        }
     }
 }
 

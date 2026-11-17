@@ -216,8 +216,8 @@ final class AppContainerTests: XCTestCase {
     /// Watched failing by letting `requestRoute` set anything: `"settings"`
     /// lands and `pendingRoute` is no longer nil.
     func testOnlyThreeRouteNamesMayComeFromOutside() {
-        XCTAssertEqual(["home", "containers", "chat"], AppContainer.routesFromOutside)
-        for allowed in ["home", "containers", "chat"] {
+        XCTAssertEqual(["home", "containers", "chat", "friend-houses"], AppContainer.routesFromOutside)
+        for allowed in ["home", "containers", "chat", "friend-houses"] {
             let container = makeContainer()
             XCTAssertTrue(container.requestRoute(allowed), allowed)
             XCTAssertEqual(allowed, container.pendingRoute)

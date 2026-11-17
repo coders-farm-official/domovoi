@@ -73,7 +73,9 @@ final class HouseholdRoot {
         // through the container's client, and `DomovoiApplication.onCreate`
         // starts them beside the socket in the same order
         // (`TimerAlerts.kt:97`).
-        alerts = AlertsAppWiring(container: container)
+        // A tap that asked for a screen while the app is open is taken at
+        // once (``AlertsAppWiring/init(container:onTap:)``).
+        alerts = AlertsAppWiring(container: container, onTap: { [weak model] in model?.refresh() })
         // After the container is started: its first act (on an app that is
         // sharing) is a call through the container's client. Builds no
         // EventKit store and asks for no permission by itself.
@@ -82,6 +84,12 @@ final class HouseholdRoot {
             container: container,
             phoneName: DeviceRegistry.suggestedDeviceName(model: deviceModel)
         )
+        // Friend Houses (Android 394473e2): the gate reads now and on every
+        // trigger from here on; its notifications go through the same system
+        // centre as the alerts', after the alerts set its delegate. While
+        // the app is open only: the iPhone has no background check
+        // (``FriendHouseAlerts``).
+        model.startFriendHouses(notifications: AlertsSystemNotificationCentre())
     }
 
     /// The household side goes quiet as the phone becomes a room

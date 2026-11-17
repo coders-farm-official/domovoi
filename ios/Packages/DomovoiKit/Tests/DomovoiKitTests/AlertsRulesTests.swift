@@ -693,6 +693,7 @@ final class AlertsRulesTests: XCTestCase {
     func testATapOnlyEverAsksForOneOfThreeScreens() {
         XCTAssertEqual(AlertsTapTarget.home, alertsTapTarget([AlertsPayloadKey.route: "home"]))
         XCTAssertEqual(AlertsTapTarget.containers, alertsTapTarget([AlertsPayloadKey.route: "containers"]))
+        XCTAssertEqual(AlertsTapTarget.friendHouses, alertsTapTarget([AlertsPayloadKey.route: "friend-houses"]))
         XCTAssertNil(alertsTapTarget([AlertsPayloadKey.route: "settings"]))
         XCTAssertNil(alertsTapTarget([:]), "a notification that is not ours")
 

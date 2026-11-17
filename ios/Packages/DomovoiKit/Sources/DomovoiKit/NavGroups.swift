@@ -33,6 +33,7 @@ public let navKeys: [Route: String] = [
     .news: "news",
     .calendar: "calendar",
     .lists: "lists",
+    .friendHouses: "friend-houses",
     .files: "files",
     .home: "home",
     .people: "people",
@@ -101,6 +102,9 @@ public let defaultNav = NavDefaults(
         .news: "tools",
         .calendar: "tools",
         .lists: "tools",
+        // Beside Lists: household communication, one inbox for the house,
+        // and its shared lists open in Lists (Android 394473e2).
+        .friendHouses: "tools",
         .files: "tools",
     ]
 )

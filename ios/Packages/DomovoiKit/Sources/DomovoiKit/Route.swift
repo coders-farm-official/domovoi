@@ -39,6 +39,13 @@ public enum Route: String, CaseIterable, Sendable {
     /// Calendar's, so a workspace screen only: never a local tab
     /// (``localTabs(phoneCanChat:sharedScreen:savedBooks:)``).
     case lists = "Lists"
+    /// Friend Houses, "Serverless messaging and friend system between
+    /// households": the house inbox, the friends and the shared lists
+    /// (`Routes.kt` `FriendHouses`, Android 394473e2). Household data like
+    /// Lists, so a workspace screen only. Off by default on the server: on no
+    /// launcher, and not rendered, unless `GET /api/friend-houses` says it
+    /// is on there (``Capabilities/friendHouses``, ``FriendHousesGate``).
+    case friendHouses = "FriendHouses"
     case stations = "Stations"
     case files = "Files"
     case settings = "Settings"
@@ -51,9 +58,15 @@ public enum Route: String, CaseIterable, Sendable {
     public var name: String { rawValue }
 
     /// What is drawn. **The name and the label diverge for `satellites`**,
-    /// which a person sees as `Rooms` (`Routes.kt:55`).
+    /// which a person sees as `Rooms` (`Routes.kt:55`), and for
+    /// `friendHouses`, which is `Friend houses` (sentence case, as the
+    /// Kotlin's label).
     public var label: String {
-        self == .satellites ? "Rooms" : rawValue
+        switch self {
+        case .satellites: return "Rooms"
+        case .friendHouses: return "Friend houses"
+        default: return rawValue
+        }
     }
 
     /// The SF Symbol drawn for this route.
@@ -83,6 +96,8 @@ public enum Route: String, CaseIterable, Sendable {
         case .satellites: return "dot.radiowaves.left.and.right"
         case .calendar: return "calendar"
         case .lists: return "checklist"
+        // Android's `HolidayVillage` (two houses); the nearest Apple ships.
+        case .friendHouses: return "house.and.flag.fill"
         case .stations: return "antenna.radiowaves.left.and.right"
         case .files: return "folder.fill"
         case .settings: return "gearshape.fill"
@@ -129,7 +144,7 @@ public let sharedScreenHidden: Set<Route> = [.people, .chat, .files, .news]
 public let workspaceRoutes: [Route] = [
     .chat,
     .music, .podcasts, .audiobooks, .videos, .stations, .images,
-    .news, .calendar, .lists, .files,
+    .news, .calendar, .lists, .friendHouses, .files,
 ]
 
 /// The phone bar's default, left to right: home · music · videos · chat
@@ -224,6 +239,10 @@ public extension Route {
         if self == .chat, !chatAvailable(visibility.capabilities, phoneCanChat: visibility.phoneCanChat) {
             return false
         }
+        // Friend houses needs the server to say it is on
+        // (``Capabilities/friendHouses``). Not in ``sharedScreenHidden``:
+        // one inbox for the whole house, not one person's.
+        if self == .friendHouses, !visibility.capabilities.friendHouses { return false }
         return true
     }
 
@@ -292,6 +311,7 @@ public extension Route {
         case "home": return .home
         case "chat": return .chat
         case "containers": return .containers
+        case FriendHousesGate.route: return .friendHouses
         default: return nil
         }
     }

@@ -243,7 +243,9 @@ final class NavGroupsTests: XCTestCase {
         XCTAssertEqual("lists", navKeys[.lists])
         XCTAssertEqual(.lists, routeForNavKey("lists"))
         XCTAssertEqual("tools", defaultNav.groupOf[.lists])
-        XCTAssertEqual([.news, .calendar, .lists, .files], Array(workspaceRoutes.suffix(4)))
+        // Friend houses sits between Lists and Files (Android 394473e2), and
+        // is drawn only while the server says it is on.
+        XCTAssertEqual([.news, .calendar, .lists, .friendHouses, .files], Array(workspaceRoutes.suffix(5)))
         XCTAssertEqual(
             [.news, .calendar, .lists, .files],
             try XCTUnwrap(group(navTree(visible(.empty, shared: false)), "tools")).routes

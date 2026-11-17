@@ -527,7 +527,7 @@ struct SidebarList: View {
     }
 
     private func row(_ route: Route) -> some View {
-        SidebarRow(route: route, selected: model.navigation.route == route) {
+        SidebarRow(route: route, selected: model.navigation.route == route, badge: model.badge(for: route)) {
             model.navigate(route)
         }
     }
@@ -543,12 +543,21 @@ struct SidebarRow: View {
 
     let route: Route
     let selected: Bool
+    /// Friend houses' unread messages, or nil (``ShellModel/badge(for:)``).
+    var badge: Int?
     let onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
-            Label(route.label, systemImage: route.systemImage)
+            HStack {
+                Label(route.label, systemImage: route.systemImage)
+                if let badge {
+                    Spacer(minLength: 8)
+                    RouteCountBadge(count: badge)
+                }
+            }
         }
+        .routeCountValue(badge)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
     }
 }
