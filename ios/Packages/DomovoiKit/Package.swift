@@ -13,7 +13,12 @@ import PackageDescription
 //
 // ## Its one dependency: ONNX Runtime (room mode, batch 2026-11-14)
 //
-// Microsoft's own Swift package, pinned EXACTLY. Its `onnxruntime` product is
+// Microsoft's own Swift package at 1.24.2 (commit b7fb7f7d), VENDORED in
+// ios/Vendor/onnxruntime-swift-package-manager: the GitHub repository
+// (microsoft/onnxruntime-swift-package-manager) disappeared on 2026-11-17 and
+// every fresh package resolve failed, so the tag's own files (MIT, LICENSE
+// beside them; only its .github, .pipelines and .config folders left out) live
+// here unchanged. Its `onnxruntime` product is
 // the Objective-C API (`import OnnxRuntimeBindings`) over a binary target, the
 // CocoaPods "onnxruntime-c" archive, which SwiftPM fetches from
 // download.onnxruntime.ai and checks against the SHA-256 in that package's
@@ -37,7 +42,7 @@ let package = Package(
         .library(name: "DomovoiKit", targets: ["DomovoiKit"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.24.2"),
+        .package(path: "../../Vendor/onnxruntime-swift-package-manager"),
     ],
     targets: [
         .target(
