@@ -185,6 +185,9 @@ internal data class MessageList(
     /** Long-document jobs (documents plan D2): running ones show their
      *  progress, a stopped one lets its reply carry on. */
     val jobs: List<ServerJobView> = emptyList(),
+    /** The thread's video jobs (1.4.0, ChatVideo.kt), each under the
+     *  message it was sent with (`message_id`). */
+    val videos: List<ServerVideoJob> = emptyList(),
 )
 
 /** Documents per message the backend accepts (documents plan D1). */
@@ -253,6 +256,9 @@ internal class LiveMessage(
     val documents: List<ServerDocument> = emptyList(),
     doc: ServerDocReply? = null,
     draft: ServerDraftRef? = null,
+    /** A video sent with this user message, until the thread is read
+     *  back with its job (ChatVideo.kt). */
+    val stagedVideo: StagedVideo? = null,
 ) {
     var content by mutableStateOf(content)
     /** A draft reply's draft (documents plan D4). */
@@ -297,6 +303,39 @@ internal class LiveMessage(
 // SSE send — OkHttp streaming read of the reply.
 // ---------------------------------------------------------------------------
 
+/**
+ * A message's `SendBody`: the words ([content] may be empty when a document
+ * or a video goes with it; words sent with a video are its question), which
+ * install sent it (V017), its pictures, documents and video (`videos:
+ * [{token}]`, at most one), the draft it revises, and this phone's heads-up
+ * switch and silenced kinds (the server's rules decide when a card shows).
+ */
+internal fun messageSendBody(
+    content: String,
+    deviceId: String,
+    images: List<ImageRef>,
+    documents: List<ServerDocument>,
+    videos: List<String>,
+    reviseDraft: Long?,
+    headsUp: kotlinx.serialization.json.JsonObject,
+): kotlinx.serialization.json.JsonObject = buildJsonObject {
+    put("heads_up", headsUp)
+    put("content", content)
+    put("device_id", deviceId)
+    put("images", buildJsonArray {
+        images.forEach { img ->
+            add(buildJsonObject { put("token", img.token); put("name", img.name) })
+        }
+    })
+    if (documents.isNotEmpty()) {
+        put("documents", buildJsonArray { documents.forEach { d -> add(buildJsonObject { put("token", d.token) }) } })
+    }
+    if (videos.isNotEmpty()) {
+        put("videos", buildJsonArray { videos.take(1).forEach { t -> add(buildJsonObject { put("token", t) }) } })
+    }
+    if (reviseDraft != null) put("revise_draft", reviseDraft)
+}
+
 private suspend fun sendStreaming(
     app: AppContainer,
     threadId: Long,
@@ -319,6 +358,8 @@ private suspend fun sendStreaming(
     /** A pick on a heads-up card (documents plan D3): (card row id, option),
      *  streamed from `POST .../heads-up`. */
     headsUpPick: Pair<Long, String>? = null,
+    /** A staged video's token (ChatVideo.kt): at most one a message. */
+    videos: List<String> = emptyList(),
 ) = withContext(Dispatchers.IO) {
     val prefs = app.headsUp.prefs
     val body = (if (headsUpPick != null) buildJsonObject {
@@ -328,22 +369,8 @@ private suspend fun sendStreaming(
     } else if (decision != null) buildJsonObject {
         put("decision", decision.second)
         put("device_id", app.prefs.deviceId)
-    } else if (retry) buildJsonObject {} else buildJsonObject {
-        // This phone's heads-up switch and silenced kinds (the server's
-        // rules decide when a card shows).
-        put("heads_up", headsUpBody(prefs))
-        put("content", content)
-        // Which install sent it, for the message's details (V017).
-        put("device_id", app.prefs.deviceId)
-        put("images", buildJsonArray {
-            images.forEach { img ->
-                add(buildJsonObject { put("token", img.token); put("name", img.name) })
-            }
-        })
-        if (documents.isNotEmpty()) {
-            put("documents", buildJsonArray { documents.forEach { d -> add(buildJsonObject { put("token", d.token) }) } })
-        }
-        if (reviseDraft != null) put("revise_draft", reviseDraft)
+    } else if (retry) buildJsonObject {} else {
+        messageSendBody(content, app.prefs.deviceId, images, documents, videos, reviseDraft, headsUpBody(prefs))
     }).toString().toRequestBody("application/json".toMediaType())
     val path = when {
         headsUpPick != null -> "/api/chat/threads/$threadId/heads-up"
@@ -448,6 +475,11 @@ internal fun ConversationPane(
     // read on the home server as they are picked.
     val docAttachments = remember { mutableStateListOf<ServerDocument>() }
     var docUploading by remember { mutableStateOf<String?>(null) }
+    // A video for the next message (ChatVideo.kt): going up, then staged on
+    // the home server; one a message.
+    var videoDraft by remember { mutableStateOf<VideoDraft?>(null) }
+    var videoUpload by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val caps = com.domovoi.app.net.LocalCapabilities.current
     var attachMenu by remember { mutableStateOf(false) }
     var openSource by remember { mutableStateOf<SourceView?>(null) }
     var sending by remember { mutableStateOf(false) }
@@ -502,16 +534,20 @@ internal fun ConversationPane(
 
     // The thread's long-document jobs (documents plan D2).
     val jobs = remember { mutableStateListOf<ServerJobView>() }
+    // The thread's videos (ChatVideo.kt): each one's chip under its message.
+    val videoJobs = remember { mutableStateListOf<ServerVideoJob>() }
     var reloads by remember { mutableStateOf(0) }
     // A thread's messages, read from the server (opening it, and after
-    // "try again"), with its jobs.
-    suspend fun loadMessages(threadId: Long) {
+    // "try again"), with its jobs. False when it couldn't be read.
+    suspend fun loadMessages(threadId: Long): Boolean =
         runCatching {
             app.api.get("/api/chat/threads/$threadId/messages").decode<MessageList>()
         }.onSuccess { list ->
             val rows = list.messages
             jobs.clear()
             jobs.addAll(list.jobs)
+            videoJobs.clear()
+            videoJobs.addAll(list.videos)
             transcript.clear()
             rows.forEach {
                 transcript.add(
@@ -535,8 +571,7 @@ internal fun ConversationPane(
                     ),
                 )
             }
-        }
-    }
+        }.isSuccess
     // A thread opened from the list: its messages. A new chat has none.
     LaunchedEffect(thread?.id, reloads) {
         if (thread != null) loadMessages(thread.id)
@@ -614,6 +649,24 @@ internal fun ConversationPane(
                 reloads++
                 return@LaunchedEffect
             }
+        }
+    }
+    // A video being watched: its view every three seconds while queued or
+    // running (the dashboard's pace), then the thread again when one ends
+    // (its summary, and the answer to a question sent with it, are in).
+    val liveVideos = liveVideoKey(videoJobs)
+    LaunchedEffect(liveVideos, sending) {
+        if (liveVideos.isEmpty() || sending) return@LaunchedEffect
+        val threadId = current?.id ?: return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(VIDEO_POLL_MS)
+            val poll = pollVideos(videoJobs.toList()) { fetchVideoJob(app.api, it) }
+            // Read back, the thread brings every job's view with it; if it
+            // can't be read, the views read here still show how it ended.
+            if (poll.ended && loadMessages(threadId)) return@LaunchedEffect
+            val merged = mergeVideoViews(videoJobs.toList(), poll.views)
+            merged.forEachIndexed { i, v -> if (videoJobs.getOrNull(i) != v) videoJobs[i] = v }
+            if (poll.ended) return@LaunchedEffect
         }
     }
     // Follow a streaming reply down as it grows — the size trigger above only
@@ -711,6 +764,50 @@ internal fun ConversationPane(
         }
     }
 
+    // A video (ChatVideo.kt): its length and size checked here before
+    // anything is sent, then streamed up with its progress; removing it
+    // stops the upload.
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val info = models.data?.video ?: return@rememberLauncherForActivityResult
+        if (videoDraft != null) { toast(VIDEO_ONE_A_MESSAGE); return@rememberLauncherForActivityResult }
+        uploadNote = null
+        val key = System.nanoTime()
+        // Only this pick's draft changes: a removed one stays removed.
+        fun update(f: (VideoDraft) -> VideoDraft?) {
+            val cur = videoDraft
+            if (cur != null && cur.key == key) videoDraft = f(cur)
+        }
+        videoUpload = scope.launch {
+            val picked = withContext(Dispatchers.IO) { pickedVideo(context, uri) }
+            val name = videoUploadName(picked.name, picked.mime, info.extensions)
+            videoRefusalBeforeUpload(name, picked.durationS, picked.size, info)?.let {
+                uploadNote = it
+                return@launch
+            }
+            val upName = name ?: return@launch
+            videoDraft = VideoDraft(key, upName)
+            try {
+                val staged = uploadChatVideo(
+                    app.api, upName, picked.mime?.takeIf { it.startsWith("video/") } ?: "application/octet-stream",
+                    picked.size, videoOpener(context, uri, upName),
+                    onPercent = { p -> scope.launch { update { it.copy(percent = p) } } },
+                )
+                update { it.copy(staged = staged, percent = 100) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                update { null }
+                uploadNote = videoFailureText(e)
+            }
+        }
+    }
+    val removeVideo: () -> Unit = {
+        videoUpload?.cancel()
+        videoUpload = null
+        videoDraft = null
+    }
+
     // The report for the reply at [i], or null when it is not a finished
     // reply with words (ReplyReport.draftServer).
     fun reportableAt(i: Int): ReplyReport? {
@@ -733,13 +830,19 @@ internal fun ConversationPane(
      *  message box's words and attachments. */
     fun send(revise: Pair<Long, String>? = null): Boolean {
         val content = revise?.second?.trim() ?: draft.trim()
-        if ((content.isBlank() && (revise != null || docAttachments.isEmpty())) || sending || docUploading != null) return false
+        // A video still going up can't be sent yet; a staged one can be
+        // sent alone (its question can come later, or with it).
+        if (videoDraft?.uploading == true && revise == null) return false
+        val video = if (revise != null) null else videoDraft?.staged
+        if ((content.isBlank() && (revise != null || (docAttachments.isEmpty() && video == null))) || sending || docUploading != null) return false
         val images = if (revise != null) emptyList() else attachments.toList()
         val docs = if (revise != null) emptyList() else docAttachments.toList()
         if (revise == null) {
             draft = ""
             attachments.clear()
             docAttachments.clear()
+            videoDraft = null
+            videoUpload = null
         }
         sending = true
         following = true
@@ -747,7 +850,10 @@ internal fun ConversationPane(
         // Stamped now; the server's own row (with its id) is not sent back
         // for the user turn, and the two clocks agree to the second on a LAN.
         transcript.add(
-            LiveMessage("user", content, images, createdAt = Instant.now().toString(), device = "this phone", documents = docs),
+            LiveMessage(
+                "user", content, images, createdAt = Instant.now().toString(), device = "this phone", documents = docs,
+                stagedVideo = video,
+            ),
         )
         val live = LiveMessage("assistant", "", pending = true)
         live.sentAtMs = System.currentTimeMillis()
@@ -769,7 +875,12 @@ internal fun ConversationPane(
                     onDone = { row -> live.finishWith(row) },
                     reviseDraft = revise?.first,
                     onJob = { live.job = it },
+                    videos = listOfNotNull(video?.token),
                 )
+                // A video sent is being watched now: the thread again, for
+                // its chip under this message (the job names the message).
+                // A refused send keeps its error in place instead.
+                if (video != null && live.error == null) loadMessages(target.id)
             }.onFailure { live.error = failureText("send", it) }
             // Refused for want of the vision model: re-read what's installed,
             // so the paperclip explains it next time.
@@ -1004,6 +1115,13 @@ internal fun ConversationPane(
                             }
                         },
                         onRetry = if (i == transcript.lastIndex && !sending && canRetry(transcript)) ({ retry() }) else null,
+                        // A video sent with this message: its job's chip.
+                        videoJobs = m.id?.let { id -> videoJobs.filter { it.message_id == id } }.orEmpty(),
+                        onStopVideo = { job ->
+                            runCatching { cancelVideoJob(app.api, job.id) }
+                                .onSuccess { v -> videoJobs.indexOfFirst { it.id == v.id }.takeIf { it >= 0 }?.let { videoJobs[it] = v } }
+                                .onFailure { toast(failureText("stop", it)) }
+                        },
                         // A card answers only while it ends the thread.
                         onHeadsUp = if (i == transcript.lastIndex && !sending) ({ option -> pickHeadsUp(m, option) }) else null,
                         busy = sending,
@@ -1094,6 +1212,11 @@ internal fun ConversationPane(
                 }
             }
         }
+        videoDraft?.let { v ->
+            Box(Modifier.padding(top = 6.dp)) {
+                StagedVideoChip(v.name, v.staged, v.percent, onRemove = removeVideo)
+            }
+        }
         openSource?.let { SourceSheet(it, onClose = { openSource = null }) }
         val printing = printDraft
         if (printing != null && draftPrinters != null) {
@@ -1146,6 +1269,16 @@ internal fun ConversationPane(
                             docPicker.launch(com.domovoi.app.assistant.docs.DocExtract.PICKER_TYPES + "*/*")
                         },
                     )
+                    // Only when the home server can watch one (AI on, ffmpeg there).
+                    if (videoOffered(models.data, ChatPlaceKind.Server, caps.aiEnabled)) {
+                        DropdownMenuItem(
+                            text = { Text(VIDEO_MENU_ITEM) },
+                            onClick = {
+                                attachMenu = false
+                                if (videoDraft != null) toast(VIDEO_ONE_A_MESSAGE) else videoPicker.launch("video/*")
+                            },
+                        )
+                    }
                 }
             }
             OutlinedTextField(
@@ -1155,7 +1288,7 @@ internal fun ConversationPane(
                 maxLines = 4,
             )
             // Nothing typed: the mic, which opens the hold-to-talk view.
-            if (draft.isBlank() && attachments.isEmpty() && docAttachments.isEmpty()) {
+            if (draft.isBlank() && attachments.isEmpty() && docAttachments.isEmpty() && videoDraft == null) {
                 IconButton(onClick = openVoice, enabled = !sending) {
                     Icon(
                         Icons.Outlined.Mic, contentDescription = "talk",
@@ -1163,7 +1296,8 @@ internal fun ConversationPane(
                     )
                 }
             } else {
-                val canSend = (draft.isNotBlank() || docAttachments.isNotEmpty()) && !sending && docUploading == null
+                val canSend = (draft.isNotBlank() || docAttachments.isNotEmpty() || videoDraft?.staged != null) &&
+                    !sending && docUploading == null && videoDraft?.uploading != true
                 IconButton(onClick = { send() }, enabled = canSend) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send, contentDescription = "send",
@@ -1375,6 +1509,9 @@ internal fun MessageBubble(
     /** A pick on this heads-up card (null: it doesn't answer now). */
     onHeadsUp: ((String) -> Unit)? = null,
     busy: Boolean = false,
+    /** Videos sent with this (user) message: their jobs' chips (ChatVideo.kt). */
+    videoJobs: List<ServerVideoJob> = emptyList(),
+    onStopVideo: (suspend (ServerVideoJob) -> Unit)? = null,
 ) {
     val app = LocalApp.current
     val context = LocalContext.current
@@ -1408,7 +1545,12 @@ internal fun MessageBubble(
         }
         // A document attached with this message: its marker line.
         m.documents.forEach { d -> DocMarker(d.summary.ifEmpty { d.name }, d.notes.map { it.text }, Modifier.padding(bottom = 4.dp)) }
-        if (isUser && m.content.isBlank() && m.documents.isNotEmpty()) return@Column
+        // A video sent with it: as sent, then its job's chip once the thread is read back.
+        if (videoJobs.isEmpty()) m.stagedVideo?.let { v -> StagedVideoChip(v.name, v, 100, onRemove = null) }
+        videoJobs.forEach { j -> VideoJobChip(j, onStopVideo) }
+        if (isUser && m.content.isBlank() &&
+            (m.documents.isNotEmpty() || m.stagedVideo != null || videoJobs.isNotEmpty())
+        ) return@Column
         // Long-press: copy / details. The menu anchors to the bubble.
         Box {
             Box(

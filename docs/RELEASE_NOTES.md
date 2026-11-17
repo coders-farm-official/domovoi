@@ -261,8 +261,9 @@ signed out and says "Signed out after 1 hour without admin activity".
   `chat_video_jobs`, `chat_video_segments`, `chat_video_frames`. On a
   CPU-only server expect a few minutes per 3-minute clip, most of it the
   frame descriptions (measured on a development PC at the lowest priority, with other work running, for a 3-minute 1080p clip: the scene scan 0.6 s, the sound 0.3 s, each frame grab 0.15 s, and the speech model (small.en on the CPU) about 1.7 s per second of speech; a frame description with qwen3-vl:2b on a CPU is expected to take 10-30 s, not measured there); the estimate starts from a fixed guess and learns this
-  server's speed from each finished video. The phone apps can use the
-  same routes (docs/API_REFERENCE.md, "Videos"); they don't offer it yet.
+  server's speed from each finished video. The Android app offers it too
+  once it is updated (the same routes, docs/API_REFERENCE.md, "Videos");
+  the iPhone app doesn't yet.
 
 ## 2026-11-16 — 1.3.0
 
