@@ -12,14 +12,28 @@ import Foundation
 public struct OnnxRoomEarsLoader: RoomEarsLoading {
     public init() {}
 
-    /// `RoomEngine.kt:711-716`: the three wake networks, the detector (its
-    /// noise history computed here, once per load) and Silero. Called on the
+    /// `RoomEngine.kt:711-716`: the wake networks, the detector (its noise
+    /// history computed here, once per load) and Silero. Called on the
     /// listening thread, which owns the result.
+    ///
+    /// Several words (1.4.0): ONE front end (melspectrogram + embedding) and
+    /// one classifier per word, main word first. The main word must load (a
+    /// failure throws, as before); an extra word whose model will not load
+    /// is left out, and ``OnnxRoomEars/wakeWords`` says what did, which the
+    /// room's next hello lists. Never more than
+    /// ``RoomWakeWords/maxPerRoom`` words, whatever the files name.
     public func load(_ files: RoomModelFiles) throws -> any RoomEars {
-        let nets = try OrtWakeNets(melspectrogram: files.melspectrogram, embedding: files.embedding, wake: files.wake)
-        let detector = try WakeDetector(nets: nets)
+        let front = try OrtWakeFrontEnd(melspectrogram: files.melspectrogram, embedding: files.embedding)
+        var classifiers: [any WakeClassifier] = [try OrtWakeClassifier(contentsOf: files.wake)]
+        var words = [files.wakeKey]
+        for extra in files.extras where words.count < RoomWakeWords.maxPerRoom && !words.contains(extra.slug) {
+            guard let classifier = try? OrtWakeClassifier(contentsOf: extra.file) else { continue }
+            classifiers.append(classifier)
+            words.append(extra.slug)
+        }
+        let detector = try WakeDetector(frontEnd: front, classifiers: classifiers)
         let vad = try SileroVad(contentsOf: files.vad)
-        return OnnxRoomEars(files: files, wake: detector, vad: vad)
+        return OnnxRoomEars(files: files, wake: detector, words: words, vad: vad)
     }
 }
 
@@ -40,22 +54,32 @@ public final class OnnxRoomEars: RoomEars {
     public let files: RoomModelFiles?
     private let wake: WakeDetector
     private let vad: RoomVoiceDetecting
-    /// The wake chain's cost per 80 ms chunk, as a running mean.
+    /// The words that loaded, one per classifier, main word first.
+    public let wakeWords: [String]
+    /// The wake chain's cost per 80 ms chunk, as a running mean (the shared
+    /// front end and every word's classifier).
     public let timing = RoomEarsTiming()
 
-    init(files: RoomModelFiles?, wake: WakeDetector, vad: RoomVoiceDetecting) {
+    /// `words`: one slug per classifier of `wake`; nil names them from
+    /// `files` (the main word, then its extras).
+    init(files: RoomModelFiles?, wake: WakeDetector, words: [String]? = nil, vad: RoomVoiceDetecting) {
         self.files = files
         self.wake = wake
+        self.wakeWords = words ?? files.map { Array($0.wakeKeys.prefix(wake.classifiers.count)) } ?? []
         self.vad = vad
     }
 
     public func wakeScore(_ frame: [Int16]) throws -> Float? {
+        try wakeScores(frame)?.first
+    }
+
+    public func wakeScores(_ frame: [Int16]) throws -> [Float]? {
         let start = DispatchTime.now().uptimeNanoseconds
         let chunksBefore = wake.chunksSeen
-        let score = try wake.accept(frame)
+        let scores = try wake.acceptAll(frame)
         let spent = DispatchTime.now().uptimeNanoseconds &- start
         timing.record(nanoseconds: spent, chunks: wake.chunksSeen - chunksBefore)
-        return score
+        return scores
     }
 
     public func resetWake() { wake.reset() }

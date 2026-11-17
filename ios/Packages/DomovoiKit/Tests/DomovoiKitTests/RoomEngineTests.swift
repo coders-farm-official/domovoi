@@ -32,6 +32,7 @@ final class RoomEngineTests: XCTestCase {
         echoCanceller: Bool = true,
         ears: any RoomEarsLoading = FakeRoomEarsLoader(),
         healthMS: Int64 = RoomEngine.healthIntervalMS,
+        wakeWordsMax: Int = 5,
         script: (@Sendable (FakeRoomSocket) -> Void)? = nil
     ) -> Rig {
         let store = InMemoryRoomStore(
@@ -55,7 +56,7 @@ final class RoomEngineTests: XCTestCase {
             acquireMic: { { released.withLock { $0 += 1 } } }, micRefusal: { nil },
             http: http, transport: transport, wifi: FakeRoomWifi(),
             speaker: RoomSpeaker(output: RoomSilentSpeakerOutput()), music: music,
-            echoCanceller: echoCanceller, healthIntervalMS: healthMS
+            echoCanceller: echoCanceller, wakeWordsMax: wakeWordsMax, healthIntervalMS: healthMS
         ))
         engines.append(engine)
         return Rig(engine: engine, store: store, transport: transport, http: http, source: source, music: music, released: released, directory: dir)
@@ -317,6 +318,152 @@ final class RoomEngineTests: XCTestCase {
             }
         }
         XCTAssertTrue(sawReady)
+    }
+
+    // MARK: - several wake words (1.4.0)
+
+    /// The room's three words: porch_cat with its own 0.95, hey_house at the
+    /// room's 0.5.
+    private static let threeWords = #"{"type":"set_wake_word","slug":"hey_jarvis","threshold":0.5,"words":[{"slug":"hey_jarvis","threshold":0.5},{"slug":"porch_cat","threshold":0.95},{"slug":"hey_house"}]}"#
+
+    private func modelFiles(_ r: Rig, _ main: String, _ extras: [String]) -> RoomModelFiles {
+        RoomModelFiles(melspectrogram: r.directory, embedding: r.directory, vad: r.directory, wake: r.directory, wakeKey: main,
+                       extras: extras.map { RoomWakeModelFile(slug: $0, file: r.directory) })
+    }
+
+    /// Says `frame` as the core, hands the room the models a verified sync
+    /// would, and returns the next session (ready), whose hello lists what
+    /// loaded.
+    private func pushWords(_ r: Rig, _ frame: String, loads main: String, _ extras: [String]) throws -> FakeRoomSocket {
+        let before = r.transport.sockets.count
+        let socket = try XCTUnwrap(r.transport.last)
+        let configs = socket.all("config_status").count
+        socket.say(frame)
+        waitFor("config_status after the push") { socket.all("config_status").count == configs + 1 }
+        r.engine.useModels(modelFiles(r, main, extras))
+        waitFor("a new session") { r.transport.sockets.count == before + 1 }
+        let next = try XCTUnwrap(r.transport.last)
+        waitFor("ready again") { next.first("config_status") != nil }
+        return next
+    }
+
+    func testAPushOfSeveralWordsLoadsThemAndANewHelloListsThem() throws {
+        let r = rig(ears: FakeWordsEarsLoader()) { s in s.say(Self.readyFrame) }
+        r.engine.start()
+        waitFor("ready") { r.engine.status.link == .ready }
+        let first = try XCTUnwrap(r.transport.last)
+        let hello = try XCTUnwrap(first.first("hello"))
+        XCTAssertEqual(.array([.string("hey_jarvis")]), hello["wake_words"])
+        XCTAssertEqual(.int(5), hello["wake_words_max"])
+
+        let next = try pushWords(r, Self.threeWords, loads: "hey_jarvis", ["porch_cat", "hey_house"])
+        XCTAssertTrue(first.isClosed, "the old session ends for the new hello")
+        let again = try XCTUnwrap(next.first("hello"))
+        XCTAssertEqual(.array(["hey_jarvis", "porch_cat", "hey_house"].map { .string($0) }), again["wake_words"])
+        XCTAssertEqual(.int(5), again["wake_words_max"])
+        XCTAssertEqual(.string("hey_jarvis"), again["wake_word"])
+        XCTAssertEqual([RoomWakeWord(slug: "porch_cat", threshold: 0.95), RoomWakeWord(slug: "hey_house")], r.store.wakeExtras)
+        XCTAssertEqual(.double(0.5), next.first("config_status")?["config"]?["wake.threshold"])
+        // Settled: the hello says what loaded, so no third session.
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertEqual(2, r.transport.sockets.count)
+    }
+
+    func testTheWordThatFiredIsTheTurnsWakeWordAndTheFollowUpHasNone() throws {
+        let r = rig(ears: FakeWordsEarsLoader()) { s in s.say(Self.readyFrame) }
+        r.engine.start()
+        waitFor("ready") { r.engine.status.link == .ready }
+        let socket = try pushWords(r, Self.threeWords, loads: "hey_jarvis", ["porch_cat", "hey_house"])
+        r.source.queue(FakeWordsEars.mark(2), frames: 1)
+        r.source.queue(2, frames: 30)
+        r.source.queue(1_000, frames: 20)
+        waitFor("utterance_start") { socket.first("utterance_start") != nil }
+        let start = try XCTUnwrap(socket.first("utterance_start"))
+        XCTAssertEqual(.string("wake_word"), start["trigger"])
+        XCTAssertEqual(.string("hey_house"), start["wake_word"])
+        XCTAssertEqual(.double(0.9), start["wake_score"])
+        waitFor("utterance_end", 10) { socket.first("utterance_end") != nil }
+        socket.say(#"{"type":"response_start","audio_sample_rate":22050}"#)
+        socket.events.binary(Data(count: 4_410))
+        socket.say(#"{"type":"response_end","interrupted":false,"expect_followup":true}"#)
+        waitFor("the follow-up's utterance_start", 10) { socket.all("utterance_start").count == 2 }
+        let followup = socket.all("utterance_start")[1]
+        XCTAssertEqual(.string("followup"), followup["trigger"])
+        XCTAssertNil(followup["wake_word"], "a follow-up was not woken by a word")
+        XCTAssertNil(followup["wake_score"])
+    }
+
+    func testEachWordWakesAtItsOwnThreshold() throws {
+        let r = rig(ears: FakeWordsEarsLoader()) { s in s.say(Self.readyFrame) }
+        r.engine.start()
+        waitFor("ready") { r.engine.status.link == .ready }
+        let socket = try pushWords(r, Self.threeWords, loads: "hey_jarvis", ["porch_cat", "hey_house"])
+        // porch_cat scores 0.9, under its own 0.95.
+        r.source.queue(FakeWordsEars.mark(1), frames: 1)
+        waitFor("heard") { r.source.queued == 0 }
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertNil(socket.first("utterance_start"), "porch_cat wakes only over its own threshold")
+        // The main word's 0.9 is over the room's 0.5.
+        r.source.queue(FakeWordsEars.mark(0), frames: 1)
+        waitFor("utterance_start") { socket.first("utterance_start") != nil }
+        XCTAssertEqual(.string("hey_jarvis"), socket.first("utterance_start")?["wake_word"])
+    }
+
+    func testAPushWithoutWordsRunsTheSlugAloneAndDropsTheExtras() throws {
+        let r = rig(ears: FakeWordsEarsLoader()) { s in s.say(Self.readyFrame) }
+        r.engine.start()
+        waitFor("ready") { r.engine.status.link == .ready }
+        _ = try pushWords(r, Self.threeWords, loads: "hey_jarvis", ["porch_cat", "hey_house"])
+        XCTAssertEqual(2, r.store.wakeExtras.count)
+        let last = try pushWords(r, #"{"type":"set_wake_word","slug":"hey_jarvis"}"#, loads: "hey_jarvis", [])
+        XCTAssertEqual([], r.store.wakeExtras)
+        XCTAssertEqual(["hey_jarvis"], r.engine.configuredWakeWords())
+        XCTAssertEqual(.array([.string("hey_jarvis")]), last.first("hello")?["wake_words"])
+        XCTAssertEqual(3, r.transport.sockets.count)
+    }
+
+    func testTheRoomRunsNoMoreThanItsOwnLimit() throws {
+        let r = rig(ears: FakeWordsEarsLoader(), wakeWordsMax: 3) { s in s.say(Self.readyFrame) }
+        r.engine.start()
+        waitFor("ready") { r.engine.status.link == .ready }
+        XCTAssertEqual(.int(3), r.transport.last?.first("hello")?["wake_words_max"])
+        let five = #"{"type":"set_wake_word","slug":"hey_jarvis","words":[{"slug":"hey_jarvis"},{"slug":"porch_cat"},{"slug":"hey_house"},{"slug":"alexa"},{"slug":"timer"}]}"#
+        let next = try pushWords(r, five, loads: "hey_jarvis", ["porch_cat", "hey_house"])
+        XCTAssertEqual(["porch_cat", "hey_house"], r.store.wakeExtras.map(\.slug))
+        XCTAssertEqual(["hey_jarvis", "porch_cat", "hey_house"], r.engine.configuredWakeWords())
+        XCTAssertEqual(.array(["hey_jarvis", "porch_cat", "hey_house"].map { .string($0) }), next.first("hello")?["wake_words"])
+        XCTAssertEqual(.int(3), next.first("hello")?["wake_words_max"])
+    }
+
+    /// An extra word whose model did not load is left out of the hello.
+    func testTheHelloListsOnlyTheWordsThatLoaded() throws {
+        let r = rig(ears: FakeWordsEarsLoader()) { s in s.say(Self.readyFrame) }
+        r.engine.start()
+        waitFor("ready") { r.engine.status.link == .ready }
+        let next = try pushWords(r, Self.threeWords, loads: "hey_jarvis", ["hey_house"])
+        XCTAssertEqual(.array([.string("hey_jarvis"), .string("hey_house")]), next.first("hello")?["wake_words"])
+        XCTAssertEqual(2, r.store.wakeExtras.count, "the room keeps the list; the server hears what runs")
+    }
+
+    func testEveryWordListensDuringADropin() throws {
+        let r = rig(ears: FakeWordsEarsLoader()) { s in s.say(Self.readyFrame) }
+        r.engine.start()
+        waitFor("ready") { r.engine.status.link == .ready }
+        let socket = try pushWords(r, Self.threeWords, loads: "hey_jarvis", ["porch_cat", "hey_house"])
+        socket.say(#"{"type":"dropin_start","peer_room":"office","peer_label":"Office","audio_sample_rate":16000,"full_duplex":true}"#)
+        waitFor("in the call") { r.engine.status.phase == .call }
+        waitFor("call mic") { r.source.starts.last == true }
+        // porch_cat under its own threshold is relayed, not heard.
+        r.source.queue(FakeWordsEars.mark(1), frames: 1)
+        waitFor("relayed") { r.source.queued == 0 }
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertNil(socket.first("utterance_start"))
+        r.source.queue(FakeWordsEars.mark(2), frames: 1)
+        waitFor("the command's utterance_start") { socket.first("utterance_start") != nil }
+        let start = try XCTUnwrap(socket.first("utterance_start"))
+        XCTAssertEqual(.string("wake_word"), start["trigger"])
+        XCTAssertEqual(.string("hey_house"), start["wake_word"])
+        XCTAssertEqual(2, r.transport.sockets.count, "no new hello in the middle of a call")
     }
 
     // MARK: - the real models (the build Mac's fixtures)

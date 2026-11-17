@@ -18,6 +18,11 @@ import Foundation
 // coordinator, because three branches compile against it.
 //
 // The Android spec for each type is named on it.
+//
+// 1.4.0 (several wake words per room) added, additively: ``RoomWakeWord``,
+// ``RoomWakeWords``, ``RoomModelFiles/extras``, ``RoomEars/wakeScores(_:)``
+// and ``RoomEars/wakeWords`` (with one-word defaults), and the store's
+// ``RoomKeeping/wakeExtras`` / ``RoomKeeping/setWakeWords(_:)``.
 
 // MARK: - the enrolment
 
@@ -208,6 +213,12 @@ public protocol RoomKeeping: RoomModelBook {
     /// A pushed wake word; `threshold` replaces the room's threshold only
     /// when ``RoomWakeSettings/thresholdValue(_:)`` takes it.
     func setWakeWord(_ slug: String, threshold: Double?)
+    /// The room's other wake words (1.4.0), after the main word, as last
+    /// pushed: [] for a one-word room, and [] when the kept list does not
+    /// start with ``wakeWord`` (``RoomWakeSettings/extras(kept:main:)``).
+    var wakeExtras: [RoomWakeWord] { get }
+    /// Keep the room's whole list, main word first; one word keeps none.
+    func setWakeWords(_ words: [RoomWakeWord])
     var muted: Bool { get }
     func setMuted(_ on: Bool)
 }
@@ -223,6 +234,14 @@ public enum RoomWakeSettings {
     public static func thresholdValue(_ raw: Double?) -> Float? {
         guard let raw, raw.isFinite, (0.0...1.0).contains(raw) else { return nil }
         return Float(raw)
+    }
+
+    /// The extra words of a kept list: the list only counts when it starts
+    /// with the room's main word (the Pi's `wake_words.read_list` rule: a
+    /// later one-word push replaced the main word without it).
+    public static func extras(kept: [RoomWakeWord], main: String) -> [RoomWakeWord] {
+        guard kept.count > 1, kept.first?.slug == main else { return [] }
+        return Array(kept.dropFirst())
     }
 
     /// An approval code the core may hand back: 4-8 ASCII digits.
@@ -259,6 +278,7 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
         var approved = false
         var wakeWord = RoomWakeSettings.defaultWakeWord
         var threshold = RoomWakeSettings.defaultThreshold
+        var wakeWords: [RoomWakeWord] = []
         var muted = false
         var seen: [String: RoomSeenList] = [:]
         var trained: [String: String] = [:]
@@ -288,6 +308,12 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
             if let t = RoomWakeSettings.thresholdValue(threshold) { $0.threshold = t }
         }
     }
+    public var wakeExtras: [RoomWakeWord] {
+        state.withLock { RoomWakeSettings.extras(kept: $0.wakeWords, main: $0.wakeWord) }
+    }
+    public func setWakeWords(_ words: [RoomWakeWord]) {
+        state.withLock { $0.wakeWords = words.count > 1 ? words : [] }
+    }
     public var muted: Bool { state.withLock { $0.muted } }
     public func setMuted(_ on: Bool) { state.withLock { $0.muted = on } }
     public func seen(_ record: String) -> RoomSeenList? { state.withLock { $0.seen[record] } }
@@ -300,9 +326,21 @@ public final class InMemoryRoomStore: RoomKeeping, @unchecked Sendable {
 
 // MARK: - the listening networks (R1 implements, R2 consumes)
 
-/// The four model files a room loads for one wake word
-/// (`RoomModels.kt:57`, `Files`), checked by R2's model sync before they are
-/// handed over.
+/// One extra wake word's model file (1.4.0).
+public struct RoomWakeModelFile: Equatable, Sendable {
+    public let slug: String
+    public let file: URL
+
+    public init(slug: String, file: URL) {
+        self.slug = slug
+        self.file = file
+    }
+}
+
+/// The model files a room loads (`RoomModels.kt:57`, `Files`), checked by
+/// R2's model sync before they are handed over: the shared front end, the
+/// voice detector, the main wake word's model and (1.4.0) the room's other
+/// words' models, each a small classifier on the same front end.
 public struct RoomModelFiles: Equatable, Sendable {
     public let melspectrogram: URL
     public let embedding: URL
@@ -310,13 +348,136 @@ public struct RoomModelFiles: Equatable, Sendable {
     public let wake: URL
     /// The wake word these are for ("hey_jarvis", or a trained slug).
     public let wakeKey: String
+    /// The room's other words whose models are here and checked, in the
+    /// room's order (at most the device's limit less one).
+    public let extras: [RoomWakeModelFile]
 
-    public init(melspectrogram: URL, embedding: URL, vad: URL, wake: URL, wakeKey: String) {
+    public init(melspectrogram: URL, embedding: URL, vad: URL, wake: URL, wakeKey: String, extras: [RoomWakeModelFile] = []) {
         self.melspectrogram = melspectrogram
         self.embedding = embedding
         self.vad = vad
         self.wake = wake
         self.wakeKey = wakeKey
+        self.extras = extras
+    }
+
+    /// Every word these files are for, main word first.
+    public var wakeKeys: [String] { [wakeKey] + extras.map(\.slug) }
+}
+
+// MARK: - several wake words (1.4.0)
+
+/// One of a room's wake words, as `set_wake_word`'s `words` carries it: the
+/// slug, and the word's own threshold (a trained word's), nil for the
+/// room's Wake sensitivity.
+public struct RoomWakeWord: Equatable, Sendable, Codable {
+    public let slug: String
+    public let threshold: Float?
+
+    public init(slug: String, threshold: Float? = nil) {
+        self.slug = slug
+        self.threshold = threshold
+    }
+}
+
+/// How many wake words a room phone runs, and the rules for a pushed list
+/// (domovoi/wake_default.py, satellite/wake_words.py).
+public enum RoomWakeWords {
+    /// The most a room may have (the core's `MAX_ROOM_WORDS`).
+    public static let maxPerRoom = 5
+    /// The most a low-memory phone runs.
+    public static let lowMemoryMax = 3
+    /// At or under this much memory a phone is low-memory: a 2 GB iPhone or
+    /// iPad reports a little under 2 GiB, a 3 GB one about 2.8 GiB, so
+    /// 2.5 GiB splits them cleanly.
+    public static let lowMemoryBytes: UInt64 = 5 * 1024 * 1024 * 1024 / 2
+
+    /// How many words this phone runs at once: its hello's `wake_words_max`.
+    ///
+    /// openWakeWord's front end (melspectrogram + embedding) is shared and
+    /// is nearly all the CPU (1.79 ms per 80 ms chunk on a desktop, against
+    /// 0.012-0.026 ms per word's classifier), so CPU allows five on any
+    /// phone that runs one. What each word does add is memory: its model
+    /// and its own ONNX Runtime session (a few MB each, with the session's
+    /// arena). A 2 GB phone (iPhone 6s/7/SE, the 2 GB iPads) already holds
+    /// the front end, Silero, the audio graph, the room display and the
+    /// reply's audio inside iOS's per-app memory limit, so it runs 3, as a
+    /// Pi Zero 2 W (512 MB) does; anything bigger runs 5.
+    public static func deviceMax(physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory) -> Int {
+        physicalMemory <= lowMemoryBytes ? lowMemoryMax : maxPerRoom
+    }
+
+    /// `set_wake_word`'s `words` (`[{"slug", "threshold"?}]`, or bare
+    /// slugs), cleaned as the Pi's `parse_words`: slug-shaped
+    /// (``RoomModels/isSlug(_:)``, the file stem the room loads), no
+    /// repeats, at most ``maxPerRoom``, in order; a threshold outside 0-1
+    /// is dropped (the room's applies). Nil when there is no usable list:
+    /// then the room runs the frame's `slug` alone.
+    public static func parse(_ raw: RoomJSON?) -> [RoomWakeWord]? {
+        guard case .array(let items)? = raw else { return nil }
+        var out: [RoomWakeWord] = []
+        for item in items {
+            var text: String?
+            var threshold: Float?
+            switch item {
+            case .string(let s):
+                text = s
+            case .object(let o):
+                text = o["slug"]?.stringValue
+                switch o["threshold"] {
+                case .int(let n)?: threshold = RoomWakeSettings.thresholdValue(Double(n))
+                case .double(let d)?: threshold = RoomWakeSettings.thresholdValue(d)
+                default: threshold = nil
+                }
+            default:
+                text = nil
+            }
+            guard let slug = text?.trimmingCharacters(in: .whitespaces), RoomModels.isSlug(slug),
+                  !out.contains(where: { $0.slug == slug }) else { continue }
+            out.append(RoomWakeWord(slug: slug, threshold: threshold))
+            if out.count >= maxPerRoom { break }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// The words a room runs after a push of `slug` with `words`: the list
+    /// when it starts with `slug`, cut to `max`; otherwise `slug` alone (an
+    /// older server, a one-word room, or a list that does not lead with the
+    /// main word, which the Pi does not trust either).
+    public static func pushed(slug: String, threshold: Float?, words: [RoomWakeWord]?, max: Int) -> [RoomWakeWord] {
+        let main = RoomWakeWord(slug: slug, threshold: threshold)
+        guard let words, words.first?.slug == slug else { return [main] }
+        let limit = Swift.max(1, Swift.min(max, maxPerRoom))
+        return [main] + Array(words.dropFirst().prefix(limit - 1))
+    }
+
+    /// Each loaded word's threshold (`words`, main word first): the first
+    /// wakes at the room's (its Wake sensitivity, which a push's `threshold`
+    /// sets), every other word at its own when the list gave it one, else
+    /// at the room's. Android's `WakeWords.thresholds`.
+    public static func thresholds(for words: [String], room: Float, extras: [RoomWakeWord]) -> [Float] {
+        words.enumerated().map { i, word in
+            if i == 0 { return room }
+            return extras.first { $0.slug == word }?.threshold ?? room
+        }
+    }
+
+    /// The words the room is set to run, main word first, no repeats, at
+    /// most `max`: what a model sync fetches and the ears load.
+    public static func configured(main: String, extras: [RoomWakeWord], max: Int) -> [String] {
+        let limit = Swift.max(1, Swift.min(max, maxPerRoom))
+        var out = [main]
+        for w in extras where out.count < limit && !out.contains(w.slug) { out.append(w.slug) }
+        return out
+    }
+
+    /// The hello's `wake_words` (Android's `reportedWords`): the words of
+    /// models handed over and not loaded yet (the listening thread takes
+    /// them on its next frame, and a new hello follows if a word then fails
+    /// to load); else the words that loaded; before any model, the main
+    /// word alone. Never padded with a main word that has not loaded.
+    public static func reported(main: String, pending: [String]?, loaded: [String]?) -> [String] {
+        pending ?? loaded ?? [main]
     }
 }
 
@@ -335,6 +496,14 @@ public protocol RoomEars: AnyObject {
     /// 80 ms chunks it completed, or nil when none completed
     /// (`WakeDetector.accept`).
     func wakeScore(_ frame: [Int16]) throws -> Float?
+    /// Feed one frame to every loaded word (1.4.0): each word's highest
+    /// score, in ``wakeWords``' order, or nil when no chunk completed
+    /// (`WakeDetector.acceptAll`). Call this OR ``wakeScore(_:)`` for a
+    /// frame, never both. Default: the one word's.
+    func wakeScores(_ frame: [Int16]) throws -> [Float]?
+    /// The words that loaded, main word first; [] when the ears do not say
+    /// (the room then reads them from the files it loaded).
+    var wakeWords: [String] { get }
     /// Forget the wake word's history (`WakeDetector.reset`).
     func resetWake()
     /// Whether this frame is speech: quieter than
@@ -344,6 +513,14 @@ public protocol RoomEars: AnyObject {
     func isSpeech(_ frame: [Int16]) throws -> Bool
     /// Forget Silero's state (`SileroVad.reset`), between captures.
     func resetVoice()
+}
+
+extension RoomEars {
+    public func wakeScores(_ frame: [Int16]) throws -> [Float]? {
+        try wakeScore(frame).map { [$0] }
+    }
+
+    public var wakeWords: [String] { [] }
 }
 
 /// Loads ``RoomEars`` for a set of files (R1: ONNX Runtime). Called on the

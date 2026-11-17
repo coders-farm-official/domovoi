@@ -42,15 +42,27 @@ public enum RoomProtocol {
     }
 
     /// `RoomProtocol.kt:56-73`.
+    ///
+    /// Several words per room (1.4.0, domovoi/streaming.py's hello;
+    /// Android's `RoomProtocol.hello`): `wake_words` lists every word the
+    /// room listens for right now, main word first, as given (slugs, no
+    /// repeats, at most five; never padded with `wakeWord`: a room whose new
+    /// main word has not loaded yet says what it still runs, and the core's
+    /// `room_word` then ignores the list); `wake_words_max` is how many this
+    /// phone can run at once (``RoomWakeWords/deviceMax(physicalMemory:)``),
+    /// 1-5. Each key is left out when its argument is empty / nil (the shape
+    /// before 1.4.0); the room always sends both.
     public static func hello(
         roomID: String,
         wakeWord: String,
         pairingToken: String,
         approvalCode: String?,
         echoCanceller: Bool,
-        micEnabled: Bool = true
+        micEnabled: Bool = true,
+        wakeWords: [String] = [],
+        wakeWordsMax: Int? = nil
     ) -> Frame {
-        [
+        var f: Frame = [
             "type": .string("hello"),
             "room_id": .string(roomID),
             "wake_word": .string(wakeWord),
@@ -61,6 +73,13 @@ public enum RoomProtocol {
             "board": .string(board),
             "supports": .array(supports(echoCanceller: echoCanceller).map { .string($0) }),
         ]
+        var words: [String] = []
+        for w in wakeWords where RoomModels.isSlug(w) && !words.contains(w) && words.count < RoomWakeWords.maxPerRoom {
+            words.append(w)
+        }
+        if !words.isEmpty { f["wake_words"] = .array(words.map { .string($0) }) }
+        if let wakeWordsMax { f["wake_words_max"] = .int(Int64(min(max(wakeWordsMax, 1), RoomWakeWords.maxPerRoom))) }
+        return f
     }
 
     // MARK: - what the phone sends
@@ -68,8 +87,13 @@ public enum RoomProtocol {
     /// `wakeScore`: the wake's peak score (`WakeGate.lastPeak`), sent as
     /// `wake_score` (three decimals, as the Pi does) on a wake-word capture
     /// only; the core keeps it on the turn's history row (V044).
+    /// `wakeWord` (1.4.0): which of the room's words fired, sent as
+    /// `wake_word` on a wake-word capture only (never a follow-up, a
+    /// barge-in or push-to-talk); kept as conversation_log.wake_word (V063).
     /// `RoomProtocol.kt:80-89`.
-    public static func utteranceStart(trigger: String, utt: Int, backlogMS: Int, wakeMS: Int?, wakeScore: Float? = nil) -> Frame {
+    public static func utteranceStart(
+        trigger: String, utt: Int, backlogMS: Int, wakeMS: Int?, wakeScore: Float? = nil, wakeWord: String? = nil
+    ) -> Frame {
         var f: Frame = [
             "type": .string("utterance_start"),
             "trigger": .string(trigger),
@@ -80,6 +104,9 @@ public enum RoomProtocol {
         if trigger == "wake_word", let wakeScore, wakeScore.isFinite {
             let clamped = min(1.0, max(0.0, Double(wakeScore)))
             f["wake_score"] = .double((clamped * 1000).rounded() / 1000)
+        }
+        if trigger == "wake_word", let wakeWord, RoomModels.isSlug(wakeWord) {
+            f["wake_word"] = .string(wakeWord)
         }
         return f
     }
@@ -173,7 +200,9 @@ public enum RoomProtocol {
         case endCapture(utt: Int?)
         /// `saysVoice`: the frame carried `room_voice`.
         case soundsChanged(roomVoice: String?, saysVoice: Bool)
-        case setWakeWord(slug: String?, threshold: Double?)
+        /// `words` (1.4.0): the room's whole list, `slug` first, cleaned
+        /// (``RoomWakeWords/parse(_:)``); nil when the frame had none.
+        case setWakeWord(slug: String?, threshold: Double?, words: [RoomWakeWord]?)
         case wakeModelsChanged
         /// `awaitReady`: finish the reply still playing, then open the call
         /// and say `dropin_ready`.
@@ -243,7 +272,7 @@ public enum RoomProtocol {
             case .double(let d)?: threshold = d
             default: threshold = nil
             }
-            return .setWakeWord(slug: s("slug"), threshold: threshold)
+            return .setWakeWord(slug: s("slug"), threshold: threshold, words: RoomWakeWords.parse(o["words"]))
         case "wake_models_changed":
             return .wakeModelsChanged
         case "dropin_start":
