@@ -193,6 +193,12 @@ Around that happy path:
   (`_music_hold_reason`).
 * **"Stop"** sends `music_stop`, clears the room's resumable entry and its
   now-playing stamp.
+* **A song taken out of the library leaves every room** (1.4.0). The web
+  process deletes the row (and the file, when asked), then tells the core
+  (`POST /v1/admin/music/tracks-removed`, `domovoi/music_track_removed.py`):
+  a room playing or paused on it goes on to the next song in its queue, or
+  stops when nothing comes after it, and every queued copy of it is
+  removed, since a deleted file stays readable to a player that has it open.
 * **The playback-state sweeper** (a core poll worker) clears now-playing
   stamps whose room's MPD no longer plays the stamped stream, so a stale
   card can't outlive reality.

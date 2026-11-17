@@ -176,8 +176,9 @@ or in the cloud; they override your tool's defaults.
 - **No pull requests.** Don't open one unless the owner asks for it in
   that session.
 - **CI runs on every push to main.** `.github/workflows/ci.yml` (the
-  pytest suite in shards, the web and docs checks, the bash harnesses, the
-  Android app, the Windows build) runs on GitHub's hosted runners, free for
+  pytest suite in shards, ruff, the web and docs checks, the bash harnesses,
+  the Android app, the iPhone app's build, the Windows build) runs on
+  GitHub's hosted runners, free for
   this public repo (2026-11-14). Don't put `[skip ci]` in commit messages.
   Main stays green: a red run on main is fixed before anything else is
   pushed. It fails on NEW test failures only; one listed in
@@ -207,7 +208,7 @@ or in the cloud; they override your tool's defaults.
   mv cmdline-tools/{bin,lib,NOTICE.txt,source.properties} cmdline-tools/latest/
   export ANDROID_HOME=/opt/android-sdk
   yes | cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null
-  cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+  cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;35.0.0" "platform-tools"
   cd <repo>/android && gradle --no-daemon testDebugUnitTest assembleDebug
   # -> android/app/build/outputs/apk/debug/app-debug.apk
   ```
