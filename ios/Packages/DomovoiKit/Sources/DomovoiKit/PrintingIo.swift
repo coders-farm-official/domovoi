@@ -101,6 +101,12 @@ public struct PrintingIo: Sendable {
         ).jobs
     }
 
+    /// A printer's recent print jobs **and** the scans made on it, each with
+    /// its reading — the whole wrapper. Android's `jobLog`.
+    public func jobLog(printerID: Int, limit: Int = 10) async throws(DomovoiError) -> PrintingJobsResponse {
+        try await client.get(Path.jobs(printerID: printerID, limit: limit), as: PrintingJobsResponse.self)
+    }
+
     public func job(_ id: Int) async throws(DomovoiError) -> PrintingJob {
         try await client.get(Path.job(id), as: PrintingJob.self)
     }
@@ -237,6 +243,44 @@ public struct PrintingIo: Sendable {
 
     public func scanCancel(_ id: String) async throws(DomovoiError) -> PrintingScanJob {
         try await client.post(Path.scanCancel(id), as: PrintingScanJob.self)
+    }
+
+    // MARK: - "What does it say?" (the scan reader, 1.4.0)
+    //
+    // The paths are ``ScanReadPath``'s. All five are here, as Android's
+    // `PrintIo` has them; the screens use the progress, the summary and the
+    // text. Lookup-by-path and start are for a scan found in Documents,
+    // which neither phone offers the button on (owner decision 2026-11-17,
+    // Android 54d46869): they are the API, tested, and not a control.
+
+    /// The newest reading of a scan by its Documents path (`Scans/….pdf`).
+    public func scanReadFor(documentsPath: String) async throws(DomovoiError) -> ScanReadLookup {
+        try await client.get(ScanReadPath.lookup(documentsPath), as: ScanReadLookup.self)
+    }
+
+    /// Read a scan: `201` with the reading (the one already under way for the
+    /// same bytes when there is one); `409` when this server can't read scans.
+    public func startScanRead(documentsPath: String) async throws(DomovoiError) -> ScanRead {
+        try await client.post(
+            ScanReadPath.reads,
+            body: ScanReadPath.startBody(documentsPath),
+            as: ScanRead.self
+        )
+    }
+
+    public func scanRead(_ id: String) async throws(DomovoiError) -> ScanRead {
+        try await client.get(ScanReadPath.read(id), as: ScanRead.self)
+    }
+
+    /// `409` while the scan is still being read. The client's own wait
+    /// (60 s): a first summary the chat model takes longer over is asked
+    /// again (``ScanReadModel``).
+    public func scanReadSummary(_ id: String) async throws(DomovoiError) -> ScanReadSummary {
+        try await client.get(ScanReadPath.summary(id), as: ScanReadSummary.self)
+    }
+
+    public func scanReadText(_ id: String) async throws(DomovoiError) -> ScanReadFullText {
+        try await client.get(ScanReadPath.text(id), as: ScanReadFullText.self)
     }
 
     // MARK: - the bodies, built by hand
