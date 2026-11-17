@@ -164,66 +164,24 @@ changed when is in the [release notes](docs/RELEASE_NOTES.md).
 
 **Previews**
 
-These ship with 1.0 and work, labelled *preview* wherever you choose them:
-they have been tried on fewer devices than the rest, aren't yet held to
-1.0's promise, and may still change.
+Four things work today but have been tried on fewer devices than the rest,
+so each says *preview* where you choose it and may still change. Each line
+links to the page that covers it.
 
-- **Chat on your phone, no server needed.** The Android app's
-  Chat can run on the phone itself (Gemma 4 E2B on LiteRT-LM)
-  for text chat and push-to-talk voice, in airplane mode too once its
-  about 2.6 GB of models are downloaded. It needs a 64-bit phone with 8 GB of
-  memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
-  It answers the time and date from the phone's own clock, and questions
-  about the phone itself (what is playing, the battery, free space, Wi-Fi
-  or mobile data, its music, videos and saved books) from what the phone
-  reads at that moment; the house's rooms and calendar stay in home-server
-  chats. It also acts on the phone after a card or a yes: timers and alarms
-  in the Clock app ("remind me in 2 minutes to check the oven" becomes a
-  timer card with that label), the phone's player (with undo, and a
-  "did you mean" for a near spelling of an artist, never a guess played), a
-  saved audiobook or video. With a photo it can answer about a picture, on phones whose GPU
-  runs the model's photo encoder (the buttons show only there). A bad reply
-  can be reported (an email draft you send yourself), and its controls,
-  like room mode's, are labelled for screen readers.
-- **A Windows installer.** `DomovoiSetup.exe` puts the Linux
-  server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
-  download it from the
-  [v1.3.0 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.3.0)
-  ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
-  Domovoi's icon beside the clock: whether Domovoi is
-  running, the dashboard, a QR code for phones, and a helper that prepares
-  a Raspberry Pi's SD card from Windows (it fetches the setup Wi-Fi's
-  key itself, so nobody types it there)
-  ([the tray icon](docs/WINDOWS_HOST.md#the-tray-icon)). **Update Domovoi**
-  updates both the server and the Windows part; pressed on a phone, it
-  waits for someone at the PC, where the icon wears a blue **!** until it
-  is clicked ([a request from another device](docs/WINDOWS_HOST.md#a-request-from-another-device)).
-- **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
-  phone or tablet through the Android app's room mode, can be a room instead
-  of a Raspberry Pi. Each joins with a one-line command or a QR code from the
-  dashboard ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)). A
-  Windows PC can instead download a Setup to double-click from the same card
-  (`DomovoiSatelliteSetup.exe`, with a setup code in its file name; it
-  checks the server it reached is the one the code came from, and is not
-  code-signed yet, so SmartScreen asks first). A Windows server carries that
-  Setup in its own; a Linux server downloads it from a release that has it,
-  and until then shows the one-line command
-  ([Windows PCs](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
-  Older Linux laptops (Ubuntu 22.04, Mint 21, Debian 11) and Fedora,
-  openSUSE or Arch get the satellite's own pinned Python
-  ([older Linux](docs/SPARE_DEVICE_SATELLITES.md#older-linux-and-fedora-opensuse-arch)),
-  and a processor from before about 2009 is turned away before anything
-  is downloaded. A phone room changes its voice like any room ("switch to
-  Kristin's voice"); the server keeps the choice for it. An admin can also
-  pick any room's voice in its drawer on the dashboard (Settings → Household → Rooms). A phone room warns before its battery runs out: off its
-  charger, at 20 % and again at 10 %, the dashboard's Home and Health and
-  the app on the household's phones say so, and the room says it aloud
-  unless it is in its quiet hours; each room can turn the spoken and the
-  notified warning off in its Settings tab.
+- **Chat on your phone, no server needed.** The Android app can run chat on
+  the phone itself, even in airplane mode. Preview because it needs a
+  64-bit phone with 8 GB of memory or more and a large download
+  ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
+- **A Windows installer.** `DomovoiSetup.exe` turns a Windows 11 PC into a
+  Domovoi server. Preview because it is not code-signed yet, so Windows
+  asks before it runs ([Windows installer](docs/WINDOWS_HOST.md)).
+- **Satellites on spare devices.** A spare laptop or PC, or an old phone or
+  tablet in the app's room mode, can be a room instead of a Raspberry Pi.
+  Preview because it has been tried on few real devices
+  ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
 - **A USB stick that turns an old PC into a room.** The dashboard prepares
-  the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
-  the satellite from it after you type ERASE on it; a network cable for the
-  setup. Tested in virtual machines; real computers are next
+  the stick and the old PC installs from it. Preview because it has been
+  tested in virtual machines only, not yet on real computers
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
 **This release: Domovoi v1.3.0**
@@ -246,26 +204,20 @@ cover art; new installs that wake on "Domovoi"; one-command install on
 Linux, now also on Debian 13, Linux Mint 22 and Pop!_OS 24.04, with the
 phone app downloaded at install; and security updates.
 
+**Coming in 1.4.0**
+
+Already on `main`, not yet released: a history of what Up next picked and
+why; up to five wake words per room; a room display for a phone in room
+mode; short videos in chat; radio stations found by how you say them, and
+played in a room; a new room that asks every Domovoi server and joins the
+one you approve it on; admins signed out after an hour idle; and fixes from
+a round of home testing.
+
 **Later**
 
 The whole plan, grouped Now / Next / Later, is in the
-[roadmap](docs/ROADMAP.md).
-
-- **Guided resumes and letters, held out of 1.0.0.** The step-by-step
-  flows that ask questions to build a resume or letter are built but not
-  part of 1.0.0; plain "write a cover letter" in Chat ships.
-
-- **An iPhone app.** Its own track, apart from 1.0.0.
-- **The Windows installer out of preview,** so one download turns the household
-  gaming PC into a Domovoi server.
-- **A permissive default wake word.** The "Domovoi" word a new install
-  wakes on is CC BY-NC-SA 4.0 because of its training data, so it stays out
-  of this repository and can't ride in anything sold. One trained on
-  permissively licensed data throughout could ship anywhere.
-- **Signed releases.** Release commits and tags signed, and servers on
-  `stable` checking the signature before they update; the update verifier
-  already does the checking wherever an `allowed_signers` file is in place
-  ([signed updates](docs/LINUX_HOST.md#signed-updates)).
+[roadmap](docs/ROADMAP.md): an iPhone app, the Android app on F-Droid, the
+Windows installer out of preview, and a few wishes beyond those.
 
 **How it's built.** Domovoi is written with AI coding agents and held to the
 same bar Coders Farm teaches: automated tests, review, and a written

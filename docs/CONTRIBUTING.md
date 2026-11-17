@@ -712,6 +712,12 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    commit raises `pyproject.toml`'s version and leaves
    `android/release.json` alone, and that GitHub has no tag
    `v<version>` yet.
+   Refresh the public status pages in the same commit: the README's
+   "Status and roadmap" (**This release**, **Coming in**, **Previews**)
+   and `docs/ROADMAP.md` (move what shipped out of **Now**, **Next** and
+   **Later**, and name the next work). The docs gates fail on a stale
+   version in either (`domovoi/tests/test_version_copies.py`); whether the
+   wording is still true is for the person releasing to read.
 2. Wait for CI to go green on that commit.
 3. **Actions → release → Run workflow**, branch `main` (leave *tag* empty:
    it is `v` + `pyproject.toml`'s version).
@@ -790,6 +796,7 @@ workflow runs the same scripts. In order:
    under 20 KB). When the app changed, its `versionName` and `versionCode`
    too; when it didn't, `android/` stays as it is (`android/release.json`
    above all).
+   Include the README and roadmap refresh from step 1 of the workflow path.
 2. **Only when the app changed: `android/scripts/release.ps1`** (or `.sh`)
    from a clean, pushed checkout of `main`, **with Docker Desktop running**:
    builds the APKs in the pinned Linux image (`android/build-env`; it
