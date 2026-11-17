@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Plugin SDK 1.11: plugins can hold a live connection with phones and browsers
+
+- **What changed.** A plugin can now keep a live, two-way connection (a
+  websocket) open with the household's phones and browsers, for things
+  like a game or a remote control. It is served by the core
+  (`WS /v1/plugins/<slug>/...`) and only for routes the plugin marks
+  `@device_endpoint`: the connection needs the household token
+  (`X-Device-Token`, or `?token=` from a browser) or an admin sign-in, a
+  browser page must be on the home network, and a refused connection never
+  reaches the plugin. An open connection is checked again every 30 seconds
+  and closed once its token is changed, its admin sign-in ends, or setup
+  finishes; it never keeps an admin signed in. A plugin may hold 32
+  connections, one device 8; messages are capped in size and rate.
+  Disabling, re-enabling or upgrading the plugin closes its connections.
+  The install trust screen lists each one among the device-tier routes.
+- **What to know.** A plugin that uses it asks for SDK 1.11
+  (`domovoi_api >=1.11`) and won't install on an older server: update
+  Domovoi first. No bundled plugin uses it. Any other plugin websocket is
+  still refused at load, now with "plugin websocket routes must be
+  @device_endpoint routes on the core router (core.py)". The server's log
+  blanks the whole `?token=` value of every connection, whatever
+  characters a chosen household token holds (before, a token starting with
+  certain punctuation could reach the log in part).
+
 ## 1.4.0 (unreleased) — the room display: a phone in room mode shows the room
 
 - **What changed.** A phone or tablet in room mode can show what its room

@@ -58,6 +58,30 @@ def test_credential_values_are_blanked_and_names_kept(line: str, kept: str) -> N
 
 
 @pytest.mark.parametrize(
+    ("line", "kept"),
+    [
+        # A chosen household token may be any printable ASCII. In a query
+        # string a browser sends it through encodeURIComponent: a leading
+        # '#' becomes %23 (the value used to be skipped whole for starting
+        # with '%'), and ' ( ) ! * ~ stay as they are (the value used to
+        # stop at the first ')' or "'", leaving the rest in the line).
+        ('127.0.0.1:5 - "WebSocket /v1/plugins/game/live?token=%23Sarah\'s%20(den)%20key!*" [accepted]',
+         '127.0.0.1:5 - "WebSocket /v1/plugins/game/live?token=***" [accepted]'),
+        ('"GET /api/files/raw?path=a.pdf&device_token=ab)c,d;e HTTP/1.1" 200',
+         '"GET /api/files/raw?path=a.pdf&device_token=*** HTTP/1.1" 200'),
+        ("GET /a?token=%2Fx%3Dy&next=1", "GET /a?token=***&next=1"),
+    ],
+)
+def test_a_query_string_value_is_blanked_whole_whatever_it_holds(line: str, kept: str) -> None:
+    assert scrub(line) == kept
+
+
+def test_a_format_placeholder_is_still_not_a_value() -> None:
+    assert scrub("pairing_token=%s room=%s") == "pairing_token=%s room=%s"
+    assert scrub("GET /a?token=%s") == "GET /a?token=%s"
+
+
+@pytest.mark.parametrize(
     "line",
     [
         "exit returncode=1 tokens_used=512 key=OLLAMA_MODEL",
