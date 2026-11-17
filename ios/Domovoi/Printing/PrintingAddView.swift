@@ -86,6 +86,16 @@ struct PrintingAddView: View {
                             }
                         )
                     }
+                    // Under the fields, muted, as the dashboard and Android
+                    // say it: where the address is, and that a printer on a
+                    // USB cable can't be added (network printers only).
+                    if typesAddress {
+                        Text(PrintingStrings.addByAddressHint)
+                            .font(.footnote)
+                            .foregroundStyle(Color.fgMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
                     Button(PrintingStrings.add) { add() }
                         .buttonStyle(BrandFillButtonStyle())
                         .disabled(!canAdd)

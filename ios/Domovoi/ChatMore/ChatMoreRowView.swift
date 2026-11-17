@@ -35,6 +35,10 @@ struct ChatMoreRowActions {
     let draft: (Int64, Int) -> Void
     /// Report a reply.
     let report: (Int64) -> Void
+    /// Print a draft's version on the house's printer: the draft card's
+    /// `print` / `Print`. **Nil when the house has no printer**
+    /// (``printingOffersDraftPrint(printers:)``), and then no card draws it.
+    var print: ((ChatMoreDraftRef) -> Void)? = nil
 }
 
 extension ChatMoreRowExtras {
@@ -245,7 +249,11 @@ struct ChatMoreRowCards: View {
                     ChatMoreHeadsUpCardView(message: id, card: heads, more: more, isLastRow: isLastRow)
                 }
                 if let draft = extras.draft {
-                    ChatMoreDraftCardView(draft: draft) { actions.draft(draft.id, draft.version) }
+                    ChatMoreDraftCardView(
+                        draft: draft,
+                        open: { actions.draft(draft.id, draft.version) },
+                        print: actions.print.map { printDraft -> () -> Void in { printDraft(draft) } }
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

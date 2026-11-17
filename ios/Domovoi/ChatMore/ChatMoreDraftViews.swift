@@ -13,12 +13,16 @@ import SwiftUI
 ///   `{content, device_id}` only — a box that cannot send is not drawn.
 ///   Hand editing reaches the same place through a route of its own
 ///   (`POST .../versions`), so the feature is here and the shortcut is not.
-/// * **No save, share or print on the card.** Android offers all three
-///   (`:258-262`); they are the canvas's, one tap further in, and a card that
-///   saved a version a person has not read is a control that does something
-///   bigger than it looks. Print is left out everywhere —
-///   ``ChatMoreDraftModel`` says why, and it is Android's own behaviour on a
-///   house with no printer.
+/// * **No save or share on the card.** Android offers both (`:258-261`);
+///   they are the canvas's, one tap further in, and a card that saved a
+///   version a person has not read is a control that does something bigger
+///   than it looks.
+/// * **Print is on the card**, as Android's is (`:254`, `:260`), and only
+///   when the house has a printer (``printingOffersDraftPrint(printers:)``):
+///   `Print` first on a card whose reply asked to print, `print` after `open`
+///   on any other (``ChatMoreDraftRules/cardPrint(action:canPrint:)``). It
+///   opens the house's Print sheet for **this card's version** — nothing is
+///   sent until that sheet's own Print.
 /// * **No `latest vN` on a card that already is the latest** — "latest v3"
 ///   beside "v3" is furniture, and Android's own `takeIf` says the same
 ///   (`DraftUi.kt:166`).
@@ -26,6 +30,8 @@ struct ChatMoreDraftCardView: View {
 
     let draft: ChatMoreDraftRef
     let open: () -> Void
+    /// Print this card's version; nil when the house has no printer.
+    var print: (() -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -66,19 +72,7 @@ struct ChatMoreDraftCardView: View {
             // layout box and leave the hit area and the accessibility frame
             // the label's own 18 points (``ChatMoreLookupCardView``'s
             // `answer(_:_:strong:)` has the measurement).
-            Button(action: open) {
-                Text(ChatMoreStrings.open)
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .accessibilityLabel(ChatMoreStrings.open)
-            .accessibilityValue(
-                ChatMoreStrings.draftCard(title: draft.title, version: draft.version)
-            )
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.brandInk)
+            buttons
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,6 +86,42 @@ struct ChatMoreDraftCardView: View {
         // The sentence itself is on the title leaf above: a container's own
         // label is read on the way in and is not an element a reader stops
         // on.
+    }
+
+    /// `open`, and Print where the house has a printer — in a row, or a
+    /// column at an accessibility size (NIGHT-RULES §3).
+    @ViewBuilder
+    private var buttons: some View {
+        let printing = ChatMoreDraftRules.cardPrint(action: draft.action, canPrint: print != nil)
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: 16))
+        layout {
+            if printing == .primary { printButton(ChatMoreStrings.printPrimary) }
+            cardButton(ChatMoreStrings.open, action: open)
+            if printing == .secondary { printButton(ChatMoreStrings.print) }
+        }
+    }
+
+    @ViewBuilder
+    private func printButton(_ word: String) -> some View {
+        if let print { cardButton(word, action: print) }
+    }
+
+    private func cardButton(_ word: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(word)
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+        }
+        .accessibilityLabel(word)
+        .accessibilityValue(
+            ChatMoreStrings.draftCard(title: draft.title, version: draft.version)
+        )
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.brandInk)
     }
 
     /// kind · vN, in a column at an accessibility size (NIGHT-RULES §3).
@@ -158,6 +188,19 @@ struct ChatMoreDraftCanvasView: View {
     let model: ChatMoreDraftModel
     let close: () -> Void
 
+    /// The house's printers and the shell, when the house has a printer
+    /// (``printingOffersDraftPrint(printers:)``); nil draws no print. The
+    /// canvas's `print` is Android's version-menu entry (`DraftUi.kt:414`)
+    /// and its print icon (`:468`): the version on screen, on the house's
+    /// printer.
+    var printing: ChatMoreDraftPrinting? = nil
+
+    /// The version whose Print sheet is up. Presented from **inside** the
+    /// canvas for `sharing`'s reason, and from the scroll view rather than
+    /// from the stack `sharing` hangs off: two `.sheet`s on one view do not
+    /// reliably coexist.
+    @State private var printingVersion: ChatMoreDraftPrintVersion?
+
     @State private var exporting = false
     /// The export on its way to the share sheet.
     ///
@@ -193,6 +236,17 @@ struct ChatMoreDraftCanvasView: View {
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .sheet(item: $printingVersion) { asked in
+                if let printing {
+                    PrintSheetView(
+                        target: ChatMoreDraftRules.printTarget(draftID: asked.draftID, version: asked.version),
+                        name: printingDraftName(title: asked.title, version: asked.version),
+                        printers: printing.printers,
+                        model: printing.shell,
+                        onClose: { printingVersion = nil }
+                    )
+                }
             }
             .navigationTitle(model.view?.draft.title ?? ChatMoreStrings.draft)
             .navigationBarTitleDisplayMode(.inline)
@@ -337,6 +391,15 @@ struct ChatMoreDraftCanvasView: View {
                 }
                 HomeLink(ChatMoreStrings.share) { exporting = true }
                     .disabled(exporting)
+                if printing != nil, let draftID = model.draftID, let version = model.version?.version {
+                    HomeLink(ChatMoreStrings.print) {
+                        printingVersion = ChatMoreDraftPrintVersion(
+                            draftID: draftID,
+                            version: version,
+                            title: model.view?.draft.title
+                        )
+                    }
+                }
                 ChatMoreReadAloudButton(text: model.version?.body ?? "")
             } else {
                 HomeLink(ChatMoreStrings.saveAsVersion(model.nextVersion)) { model.saveEdit() }
@@ -403,4 +466,23 @@ struct ChatMoreChangesView: View {
         }
         return out
     }
+}
+
+/// What the canvas needs to open the house's Print sheet: the printers read
+/// that said there is one, and the shell the sheet takes its container and
+/// its toasts from.
+struct ChatMoreDraftPrinting {
+    let printers: PrintersResponse
+    let shell: ShellModel
+}
+
+/// One draft version on its way to the Print sheet. Its own type, with the
+/// draft and the version in its identity, so asking for v3 after v2 puts a
+/// fresh sheet up rather than keeping v2's.
+struct ChatMoreDraftPrintVersion: Identifiable {
+    let draftID: Int64
+    let version: Int
+    let title: String?
+
+    var id: String { "print:\(draftID):\(version)" }
 }

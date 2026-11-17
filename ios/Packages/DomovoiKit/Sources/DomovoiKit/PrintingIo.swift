@@ -337,11 +337,9 @@ public struct PrintingIo: Sendable {
 /// of a chat draft — each through its own routes, with the same options and
 /// the same preview. `PrintTarget` (`PrintIo.kt:108-121`).
 ///
-/// **No view in this item opens the draft case.** `/api/chat/drafts/{id}/print/*`
-/// belongs to whoever ports the draft panel, and both cases are written here
-/// so that item has nothing to change in this file. A seam with no caller is
-/// the pattern this track has been bitten by, so it is said out loud rather
-/// than left to look shipped.
+/// The draft case is opened by Chat: a home-server draft card's Print and the
+/// canvas's print (``ChatMoreDraftCardView``, ``ChatMoreDraftCanvasView``),
+/// as Android's `PrintTarget.ChatDraft` is (`ChatScreen.kt:970,1014,1104`).
 public enum PrintingTarget: Equatable, Sendable {
 
     /// A file the home server holds: `library_id` + a path relative to it.
@@ -349,8 +347,9 @@ public enum PrintingTarget: Equatable, Sendable {
     /// target with an empty path is a 422 and never a print.
     case file(libraryID: String, path: String)
 
-    /// A home-server chat draft's version (documents plan D4).
-    case chatDraft(draftID: Int, version: Int)
+    /// A home-server chat draft's version (documents plan D4). The id is the
+    /// draft's own (``ChatMoreDraftRef/id``), an `Int64` like every chat id.
+    case chatDraft(draftID: Int64, version: Int)
 
     public var previewPath: String {
         switch self {
