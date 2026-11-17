@@ -120,7 +120,7 @@ async def test_fh2_off_stops_tor_even_if_stopping_the_listener_fails(monkeypatch
         return "running"
 
     monkeypatch.setattr(svc, "_root", lambda: tmp_path / "friend-houses")
-    (tmp_path / "friend-houses").mkdir()
+    (tmp_path / "friend-houses" / "tor").mkdir(parents=True)  # a house that once ran it
     monkeypatch.setattr(svc, "_stop_listener", boom)
     monkeypatch.setattr(svc, "_stop_retries", lambda: calls.append("retries"))
     monkeypatch.setattr(rt, "stop", stop)
@@ -312,7 +312,9 @@ async def test_fh10_a_removed_friend_is_off_the_list_even_if_tor_fails(house, mo
     async def broken():
         raise RuntimeError("docker: no answer")
 
-    monkeypatch.setattr(svc.rt, "reload", broken)
+    from domovoi.friend_houses import tor_runtime as rt
+
+    monkeypatch.setattr(rt, "reload", broken)
     del house.friends[0]  # removed
     await svc.reconcile()
     assert svc.status()["status"] == "error"
