@@ -1612,7 +1612,12 @@ def test_the_sboms_are_attached_summed_and_listed(tmp_path, monkeypatch):
     assert set(fr.SBOM_ASSETS) <= {a["name"] for a in rel["assets"]}
     for n in fr.SBOM_ASSETS:
         assert f"| {n} |" in rel["body"] and sha[n] in rel["body"]
-    assert "`gh attestation verify <file> -R coders-farm-official/domovoi`" in rel["body"]
+    # OPS-22: the strict form only; the loose one passes any workflow's attestation.
+    strict = ("`gh attestation verify <file> -R coders-farm-official/domovoi "
+              "--signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml "
+              "--source-ref refs/heads/main`")
+    assert strict in rel["body"]
+    assert "`gh attestation verify <file> -R coders-farm-official/domovoi`" not in rel["body"]
     assert "SECURITY.md#verifying-a-release" in rel["body"]
     assert w.run("--sbom-dir", str(d), "--provenance") == 0
 

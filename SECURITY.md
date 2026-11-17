@@ -124,14 +124,17 @@ fallback scripts, have the first two only.
   commit and the run. With the [GitHub CLI](https://cli.github.com/):
 
   ```bash
-  gh attestation verify <file> -R coders-farm-official/domovoi
+  gh attestation verify <file> -R coders-farm-official/domovoi --signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml --source-ref refs/heads/main
   ```
 
-  It passes only for a file with exactly the bytes the release workflow
-  published. To also hold it to the release workflow on `main`, add
-  `--signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml --source-ref refs/heads/main`.
-  An attestation says where and how a file was built; it says nothing
-  about whether the code in it is safe.
+  It passes only for a file with exactly those bytes, attested by the
+  release workflow run from `main`. Leave out the last two options and it
+  accepts an attestation from any workflow in the repository, which anyone
+  with write access could add on a branch, so always give them (OPS-22,
+  round 6). The release workflow attests only what its own signing job
+  listed, after the owner approved the run; there is no provenance-only
+  run any more (OPS-21). An attestation says where and how a file was
+  built; it says nothing about whether the code in it is safe.
 
 Each release also carries **software bills of materials** (SBOMs,
 CycloneDX JSON), the third-party code it ships by name, version and

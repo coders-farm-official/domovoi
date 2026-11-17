@@ -1523,6 +1523,62 @@ object or a graft. Said plainly:
   only way in; it is why the service user must not be a login anyone
   shares.
 
+### The release pipeline: what GitHub's settings bound, and what they don't
+
+What a release is checked against is decided partly in this repository and
+partly in GitHub's settings, which no file here can change. As of round 6
+(OPS-21, OPS-22, 2026-11-17):
+
+- **Provenance comes only from a release run.** The release workflow's
+  `attest` job attests the files its own signing job listed in
+  `SHA256SUMS`, in a run the owner approved through the `release`
+  environment. The `attest_published` box, which ran `attest` alone with no
+  approval and attested whatever `SHA256SUMS` a published release held, is
+  gone (OPS-21).
+- **The verify command is the strict one.** Every release page and
+  [SECURITY.md](../SECURITY.md#verifying-a-release) print
+  `gh attestation verify <file> -R coders-farm-official/domovoi --signer-workflow coders-farm-official/domovoi/.github/workflows/release.yml --source-ref refs/heads/main`.
+  Without the last two options any workflow in the repository can make an
+  attestation that passes, including one pushed on a branch by anyone with
+  write access (OPS-22). Release pages published before this change
+  (1.3.0 and earlier) still print the short form.
+- **Known limit: a pull request decides its own required check.** `main`
+  takes changes only through pull requests, and the one required check,
+  `ci passed`, is a job in `.github/workflows/ci.yml` as the pull request
+  itself has it. A pull request that edits `ci.yml` (or the release
+  workflow, or `scripts/release/`) can make that check pass, and no review
+  is required, so it merges on its own say-so. A change to the signing
+  job's code then runs with the signing secrets at the next release the
+  owner approves; the approval is the one gate in between, and it shows the
+  run, not the diff since the last one.
+- **Known limit: nobody has to review anything.** There is no
+  `CODEOWNERS` and no required approval; auto-merge is the normal path
+  (owner decision 2026-11-17).
+- **Known limit: `stable` has no rule of its own.** The one-line Linux
+  install fetches `stable` and runs it as root. The release run moves it
+  (fast-forward only, never forced), and nothing on GitHub refuses a force
+  push or a deletion there.
+
+**Options for the owner** (none changed by this repository; each is a
+GitHub setting):
+
+1. A `CODEOWNERS` file naming the owner for `.github/`, `scripts/release/`,
+   `android/scripts/` and `windows/installer/`, with "Require review from
+   Code Owners" on the `main` rule. Every other change keeps merging by
+   itself; these wait for one approval. The cheapest real fix for the first
+   two limits.
+2. Keep the "no force push" and "no deletion" rules on `main` and `stable`
+   switched on always, including while a release runs (only the
+   pull-request rule needs switching off for the release's own push). The
+   release never force-pushes or deletes, so these never get in its way.
+3. Make the required check come from `main`, not the pull request: a
+   ruleset "required workflow" (an organization feature, once the
+   repository moves to Coders Farm) runs `ci.yml` as `main` has it.
+4. Before approving a release run, compare `release.yml` and
+   `scripts/release/` with the last release's tag
+   (`git diff v<last>..main -- .github scripts/release`); the approval
+   screen doesn't show it.
+
 ## What the admin password actually gates
 
 Verified against `domovoi/admin_auth.py`, `domovoi/auth.py`, and the route

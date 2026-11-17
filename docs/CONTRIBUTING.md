@@ -795,10 +795,12 @@ setup is [docs/release/ACTIONS-SETUP.md](release/ACTIONS-SETUP.md).
    `SHA256SUMS` as an artifact (`release-sums`), since GitHub drops a job
    output that holds a secret's value. If attest fails, the release is
    already out: **Re-run failed jobs** runs it again, and nothing is
-   published twice. A release whose run made no provenance at all (1.3.0)
-   gets it from **Run workflow** with the tag and **attest_published**
-   ticked: only attest runs, taking `SHA256SUMS` from the published
-   release (weaker than the signing job's own, so the release notes say so). How a user checks a file:
+   published twice. There is no provenance-only run: the
+   `attest_published` box that backfilled 1.3.0's ran attest with no
+   approval and attested whatever `SHA256SUMS` the release held, so it was
+   removed (OPS-21, round 6). A release whose attest never ran gets its
+   provenance by **Re-run failed jobs** on that release's own run, while
+   GitHub keeps it. How a user checks a file:
    [SECURITY.md, "Verifying a release"](../SECURITY.md#verifying-a-release).
 
 Every check the scripts make still runs; the workflow adds the plan, and a

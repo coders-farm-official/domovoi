@@ -606,8 +606,13 @@ def body(rel: Release) -> str:
              "Check a download: `sha256sum -c SHA256SUMS --ignore-missing` (Linux, macOS, Git Bash), "
              "or `Get-FileHash -Algorithm SHA256 <file>` (PowerShell) against the line in `SHA256SUMS`."]
     if rel.provenance:
-        check += ["", f"Check that a file was built by Domovoi's release workflow: "
-                      f"`gh attestation verify <file> -R {REPO_SLUG}` "
+        # OPS-22 (round 6): the strict form only. Without --signer-workflow and
+        # --source-ref an attestation from ANY workflow in the repository
+        # passes, which a branch pushed by anyone with write access can make.
+        check += ["", f"Check that a file was built by Domovoi's release workflow on main: "
+                      f"`gh attestation verify <file> -R {REPO_SLUG} "
+                      f"--signer-workflow {REPO_SLUG}/.github/workflows/release.yml "
+                      f"--source-ref refs/heads/main` "
                       f"([SECURITY.md, Verifying a release]({REPO_URL}/blob/{rel.tag}/SECURITY.md#verifying-a-release))."]
     where = ["<details>", "<summary>Where these files come from</summary>", "", *facts, "", "</details>"]
     parts = [*([lead, ""] if lead else []), *download(rel), "", _with_more_detail(rel.notes, more_detail(rel)), "",
