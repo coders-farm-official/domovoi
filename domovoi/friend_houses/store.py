@@ -243,6 +243,44 @@ async def delete_request(s: AsyncSession, request_id: str) -> bool:
     return bool(res.rowcount)
 
 
+async def delete_requests_for(s: AsyncSession, house_key: bytes, direction: str | None = None) -> int:
+    """Every request to or from one house (or one direction of them)."""
+    q = "DELETE FROM friend_houses_requests WHERE house_key = :h"
+    params: dict[str, Any] = {"h": house_key}
+    if direction is not None:
+        q += " AND direction = :d"
+        params["d"] = direction
+    res = await s.execute(text(q), params)
+    return int(res.rowcount or 0)
+
+
+async def address_clash(s: AsyncSession, house_key: bytes, onion_key: bytes,
+                        session_key: bytes) -> bool:
+    """Whether another friend already uses this onion or session key. A
+    friend's address is self-asserted: two friends naming one onion make
+    Tor refuse its config (audit R6 FH-13), and one naming another's
+    session key would take that friend's place in the listener's list."""
+    from domovoi.friend_houses import service
+
+    if onion_key in (service._STATE.get("onion"), service._STATE.get("pairing")):
+        return True  # this house's own address
+    row = (await s.execute(text(
+        "SELECT 1 FROM friend_houses_friends WHERE house_key <> :h "
+        "AND (onion_key = :o OR session_key = :k) LIMIT 1"),
+        {"h": house_key, "o": onion_key, "k": session_key})).first()
+    return row is not None
+
+
+async def session_key_taken(s: AsyncSession, session_key: bytes) -> bool:
+    """Whether a friend or any request already uses this session key (the
+    listener's friend list is keyed by it: audit R6 FH-11)."""
+    row = (await s.execute(text(
+        "SELECT 1 FROM friend_houses_friends WHERE session_key = :k "
+        "UNION ALL SELECT 1 FROM friend_houses_requests WHERE session_key = :k AND expires_at > now() "
+        "LIMIT 1"), {"k": session_key})).first()
+    return row is not None
+
+
 async def drop_expired(s: AsyncSession) -> int:
     res = await s.execute(text("DELETE FROM friend_houses_requests WHERE expires_at <= now()"))
     return int(res.rowcount or 0)

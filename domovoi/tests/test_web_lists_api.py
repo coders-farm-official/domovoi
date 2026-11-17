@@ -270,6 +270,26 @@ async def test_a_voice_add_shows_who_and_where(house) -> None:
 
 @requires_db
 @pytest.mark.asyncio
+async def test_an_item_a_friend_house_added_loads(house) -> None:
+    # Audit R6 FH-6: an item stored with added_via 'friend' (a shared list)
+    # failed the response model, so the list answered 500 everywhere.
+    from domovoi import lists as L
+
+    shopping = await L.find_list(house, "shopping")
+    await L.add_item(house, shopping.id, "Paper plates", via="friend")
+    await house.commit()
+    r = await _call("GET", f"/api/lists/{shopping.id}")
+    assert r.status_code == 200
+    [item] = r.json()["items"]
+    assert item["added_via"] == "friend"
+    r = await _call("PATCH", f"/api/lists/{shopping.id}/items/{item['id']}", {"done": True})
+    assert r.status_code == 200 and r.json()["added_via"] == "friend"
+    r = await _call("PUT", f"/api/lists/{shopping.id}/items/order", {"item_ids": [item["id"]]})
+    assert r.status_code == 200
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_the_realtime_digest_moves_on_every_write_and_names_nothing(house) -> None:
     from web.backend.api import lists as lists_api
 

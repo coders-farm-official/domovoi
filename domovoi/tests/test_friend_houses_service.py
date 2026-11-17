@@ -110,6 +110,7 @@ def house(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_ensure_listener", fake_ensure)
     monkeypatch.setattr(svc, "_stop_listener", fake_stop)
     monkeypatch.setattr(svc, "RELOAD_MIN_INTERVAL_SEC", 0.0)
+    monkeypatch.setattr(svc, "firewall_state", lambda: "in_place")
     monkeypatch.setitem(svc._STATE, "applied", None)
     monkeypatch.setitem(svc._STATE, "last_reload", 0.0)
     monkeypatch.setattr(settings, "friend_houses_enabled", False, raising=False)
@@ -324,3 +325,19 @@ async def test_no_new_address_while_nothing_runs(house) -> None:
     house.enable()
     assert await svc.move_to_new_address() is False
     assert house.docker.calls == []
+
+
+@linux_only
+async def test_no_firewall_rules_no_tor(house, monkeypatch) -> None:
+    # Audit R6 FH-14: core used to start Tor with only a warning.
+    monkeypatch.setattr(svc, "firewall_state", lambda: "missing")
+    monkeypatch.setattr(svc, "_retry_reconcile_later", lambda: None)
+    monkeypatch.delenv("DOMOVOI_MANAGE_FH_FIREWALL", raising=False)
+    house.enable()
+    house.friends.append(_friend(1))
+    await svc.reconcile()
+    assert "start" not in house.docker.calls
+    assert svc.status()["status"] == "error" and "firewall" in svc.status()["detail"]
+    monkeypatch.setenv("DOMOVOI_MANAGE_FH_FIREWALL", "0")  # the administrator's own firewall
+    await svc.reconcile()
+    assert "start" in house.docker.calls

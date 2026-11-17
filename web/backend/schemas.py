@@ -1173,7 +1173,7 @@ class HouseholdListItem(BaseModel):
     added_by_person_id: int | None = None
     added_by_name: str | None = None
     added_by_room: str | None = None
-    added_via: Literal["voice", "screen"]
+    added_via: Literal["voice", "screen", "friend"]  # friend: added by a friend house on a shared list
     created_at: datetime
     updated_at: datetime
 

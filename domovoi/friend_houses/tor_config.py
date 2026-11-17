@@ -80,7 +80,9 @@ def render_torrc(w: Wanted) -> str:
     lines = [
         "# Written by Domovoi (Friend Houses). Changes here are overwritten.",
         f"DataDirectory {DATA_MOUNT}/tor",
-        f"SocksPort unix:{RUN_MOUNT}/{SOCKS_NAME}",
+        # Onions only: the SOCKS port can't be used to reach the clear web
+        # (audit R6 FH-12).
+        f"SocksPort unix:{RUN_MOUNT}/{SOCKS_NAME} OnionTrafficOnly",
         f"ClientOnionAuthDir {DATA_MOUNT}/clientauth",
         "AvoidDiskWrites 1",
         "Log notice stdout",

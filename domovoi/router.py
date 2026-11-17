@@ -571,12 +571,14 @@ async def _persist_turn(
         # existed (domovoi/turn_history.py): this fills in that same row.
         history_entry=ctx.history_entry,
     )
-    await SessionRepository(session).record_exchange(
-        session_id,
-        intent.transcript,
-        response.text,
-        settings.session_recent_turns_cap,
-    )
+    if response.history_text is None:
+        await SessionRepository(session).record_exchange(
+            session_id, intent.transcript, response.text, settings.session_recent_turns_cap)
+    else:
+        # The history keeps a stand-in; "say that again" repeats what was said.
+        await SessionRepository(session).record_exchange(
+            session_id, intent.transcript, response.history_text,
+            settings.session_recent_turns_cap, last_response=response.text)
     # A turn that started music in its own room: that music is for the
     # person who spoke (None, the household, when nobody was recognised).
     # The listening history attributes the room's songs by it

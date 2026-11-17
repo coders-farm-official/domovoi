@@ -990,7 +990,12 @@ class MemoriesRepository:
         row = await self.s.execute(
             text(
                 """
-                SELECT user_text, assistant_text
+                SELECT user_text,
+                       -- Answers that read out words from outside the
+                       -- house (a friend house's messages or list items)
+                       -- never feed the memory extractor (R6 FH-15).
+                       CASE WHEN matched_handler IN ('friend_houses', 'lists')
+                            THEN NULL ELSE assistant_text END
                 FROM conversation_log
                 WHERE person_id = :pid
                 ORDER BY at DESC
@@ -1463,8 +1468,13 @@ class SessionRepository:
         user_text: str,
         assistant_text: str,
         recent_turns_cap: int,
+        *,
+        last_response: str | None = None,
     ) -> None:
         """Append user + assistant turns and update last_assistant_response.
+
+        ``last_response``: what was actually said, when the history keeps a
+        stand-in for it (Response.history_text); "say that again" repeats it.
 
         Past ``recent_turns_cap`` entries the OLDER HALF goes in one cut
         (see ``trim_recent_turns``), not one exchange per turn.
@@ -1483,7 +1493,7 @@ class SessionRepository:
         recent = trim_recent_turns(recent, recent_turns_cap)
 
         ctx["recent_turns"] = recent
-        ctx["last_assistant_response"] = assistant_text
+        ctx["last_assistant_response"] = last_response if last_response is not None else assistant_text
 
         await self.s.execute(
             text(

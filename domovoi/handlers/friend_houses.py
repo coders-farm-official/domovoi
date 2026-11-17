@@ -202,7 +202,8 @@ class FriendHousesHandler(Handler):
         if not convos:
             return self._reply(ctx, "No new messages.")
         total = sum(c["unread"] for c in convos)
-        names = [c["name"] for c in convos]
+        phrases = await messages.wake_phrases()
+        names = [messages.safe_name(c["name"], phrases) for c in convos]
         who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         word = "message" if total == 1 else "messages"
         return self._reply(ctx, f"{total} new {word}, from {who}. Say \"read my messages\" to hear them.")
@@ -233,7 +234,7 @@ class FriendHousesHandler(Handler):
             for msg in unread[:room]:
                 said = messages.safe_to_say(msg["body"], phrases)
                 if said:
-                    parts.append(f"From {c['name']}: {said}")
+                    parts.append(f"From {messages.safe_name(c['name'], phrases)}: {said}")
                 read += 1
             if len(unread) <= room:
                 await messages.mark_read(house)  # all of it was heard

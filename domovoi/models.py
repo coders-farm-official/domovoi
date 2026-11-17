@@ -238,6 +238,12 @@ class Response(BaseModel):
     # Skipped when the response was interrupted — the bot's question
     # got cut off, so the user wasn't given a chance to answer it.
     expect_followup: bool = False
+    # What this turn is remembered as in the conversation's context (the
+    # chat model's history), when that must differ from ``text``: an answer
+    # that quotes words from outside the house (a friend house's shared
+    # list items) is remembered with a stand-in, so those words never
+    # become the model's own (audit R6 FH-15). None: the text itself.
+    history_text: str | None = None
     # Pi-side action to trigger after the response audio drains. The
     # streaming layer copies this into the response_end frame; the
     # satellite executes the action once playback has fully drained

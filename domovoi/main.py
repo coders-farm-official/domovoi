@@ -3955,6 +3955,7 @@ async def admin_friend_houses_status() -> dict[str, Any]:
     out["house_name"] = await friending.house_name()
     out["unread"] = await messages.unread_total()
     out["invite_days"] = await friending.invite_days_default()
+    out["changes"] = await friending.recent_changes()  # new friends, shared lists (R6 FH-8)
     out["limits"] = {"min_days": friending.MIN_DAYS, "max_days": friending.MAX_DAYS,
                      "max_open_files": friending.MAX_OPEN_INVITES}
     return out
@@ -4061,6 +4062,16 @@ async def admin_friend_houses_decline(request_id: str) -> dict[str, Any]:
     if not await friending.decline(request_id):
         raise HTTPException(status_code=404, detail="That request isn't waiting any more.")
     return {"declined": True}
+
+
+@app.delete("/v1/admin/friend-houses/requests/{request_id}", dependencies=_FH_WRITE)
+async def admin_friend_houses_withdraw(request_id: str) -> dict[str, Any]:
+    """Take back a request this house sent, before the other house accepts."""
+    from domovoi.friend_houses import friending
+
+    if not await friending.withdraw(request_id):
+        raise HTTPException(status_code=404, detail="That request can't be taken back any more.")
+    return {"withdrawn": True}
 
 
 @app.get("/v1/admin/friend-houses/friends", dependencies=_FH_HOUSEHOLD)

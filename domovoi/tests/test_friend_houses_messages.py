@@ -360,3 +360,18 @@ async def test_messages_outlive_an_unfriend_for_keep_or_export(house) -> None:
     assert convo[0]["name"] == "The Smiths" and convo[0]["friend_id"] is None
     with pytest.raises(fm.MessageError):
         await fm.send("fthem", "still there?")
+
+
+@requires_db
+@pytest.mark.parametrize("sent_at,seq", [(1 << 62, 2), ((1 << 64) - 1, (1 << 64) - 1), (0, 3)])
+async def test_a_clock_no_date_can_show_is_stored_as_the_arrival_time(house, sent_at, seq) -> None:
+    # From the phone apps' review: sent_at 2^62 crashed the Android app,
+    # and 2^63 or more (sent_at or seq) failed the BIGINT insert, so the
+    # message was never acked and the friend's later ones waited behind it.
+    env = fe.text_message(house.them, to=house.us.house_key, text="Hi", epoch=b"\x09" * 8, seq=seq,
+                          sent_at=sent_at)
+    event = {"event": "message", "house": house.them.house_key.hex(), "envelope": env.to_bytes().hex()}
+    before = int(time.time())
+    assert await fm.on_message(event)
+    [msg] = await fm.conversation(house.them.house_key)
+    assert before <= msg["sent_at"] <= int(time.time()) + 1

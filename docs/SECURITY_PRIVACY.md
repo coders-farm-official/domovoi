@@ -2640,9 +2640,24 @@ Friend Houses page warns while those rules are missing.
 house; it doesn't prove who is calling, and a removed friend can keep
 reaching the onion for minutes. So every connection also runs a Noise
 handshake bound to both houses' keys, and the house checks the caller
-against its **current** friend list before reading anything else. The
-inbound side runs as its own process with no database and no network,
-reading only fixed-size, fixed-format frames.
+against its **current** friend list before reading anything else, and
+again on every frame, so a friend removed or blocked mid-connection is cut
+off at its next one. The inbound side runs as its own process that reads
+only fixed-size, fixed-format frames and starts with a scrubbed
+environment (no database address, no tokens). It is not a sandbox: it
+runs as the core's own user, so a bug in it could read what that user
+can. Tor's SOCKS port reaches onion addresses only.
+
+**Limits that keep one house from swamping this one.** A friend can send
+at most 60 messages an hour; connects, "I'm back" and accepts are capped
+at 120 an hour per house, and one accept ends its connection; friend
+requests have their own 8 connection slots and only a request naming an
+open friend file counts toward the 20 an hour; the handshake must finish
+within 20 seconds. The core handles at most 24 events from the listener
+at once and drops the rest (the other house simply tries again). A
+friend's offered lists (5 waiting at most), the changes waiting on an
+offer (2,000) and the items a shared list remembers (5,000) are capped
+too.
 
 **Friend files are bearer secrets.** A friend file (one line,
 `domovoi-friend:1:…`) lets whoever holds it ask to be a friend, **once**,
@@ -2661,14 +2676,22 @@ household token): reading the house inbox, sending a message, marking a
 conversation read, and seeing the friend list and the shared lists.
 
 **The 4-digit code.** Both houses compute the same 4-digit code from
-random values each side committed to before seeing the other's, so
+random values each side committed to before seeing the other's (the
+asking house commits to its house key too, so it can't generate keys
+until the code comes out the way it wants), so
 someone who swapped a friend file in transit can't make the codes match
 except by a 1-in-10,000 chance, once per file. Comparing codes (by phone,
 in person) is optional; a friend shows "Not verified" until someone does.
 
-**Every new friend is announced** aloud in the rooms and logged, so a
-friend added without the household knowing (for example by someone on the
-LAN who captured an admin sign-in) doesn't go unnoticed.
+**Every new friend is announced** aloud in the rooms and logged, and so
+is every list shared with a friend, so a friend added without the
+household knowing (for example by someone on the LAN who captured an
+admin sign-in) doesn't go unnoticed. During the house's quiet hours the
+announcement waits and is said when they end; the Friend Houses page (and
+the status the phones read) lists the week's new friends and shared lists
+either way. A request this house sent can be taken back before it is
+accepted, and a friend file naming a key another friend already uses is
+refused.
 
 **Messages.** There is one inbox for the whole house; Domovoi has no
 per-person sign-in, so per-person inboxes wait for one. Every message is
@@ -2721,8 +2744,9 @@ friend's message nor a friend's name goes to the chat model.
 
 **Shared lists.** An admin can share a household list with a friend house.
 Each house keeps its own copy in its own Lists, and the two exchange
-signed changes (items added, edited, ticked off, removed; not the list's
-name, its order or who in the house did what). A friend's changes can
+signed changes (items added, edited, ticked off, removed; not its order
+or who in the house did what). The list's name goes with the first change,
+as the title the friend sees on the offer. A friend's changes can
 only touch the one list its share is linked to here. A list a friend
 offers waits for an admin to accept it, and declining tells nobody. Text a
 friend adds to a list is cleaned, cut at 200 characters, and has every
