@@ -193,6 +193,11 @@ those voices shaped it; **Synthetic voices only** avoids that.
   (`pypdfium2-*.dist-info/licenses/`). The FreeType licence asks for this
   credit: *Portions of this software are copyright © The FreeType Project
   (www.freetype.org). All rights reserved.*
+- **RapidFuzz** (MIT), **anyascii** (ISC) and **Metaphone** (BSD): the
+  library's name matching ("play suicide boys" finds a stylized artist
+  name): close spellings, names turned into plain ASCII letters, and
+  sounds-alike keys. All three are small Python packages that install with
+  Domovoi; their licences come in each package's metadata.
 - **ReportLab** (test pages, text and table printouts, scan PDFs): BSD.
 - **cryptography** (signs the server's identity and checks signatures,
   the Android app's included; since 1.3.0): Apache-2.0 or BSD-3-Clause.
