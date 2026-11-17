@@ -228,6 +228,36 @@ struct FakeRoomEarsLoader: RoomEarsLoading {
     func load(_ files: RoomModelFiles) throws -> any RoomEars { FakeRoomEars() }
 }
 
+/// Ears for several words (1.4.0): word `i` (of ``words``, main first)
+/// scores 0.9 on a frame whose first sample is ``FakeRoomEars/wakeMark`` + i,
+/// every word 0.01 on any other; speech as ``FakeRoomEars``.
+final class FakeWordsEars: RoomEars {
+    let words: [String]
+
+    init(words: [String]) {
+        self.words = words
+    }
+
+    var wakeWords: [String] { words }
+
+    static func mark(_ index: Int) -> Int16 { FakeRoomEars.wakeMark + Int16(index) }
+
+    func wakeScore(_ frame: [Int16]) throws -> Float? { try wakeScores(frame)?.first }
+
+    func wakeScores(_ frame: [Int16]) throws -> [Float]? {
+        words.indices.map { i -> Float in frame.first == Self.mark(i) ? 0.9 : 0.01 }
+    }
+
+    func resetWake() {}
+    func isSpeech(_ frame: [Int16]) throws -> Bool { (frame.first ?? 0) > 500 }
+    func resetVoice() {}
+}
+
+/// Loads ``FakeWordsEars`` for every word the files name.
+struct FakeWordsEarsLoader: RoomEarsLoading {
+    func load(_ files: RoomModelFiles) throws -> any RoomEars { FakeWordsEars(words: files.wakeKeys) }
+}
+
 /// A microphone that hands over the frames queued on it, then quiet noise,
 /// a millisecond a frame (never exact zeros).
 final class ScriptedPCMSource: RoomPCMSource, @unchecked Sendable {

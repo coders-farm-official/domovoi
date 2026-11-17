@@ -127,3 +127,74 @@ class WakeGate(
         fun floorFor(threshold: Float): Float = minOf(threshold, maxOf(0.3f, threshold * 0.6f))
     }
 }
+
+/**
+ * One [WakeGate] per word the room listens for (1.4.0, [WakeWords]), each at
+ * its own threshold, all with the room's patience and cooldown: the Pi's
+ * `gates` dict in satellite/client.py `_wait_for_wake`.
+ *
+ * Every chunk feeds every word's score to its own gate, so each word's run
+ * is its own; the first word (in the room's order, main word first) whose
+ * gate completes a run wakes the room, and the other words' runs are
+ * forgotten. The cooldown after a turn that went wrong holds every word.
+ *
+ * Pure, like [WakeGate]: the listening thread owns it.
+ */
+class WakeGates(
+    val slugs: List<String>,
+    val thresholds: List<Float>,
+    patience: Int = WakeGate.PATIENCE_DEFAULT,
+    cooldownSec: Double = WakeGate.COOLDOWN_SEC_DEFAULT,
+) {
+    init {
+        require(slugs.isNotEmpty() && slugs.size == thresholds.size) { "one threshold per word" }
+    }
+
+    val gates: List<WakeGate> = thresholds.map { WakeGate(it, patience, cooldownSec) }
+
+    /** The word that last woke the room ([slugs] index), its peak score
+     *  and how many chunks its run lasted. */
+    var lastIndex: Int? = null; private set
+    var lastPeak: Float? = null; private set
+    var lastRun = 0; private set
+
+    val lastSlug: String? get() = lastIndex?.let { slugs[it] }
+
+    /** One chunk's scores, one per word ([WakeDetector.accept]): the index
+     *  of the word that woke the room, or null. */
+    fun feed(scores: FloatArray, now: Long): Int? {
+        var fired: Int? = null
+        for (i in gates.indices) {
+            val s = if (i < scores.size) scores[i] else 0f
+            if (gates[i].feed(s, now) && fired == null) fired = i
+        }
+        val f = fired ?: return null
+        val g = gates[f]
+        lastIndex = f
+        lastPeak = g.lastPeak
+        lastRun = g.lastRun
+        for (i in gates.indices) if (i != f) gates[i].reset()
+        return f
+    }
+
+    /**
+     * One chunk over a word's own threshold, no patience, no cooldown: the
+     * first such word's index, or null. What a drop-in's "hang up" listens
+     * with (the Pi's `_wake_hit`).
+     */
+    fun hit(scores: FloatArray): Int? {
+        for (i in gates.indices) {
+            val s = if (i < scores.size) scores[i] else 0f
+            if (!s.isNaN() && s > thresholds[i]) return i
+        }
+        return null
+    }
+
+    fun quietFor(now: Long, ms: Long? = null) = gates.forEach { it.quietFor(now, ms) }
+
+    fun inCooldown(now: Long): Boolean = gates.any { it.inCooldown(now) }
+
+    fun reset() = gates.forEach { it.reset() }
+
+    val patience: Int get() = gates[0].patience
+}

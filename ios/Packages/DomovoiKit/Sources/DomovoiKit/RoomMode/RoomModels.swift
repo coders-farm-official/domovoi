@@ -13,6 +13,10 @@ import Foundation
 ///   checks the two agree).
 /// - a wake word the dashboard trained and pushed (`set_wake_word`) comes
 ///   from `/v1/wake-models`, signed, checked against the list's digest.
+/// - a room with several words (1.4.0) takes each the same way: a stock
+///   word from `/v1/wake-base`, any other from `/v1/wake-models`. The main
+///   word must be there; an extra word the server lacks (or whose download
+///   fails) is left out, and the room's hello then says what loaded.
 ///
 /// Nothing is bundled in the app: the pretrained wake-word models are not
 /// under a licence the app may ship. Files live under the room's own folder
@@ -83,12 +87,28 @@ public final class RoomModels: @unchecked Sendable {
 
     /// What the room loads for `wakeWord`, if it is all here and intact.
     public func local(_ wakeWord: String) -> RoomModelFiles? {
+        local([wakeWord])
+    }
+
+    /// What the room loads for `wakeWords` (main word first): nil unless
+    /// the base models and the main word's are here and intact; each other
+    /// word only when its own model is (re-hashed, as every load is).
+    public func local(_ wakeWords: [String]) -> RoomModelFiles? {
+        guard let main = wakeWords.first else { return nil }
         let base = Self.base.map { dir.appendingPathComponent($0) }
         guard base.allSatisfy(verifiedBase) else { return nil }
-        let wakeFile = dir.appendingPathComponent(Self.wakeFileName(wakeWord))
-        let wakeOK = Self.stockFile(wakeWord) != nil ? verifiedBase(wakeFile) : trainedModelIntact(wakeFile.lastPathComponent)
-        guard wakeOK else { return nil }
-        return RoomModelFiles(melspectrogram: base[0], embedding: base[1], vad: base[2], wake: wakeFile, wakeKey: wakeWord)
+        guard let wakeFile = intactWakeFile(main) else { return nil }
+        var extras: [RoomWakeModelFile] = []
+        for word in wakeWords.dropFirst() where word != main && !extras.contains(where: { $0.slug == word }) {
+            if let file = intactWakeFile(word) { extras.append(RoomWakeModelFile(slug: word, file: file)) }
+        }
+        return RoomModelFiles(melspectrogram: base[0], embedding: base[1], vad: base[2], wake: wakeFile, wakeKey: main, extras: extras)
+    }
+
+    private func intactWakeFile(_ wakeWord: String) -> URL? {
+        let file = dir.appendingPathComponent(Self.wakeFileName(wakeWord))
+        let ok = Self.stockFile(wakeWord) != nil ? verifiedBase(file) : trainedModelIntact(file.lastPathComponent)
+        return ok ? file : nil
     }
 
     /// A trained model is loaded only when it still hashes to what its
@@ -101,36 +121,69 @@ public final class RoomModels: @unchecked Sendable {
     /// Fetch what is missing or changed for `wakeWord` from the core at
     /// `coreURL` (pinned `fingerprint`) over `http`. Blocking.
     public func sync(http: any RoomHTTP, coreURL: String, fingerprint: String, wakeWord: String) -> Outcome {
+        sync(http: http, coreURL: coreURL, fingerprint: fingerprint, wakeWords: [wakeWord])
+    }
+
+    /// The same for a room's words, main word first (1.4.0). The main word
+    /// is fetched as one word always was (its absence or a bad body is the
+    /// outcome); every other word is best effort: one the server does not
+    /// list, or whose body fails its digest, is left out of the files.
+    public func sync(http: any RoomHTTP, coreURL: String, fingerprint: String, wakeWords: [String]) -> Outcome {
+        guard let main = wakeWords.first else { return .failed("no wake word") }
+        var words: [String] = []
+        for w in wakeWords where !words.contains(w) { words.append(w) }
         do {
             try Self.makeFolder(dir)
             let baseList = try signedList(http, "\(coreURL)/v1/wake-base/manifest.sig", RoomIdentity.wakeBaseChannel, fingerprint)
-            let wanted = Self.base + [Self.stockFile(wakeWord)].compactMap { $0 }
+            let wanted = Self.base + [Self.stockFile(main)].compactMap { $0 }
             let missing = wanted.filter { baseList[$0] == nil }
             for name in wanted where !missing.contains(name) {
-                guard let pin = Self.pins[name] else { continue }
-                if baseList[name] != pin.sha {
-                    throw RoomNetworkFailure("the server lists \(name) with a digest the app does not pin")
-                }
-                let target = dir.appendingPathComponent(name)
-                if verifiedBase(target) { continue }
-                try download(http, "\(coreURL)/v1/wake-base/\(name)", target, sha: pin.sha, size: pin.size)
+                try fetchBase(http, coreURL, baseList, name)
             }
-            if Self.stockFile(wakeWord) == nil {
-                let name = Self.wakeFileName(wakeWord)
+            for word in words.dropFirst() {
+                guard let name = Self.stockFile(word), baseList[name] != nil else { continue }
+                // An extra word's failure leaves that word out, nothing more.
+                _ = try? fetchBase(http, coreURL, baseList, name)
+            }
+            let trained = words.filter { Self.stockFile($0) == nil }
+            if !trained.isEmpty {
                 let list = try signedList(http, "\(coreURL)/v1/wake-models/manifest.sig", RoomIdentity.wakeModelsChannel, fingerprint)
-                guard let sha = list[name] else { return .missing(missing + [name]) }
-                let target = dir.appendingPathComponent(name)
-                if Self.sha256(file: target) != sha {
-                    try download(http, "\(coreURL)/v1/wake-models/\(name)", target, sha: sha, size: nil)
+                for word in trained {
+                    let name = Self.wakeFileName(word)
+                    let isMain = word == main
+                    guard let sha = list[name] else {
+                        if isMain { return .missing(missing + [name]) }
+                        continue
+                    }
+                    let target = dir.appendingPathComponent(name)
+                    do {
+                        if Self.sha256(file: target) != sha {
+                            try download(http, "\(coreURL)/v1/wake-models/\(name)", target, sha: sha, size: nil)
+                        }
+                        book.setTrainedSHA(name, sha)
+                    } catch {
+                        if isMain { throw error }
+                    }
                 }
-                book.setTrainedSHA(name, sha)
             }
             if !missing.isEmpty { return .missing(missing) }
-            guard let files = local(wakeWord) else { return .failed("the models did not check out after the download") }
+            guard let files = local(words) else { return .failed("the models did not check out after the download") }
             return .ready(files)
         } catch {
             return .failed(RoomIdentity.describe(error))
         }
+    }
+
+    /// One `/v1/wake-base` file, only when the signed list's digest is the
+    /// app's pin, and only when the copy here is not already it.
+    private func fetchBase(_ http: any RoomHTTP, _ coreURL: String, _ baseList: [String: String], _ name: String) throws {
+        guard let pin = Self.pins[name] else { return }
+        if baseList[name] != pin.sha {
+            throw RoomNetworkFailure("the server lists \(name) with a digest the app does not pin")
+        }
+        let target = dir.appendingPathComponent(name)
+        if verifiedBase(target) { return }
+        try download(http, "\(coreURL)/v1/wake-base/\(name)", target, sha: pin.sha, size: pin.size)
     }
 
     private func signedList(_ http: any RoomHTTP, _ url: String, _ channel: String, _ fingerprint: String) throws -> [String: String] {

@@ -22,13 +22,12 @@ import java.io.File
  * point at the models and the clips (not in the repo: their licence).
  */
 class WakeDetectorTest {
-    /** Records what the pipeline asks of each network. */
-    private class FakeNets(private val scores: (Int) -> Float = { 0.9f }) : WakeNets {
+    /** Records what the pipeline asks of the shared front end. */
+    class FakeFrontEnd : WakeFrontEnd {
         val melInputs = mutableListOf<Int>()
         var embeddings = 0
-        var wakes = 0
         val windows = mutableListOf<Float>()
-        override val wakeInputFrames = 16
+        var closed = false
 
         override fun melspectrogram(samples: FloatArray): Array<FloatArray> {
             melInputs += samples.size
@@ -43,17 +42,32 @@ class WakeDetectorTest {
             return FloatArray(96) { embeddings.toFloat() }
         }
 
-        override fun wake(features: Array<FloatArray>): Float {
-            assertEquals(16, features.size)
+        override fun close() {
+            closed = true
+        }
+    }
+
+    /** One word's classifier: [scores] by call number. */
+    class FakeClassifier(override val inputFrames: Int = 16, private val scores: (Int) -> Float = { 0.9f }) : WakeClassifier {
+        var wakes = 0
+        var closed = false
+
+        override fun score(features: Array<FloatArray>): Float {
+            assertEquals(inputFrames, features.size)
             wakes += 1
             return scores(wakes)
+        }
+
+        override fun close() {
+            closed = true
         }
     }
 
     @Test
     fun eightyMillisecondChunksWithTheirContext() {
-        val nets = FakeNets()
-        val d = WakeDetector(nets, seed = List(41) { FloatArray(96) })
+        val nets = FakeFrontEnd()
+        val word = FakeClassifier()
+        val d = WakeDetector(nets, listOf(word), seed = List(41) { FloatArray(96) })
         // 30 ms frames, as the room's mic delivers them: 1280 samples is
         // 2.67 frames, so a chunk completes on the 3rd, 6th and 8th frame.
         val frame = ShortArray(480) { 100 }
@@ -63,24 +77,23 @@ class WakeDetectorTest {
         assertEquals(listOf(1280, 1760, 1760), nets.melInputs)
         // One embedding and one score per chunk.
         assertEquals(3, nets.embeddings)
-        assertEquals(3, nets.wakes)
+        assertEquals(3, word.wakes)
     }
 
     @Test
     fun theFirstFiveScoresAfterAResetAreSilent() {
-        val nets = FakeNets { 0.99f }
-        val d = WakeDetector(nets, seed = List(41) { FloatArray(96) })
+        val d = WakeDetector(FakeFrontEnd(), listOf(FakeClassifier { 0.99f }), seed = List(41) { FloatArray(96) })
         val chunk = ShortArray(1280)
-        val scores = (1..7).map { d.accept(chunk)!! }
+        val scores = (1..7).map { d.accept(chunk)!!.single() }
         assertEquals(listOf(0f, 0f, 0f, 0f, 0f, 0.99f, 0.99f), scores)
         d.reset()
-        assertEquals(0f, d.accept(chunk))
+        assertEquals(0f, d.accept(chunk)!!.single())
     }
 
     @Test
     fun theMelTransformIsAppliedBeforeTheEmbedding() {
-        val nets = FakeNets()
-        val d = WakeDetector(nets, seed = emptyList())
+        val nets = FakeFrontEnd()
+        val d = WakeDetector(nets, listOf(FakeClassifier()), seed = emptyList())
         d.accept(ShortArray(1280) { 30 })
         // mel value 30 -> 30 / 10 + 2 = 5 in the newest frame of the window
         assertEquals(5f, nets.windows.last(), 1e-6f)
@@ -89,11 +102,45 @@ class WakeDetectorTest {
 
     @Test
     fun theNoiseSeedIsEveryEighthWindowOfFourSeconds() {
-        val nets = FakeNets()
+        val nets = FakeFrontEnd()
         val seed = WakeDetector.noiseFeatures(nets)
         // 64000 samples -> 397 mel frames -> windows at 0, 8, ..., 320.
         assertEquals(41, seed.size)
         assertEquals(listOf(64000), nets.melInputs)
+    }
+
+    // ── several words (1.4.0): one front end, one classifier each ────────
+
+    @Test
+    fun oneFrontEndFeedsEveryWord() {
+        val nets = FakeFrontEnd()
+        val words = listOf(FakeClassifier { 0.1f }, FakeClassifier { 0.5f }, FakeClassifier(inputFrames = 12) { 0.8f })
+        val d = WakeDetector(nets, words, seed = List(41) { FloatArray(96) })
+        assertEquals(3, d.words)
+        val chunk = ShortArray(1280)
+        val got = (1..8).map { d.accept(chunk)!! }
+        // ONE melspectrogram and ONE embedding per chunk, whatever the
+        // number of words; each word's classifier once per chunk.
+        assertEquals(8, nets.melInputs.size)
+        assertEquals(8, nets.embeddings)
+        assertEquals(listOf(8, 8, 8), words.map { it.wakes })
+        // A score per word, in the room's order; the warm-up silences all.
+        assertEquals(listOf(0f, 0f, 0f), got[0].toList())
+        assertEquals(listOf(0.1f, 0.5f, 0.8f), got[7].toList())
+        d.close()
+        assertTrue(nets.closed && words.all { it.closed })
+    }
+
+    @Test
+    fun aFrameThatCompletesTwoChunksGivesEachWordItsBest() {
+        val nets = FakeFrontEnd()
+        val a = FakeClassifier { if (it == 6) 0.9f else 0.2f }
+        val b = FakeClassifier { if (it == 7) 0.7f else 0.1f }
+        val d = WakeDetector(nets, listOf(a, b), seed = List(41) { FloatArray(96) })
+        repeat(5) { d.accept(ShortArray(1280)) }
+        // Chunks 6 and 7 in one call: word a peaked on the first, b on the second.
+        assertEquals(listOf(0.9f, 0.7f), d.accept(ShortArray(2560))!!.toList())
+        assertEquals(7, nets.embeddings)
     }
 
     // ── the real models ─────────────────────────────────────────────────
@@ -116,15 +163,42 @@ class WakeDetectorTest {
             val pcm = readWav(File(clips, "$name.wav"))
             val pad = ShortArray(16_000)
             val audio = pad + pcm + pad
-            val nets = OrtWakeNets(File(models, "melspectrogram.onnx"), File(models, "embedding_model.onnx"), File(models, "hey_jarvis_v0.1.onnx"))
-            nets.use {
-                val d = WakeDetector(nets, seed = WakeDetector.noiseFeatures(nets, ShortArray(64_000)))
-                val got = (0..audio.size - 1280 step 1280).map { d.accept(audio.copyOfRange(it, it + 1280))!! }
+            val nets = OrtWakeFrontEnd(File(models, "melspectrogram.onnx"), File(models, "embedding_model.onnx"))
+            val word = OrtWakeClassifier(File(models, "hey_jarvis_v0.1.onnx"))
+            WakeDetector(nets, listOf(word), seed = WakeDetector.noiseFeatures(nets, ShortArray(64_000))).use { d ->
+                val got = (0..audio.size - 1280 step 1280).map { d.accept(audio.copyOfRange(it, it + 1280))!!.single() }
                 assertEquals(want.size, got.size)
                 for (i in got.indices) assertEquals("$name chunk $i", want[i], got[i], 0.02f)
                 if (name == "hey_jarvis") assertTrue("it fires", got.max() > 0.5f) else assertTrue("it stays quiet", got.max() < 0.1f)
             }
         }
+    }
+
+    @Test
+    fun extraWordsLeaveEachWordsScoresAsTheyWere() {
+        val models = realModels()
+        val clips = clips()
+        val extras = listOf("alexa_v0.1.onnx", "hey_mycroft_v0.1.onnx")
+        assumeTrue(
+            "needs -Pdomovoi.oww.dir (with the alexa and hey_mycroft models) and -Pdomovoi.room.clips",
+            models != null && clips != null && extras.all { File(models, it).isFile },
+        )
+        val pcm = readWav(File(clips, "hey_jarvis.wav"))
+        val audio = ShortArray(16_000) + pcm + ShortArray(16_000)
+        fun run(files: List<String>): List<FloatArray> {
+            val nets = OrtWakeFrontEnd(File(models, "melspectrogram.onnx"), File(models, "embedding_model.onnx"))
+            val words = files.map { OrtWakeClassifier(File(models!!, it)) }
+            return WakeDetector(nets, words, seed = WakeDetector.noiseFeatures(nets, ShortArray(64_000))).use { d ->
+                (0..audio.size - 1280 step 1280).map { d.accept(audio.copyOfRange(it, it + 1280))!! }
+            }
+        }
+        val alone = run(listOf("hey_jarvis_v0.1.onnx")).map { it[0] }
+        val three = run(listOf("hey_jarvis_v0.1.onnx") + extras)
+        // The main word scores exactly as it does on its own.
+        assertEquals(alone, three.map { it[0] })
+        assertTrue("hey jarvis fires", three.maxOf { it[0] } > 0.5f)
+        // And the other words stay quiet on it.
+        assertTrue("alexa / hey mycroft stay quiet", three.all { it[1] < 0.5f && it[2] < 0.5f })
     }
 
     @Test
