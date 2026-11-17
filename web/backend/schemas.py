@@ -1451,6 +1451,12 @@ class HealthResponse(BaseModel):
     # one), "unavailable" (nothing loaded), "stub" (tests) or "not_loaded".
     # None when the core did not answer. Never makes `status` degraded.
     stt: str | None = None
+    # Who hears the turns, when the core uses a speech service on the host
+    # (a Mac's graphics chip; mac-installer PHASE8A-STT.md): {active: host |
+    # local, host_state: ok | down | unknown | refused, local_standby,
+    # use_host, down_since}. None everywhere else, and when the core did
+    # not answer. `stt` keeps meaning the core's own Whisper.
+    stt_engine: dict[str, Any] | None = None
     # The core's turn watchdog on speech recognition (domovoi/turn_watchdog.py
     # speech_health): `state` ok | slow | stalled, `workers`,
     # `stuck_workers`, `stuck_for_s`, `last_timeout` ({stage, at} or null).

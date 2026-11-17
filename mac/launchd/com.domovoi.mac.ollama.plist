@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Domovoi's own Ollama (mac-installer PLAN 4.3), a LaunchDaemon run by the
+  role account. A template: DomovoiMacKit (LaunchdJob.swift) fills each
+  double-braced NAME XML-escaped, keeps the ROLE section only when a role account
+  runs the job (the system install), and checks the result parses.
+  Ollama listens on the Mac's loopback only; the VM reaches it at
+  host.lima.internal. ProcessType Interactive: not throttled as a background
+  job. launchd opens the log files as UserName, so the helper creates them,
+  owned by that account, before it bootstraps the job.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{{LABEL}}</string>
+{{#ROLE}}
+  <key>UserName</key><string>{{ROLE_USER}}</string>
+  <key>GroupName</key><string>{{ROLE_GROUP}}</string>
+{{/ROLE}}
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{OLLAMA_BIN}}</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OLLAMA_HOST</key><string>127.0.0.1:{{OLLAMA_PORT}}</string>
+    <key>OLLAMA_MODELS</key><string>{{OLLAMA_MODELS}}</string>
+    <key>HOME</key><string>{{JOB_HOME}}</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>{{LOG_FILE}}</string>
+  <key>StandardErrorPath</key><string>{{LOG_FILE}}</string>
+</dict>
+</plist>

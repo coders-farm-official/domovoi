@@ -404,8 +404,12 @@ the server's address, `http://<server>:6369`, which always works. While
 nobody has claimed it, every page opens a welcome that asks for the
 **setup code** and a new admin password.
 
-- **The setup code** is 8 words, in `~/.domovoi/setup-code.txt` on the
-  server (in the home of the account the core runs as). The core also
+- **The setup code** is 8 words. The Windows installer shows it on its
+  last page, and on a Mac the Domovoi Setup window shows it (closed it?
+  the Domovoi cat in the menu bar, **Repair or Uninstall Domovoi...**,
+  then **Show Setup Code...**). Elsewhere it is in
+  `~/.domovoi/setup-code.txt` on the server (in the home of the account
+  the core runs as). The core also
   prints it when it runs in a terminal, but never as a service, so it
   stays out of the journal. It is valid for 24 hours (restart the core for
   a fresh one), and the file is deleted once setup is done.

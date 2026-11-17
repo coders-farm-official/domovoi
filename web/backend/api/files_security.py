@@ -531,8 +531,12 @@ def removable_drives_visible() -> bool:
     depend on a drive — USB adoption, writing a card from media prep — read
     this to explain the gap instead of offering a list that is always
     empty. Detection itself still runs everywhere: a drive someone attached
-    to WSL and mounted by hand still shows on the Files page."""
-    return host_kind() != "wsl"
+    to WSL and mounted by hand still shows on the Files page.
+
+    Also False inside the Mac installer's Linux VM (``mac``): Lima's VM
+    gets none of the Mac's USB devices, and macOS mounts an SD card for
+    the signed-in person, not for the VM."""
+    return host_kind() not in ("wsl", "mac")
 
 
 # ─── Plugin config (.env) single-key reader ──────────────────────────────────

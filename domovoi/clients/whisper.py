@@ -956,10 +956,41 @@ def load_whisper_client() -> WhisperClient | None:
         _status = _status_doc("stub")
         return _client
     try:
-        return _load_real_client()
+        local = _load_real_client()
     except Exception as e:  # pragma: no cover — the ladder catches its own
         log.exception("Whisper: load raised unexpectedly")
-        return _mark_unavailable(f"{type(e).__name__}: {e}")
+        local = _mark_unavailable(f"{type(e).__name__}: {e}")
+    return _with_remote(local)
+
+
+# The remote speech service in front of the local Whisper, when
+# whisper_remote_url names one (clients/whisper_remote.py); else None.
+_remote: Any = None
+# Why whisper_remote_url was not used (a URL it refuses), for the status.
+_remote_error: str | None = None
+
+
+def _with_remote(local: WhisperClient | None) -> WhisperClient | None:
+    """``local`` alone when no remote service is configured — every
+    install that doesn't set ``whisper_remote_url`` — else the remote
+    service in front of it. The local ladder has already run either way,
+    so the local Whisper is loaded and ready to hear a turn the service
+    doesn't answer."""
+    global _client, _remote, _remote_error
+    _remote, _remote_error = None, None
+    if not (settings.whisper_remote_url or "").strip():
+        return local
+    from domovoi.clients import whisper_remote
+
+    try:
+        wrapped = whisper_remote.build_from_settings(local)
+    except ValueError as e:
+        _remote_error = str(e)
+        log.error("Whisper: whisper_remote_url is not used: %s. Turns are heard locally.", e)
+        return local
+    _remote = wrapped
+    _client = wrapped
+    return wrapped
 
 
 def get_whisper_client() -> WhisperClient:
@@ -989,7 +1020,27 @@ def stt_status() -> dict[str, Any]:
     actually transcribing."""
     if _status is None:
         return _status_doc("not_loaded")
-    return {**_status, "configured": dict(_status["configured"])}
+    doc = {**_status, "configured": dict(_status["configured"])}
+    # Only when a remote service is configured: every other install's
+    # status is exactly what it always was. ``state`` stays the LOCAL
+    # ladder's; ``engine.active`` says who hears the turns.
+    eng = engine_status()
+    if eng is not None:
+        doc["engine"] = eng
+    return doc
+
+
+def engine_status() -> dict[str, Any] | None:
+    """The remote speech service's state (``clients/whisper_remote.py``
+    ``FallbackWhisperClient.engine_doc``), or None when none is
+    configured. A URL the core refused reports ``active: local`` with the
+    reason."""
+    if _remote is not None:
+        return _remote.engine_doc()
+    if _remote_error is not None:
+        return {"configured": "host", "active": "local", "host_state": "refused",
+                "last_error": _remote_error}
+    return None
 
 
 def short_window_active() -> bool | None:
@@ -1011,7 +1062,7 @@ def whisper_runtime() -> dict[str, Any]:
     st = stt_status()
     loaded = st.get("loaded") or {}
     threads = getattr(_client, "cpu_threads", None)
-    return {
+    doc = {
         "state": st.get("state"),
         "model": loaded.get("model"),
         "device": loaded.get("device"),
@@ -1019,6 +1070,14 @@ def whisper_runtime() -> dict[str, Any]:
         "cpu_threads": threads if isinstance(threads, int) else None,
         "short_window": short_window_active(),
     }
+    if _remote is not None:
+        # Who heard the latest call (before any: who would hear the next).
+        engine = _remote.last_engine or _remote.active
+        doc["engine"] = engine
+        if engine == "host":
+            doc.update(model=_remote.remote.model, device="host", compute_type="remote",
+                       cpu_threads=None)
+    return doc
 
 
 # Backward-compat alias used by existing code.

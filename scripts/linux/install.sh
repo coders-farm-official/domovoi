@@ -55,7 +55,7 @@ HARNESS=0
 
 # provision.sh's options, passed through as given (a test keeps these
 # lists in step with provision.sh's own).
-PASS_VALUE_OPTS=" --checkout-dir --user --tier --lan-ip --media --health-timeout --allowed-signers --stop-before "
+PASS_VALUE_OPTS=" --checkout-dir --user --tier --lan-ip --ollama-url --host-stt-url --host-stt-model --vm-guard --vm-guard-dns --vm-guard-lan --media --health-timeout --allowed-signers --stop-before "
 PASS_FLAG_OPTS=" --wsl --no-wsl --skip-models --no-vision-model --ai-models --no-ai-models --dry-run --keep-downloads "
 # Chosen here from the checked release, never passed through.
 OWN_OPTS=" --repo-url --ref --track-branch "

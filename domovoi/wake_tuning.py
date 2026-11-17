@@ -58,6 +58,16 @@ KEY = "wake_tuning"
 SUFFIX = "_tuned"
 
 
+def _cant_train_here() -> bool:
+    """True when this server can never train (wake_trainer_setup.unsupported_reason)."""
+    try:
+        from domovoi.wake_trainer_setup import unsupported_reason
+
+        return unsupported_reason() is not None
+    except Exception:  # noqa: BLE001 - a status read never fails on this
+        return False
+
+
 @dataclass(frozen=True)
 class Recipe:
     """What a household copy of a published word trains from, beyond the
@@ -188,6 +198,11 @@ async def status(s, room_words: dict[str, str] | None = None,
     can_start, why_not = True, None
     if published is None or not published.pinned:
         can_start, why_not = False, "the Domovoi wake word isn't published yet"
+    elif _cant_train_here():
+        # An ARM server (the Mac installer's VM among them) can't train at
+        # all: pointing at "Turn on wake-word training" would be a control
+        # that can't do what it says; the trainer card above says why.
+        can_start, why_not = False, "this server can't train wake words (the card above says why)"
     elif not settings.wake_word_trainer_enabled:
         can_start, why_not = False, ("wake-word training isn't turned on on this server "
                                      "(Turn on wake-word training, above)")

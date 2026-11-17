@@ -1042,6 +1042,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.speech_warmup import cancel_speech_warm_up, schedule_speech_warm_up
 
     schedule_speech_warm_up("boot")
+    # The Mac's speech service, when one is configured: a /health look every
+    # whisper_remote_probe_sec, so Health follows it between turns
+    # (domovoi/clients/whisper_remote.py). No task anywhere else.
+    from domovoi.clients.whisper_remote import cancel_probe as cancel_stt_probe, schedule_probe as schedule_stt_probe
+
+    schedule_stt_probe()
 
     # The Android app phones install from here: after an update brought a
     # new release, fetch it in the background where the household allows
@@ -1089,6 +1095,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             [
                 ("LLM warm-up", cancel_warm_up, 1.0),
                 ("speech warm-up", cancel_speech_warm_up, 1.0),
+                ("speech service probe", cancel_stt_probe, 1.0),
                 ("Android app refresh", _android_app.cancel_auto_refresh, 1.0),
                 # The goodbye for the network name, so caches drop it now.
                 ("network name", _lan_name.stop, 2.0),
@@ -1502,6 +1509,15 @@ async def health(
         # and time. No room names: this answer is open.
         "speech": turn_watchdog.speech_health(),
     }
+    # Who hears the turns, only when a speech service on the host is
+    # configured (the Mac): Health says "on this Mac's graphics chip" or why
+    # not. Absent everywhere else, so their answer is what it was.
+    from domovoi.clients.whisper import engine_status
+
+    _engine = engine_status()
+    if _engine is not None:
+        doc["stt_engine"] = {k: _engine.get(k) for k in (
+            "active", "host_state", "local_standby", "use_host", "down_since")}
     if PAIRING_PROOF_VERSION:
         # 1.4.0: this server can PROVE an approval to a room device — the
         # exchange in satellite/pairing_proof.py. A device that asks every
@@ -3395,6 +3411,96 @@ async def windows_update_result(body: _TrayResultBody, request: Request) -> JSON
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
+# The Mac's twin of the three routes above (mac-installer PLAN 4.12): the
+# Domovoi app on a Mac install polls, claims and reports here, over Lima's
+# loopback forward (a LAN client arrives through pf with its own address,
+# never as loopback). Same rule, same files; they answer only on a Mac.
+
+_NOT_LOCAL_MAC = {"detail": "this is answered only to the Domovoi app on the server's own Mac", "reason": "not_local"}
+_NO_MAC_SIDE = {"detail": "this server isn't a Mac install", "reason": "no_mac_side"}
+
+
+@app.get("/v1/mac/update")
+async def mac_update_state(request: Request, app_version: str | None = Query(default=None, alias="app")) -> JSONResponse:
+    """The Mac app's poll: as ``GET /v1/windows/update``, with the side under
+    ``"mac"`` (null, ``why_not: no_mac_side`` and no request on a server
+    that isn't a Mac install). ``app`` (its version) records that the app
+    is there, for the card's "sign in on the Mac to finish"."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_MAC, status_code=403, headers={"Cache-Control": "no-store"})
+    state = await windows_side.agent_state("mac")
+    # Only the app says who it is: the helper's own wait on the update unit
+    # (HelperUpdate.swift) polls without ``app`` and is no app.
+    if state["mac"] is not None and app_version is not None:
+        windows_side.note_tray(app_version)
+    return JSONResponse(state, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/mac/update/claim")
+async def mac_update_claim(body: _TrayClaimBody, request: Request) -> JSONResponse:
+    """One Mac app (of the accounts signed in on the Mac) takes the admin's
+    request: as ``/v1/windows/update/claim``. 409 ``no_mac_side`` on a
+    server that isn't a Mac install."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_MAC, status_code=403, headers={"Cache-Control": "no-store"})
+    if (await windows_side.agent_state("mac"))["mac"] is None:
+        return JSONResponse(_NO_MAC_SIDE, status_code=409, headers={"Cache-Control": "no-store"})
+    return await windows_update_claim(body, request)
+
+
+@app.post("/v1/mac/update/result")
+async def mac_update_result(body: _TrayResultBody, request: Request) -> JSONResponse:
+    """The Mac app's outcome of a Mac step (the tray's words; the log a path
+    in Domovoi's own folders on the Mac). 409 ``no_mac_side`` on a server
+    that isn't a Mac install."""
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_MAC, status_code=403, headers={"Cache-Control": "no-store"})
+    state = await windows_side.agent_state("mac")
+    if state["mac"] is None:
+        return JSONResponse(_NO_MAC_SIDE, status_code=409, headers={"Cache-Control": "no-store"})
+    target = (state.get("target") or {}).get("tag")
+    try:
+        doc = await asyncio.to_thread(windows_side.record_result, body.model_dump(), target, "mac")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    log.info("mac update: the Mac app reports %s", doc["outcome"])
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+# ─── Media the host changed (domovoi/host_media.py) ──────────────────────
+# A VM's media folders are a share from its host, and the host's own file
+# changes raise no inotify event in here: the host side's watcher (FSEvents
+# on a Mac) says which paths changed. Loopback only, like the tray's routes:
+# the host's helper reaches it through the VM's loopback forward.
+
+_NOT_LOCAL_HOST = {"detail": "this is answered only to Domovoi's own helper on the server's host", "reason": "not_local"}
+
+
+class _HostMediaBody(BaseModel):
+    paths: list[str] = Field(..., max_length=256)
+
+
+@app.post("/v1/host/media-changed")
+async def host_media_changed(body: _HostMediaBody, request: Request) -> JSONResponse:
+    """The host's media watcher: these paths (as this machine names them,
+    under the library folders) changed. The audio files that exist are
+    indexed and every room's player reads their folders, in the background
+    (``domovoi/host_media.py``); a library folder itself asks for that
+    whole library. ``202 {queued, refused, libraries}``. Loopback peer with
+    no forwarding header only (403 ``not_local``)."""
+    from domovoi import host_media
+
+    if not local_peer.from_this_pc(request):
+        return JSONResponse(_NOT_LOCAL_HOST, status_code=403, headers={"Cache-Control": "no-store"})
+    try:
+        out = host_media.accept(body.paths)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return JSONResponse(out, status_code=202, headers={"Cache-Control": "no-store"})
+
+
 class _WindowsRequestBody(BaseModel):
     on_this_pc: bool = False
     after_linux: bool = False
@@ -3418,10 +3524,18 @@ async def admin_windows_request(body: _WindowsRequestBody) -> dict[str, Any]:
     (``joined: true``, the same request): never a second run.
     ``{ok, request, joined, tray}``: ``tray.running`` false means no tray has
     polled for two minutes (remembered across core restarts), so nobody is
-    signed in on the PC."""
+    signed in on the PC.
+
+    On a Mac install whose Mac side has the updater it is the same request,
+    for the Domovoi app on the Mac (``on_this_pc``: a browser on that Mac;
+    macOS asks for an administrator's password there); a Mac side from
+    before the updater is refused, ``mac_by_hand``, in words."""
     await container_freeze.require_unfrozen("update_apply")
     st = await windows_side.card_state()
     if not st.get("present") or not st.get("step_needed"):
+        if st.get("kind") == "mac":
+            why = st.get("why_not") or "mac_by_hand"
+            raise HTTPException(status_code=409, detail=_MAC_WHY_NOT.get(why, "there is nothing to update on the Mac"))
         why = st.get("why_not") or "no_windows_side"
         raise HTTPException(status_code=409, detail=_WINDOWS_WHY_NOT.get(why, "there is nothing to update on the PC"))
     req, joined = await asyncio.to_thread(windows_side.make_request, body.on_this_pc, body.after_linux)
@@ -3434,6 +3548,14 @@ _WINDOWS_WHY_NOT = {
     "no_release": "the code this server runs includes no release yet",
     "up_to_date": "the Windows side is up to date",
     "unsigned_release": "that release has no signed Windows Setup",
+    "mac_by_hand": "this server runs on a Mac: its Mac side updates only when a release includes DomovoiSetup-mac.pkg, opened on the Mac",
+}
+_MAC_WHY_NOT = {
+    "internet_off": "internet access is turned off, and the Mac side updates from Domovoi's releases on the internet",
+    "no_release": "the code this server runs includes no release yet",
+    "up_to_date": "the Mac side is up to date",
+    "unsigned_release": "that release has no signed Mac package",
+    "mac_by_hand": _WINDOWS_WHY_NOT["mac_by_hand"],
 }
 
 
@@ -7910,6 +8032,34 @@ async def admin_internet_search_helper() -> dict[str, Any]:
     return {"scheduled": scheduled, "search_helper": searxng_service.status()}
 
 
+class _SttEngineBody(BaseModel):
+    use_host: bool
+
+
+@app.post("/v1/admin/stt-engine", dependencies=[Depends(require_admin_mutation)])
+async def admin_stt_engine(body: _SttEngineBody) -> dict[str, Any]:
+    """The household's switch for the speech service on the host (Settings >
+    Models, shown only on a Mac that has it; mac-installer PHASE8A-STT.md):
+    ``use_host`` false makes this machine's own Whisper hear every turn.
+    Saved to .env (``whisper_remote_enabled``) and applied at once. 409 when
+    no service is configured: then there is nothing to switch, and the
+    dashboard shows no switch."""
+    from domovoi.clients.whisper import engine_status
+    from domovoi.config_env_writer import write_env_values
+
+    eng = engine_status()
+    if eng is None or eng.get("host_state") == "refused":
+        raise HTTPException(status_code=409, detail="this server has no speech service to switch")
+    try:
+        write_env_values({"whisper_remote_enabled": bool(body.use_host)})
+    except Exception as e:  # noqa: BLE001 - said, not raised
+        raise HTTPException(status_code=500, detail=f".env write failed: {e}") from e
+    settings.whisper_remote_enabled = bool(body.use_host)
+    log.info("speech recognition: the household %s the host's speech service",
+             "turned on" if body.use_host else "turned off")
+    return {"use_host": settings.whisper_remote_enabled, "engine": engine_status()}
+
+
 @app.get(
     "/v1/admin/memory",
     # Admin READ, like the container guard's status beside it on Health:
@@ -7985,7 +8135,9 @@ async def get_lan_name() -> dict[str, Any]:
     updates): ``{requested, claimed, fqdn, state, taken, error, enabled,
     host_kind, addresses, hint, help}``. ``state``: ``announced``,
     ``checking``, ``taken``, ``off``, ``no_lan``, ``failed`` or
-    ``no_host`` (nothing on this machine announces one)."""
+    ``no_host`` (nothing on this machine announces one). ``fixed: true``
+    on a Mac, whose helper announces ``domovoi.local`` itself: no change
+    or on/off from here."""
     from domovoi.lan_name import service as lan_name
 
     return await asyncio.to_thread(lan_name.status)
@@ -7996,7 +8148,8 @@ async def put_lan_name(body: LanNameBody) -> dict[str, Any]:
     """Change the name or turn it on or off: saved to ``.env``
     (``LAN_NAME``, ``LAN_NAME_ENABLED``), then checked on the network by
     whoever announces it. 202 with the state (``checking`` until the
-    probe is done); 400 for a name that can't be one. A name the
+    probe is done); 400 for a name that can't be one; 409 on a Mac, which
+    announces ``domovoi.local`` itself (``fixed`` in the GET). A name the
     household typed that another device holds is never changed: the
     state says ``taken`` and the name held before stays."""
     from domovoi.lan_name import names as lan_names
@@ -8007,6 +8160,9 @@ async def put_lan_name(body: LanNameBody) -> dict[str, Any]:
             return await asyncio.to_thread(lan_name.save, body.name, body.enabled)
         except lan_names.BadName as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        except lan_name.FixedName as e:
+            # A Mac announces domovoi.local itself (Settings shows no change).
+            raise HTTPException(status_code=409, detail=str(e)) from e
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -8163,6 +8319,10 @@ async def admin_hardware() -> dict[str, Any]:
     ``stt`` is what speech recognition actually loaded at boot next to what
     was configured (``clients.whisper.stt_status``): the Models page shows
     a banner when it is running on the cpu fallback or not at all.
+
+    ``vm_guard`` is null unless the box was provisioned with
+    ``--vm-guard``; then ``{loaded, unit}``, and Health flags a fence that
+    isn't loaded (``domovoi/vm_guard.py``).
     """
     from domovoi.handlers.homelab import _query_gpus
 
@@ -8214,7 +8374,16 @@ async def admin_hardware() -> dict[str, Any]:
     except Exception as e:  # psutil missing or a probe raised — degrade.
         log.warning("hardware probe (psutil) failed: %s", e)
 
-    return {"gpus": gpus, "cpu": cpu, "ram": ram, "disk": disk, "stt": stt_status()}
+    from domovoi import vm_guard
+
+    # ``vm_guard``: null on every box that was not provisioned with
+    # --vm-guard (Health shows nothing then); else whether its fence loaded.
+    from domovoi.host_kind import host_kind
+
+    # ``host_kind`` (domovoi/host_kind.py): on "mac" the page says the
+    # readout is the Mac installer's VM, not the Mac (Train 1 finding 13).
+    return {"gpus": gpus, "cpu": cpu, "ram": ram, "disk": disk, "stt": stt_status(),
+            "vm_guard": await asyncio.to_thread(vm_guard.status), "host_kind": host_kind()}
 
 
 class _AdminPlayPlaylistBody(BaseModel):

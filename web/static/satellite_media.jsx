@@ -19,6 +19,15 @@
  * network's password itself from this server (the zip's one-time pass,
  * POST /api/satellites/media/claim); the person still reads it here for
  * their phone. The zip's README keeps the steps by hand.
+ *
+ * Inside the Mac installer's VM (host_kind "mac") the server can't see
+ * SD cards either: the same drive-less card. When the Mac side has the
+ * menu-bar card helper (/status mac_card_helper: its side.json says
+ * "card_helper": 1) the words point at Domovoi's menu-bar icon -> Prepare
+ * an SD card..., which writes the zip and fetches the setup password
+ * itself, like the tray; an older Mac side gets the zip's README (Finder
+ * and TextEdit steps) as the way onto the card. Never a word of a tray
+ * icon on a Mac.
  * The tray links here as #settings/rooms/media, which opens this
  * card. */
 
@@ -90,7 +99,7 @@ const smCacheRows = (cache, dockerAvailable) => {
  * They live in the web process's memory and nowhere else, so a restart
  * loses them.
  */
-const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
+const CredentialsModal = ({ creds, zip, cardHelper, macHelper, onClose }) => {
   const ap = creds.ap;
   const con = creds.console;
   const row = (label, value) => (
@@ -125,17 +134,18 @@ const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
 
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 16,
                       paddingTop: 14, borderTop: '1px solid var(--border-soft)' }}>
-          {zip && cardHelper ? (
+          {zip && (cardHelper || macHelper) ? (
             <>
               {ap && (
-                <>The desktop app (Domovoi's tray icon → <b>Prepare a room's SD
-                  card</b>) fills in the wi-fi password by itself when it
+                <>The desktop app ({macHelper
+                  ? <>Domovoi's menu-bar icon → <b>Prepare an SD card...</b></>
+                  : <>Domovoi's tray icon → <b>Prepare a room's SD card</b></>}) fills in the wi-fi password by itself when it
                   writes the card: you don't type it there. You still need it
                   on your phone, to join the setup network, so keep this open or
                   write it down.{' '}</>
               )}
               {creds.reissued
-                ? 'These were made again after Domovoi restarted, when the tray icon signed in as admin to write the card: the ones shown before no longer apply to this card. '
+                ? 'These were made again after Domovoi restarted, when the card helper signed in as admin to write the card: the ones shown before no longer apply to this card. '
                 : 'This is the only place it is shown. '}
               The downloaded zip contains no passwords, and these are held in
               memory here until the dashboard restarts.
@@ -168,7 +178,7 @@ const CredentialsModal = ({ creds, zip, cardHelper, onClose }) => {
   );
 };
 
-const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
+const MediaJobRow = ({ j, onShowCredentials, cardHelper, macHelper, byHand }) => {
   const live = j.status === 'running' || j.status === 'pending';
   return (
     <div style={{ padding: '10px 0', borderTop: '1px solid var(--border-soft)' }}>
@@ -205,6 +215,16 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
           then Domovoi's tray icon → Prepare a room's SD card
         </div>
       )}
+      {j.status === 'done' && j.target_kind === 'zip' && byHand && (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+          then copy it onto the card in Finder, as the zip's README.txt says
+        </div>
+      )}
+      {j.status === 'done' && j.target_kind === 'zip' && macHelper && (
+        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+          then Domovoi's menu-bar icon → Prepare an SD card...
+        </div>
+      )}
       {j.status === 'done' && j.target_kind === 'drive' && (
         <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
           eject the card, then boot the device to finish setup
@@ -226,7 +246,11 @@ const MediaJobRow = ({ j, onShowCredentials, cardHelper }) => {
       )}
       {j.status === 'done' && j.has_credentials === false && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
-          {j.target_kind === 'zip'
+          {j.target_kind === 'zip' && byHand
+            ? 'Setup details were cleared when Domovoi restarted, and the zip never had them: prepare the card again.'
+            : j.target_kind === 'zip' && macHelper
+            ? "Setup details were cleared when Domovoi restarted. Write this card with the menu-bar icon's Prepare an SD card... (it can sign in as admin to make a new password)."
+            : j.target_kind === 'zip'
             ? 'Setup details were cleared when Domovoi restarted. Write this card with the tray icon (it can sign in as admin to make a new password).'
             : 'Setup details were cleared when Domovoi restarted. The card has them in domovoi/ap.json and domovoi/console.json.'}
         </div>
@@ -295,6 +319,14 @@ const PrepareMediaCard = ({ fire }) => {
   // still loading, or an older server) counts as visible, which is how
   // the card has always behaved.
   const drivesVisible = status?.drive_targets !== false;
+  // The Mac installer's VM: no drives. Its menu-bar icon writes the card
+  // when the Mac side says it can (macHelper); an older Mac side leaves the
+  // card files to go on by hand (the zip's README). The tray's words are
+  // for a Windows install only.
+  const onMac = status?.host_kind === 'mac';
+  const macHelper = onMac && status?.mac_card_helper === true;
+  const byHand = onMac && !macHelper;
+  const cardHelper = !drivesVisible && !onMac;
 
   // Re-scan drives while the section is open (a just-inserted card should
   // appear without a manual refresh).
@@ -365,6 +397,26 @@ const PrepareMediaCard = ({ fire }) => {
     }
   };
 
+  const refreshButton = (
+    <Button icon="refresh-cw" disabled={busy || internetOff} onClick={refreshCache}
+            title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Refresh caches</Button>
+  );
+  const cacheRows = (
+    <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8,
+                                   display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      {smCacheRows(cache, status?.docker_available).map(r => (
+        <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {r.tone ? <StatusDot tone={r.tone}/> : <Icon name="info" size={11}/>}
+          {r.text}
+        </span>
+      ))}
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <StatusDot tone={status?.docker_available ? 'ok' : 'warn'}/>
+        docker {status?.docker_available ? 'available' : 'unavailable — deb cache skipped'}
+      </span>
+    </div>
+  );
+
   return (
     <div ref={cardRef}
          style={{ background: 'var(--card)', border: '1px solid var(--border)',
@@ -376,7 +428,11 @@ const PrepareMediaCard = ({ fire }) => {
         <Icon name="disc-3" size={16}/>
         <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>prepare a room's SD card</span>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-          {!drivesVisible
+          {macHelper
+            ? 'flash stock OS · build here · menu-bar icon writes the card · boot · set up from a phone'
+            : onMac
+            ? 'flash stock OS · build here · copy onto the card in Finder · boot · set up from a phone'
+            : !drivesVisible
             ? 'flash stock OS · build here · tray icon writes the card · boot · set up from a phone'
             : transport === 'portal'
               ? 'flash stock OS · prepare here · boot · set up from a phone'
@@ -422,7 +478,7 @@ const PrepareMediaCard = ({ fire }) => {
               </select>
             )}
             <select value={target} onChange={e => setTarget(e.target.value)} style={smInput}>
-              <option value="zip">{drivesVisible ? 'download overlay zip' : 'download for the card helper'}</option>
+              <option value="zip">{drivesVisible ? 'download overlay zip' : onMac ? 'download zip' : 'download for the card helper'}</option>
               {bootTargets.map(t => (
                 <option key={t.token} value={t.token}>
                   write to {t.token}: {t.label ? `(${t.label})` : ''} · {smBytes(t.free_bytes)} free
@@ -441,7 +497,43 @@ const PrepareMediaCard = ({ fire }) => {
             </div>
           )}
 
-          {!drivesVisible && (
+          {macHelper && (
+            <div style={{ marginTop: 10, padding: '8px 10px', display: 'flex', gap: 8,
+                          alignItems: 'flex-start', borderRadius: 'var(--r-sm)',
+                          background: 'var(--sunken)' }}>
+              <Icon name="info" size={13}/>
+              <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                Domovoi runs in a Linux system on this Mac, which can't see SD
+                cards. Build the card files here and download the zip, then
+                use Domovoi's menu-bar icon (the cat) → <b>Prepare an SD
+                card...</b>: it writes them onto the card, checks them, ejects
+                the card and fills in the setup network password by itself.
+                You'll still need that password for your phone: it's shown
+                here when the build finishes ("show setup details"). Then set
+                the room up from your phone over its own Wi-Fi. By hand
+                instead: the zip's README.txt has the steps.
+              </span>
+            </div>
+          )}
+
+          {byHand && (
+            <div style={{ marginTop: 10, padding: '8px 10px', display: 'flex', gap: 8,
+                          alignItems: 'flex-start', borderRadius: 'var(--r-sm)',
+                          background: 'var(--sunken)' }}>
+              <Icon name="info" size={13}/>
+              <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                Domovoi runs in a Linux system on this Mac, which can't see SD
+                cards. Build the card files here and download the zip, then
+                copy them onto the card in Finder: the zip's README.txt has
+                the steps (about ten minutes). You'll need the setup network
+                password for the card and for your phone: it's shown here
+                when the build finishes ("show setup details"). Then set the
+                room up from your phone over its own Wi-Fi.
+              </span>
+            </div>
+          )}
+
+          {cardHelper && (
             <div style={{ marginTop: 10, padding: '8px 10px', display: 'flex', gap: 8,
                           alignItems: 'flex-start', borderRadius: 'var(--r-sm)',
                           background: 'var(--sunken)' }}>
@@ -466,23 +558,8 @@ const PrepareMediaCard = ({ fire }) => {
             <summary style={{ fontSize: 11, color: 'var(--fg-muted)', cursor: 'pointer' }}>
               details: what is kept for building cards
             </summary>
-            <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 8,
-                                           display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {smCacheRows(cache, status?.docker_available).map(r => (
-                <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  {r.tone ? <StatusDot tone={r.tone}/> : <Icon name="info" size={11}/>}
-                  {r.text}
-                </span>
-              ))}
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <StatusDot tone={status?.docker_available ? 'ok' : 'warn'}/>
-                docker {status?.docker_available ? 'available' : 'unavailable — deb cache skipped'}
-              </span>
-            </div>
-            <div style={{ marginTop: 6 }}>
-              <Button icon="refresh-cw" disabled={busy || internetOff} onClick={refreshCache}
-                      title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Refresh caches</Button>
-            </div>
+            {cacheRows}
+            <div style={{ marginTop: 6 }}>{refreshButton}</div>
           </details>
 
           {plugins.length > 0 && (
@@ -506,14 +583,14 @@ const PrepareMediaCard = ({ fire }) => {
             <div style={{ marginTop: 10 }}>
               {jobs.slice(0, 5).map(j => (
                 <MediaJobRow key={j.id} j={j} onShowCredentials={showCredentials}
-                             cardHelper={!drivesVisible}/>
+                             cardHelper={cardHelper} macHelper={macHelper} byHand={byHand}/>
               ))}
             </div>
           )}
         </div>
       )}
       {creds && (
-        <CredentialsModal creds={creds} zip={!!creds.zip} cardHelper={!drivesVisible}
+        <CredentialsModal creds={creds} zip={!!creds.zip} cardHelper={cardHelper} macHelper={macHelper}
                           onClose={() => setCreds(null)}/>
       )}
     </div>

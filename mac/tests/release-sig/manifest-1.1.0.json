@@ -1,0 +1,10 @@
+{
+  "commit": "c0ffee0123456789abcdef0123456789abcdef01",
+  "file": "DomovoiSetup-mac.pkg",
+  "kind": "domovoi-mac-setup",
+  "schema": 1,
+  "sha256": "f541874101876255b4baf3a739778d04cb9cba25ffa38b30bc1fb8b0701f2a45",
+  "size": 3000,
+  "tag": "v1.1.0",
+  "version": "1.1.0"
+}

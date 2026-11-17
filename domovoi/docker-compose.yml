@@ -212,7 +212,11 @@ services:
       # Host-native Ollama (LLM + embeddings) reached from inside the
       # container. Windows/Mac use host.docker.internal; on Linux this
       # would instead be --network host + localhost:11434/v1.
-      OLLAMA_BASE_URL: "http://host.docker.internal:11434/v1"
+      # LETTA_OLLAMA_BASE_URL in domovoi/.env replaces it: provision.sh
+      # --ollama-url writes the outside Ollama there by IP address (a Mac
+      # host's Lima VM: containers can't resolve host.lima.internal, and
+      # host.docker.internal is the VM there). Unset or blank: as before.
+      OLLAMA_BASE_URL: "${LETTA_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}"
       # Password-protect the server. The value is LETTA_TOKEN from .env,
       # the same variable the core reads as settings.letta_token, so the
       # two can't drift. A fresh install's .env carries a random one

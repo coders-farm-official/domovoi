@@ -69,7 +69,9 @@ network.
    Domovoi's dashboard asks for it (or [Settings → System → Advanced](#settings/advanced),
    **set up admin**). Type the 8-word setup code and choose a password.
    Where the code is: the Windows installer shows it on its last page; on
-   Linux it is in a file on the server. Then keep the household token it shows: every phone and
+   a Mac the Domovoi Setup window shows it (closed it? click the Domovoi
+   cat in the menu bar, **Repair or Uninstall Domovoi...**, then **Show
+   Setup Code...**); on Linux it is in a file on the server. Then keep the household token it shows: every phone and
    browser asks for it once. [More detail](README.md#2-claim-the-admin-account)
 2. **Answer the internet question**: Yes, Sometimes or No. You can change
    it later in [Settings → Privacy → Internet](#settings/internet).

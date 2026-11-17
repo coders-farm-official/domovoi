@@ -135,9 +135,15 @@ async def get_installed() -> dict[str, Any]:
     """Installed-on-disk Ollama models (``/api/tags``) joined with which are
     loaded in VRAM right now (``/api/ps``). ``ollama_reachable`` is false when
     the local Ollama server is down — the page then shows an offline notice
-    instead of an empty 'no models' state (they're different situations)."""
-    tags = await ollama_client.list_models()
-    loaded = await ollama_client.ps()
+    instead of an empty 'no models' state (they're different situations).
+
+    ``ollama_version``: the configured Ollama's version against the oldest
+    Domovoi runs on (``ollama_client.server_version``): ``{version, ok, min}``,
+    ``ok`` False when it is older, None when it can't be told. The page says
+    so in words, for an Ollama the household brings itself."""
+    tags, loaded, version = await asyncio.gather(
+        ollama_client.list_models(), ollama_client.ps(), ollama_client.server_version()
+    )
     loaded_names = {m.get("name") or m.get("model") for m in loaded}
     # Ollama unreachable ⇒ both come back empty; distinguish by re-checking ps
     # only isn't reliable, so treat a successful (even empty) tags call as
@@ -159,7 +165,7 @@ async def get_installed() -> dict[str, Any]:
             }
         )
     installed.sort(key=lambda x: (x["name"] or "").lower())
-    return {"ollama_reachable": reachable, "installed": installed}
+    return {"ollama_reachable": reachable, "installed": installed, "ollama_version": version}
 
 
 # ─── Active role slots ───────────────────────────────────────────────────────
@@ -332,6 +338,20 @@ async def set_active(body: SetActiveBody, request: Request):
 
 
 # ─── Hardware ────────────────────────────────────────────────────────────────
+
+
+class SttEngineBody(BaseModel):
+    use_host: bool
+
+
+@router.post("/stt-engine", dependencies=[Depends(require_admin_mutation)])
+async def set_stt_engine(body: SttEngineBody, request: Request):
+    """Speech recognition on this Mac's graphics chip, on or off (admin;
+    mac-installer PHASE8A-STT.md). The core's ``/v1/admin/stt-engine``: 409
+    on a server with no speech service, where the page shows no switch."""
+    return bridge_response(
+        *await post_admin("/v1/admin/stt-engine", {"use_host": body.use_host}, headers=auth_forward_headers(request))
+    )
 
 
 @router.get("/hardware")

@@ -132,6 +132,11 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
         "the Windows tray's outcome of a Windows step: loopback peer only with no forwarding "
         "headers; only the tray that claimed a request may answer it (test_windows_side.py)"
     ),
+    ("core", "POST", "/v1/host/media-changed"): (
+        "the host's media watcher: loopback peer only with no forwarding headers; only "
+        "library paths are taken, and the work is the bounded post-upload index plus a "
+        "room-player folder read, less than the 'rescan my library' intent (test_host_media.py)"
+    ),
     ("core", "POST", "/v1/windows/update/claim"): (
         "one tray takes the admin's request: loopback peer only with no forwarding headers, "
         "first caller only (O_EXCL), the token it gets is what its result must carry (test_windows_side.py)"
@@ -144,6 +149,14 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("core", "POST", "/v1/windows/media/open/result"): (
         "how the tray's open went, for the page: loopback peer only with no forwarding headers, only "
         "for the request this tray claimed, known outcomes only (test_media_folders.py)"
+    ),
+    ("core", "POST", "/v1/mac/update/claim"): (
+        "the Mac app's twin of /v1/windows/update/claim: loopback peer only with no forwarding "
+        "headers, 409 off a Mac install, then the same first-caller claim (test_mac_update.py)"
+    ),
+    ("core", "POST", "/v1/mac/update/result"): (
+        "the Mac app's twin of /v1/windows/update/result: loopback peer only with no forwarding "
+        "headers, 409 off a Mac install; only the claimer may answer (test_mac_update.py)"
     ),
     ("web", "DELETE", "/api/auth/sessions/{token_hash}"): "checks the Bearer inside the handler",
     ("web", "POST", "/api/auth/password"): "checks the Bearer inside the handler",

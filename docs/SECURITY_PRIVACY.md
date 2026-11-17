@@ -2890,6 +2890,73 @@ dashboard choice.
   side runs again its report is stale and the page shows what is mounted,
   with neither action.
 
+## Restart on a Mac: no password, one fixed action
+
+On the Mac installer, **any process under any local account** (a person
+signed in at the Mac, an SSH login, the Guest account, a service account)
+may ask Domovoi to restart, without a password (owner decision,
+2026-11-11). The permission is granted once, when Setup installs Domovoi as
+an administrator, and the uninstall takes it away again. How it is kept
+narrow:
+
+- **One root job, one process, one fixed action.** `com.domovoi.mac.restart`
+  is a LaunchDaemon with a launchd `Sockets` entry: launchd makes the UNIX
+  socket `/Library/Application Support/Domovoi/run/restart.sock` (mode 0666)
+  in a root-owned 0755 folder and starts `DomovoiHelper restart-trigger
+  --system` as root when someone connects. That ONE process takes the
+  socket from launchd (`launch_activate_socket`) and accepts every
+  connection itself; it is never one process per connection. It holds at
+  most 32 connections at once (more get `BUSY` and are closed), sets send
+  and receive timeouts and no SIGPIPE on each, and leaves after 30 idle
+  seconds; launchd starts it again on the next connection. Program and
+  arguments are fixed in the job file in `/Library/LaunchDaemons`; the
+  program is in Domovoi's root-owned folder. No RunAtLoad, no KeepAlive. It does what the menu's
+  Restart did with a password: restart Domovoi's services, and its virtual
+  machine when that isn't enough.
+- **Connecting is the request.** The job reads at most one byte (`R`, or
+  nothing within 200 ms); anything else is answered `ERROR` and closed.
+  Nothing an account sends becomes an argument, a path or a program, and
+  nothing an account owns is left on disk. The asking account is logged in
+  `/Library/Logs/Domovoi/helper.log` (`getpeereid`), at most one line a
+  second (the rest as "N more connections").
+- **One at a time.** The restart runs on a worker thread of that process.
+  A request while it runs (from any account) is told `RUNNING` and gets
+  that run's result; it never starts a second.
+- **Rate limit.** After a restart that acted the next one is refused for
+  two minutes, counted from when that restart finished. "Acted" means any
+  restart step ran: one that then failed part-way, or that ended with
+  Domovoi still not answering, counts. Only a refusal in the checks before
+  any step (Domovoi switched off in Login Items, an update, Setup or the
+  uninstall at work) doesn't start the two minutes. A finish time in the future (the
+  clock went back) doesn't block. The last result is kept in the
+  root-owned `state/restart.json`.
+- **The busy lock.** Setup, updates and restarts take an exclusive lock on
+  `/Library/Application Support/Domovoi/.busy`, mode 0600, so no other
+  account can open it and hold a lock that makes theirs fail. The menu reads
+  who holds it (install, repair, update, restart, uninstall or setup) from
+  the root-written `state/busy.json`, never by locking; the uninstall
+  removes that file before it removes Domovoi's folders.
+- **Deleting as root, without following links.** The uninstall (and a
+  repair, for the requests folder an early test build of this feature
+  made) removes files and folders with an fd-relative, no-follow walk:
+  every folder is opened with `O_NOFOLLOW`, checked to be the folder that
+  was looked at, taken over (root, 0700) so nothing more can be added, and
+  emptied with `unlinkat`. A folder swapped for a link mid-walk is never
+  entered; the link itself is removed. Flags are cleared only on what the
+  walk opened. Empty folders go with `rmdir`.
+- **What it can't stop.** Any local process can restart Domovoi, once every
+  two minutes after a restart that acted, and can keep up to 32 connections
+  of the one root process busy (others are told `BUSY`), which may delay a
+  real request until it tries again. The restart's health checks ask Domovoi on `127.0.0.1`: a local
+  program that takes Domovoi's ports while it is down could answer them and
+  make the menu say "back" too early (accepted for now; the checks are
+  unchanged).
+- **Older installs** have no such job: the menu then asks macOS for an
+  administrator's password as before and says that a Repair stops it
+  asking. Release builds of the app ignore the `DOMOVOI_HELPER` and
+  `DOMOVOI_UNINSTALL` environment overrides, so an account's environment
+  can't choose what runs behind that password prompt.
+
 ## Printers and scanners
 
 Domovoi prints to network printers (IPP Everywhere, AirPrint, Mopria) and

@@ -51,6 +51,43 @@ a newer ``DomovoiSetup.exe`` repairs the install. This module joins them:
   here as the service user: :func:`linux_update`, the dashboard's own steps
   in its order.
 
+**A Mac install** (the macOS installer runs this Linux side in a Lima VM;
+mac-installer PLAN 4.8, 4.12) has a host side too: the root helper on the
+Mac writes ``/var/lib/domovoi-mac/side.json`` inside the VM, the same
+fields plus ``"kind": "mac"``. :func:`read_host_side` reads either file
+(the Windows one first, so a Windows install reads exactly as before) and
+says which kind it is; the Version card names the row "Mac side". The Mac
+side changes only from a release's signed ``DomovoiSetup-mac.pkg``.
+
+* A Mac side that says ``"updates": 1`` in its file has the updater
+  (``mac/Sources/DomovoiMacKit/MacUpdate.swift``): the same step as on
+  Windows, the same request, claim and result, through its own loopback
+  routes (``/v1/mac/update``, :func:`agent_state` ``"mac"``). The Domovoi
+  app on the Mac polls them, downloads the release's package, its manifest
+  and both signatures, checks them against the release key the install
+  pinned, and the root helper checks its own copy again and installs it
+  behind one administrator prompt.
+* One without it (an install from before the updater) gets no step: when
+  the release the Linux side includes is newer, ``why_not`` is
+  ``mac_by_hand`` and the card says that, when that release includes
+  ``DomovoiSetup-mac.pkg``, it is opened on the Mac. The core knows release
+  tags (``git describe``), not what a release carries, so the card never
+  says to download it.
+
+The Windows tray's routes stay the Windows tray's (a Mac side is no Windows
+side to them), and the Mac's routes answer only on a Mac. The state files
+below are shared (an install has one host side): the folder keeps its
+Windows name.
+
+The contract for ``/var/lib/domovoi-mac`` (docs/LINUX_HOST.md, "ARM and
+VMs"): the folder is ``root:root`` ``0755`` and ``side.json`` and
+``lan.json`` are root's and not writable by group or others, else
+:func:`_read_side_doc` (and ``lan_address``) ignore the file with a
+warning, and the core falls back silently (no Mac side on the card, the
+VM's own address for satellites). Anyone in the ``docker`` group can get
+around that (a container can write the folder as root); the container
+guard is the backstop.
+
 Files (the core's home, ``~/.domovoi/windows_update``; both processes run as
 the service user): ``request.json`` (the admin's request; a second press
 while one waits joins it), ``seen.json`` (when a tray first said it
@@ -83,10 +120,15 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 SIDE_FILE = "/var/lib/domovoi-windows/side.json"
+#: Where another host's side reports itself (a Mac's; "kind" names it).
+HOST_SIDE_FILE = "/var/lib/domovoi-mac/side.json"
+#: The kinds the host-side file may name. Windows keeps its own file.
+HOST_KINDS = ("mac",)
 _SIDE_MAX_BYTES = 4096
 _STATE_MAX_BYTES = 64 * 1024
 
-#: The tray's outcomes (windows/tray/Updater.cs Outcome).
+#: The tray's outcomes (windows/tray/Updater.cs Outcome); the Mac app's are
+#: the same words (mac/Sources/DomovoiMacKit/MacUpdate.swift MacOutcome).
 OUTCOMES = (
     "ok", "nothing_new", "declined", "download_failed", "no_signed_setup", "bad_signature",
     "not_newer", "no_key", "repair_failed", "linux_failed", "internet_off", "not_installed", "failed",
@@ -106,6 +148,8 @@ _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 # A Windows path the tray names for a log: a drive, then no control or
 # reserved characters.
 _LOG_RE = re.compile(r'^[A-Za-z]:\\[^<>"|?*\x00-\x1f]{1,250}$')
+# A log the Mac helper names: in Domovoi's own root-only folders.
+_MAC_LOG_RE = re.compile(r'^/Library/(?:Logs|Application Support)/Domovoi/[^\x00-\x1f]{1,200}$')
 
 # Seconds since the epoch; module attributes so the tests can move them.
 _now = time.time
@@ -164,6 +208,10 @@ def side_file() -> Path:
     return Path(os.environ.get("DOMOVOI_WINDOWS_SIDE_FILE") or SIDE_FILE)
 
 
+def host_side_file() -> Path:
+    return Path(os.environ.get("DOMOVOI_HOST_SIDE_FILE") or HOST_SIDE_FILE)
+
+
 def _root_only(st: os.stat_result) -> bool:
     """Owned by root and writable by nobody else. Where there are no POSIX
     owners (a Windows development box) nothing is root's, so nothing
@@ -201,24 +249,59 @@ def read_side() -> dict | None:
     wrote it (``setup``: :func:`_read_setup`, None from a host before
     1.3.1), or None: no file (a Linux-only install), or one this module
     can't trust or read. Never raises."""
-    path = side_file()
+    doc = _read_side_doc(side_file(), "windows side")
+    return {**_side_fields(doc), "setup": _read_setup(doc.get("setup"))} if doc is not None else None
+
+
+def read_host_side() -> dict | None:
+    """The host side of this install, with its ``kind``: ``"windows"``
+    (:func:`read_side`, DomovoiHost's file) or ``"mac"`` (the Mac helper's
+    ``/var/lib/domovoi-mac/side.json``, which must say ``"kind": "mac"``;
+    no ``setup`` record there); None on a Linux-only install. The Windows
+    file wins when both exist. Never raises."""
+    win = read_side()
+    if win is not None:
+        return {**win, "kind": "windows"}
+    doc = _read_side_doc(host_side_file(), "host side")
+    if doc is None or doc.get("kind") not in HOST_KINDS:
+        return None
+    # "updates": 1, this Mac side has the updater (one from before it is
+    # updated by hand only).
+    updates = doc.get("updates")
+    return {**_side_fields(doc), "kind": doc["kind"], "updates": type(updates) is int and updates == 1}
+
+
+def _side_fields(doc: dict) -> dict:
+    commit = doc.get("build_commit")
+    written = doc.get("written_at")
+    return {
+        "version": doc["version"],
+        "build_commit": commit if isinstance(commit, str) and _COMMIT_RE.match(commit) else None,
+        "written_at": written if isinstance(written, str) and len(written) <= 40 else None,
+    }
+
+
+def _read_side_doc(path: Path, what: str) -> dict | None:
+    """The report at ``path`` (schema 1, a version), believed only while
+    root owns it and its folder and nobody else can write either; None
+    otherwise. Never raises."""
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError:
         return None
     except OSError as e:
-        log.warning("windows side: can't open %s: %s", path, e)
+        log.warning("%s: can't open %s: %s", what, path, e)
         return None
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or not _root_only(st) or not _root_only(os.stat(path.parent)):
-            log.warning("windows side: %s isn't root's alone; not believing it", path)
+            log.warning("%s: %s isn't root's alone; not believing it", what, path)
             return None
         if st.st_size > _SIDE_MAX_BYTES:
             return None
         data = os.read(fd, _SIDE_MAX_BYTES + 1)
     except OSError as e:
-        log.warning("windows side: can't read %s: %s", path, e)
+        log.warning("%s: can't read %s: %s", what, path, e)
         return None
     finally:
         os.close(fd)
@@ -228,14 +311,7 @@ def read_side() -> dict | None:
         return None
     if not isinstance(doc, dict) or doc.get("schema") != 1 or not valid_version(doc.get("version")):
         return None
-    commit = doc.get("build_commit")
-    written = doc.get("written_at")
-    return {
-        "version": doc["version"],
-        "build_commit": commit if isinstance(commit, str) and _COMMIT_RE.match(commit) else None,
-        "written_at": written if isinstance(written, str) and len(written) <= 40 else None,
-        "setup": _read_setup(doc.get("setup")),
-    }
+    return doc
 
 
 # ─── the release the Linux side includes ────────────────────────────────
@@ -471,7 +547,7 @@ def _clean_text(s: object, limit: int) -> str | None:
     return out or None
 
 
-def record_result(body: dict, target_tag: str | None) -> dict:
+def record_result(body: dict, target_tag: str | None, host: str = "windows") -> dict:
     """The tray's outcome of a Windows step (or of its own "Update Domovoi"):
     kept for the card. Any process on the PC can reach this route (the
     shared-PC boundary), so what it may change is held to the claim: only
@@ -479,10 +555,12 @@ def record_result(body: dict, target_tag: str | None) -> dict:
     which ends the request, and only that answer can mark a release as
     having no signed Setup (``unsigned.json``), so a stray POST can't hide
     an update. An answer for no request (the tray menu's own run) is shown
-    and changes nothing else. Only known outcomes and plain text are kept.
-    ``kind`` (:data:`RESULT_KINDS`) keeps a menu run's Linux part from
-    reading as a Windows result. PermissionError: a request id without its
-    claim."""
+    and changes nothing else. Only known outcomes and plain text are kept;
+    the log is a Windows path from the tray, a path in Domovoi's own
+    folders from the Mac app (``host`` "mac"). ``kind``
+    (:data:`RESULT_KINDS`) keeps a menu run's Linux part from reading as a
+    Windows result ("windows" is the host side's step, a Mac's included).
+    PermissionError: a request id without its claim."""
     outcome = body.get("outcome")
     if outcome not in OUTCOMES:
         raise ValueError("unknown outcome")
@@ -499,7 +577,7 @@ def record_result(body: dict, target_tag: str | None) -> dict:
     doc = {
         "outcome": outcome,
         "detail": _clean_text(body.get("detail"), 400),
-        "log": log_path if isinstance(log_path, str) and _LOG_RE.match(log_path) else None,
+        "log": log_path if isinstance(log_path, str) and (_MAC_LOG_RE if host == "mac" else _LOG_RE).match(log_path) else None,
         "version": version,
         "at": _iso(_now()),
         "request_id": rid,
@@ -579,7 +657,9 @@ def core_boot_sha() -> str | None:
 async def _facts() -> dict:
     from domovoi import egress, git_version, self_restart
 
-    side = await asyncio.to_thread(read_side)
+    host = await asyncio.to_thread(read_host_side)
+    kind = host["kind"] if host else None
+    side = {k: v for k, v in host.items() if k not in ("kind", "updates")} if host else None
     running = git_version.boot_sha()
     track = await asyncio.to_thread(git_version.tracking)
     channel = track.get("channel")
@@ -597,6 +677,9 @@ async def _facts() -> dict:
         why = "no_release"
     elif compare_versions(target["version"], side["version"]) <= 0:
         why = "up_to_date"
+    elif kind == "mac" and not host.get("updates"):
+        # Newer, and this Mac side has no updater to run the step: by hand.
+        why = "mac_by_hand"
     elif target["tag"] in unsigned:
         why = "unsigned_release"
     request = await asyncio.to_thread(read_request)
@@ -605,41 +688,60 @@ async def _facts() -> dict:
         await asyncio.to_thread(clear_request)
         request = None
     return {
-        "side": side, "target": target, "channel": channel, "internet": internet,
+        "side": side, "kind": kind, "target": target, "channel": channel, "internet": internet,
         "step_needed": why is None, "why_not": why, "busy": busy, "last": last,
         "request": request, "running_sha": running,
+        "updates": bool(host and host.get("updates")),
     }
 
 
 async def tray_state() -> dict:
     """``GET /v1/windows/update``: what the tray needs, and nothing more."""
+    return await agent_state("windows")
+
+
+async def agent_state(kind: str) -> dict:
+    """What a host side's own updater needs: the Windows tray's
+    (``"windows"``, ``GET /v1/windows/update``; the side under
+    ``"windows"``) or the Mac app's (``"mac"``, ``GET /v1/mac/update``; under
+    ``"mac"``). Another host's side is none to it: no side, no step
+    (``why_not`` ``no_windows_side`` / ``no_mac_side``) and, for the Mac app,
+    no request either."""
     f = await _facts()
     last = f["last"] or {}
+    if kind == "mac":
+        mine = f["kind"] == "mac"
+    else:
+        # A Mac side is no Windows side to the Windows tray.
+        mine = f["kind"] in ("windows", None)
     return {
         "schema": 1,
-        "windows": f["side"],
+        kind: f["side"] if mine else None,
         "target": f["target"],
-        "step_needed": f["step_needed"],
-        "why_not": f["why_not"],
+        "step_needed": f["step_needed"] if mine else False,
+        "why_not": f["why_not"] if mine else f"no_{kind}_side",
         "internet": f["internet"],
         "channel": f["channel"],
         "linux": {
             "busy": f["busy"],
             "last_update": {k: last.get(k) for k in ("status", "started_at", "finished_at", "error")} if f["last"] else None,
         },
-        "request": f["request"],
+        # The Windows tray has always seen the request as is.
+        "request": f["request"] if mine or kind == "windows" else None,
     }
 
 
 async def card_state() -> dict:
     """``windows_side`` in ``GET /v1/admin/version``: the Version card's
-    Windows rows. ``present`` false on a Linux-only install (then nothing
-    else matters)."""
+    host-side rows (``kind``: ``windows`` or ``mac``). ``present`` false on
+    a Linux-only install (then nothing else matters)."""
     f = await _facts()
     if f["side"] is None:
         return {"present": False}
     return {
         "present": True,
+        # "windows" or "mac": which host this Linux side runs under.
+        "kind": f["kind"],
         "version": f["side"]["version"],
         "build_commit": f["side"]["build_commit"],
         "reported_at": f["side"]["written_at"],
@@ -654,6 +756,9 @@ async def card_state() -> dict:
         "request": f["request"],
         "result": await asyncio.to_thread(read_result),
         "tray": tray_seen(),
+        # A Mac side's: whether it has the updater (else it updates by
+        # hand only, why_not mac_by_hand). Not on a Windows card.
+        **({"updates": f["updates"]} if f["kind"] == "mac" else {}),
     }
 
 

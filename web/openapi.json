@@ -10771,7 +10771,7 @@
           "config"
         ],
         "summary": "Request Windows Step",
-        "description": "A Windows install's \"Update Domovoi\", its second half: ask the tray\non the PC for the Windows step (domovoi/windows_side.py). This process\nsays whether the browser is on that PC, by the loopback rule the tray's\nown routes use (domovoi/local_peer.py): then the tray starts at once and\nWindows asks for permission there; from another device the tray shows a\nnotification instead. Proxy of the core's ``POST\n/v1/admin/windows/request`` \u2192 ``{ok, request, joined, tray}`` (a press\nwhile a request waits joins it); ``after_linux``: this press updated the\nLinux side first. 409 with the reason when there is no step to take.",
+        "description": "A Windows install's \"Update Domovoi\", its second half: ask the tray\non the PC for the Windows step (domovoi/windows_side.py). This process\nsays whether the browser is on that PC, by the loopback rule the tray's\nown routes use (domovoi/local_peer.py): then the tray starts at once and\nWindows asks for permission there; from another device the tray shows a\nnotification instead. Proxy of the core's ``POST\n/v1/admin/windows/request`` \u2192 ``{ok, request, joined, tray}`` (a press\nwhile a request waits joins it); ``after_linux``: this press updated the\nLinux side first. 409 with the reason when there is no step to take.\nOn a Mac install it is the Mac step, for the Domovoi app on the Mac (a\nbrowser on the Mac arrives here over Lima's loopback forward, so \"on\nthis PC\" reads as \"on this Mac\" by the same rule).",
         "operationId": "request_windows_step_api_config_version_windows_request_post",
         "requestBody": {
           "content": {
@@ -22031,7 +22031,7 @@
           "models"
         ],
         "summary": "Get Installed",
-        "description": "Installed-on-disk Ollama models (``/api/tags``) joined with which are\nloaded in VRAM right now (``/api/ps``). ``ollama_reachable`` is false when\nthe local Ollama server is down \u2014 the page then shows an offline notice\ninstead of an empty 'no models' state (they're different situations).",
+        "description": "Installed-on-disk Ollama models (``/api/tags``) joined with which are\nloaded in VRAM right now (``/api/ps``). ``ollama_reachable`` is false when\nthe local Ollama server is down \u2014 the page then shows an offline notice\ninstead of an empty 'no models' state (they're different situations).\n\n``ollama_version``: the configured Ollama's version against the oldest\nDomovoi runs on (``ollama_client.server_version``): ``{version, ok, min}``,\n``ok`` False when it is older, None when it can't be told. The page says\nso in words, for an Ollama the household brings itself.",
         "operationId": "get_installed_api_models_installed_get",
         "responses": {
           "200": {
@@ -22082,6 +22082,46 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SetActiveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models/stt-engine": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Set Stt Engine",
+        "description": "Speech recognition on this Mac's graphics chip, on or off (admin;\nmac-installer PHASE8A-STT.md). The core's ``/v1/admin/stt-engine``: 409\non a server with no speech service, where the page shows no switch.",
+        "operationId": "set_stt_engine_api_models_stt_engine_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SttEngineBody"
               }
             }
           },
@@ -26898,6 +26938,18 @@
             ],
             "title": "Stt"
           },
+          "stt_engine": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stt Engine"
+          },
           "speech": {
             "anyOf": [
               {
@@ -30577,7 +30629,7 @@
           "setup_transport": {
             "type": "string",
             "title": "Setup Transport",
-            "description": "usb | portal. Omitted: usb, or portal when the server runs inside WSL (no removable drives there)."
+            "description": "usb | portal. Omitted: usb, or portal when the server runs inside WSL or the Mac installer's VM (no removable drives there)."
           },
           "wifi_country": {
             "type": "string",
@@ -33270,6 +33322,19 @@
         },
         "type": "object",
         "title": "StreamUploadResponse"
+      },
+      "SttEngineBody": {
+        "properties": {
+          "use_host": {
+            "type": "boolean",
+            "title": "Use Host"
+          }
+        },
+        "type": "object",
+        "required": [
+          "use_host"
+        ],
+        "title": "SttEngineBody"
       },
       "SubscribeRequest": {
         "properties": {

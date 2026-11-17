@@ -145,6 +145,37 @@ async def ps(base_url: str | None = None, timeout: float = 2.0) -> list[dict[str
     return await _ps_or_none(base_url, timeout) or []
 
 
+#: The oldest Ollama Domovoi runs on: Qwen3-VL, every tier's vision model,
+#: needs 0.12.7 (ollama.com/library/qwen3-vl, read 2026-10-28). The pinned
+#: release (docs/LINUX_HOST.md) is newer; this matters for an Ollama the
+#: household brings ("use my existing Ollama", OLLAMA_URL elsewhere).
+#: provision.sh's OLLAMA_MIN_VERSION is the same value (a test holds them).
+MIN_OLLAMA_VERSION = (0, 12, 7)
+
+
+async def server_version(base_url: str | None = None, timeout: float = 2.0) -> dict[str, Any]:
+    """What ``GET /api/version`` of the configured Ollama says, against
+    :data:`MIN_OLLAMA_VERSION`: ``{"version": "0.34.4" | None, "ok": True |
+    False | None, "min": "0.12.7"}``. ``ok`` is None when that can't be told:
+    Ollama didn't answer, or answered with no usable version (``0.0.0``, a
+    build from source). Never raises."""
+    import httpx
+
+    minimum = ".".join(map(str, MIN_OLLAMA_VERSION))
+    text = None
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            resp = await c.get(f"{_ollama_base(base_url)}/api/version")
+            resp.raise_for_status()
+            payload = resp.json()
+        raw = payload.get("version") if isinstance(payload, dict) else None
+        text = raw.strip()[:40] if isinstance(raw, str) and raw.strip() else None
+    except Exception as e:  # noqa: BLE001 — unknown, not a failure
+        log.debug("ollama /api/version failed: %s", e)
+    parsed = _parse_ollama_version(text)
+    return {"version": text, "ok": None if parsed is None else parsed >= MIN_OLLAMA_VERSION, "min": minimum}
+
+
 def _parse_ollama_version(text: Any) -> tuple[int, int, int] | None:
     """``"0.34.2"`` → ``(0, 34, 2)``; a pre-release suffix ("0.9.1-rc0") is
     ignored. None for anything else, and for ``0.0.0``, which is what a
