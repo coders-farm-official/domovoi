@@ -136,7 +136,35 @@ struct FhHeader: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("fh.statusLine")
             }
+            if let lines = fhChangeLines(status?.changes, nowMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())) {
+                FhChangesSection(lines: lines)
+                    .padding(.top, 8)
+            }
         }
+    }
+}
+
+/// "This week" (Android 3d99f404 `ThisWeek`): who this house started
+/// trusting in the last week, newest first, and what to do if it wasn't
+/// you. Said aloud too, but quiet hours hold that back, so it stays written
+/// here. Each change is one plain line (names are another house's words).
+struct FhChangesSection: View {
+
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            FhPlainText(text: FhWords.thisWeek, font: .subheadline, weight: .semibold)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("fh.changes.title")
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                FhPlainText(text: line, font: .footnote)
+                    .accessibilityIdentifier("fh.change")
+            }
+            FhMutedLine(text: FhWords.notYou)
+                .accessibilityIdentifier("fh.changes.note")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

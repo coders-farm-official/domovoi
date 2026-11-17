@@ -74,6 +74,11 @@ public enum FhWords {
     public static let notReachedYet = "Not reached yet"
     public static func lastSeen(_ relative: String) -> String { "Last seen \(relative)" }
 
+    /// "This week" (server R6 FH-8), Android 3d99f404 word for word.
+    public static let thisWeek = "This week"
+    public static let notYou =
+        "Not you? Only an admin can remove or block the house and change the admin password, on the dashboard."
+
     public static func unread(_ n: Int) -> String { "\(n) unread" }
     public static func notDelivered(_ n: Int) -> String { "\(n) not delivered" }
     public static func waiting(_ n: Int) -> String { "\(n) \(n == 1 ? "change" : "changes") waiting to send" }
@@ -113,6 +118,52 @@ public enum FhTab: String, CaseIterable, Sendable {
     }
 }
 
+// MARK: - wire times, bounded (security review, Android 22b3b9c8)
+
+/// The latest time these screens format: 9999-12-31T23:59:59Z. Every time
+/// on the wire is checked against 0...this before it reaches arithmetic, a
+/// `Date` or a formatter: `sent_at` is the OTHER house's number, and
+/// `Int64.min` in a subtraction is a trap on every open of that
+/// conversation.
+public let fhMaxEpochSec: Int64 = 253_402_300_799
+
+/// `sec` when it is a time these screens can show, else nil.
+public func fhEpochSec(_ sec: Int64?) -> Int64? {
+    guard let sec, sec >= 0, sec <= fhMaxEpochSec else { return nil }
+    return sec
+}
+
+/// An ISO time from the server, as seconds, when it parses to a time these
+/// screens can show; else nil. The `Double` is checked before it becomes an
+/// integer, so no conversion can trap.
+public func fhIsoSeconds(_ iso: String?) -> Int64? {
+    guard let date = parseInstant(iso) else { return nil }
+    let t = date.timeIntervalSince1970
+    guard t.isFinite, t >= 0, t <= Double(fhMaxEpochSec) else { return nil }
+    return fhEpochSec(Int64(t.rounded(.down)))
+}
+
+/// The ISO time itself, when ``fhIsoSeconds(_:)`` accepts it.
+public func fhIso(_ iso: String?) -> String? {
+    fhIsoSeconds(iso) == nil ? nil : iso
+}
+
+/// "4m ago" for a server time, or "—" for one that is missing, unreadable or
+/// out of range: never a trap (``relTime(_:nowMs:)`` turns the time into
+/// milliseconds, which a year in the billions would overflow).
+public func fhRelTime(_ iso: String?, nowMs: Int64) -> String {
+    guard let ok = fhIso(iso) else { return "—" }
+    return relTime(ok, nowMs: nowMs)
+}
+
+/// `|a - b|`, saturating at `Int64.max` instead of trapping. The callers
+/// bound both first; this is the second lock on the same door.
+func fhDistance(_ a: Int64, _ b: Int64) -> Int64 {
+    let (difference, overflow) = a.subtractingReportingOverflow(b)
+    if overflow || difference == .min { return .max }
+    return difference < 0 ? -difference : difference
+}
+
 /// A friend house's presence line: "Online"; else "Last seen <relative>"
 /// (the app's ``relTime(_:nowMs:)`` words: "4m ago", "yesterday"…); else
 /// "Not reached yet". Nil — nothing drawn — when the server sent no presence
@@ -120,10 +171,52 @@ public enum FhTab: String, CaseIterable, Sendable {
 public func fhPresence(_ friend: FhFriend, nowMs: Int64) -> String? {
     guard let online = friend.online else { return nil }
     if online { return FhWords.online }
-    if let seen = friend.lastSeenAt, parseInstant(seen) != nil {
-        return FhWords.lastSeen(relTime(seen, nowMs: nowMs))
+    guard let seen = friend.lastSeenAt, !fhBlank(seen) else { return FhWords.notReachedYet }
+    // A time that can't be shown says nothing rather than something wrong
+    // (Android 22b3b9c8).
+    guard fhIso(seen) != nil else { return nil }
+    return FhWords.lastSeen(fhRelTime(seen, nowMs: nowMs))
+}
+
+/// At most this many of the week's changes are listed.
+public let fhChangesShown = 5
+
+/// One of the week's changes in the dashboard's words, with its time when
+/// it can be shown: "The Smiths became a friend house · 2d ago",
+/// "“Groceries” was shared with The Patels · 5h ago" (Android
+/// `FhWords.change`). Nil for a kind this build doesn't know. A null or
+/// blank name is "A house" / "A list" / "a friend house"; a missing time, or
+/// one outside 0...9999-12-31, drops the " · <time>" part.
+public func fhChangeLine(_ change: FhChange, nowMs: Int64) -> String? {
+    func named(_ value: String?, _ fallback: String) -> String {
+        guard let value, !fhBlank(value) else { return fallback }
+        return value
     }
-    return FhWords.notReachedYet
+    let what: String
+    switch change.kind {
+    case "friend":
+        what = "\(named(change.friend, "A house")) became a friend house"
+    case "shared_list":
+        what = "\u{201C}\(named(change.list, "A list"))\u{201D} was shared with "
+            + named(change.friend, "a friend house")
+    default:
+        return nil
+    }
+    guard fhIso(change.at) != nil else { return what }
+    return "\(what) \u{00B7} \(fhRelTime(change.at, nowMs: nowMs))"
+}
+
+/// The "This week" lines: newest first (a change with no time to show
+/// after those with one, the server's order among equals), at most
+/// ``fhChangesShown``; nil — no section — when there is nothing to say
+/// (absent, not a list, empty, or only kinds this build doesn't know).
+public func fhChangeLines(_ changes: [FhChange]?, nowMs: Int64) -> [String]? {
+    guard let changes else { return nil }
+    let ordered = changes.enumerated()
+        .map { (index: $0.offset, at: fhIsoSeconds($0.element.at) ?? -1, change: $0.element) }
+        .sorted { $0.at != $1.at ? $0.at > $1.at : $0.index < $1.index }
+    let lines = ordered.compactMap { fhChangeLine($0.change, nowMs: nowMs) }.prefix(fhChangesShown)
+    return lines.isEmpty ? nil : Array(lines)
 }
 
 /// An outgoing message's state in plain words, with its tone.
@@ -156,11 +249,11 @@ public func fhOutState(_ m: FhMessage) -> FhOutState? {
 public let fhClockSkewSec: Int64 = 5 * 60
 
 /// The sender's own clock, when it disagrees with this house's by more than
-/// five minutes: "sent <time> (their clock)"; else nil.
+/// five minutes: "sent <time> (their clock)"; else nil, and nil for either
+/// time outside 0...``fhMaxEpochSec``.
 public func fhTheirClock(_ m: FhMessage, zone: TimeZone = .current) -> String? {
-    guard m.incoming, let here = parseInstant(m.createdAt), let theirs = m.sentAt else { return nil }
-    let hereSec = Int64(here.timeIntervalSince1970.rounded(.down))
-    if abs(theirs - hereSec) <= fhClockSkewSec { return nil }
+    guard m.incoming, let hereSec = fhIsoSeconds(m.createdAt), let theirs = fhEpochSec(m.sentAt) else { return nil }
+    if fhDistance(theirs, hereSec) <= fhClockSkewSec { return nil }
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = zone
@@ -208,6 +301,21 @@ public struct FhThread: Equatable, Sendable {
         self.more = more
         self.loaded = loaded
     }
+}
+
+/// How many messages a conversation holds on screen from its own re-reads,
+/// newest kept (security review: the thread is a plain `VStack`, and a
+/// house that writes all day would otherwise grow it without end).
+public let fhThreadKeep = 200
+
+/// The most "Load earlier" may hold, newest kept.
+public let fhThreadKeepEarlier = 1000
+
+/// `thread` with at most `keep` messages, the newest; trimming says there
+/// are earlier ones to load again.
+public func fhCapped(_ thread: FhThread, keep: Int) -> FhThread {
+    guard thread.messages.count > keep, keep > 0 else { return thread }
+    return FhThread(messages: Array(thread.messages.suffix(keep)), more: true, loaded: thread.loaded)
 }
 
 /// `rows` merged into `current` by id (a re-read replaces what it holds),

@@ -72,6 +72,10 @@ public struct AlertsRequest: Equatable, Sendable {
     public let threadIdentifier: String
     public let userInfo: [String: String]
 
+    /// A registered notification category, or nil. Friend Houses' carries
+    /// the hidden-previews placeholder (``FhNotificationSink/category``).
+    public let categoryIdentifier: String?
+
     /// An update to a notification already on screen, which must not alert
     /// again — `post(…, silent = true)` (`AlertEngine.kt:113`).
     ///
@@ -94,7 +98,8 @@ public struct AlertsRequest: Equatable, Sendable {
         threadIdentifier: String,
         userInfo: [String: String] = [:],
         afterSeconds: Double? = nil,
-        silent: Bool = false
+        silent: Bool = false,
+        categoryIdentifier: String? = nil
     ) {
         self.identifier = identifier
         self.title = title
@@ -104,6 +109,7 @@ public struct AlertsRequest: Equatable, Sendable {
         self.userInfo = userInfo
         self.afterSeconds = afterSeconds
         self.silent = silent
+        self.categoryIdentifier = categoryIdentifier
     }
 
     /// `TimerNotifier.GROUP` (`TimerNotifier.kt:45`).
@@ -276,6 +282,7 @@ public final class AlertsSystemNotificationCentre: AlertsNotificationCentre, @un
         if let body = request.body { content.body = body }
         content.threadIdentifier = request.threadIdentifier
         content.userInfo = request.userInfo
+        if let category = request.categoryIdentifier { content.categoryIdentifier = category }
         // `setSilent` + `setOnlyAlertOnce` have no iOS equivalent, so a
         // silent request is one with no sound and a passive level: it updates
         // what is on screen without lighting it up again.

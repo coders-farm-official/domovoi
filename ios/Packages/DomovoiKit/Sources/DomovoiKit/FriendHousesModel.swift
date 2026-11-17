@@ -271,7 +271,13 @@ public final class FhConversationModel {
         do {
             let (next, unread) = try await loader.latest(current, first: first)
             guard !moved else { return }
-            thread = FhThread(messages: fhMerge(thread.messages, next.messages), more: next.more, loaded: true)
+            // Never more than it held (what "Load earlier" brought stays), and
+            // never more than ``fhThreadKeep`` from re-reads alone.
+            let keep = min(max(fhThreadKeep, thread.messages.count), fhThreadKeepEarlier)
+            thread = fhCapped(
+                FhThread(messages: fhMerge(thread.messages, next.messages), more: next.more, loaded: true),
+                keep: keep
+            )
             problem = nil
             if !first && unread { await markRead() }
         } catch {
@@ -286,7 +292,10 @@ public final class FhConversationModel {
         do {
             let next = try await loader.earlier(thread)
             guard !moved else { return }
-            thread = FhThread(messages: fhMerge(thread.messages, next.messages), more: next.more, loaded: true)
+            thread = fhCapped(
+                FhThread(messages: fhMerge(thread.messages, next.messages), more: next.more, loaded: true),
+                keep: fhThreadKeepEarlier
+            )
         } catch {
             guard !moved else { return }
             problem = fhProblem("load earlier", error)

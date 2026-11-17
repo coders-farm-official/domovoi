@@ -163,6 +163,68 @@ final class FriendHousesPlainTextTests: XCTestCase {
         XCTAssertNil(fhTheirClock(FhMessage(direction: "out", sentAt: at + 3600, createdAt: here), zone: utc))
     }
 
+    /// `sent_at` is another house's number: one outside 0...9999-12-31 gives
+    /// no "their clock" line rather than a trap in every bubble
+    /// (Android 22b3b9c8, `anImpossibleSenderClockIsLeftOutNotACrash`).
+    func testAnImpossibleSenderClockIsLeftOutNotACrash() throws {
+        let here = "2026-11-17T18:25:33+00:00"
+        for bad: Int64 in [1 << 62, .max, .min, -1, fhMaxEpochSec + 1] {
+            XCTAssertNil(fhTheirClock(FhMessage(direction: "in", sentAt: bad, createdAt: here)), "\(bad)")
+        }
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        XCTAssertEqual(
+            "sent Dec 31, 11:59 PM (their clock)",
+            fhTheirClock(FhMessage(direction: "in", sentAt: fhMaxEpochSec, createdAt: here), zone: utc)
+        )
+        XCTAssertEqual(
+            "sent Jan 1, 12:00 AM (their clock)",
+            fhTheirClock(FhMessage(direction: "in", sentAt: 0, createdAt: here), zone: utc)
+        )
+        // A created_at before 1970 or past 9999 with a far sent_at: no line,
+        // no trap.
+        XCTAssertNil(fhTheirClock(FhMessage(direction: "in", sentAt: .max, createdAt: "1969-12-31T23:59:59+00:00")))
+        // Bounded at decode too: the extremes become no sender clock.
+        for raw in ["9223372036854775807", "-9223372036854775808", "4611686018427387904", "-1", "1e300", "253402300800"] {
+            let data = Data(#"{"id":1,"direction":"in","body":"x","state":"read","sent_at":\#(raw)}"#.utf8)
+            XCTAssertNil(try JSONDecoder().decode(FhMessage.self, from: data).sentAt, raw)
+        }
+        XCTAssertEqual(Int64(1795466733), try JSONDecoder().decode(
+            FhMessage.self, from: Data(#"{"id":1,"sent_at":1795466733}"#.utf8)
+        ).sentAt)
+        XCTAssertEqual(.max, fhDistance(.max, .min))
+        XCTAssertEqual(.max, fhDistance(.min, 0))
+        XCTAssertEqual(5, fhDistance(3, 8))
+    }
+
+    func testServerTimesOutOfRangeShowADashOrNothing() throws {
+        let now = try XCTUnwrap(isoMs("2026-11-17T19:12:10+00:00"))
+        XCTAssertEqual("—", fhRelTime("+999999999-12-31T23:59:59Z", nowMs: now))
+        XCTAssertEqual("—", fhRelTime("1969-12-31T23:59:59Z", nowMs: now))
+        XCTAssertEqual("—", fhRelTime("not a time", nowMs: now))
+        XCTAssertEqual("—", fhRelTime(nil, nowMs: now))
+        XCTAssertEqual("2m ago", fhRelTime("2026-11-17T19:10:10+00:00", nowMs: now))
+        XCTAssertNil(fhIso("1969-12-31T23:59:59Z"))
+        // Presence: a last-seen that can't be shown says nothing.
+        XCTAssertNil(fhPresence(FhFriend(online: false, lastSeenAt: "1969-12-31T23:59:59Z"), nowMs: now))
+        XCTAssertNil(fhPresence(FhFriend(online: false, lastSeenAt: "soon"), nowMs: now))
+        XCTAssertEqual("Not reached yet", fhPresence(FhFriend(online: false, lastSeenAt: "  "), nowMs: now))
+    }
+
+    /// The thread keeps the newest 200 from re-reads (more than "Load
+    /// earlier" brought, never more than 1000), and says there is more.
+    func testTheThreadIsCapped() {
+        let many = FhThread(messages: (1...250).map { FhMessage(id: Int64($0)) }, more: false, loaded: true)
+        let capped = fhCapped(many, keep: fhThreadKeep)
+        XCTAssertEqual(200, capped.messages.count)
+        XCTAssertEqual(Int64(51), capped.messages.first?.id)
+        XCTAssertEqual(Int64(250), capped.messages.last?.id, "the newest stay")
+        XCTAssertTrue(capped.more, "trimming offers Load earlier again")
+        XCTAssertEqual(many.messages.count, fhCapped(many, keep: 1000).messages.count)
+        XCTAssertFalse(fhCapped(many, keep: 1000).more)
+        XCTAssertEqual(200, fhThreadKeep)
+        XCTAssertEqual(1000, fhThreadKeepEarlier)
+    }
+
     func testNamesAndTitlesArePassedOnUnchanged() {
         XCTAssertEqual("\(hostile) shared a list: \(hostile). An admin can accept it in the dashboard.",
                        FhWords.invited(hostile, hostile))

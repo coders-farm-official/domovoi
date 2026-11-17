@@ -171,6 +171,25 @@ final class FriendHousesModelTests: XCTestCase {
         XCTAssertTrue(fh.seen.current.isEmpty, "a call for the house the phone left was sent: \(fh.seen.current)")
     }
 
+    /// Re-reads never grow the thread past 200: a house writing all day
+    /// keeps the newest, and Load earlier is offered again.
+    func testReReadsKeepTheNewestTwoHundred() async {
+        let fh = FhHouse()
+        let url = "/api/friend-houses/conversations/\(smiths)?limit=50"
+        fh.answer("POST", "/api/friend-houses/conversations/\(smiths)/read", #"{"marked":0}"#)
+        let (model, _) = conversation(fh)
+        var top = 0
+        for round in 0..<6 {
+            let rows = (1...50).map { FhHouse.message(Int64(round * 50 + $0)) }
+            top = round * 50 + 50
+            fh.answer("GET", url, page(rows))
+            await model.latest(first: round == 0)
+        }
+        XCTAssertEqual(200, model.thread.messages.count)
+        XCTAssertEqual(Int64(top), model.thread.messages.last?.id)
+        XCTAssertTrue(model.thread.more)
+    }
+
     // MARK: - the screen
 
     func testTheScreensReadsAndItsMoves() async {

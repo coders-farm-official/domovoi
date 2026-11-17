@@ -1704,15 +1704,29 @@ public final class ShellModel {
     /// is the system centre, which a package test cannot build, so a shell
     /// without it runs the gate with no notifications.
     public func startFriendHouses(notifications: (any AlertsNotificationCentre)? = nil) {
+        let lock = container.lock
+        let roomMode: @Sendable () -> Bool = { lock.roomModeActive }
         let alerts = notifications.map { centre in
             FriendHouseAlerts(
                 api: friendHouses.api,
                 store: FhSeenBook(),
-                sink: FhNotificationSink(centre: centre)
+                sink: FhNotificationSink(centre: centre, roomMode: roomMode),
+                roomMode: roomMode
             )
         }
         friendHouses.start(alerts: alerts)
         friendHouses.setForeground(phase == .active)
+    }
+
+    /// Room mode begins: Friend Houses stops, hides, and takes back its
+    /// notifications (``FriendHousesGate/pauseForRoomMode()``).
+    public func pauseFriendHousesForRoomMode() {
+        friendHouses.pauseForRoomMode()
+    }
+
+    /// Room mode ended: Friend Houses starts again.
+    public func resumeFriendHousesAfterRoomMode() {
+        friendHouses.resumeAfterRoomMode(foreground: phase == .active)
     }
 
     /// The gate's verdict changed: a route that lost it goes home, and a

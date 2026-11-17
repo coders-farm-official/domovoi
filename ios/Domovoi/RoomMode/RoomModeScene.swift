@@ -90,6 +90,9 @@ final class HouseholdRoot {
         // the app is open only: the iPhone has no background check
         // (``FriendHouseAlerts``).
         model.startFriendHouses(notifications: AlertsSystemNotificationCentre())
+        // Its category's hidden-previews placeholder: a locked phone with
+        // previews hidden shows "A message from a friend house", no words.
+        Task { await FhNotificationSink.registerCategory() }
     }
 
     /// The household side goes quiet as the phone becomes a room
@@ -105,6 +108,9 @@ final class HouseholdRoot {
     /// does (its container is the process's, and `leave` restarts it).
     func quietForRoomMode() {
         alerts.centre.pause()
+        // Friend Houses stops and takes back its notifications: at the
+        // `read` level they carry another house's words.
+        model.pauseFriendHousesForRoomMode()
         container.socket.stop()
         if model.playerIsBuilt, let player = model.player, player.target.roomID == nil {
             player.stop()
@@ -117,6 +123,7 @@ final class HouseholdRoot {
     func resumeAfterRoomMode() {
         container.socket.start()
         alerts.centre.resume()
+        model.resumeFriendHousesAfterRoomMode()
     }
 }
 

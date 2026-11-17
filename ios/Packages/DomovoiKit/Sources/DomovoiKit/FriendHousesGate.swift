@@ -80,6 +80,7 @@ public final class FriendHousesGate {
     @ObservationIgnored private var wanted = false
     @ObservationIgnored private var reading: Task<Void, Never>?
     @ObservationIgnored private var minute: Task<Void, Never>?
+    @ObservationIgnored private var foreground = false
     @ObservationIgnored private var askedServer: String?
     @ObservationIgnored private var askedToken: String?
 
@@ -160,6 +161,7 @@ public final class FriendHousesGate {
     /// The app is on screen (`true`) or not: the minute's re-read runs only
     /// while it is, as Android's `repeatOnLifecycle(STARTED)`.
     public func setForeground(_ on: Bool) {
+        foreground = on
         guard started, on else {
             minute?.cancel()
             minute = nil
@@ -207,7 +209,37 @@ public final class FriendHousesGate {
         }
         note(server, availability)
         reads += 1
-        if let alerts { _ = await alerts.afterStatus(availability, server: server) }
+        // Notifications only while the app is on screen: the iPhone has no
+        // background check, and a socket that comes back while the app sits
+        // in the background (playing music) must not post one either
+        // (security review). What arrived meanwhile is posted on return.
+        if let alerts, foreground, !container.lock.roomModeActive {
+            _ = await alerts.afterStatus(availability, server: server)
+        }
+    }
+
+    /// Room mode begins: stop, hide, and take back every Friend Houses
+    /// notification already delivered or pending — at the `read` level they
+    /// carry another house's words, and a room is a phone anyone nearby can
+    /// pick up. Nothing reads or posts while it runs (``read()``, the
+    /// alerts and the sink each check the lock as well).
+    public func pauseForRoomMode() {
+        let alerts = self.alerts
+        stop()
+        note(container.store.serverURL, .hidden)
+        if let alerts { Task { await alerts.withdrawAll() } }
+    }
+
+    /// Room mode ended: start again (Android missed this at first), and read
+    /// at once.
+    public func resumeAfterRoomMode(foreground on: Bool) {
+        guard !started else {
+            refresh()
+            return
+        }
+        started = true
+        refresh()
+        setForeground(on)
     }
 
     /// Record a status answer for `server`: the verdict that holds
