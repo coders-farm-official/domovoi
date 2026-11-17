@@ -464,6 +464,10 @@ final class FriendHousesApiTests: XCTestCase {
         let s = try XCTUnwrap(shared.first)
         XCTAssertEqual("invited", s.state)
         XCTAssertNil(s.listId)
+        // No presence from this server: nothing to show.
+        XCTAssertNil(f.online)
+        XCTAssertNil(f.lastSeenAt)
+        XCTAssertNil(fhPresence(f, nowMs: 0))
         // A friend with no alert level is the default, the least intrusive.
         let bare = try JSONDecoder().decode(FhFriend.self, from: Data(#"{"id":"x"}"#.utf8))
         XCTAssertEqual("inbox", bare.alert)
@@ -477,6 +481,8 @@ final class FriendHousesApiTests: XCTestCase {
             XCTAssertTrue(words.contains("on the dashboard"), words)
         }
         XCTAssertEqual("Only an admin can do that, on the dashboard.", fhAdminOnly)
+        // Blocking is an admin's too (2026-11-17), and the sentence says so.
+        XCTAssertTrue(FhWords.friendsAdmin.contains("block"))
         XCTAssertEqual(
             "The Smiths shared a list: Camping. An admin can accept it in the dashboard.",
             FhWords.invited("The Smiths", "Camping")
@@ -487,6 +493,37 @@ final class FriendHousesApiTests: XCTestCase {
             FhWords.conversationAdmin, FhWords.phoneFollows, FhWords.phoneOpenOnly, FhWords.noFriendsSub,
         ]
         XCTAssertTrue(words.allSatisfy { $0.range(of: "gam", options: .caseInsensitive) == nil })
+    }
+
+    /// Presence (hand-off "Friends", 2026-11-17): "Online"; else "Last seen
+    /// <relative>"; else "Not reached yet"; and nothing at all when the
+    /// server sends neither field.
+    func testPresenceIsOnlineLastSeenOrNotReachedYet() throws {
+        let now = try XCTUnwrap(isoMs("2026-11-17T19:12:10+00:00"))
+        let rows = Data("""
+            {"friends":[
+            {"id":"a","name":"On","online":true,"last_seen_at":"2026-11-17T19:02:10+00:00"},
+            {"id":"b","name":"Seen","online":false,"last_seen_at":"2026-11-17T17:12:10+00:00"},
+            {"id":"c","name":"Never","online":false,"last_seen_at":null},
+            {"id":"d","name":"Old server"},
+            {"id":"e","name":"Garbled","online":"yes","last_seen_at":7}]}
+            """.utf8)
+        let friends = try JSONDecoder().decode(FhFriends.self, from: rows).friends
+        XCTAssertEqual(
+            ["Online", "Last seen 2h ago", "Not reached yet", nil, nil],
+            friends.map { fhPresence($0, nowMs: now) }
+        )
+        XCTAssertEqual(true, friends.first?.online)
+        XCTAssertEqual("2026-11-17T19:02:10+00:00", friends.first?.lastSeenAt)
+        // Online wins over an old last-seen; a last-seen that is not a time
+        // reads as never reached rather than as a broken line.
+        XCTAssertEqual("Online", fhPresence(FhFriend(online: true, lastSeenAt: nil), nowMs: now))
+        XCTAssertEqual("Not reached yet", fhPresence(FhFriend(online: false, lastSeenAt: "soon"), nowMs: now))
+        XCTAssertEqual("Last seen just now", FhWords.lastSeen(relTime("2026-11-17T19:12:00+00:00", nowMs: now)))
+        // Never about a person: no "home", no "away", no "is online".
+        for words in [FhWords.online, FhWords.notReachedYet, FhWords.lastSeen("2h ago")] {
+            XCTAssertNil(words.range(of: "home", options: .caseInsensitive), words)
+        }
     }
 
     func testAlertLevelsAreWords() {

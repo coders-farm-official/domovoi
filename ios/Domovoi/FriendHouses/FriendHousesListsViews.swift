@@ -129,13 +129,22 @@ struct FhFriendRow: View {
             FhRowOrColumn {
                 FhPlainText(text: friend.name, weight: .semibold)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("fh.friend.name")
             } trailing: {
                 HomeTonePill(
                     label: friend.verified ? FhWords.verified : FhWords.notVerified,
                     tone: friend.verified ? .ok : .warn
                 )
+                .accessibilityIdentifier("fh.friend.verified")
+            }
+            // Online / Last seen … / Not reached yet; nothing from a server
+            // that sends no presence.
+            if let presence = fhPresence(friend, nowMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())) {
+                FhMutedLine(text: presence)
+                    .accessibilityIdentifier("fh.friend.presence")
             }
             FhMutedLine(text: FhWords.alert(friend.alert))
+                .accessibilityIdentifier("fh.friend.alert")
             if FhPaths.isHouseKey(friend.house) {
                 Button(action: onMessage) {
                     FhPlainText(text: FhWords.message, colour: Color.brandInk)
@@ -155,8 +164,11 @@ struct FhFriendsAdminWords: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             FhMutedLine(text: FhWords.phoneFollows)
+                .accessibilityIdentifier("fh.friends.note")
             FhMutedLine(text: FhWords.phoneOpenOnly)
+                .accessibilityIdentifier("fh.friends.note")
             FhMutedLine(text: FhWords.friendsAdmin)
+                .accessibilityIdentifier("fh.friends.note")
         }
         .padding(.top, 8)
     }

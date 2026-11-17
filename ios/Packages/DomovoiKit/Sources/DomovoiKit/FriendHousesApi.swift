@@ -94,6 +94,13 @@ public struct FhFriend: Equatable, Sendable, Decodable {
     public let alert: String
     public let verified: Bool
     public let addedAt: String?
+    /// Presence (hand-off, 2026-11-17): heard from in the last 15 minutes.
+    /// Nil when the server sends no presence at all (one from before it),
+    /// and then nothing is shown. It is about the other *house* running,
+    /// never about who is home.
+    public let online: Bool?
+    /// When that house was last heard from (ISO), nil: not reached yet.
+    public let lastSeenAt: String?
 
     public init(
         id: String = "",
@@ -101,7 +108,9 @@ public struct FhFriend: Equatable, Sendable, Decodable {
         house: String = "",
         alert: String = "inbox",
         verified: Bool = false,
-        addedAt: String? = nil
+        addedAt: String? = nil,
+        online: Bool? = nil,
+        lastSeenAt: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -109,11 +118,14 @@ public struct FhFriend: Equatable, Sendable, Decodable {
         self.alert = alert
         self.verified = verified
         self.addedAt = addedAt
+        self.online = online
+        self.lastSeenAt = lastSeenAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, house, alert, verified
+        case id, name, house, alert, verified, online
         case addedAt = "added_at"
+        case lastSeenAt = "last_seen_at"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -124,6 +136,8 @@ public struct FhFriend: Equatable, Sendable, Decodable {
         alert = c.fhOptional(String.self, .alert) ?? "inbox"
         verified = c.fhOptional(Bool.self, .verified) ?? false
         addedAt = c.fhOptional(String.self, .addedAt)
+        online = c.fhOptional(Bool.self, .online)
+        lastSeenAt = c.fhOptional(String.self, .lastSeenAt)
     }
 }
 
