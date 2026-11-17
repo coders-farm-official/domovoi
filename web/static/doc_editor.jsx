@@ -1218,19 +1218,22 @@
           return true;
         },
         handlePaste: (view, event) => {
+          if (!view.editable) return false;
           const dt = event.clipboardData;
-          if (!dt) return false;
-          const html = dt.getData('text/html');
-          const files = Array.from(dt.files || []).filter((f) => /^image\//.test(f.type));
-          if (files.length && !(html && /<(p|div|span|h\d|li|table)\b/i.test(html))) {
+          const files = imageFilesFrom(dt);
+          // A picture on the clipboard (a screenshot, "Copy image") goes in
+          // as Insert photo would; text copied with a picture keeps the
+          // normal paste (the picture arrives with it).
+          if (files.length && htmlIsOnlyPictures(dt.getData('text/html')) && !dt.getData('text/plain').trim()) {
+            event.preventDefault();
             env.insertPictures(files, null);
             return true;
           }
           return false;
         },
         handleDrop: (view, event, slice, moved) => {
-          if (moved) return false;
-          const files = Array.from((event.dataTransfer && event.dataTransfer.files) || []).filter((f) => /^image\//.test(f.type));
+          if (moved || !view.editable) return false;
+          const files = imageFilesFrom(event.dataTransfer);
           if (!files.length) return false;
           event.preventDefault();
           const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
@@ -1294,6 +1297,35 @@
         : `${failed} pasted pictures couldn't be copied from their websites. Save them to this device, then use Insert photo.`);
     }
   };
+
+  /* ---- pasted / dropped pictures (pure; tests/test_doc_editor_paste.py runs these) ---- */
+  // PASTE-HELPERS-START
+  const imageFilesFrom = (dt) => {
+    const out = [];
+    const add = (f) => { if (f && /^image\//.test(f.type || '') && out.indexOf(f) < 0) out.push(f); };
+    Array.from((dt && dt.files) || []).forEach(add);
+    // some browsers list a screenshot only under items
+    if (!out.length) {
+      Array.from((dt && dt.items) || []).forEach((it) => {
+        if (it && it.kind === 'file' && /^image\//.test(it.type || '') && it.getAsFile) add(it.getAsFile());
+      });
+    }
+    return out;
+  };
+  /* True when the clipboard's HTML is just picture(s) in wrappers (what
+   * "Copy image" on a web page puts there), with no words or tables. */
+  const htmlIsOnlyPictures = (html) => {
+    const src = String(html || '')
+      .replace(/<!--[\s\S]*?-->/g, '').replace(/<(head|style|script|title)\b[\s\S]*?<\/\1>/gi, '');
+    if (!src.trim()) return true;
+    const ok = /^(html|body|meta|img|picture|source|p|div|span|br|figure|a)$/i;
+    let bad = false;
+    src.replace(/<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi, (m, tag) => { if (!ok.test(tag)) bad = true; return ''; });
+    if (bad) return false;
+    const text = src.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/gi, ' ').trim();
+    return !text;
+  };
+  // PASTE-HELPERS-END
 
   /* ───────────────────────── toolbar ───────────────────────── */
   const Popover = ({ anchor, onClose, children, label }) => {
@@ -1657,6 +1689,16 @@
         {error && <div style={{ padding: 20, color: 'var(--err-ink)', fontSize: 13 }}>The editor couldn't start: {error}</div>}
         {!editor && !error && <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Opening…</div>}
         <div className="de-scroll" onPointerDown={(e) => { downAt.current = { x: e.clientX, y: e.clientY }; }}
+             onDragOver={(e) => { if (editable && e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf('Files') >= 0) e.preventDefault(); }}
+             onDrop={(e) => {
+               // a picture dropped on the grey around the page: the browser
+               // would open it instead; put it at the cursor
+               if (e.defaultPrevented || !editable) return;
+               const files = imageFilesFrom(e.dataTransfer);
+               if (!files.length) return;
+               e.preventDefault();
+               bridge.insertPictures(files, null);
+             }}
              onClick={(e) => pageTap(editor, e, downAt.current)}>
           <div className="de-paper" style={{ display: editor ? undefined : 'none' }}>
             <div ref={mountRef}/>
