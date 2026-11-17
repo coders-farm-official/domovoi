@@ -29,7 +29,10 @@ def _expand(spans: list[tuple[int, int]]) -> set[int]:
 
 def windows_ports() -> set[int]:
     text = (REPO / "windows" / "common" / "Ports.cs").read_text(encoding="utf-8")
-    spans = [(int(a), int(b)) for a, b in re.findall(r'new PortSpec\((\d+), (\d+), "[^"]*", true, "Domovoi-[^"]+"\)', text)]
+    # A row's sixth argument, when it has one, says the port is optional
+    # (the short address, 80): still a firewall row.
+    spans = [(int(a), int(b)) for a, b in re.findall(
+        r'new PortSpec\((\d+), (\d+), "[^"]*", true, "Domovoi-[^"]+"(?:, (?:true|false))?\)', text)]
     assert spans, "no firewall rows found in Ports.cs"
     return _expand(spans)
 

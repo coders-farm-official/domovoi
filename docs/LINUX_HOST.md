@@ -566,9 +566,11 @@ redirects Domovoi's ports to the VM's address on Lima's vzNAT network
 (`lima0` in the VM), keeping each device's own address. With
 `--vm-guard-lan lima0` the same table gets a `lan_in` chain (prerouting,
 after connection tracking and before Docker's port mapping): connections
-arriving on that interface reach only TCP 6369, 6370, 7676, 8050-8099, 8096
-and 9467 (the dashboard, the core, the rooms' streams and the plugin ports,
-the list the Windows installer's firewall rules use); replies, ICMP, DHCP
+arriving on that interface reach only TCP 80, 6369, 6370, 7676, 8050-8099,
+8096 and 9467 (the short address, the dashboard, the core, the rooms'
+streams and the plugin ports, the list the Windows installer's firewall
+rules use; the Mac redirects 80 only while nothing on the Mac itself uses
+it); replies, ICMP, DHCP
 and the host's own SSH pass, and anything else arriving there is dropped.
 Other interfaces are not touched. Without the option the file is exactly
 what it was.
@@ -597,7 +599,11 @@ satellites; the host's helper rewrites it at every boot and whenever the
 host's address changes) and `lan_name.json` (the network-name report, the
 same schema as the Windows side's: the host's LAN addresses that forward
 to the core, which the core signs its identity for, and the state of the
-name the host announces, `domovoi.local`). With a Mac `side.json` the
+name the host announces, `domovoi.local`) and `short_address.json`
+(`{"schema": 1, "state": "on" | "taken" | "unchecked", "holder"}`: whether
+the Mac redirects its own port 80 into the VM; the Mac leaves 80 out while
+another program on the Mac serves it, and the dashboard's short address
+then reads `taken`, naming that program). With a Mac `side.json` the
 network name runs in host mode, as on Windows. The host's media watcher tells the core about
 files changed from the host side, which raise no inotify event in the VM:
 `POST /v1/host/media-changed`, answered over loopback only

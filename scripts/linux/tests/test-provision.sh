@@ -2845,13 +2845,13 @@ case_vm_guard_lan_lets_in_only_the_lan_ports() {
   run_prov "${vm_guard_args[@]}" --vm-guard-lan lima0
   check "exit 0" eq "$RC" 0
   check "the new option re-runs the step" eq "$(state_of vm-guard)" done
-  check "says so" said "new connections on lima0 reach only TCP 6369, 6370, 7676, 8050-8099, 8096, 9467"
+  check "says so" said "new connections on lima0 reach only TCP 80, 6369, 6370, 7676, 8050-8099, 8096, 9467"
   check "a prerouting chain, before Docker's DNAT" has_line "$f" $'		type filter hook prerouting priority -150; policy accept;'
   check "other interfaces untouched" has_line "$f" $'		iifname != "lima0" accept'
   check "replies pass" eq "$(grep -c 'ct state established,related accept' "$f")" 3
   check "ICMP passes" has_line "$f" $'		meta l4proto { icmp, ipv6-icmp } accept'
   check "DHCP passes" has_line "$f" $'		udp dport { 68, 546 } accept'
-  check "the LAN ports" has_line "$f" $'		tcp dport { 6369, 6370, 7676, 8050-8099, 8096, 9467 } accept'
+  check "the LAN ports" has_line "$f" $'		tcp dport { 80, 6369, 6370, 7676, 8050-8099, 8096, 9467 } accept'
   check "the rest dropped" has_line "$f" $'		drop'
   check "the host fence unchanged" has_line "$f" $'		ip daddr 192.168.5.0/24 drop'
   check "still one table, replaced whole" has_line "$f" "delete table inet domovoi_vm_guard"

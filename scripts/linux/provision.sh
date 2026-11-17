@@ -611,12 +611,14 @@ VM_GUARD_NET=""
 VM_GUARD_DNS=()
 # --vm-guard-lan IFACE: the interface the host's LAN redirect delivers on
 # (Lima's vzNAT: lima0). New connections from it reach only these TCP ports:
-# the dashboard, the core, the rooms' streams and the plugin ports, the same
+# the short address (80; the host redirects it only while nothing on the
+# host itself uses it), the dashboard, the core, the rooms' streams and the
+# plugin ports, the same
 # list the Windows installer's firewall rules and the Mac's pf redirect carry
 # (windows/common/Ports.cs, mac/Sources/DomovoiMacKit/PfAnchor.swift;
 # domovoi/tests/test_lan_port_parity.py keeps the three equal).
 VM_GUARD_LAN_IF=""
-VM_GUARD_LAN_PORTS="6369, 6370, 7676, 8050-8099, 8096, 9467"
+VM_GUARD_LAN_PORTS="80, 6369, 6370, 7676, 8050-8099, 8096, 9467"
 VM_GUARD_FILE=$ROOT/etc/domovoi/vm-guard.nft
 VM_GUARD_UNIT=domovoi-vm-guard.service
 # This machine's architecture, as the kernel names it (x86_64, aarch64).
@@ -724,7 +726,7 @@ feeds.
   --vm-guard-lan IFACE  with --vm-guard: the interface the host's redirect
                         from its home network arrives on (Lima's vzNAT:
                         lima0). New connections from it reach only
-                        Domovoi's LAN ports (TCP 6369, 6370, 7676,
+                        Domovoi's LAN ports (TCP 80, 6369, 6370, 7676,
                         8050-8099, 8096, 9467); replies, ICMP and DHCP pass
   --lan-ip IP           write MPD_HTTP_BASE=http://IP (default: the repo's
                         "auto", which finds this host's LAN address itself)

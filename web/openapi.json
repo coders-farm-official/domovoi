@@ -10998,7 +10998,7 @@
           "config"
         ],
         "summary": "Get Short Address",
-        "description": "``{enabled, state, port, dashboard_port, message}``. ``state``:\n``on`` (port 80 sends browsers to the dashboard), ``off`` (switched\noff), ``taken`` (something else on this computer uses port 80),\n``no_permission`` (the dashboard may not use a low port: an install\nwhose service unit predates the feature), ``failed`` or\n``unsupported`` (not a Linux server). ``message`` is the line\nSettings shows.",
+        "description": "``{enabled, state, port, dashboard_port, message}``. ``state``:\n``on`` (port 80 sends browsers to the dashboard), ``off`` (switched\noff), ``taken`` (something else on this computer uses port 80; on a\nMac install, also another program on the Mac itself),\n``no_permission`` (the dashboard may not use a low port: an install\nwhose service unit predates the feature), ``failed`` or\n``unsupported`` (not a Linux server). ``message`` is the line\nSettings shows.",
         "operationId": "get_short_address_api_short_address_get",
         "responses": {
           "200": {

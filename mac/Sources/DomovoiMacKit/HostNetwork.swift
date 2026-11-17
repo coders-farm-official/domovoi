@@ -93,6 +93,9 @@ public struct NetworkStatus: Codable, Equatable {
     /// `this-mac` (the Mac's own name is domovoi), `off` (no LAN address),
     /// `failed: ...`. Filled by the running helper.
     public var localName: String?
+    /// The Mac's own port 80 (the short address): `on` (redirected),
+    /// `taken: <program>` or `unchecked: <why>` (left out of the redirect).
+    public var shortAddress: String?
     public var watcher: String?
     /// Why the household can't reach Domovoi right now, in words; nil when
     /// it can.
@@ -144,17 +147,25 @@ public final class NetworkSync {
     /// The running helper's domovoi.local state (LocalNamePublisher.state),
     /// for the network-name report; nil during the install's own sync.
     public var localNameState: () -> String? = { nil }
+    /// Who serves the Mac's own port 80 (nil: lsof through the runner;
+    /// tests may answer): checked at every sync, so a program that starts
+    /// serving it later gets it back at the next one, and Domovoi gets it
+    /// once that program stops.
+    public var checkPort80: (() -> MacPort80)?
 
     /// Remembered between runs of the same process.
     public private(set) var vm: GuestAddress?
     public private(set) var lanWritten: LanAddress?
     public private(set) var lanNameWritten: LanNameReport?
+    public private(set) var shortAddressWritten: ShortAddressReport?
+    let runner: CommandRunner
 
     public init(layout: Layout, lima: Lima, runner: CommandRunner, fileOps: FileOps, log: @escaping (String) -> Void = { _ in }) {
         self.layout = layout
         self.lima = lima
         self.fileOps = fileOps
         self.log = log
+        self.runner = runner
         pf = PfController(runner: runner, fileOps: fileOps, stateFile: Self.pfStateFile(layout), log: log)
     }
 
@@ -186,9 +197,18 @@ public final class NetworkSync {
         var status = NetworkStatus(updated: HostFiles.iso(now()), interfaces: interfaces, vm: vm)
         var problems: [String] = []
 
+        // The short address: port 80 joins the redirect only while nothing
+        // on the Mac serves it (ShortAddressPort).
+        let port80 = checkPort80?() ?? ShortAddressPort.check(runner: runner)
+        switch port80 {
+        case .free: status.shortAddress = "on"
+        case .taken(let holder): status.shortAddress = "taken: " + (holder ?? "another program")
+        case .unchecked(let why): status.shortAddress = "unchecked: " + why
+        }
+
         // The redirect.
         do {
-            let rules = try PfRules.text(interfaces: seen, vm: vm)
+            let rules = try PfRules.text(interfaces: seen, vm: vm, shortAddress: port80.redirects)
             let redirects = PfRules.redirects(rules)
             let old = pf.loadState()
             let loaded = rules.isEmpty ? false : anchorLoaded(redirects: redirects)
@@ -243,6 +263,20 @@ public final class NetworkSync {
                 problems.append("\(error)")
             }
         }
+        // short_address.json: whether the Mac passes port 80 on, so the
+        // dashboard doesn't offer domovoi.local while it reaches another
+        // program. Not a problem for the household when it fails (6369
+        // works either way): logged, and tried again at the next sync.
+        let shortReport = ShortAddressReport(port80)
+        if shortReport != shortAddressWritten {
+            do {
+                try writeShortAddress(shortReport)
+                shortAddressWritten = shortReport
+                log("short_address.json: port 80 \(status.shortAddress ?? shortReport.state)")
+            } catch {
+                log("\(error)")
+            }
+        }
         status.problem = problems.isEmpty ? nil : problems.joined(separator: "; ")
         try? writeStatus(status)
         return status
@@ -268,6 +302,12 @@ public final class NetworkSync {
         let data = try report.json(at: now())
         let r = try lima.shell(Names.instance, ["sudo", "sh", "-c", HostFiles.guestWriteScript(path: HostFiles.lanNameFile)], stdin: data, timeout: 60)
         guard r.ok else { throw HelperError("can't write \(HostFiles.lanNameFile) in the VM: \(r.tail)") }
+    }
+
+    public func writeShortAddress(_ report: ShortAddressReport) throws {
+        let data = try report.json(at: now())
+        let r = try lima.shell(Names.instance, ["sudo", "sh", "-c", HostFiles.guestWriteScript(path: HostFiles.shortAddressFile)], stdin: data, timeout: 60)
+        guard r.ok else { throw HelperError("can't write \(HostFiles.shortAddressFile) in the VM: \(r.tail)") }
     }
 
     public func writeStatus(_ s: NetworkStatus) throws {

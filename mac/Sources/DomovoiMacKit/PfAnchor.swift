@@ -43,14 +43,19 @@ public enum PfRules {
     /// The anchor points the stock /etc/pf.conf declares (macOS 10.10 on).
     public static let anchorPoints = ["rdr-anchor \"com.apple/*\"", "anchor \"com.apple/*\""]
 
-    /// TCP ports the household reaches: dashboard, core, the rooms' music
-    /// streams (8050+N), the Jellyfin, RomM and Kiwix plugins. The same as
+    /// TCP ports the household reaches: the short address (80, the
+    /// dashboard without :6369), dashboard, core, the rooms' music streams
+    /// (8050+N), the Jellyfin, RomM and Kiwix plugins. The same as
     /// windows/common/Ports.cs's firewall ports and provision.sh's
     /// VM_GUARD_LAN_PORTS (domovoi/tests/test_lan_port_parity.py).
-    public static let lanPorts: [ClosedRange<Int>] = [6369...6369, 6370...6370, 7676...7676, 8050...8099, 8096...8096, 9467...9467]
+    /// Port 80 is redirected only while nothing on the Mac serves it
+    /// (ShortAddressPort): `shortAddress: false` leaves it out.
+    public static let lanPorts: [ClosedRange<Int>] = [80...80, 6369...6369, 6370...6370, 7676...7676, 8050...8099, 8096...8096, 9467...9467]
 
-    public static func portList() -> String {
-        lanPorts.map { $0.count == 1 ? "\($0.lowerBound)" : "\($0.lowerBound):\($0.upperBound)" }.joined(separator: " ")
+    /// The ports for a rule, pf's way ("80 6369 8050:8099").
+    public static func portList(shortAddress: Bool = true) -> String {
+        lanPorts.filter { shortAddress || $0 != ShortAddressPort.port...ShortAddressPort.port }
+            .map { $0.count == 1 ? "\($0.lowerBound)" : "\($0.lowerBound):\($0.upperBound)" }.joined(separator: " ")
     }
 
     /// The same ports for people ("6369, 6370, 8050-8099"): Setup's consent
@@ -91,8 +96,11 @@ public enum PfRules {
     /// LanInterfaces.current(all: true) reads them): the redirect on the
     /// ones on a home network when the VM's address is known, and the
     /// forwarding fence on every one. Empty (the anchor is flushed) when the
-    /// Mac has no `en*` address at all.
-    public static func text(interfaces: [LanInterface], vm: GuestAddress?) throws -> String {
+    /// Mac has no `en*` address at all. `shortAddress`: port 80 redirected
+    /// too; only the caller that has just checked nothing on the Mac serves
+    /// it (NetworkSync, ShortAddressPort) passes true, so by default it is
+    /// left alone.
+    public static func text(interfaces: [LanInterface], vm: GuestAddress?, shortAddress: Bool = false) throws -> String {
         let fenced = interfaces.filter(fenceable)
         guard !fenced.isEmpty else { return "" }
         var vmNet: String?
@@ -112,7 +120,7 @@ public enum PfRules {
             guard !IPv4.contains(vmNet, i.ipv4) else {
                 throw HelperError("\(i.name)'s network \(net) overlaps the VM network \(vmNet)")
             }
-            rdr.append("rdr pass on \(i.name) inet proto tcp from \(net) to (\(i.name)) port { \(portList()) } -> \(vm.ipv4)")
+            rdr.append("rdr pass on \(i.name) inet proto tcp from \(net) to (\(i.name)) port { \(portList(shortAddress: shortAddress)) } -> \(vm.ipv4)")
             filter.append("block drop in quick on \(i.name) inet proto tcp from any to \(vmNet) flags S/SA")
         }
         for a in ["255.255.255.255", "224.0.0.0/4"] where !here.contains(a) { here.append(a) }

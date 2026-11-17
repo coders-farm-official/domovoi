@@ -113,6 +113,13 @@ public enum HostFiles {
     /// side.json.
     public static let lanNameFile = folder + "/lan_name.json"
 
+    /// Whether the Mac redirects its own port 80 into the VM (the short
+    /// address, ShortAddressPort): `ShortAddressReport`, read by
+    /// web/backend/short_address.py `read_host_report`, which turns the
+    /// dashboard's "on" into "taken" while another program on the Mac
+    /// serves port 80. Root's, in the same folder, by `guestWriteScript`.
+    public static let shortAddressFile = folder + "/short_address.json"
+
     /// The guest command that puts `data` (on its stdin) at `path` as root,
     /// atomically, with the folder and modes the core insists on.
     public static func guestWriteScript(path: String) -> String {
