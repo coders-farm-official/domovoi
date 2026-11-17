@@ -658,7 +658,9 @@ const VoicesPanel = () => {
  * "linux" is the tray menu's Linux part alone: nothing on Windows ran, so
  * it is never "the Windows side updated" (2026-11-14: a 1.1.0 tray's
  * "Update Domovoi" updated the Linux side only, and its "ok" sat beside a
- * Windows side still at 1.1.0).
+ * Windows side still at 1.1.0). A Setup run on the PC that didn't finish
+ * (`windows_side.setup.result` "failed": DomovoiHost's word) is said too,
+ * with its step, its error and what to do.
  *
  * One update action on a Windows install too: while the Windows step is
  * needed, "Update Domovoi" is the only button ("Check for updates" is only
@@ -1018,6 +1020,20 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, c
   const linuxOnly = !!(result && result.kind === 'linux');
   const target = win.target || null;
   const lines = [];
+  // The last Setup run on the PC didn't finish (DomovoiHost's word, in
+  // side.json): what failed and what to do, here and in the PC's icon, not
+  // only in host.log (2026-11-16).
+  const setup = win.setup && win.setup.result === 'failed' ? win.setup : null;
+  if (setup) {
+    const when = windowsWhen(setup.at);
+    lines.push(<div key="su" className="version-windows-setup" style={{ color: 'var(--err-ink)', overflowWrap: 'anywhere' }}>
+      {`Domovoi Setup${setup.version ? ` ${setup.version}` : ''} didn’t finish on the PC${when ? ` (${when})` : ''}. It stopped${setup.step ? ` at its “${setup.step}” step` : ''}: ${setup.error}`}
+      <span style={{ display: 'block', color: 'var(--fg-muted)' }}>
+        Domovoi keeps running what it had. Run the newest Domovoi Setup on the PC again; if it stops at the
+        same place, choose “Save logs for support” in the Domovoi icon’s menu on the PC.
+      </span>
+    </div>);
+  }
   if (channel === 'main' && target) {
     lines.push(<div key="ch" className="version-windows-channel" style={{ color: 'var(--fg-muted)' }}>
       The Linux side follows every change on main; the Windows side follows releases (the latest this

@@ -194,6 +194,10 @@ var
   { Whether provision.sh put the phone app on the server: yes, no (it
     couldn't download it: the last page says so), or '' (unknown). }
   PhoneAppReported: String;
+  { Whether this run found the server's code already checked out and left
+    it where it was (DomovoiHost's checkout_kept, common\Provision.cs
+    InstalledHead.Kept): yes, no, or '' (unknown). Only yes is said. }
+  CheckoutKept: String;
   InternetPage: TWizardPage;
   InternetIntro: TNewStaticText;
   RadioAlways, RadioSometimes, RadioNever: TNewRadioButton;
@@ -1086,6 +1090,11 @@ begin
     CodeEdit.Text := SetupCodeText;
     if SetupCodeText = '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup could not read the setup code. Restarting the DomovoiHost service writes a fresh one (see docs/WINDOWS_HOST.md).';
+    { Over an existing install, provision.sh leaves the server's code where
+      the dashboard's updates put it (2026-11-16: "Setup didn't update
+      Linux"). Said only when DomovoiHost saw it really wasn't moved. }
+    if CheckoutKept = 'yes' then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup updated Domovoi''s programs on this PC. It didn''t change the server''s own code, which stays as it was: that updates with "Update Domovoi" in the Domovoi icon''s menu, or in the dashboard (Settings > About & updates).';
     LanText.Caption := 'Phones and rooms reach Domovoi at http://' + LanIp + ':6369. If it changes, rooms look for Domovoi again by themselves; to keep it fixed, reserve it for this PC in your router (DHCP reservation for ' + LanMac + ').' + #13#10;
     { The network name is for browsers; a phone pairs with the address. }
     if LanName <> '' then
@@ -1236,6 +1245,7 @@ begin
         install record keeps it, not the click. }
       AiReported := KvValue(Lines, 'ai');
       PhoneAppReported := KvValue(Lines, 'phone_app');
+      CheckoutKept := KvValue(Lines, 'checkout_kept');
       if AiReported <> '' then
         if not RunHelper(AppHelper, 'record-ai', Ignored, Code) or (Code <> 0) then
           Log('record-ai did not work: ' + KvValue(Ignored, 'error'));

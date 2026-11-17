@@ -535,6 +535,26 @@ static partial class Tests
                     True(v.Line.Length > 0 && v.Line.Length <= 63, "tooltip fits: " + v.Line);
                 }
         });
+        Run("status: a Setup that didn't finish shows in the menu, running or not (2026-11-16)", delegate
+        {
+            SetupOutcome bad = SetupOutcome.Failure("1.2.1", "checkout", "provision-manifest.conf line 54: unknown key docker_debian_key_url", 13, now);
+            Verdict v = decide(new Facts { Service = ServiceFact.Running, Web = WebFact.Ok, Setup = bad }, now);
+            Eq(TrayState.Running, v.State, "Domovoi still runs");
+            Eq("Domovoi is running", v.Line, "and says so");
+            Eq("Domovoi Setup 1.2.1 didn't finish. Run the newest Setup again.", v.Detail, "the menu's second line");
+            Verdict down = decide(new Facts { Service = ServiceFact.Running, Setup = bad }, now.AddHours(-1));
+            Eq(TrayState.Problem, down.State, "down");
+            Eq(bad.MenuLine(), down.Detail, "the Setup is the likelier why");
+            Eq(null, decide(new Facts { Service = ServiceFact.Running, Web = WebFact.Ok, Setup = SetupOutcome.Ok("1.3.0", 14, now) }, now).Detail, "a finished Setup: nothing");
+            string dir = TempDir("setup-json");
+            string path = System.IO.Path.Combine(dir, SetupOutcome.TrayFile);
+            True(Probe.ReadSetup(path) == null, "no file");
+            System.IO.File.WriteAllText(path, Json.Serialize(bad.ToJson()));
+            SetupOutcome back = Probe.ReadSetup(path);
+            True(back != null && back.Failed && back.NoticeId() == bad.NoticeId(), "the host's file reads back");
+            System.IO.File.WriteAllText(path, "{not json");
+            True(Probe.ReadSetup(path) == null, "garbage");
+        });
         Run("status: WSL went away (an update of WSL): the icon says so and waits", delegate
         {
             var updating = new WslFacts { MsiBusy = true, Version = "2.7.14.0", Service = WslService.Stopped };

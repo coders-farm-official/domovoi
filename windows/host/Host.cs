@@ -14,9 +14,12 @@
 //   5. wait until both health URLs answer from Windows;
 //   6. answer one-off requests (the setup code, the household's AI answer,
 //      and an administrator's Linux update: WindowsSide.cs);
-//   6a. tell the Linux side which Windows side runs it (WindowsSide.cs:
-//      /var/lib/domovoi-windows/side.json, written as root at every
-//      bring-up), for the dashboard's Version card;
+//   6a. tell the Linux side which Windows side runs it, and how the last
+//      Setup's bring-up went (WindowsSide.cs: /var/lib/domovoi-windows/
+//      side.json, written as root before and after every bring-up attempt,
+//      whatever its result, and whenever what was last written isn't this
+//      build's report), for the dashboard's Version card; the Setup outcome
+//      also to the tray (host\out\setup.json);
 //   6b. copy the core's journal out to logs\core.log for "Save logs", and
 //      the core's watchdog and faulthandler logs beside it (CoreLog.cs,
 //      CoreJournal.cs): once ready, every 10 minutes, and on the helper's
@@ -114,6 +117,17 @@ namespace Domovoi.Windows.Host
         string lanLastTray;
         string lanLastProblem;
         string lanLastClaimed;
+        // The Windows side's report (WindowsSide.cs): what was last written
+        // (WindowsSideReport.Key), when the main loop may try again after a
+        // failed write, and how many failed in a row. The last Setup's
+        // outcome (host-state.json "setup"), kept here too.
+        string sideWrittenKey;
+        DateTime sideNext = DateTime.MinValue;
+        int sideFailures;
+        SetupOutcome setupOutcome;
+        // A bring-up is under way (provision.sh may be running): requests
+        // that need a settled Domovoi wait for it.
+        bool bringingUp;
 
         public Host(ManualResetEvent stop)
         {
@@ -237,6 +251,7 @@ namespace Domovoi.Windows.Host
         {
             CheckAccount();
             LoadLastLinuxRestart();
+            LoadSetupOutcome();
             StartLanName();
             log.Write("DomovoiHost started as " + WindowsIdentity.GetCurrent().Name + " (pid " + Inv.S(status.HostPid) + ")");
             Status("starting", HostProgress.PhaseConfig, 0, "Starting");
@@ -299,6 +314,7 @@ namespace Domovoi.Windows.Host
                             WriteStatus(false);
                     }
                     ProcessRequests(ready);
+                    MaybeReportWindowsSide();
                     if (ready) PeriodicCoreLog();
                     TrackLanName(ready);
                     if (ready)
@@ -421,12 +437,37 @@ namespace Domovoi.Windows.Host
             }
         }
 
-        // One attempt at everything; true when Domovoi answers.
+        // One attempt at everything; true when Domovoi answers. Whatever the
+        // result, the Windows side is reported to the Linux side afterwards
+        // (2026-11-16: a failed provisioning left side.json at the old
+        // version for good), and a job Setup handed over that wasn't
+        // provisioned yet records its outcome for the card and the tray.
         bool BringUp(HostJob job)
+        {
+            bool setupRun = !AlreadyProvisioned(job);
+            bool ok;
+            bringingUp = true;
+            try { ok = BringUpOnce(job); }
+            finally { bringingUp = false; }
+            if (Stopping) return ok;
+            if (setupRun)
+            {
+                string state, step, error;
+                lock (statusGate) { state = status.State; step = status.FailedStep; error = status.Error; }
+                if (ok) RecordSetupOutcome(SetupOutcome.Ok(BuildVersion.Version, job.Generation, DateTime.UtcNow));
+                else if (state == "failed") RecordSetupOutcome(SetupOutcome.Failure(BuildVersion.Version, step, error, job.Generation, DateTime.UtcNow));
+            }
+            // Only while the holder keeps the distro up (a failed import has
+            // none to write into); the main loop tries again once it does.
+            if (holder != null && !SafeExited(holder)) ReportWindowsSide();
+            return ok;
+        }
+
+        bool BringUpOnce(HostJob job)
         {
             log.Write(Inv.F("job generation {0} attempt {1}", job.Generation, job.Attempt));
             // What this job's provision.sh reports, not an earlier one's.
-            lock (statusGate) { status.Ai = null; status.PhoneApp = null; }
+            lock (statusGate) { status.Ai = null; status.PhoneApp = null; status.CheckoutKept = null; }
             Status("config", HostProgress.PhaseConfig, 0, "Configuring WSL for Domovoi");
             if (!WriteWslConfig(job)) return false;
 
@@ -456,6 +497,12 @@ namespace Domovoi.Windows.Host
             if (Stopping) return false;
             if (!AlreadyProvisioned(job) && !InteropOff()) return false;
             KeepHolder();
+            // The Windows programs are this build's already (Setup replaced
+            // them before it started this service): say so before a
+            // provisioning run that may take long or fail. After the
+            // .wslconfig and the interop check, so this wsl.exe call starts
+            // nothing they haven't settled.
+            ReportWindowsSide();
 
             if (AlreadyProvisioned(job))
             {
@@ -470,32 +517,88 @@ namespace Domovoi.Windows.Host
             Status("ready", HostProgress.PhaseReady, 100, "Domovoi is running");
             log.Write("ready");
             PlaceSatelliteSetup();
-            ReportWindowsSide();
             return true;
         }
 
-        // This build's version and commit, into the distro as root, for the
-        // core (domovoi/windows_side.py). Never fails the bring-up: a core
-        // without it shows no Windows side and offers no Windows step.
-        void ReportWindowsSide()
+        string SideKey() { return WindowsSideReport.Key(BuildVersion.Version, BuildVersion.Commit, setupOutcome); }
+
+        // From the main loop: the report again whenever what was last
+        // written isn't this build's (the service's first pass, a failed
+        // write, a new Setup outcome), once the holder keeps the distro up
+        // and no bring-up runs.
+        void MaybeReportWindowsSide()
         {
+            bool up = !bringingUp && holder != null && !SafeExited(holder);
+            if (WindowsSideReport.Due(sideWrittenKey, SideKey(), up, DateTime.UtcNow, sideNext)) ReportWindowsSide();
+        }
+
+        // This build's version and commit and the last Setup's outcome,
+        // into the distro as root, for the core (domovoi/windows_side.py).
+        // Never fails the bring-up: a core without it shows no Windows side
+        // and offers no Windows step. True when it landed.
+        bool ReportWindowsSide()
+        {
+            string key = SideKey();
+            string why;
             try
             {
-                string text = WindowsSideReport.Content(BuildVersion.Version, BuildVersion.Commit, DateTime.UtcNow);
+                string text = WindowsSideReport.Content(BuildVersion.Version, BuildVersion.Commit, DateTime.UtcNow, setupOutcome);
                 byte[] body = new UTF8Encoding(false).GetBytes(text);
                 string sha;
                 using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(body));
                 WslResult r = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", WindowsSideReport.Script() }, 60000, body, 4096);
                 if (r.ExitCode == 0 && r.Stdout.StartsWith(sha, StringComparison.Ordinal))
-                    log.Write("told the Linux side this Windows side is " + BuildVersion.Version + (BuildVersion.Commit != null ? " (" + BuildVersion.Commit.Substring(0, 12) + ")" : ""));
-                else
-                    log.Write("could not tell the Linux side the Windows side's version (exit " + Inv.S(r.ExitCode) + "): " + FirstLine(r.Stderr + r.Stdout));
+                {
+                    if (sideWrittenKey != key)
+                        log.Write("told the Linux side this Windows side is " + BuildVersion.Version + (BuildVersion.Commit != null ? " (" + BuildVersion.Commit.Substring(0, 12) + ")" : "")
+                            + (setupOutcome != null ? "; the last Setup " + (setupOutcome.Failed ? "didn't finish" : "finished") : ""));
+                    sideWrittenKey = key;
+                    sideFailures = 0;
+                    sideNext = DateTime.MinValue;
+                    return true;
+                }
+                why = "exit " + Inv.S(r.ExitCode) + ": " + FirstLine(r.Stderr + r.Stdout);
             }
             catch (Exception e)
             {
                 if (!(e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException
                       || e is ArgumentException || e is System.ComponentModel.Win32Exception)) throw;
-                log.Write("could not tell the Linux side the Windows side's version: " + e.Message);
+                why = e.Message;
+            }
+            sideFailures++;
+            TimeSpan wait = WindowsSideReport.Backoff(sideFailures);
+            sideNext = DateTime.UtcNow + wait;
+            // One line per change of mind, not one every ten minutes.
+            if (sideFailures == 1 || sideFailures % 6 == 0)
+                log.Write("could not tell the Linux side the Windows side's version (" + why + "); trying again in " + Inv.S((int)wait.TotalMinutes) + " min");
+            return false;
+        }
+
+        // The last Setup's outcome, from host-state.json, and the tray's copy
+        // of it written again (the tray's file may predate this service).
+        void LoadSetupOutcome()
+        {
+            setupOutcome = SetupOutcome.FromJson(Json.Obj(ReadState(), "setup"));
+            if (setupOutcome != null) WriteSetupForTray();
+        }
+
+        void RecordSetupOutcome(SetupOutcome o)
+        {
+            setupOutcome = o;
+            log.Write(o.Failed
+                ? "the Setup of job generation " + Inv.S(o.Generation) + " didn't finish" + (o.Step != null ? " (step " + o.Step + ")" : "") + "; the tray and the dashboard say so"
+                : "the Setup of job generation " + Inv.S(o.Generation) + " finished");
+            UpdateState("setup", o.ToJson());
+            WriteSetupForTray();
+        }
+
+        void WriteSetupForTray()
+        {
+            try { MediaPrep.WriteForUsers(Path.Combine(Paths.HostOut, SetupOutcome.TrayFile), Json.Serialize(setupOutcome.ToJson())); }
+            catch (Exception e)
+            {
+                if (!(e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException)) throw;
+                log.Write("could not tell the tray how the last Setup went: " + e.Message);
             }
         }
 
@@ -1406,6 +1509,9 @@ namespace Domovoi.Windows.Host
                             UpdateState("head_verified", true);
                             log.Write("the installed commit " + final.Head + " is the one Setup pinned");
                         }
+                        bool? kept = InstalledHead.Kept(final.Head, InstalledHead.RefOf(job.ProvisionArgs));
+                        lock (statusGate) status.CheckoutKept = kept;
+                        if (kept == true) log.Write("the server's code stays at " + final.Head + " (the checkout was there; Setup doesn't move it, Update Domovoi does)");
                         return true;
                     case ProvisionVerdict.DoneRestartDistro:
                     case ProvisionVerdict.RestartDistroAndRerun:
@@ -1667,10 +1773,15 @@ namespace Domovoi.Windows.Host
         // administrator can write host\in, so only one can ask. The answer is
         // the CLI's: started (the update unit runs now), nothing_new, or an
         // error in the dashboard's words.
+        //
+        // Not "ready" (a Setup whose provisioning failed, 2026-11-16) still
+        // runs it when no bring-up is under way and Domovoi answers on both
+        // ports: the code it runs is the dashboard's to update, as from the
+        // dashboard itself.
         void AnswerLinuxUpdate(bool ready, Dictionary<string, object> resp)
         {
             resp["ok"] = false;
-            if (!ready) { resp["error"] = "Domovoi is not running yet"; return; }
+            if (!ready && !AnswersAnyway()) { resp["error"] = "Domovoi is not running yet"; return; }
             WslResult r = Wsl.Run(LinuxUpdate.WslArgs(Paths.DistroName, SatelliteSetupPlacement.ServiceUser), LinuxUpdate.TimeoutMs, null, 64 * 1024);
             Dictionary<string, object> a = LinuxUpdate.Answer(r.Stdout);
             if (r.TimedOut || a == null)
@@ -1682,6 +1793,14 @@ namespace Domovoi.Windows.Host
             foreach (string k in new[] { "ok", "started", "nothing_new", "error", "from_sha", "to_sha" })
                 if (a.ContainsKey(k)) resp[k] = a[k];
             log.Write("linux-update request: " + (Json.Bool(a, "started") == true ? "the update unit is running" : Json.Bool(a, "nothing_new") == true ? "nothing new" : "refused: " + (Json.Str(a, "error") ?? "no reason")));
+        }
+
+        // Domovoi answers though the host doesn't count it as ready (its
+        // last bring-up failed with the core still up from before).
+        bool AnswersAnyway()
+        {
+            if (bringingUp || provision != null || recovery.Down || holder == null || SafeExited(holder)) return false;
+            return Healthy("http://127.0.0.1:6370/v1/health") && Healthy("http://127.0.0.1:6369/api/health");
         }
 
         // -- the core's log (CoreLog.cs) ---------------------------------

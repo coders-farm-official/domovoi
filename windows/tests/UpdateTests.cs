@@ -7,8 +7,10 @@
 // private run folder and the held file (the TOCTOU guard); the silent
 // repair's arguments; and the Windows step end to end against a pretend
 // release, a pretend Windows (permission given, declined) and a pretend
-// core on a loopback socket. Nothing here starts anything elevated or
-// touches the network beyond loopback.
+// core on a loopback socket; the Windows side's report (when it is written,
+// the last Setup's outcome in it) and a core whose record lags behind the
+// tray. Nothing here starts anything elevated or touches the network beyond
+// loopback.
 
 using System;
 using System.Collections.Generic;
@@ -601,8 +603,14 @@ static partial class Tests
             env.Key = OtherKey();
             Eq(Outcome.BadSignature, WindowsStep.Start(env, Behind(), false, out runDir).Outcome, "pinned to another key");
 
-            r = WindowsStep.Start(FakeEnv(FakeFiles.Release("manifest-0.9.0.json"), elev), Behind("v0.9.0", "0.9.0"), false, out runDir);
-            Eq(Outcome.NotNewer, r.Outcome, "older");
+            // A target older than this tray isn't even downloaded now
+            // (WindowsStep.AlreadyCurrent); SetupCheck's own refusal of an
+            // older Setup is "setup check: an older or the same version
+            // never runs", and of an unknown installed version, below.
+            var older = FakeFiles.Release("manifest-0.9.0.json");
+            r = WindowsStep.Start(FakeEnv(older, elev), Behind("v0.9.0", "0.9.0"), false, out runDir);
+            Eq(Outcome.NothingNew, r.Outcome, "older");
+            Eq(0, older.Asked.Count, "older: not downloaded");
             env = FakeEnv(FakeFiles.Release("manifest-1.0.1.json"), elev);
             env.Installed = null;
             r = WindowsStep.Start(env, Behind(), false, out runDir);
@@ -658,6 +666,50 @@ static partial class Tests
             Eq(UpdateRun.LinuxArguments(r.Run), elev.Args, "its Linux part");
             Eq(0, files.Asked.Count, "nothing downloaded");
             Eq(Outcome.NothingNew, WindowsStep.Finish(env.AdminRoot, r.Run, r.Process.WaitForExit(), "linux", null).Outcome, "nothing new");
+        });
+        Run("windows step: the core's record lags behind this tray (2026-11-16): no download, the Linux part still runs", delegate
+        {
+            // side.json said 1.2.0 under a 1.2.1 tray after a failed
+            // provisioning; the core asked for v1.2.1 every time, and every
+            // "Update Domovoi" downloaded the 1.2.1 Setup, refused it as
+            // not newer and stopped before the Linux part.
+            UpdateState lag = Behind("v1.2.1", "1.2.1");
+            lag.Installed = "1.2.0";
+            var files = new FakeFiles();
+            var elev = new FakeElevator { Writes = delegate (string dir) { File.WriteAllText(Path.Combine(dir, UpdateRun.ResultFile), "ok=1\r\nlinux=updated\r\n"); } };
+            var env = FakeEnv(files, elev);
+            env.Installed = "1.2.1";
+            True(WindowsStep.AlreadyCurrent(lag, env.Installed) && !WindowsStep.WindowsNeeded(lag, env.Installed), "already current");
+            string runDir;
+            StepResult r = WindowsStep.Start(env, lag, true, out runDir);
+            True(r.Launched && r.Kind == "linux", "the menu's run: the Linux part alone: " + r.Outcome + " " + r.Detail);
+            Eq(UpdateRun.LinuxArguments(r.Run), elev.Args, "the helper's Linux part");
+            Eq(0, files.Asked.Count, "nothing downloaded");
+            Eq(Outcome.Ok, WindowsStep.Finish(env.AdminRoot, r.Run, r.Process.WaitForExit(), "linux", null).Outcome, "and it ran");
+
+            elev = new FakeElevator();
+            env = FakeEnv(files, elev);
+            env.Installed = "1.2.1";
+            r = WindowsStep.Start(env, lag, false, out runDir);
+            Eq(Outcome.NothingNew, r.Outcome, "a dashboard request: answered");
+            True(r.Detail.Contains("already up to date") && r.Detail.Contains("1.2.1"), r.Detail);
+            True(elev.Exe == null && files.Asked.Count == 0, "nothing started, nothing downloaded");
+
+            env.Installed = "1.3.0";
+            True(WindowsStep.AlreadyCurrent(lag, env.Installed), "a newer tray than the target too");
+            env.Installed = "1.2.0";
+            True(!WindowsStep.AlreadyCurrent(lag, env.Installed) && WindowsStep.WindowsNeeded(lag, env.Installed), "an older tray: the step as before");
+            True(!WindowsStep.AlreadyCurrent(lag, null) && !WindowsStep.AlreadyCurrent(lag, "dev"), "a version nobody knows: the usual path, which fails closed");
+            UpdateState odd = Behind("v1.2.1", "garbage");
+            True(!WindowsStep.AlreadyCurrent(odd, "1.2.1"), "a target that isn't a version: the usual path");
+            UpdateState none = Behind("v1.2.1", "1.2.1");
+            none.StepNeeded = false;
+            True(!WindowsStep.AlreadyCurrent(none, "1.2.1"), "no step asked for: nothing to see through");
+            True(!WindowsStep.AlreadyCurrent(null, "1.2.1"), "no core");
+
+            var now = new UpdateState { Installed = "1.2.0", TargetTag = "v1.2.1", TargetVersion = "1.2.1", StepNeeded = true, Internet = "always" };
+            True(!UpdateDecision.WindowsAfterLinux("linux", new StepResult { Outcome = Outcome.Ok }, now, "1.2.1"), "no Windows part after the Linux part for a release this tray is");
+            True(UpdateDecision.WindowsAfterLinux("linux", new StepResult { Outcome = Outcome.Ok }, now, "1.2.0"), "but for a newer one");
         });
         Run("windows step: a failed repair names its log; a failed Linux part changed nothing on Windows", delegate
         {
@@ -824,6 +876,35 @@ static partial class Tests
             var bad = Json.ParseObject(StateJson.Replace("\"v1.0.1\"", "\"../x\""));
             True(!UpdateState.From(bad).StepNeeded, "a target that isn't a tag is no step");
         });
+        Run("update poll: a request for a release this tray already is gets answered, never downloaded or reminded about (2026-11-16)", delegate
+        {
+            UpdateState s = UpdateState.From(Json.ParseObject(StateJson));
+            Eq(UpdateAction.AlreadyCurrent, UpdateDecision.OnState(s, null, false, false, "1.0.1"), "another device: answered");
+            Eq(UpdateAction.Notify, UpdateDecision.OnState(s, null, false, false, "1.0.0"), "an older tray: the notification as before");
+            Eq(UpdateAction.Notify, UpdateDecision.OnState(s, null, false, false, null), "no version known: as before");
+            True(RequestReminder.Waiting(s, false, false, "1.0.1") == null, "no reminder for it");
+            Eq(s.RequestId, RequestReminder.Waiting(s, false, false, "1.0.0"), "but for an older tray");
+            s.RequestOnThisPc = true;
+            Eq(UpdateAction.AlreadyCurrent, UpdateDecision.OnState(s, null, false, false, "1.0.2"), "this PC: answered too");
+            Eq(UpdateAction.Nothing, UpdateDecision.OnState(s, s.RequestId, false, false, "1.0.1"), "once");
+            s.RequestClaimed = true;
+            Eq(UpdateAction.Nothing, UpdateDecision.OnState(s, null, false, false, "1.0.1"), "never another tray's");
+            // Answered as a run: claimed, nothing new, the claim ends it.
+            var core = new FakeCore { OnThisPc = false };
+            string root = TempDir("poll-current");
+            UpdateState st;
+            PendingDone done;
+            Eq(UpdateAction.AlreadyCurrent, UpdatePoll.Run(core, root, TempDir("poll-current-admin"), DateTime.UtcNow, null, false, "1.0.1", out st, out done), "the poll says so");
+            string claim = core.Claim(st.RequestId);
+            var elev = new FakeElevator();
+            var files = new FakeFiles();
+            var env = FakeEnv(files, elev);
+            env.Installed = "1.0.1";
+            string runDir;
+            StepResult r = WindowsStep.Start(env, st, false, out runDir);
+            Eq(Outcome.NothingNew, r.Outcome, "nothing new");
+            True(claim != null && elev.Exe == null && files.Asked.Count == 0, "claimed, nothing started or downloaded");
+        });
         Run("update poll: a fresh tray after a failed repair reports first, then reads: no instant second prompt (review probe 3)", delegate
         {
             string root = TempDir("poll-fail"), admin = TempDir("poll-fail-admin");
@@ -955,6 +1036,75 @@ static partial class Tests
             Throws<ArgumentException>(delegate { WindowsSideReport.Content("1.0.0", "HEAD", DateTime.UtcNow); }, "only a commit");
             string sh = WindowsSideReport.Script();
             True(sh.StartsWith("set -e; umask 022;") && sh.Contains("chown root:root /var/lib/domovoi-windows") && sh.Contains("mv -f /var/lib/domovoi-windows/.side.json.new /var/lib/domovoi-windows/side.json"), sh);
+        });
+        Run("windows side: the last Setup's outcome rides along, in words that need no escaping", delegate
+        {
+            DateTime at = new DateTime(2026, 11, 15, 22, 32, 0, DateTimeKind.Utc);
+            SetupOutcome bad = SetupOutcome.Failure("1.2.1", "checkout", "provision-manifest.conf line 54: unknown key \"docker_debian_key_url\"\n\\ POSTGRES_PASSWORD=hunter22 " + (char)0xe9, 13, at);
+            Eq("failed", bad.Result, "failed");
+            Eq("checkout", bad.Step, "its step");
+            True(!bad.Error.Contains("\"") && !bad.Error.Contains("\\") && !bad.Error.Contains("\n"), "no quote, backslash or line break: " + bad.Error);
+            True(bad.Error.Contains("unknown key 'docker_debian_key_url'") && !bad.Error.Contains("hunter22"), "the words kept, the secret blanked: " + bad.Error);
+            True(bad.Error.All(c => c >= 0x20 && c <= 0x7e), "printable ASCII only");
+            string t = WindowsSideReport.Content("1.2.1", FixtureCommit, at, bad);
+            var d = Json.ParseObject(t);
+            var s = Json.Obj(d, "setup");
+            True(s != null && Json.Str(s, "result") == "failed" && Json.Str(s, "step") == "checkout" && Json.Str(s, "at") == "2026-11-15T22:32:00Z" && Json.Int(s, "generation") == 13, "parses: " + t);
+            Eq("1.2.1", Json.Str(d, "version"), "the version still");
+            Eq(WindowsSideReport.Content("1.2.1", FixtureCommit, at), WindowsSideReport.Content("1.2.1", FixtureCommit, at, null), "none: the old text exactly");
+            Eq(null, SetupOutcome.Clean("  \r\n "), "nothing");
+            string longer = SetupOutcome.Clean(new string('x', 1000));
+            True(longer.Length == SetupOutcome.MaxError && longer.EndsWith("..."), "at most " + SetupOutcome.MaxError);
+            True(SetupOutcome.Failure("1.0.0", "Bad Step; rm", "e", 1, at).Step == null, "a step id only");
+            Eq("no reason was given", SetupOutcome.Failure("1.0.0", null, null, 1, at).Error, "a failure always says something");
+            SetupOutcome ok = SetupOutcome.Ok("1.3.0", 14, at);
+            True(ok.Error == null && ok.Step == null && !ok.Failed && ok.MenuLine() == null && ok.Notification() == null, "a finished Setup says nothing");
+        });
+        Run("windows side: the Setup outcome reads back, and anything else is refused", delegate
+        {
+            DateTime at = new DateTime(2026, 11, 15, 22, 32, 0, DateTimeKind.Utc);
+            SetupOutcome bad = SetupOutcome.Failure("1.2.1", "checkout", "it broke", 13, at);
+            SetupOutcome back = SetupOutcome.FromJson(Json.ParseObject(Json.Serialize(bad.ToJson())));
+            True(back != null && back.ToJsonText() == bad.ToJsonText(), "round trip: " + (back != null ? back.ToJsonText() : "null"));
+            True(SetupOutcome.FromJson(null) == null, "none");
+            True(SetupOutcome.FromJson(Json.ParseObject("{\"result\": \"maybe\", \"at\": \"2026-11-15T22:32:00Z\"}")) == null, "an unknown result");
+            True(SetupOutcome.FromJson(Json.ParseObject("{\"result\": \"failed\", \"at\": \"yesterday\"}")) == null, "a time that isn't one");
+            back = SetupOutcome.FromJson(Json.ParseObject("{\"result\": \"failed\", \"at\": \"2026-11-15T22:32:00Z\", \"step\": \"../x\", \"version\": \"1 2\", \"error\": \"a\\\"b\", \"generation\": -4}"));
+            True(back.Step == null && back.Version == null && back.Error == "a'b" && back.Generation == 0, "every field checked again: " + back.ToJsonText());
+            Eq("Domovoi Setup 1.2.1 didn't finish. Run the newest Setup again.", bad.MenuLine(), "the menu's line");
+            string[] n = bad.Notification();
+            Eq("Domovoi Setup 1.2.1 didn't finish", n[0], "title");
+            True(n[1].StartsWith("It stopped at its \"checkout\" step: it broke. ") && n[1].Contains("keeps running") && n[1].Contains("Save logs for support"), n[1]);
+            Eq(bad.NoticeId(), SetupOutcome.Failure("1.2.1", "checkout", "other words", 13, at).NoticeId(), "the same failure is the same notice");
+            True(bad.NoticeId() != SetupOutcome.Failure("1.2.1", "checkout", "it broke", 14, at).NoticeId(), "another job's is another");
+            True(bad.NoticeId() >= 0, "a registry DWORD");
+        });
+        Run("windows side: written again whenever it isn't this build's report, with a back-off", delegate
+        {
+            DateTime now = new DateTime(2026, 11, 16, 9, 0, 0, DateTimeKind.Utc);
+            SetupOutcome bad = SetupOutcome.Failure("1.2.1", "checkout", "x", 13, now);
+            string want = WindowsSideReport.Key("1.2.1", FixtureCommit, bad);
+            True(WindowsSideReport.Due(null, want, true, now, DateTime.MinValue), "the service's first pass");
+            True(WindowsSideReport.Due(WindowsSideReport.Key("1.2.0", FixtureCommit, null), want, true, now, DateTime.MinValue), "an older build's report (2026-11-16)");
+            True(WindowsSideReport.Due(WindowsSideReport.Key("1.2.1", FixtureCommit, null), want, true, now, DateTime.MinValue), "a new Setup outcome");
+            True(!WindowsSideReport.Due(want, want, true, now, DateTime.MinValue), "already written: nothing");
+            True(!WindowsSideReport.Due(null, want, false, now, DateTime.MinValue), "not while the distro is down (wsl.exe -d would start it)");
+            True(!WindowsSideReport.Due(null, want, true, now, now.AddSeconds(1)), "not before the back-off");
+            Eq(1.0, WindowsSideReport.Backoff(1).TotalMinutes, "1 min");
+            Eq(2.0, WindowsSideReport.Backoff(2).TotalMinutes, "2");
+            Eq(8.0, WindowsSideReport.Backoff(4).TotalMinutes, "8");
+            Eq(10.0, WindowsSideReport.Backoff(5).TotalMinutes, "10 at most");
+            Eq(10.0, WindowsSideReport.Backoff(50).TotalMinutes, "still 10");
+        });
+        Run("windows side: Setup over an existing install says the server's code wasn't moved, only when it wasn't", delegate
+        {
+            string other = "0123456789abcdef0123456789abcdef01234567";
+            True(InstalledHead.Kept(other, FixtureCommit) == true, "HEAD isn't the commit this Setup pinned: the checkout was kept");
+            True(InstalledHead.Kept(FixtureCommit, FixtureCommit) == false, "a fresh clone at the pin");
+            True(InstalledHead.Kept(null, FixtureCommit) == null && InstalledHead.Kept(other, null) == null && InstalledHead.Kept("HEAD", FixtureCommit) == null, "unknown: nothing said");
+            var st = new HostStatus { CheckoutKept = true };
+            True(HostStatus.FromJson(Json.ParseObject(Json.Serialize(st.ToJson()))).CheckoutKept == true, "status.json carries it");
+            True(HostStatus.FromJson(Json.ParseObject(Json.Serialize(new HostStatus().ToJson()))).CheckoutKept == null, "and its absence");
         });
         Run("windows side: the Linux update runs the dashboard's own, as the service user", delegate
         {
