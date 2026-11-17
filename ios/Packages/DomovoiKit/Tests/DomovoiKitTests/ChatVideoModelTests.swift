@@ -82,6 +82,11 @@ final class ChatVideoModelTests: XCTestCase {
         let parkPath = Shared<String?>(nil)
         let parkArrived = Shared<Bool>(false)
         let parkRelease = Shared<Bool>(false)
+        /// The park hit its bound instead of being released: whatever the
+        /// case asserted afterwards was asserted over a timed-out request.
+        let parkRanOut = Shared<Bool>(false)
+        /// The parked request has been let go and is being answered.
+        let parkLeft = Shared<Bool>(false)
 
         /// "METHOD path" of every request but the identity probe.
         let seen = Shared<[String]>([])
@@ -102,10 +107,12 @@ final class ChatVideoModelTests: XCTestCase {
                 self.seen.mutate { $0.append("\(method) \(path)") }
                 if let parked = self.parkPath.current, parked == path {
                     self.parkArrived.set(true)
-                    for _ in 0..<400 {
+                    for step in 0..<400 {
                         if self.parkRelease.current { break }
+                        if step == 399 { self.parkRanOut.set(true) }
                         Thread.sleep(forTimeInterval: 0.002)
                     }
+                    self.parkLeft.set(true)
                 }
                 switch (method, path) {
                 case ("POST", "/api/chat/videos"):
@@ -425,8 +432,15 @@ final class ChatVideoModelTests: XCTestCase {
 
     // MARK: - following a job
 
-    private func view(_ state: String, line: String, message: Int64 = 10, cancel: Bool = false) -> String {
-        #"{"id":"aa","thread_id":5,"message_id":\#(message),"name":"party.mp4","duration_s":151.3,"#
+    private func view(
+        _ state: String,
+        line: String,
+        message: Int64 = 10,
+        cancel: Bool = false,
+        id: String = "aa",
+        thread: Int64 = 5
+    ) -> String {
+        #"{"id":"\#(id)","thread_id":\#(thread),"message_id":\#(message),"name":"party.mp4","duration_s":151.3,"#
             + #""state":"\#(state)","line":"\#(line)","cancel_requested":\#(cancel),"#
             + #""progress":{"pieces_done":4,"pieces":18,"frames_done":0,"frames":0}}"#
     }
@@ -495,21 +509,55 @@ final class ChatVideoModelTests: XCTestCase {
         XCTAssertEqual([], model.jobs.map(\.id))
     }
 
-    /// [[read-after-await-wrong-key]]: thread 5's videos, answered after
-    /// thread 6 was opened, must not land under thread 6.
+    /// [[read-after-await-wrong-key]]: thread 5's videos, answered after the
+    /// person left thread 5, must not land.
+    ///
+    /// **Released before anything else is waited for.** A parked
+    /// `URLProtocol` holds the thread it is loading on (``ParkedRequest`` and
+    /// `HealthPanelModelTests` say so), so no other request reaches the stub
+    /// until the park is let go. CI run 44011423168 failed this case when it
+    /// waited for thread 6's read to arrive *during* the park: that read was
+    /// queued behind thread 5's in the stub, not lost in the model.
+    ///
+    /// Two halves, because the stub answers in order: thread 5's answer always
+    /// lands before anything asked after it.
+    ///
+    /// * **Left for nothing** (``ChatVideoModel/close()``): the only answer is
+    ///   thread 5's, so without the epoch guard its job would be on screen.
+    ///   This is the half that fails if the guard goes.
+    /// * **Left for thread 6**: thread 6's own job ends up on screen and stays.
     func testAnOldThreadsVideosDoNotLandInTheNewOne() async throws {
         let house = House()
-        house.videos.set([5: "[\(view("done", line: "Watched"))]", 6: "[]"])
+        house.videos.set([
+            5: "[\(view("done", line: "Watched"))]",
+            6: "[\(view("done", line: "Watched", message: 60, id: "bb", thread: 6))]",
+        ])
         house.parkPath.set("/api/chat/threads/5/messages")
         let (model, _) = rig(house: house)
+
         model.open(thread: 5)
         await settleUntil({ house.parkArrived.current }, "thread 5's read")
-        model.open(thread: 6)
-        await settleUntil({ house.count("GET /api/chat/threads/6/messages") == 1 }, "thread 6's read")
+        model.close()
         house.parkRelease.set(true)
+        await settleUntil({ house.parkLeft.current }, "thread 5's answer")
         await everythingLands()
-        XCTAssertEqual([], model.jobs.map(\.id))
+        XCTAssertFalse(house.parkRanOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertEqual([], model.jobs.map(\.id), "thread 5's answer landed after the person left it")
+        XCTAssertNil(model.thread)
+
+        house.parkArrived.set(false)
+        house.parkRelease.set(false)
+        house.parkLeft.set(false)
+        model.open(thread: 5)
+        await settleUntil({ house.parkArrived.current }, "thread 5's second read")
+        model.open(thread: 6)
+        house.parkRelease.set(true)
+        await settleUntil({ model.jobs.map(\.id) == ["bb"] }, "thread 6's read")
+        await everythingLands()
+        XCTAssertFalse(house.parkRanOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertEqual(["bb"], model.jobs.map(\.id), "thread 5's job under thread 6")
         XCTAssertEqual(6, model.thread)
+        XCTAssertEqual(1, house.count("GET /api/chat/threads/6/messages"))
     }
 
     // MARK: - stop
