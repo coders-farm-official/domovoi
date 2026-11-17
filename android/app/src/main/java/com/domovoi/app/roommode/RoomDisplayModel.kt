@@ -62,6 +62,9 @@ object RoomDisplayModel {
         /** Timers past the ones shown. */
         val moreTimers: Int,
         val nextAlarm: AlarmRow?,
+        /** A timer is nearly done: the timers go above the music, so the
+         *  soonest one is on screen without scrolling. */
+        val timersFirst: Boolean,
     ) {
         /** Anything for the second column of a landscape screen. */
         val hasCards: Boolean get() = ringing != null || nowPlaying != null || timers.isNotEmpty() || nextAlarm != null
@@ -92,6 +95,10 @@ object RoomDisplayModel {
 
     /** At most this many timers are listed; the rest are counted. */
     const val MAX_TIMERS_SHOWN = 3
+
+    /** A timer with less than this left is the most urgent thing on the
+     *  screen after a ringing one ([State.timersFirst]). */
+    const val URGENT_TIMER_MS = 10 * 60_000L
 
     /** The volume buttons' step. */
     const val VOLUME_STEP = 10
@@ -159,6 +166,7 @@ object RoomDisplayModel {
                 val time = alarmTime(at, local, i.locale, i.use24h)
                 AlarmRow(a.id, time, "next alarm $time")
             },
+            timersFirst = timers.firstOrNull()?.let { it.second < URGENT_TIMER_MS } == true,
         )
     }
 

@@ -199,6 +199,20 @@ class RoomDisplayModelTest {
         assertEquals("28 Nov 7:00", RoomDisplayModel.alarmTime(now.plusDays(12).withHour(7).withMinute(0), now, Locale.US, true))
     }
 
+    @Test fun aTimerNearlyDoneGoesAboveTheMusic() {
+        fun first(vararg left: Long, elapsed: Long = 10_000L) = RoomDisplayModel.build(
+            input(feed = feed(nowPlaying = song(), timers = left.mapIndexed { i, l -> timer(i + 1L, l) }), elapsed = elapsed),
+        ).timersFirst
+        assertTrue(first(4 * 60_000L))
+        assertTrue("the soonest decides", first(45 * 60_000L, 9 * 60_000L))
+        assertFalse(first(10 * 60_000L))
+        assertFalse(first(25 * 60_000L))
+        assertTrue("it becomes urgent as it counts down", first(10 * 60_000L, elapsed = 10_000L + 1_000L))
+        assertFalse("no timers: nothing to lift", first())
+        val alarmOnly = RoomDisplayModel.build(input(feed = feed(timers = listOf(timer(1, 60_000L, "7 am alarm", TimerKind.ALARM)))))
+        assertFalse("an alarm is not a timer running out", alarmOnly.timersFirst)
+    }
+
     @Test fun aRingingTimerGetsAStop() {
         val s = RoomDisplayModel.build(input(feed = feed(ringing = FeedRinging(41, TimerKind.TIMER, "pasta"))))
         val r = s.ringing!!

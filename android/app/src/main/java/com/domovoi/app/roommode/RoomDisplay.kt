@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -60,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -190,7 +192,8 @@ private class DisplayActions(
 )
 
 /** One column; the big button and Exit stay at the foot of the screen
- *  whatever scrolls above them. */
+ *  whatever scrolls above them, and nothing is cut off at the bar: the
+ *  scroll area fades out above it and ends with room to scroll clear. */
 @Composable
 private fun Portrait(
     modifier: Modifier, label: String, status: RoomEngine.Status?, running: Boolean,
@@ -198,7 +201,7 @@ private fun Portrait(
 ) {
     val gap = if (s.compact) 12.dp else 20.dp
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+        FadingScroll(Modifier.weight(1f).fillMaxWidth()) {
             TopRow(label, status, running, s, c)
             s.ringing?.let { Spacer(Modifier.height(gap)); RingingCard(it, s.compact, c, a) }
             Spacer(Modifier.height(gap))
@@ -209,11 +212,8 @@ private fun Portrait(
             Spacer(Modifier.height(gap))
             VoiceState(s, c, if (small) 56.dp else 72.dp)
             StatusBlock(s, c, a)
-            s.nowPlaying?.let { Spacer(Modifier.height(gap)); NowPlayingCard(it, art, s.compact, c, a) }
-            if (s.timers.isNotEmpty() || s.nextAlarm != null) {
-                Spacer(Modifier.height(gap / 2))
-                TimersCard(s, c)
-            }
+            Spacer(Modifier.height(gap))
+            Cards(s, c, art, a, gap, withRinging = false)
             UpdateLine(update, c)
         }
         Spacer(Modifier.height(gap / 2))
@@ -221,8 +221,10 @@ private fun Portrait(
     }
 }
 
-/** Two columns, the clock's and the cards'; the big button and Exit along
- *  the foot. With no cards the clock's column has the screen. */
+/** Two columns: the clock's, with the big button and Exit under it, and
+ *  the cards', which has the full height and scrolls (fading at its foot,
+ *  never cut) when there is more than fits. With no cards the clock's
+ *  column has the screen. */
 @Composable
 private fun Landscape(
     modifier: Modifier, label: String, status: RoomEngine.Status?, running: Boolean,
@@ -231,32 +233,58 @@ private fun Landscape(
     val gap = if (s.compact) 12.dp else 20.dp
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         TopRow(label, status, running, s, c)
-        Row(Modifier.weight(1f).fillMaxWidth().padding(vertical = gap), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-            Column(
-                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
+        Row(Modifier.weight(1f).fillMaxWidth().padding(top = gap), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+            FadingScroll(Modifier.weight(1f).fillMaxHeight(), centered = true) {
                 Clock(s, c, if (s.compact) 72.sp else 120.sp)
                 Spacer(Modifier.height(gap))
                 VoiceState(s, c, if (s.compact) 56.dp else 80.dp)
                 StatusBlock(s, c, a)
                 UpdateLine(update, c)
+                Spacer(Modifier.height(gap))
+                ActionBar(s, c, a, Modifier.widthIn(max = 420.dp).fillMaxWidth(if (s.hasCards) 0.8f else 0.5f))
             }
             if (s.hasCards) {
-                Column(
-                    Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(gap, Alignment.CenterVertically),
-                ) {
-                    s.ringing?.let { RingingCard(it, s.compact, c, a) }
-                    s.nowPlaying?.let { NowPlayingCard(it, art, s.compact, c, a) }
-                    if (s.timers.isNotEmpty() || s.nextAlarm != null) TimersCard(s, c)
+                FadingScroll(Modifier.weight(1f).fillMaxHeight(), centered = true) {
+                    Cards(s, c, art, a, gap, withRinging = true)
                 }
             }
         }
-        ActionBar(s, c, a, Modifier.widthIn(max = 420.dp).fillMaxWidth())
     }
 }
+
+/** The ringing card (when asked), then the timers and the music: the
+ *  timers first while one is nearly done ([RoomDisplayModel.State.timersFirst]). */
+@Composable
+private fun Cards(s: RoomDisplayModel.State, c: RoomColors, art: ImageBitmap?, a: DisplayActions, gap: Dp, withRinging: Boolean) {
+    val hasTimers = s.timers.isNotEmpty() || s.nextAlarm != null
+    var first = true
+    fun gapBefore(): Modifier = if (first) Modifier.also { first = false } else Modifier.padding(top = gap)
+    if (withRinging) s.ringing?.let { Box(gapBefore()) { RingingCard(it, s.compact, c, a) } }
+    if (s.timersFirst && hasTimers) Box(gapBefore()) { TimersCard(s, c) }
+    s.nowPlaying?.let { Box(gapBefore()) { NowPlayingCard(it, art, s.compact, c, a) } }
+    if (!s.timersFirst && hasTimers) Box(gapBefore()) { TimersCard(s, c) }
+}
+
+/** A scrolling column that never ends in a hard cut: while there is more
+ *  below, its foot fades into the screen, and its content ends with that
+ *  much room so the last line can always be scrolled clear of the fade.
+ *  [centered]: content that fits sits in the middle. */
+@Composable
+private fun FadingScroll(modifier: Modifier, centered: Boolean = false, content: @Composable () -> Unit) {
+    val scroll = rememberScrollState()
+    BoxWithConstraints(modifier) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(scroll).heightIn(min = maxHeight).padding(bottom = FADE),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = if (centered) Arrangement.Center else Arrangement.Top,
+        ) { content() }
+        if (scroll.canScrollForward) {
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(FADE).background(Brush.verticalGradient(listOf(Color.Transparent, Ink))))
+        }
+    }
+}
+
+private val FADE = 32.dp
 
 @Composable
 private fun TopRow(label: String, status: RoomEngine.Status?, running: Boolean, s: RoomDisplayModel.State, c: RoomColors) {
