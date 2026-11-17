@@ -36,6 +36,16 @@ internal fun docRawPath(rel: String): String = "/api/documents/raw/" + Uri.encod
 
 internal fun docTextPath(rel: String): String = "/api/documents/text/" + Uri.encode(rel, "/")
 
+/** A document as Word: `GET /api/documents/export/doc/{rel_path:path}?fmt=docx`
+ *  (web/backend/api/documents.py `export_doc`, daily-read tier). Each folder
+ *  and the name are one %-encoded segment ("/" kept between them), so
+ *  "Letters/To Gran.html" asks for `Letters/To%20Gran.html`. Pure, unlike
+ *  android.net.Uri, so it is pinned by a JVM test. */
+internal fun docWordExportPath(rel: String): String =
+    "/api/documents/export/doc/" +
+        rel.trim('/').split('/').joinToString("/") { com.domovoi.app.net.encodePathSegment(it) } +
+        "?fmt=docx"
+
 /** modified_at arrives as unix seconds — bridge it into the shared relTime. */
 internal fun relFromEpochSec(sec: Double?): String {
     val s = sec ?: return "—"

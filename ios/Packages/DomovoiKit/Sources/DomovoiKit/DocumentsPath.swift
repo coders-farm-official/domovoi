@@ -24,9 +24,11 @@ import Foundation
 ///   draws the notice itself, over the collab layer it already carries
 ///   (`web/static/collab_ui.jsx`). That is the whole argument for hosting the
 ///   page rather than rebuilding it.
-/// * `/doc-save-as`, `/export/*`, `/convert/docx`, `/drawings/*` — asked for
-///   by those pages too, and so not addresses this app builds. `/drawings/*`
-///   has no editor on either phone at all.
+/// * `/doc-save-as`, `/export/sheet/*`, `/convert/docx`, `/drawings/*` —
+///   asked for by those pages too, and so not addresses this app builds.
+///   `/drawings/*` has no editor on either phone at all. `/export/doc/*` is
+///   the one export route built here (``wordExport(rel:)``): Files' save of a
+///   Domovoi document.
 /// * `/delete` and `/download-zip` — **admin** tier (`documents.py:808`,
 ///   `:836`), and a phone has no admin session: they answer 401 every time,
 ///   the same reason ``FilePath/deleteNeedsAnAdmin`` is drawn by nothing.
@@ -80,6 +82,25 @@ public enum DocumentsPath {
     public static func raw(rel: String) -> String {
         "/api/documents/raw/\(FilePath.escPath(rel))"
     }
+
+    /// `GET /api/documents/export/doc/{rel_path}?fmt=docx` — a document as
+    /// Word (`documents.py` `export_doc`, the daily read tier `/raw` is on).
+    ///
+    /// What saving a **Domovoi document** onto the phone fetches
+    /// (``FileSaveModel/plan(for:from:)``): a formatted `.html`/`.htm` in the
+    /// Documents library is the editor's own format, a web page, and the
+    /// person asked for a document they can open. Android builds the same
+    /// address (`docWordExportPath`, `DocumentsIo.kt`). A path tail like the
+    /// other routes here, so `Letters/To Gran.html` is
+    /// `Letters/To%20Gran.html`.
+    public static func wordExport(rel: String) -> String {
+        "/api/documents/export/doc/\(FilePath.escPath(rel))?fmt=docx"
+    }
+
+    /// Word's MIME type: what that route answers with, and the type the
+    /// saved `<stem>.docx` carries (the share sheet reads it from the
+    /// extension).
+    public static let wordMIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     /// `GET /doc.html?path={rel}` — **not an API route**: the dashboard's own
     /// editor page, which ``DocumentsWebEditorHost`` loads in a `WKWebView`

@@ -25,6 +25,7 @@ import com.domovoi.app.ui.screens.documents.SheetCell
 import com.domovoi.app.ui.screens.documents.SheetUnsupported
 import com.domovoi.app.ui.screens.documents.docTextPath
 import com.domovoi.app.ui.screens.documents.docRawPath
+import com.domovoi.app.ui.screens.documents.docWordExportPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -148,6 +149,47 @@ internal const val OTHER_LIBRARY_ID = "core:other"
 
 internal fun sheetApiPath(rel: String): String = "/api/documents/sheet/" + Uri.encode(rel, "/")
 
+/** Word's MIME type, for a document saved as .docx. */
+internal const val WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+/** What Download fetches for one Files entry, and the name (and MIME
+ *  type, when it is not the name's own) it is saved under. */
+internal data class DownloadPlan(val path: String, val fileName: String, val mime: String? = null)
+
+/** A Domovoi document: a formatted .html/.htm in the Documents library,
+ *  the editor's own format. Its raw file is a web page, not something a
+ *  person can open as a document, so Download saves it as Word. */
+internal fun downloadsAsWord(libraryId: String, entry: FileEntry): Boolean =
+    libraryId == DOCUMENTS_LIBRARY_ID && !entry.isDir &&
+        entry.rel.trimEnd('/').substringAfterLast('/').substringAfterLast('.', "").lowercase() in WORD_EXPORTED_EXTS
+
+private val WORD_EXPORTED_EXTS = setOf("html", "htm")
+
+/** "Letters/To Gran.html" saves as "To Gran.docx" (the server's own
+ *  attachment name: the file's stem + .docx). */
+internal fun wordSaveName(rel: String): String {
+    val stem = rel.trimEnd('/').substringAfterLast('/').substringBeforeLast('.')
+    return com.domovoi.app.net.DeviceDownloads.safeName(stem, "document") + ".docx"
+}
+
+/**
+ * Download for one entry:
+ *  * a Domovoi document (see [downloadsAsWord]) is converted by the server
+ *    (`/api/documents/export/doc/...?fmt=docx`) and saved as `<stem>.docx`.
+ *    A failed conversion is reported; it never falls back to the raw page;
+ *  * any other Documents file reuses the /api/documents/raw attachment serve;
+ *  * every other library (and any directory: the server's zip) uses
+ *    /api/files/download.
+ */
+internal fun downloadPlan(libraryId: String, entry: FileEntry): DownloadPlan = when {
+    downloadsAsWord(libraryId, entry) ->
+        DownloadPlan(docWordExportPath(entry.rel), wordSaveName(entry.rel), WORD_MIME)
+    libraryId == DOCUMENTS_LIBRARY_ID && !entry.isDir ->
+        DownloadPlan(docRawPath(entry.rel), ServerFileTransfer.saveName(entry.rel, false))
+    else ->
+        DownloadPlan(filesDownloadPath(libraryId, entry.rel), ServerFileTransfer.saveName(entry.rel, entry.isDir))
+}
+
 internal class ServerFileSource(private val app: AppContainer) : FileSource {
     override val onPhone = false
     override val subtitle = "browse every library — music, docs, plugins & removable drives"
@@ -197,12 +239,10 @@ internal class ServerFileSource(private val app: AppContainer) : FileSource {
 
     override val canDownload = true
 
-    // Documents files reuse the /api/documents/raw attachment serve; every
-    // other library (and any directory → server zip) uses /api/files/download.
+    // What is fetched and how it is saved: downloadPlan below.
     override fun download(context: Context, libraryId: String, entry: FileEntry, report: (String) -> Unit) {
-        val path = if (libraryId == DOCUMENTS_LIBRARY_ID && !entry.isDir) docRawPath(entry.rel)
-        else filesDownloadPath(libraryId, entry.rel)
-        ServerFileTransfer.download(context, app, path, ServerFileTransfer.saveName(entry.rel, entry.isDir), report)
+        val plan = downloadPlan(libraryId, entry)
+        ServerFileTransfer.download(context, app, plan.path, plan.fileName, report, plan.mime)
     }
 
     override suspend fun import(sourceLibraryId: String, entry: FileEntry, target: FileLibrary): ImportResult =
