@@ -62,7 +62,7 @@ async def test_webkit_exports_open_endpoint_and_admin_required() -> None:
 def _fake_admin(monkeypatch, result: str) -> None:
     """Pin the classification the shared gate sees for every request."""
 
-    async def _check(request, session=None):
+    async def _check(request, session=None, *, activity=False):
         return result
 
     monkeypatch.setattr(webkit, "check_admin_request", _check)

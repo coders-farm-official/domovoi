@@ -1996,10 +1996,10 @@ Domovoi?"). It doesn't mean Domovoi has forgotten you.
 **How to** *(admin)*
 
 - Sign in: [Settings → System → Advanced](#settings/advanced), the
-  **Admin** card at the top, **sign in**. A reload in that browser keeps
-  you signed in for 60 minutes after you signed in; **sign out** ends it
-  at once.
-- Change those minutes: on the same page, **show the settings**, then
+  **Admin** card at the top, **sign in**. Admin signs out after 1 hour
+  idle: an hour with no change made as admin. A reload in that browser
+  keeps you signed in until then; **sign out** ends it at once.
+- Shorten the reload part: on the same page, **show the settings**, then
   **Security** → **Stay signed in after a reload**.
 - Turn guest music control off: same group, **Guests can change the
   music in a playing room**.

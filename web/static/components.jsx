@@ -235,9 +235,10 @@ const useAdminSignedIn = () => {
 };
 
 /* The admin sign-in as THIS tab holds it, with the reload window (owner
- * decision 2026-10-14: a reload within an hour of signing in stays signed
- * in). What the Settings Admin card, the sidebar footer and the Advanced
- * note all read, so they never disagree:
+ * decision 2026-10-14: a reload within the hour stays signed in; counted
+ * from the last admin change since the idle timeout, 2026-11-16). What the
+ * Settings Admin card, the sidebar footer and the Advanced note all read,
+ * so they never disagree:
  *   live       — the Bearer is in this tab's memory;
  *   resumable  — not yet, but this browser's session cookie is inside its
  *                reload window: the first action takes the sign-in back
@@ -248,12 +249,19 @@ const useAdminSignedIn = () => {
  *   until      — "14:32", when a reload stops being signed in, while it
  *                still is (null otherwise); endsAt is the same instant;
  *   windowWords— the window's length ("an hour"), null when it is off or
- *                the server is too old to say.
+ *                the server is too old to say;
+ *   idleEndsAt / idleUntil — when the sign-in signs out with no further
+ *                admin change ("14:32"), while signed in;
+ *   idleWords  — the idle timeout in words ("1 hour");
+ *   signedOut  — "Signed out after 1 hour without admin activity" (or
+ *                that the sign-in ended), once this tab's sign-in was
+ *                dropped and until someone signs in or dismisses it.
  * Every Auth method is optional here: a page under an older auth.js (or a
  * test's stub) reads as it did before the window existed. */
 const adminReloadState = () => {
   const out = { live: false, resumable: false, signedIn: false, viewOnly: false,
-                endsAt: null, until: null, windowWords: null };
+                endsAt: null, until: null, windowWords: null,
+                idleEndsAt: null, idleUntil: null, idleWords: '1 hour', signedOut: null };
   try {
     if (typeof Auth === 'undefined') return out;
     const st = Auth.status;
@@ -268,6 +276,13 @@ const adminReloadState = () => {
       out.until = new Date(ends).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
     out.windowWords = (Auth.reloadWindowWords && Auth.reloadWindowWords()) || null;
+    out.idleWords = (Auth.idleWords && Auth.idleWords()) || out.idleWords;
+    const idleEnds = out.signedIn && Auth.idleEndsAt ? Auth.idleEndsAt() : null;
+    if (idleEnds) {
+      out.idleEndsAt = idleEnds;
+      out.idleUntil = new Date(idleEnds).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    out.signedOut = (!out.signedIn && Auth.signedOutNotice && Auth.signedOutNotice()) || null;
   } catch { /* auth.js absent or older: the defaults above */ }
   return out;
 };
@@ -287,7 +302,35 @@ const useAdminReloadState = () => {
     const t = setTimeout(force, Math.max(0, state.endsAt - Date.now()) + 500);
     return () => clearTimeout(t);
   }, [state.endsAt]);
+  // auth.js drops the sign-in itself when the idle hour runs out (and
+  // notifies); this only re-renders a resumable tab's "until" away.
+  React.useEffect(() => {
+    if (!state.idleEndsAt || state.live) return undefined;
+    const t = setTimeout(force, Math.max(0, state.idleEndsAt - Date.now()) + 500);
+    return () => clearTimeout(t);
+  }, [state.idleEndsAt, state.live]);
   return state;
+};
+
+/* "Signed out after 1 hour without admin activity" (2026-11-16): said
+ * once, in the shared toast stack, when THIS tab's admin sign-in ends on
+ * its own (auth.js signedOutNotice), so the page dropping to signed out is
+ * explained rather than noticed. It stays until someone signs in or
+ * dismisses it; the login prompt says the same while it is open, so the
+ * toast steps aside for it. */
+const AdminSignedOutNotice = () => {
+  const { signedOut } = useAdminReloadState();
+  let modalOpen = false;
+  try { modalOpen = typeof Auth !== 'undefined' && !!Auth.modalOpen; } catch { /* older Auth */ }
+  if (!signedOut || modalOpen) return null;
+  return (
+    <ToastNotice text={signedOut}
+                 detail="Admin changes ask for the password again. Everyday use carries on as before."
+                 actions={[
+                   { label: 'sign in', onClick: () => Auth.openModal() },
+                   { label: 'not now', onClick: () => Auth.dismissSignedOutNotice() },
+                 ]}/>
+  );
 };
 
 /* ---- the internet answer (INTERNET_ACCESS, Settings → Internet) ----
@@ -3314,7 +3357,10 @@ const LoginModal = ({ onClose }) => {
   try { signingOut = !needsSetup && Auth.loginReason === 'sign-out'; } catch { /* older Auth */ }
   // Inside the reload window a sign-out never gets here (auth.js takes the
   // sign-in back and signs it out); past it, the hint says how long it was.
-  const reloadWords = signingOut ? adminReloadState().windowWords : null;
+  const authState = adminReloadState();
+  const reloadWords = signingOut ? authState.windowWords : null;
+  // This tab's sign-in ended on its own (the idle hour): said at the top.
+  const signedOutWhy = !needsSetup && !signingOut ? authState.signedOut : null;
   // The first field of the form on screen: the setup code on an unclaimed
   // box, the password otherwise. Once the status read says which, the
   // caret is there.
@@ -3359,6 +3405,9 @@ const LoginModal = ({ onClose }) => {
           <IconButton name="x" onClick={onClose}/>
         </div>
         <div className="cal-modal-body">
+          {signedOutWhy && (
+            <div className="hint login-signed-out-why">{signedOutWhy}.</div>
+          )}
           {needsSetup ? (
             <>
               <div className="hint setup-code-where">
@@ -3400,7 +3449,7 @@ const LoginModal = ({ onClose }) => {
           {signingOut ? (
             <div className="hint login-sign-out-why">
               {reloadWords
-                ? `This page was reloaded more than ${reloadWords} after you signed in, so `
+                ? `This page was reloaded more than ${reloadWords} after your last admin change, so `
                 : 'This page was reloaded, so '}
               this tab no longer holds the admin sign-in, and the server ends
               a session only for a tab that can prove it holds one. Enter the
@@ -3410,6 +3459,7 @@ const LoginModal = ({ onClose }) => {
             <div className="hint">
               Admin actions (deleting files, settings, plugins, room
               upgrades) need this; saving, playback and browsing never do.
+              {' '}Signs out after {authState.idleWords} idle.
             </div>
           )}
         </div>
@@ -5137,7 +5187,7 @@ Object.assign(window, {
   ConnectAsk, connectShows, ConnectPrompt,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
-  CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState,
+  CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState, AdminSignedOutNotice,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses, coverVersions, creditedWith,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,

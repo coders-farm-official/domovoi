@@ -34,7 +34,8 @@ dependencies:
 
 The v1 auth model (scope amendment) is the lightweight one: the admin
 gate checks a Bearer token against ``admin_sessions`` (sha256-stored,
-30-day sliding expiry — validation shared with the web process via
+signs out after an hour without an admin action — validation shared
+with the web process via
 :mod:`domovoi.admin_auth`). **Until the first-run setup has created the
 ``admin_auth`` row, the gate allows everything** — the open LAN-trust
 posture — so a fresh clone works before the setup flow runs.
@@ -117,7 +118,7 @@ async def _admin_ok(request: Request) -> bool:
     """True when the request may perform admin-tier actions. Allows all
     while no admin password has been set up (pre-setup LAN-trust —
     module docstring); afterwards requires a live Bearer session
-    (sha256 lookup + sliding expiry via :mod:`domovoi.admin_auth`)."""
+    (sha256 lookup + the idle hour via :mod:`domovoi.admin_auth`)."""
     return await check_admin_request(request) in ("ok", "pre-setup")
 
 
