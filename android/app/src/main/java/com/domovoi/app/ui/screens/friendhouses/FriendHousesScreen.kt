@@ -523,6 +523,7 @@ internal fun FriendRow(f: FhFriend, onMessage: (String) -> Unit) {
             FhPlain(f.name, fontWeight = FontWeight.SemiBold, maxLines = 2, modifier = Modifier.weight(1f))
             if (f.verified) Pill(FhWords.VERIFIED, Tone.Ok) else Pill(FhWords.NOT_VERIFIED, Tone.Warn)
         }
+        FhWords.presence(f)?.let { Note(it) }
         Note(FhWords.alert(f.alert))
         if (FhPaths.isHouseKey(f.house)) {
             TextButton(onClick = { onMessage(f.house) }) { Text("message") }

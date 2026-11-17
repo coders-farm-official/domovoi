@@ -9,6 +9,7 @@ import com.domovoi.app.friendhouses.FriendHousesApi
 import com.domovoi.app.friendhouses.fhProblem
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
+import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.screens.home.plural
 import kotlinx.coroutines.CancellationException
 import java.time.ZoneId
@@ -26,7 +27,7 @@ object FhWords {
     const val TITLE = "Friend houses"
 
     const val FRIENDS_ADMIN =
-        "Only an admin can add or remove friends, compare the codes, or change what a new message does, on the dashboard."
+        "Only an admin can add, remove or block friends, compare the codes, or change what a new message does, on the dashboard."
     const val LISTS_ADMIN =
         "Only an admin can share a list, accept one or stop sharing, on the dashboard."
     const val CONVERSATION_ADMIN =
@@ -54,6 +55,19 @@ object FhWords {
         "sender" -> "New messages: the rooms say who it's from"
         "read" -> "New messages: read aloud in the rooms"
         else -> "New messages: as set on the dashboard"
+    }
+
+    const val ONLINE = "Online"
+    const val NOT_REACHED = "Not reached yet"
+
+    /** Whether the friend's HOUSE is running and reachable (never who is
+     *  home): "Online", "Last seen <relTime>", "Not reached yet"; null for
+     *  a server that doesn't say (show nothing). */
+    fun presence(f: FhFriend): String? = when {
+        f.online == null -> null
+        f.online -> ONLINE
+        f.lastSeenAt.isNullOrBlank() -> NOT_REACHED
+        else -> "Last seen ${relTime(f.lastSeenAt)}"
     }
 
     fun unread(n: Int) = "$n unread"

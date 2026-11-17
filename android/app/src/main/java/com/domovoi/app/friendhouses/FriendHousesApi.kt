@@ -70,6 +70,11 @@ data class FhFriend(
     val alert: String = "inbox",
     val verified: Boolean = false,
     @SerialName("added_at") val addedAt: String? = null,
+    /** Their house was heard from in the last 15 minutes. Null: a server
+     *  before presence (2026-11-17), which sends neither field. */
+    val online: Boolean? = null,
+    /** When their house was last heard from; null: not reached yet. */
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
 )
 
 @Serializable
