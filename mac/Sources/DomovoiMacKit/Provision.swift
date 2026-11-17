@@ -48,7 +48,9 @@ public enum ProvisionArgs {
 
     /// `sttURL`/`sttModel`: the Mac's speech service (PHASE8A-STT.md), when
     /// one is installed: the core uses it before its own Whisper, and the
-    /// VM guard lets the core (not the containers) reach its port.
+    /// VM guard lets the core (not the containers) reach its port. It runs
+    /// on the Mac's graphics chip beside Ollama, which the core is told
+    /// (`--host-stt-shares-gpu`: WHISPER_REMOTE_SHARES_GPU=true in .env).
     public static func build(source: ProvisionSource, answers: InstallRecord.Answers, ollamaURL: String,
                              sttURL: String? = nil, sttModel: String? = nil) -> [String] {
         var a: [String] = []
@@ -66,6 +68,7 @@ public enum ProvisionArgs {
         if let u = sttURL {
             a += ["--host-stt-url", u]
             if let m = sttModel { a += ["--host-stt-model", m] }
+            a.append("--host-stt-shares-gpu")
         }
         if source.allowedSigners != nil { a += ["--allowed-signers", ProvisionSource.guestSigners] }
         if source.noVisionModel { a.append("--no-vision-model") }

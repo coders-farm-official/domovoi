@@ -606,6 +606,12 @@ EXTERNAL_KEEP_ALIVE_STANDARD=24h
 # is written: a Linux or Windows box is exactly as before.
 HOST_STT_URL=""
 HOST_STT_MODEL=small.en
+# --host-stt-shares-gpu: with --host-stt-url, that service runs on the same
+# graphics chip as the AI models at --ollama-url (a Mac: whisper-server and
+# Ollama both on Metal). WHISPER_REMOTE_SHARES_GPU=true in .env, which the
+# core reads to route around the contention; false with --host-stt-url
+# alone. Set by the Mac helper only.
+HOST_STT_SHARES_GPU=0
 # --vm-guard CIDR and --vm-guard-dns IP (repeatable): see the vm-guard step.
 VM_GUARD_NET=""
 VM_GUARD_DNS=()
@@ -714,6 +720,10 @@ feeds.
                         this machine (not its containers) may reach it
   --host-stt-model NAME with --host-stt-url: the model it runs, for the
                         records (default small.en)
+  --host-stt-shares-gpu with --host-stt-url: that service shares the graphics
+                        chip with the AI models (a Mac's Metal):
+                        WHISPER_REMOTE_SHARES_GPU=true in .env (false
+                        without it)
   --vm-guard CIDR       VM mode (a Lima VM on a Mac): drop this machine's
                         and its containers' connections to CIDR, the host's
                         side of the VM network (Lima: 192.168.5.0/24),
@@ -861,7 +871,7 @@ while [ $# -gt 0 ]; do
         --stop-before) STOP_BEFORE=$val ;;
       esac
       ;;
-    --wsl|--no-wsl|--skip-models|--no-vision-model|--ai-models|--no-ai-models|--dry-run|--keep-downloads|-h|--help)
+    --wsl|--no-wsl|--skip-models|--no-vision-model|--ai-models|--no-ai-models|--host-stt-shares-gpu|--dry-run|--keep-downloads|-h|--help)
       [ "$has_val" = 0 ] || usage_error "$opt takes no value"
       case $opt in
         --wsl) WSL_OPT=yes ;;
@@ -872,6 +882,7 @@ while [ $# -gt 0 ]; do
           [ -z "$AI_FLAG" ] || [ "$AI_FLAG" = "$a" ] || usage_error "--ai-models and --no-ai-models: give one of them, not both"
           AI_FLAG=$a ;;
         --no-vision-model) PULL_VISION=0 ;;
+        --host-stt-shares-gpu) HOST_STT_SHARES_GPU=1 ;;
         --dry-run) DRY_RUN=1 ;;
         --keep-downloads) KEEP_DOWNLOADS=1 ;;
         -h|--help) usage; final_line help 0 "Usage printed; nothing was done"; exit 0 ;;
@@ -894,6 +905,9 @@ if [ -n "$VM_GUARD_NET" ] && [ "$OLLAMA_EXTERNAL" != 1 ]; then
 fi
 if [ "${#VM_GUARD_DNS[@]}" -gt 0 ] && [ -z "$VM_GUARD_NET" ]; then
   usage_error "--vm-guard-dns goes with --vm-guard"
+fi
+if [ "$HOST_STT_SHARES_GPU" = 1 ] && [ -z "$HOST_STT_URL" ]; then
+  usage_error "--host-stt-shares-gpu goes with --host-stt-url"
 fi
 if [ -n "$VM_GUARD_LAN_IF" ] && [ -z "$VM_GUARD_NET" ]; then
   usage_error "--vm-guard-lan goes with --vm-guard"
@@ -3510,6 +3524,8 @@ env_keys() {
   if [ -n "$HOST_STT_URL" ]; then
     echo "WHISPER_REMOTE_URL=$HOST_STT_URL"
     echo "WHISPER_REMOTE_MODEL=$HOST_STT_MODEL"
+    if [ "$HOST_STT_SHARES_GPU" = 1 ]; then echo "WHISPER_REMOTE_SHARES_GPU=true"
+    else echo "WHISPER_REMOTE_SHARES_GPU=false"; fi
   fi
   echo "OLLAMA_MODEL=$(tier_qa)"
   echo "OLLAMA_TOOL_MODEL=$(tier_tool)"
@@ -3532,21 +3548,22 @@ env_keys() {
 # Every key env_keys can write, whatever the options of this run: a .env
 # this script creates has the template's value of each recorded as the
 # script's own, so a later run with another option still replaces it.
-ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE WHISPER_REMOTE_URL WHISPER_REMOTE_MODEL OLLAMA_URL OLLAMA_KEEP_ALIVE LETTA_OLLAMA_BASE_URL OLLAMA_MODEL
+ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE WHISPER_REMOTE_URL WHISPER_REMOTE_MODEL WHISPER_REMOTE_SHARES_GPU OLLAMA_URL OLLAMA_KEEP_ALIVE LETTA_OLLAMA_BASE_URL OLLAMA_MODEL
   OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK OLLAMA_VISION_MODEL AI_FEATURES SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
   MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR VIDEOS_DIR)
 # Keys a checkout older than this script may have no setting for (an older
 # release installed with --ref, or stable before the release that has it):
 # its core ignores them (Settings reads .env with extra="ignore"), so the
 # verify step names them instead of failing.
-ENV_NEWER_KEYS=(AI_FEATURES LETTA_OLLAMA_BASE_URL WHISPER_REMOTE_URL WHISPER_REMOTE_MODEL)
+ENV_NEWER_KEYS=(AI_FEATURES LETTA_OLLAMA_BASE_URL WHISPER_REMOTE_URL WHISPER_REMOTE_MODEL WHISPER_REMOTE_SHARES_GPU)
 # The record's marker that a --ollama-url run wrote OLLAMA_KEEP_ALIVE and
 # LETTA_OLLAMA_BASE_URL (left only by such a run), and the keep-alive the
 # core uses without one (domovoi/config.py ollama_keep_alive).
 ENV_EXTERNAL_MARK=_OLLAMA_EXTERNAL
 # The same for --host-stt-url: a later run without it (a Mac package without
-# the speech service) blanks WHISPER_REMOTE_URL while it still holds what
-# this script wrote, so the core stops asking a service that is gone.
+# the speech service) blanks WHISPER_REMOTE_URL and puts
+# WHISPER_REMOTE_SHARES_GPU back to false while they still hold what this
+# script wrote, so the core stops asking a service that is gone.
 ENV_STT_MARK=_HOST_STT
 ENV_KEEP_ALIVE_DEFAULT=24h
 
@@ -3777,6 +3794,11 @@ do_env() {
     k=WHISPER_REMOTE_URL
     if [ -n "${have[$k]-}" ] && [ -n "${last[$k]+x}" ] && [ "${have[$k]}" = "${last[$k]}" ]; then
       want[$k]=; order+=("$k")
+    fi
+    # A bool: false, never blank (the core would refuse an empty bool).
+    k=WHISPER_REMOTE_SHARES_GPU
+    if [ "${have[$k]-}" = true ] && [ -n "${last[$k]+x}" ] && [ "${have[$k]}" = "${last[$k]}" ]; then
+      want[$k]=false; order+=("$k")
     fi
     unset "last[$ENV_STT_MARK]"
   fi
