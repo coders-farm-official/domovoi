@@ -1,10 +1,13 @@
 package com.domovoi.app.ui.screens.friendhouses
 
+import com.domovoi.app.friendhouses.FhChange
 import com.domovoi.app.friendhouses.FhConversation
 import com.domovoi.app.friendhouses.FhFriend
 import com.domovoi.app.friendhouses.FhMessage
 import com.domovoi.app.friendhouses.FhPaths
 import com.domovoi.app.friendhouses.FhSharedList
+import com.domovoi.app.friendhouses.FhStatus
+import com.domovoi.app.friendhouses.fhChanges
 import com.domovoi.app.friendhouses.FriendHousesApi
 import com.domovoi.app.friendhouses.fhProblem
 import com.domovoi.app.ui.components.Tone
@@ -56,6 +59,35 @@ object FhWords {
         "read" -> "New messages: read aloud in the rooms"
         else -> "New messages: as set on the dashboard"
     }
+
+    const val THIS_WEEK = "This week"
+    const val NOT_YOU =
+        "Not you? Only an admin can remove or block the house and change the admin password, on the dashboard."
+
+    /** At most this many of the week's changes are listed. */
+    const val CHANGES_SHOWN = 5
+
+    /** One of the week's changes in the dashboard's words, with its time
+     *  when it can be shown: "The Smiths became a friend house · 2d ago",
+     *  "\u201cGroceries\u201d was shared with The Patels · 5h ago". */
+    fun change(c: FhChange): String? {
+        val what = when (c.kind) {
+            "friend" -> "${c.friend?.takeIf { it.isNotBlank() } ?: "A house"} became a friend house"
+            "shared_list" -> "\u201c${c.list?.takeIf { it.isNotBlank() } ?: "A list"}\u201d was shared with " +
+                (c.friend?.takeIf { it.isNotBlank() } ?: "a friend house")
+            else -> return null
+        }
+        return fhIso(c.at)?.let { "$what \u00b7 ${relTime(it)}" } ?: what
+    }
+
+    /** The "This week" lines for [status]: newest first, at most
+     *  [CHANGES_SHOWN]; empty when there is nothing to say (or an older
+     *  server said nothing). */
+    fun changes(status: FhStatus): List<String> =
+        fhChanges(status).orEmpty()
+            .sortedByDescending { fhEpochSec(parseInstant(fhIso(it.at))?.epochSecond) ?: -1L }
+            .mapNotNull { change(it) }
+            .take(CHANGES_SHOWN)
 
     const val ONLINE = "Online"
     const val NOT_REACHED = "Not reached yet"

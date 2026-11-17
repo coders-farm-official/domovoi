@@ -136,6 +136,7 @@ fun FriendHousesScreen(navigate: (Route) -> Unit) {
         if (conv == null) {
             PageHeader(FhWords.TITLE, FH_DESCRIPTION)
             status?.let { StatusLine(it) }
+            status?.let { ThisWeek(it) }
             Spacer(Modifier.height(12.dp))
             Tabs(tab, unread = status?.unread ?: 0) { tab = it }
             Spacer(Modifier.height(12.dp))
@@ -217,6 +218,21 @@ private fun StatusLine(status: FhStatus) {
     ) {
         StatusDot(if (status.status == "starting") Tone.Idle else Tone.Warn, live = status.status == "starting")
         FhPlain(line, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+    }
+}
+
+/** The week's trust changes (new friend houses, lists shared with one):
+ *  said aloud too, but quiet hours hold that back, so they stay written
+ *  here. Nothing when there are none. Names and titles are another
+ *  house's words: [FhPlain]. */
+@Composable
+internal fun ThisWeek(status: FhStatus) {
+    val lines = FhWords.changes(status)
+    if (lines.isEmpty()) return
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(FhWords.THIS_WEEK, style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.fg)
+        lines.forEach { FhPlain(it, style = MaterialTheme.typography.bodySmall) }
+        Note(FhWords.NOT_YOU)
     }
 }
 
