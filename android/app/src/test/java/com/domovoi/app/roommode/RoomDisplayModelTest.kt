@@ -130,7 +130,7 @@ class RoomDisplayModelTest {
     }
 
     @Test fun aStreamShowsItsSourceAndNoProgress() {
-        val stream = song().copy(artist = null, album = null, source = "radio", durationSec = null)
+        val stream = song().copy(artist = null, album = null, source = MediaSource.RADIO, durationSec = null)
         val np = RoomDisplayModel.build(input(feed = feed(nowPlaying = stream))).nowPlaying!!
         assertEquals("radio", np.subtitle)
         assertNull(np.progress)
@@ -342,6 +342,47 @@ class RoomDisplayModelTest {
         assertNull(f.ringing)
         val stopped = RoomProtocol.parse("""{"type":"room_display","now_playing":{"state":"stop","title":"x"}}""") as RoomProtocol.ServerFrame.Display
         assertNull("a stopped room shows no card", stopped.feed.nowPlaying)
+    }
+
+    // ── the shape the core accepted (2026-11-16) ───────────────────────
+
+    private fun display(json: String): RoomFeed = (RoomProtocol.parse(json) as RoomProtocol.ServerFrame.Display).feed
+
+    @Test fun aFrameSentBeforeTheOneOnScreenIsDropped() {
+        val shown = display("""{"type":"room_display","sent_at_ms":5000,"timers":[]}""")
+        assertEquals(5000L, shown.sentAtMs)
+        assertFalse("older", RoomDisplayFeed.newer(shown, display("""{"type":"room_display","sent_at_ms":4999}""")))
+        assertTrue("same instant", RoomDisplayFeed.newer(shown, display("""{"type":"room_display","sent_at_ms":5000}""")))
+        assertTrue("newer", RoomDisplayFeed.newer(shown, display("""{"type":"room_display","sent_at_ms":5001}""")))
+        assertTrue("nothing on screen yet", RoomDisplayFeed.newer(null, display("""{"type":"room_display","sent_at_ms":1}""")))
+        val unstamped = display("""{"type":"room_display"}""")
+        assertNull(unstamped.sentAtMs)
+        assertTrue("no stamp: applied as it comes", RoomDisplayFeed.newer(shown, unstamped))
+        assertTrue("no stamp on screen: applied", RoomDisplayFeed.newer(unstamped, display("""{"type":"room_display","sent_at_ms":1}""")))
+    }
+
+    @Test fun anUnknownSourceIsOther() {
+        fun source(v: String) = display("""{"type":"room_display","now_playing":{"state":"play","title":"x","source":$v}}""").nowPlaying!!.source
+        assertEquals(MediaSource.RADIO, source("\"radio\""))
+        assertEquals(MediaSource.AUDIOBOOK, source("\"audiobook\""))
+        assertEquals(MediaSource.OTHER, source("\"karaoke\""))
+        assertEquals(MediaSource.OTHER, source("\"other\""))
+        assertNull(source("null"))
+        assertEquals(MediaSource.entries.map { it.wire }.toSet(), setOf("library", "radio", "sleep", "podcast", "audiobook", "other"))
+        // On the card: plain words for a stream with no artist, never "other".
+        val np = { s: MediaSource? -> RoomDisplayModel.build(input(feed = feed(nowPlaying = song().copy(artist = null, album = null, source = s)))).nowPlaying!!.subtitle }
+        assertEquals("podcast", np(MediaSource.PODCAST))
+        assertEquals("sleep sounds", np(MediaSource.SLEEP))
+        assertNull(np(MediaSource.OTHER))
+        assertNull(np(MediaSource.LIBRARY))
+    }
+
+    @Test fun noArtMeansNoTile() {
+        val f = display("""{"type":"room_display","now_playing":{"state":"play","title":"x","source":"radio","art":null}}""")
+        assertNull(f.nowPlaying!!.art)
+        val card = RoomDisplayModel.build(input(feed = f)).nowPlaying!!
+        assertNull("no artwork path: the card draws no tile", card.art)
+        assertTrue(RoomDisplayFeed.isArtPath("/v1/music/cover/12"))
     }
 
     @Test fun artworkComesOnlyFromTheRoomsOwnServer() {

@@ -78,7 +78,7 @@ class RoomDisplayPreviewActivity : ComponentActivity() {
             "playing" -> RoomFeed(
                 nowPlaying = FeedNowPlaying(
                     state = PlayState.PLAY, title = "Harvest Moon", artist = "The Lanterns", album = "Kitchen Radio",
-                    source = null, art = "/v1/preview/cover", durationSec = 245.0, elapsedSec = 82.0,
+                    source = MediaSource.LIBRARY, art = "/v1/music/cover/12", durationSec = 245.0, elapsedSec = 82.0,
                     controls = setOf(Transport.PAUSE, Transport.SKIP, Transport.PREVIOUS),
                 ),
                 timers = listOf(

@@ -53,14 +53,24 @@ enum class Transport(val wire: String) { PAUSE("pause"), RESUME("resume"), SKIP(
 
 enum class TimerKind { TIMER, ALARM }
 
+/** What kind of thing a room is playing (`now_playing.source`). */
+enum class MediaSource(val wire: String) {
+    LIBRARY("library"), RADIO("radio"), SLEEP("sleep"), PODCAST("podcast"), AUDIOBOOK("audiobook"), OTHER("other");
+
+    companion object {
+        /** A value this app does not know yet is "other"; none at all is null. */
+        fun of(wire: String?): MediaSource? = wire?.let { w -> entries.firstOrNull { it.wire == w } ?: OTHER }
+    }
+}
+
 data class FeedNowPlaying(
     val state: PlayState,
     val title: String?,
     val artist: String?,
     val album: String?,
-    /** A generic source name for a stream ("radio"), never a provider's. */
-    val source: String?,
-    /** A path on the room's server for the cover; null: none. */
+    val source: MediaSource?,
+    /** A path on the room's server for the cover (`/v1/music/cover/{id}`,
+     *  library tracks only); null: none, and no artwork tile is drawn. */
     val art: String?,
     val durationSec: Double?,
     val elapsedSec: Double?,
@@ -88,6 +98,9 @@ data class RoomFeed(
      *  remaining time counts down from here, so the phone's wall clock
      *  being off never moves a countdown. */
     val receivedAt: Long = 0L,
+    /** The server's monotonic ms when it sent this frame (`sent_at_ms`):
+     *  for ordering only, never shown. Null: an older shape. */
+    val sentAtMs: Long? = null,
 )
 
 sealed class RoomControl {
@@ -96,23 +109,30 @@ sealed class RoomControl {
 }
 
 /**
- * The PROPOSED frames, both on `/v1/stream/{room}` (the core team's to
- * accept or reshape; until then no core sends or takes them):
+ * The frames, both on `/v1/stream/{room}` (shape accepted by the core
+ * team 2026-11-16; no released core sends or takes them yet):
  *
- * Server → room, after `ready` and on every change to this room's music,
- * timers or a fire going off here; gated on the ability [ABILITY]:
+ * Server → room, once after `ready` and then on change only (at most about
+ * once a second); gated on the ability [ABILITY]:
  *
- *     {"type":"room_display",
+ *     {"type":"room_display","sent_at_ms":N,
  *      "now_playing": null | {"state":"play"|"pause","title":..,"artist":..,"album":..,
- *                             "source":..,"art":"/v1/...","duration_sec":N,"elapsed_sec":N,
+ *                             "source":"library"|"radio"|"sleep"|"podcast"|"audiobook"|"other",
+ *                             "art":"/v1/music/cover/{id}"|null,"duration_sec":N,"elapsed_sec":N,
  *                             "controls":["pause","resume","skip","previous"]},
  *      "timers": [{"id":N,"kind":"timer"|"alarm","label":..,"remaining_ms":N,"total_ms":N}],
  *      "ringing": null | {"fire_id":N,"kind":"timer"|"alarm","label":..}}
  *
+ * Between frames the phone moves things on itself: `elapsed_sec` while
+ * the state is "play", each `remaining_ms` always ([RoomDisplayModel]). A
+ * frame older than the last one applied (`sent_at_ms`) is dropped
+ * ([newer]). In a group every member gets the group's `now_playing` and
+ * its controls act on the group. Reminders are never sent.
+ *
  * Room → server, only when `ready.features` lists [ABILITY]:
  *
  *     {"type":"room_control","action":"pause"|"resume"|"skip"|"previous"}
- *     {"type":"room_control","action":"stop_ringing","fire_id":N}
+ *     {"type":"room_control","action":"stop_ringing","fire_id":N}   (a timer or an alarm)
  */
 object RoomDisplayFeed {
     /** The ability name (hello `supports`, and the core's `ready.features`). */
@@ -125,6 +145,7 @@ object RoomDisplayFeed {
     fun parse(o: JsonObject): RoomFeed {
         val np = o["now_playing"] as? JsonObject
         return RoomFeed(
+            sentAtMs = o.long("sent_at_ms"),
             nowPlaying = np?.let(::nowPlaying),
             timers = (o["timers"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::timer) }.take(MAX_TIMERS),
             ringing = (o["ringing"] as? JsonObject)?.let(::ringing),
@@ -146,7 +167,7 @@ object RoomDisplayFeed {
             title = o.text("title"),
             artist = o.text("artist"),
             album = o.text("album"),
-            source = o.text("source"),
+            source = MediaSource.of(o.str("source")),
             art = o.str("art")?.takeIf(::isArtPath),
             durationSec = o.num("duration_sec")?.takeIf { it > 0 },
             elapsedSec = o.num("elapsed_sec")?.takeIf { it >= 0 },
@@ -175,6 +196,15 @@ object RoomDisplayFeed {
         "timer" -> TimerKind.TIMER
         "alarm" -> TimerKind.ALARM
         else -> null
+    }
+
+    /** Whether [incoming] may replace [current]: frames can overtake each
+     *  other, so one sent before the frame on screen is dropped. A frame
+     *  (or a screen) without `sent_at_ms` is applied as it comes. */
+    fun newer(current: RoomFeed?, incoming: RoomFeed): Boolean {
+        val was = current?.sentAtMs ?: return true
+        val now = incoming.sentAtMs ?: return true
+        return now >= was
     }
 
     /** Only a plain path on the room's own server: the room never follows

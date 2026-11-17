@@ -72,7 +72,7 @@ object RoomDisplayModel {
 
     data class NowPlaying(
         val title: String,
-        /** "artist · album", or the stream's source; null: neither known. */
+        /** "artist · album", or what kind of thing is playing; null: none. */
         val subtitle: String?,
         val art: String?,
         val playing: Boolean,
@@ -179,7 +179,7 @@ object RoomDisplayModel {
         val duration = np.durationSec
         return NowPlaying(
             title = title,
-            subtitle = listOfNotNull(np.artist, np.album).joinToString(" · ").ifEmpty { np.source },
+            subtitle = listOfNotNull(np.artist, np.album).joinToString(" · ").ifEmpty { sourceWords(np.source) },
             art = np.art,
             playing = playing,
             playPause = wanted.takeIf { linked && it in np.controls },
@@ -188,6 +188,16 @@ object RoomDisplayModel {
             volume = volume?.coerceIn(0, 100)?.takeIf { linked },
             progress = if (elapsed != null && duration != null) (elapsed / duration).toFloat().coerceIn(0f, 1f) else null,
         )
+    }
+
+    /** Plain words for what is playing when there is no artist or album
+     *  to show; null when the words would add nothing ("library", "other"). */
+    fun sourceWords(source: MediaSource?): String? = when (source) {
+        MediaSource.RADIO -> "radio"
+        MediaSource.SLEEP -> "sleep sounds"
+        MediaSource.PODCAST -> "podcast"
+        MediaSource.AUDIOBOOK -> "audiobook"
+        MediaSource.LIBRARY, MediaSource.OTHER, null -> null
     }
 
     /** "pasta timer", "timer", "7 am alarm", "alarm". */

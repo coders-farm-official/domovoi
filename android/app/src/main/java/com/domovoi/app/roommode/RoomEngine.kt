@@ -441,8 +441,11 @@ class RoomEngine(private val context: Context, private val store: RoomStore) : R
             is RoomProtocol.ServerFrame.DropinEnd -> onDropinEnd()
             // Only from a core that said it sends it: anything else is not
             // this room's to show.
-            is RoomProtocol.ServerFrame.Display ->
-                _feed.value = if (RoomDisplayFeed.ABILITY in features) f.feed.copy(receivedAt = SystemClock.elapsedRealtime()) else null
+            is RoomProtocol.ServerFrame.Display -> when {
+                RoomDisplayFeed.ABILITY !in features -> _feed.value = null
+                // One sent before the frame on screen: dropped.
+                RoomDisplayFeed.newer(_feed.value, f.feed) -> _feed.value = f.feed.copy(receivedAt = SystemClock.elapsedRealtime())
+            }
             is RoomProtocol.ServerFrame.Pong -> Unit
             is RoomProtocol.ServerFrame.Other -> Log.d(TAG, "ignored frame ${f.type}")
         }
