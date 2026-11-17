@@ -216,6 +216,68 @@ final class FriendHousesGateTests: XCTestCase {
         XCTAssertEqual(60_000, FriendHousesGate.pollMs)
     }
 
+    /// Room mode: the gate stops and hides, every Friend Houses
+    /// notification goes, nothing reads while it runs; leaving starts it
+    /// again. Notifications only while the app is on screen.
+    func testRoomModeStopsHidesAndTakesBackThenLeavingStartsAgain() async {
+        let fh = FhHouse()
+        fh.answer("GET", "/api/friend-houses", FhHouse.status("on", unread: 1))
+        let lock = HouseholdLock()
+        let (container, _) = fhContainer(fh, server: server, lock: lock)
+        let centre = FakeAlertsCentre()
+        await centre.add(AlertsRequest(
+            identifier: fhNoteIdentifier(serverKey: "k", house: String(repeating: "ab", count: 32)),
+            title: "The Smiths", body: "words", threadIdentifier: FhNotificationSink.thread
+        ))
+        let api = FriendHousesApi(client: container.client)
+        let alerts = FriendHouseAlerts(
+            api: api, store: FhSeenBook(place: SavedStateBox()),
+            sink: FhNotificationSink(centre: centre, roomMode: { lock.roomModeActive }),
+            roomMode: { lock.roomModeActive }
+        )
+        let gate = FriendHousesGate(container: container, api: api)
+        defer { gate.stop() }
+        gate.start(alerts: alerts)
+        await settleUntil({ gate.reads == 1 }, "the first read")
+        XCTAssertNotNil(gate.shownFor(server))
+
+        lock.setRoomModeActive(true)
+        gate.pauseForRoomMode()
+        XCTAssertNil(gate.shownFor(server), "a room still shows Friend houses")
+        await settleUntil({ centre.log.current.delivered.isEmpty }, "the notification taken back")
+        gate.refresh()
+        gate.inputsMayHaveChanged()
+        await everythingLands()
+        XCTAssertEqual(1, statusReads(fh), "a room asked the server")
+
+        lock.setRoomModeActive(false)
+        gate.resumeAfterRoomMode(foreground: true)
+        await settleUntil({ gate.reads == 2 }, "the read after room mode")
+        XCTAssertNotNil(gate.shownFor(server))
+    }
+
+    func testNothingIsCheckedForNotificationsWhileTheAppIsAway() async {
+        let fh = FhHouse()
+        fh.answer("GET", "/api/friend-houses", FhHouse.status("on", unread: 1))
+        fh.answer("GET", "/api/friend-houses/conversations", #"{"conversations":[],"unread":1}"#)
+        let (container, _) = fhContainer(fh, server: server)
+        let book = FhSeenBook(place: SavedStateBox())
+        let api = FriendHousesApi(client: container.client)
+        let alerts = FriendHouseAlerts(api: api, store: book, sink: FhNotificationSink(centre: FakeAlertsCentre()))
+        let gate = FriendHousesGate(container: container, api: api)
+        defer { gate.stop() }
+        gate.start(alerts: alerts)
+        await settleUntil({ gate.reads == 1 }, "the read while away")
+        await everythingLands()
+        XCTAssertNil(book.read(serverKey: AppContainer.serverKey(server) ?? ""), "checked while the app was away")
+        gate.setForeground(true)
+        gate.refresh()
+        await settleUntil({ gate.reads == 2 }, "the read on screen")
+        await settleUntil(
+            { book.read(serverKey: AppContainer.serverKey(server) ?? "") != nil }, "the check on screen"
+        )
+    }
+
     // MARK: - the gate in the shell
 
     private func shell(_ container: AppContainer) -> ShellModel {

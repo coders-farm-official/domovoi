@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 // ---------------------------------------------------------------------------
 // Friend Houses notifications on the iPhone, with UserNotifications at arm's
@@ -67,14 +68,22 @@ public struct FhNote: Equatable, Sendable {
 
 public enum FhNotify {
 
-    /// Bidi embeddings, overrides and isolates, and the marks: the server
-    /// strips them already; a notification never carries one either.
-    static func isBidi(_ c: UInt32) -> Bool {
-        c == 0x200E || c == 0x200F || c == 0x061C || (0x202A...0x202E).contains(c) || (0x2066...0x2069).contains(c)
-    }
-
-    static func isControl(_ c: UInt32) -> Bool {
-        c < 0x20 || (0x7F...0x9F).contains(c) || isBidi(c)
+    /// What a notification never carries (Android 22b3b9c8's `isUnsafe`):
+    /// control characters (C0, DEL, C1), every format character (Unicode
+    /// Cf: the bidi marks, embeddings, overrides and isolates, zero-width
+    /// spaces and joiners U+200B-200D, U+2060-2064, the BOM U+FEFF, the tag
+    /// characters U+E0001-E007F, the soft hyphen), and the line and
+    /// paragraph separators U+2028/2029. The server strips the bidi and
+    /// control ones already.
+    static func isUnsafe(_ scalar: Unicode.Scalar) -> Bool {
+        let c = scalar.value
+        switch scalar.properties.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator: return true
+        default: break
+        }
+        return c < 0x20 || (0x7F...0x9F).contains(c) || (0x200B...0x200F).contains(c)
+            || (0x202A...0x202E).contains(c) || (0x2060...0x206F).contains(c) || c == 0xFEFF
+            || (0xE0000...0xE007F).contains(c) || c == 0x061C
     }
 
     /// Message text for a notification: control characters out, line
@@ -87,7 +96,7 @@ public enum FhNotify {
                 out.append(scalar)
             } else if c == 0x09 || c == 0x0D {
                 out.append(" ")
-            } else if isControl(c) {
+            } else if isUnsafe(scalar) {
                 continue
             } else {
                 out.append(scalar)
@@ -149,6 +158,9 @@ public protocol FhSink: Sendable {
     func post(serverKey: String, note: FhNote) async
     /// Take back `house`'s notification: its messages were read.
     func withdraw(serverKey: String, house: String) async
+    /// Take back every Friend Houses notification, delivered or pending, for
+    /// any server: the phone is becoming a room.
+    func withdrawAll() async
 }
 
 /// What the check remembers per server between runs: the unread total it
@@ -176,6 +188,8 @@ public enum FhTick: Equatable, Sendable {
     case quiet
     /// The first look at this server: what was there is the baseline.
     case baseline
+    /// The phone is a room: nothing asked, nothing posted.
+    case roomMode
     /// Friend Houses is off or not offered here: nothing more asked.
     case hidden
     /// No answer.
@@ -193,25 +207,36 @@ public final class FriendHouseAlerts: Sendable {
     let serverKey: @Sendable (String) -> String?
     /// Never handed a name, a title or a message.
     let log: @Sendable (String) -> Void
+    /// The phone is a room (``HouseholdLock``): nothing is asked or posted.
+    let roomMode: @Sendable () -> Bool
 
     public init(
         api: FriendHousesApi,
         store: any FhSeenStore,
         sink: any FhSink,
         serverKey: @Sendable @escaping (String) -> String? = { AppContainer.serverKey($0) },
+        roomMode: @Sendable @escaping () -> Bool = { false },
         log: @Sendable @escaping (String) -> Void = { _ in }
     ) {
         self.api = api
         self.store = store
         self.sink = sink
         self.serverKey = serverKey
+        self.roomMode = roomMode
         self.log = log
+    }
+
+    /// Room mode began: every Friend Houses notification goes.
+    public func withdrawAll() async {
+        await sink.withdrawAll()
     }
 
     /// After a status read for `server`. Never throws.
     public func afterStatus(_ availability: FhAvailability, server: String) async -> FhTick {
         let result: FhTick
-        if ServerCredentials.isBlank(server) || serverKey(server) == nil {
+        if roomMode() {
+            result = .roomMode
+        } else if ServerCredentials.isBlank(server) || serverKey(server) == nil {
             result = .noServer
         } else if !(await sink.canPost()) {
             result = .notificationsOff
@@ -290,6 +315,8 @@ public final class FriendHouseAlerts: Sendable {
                       count: news.count, newestId: newest.id
                   )
             else { continue }
+            // A room that began while this check ran posts nothing.
+            if roomMode() { break }
             await sink.post(serverKey: key, note: note)
             posted += 1
         }
@@ -309,6 +336,15 @@ public func fhNoteIdentifier(serverKey: String, house: String) -> String {
     "friend_house:\(serverKey):\(house)"
 }
 
+/// Whether a Friend Houses notification's tap may open Friend houses: only
+/// on the server that sent it (``AlertsTapTarget/chatThread(serverKey:thread:title:)``'s
+/// rule). A tap from another house, or one with no key, is refused: its
+/// inbox is not this house's.
+public func fhTapAllowed(serverKey: String?, activeServer: String) -> Bool {
+    guard let serverKey, let active = AppContainer.serverKey(activeServer) else { return false }
+    return serverKey == active
+}
+
 /// Friend Houses' notifications, through the alerts' seam over
 /// `UNUserNotificationCenter` (``AlertsNotificationCentre``): their own
 /// thread, plain strings only, and a tap that opens Friend houses.
@@ -320,10 +356,20 @@ public struct FhNotificationSink: FhSink {
 
     public static let thread = "friend_houses"
 
-    let centre: any AlertsNotificationCentre
+    /// The notification category: its hidden-previews placeholder is what a
+    /// locked phone with previews hidden shows instead of the message (the
+    /// `read` level carries one) — Android's public version, word for word.
+    public static let category = "friend_houses"
+    public static let hiddenPreviewsPlaceholder = "A message from a friend house"
+    /// Every identifier this sink posts begins with it (any server).
+    public static let identifierPrefix = "friend_house:"
 
-    public init(centre: any AlertsNotificationCentre) {
+    let centre: any AlertsNotificationCentre
+    let roomMode: @Sendable () -> Bool
+
+    public init(centre: any AlertsNotificationCentre, roomMode: @Sendable @escaping () -> Bool = { false }) {
         self.centre = centre
+        self.roomMode = roomMode
     }
 
     public func canPost() async -> Bool {
@@ -331,8 +377,41 @@ public struct FhNotificationSink: FhSink {
     }
 
     public func post(serverKey: String, note: FhNote) async {
+        // A room shows no household message, whoever asks.
+        guard !roomMode() else { return }
         await centre.add(Self.request(serverKey: serverKey, note: note))
     }
+
+    public func withdrawAll() async {
+        let delivered = Self.ours(await centre.deliveredIdentifiers())
+        if !delivered.isEmpty { await centre.removeDelivered(delivered) }
+        let pending = Self.ours(await centre.pendingIdentifiers())
+        if !pending.isEmpty { await centre.removePending(pending) }
+    }
+
+    /// Of these identifiers, the Friend Houses ones (any server), once each.
+    public static func ours(_ identifiers: [String]) -> [String] {
+        var seen: Set<String> = []
+        return identifiers.filter { $0.hasPrefix(identifierPrefix) && seen.insert($0).inserted }
+    }
+
+    #if os(iOS)
+    /// Register the category with its placeholder, keeping every other
+    /// category the app has. The app calls it once; a package test cannot
+    /// (`UNUserNotificationCenter` needs a bundle). iPhone only: the macOS
+    /// the package tests build for has no use for it.
+    public static func registerCategory(on centre: UNUserNotificationCenter = .current()) async {
+        let ours = UNNotificationCategory(
+            identifier: category,
+            actions: [],
+            intentIdentifiers: [],
+            hiddenPreviewsBodyPlaceholder: hiddenPreviewsPlaceholder,
+            options: []
+        )
+        let others = await centre.notificationCategories().filter { $0.identifier != category }
+        centre.setNotificationCategories(others.union([ours]))
+    }
+    #endif
 
     public func withdraw(serverKey: String, house: String) async {
         let id = fhNoteIdentifier(serverKey: serverKey, house: house)
@@ -347,7 +426,8 @@ public struct FhNotificationSink: FhSink {
             title: note.title,
             body: note.text,
             threadIdentifier: thread,
-            userInfo: [AlertsPayloadKey.route: FriendHousesGate.route, AlertsPayloadKey.serverKey: serverKey]
+            userInfo: [AlertsPayloadKey.route: FriendHousesGate.route, AlertsPayloadKey.serverKey: serverKey],
+            categoryIdentifier: category
         )
     }
 }

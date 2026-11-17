@@ -267,7 +267,9 @@ public struct FhMessage: Equatable, Sendable, Decodable {
         direction = c.fhOptional(String.self, .direction) ?? "in"
         body = c.fhOptional(String.self, .body)
         state = c.fhOptional(String.self, .state) ?? ""
-        sentAt = c.fhInt64(.sentAt)
+        // Another house's number, stored unchecked by ours: a time outside
+        // 0...9999-12-31 is no time at all (``fhEpochSec(_:)``).
+        sentAt = fhEpochSec(c.fhInt64(.sentAt))
         createdAt = c.fhOptional(String.self, .createdAt)
         deliveredAt = c.fhOptional(String.self, .deliveredAt)
         lastError = c.fhOptional(String.self, .lastError)

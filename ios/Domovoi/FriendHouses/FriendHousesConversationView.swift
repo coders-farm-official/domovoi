@@ -193,7 +193,8 @@ struct FhMessageMeta: View {
 
     private var when: String {
         let now = Int64((Date().timeIntervalSince1970 * 1000).rounded())
-        var parts = [relTime(message.createdAt, nowMs: now)]
+        // "—" for a time that is missing or out of range, never a trap.
+        var parts = [fhRelTime(message.createdAt, nowMs: now)]
         if let theirs = fhTheirClock(message) { parts.append(theirs) }
         return parts.joined(separator: " · ")
     }

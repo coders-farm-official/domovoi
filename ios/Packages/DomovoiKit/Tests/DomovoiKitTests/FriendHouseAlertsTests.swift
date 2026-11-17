@@ -45,6 +45,7 @@ final class FriendHouseAlertsTests: XCTestCase {
         func canPost() async -> Bool { allowed }
         func post(serverKey: String, note: FhNote) async { lock.withLock { _posts.append(note) } }
         func withdraw(serverKey: String, house: String) async { lock.withLock { _withdrawn.append(house) } }
+        func withdrawAll() async { lock.withLock { _withdrawn.append("*") } }
     }
 
     private final class Store: FhSeenStore, @unchecked Sendable {
@@ -58,7 +59,7 @@ final class FriendHouseAlertsTests: XCTestCase {
     private let store = Store()
     private let logs = Shared<[String]>([])
 
-    private func alerts(_ fh: FhHouse) -> FriendHouseAlerts {
+    private func alerts(_ fh: FhHouse, room: Shared<Bool> = Shared(false)) -> FriendHouseAlerts {
         let (container, _) = fhContainer(fh, server: server)
         let logs = self.logs
         return FriendHouseAlerts(
@@ -66,6 +67,7 @@ final class FriendHouseAlertsTests: XCTestCase {
             store: store,
             sink: sink,
             serverKey: { _ in "k" },
+            roomMode: { room.current },
             log: { line in logs.mutate { $0.append(line) } }
         )
     }
@@ -322,7 +324,92 @@ final class FriendHouseAlertsTests: XCTestCase {
         XCTAssertEqual("aaaa1111", request.userInfo[AlertsPayloadKey.serverKey])
         XCTAssertNil(request.afterSeconds)
         // The tap lands on Friend houses, and only through the allow-list.
-        XCTAssertEqual(AlertsTapTarget.friendHouses, alertsTapTarget(request.userInfo as [AnyHashable: Any]))
+        XCTAssertEqual(
+            AlertsTapTarget.friendHouses(serverKey: "aaaa1111"),
+            alertsTapTarget(request.userInfo as [AnyHashable: Any])
+        )
+        // The category with the hidden-previews placeholder.
+        XCTAssertEqual(FhNotificationSink.category, request.categoryIdentifier)
+        XCTAssertEqual("A message from a friend house", FhNotificationSink.hiddenPreviewsPlaceholder)
+    }
+
+    // MARK: - security review (Android 22b3b9c8)
+
+    /// Every format character (Cf), the line and paragraph separators and the
+    /// tag characters go from notification titles and bodies; line breaks
+    /// stay.
+    func testZeroWidthFormatAndSeparatorCharactersGoToo() throws {
+        let sneaky = "a\u{200B}b\u{200C}c\u{200D}d\u{2060}e\u{2061}f\u{2064}g\u{FEFF}h\u{00AD}i\u{2028}j\u{2029}k"
+            + "\u{E0041}\u{E007F}l"
+        XCTAssertEqual("abcdefghijkl", FhNotify.cleanText(sneaky))
+        XCTAssertEqual("one\ntwothree", FhNotify.cleanText("one\ntwo\u{202E}three\u{2066}"))
+        for c: UInt32 in [0x200B, 0x200C, 0x200D, 0x2060, 0x2064, 0xFEFF, 0x2028, 0x2029, 0xE0001, 0xE0020, 0x202A, 0x061C] {
+            XCTAssertTrue(FhNotify.isUnsafe(try XCTUnwrap(Unicode.Scalar(c))), String(c, radix: 16))
+        }
+        XCTAssertFalse(FhNotify.isUnsafe("a"))
+        XCTAssertFalse(FhNotify.isUnsafe("\u{1F600}"))
+        let n = try XCTUnwrap(FhNotify.noteFor(
+            alert: "sender", house: smiths, name: "The\u{200B} Smi\u{FEFF}ths\u{2028}", body: nil, count: 1, newestId: 1
+        ))
+        XCTAssertEqual("A message from The Smiths", n.title)
+        let r = try XCTUnwrap(FhNotify.noteFor(
+            alert: "read", house: smiths, name: "\u{2060}The Patels", body: "hi\u{200D} there", count: 1, newestId: 1
+        ))
+        XCTAssertEqual("The Patels", r.title)
+        XCTAssertEqual("hi there", r.text)
+    }
+
+    func testARoomPostsNothingAndAsksNothing() async {
+        let fh = FhHouse()
+        let room = Shared(true)
+        let a = alerts(fh, room: room)
+        looked()
+        inbox(fh, [(smiths, 1, 10)])
+        friends(fh, smiths: "read")
+        messages(fh, smiths, [(10, "unread", "x")])
+        let tick = await a.afterStatus(status(1), server: server)
+        XCTAssertEqual(.roomMode, tick)
+        XCTAssertEqual([], fh.seen.current)
+        XCTAssertTrue(sink.posts.isEmpty)
+        // And the sink itself refuses in a room, whoever asks.
+        let centre = FakeAlertsCentre()
+        let roomSink = FhNotificationSink(centre: centre, roomMode: { true })
+        await roomSink.post(serverKey: "k", note: FhNote(house: smiths, title: "t", text: "x", count: 1, newestId: 1))
+        XCTAssertTrue(centre.added.isEmpty)
+    }
+
+    /// Entering room mode takes back every Friend Houses notification,
+    /// delivered or pending, for any server, and nothing else.
+    func testEnteringRoomModeTakesBackOnlyOurNotifications() async {
+        XCTAssertEqual(
+            ["friend_house:k:\(smiths)", "friend_house:z:\(patels)"],
+            FhNotificationSink.ours([
+                "timer_fire:k:1", "friend_house:k:\(smiths)", "help_delivery:k:2",
+                "friend_house:z:\(patels)", "friend_house:k:\(smiths)",
+            ])
+        )
+        let centre = FakeAlertsCentre()
+        let sink = FhNotificationSink(centre: centre)
+        await centre.add(AlertsRequest(identifier: "timer_fire:k:1", title: "t", threadIdentifier: "timer_fires"))
+        await sink.post(serverKey: "k", note: FhNote(house: smiths, title: "The Smiths", text: "x", count: 1, newestId: 1))
+        await centre.add(AlertsRequest(
+            identifier: fhNoteIdentifier(serverKey: "z", house: patels), title: "p", threadIdentifier: "friend_houses",
+            afterSeconds: 60
+        ))
+        await sink.withdrawAll()
+        XCTAssertEqual(["timer_fire:k:1"], await centre.deliveredIdentifiers())
+        XCTAssertEqual([], await centre.pendingIdentifiers())
+        XCTAssertEqual(["friend_house:k:\(smiths)"], centre.log.current.removedDelivered)
+        XCTAssertEqual([fhNoteIdentifier(serverKey: "z", house: patels)], centre.log.current.removedPending)
+    }
+
+    /// A tap opens Friend houses only on the server that sent it.
+    func testATapFromAnotherHouseOpensNothing() throws {
+        let key = try XCTUnwrap(AppContainer.serverKey(server))
+        XCTAssertTrue(fhTapAllowed(serverKey: key, activeServer: server))
+        XCTAssertFalse(fhTapAllowed(serverKey: key, activeServer: "http://10.0.0.99:6369"))
+        XCTAssertFalse(fhTapAllowed(serverKey: nil, activeServer: server))
+        XCTAssertFalse(fhTapAllowed(serverKey: key, activeServer: ""))
     }
 
     func testTheBookKeepsHouseKeysAndNumbersOnly() throws {

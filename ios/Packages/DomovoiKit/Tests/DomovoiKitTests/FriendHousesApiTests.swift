@@ -513,12 +513,13 @@ final class FriendHousesApiTests: XCTestCase {
             ["Online", "Last seen 2h ago", "Not reached yet", nil, nil],
             friends.map { fhPresence($0, nowMs: now) }
         )
+        // A last-seen that is not a time says nothing (Android 22b3b9c8).
         XCTAssertEqual(true, friends.first?.online)
         XCTAssertEqual("2026-11-17T19:02:10+00:00", friends.first?.lastSeenAt)
         // Online wins over an old last-seen; a last-seen that is not a time
         // reads as never reached rather than as a broken line.
         XCTAssertEqual("Online", fhPresence(FhFriend(online: true, lastSeenAt: nil), nowMs: now))
-        XCTAssertEqual("Not reached yet", fhPresence(FhFriend(online: false, lastSeenAt: "soon"), nowMs: now))
+        XCTAssertNil(fhPresence(FhFriend(online: false, lastSeenAt: "soon"), nowMs: now))
         XCTAssertEqual("Last seen just now", FhWords.lastSeen(relTime("2026-11-17T19:12:00+00:00", nowMs: now)))
         // Never about a person: no "home", no "away", no "is online".
         for words in [FhWords.online, FhWords.notReachedYet, FhWords.lastSeen("2h ago")] {
