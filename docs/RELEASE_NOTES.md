@@ -4,6 +4,22 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 1.4.0 (unreleased) — Documents: Download gives a Word file
+
+- **What changed.** In Files, Documents, **Download** on a document made in
+  Domovoi's editor now offers **Word (.docx)** (the default), **PDF** (the
+  editor's print or save-as-PDF) and **Web page (.html)**. Before, it saved
+  the stored `.html` page, which looked like a broken download. Selecting
+  several files and choosing **Download as zip** now puts such documents in
+  the zip as `.docx` too. Markdown, text, spreadsheets, PDFs and pictures
+  download as before.
+- **Document editor: paste a picture.** Pasting a picture from the clipboard
+  (a screenshot, "Copy image") or dropping a picture file onto the page puts
+  it in at the cursor, the same as Insert photo. Text copied together with a
+  picture pastes as before.
+- **What to know.** The phone apps' own Files lists still save a formatted
+  document as `.html`; the zip is fixed on the server for them.
+
 ## 1.4.0 (unreleased) — the room display: a phone in room mode shows the room
 
 - **What changed.** A phone or tablet in room mode can show what its room
