@@ -17,13 +17,17 @@ import SwiftUI
 /// this screen differs from ``PrintSheetView``, which does **not** cancel a
 /// print the server has already accepted.
 ///
-/// ### What is not here, and why there is no control for it
+/// ### "What does it say?"
 ///
-/// **"What does it say?"** Android's `ScanSheet` takes an `onWhatDoesItSay`
-/// parameter and no caller passes one (`ScanSheet.kt:51,178-180`); the button
-/// is unreachable in the shipping app. Porting it would ship a control on the
-/// strength of a seam nobody wired. Left out, and written up in
-/// `design-notes/ios/overnight/printing/DECISIONS.md` as an Android finding.
+/// Once the scan is saved the server reads it. **What does it say?** is
+/// drawn under the saved line when the scan has been read and words were
+/// found, or while it is being read — then with the progress in its label —
+/// and never for a scan the server can't read or whose reading failed
+/// (``scanReadShown(readable:read:)``, the dashboard's gate). Tapping it
+/// closes this sheet and opens ``ScanReadSheet`` in its place, as Android's
+/// `onWhatDoesItSay` does (`FilesScreen.kt`): the screen behind owns both.
+///
+/// ### What is not here, and why there is no control for it
 ///
 /// **`Open` on a finished scan.** The folder behind this sheet reloads when
 /// the scan lands, and tapping the new `.pdf` row in Documents is already the
@@ -50,6 +54,9 @@ struct ScanSheetView: View {
     /// site, which it already was — `FileSheets` builds it in `body`.
     let onSaved: @MainActor () -> Void
     let onClose: () -> Void
+    /// "What does it say?": close this sheet and open the reading one for
+    /// this scan.
+    let onRead: (PrintingScanJob) -> Void
 
     @State private var scan: PrintingScanModel?
 
@@ -209,6 +216,27 @@ struct ScanSheetView: View {
                     .buttonStyle(PrintingOutlineButtonStyle())
                     .disabled(scan.busy)
             }
+            if let job = scan.scan, job.state == "done" {
+                ScanReadButton(job: job) { onRead(job) }
+            }
+        }
+    }
+}
+
+/// **What does it say?** on a saved scan: drawn only when the gate says so
+/// (``PrintingScanJob/offersRead``), and while the scan is being read its
+/// label carries the progress — the sheet keeps polling the scan for exactly
+/// that (``PrintingScanJob/followsRead``).
+struct ScanReadButton: View {
+
+    let job: PrintingScanJob
+    let open: () -> Void
+
+    var body: some View {
+        if job.offersRead {
+            Button(scanReadButtonLabel(readable: job.readable, read: job.read)) { open() }
+                .buttonStyle(PrintingOutlineButtonStyle())
+                .accessibilityHint(ScanReadStrings.hint)
         }
     }
 }

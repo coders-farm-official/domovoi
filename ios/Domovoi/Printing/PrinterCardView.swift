@@ -767,17 +767,64 @@ struct PrinterJobsList: View {
             Text(PrintingStrings.loadingJobs)
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
-        } else if rows?.isEmpty == true {
-            Text(PrintingStrings.nothingPrintedYet)
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
         } else {
             VStack(alignment: .leading, spacing: 8) {
+                if rows?.isEmpty == true {
+                    Text(PrintingStrings.nothingPrintedYet)
+                        .font(.caption)
+                        .foregroundStyle(Color.fgMuted)
+                }
                 ForEach(rows ?? []) { job in
                     PrinterJobRow(job: job, printerID: printerID, panel: panel)
                 }
+                // The scans made on it, under the prints, each with "What
+                // does it say?" once read or while being read — as on the
+                // dashboard and Android.
+                ForEach(panel.scans[printerID] ?? []) { scan in
+                    PrinterScanRow(scan: scan, panel: panel)
+                }
             }
         }
+    }
+}
+
+/// A scan in a printer's recent jobs: "scan · done · 2 pages · Scan
+/// 2026-10-21 15.40.pdf · Alex · 3d ago", its error, and **What does it
+/// say?** where the gate allows (Android's `ScanLogRow`).
+struct PrinterScanRow: View {
+
+    let scan: PrintingScanJob
+    let panel: PrintersPanelModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(scan.state == "failed" ? Color.errInk : Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                if let said = scan.error, !said.isEmpty {
+                    Text(said)
+                        .font(.caption)
+                        .foregroundStyle(Color.errInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            // One stop for the row's words; the button stays its own.
+            .accessibilityElement(children: .combine)
+            ScanReadButton(job: scan) { panel.openRead(scan) }
+        }
+    }
+
+    private var line: String {
+        // No time at all rather than ``relTime(_:nowMs:)``'s dash for a row
+        // that carries none.
+        let age = scan.createdAt == nil
+            ? ""
+            : relTime(scan.createdAt, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        return [scanLogLine(scan), age].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }
 

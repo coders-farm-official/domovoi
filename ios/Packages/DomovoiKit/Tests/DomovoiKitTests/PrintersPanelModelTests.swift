@@ -249,7 +249,17 @@ final class PrintersPanelModelTests: XCTestCase {
                        "error":"The printer said: cover open."},
                       {"id":3,"printer_id":1,"title":"notes","state":"printing","pages":3,"pages_done":1,
                        "progress":"printing · 1 of 3","can_cancel":true}],
-                     "scans":[]}
+                     "scans":[
+                      {"id":"0123456789abcdef0123456789abcd01","state":"done","pages":2,
+                       "name":"Scan 2026-11-17 09.00.pdf","who":"Alex","readable":true,
+                       "read":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1","state":"done","pages":2,
+                               "pages_done":2,"readable":true,"reading":false}},
+                      {"id":"0123456789abcdef0123456789abcd02","state":"done","pages":1,
+                       "name":"Scan 2026-11-16 18.20.pdf","readable":false,
+                       "read":{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2","state":"failed",
+                               "readable":false,"reading":false,"error":"The scan couldn't be opened."}},
+                      {"id":"0123456789abcdef0123456789abcd03","state":"done","pages":1,
+                       "name":"Scan 2026-10-01 08.00.pdf","readable":false,"read":null}]}
                     """)
 
                 case ("POST", "/api/print/jobs/3/cancel"):
@@ -570,6 +580,35 @@ final class PrintersPanelModelTests: XCTestCase {
 
         model.toggleJobs(model.rows[0])
         XCTAssertFalse(model.showingJobs.contains(1))
+        model.stop()
+    }
+
+    /// The same read brings the scans made on the printer, each with its
+    /// reading; "What does it say?" opens for the read one and for no other
+    /// (Android's `ScanLogRow`, 54d46869).
+    func testRecentJobsBringTheScansAndOnlyAReadOneOpensWhatDoesItSay() async throws {
+        let (model, _, _) = rig()
+        model.start()
+        await settleUntil({ model.rows.count == 2 }, "the list")
+        model.toggleJobs(model.rows[0])
+        await settleUntil({ model.scans[1] != nil }, "the job log")
+
+        let scans = try XCTUnwrap(model.scans[1])
+        XCTAssertEqual(scans.map(\.name), [
+            "Scan 2026-11-17 09.00.pdf", "Scan 2026-11-16 18.20.pdf", "Scan 2026-10-01 08.00.pdf",
+        ])
+        XCTAssertEqual(scans.map(\.offersRead), [true, false, false])
+        XCTAssertEqual(scanLogLine(scans[0]), "scan · done · 2 pages · Scan 2026-11-17 09.00.pdf · Alex")
+
+        // A failed read and a scan never read open nothing.
+        model.openRead(scans[1])
+        model.openRead(scans[2])
+        XCTAssertNil(model.readingScan)
+
+        model.openRead(scans[0])
+        XCTAssertEqual(model.readingScan?.id, "0123456789abcdef0123456789abcd01")
+        model.closeRead()
+        XCTAssertNil(model.readingScan)
         model.stop()
     }
 

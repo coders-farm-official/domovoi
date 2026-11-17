@@ -19,6 +19,10 @@ enum FileSheet: Identifiable {
     case printFile(FileEntry)
     /// Scanning into Documents. No file of its own — it makes one.
     case scanIn
+    /// "What does it say?" for the scan the Scan sheet just saved: that
+    /// sheet closes and this one opens in its place (Android's
+    /// `onWhatDoesItSay`, `FilesScreen.kt`).
+    case readScan(PrintingScanJob)
 
     /// The case **and** the file, so that opening a second file of the same
     /// kind replaces the sheet's content rather than keeping the first one's:
@@ -32,6 +36,7 @@ enum FileSheet: Identifiable {
         case .share(_, let name): return "share:\(name)"
         case .printFile(let entry): return "print:\(entry.rel)"
         case .scanIn: return "scan"
+        case .readScan(let scan): return "readscan:\(scan.id)"
         }
     }
 }
@@ -51,6 +56,13 @@ struct FileSheetView: View {
     /// Close whichever printing sheet is up. The other five close through
     /// ``FilesModel``, which owns their state; these two are the screen's.
     var closePrinting: () -> Void = {}
+
+    /// "What does it say?" from the Scan sheet: close it, open the reading.
+    var openScanRead: (PrintingScanJob) -> Void = { _ in }
+
+    /// Close the "What does it say?" sheet. The screen's own, like the two
+    /// printing sheets.
+    var closeScanRead: () -> Void = {}
 
     var body: some View {
         switch which {
@@ -87,9 +99,12 @@ struct FileSheetView: View {
                     // folder is re-read, not because the sheet guessed what
                     // the server wrote.
                     onSaved: { files.entries.reload(fresh: true) },
-                    onClose: closePrinting
+                    onClose: closePrinting,
+                    onRead: openScanRead
                 )
             }
+        case .readScan(let scan):
+            ScanReadSheet(scan: scan, model: model, onClose: closeScanRead)
         }
     }
 }
