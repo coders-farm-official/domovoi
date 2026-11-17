@@ -229,6 +229,44 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
+    /// The whole way through: a house whose manifest has a third party
+    /// declaring `stations` and our image plugin with no publisher (an older
+    /// server) offers neither screen — not on Home's grid, not on a bar that
+    /// had them pinned — and an open Stations goes home. The same house with
+    /// our two plugins offers both.
+    func testAManifestWithoutOurPluginsOffersNeitherScreen() async {
+        let notOurs = #"""
+            {"server_version":"1.3.0","features":{"ai":true},"plugins":[
+              {"slug":"skywave","name":"Skywave","publisher":"Someone Else","android_capabilities":["stations"]},
+              {"slug":"imagegen","name":"Image Generation","android_capabilities":["imagegen"]}
+            ]}
+            """#
+        StubURLProtocol.dispatch { _ in .json(notOurs) }
+        let rig = Rig(serverURL: server, token: "household-abc")
+        rig.store.setPhoneBar(PhoneBar.encode([.home, .stations, .images, .music]))
+        rig.model.sharedScreenAnswered(false)
+        rig.model.navigate(.stations)
+        XCTAssertEqual(.stations, rig.model.navigation.route, "the case never opened Stations")
+        await rig.model.refreshCapabilities()
+        XCTAssertEqual("1.3.0", rig.model.capabilities.serverVersion, "the manifest never landed")
+        XCTAssertFalse(rig.model.everything.contains(.stations))
+        XCTAssertFalse(rig.model.everything.contains(.images))
+        XCTAssertEqual([.home, .music], rig.model.phoneBar, "a pinned tab for a hidden screen stayed on the bar")
+        XCTAssertEqual(startRoute, rig.model.navigation.route, "Stations stayed open on a third party's plugin")
+
+        StubURLProtocol.dispatch { _ in
+            .json(#"""
+                {"server_version":"1.3.0","features":{"ai":true},"plugins":[
+                  {"slug":"radio","name":"Radio","publisher":"Coders Farm","android_capabilities":["stations"]},
+                  {"slug":"imagegen","name":"Image Generation","publisher":"Coders Farm","android_capabilities":["imagegen"]}
+                ]}
+                """#)
+        }
+        await rig.model.refreshCapabilities()
+        XCTAssertEqual([.home, .stations, .images, .music], rig.model.phoneBar)
+        rig.model.stop()
+    }
+
     // MARK: - the lifecycle (map §9.2, and the hazard part 1 left)
 
     /// The loop's verdict reaches the shell: it runs off the main actor and

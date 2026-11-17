@@ -9,10 +9,13 @@ import com.domovoi.app.net.decode
 import com.domovoi.app.ui.theme.DomovoiDarkColors
 import com.domovoi.app.ui.theme.DomovoiLightColors
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The plugin screen frame's colours (the dashboard's plugin accent, 2026-10-17). */
+/** The plugin screen frame: its colours (the dashboard's plugin accent,
+ *  2026-10-17) and its words. */
 class PluginFrameTest {
 
     private val radio = CapabilityPlugin(
@@ -69,16 +72,40 @@ class PluginFrameTest {
               {"slug": "radio", "version": "1.3.1", "name": "Radio", "publisher": "Coders Farm",
                "accent": {"source": "plugin", "light": {"brand": "#2f7d6d"}, "dark": {"brand": "#519d8c"}},
                "android_capabilities": ["stations"]},
-              {"slug": "old", "android_capabilities": ["imagegen"]}
+              {"slug": "imagegen", "publisher": "Coders Farm", "android_capabilities": ["imagegen"]}
             ]}
         """.trimIndent()
         val caps = DomovoiJson.parseToJsonElement(body).decode<Capabilities>()
         val p = caps.pluginFor("stations")!!
         assertEquals("Coders Farm", p.publisher)
         assertEquals("#2f7d6d", p.accent!!.light["brand"])
-        val old = caps.pluginFor("imagegen")!!
-        assertNull(old.accent)                 // an older server: no frame colours
-        assertNull(old.name)
+        val plain = caps.pluginFor("imagegen")!!
+        assertNull(plain.accent)               // no accent sent: the app's own colours
+        assertNull(plain.name)
+        assertEquals("Uses the imagegen plugin", pluginFrameLine(plain))   // no name: the slug
         assertNull(caps.pluginFor("holograms"))
+    }
+
+    /** The band says the screen is the app's and uses the plugin (2026-11-16):
+     *  "Uses the Radio plugin", then "by Coders Farm"; no separate badge. */
+    @Test fun theBandSaysTheScreenUsesThePlugin() {
+        assertEquals("Uses the Radio plugin", pluginFrameLine(radio))
+        assertEquals("Uses the Radio plugin, by Coders Farm", pluginFrameDescription(radio))
+        val images = radio.copy(slug = "imagegen", name = "Image Generation")
+        assertEquals("Uses the Image Generation plugin", pluginFrameLine(images))
+        assertEquals("Uses the Radio plugin", pluginFrameDescription(radio.copy(publisher = " ")))
+        assertEquals("Radio", pluginDisplayName(radio))
+        assertEquals("radio", pluginDisplayName(radio.copy(name = "")))
+    }
+
+    /** No "plugin" badge any more: the words say it. Read from the source,
+     *  as the band is a composable a unit test can't run. */
+    @Test fun theBandHasNoSeparatePluginBadge() {
+        val rel = "src/main/java/com/domovoi/app/ui/components/PluginFrame.kt"
+        val source = (listOf(java.io.File(rel), java.io.File("app/$rel")).firstOrNull { it.isFile }
+            ?: error("cannot find $rel")).readText()
+        assertFalse(source.contains("\"plugin\","))
+        assertFalse(Regex("""Text\(\s*"plugin"""").containsMatchIn(source))
+        assertTrue(source.contains("pluginFrameLine(plugin)"))
     }
 }

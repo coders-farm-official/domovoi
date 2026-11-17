@@ -1312,7 +1312,24 @@ public final class PlayerModel {
             roomReading = nil
             target = .thisPhone
         }
-        let plan = PlayerServerSwitch.plan(queue: queue, index: index)
+        dropQueued(where: PlayerServerSwitch.fromServer)
+    }
+
+    /// The house's capability manifest changed (a manifest that **loaded**:
+    /// ``ShellModel/refreshCapabilities()`` never passes a failed fetch's
+    /// ``Capabilities/empty``, so a blip in the network does not stop a
+    /// station). A station whose plugin is no longer ours and installed goes
+    /// from the queue — and stops, if it was playing — so nothing keeps
+    /// showing it or offering to play it (``PlayerServerSwitch/pluginKeeps(_:_:)``).
+    public func capabilitiesChanged(_ capabilities: Capabilities) {
+        dropQueued(where: { !PlayerServerSwitch.pluginKeeps($0, capabilities) })
+    }
+
+    /// Take the entries `goes` picks out of the queue: the server switch's
+    /// rule, and the plugin rule above. Stops playback when the entry
+    /// playing now is one of them.
+    private func dropQueued(where goes: (PlayerItem) -> Bool) {
+        let plan = PlayerServerSwitch.plan(queue: queue, index: index, goes: goes)
         guard !plan.removed.isEmpty else { return }
         if plan.currentGoes {
             // **The queue changes first**, so the pause's position save finds
@@ -1324,7 +1341,7 @@ public final class PlayerModel {
             isPlaying = false
             engine.pause()
             // The flush comes AFTER the queue change, which is the whole point
-            // of the ordering: it now finds only the phone's own songs — or
+            // of the ordering: it now finds only the kept entries — or
             // nothing — so there is nothing of the old server to send the new
             // one.
             flushSpokenPosition()
@@ -1336,7 +1353,8 @@ public final class PlayerModel {
                 rebuildEngine(offsetSec: 0, keepPlaying: false)
             }
         } else {
-            // One of the phone's own songs is playing: it plays on.
+            // A kept entry is playing (one of the phone's own songs, or —
+            // for the plugin rule — anything but a station): it plays on.
             queue = plan.kept
             index = plan.keptIndex
         }

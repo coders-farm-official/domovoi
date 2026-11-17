@@ -13,8 +13,10 @@ import XCTest
 /// `Rooms` — is a single word in a single place.
 final class RouteTests: XCTestCase {
 
+    /// Our plugin for each capability (`OurPluginsFixture.swift`): only ours
+    /// lights a screen up (``requiredPlugins``).
     private func caps(_ capabilities: String...) -> Capabilities {
-        Capabilities(plugins: [CapabilityPlugin(slug: "p", appCapabilities: capabilities)])
+        Capabilities.ours(capabilities)
     }
 
     /// The visibility inputs, with the two that are usually not the point
@@ -259,7 +261,7 @@ final class RouteTests: XCTestCase {
             )
         }
         let radioAiOff = Capabilities(
-            plugins: [CapabilityPlugin(slug: "p", appCapabilities: [capStations])],
+            plugins: [OurPlugins.radio],
             features: [featureAI: false]
         )
         XCTAssertTrue(Route.stations.visibleWith(seen(radioAiOff)))
@@ -280,10 +282,14 @@ final class RouteTests: XCTestCase {
         let chat = Route.chat.unavailableNote(aiOff)
         XCTAssertEqual("chat is turned off", chat.title)
         XCTAssertEqual("this server has its AI features turned off", chat.detail)
-        XCTAssertEqual("stations isn't available", Route.stations.unavailableNote(aiOff).title)
-        // AI on and Chat somehow unreachable is the plugin wording, not the
+        // A plugin-backed screen names neither itself nor the plugin.
+        XCTAssertEqual("this screen isn't available", Route.stations.unavailableNote(aiOff).title)
+        XCTAssertEqual("this server doesn't offer it", Route.stations.unavailableNote(aiOff).detail)
+        XCTAssertEqual("this screen isn't available", Route.images.unavailableNote(.empty).title)
+        // AI on and Chat somehow unreachable is the generic wording, not the
         // switch's: `aiEnabled` is what picks between them.
         XCTAssertEqual("chat isn't available", Route.chat.unavailableNote(.empty).title)
+        XCTAssertEqual("this server doesn't offer it", Route.chat.unavailableNote(.empty).detail)
         // The label is lowercased, and `Rooms` is the label, not the name.
         XCTAssertEqual("rooms isn't available", Route.satellites.unavailableNote(.empty).title)
     }

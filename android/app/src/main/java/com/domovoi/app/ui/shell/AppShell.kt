@@ -74,7 +74,6 @@ import com.domovoi.app.alerts.CHAT_ROUTE
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.data.ServerCredentials
-import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.IdentityVerdict
 import com.domovoi.app.net.LocalSharedScreen
@@ -82,6 +81,8 @@ import com.domovoi.app.net.canRegister
 import com.domovoi.app.net.isSharedScreen
 import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.LocalCapabilities
+import com.domovoi.app.net.dropsStations
+import com.domovoi.app.net.manifestFor
 import com.domovoi.app.net.rememberCapabilities
 import com.domovoi.app.ui.components.DomovoiGlyph
 import com.domovoi.app.ui.components.StatusDot
@@ -388,11 +389,22 @@ private fun ShellContent(
 
     // Capability manifest — fetched at connect, refreshed when the WS
     // comes (back) up. Absence of the endpoint ⇒ EMPTY ⇒ gated screens
-    // stay hidden (design §8).
+    // stay hidden (design §8). Only the ACTIVE server's own manifest
+    // counts (manifestFor): after a server switch it is EMPTY until the new
+    // one's loads, never the previous server's.
+    val activeServer by app.prefs.serverUrl.collectAsState()
     val capsState = rememberCapabilities()
-    val caps = capsState.data ?: Capabilities.EMPTY
+    val caps = manifestFor(capsState.data, activeServer)
     val connected by app.bus.connected.collectAsState()
     LaunchedEffect(connected) { if (connected) capsState.refresh() }
+    // A station in the phone's queue belongs to our Radio plugin: once the
+    // active server's manifest has LOADED without it (removed, disabled, a
+    // server that never had it), its stations go from the queue, the mini
+    // player and the media notification. Not on the EMPTY of a switch, a
+    // fetch that failed or one not landed (dropsStations).
+    LaunchedEffect(capsState.data, activeServer) {
+        if (dropsStations(capsState.data, activeServer)) app.player.dropStations()
+    }
     // Introduce this install to the server (id + a seeded name) so room
     // queues can say "added by <device>". Idempotent; the server keeps any
     // name the user has since chosen. Re-run on reconnect, on a server

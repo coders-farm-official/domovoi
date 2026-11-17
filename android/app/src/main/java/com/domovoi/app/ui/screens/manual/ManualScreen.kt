@@ -293,9 +293,10 @@ private fun ManualBody(doc: ManualDoc, cached: Boolean, navigate: (Route) -> Uni
             .getOrDefault(false)
     }
 
-    val visible = remember(doc, live.plugins) {
+    val caps = LocalCapabilities.current
+    val visible = remember(doc, live.plugins, caps) {
         val on = live.plugins.orEmpty().filter { it.enabled && (it.status == "ok" || it.status == "degraded") }.map { it.slug }.toSet()
-        doc.pieces.filter { it.plugin == null || it.plugin in on }.map { it.id }.toSet()
+        shownManualPieces(doc, on, caps)
     }
     val go: (String) -> Unit = { id ->
         at = when {
@@ -961,8 +962,9 @@ private fun LiveSlot(slot: String?, doc: ManualDoc, live: Live, links: ManualLin
             }
         }
         "things-to-say" -> live.handlers?.let { all ->
-            val ours = remember(doc) { phrasesByHandler(doc) }
-            val features = LocalCapabilities.current.features
+            val caps = LocalCapabilities.current
+            val ours = remember(doc, caps) { phrasesByHandler(doc, caps) }
+            val features = caps.features
             val listed = listedHandlers(doc, all.map { it.name }, features).toSet()
             val handlers = all.filter { it.name in listed }
             LiveBox {

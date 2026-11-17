@@ -10,8 +10,10 @@ import XCTest
 /// by index, so a miss is a failure and not a trap.
 final class NavGroupsTests: XCTestCase {
 
+    /// Our plugin for each capability (`OurPluginsFixture.swift`): only ours
+    /// lights a screen up.
     private func caps(_ capabilities: String...) -> Capabilities {
-        Capabilities(plugins: [CapabilityPlugin(slug: "p", appCapabilities: capabilities)])
+        Capabilities.ours(capabilities)
     }
 
     private var both: Capabilities { caps(capStations, capImagegen) }

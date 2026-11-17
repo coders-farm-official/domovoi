@@ -1,7 +1,7 @@
 import Foundation
 
-/// The rows and the rules of the Images screen — the Image Generation
-/// plugin's own surface, `/api/plugins/imagegen`.
+/// The rows and the rules of the Images screen — the app's own screen over
+/// the Image Generation plugin's surface, `/api/plugins/imagegen`.
 ///
 /// Ported field for field from `ui/screens/images/ImagesScreen.kt:76-125`,
 /// because the plugin is not in this repository: `plugins/` holds `radio/`
@@ -613,6 +613,11 @@ public struct PluginBand: Equatable, Sendable {
     public var publisherLine: String? {
         publisher.map { PluginBandStrings.by($0) }
     }
+
+    /// The band's main line, "Uses the <name> plugin"
+    /// (``PluginBandStrings/uses(_:)``): the screen is the app's own and it
+    /// uses this plugin.
+    public var usesLine: String { PluginBandStrings.uses(name) }
 
     /// `"manage $name on the dashboard's Plugins page"` (`:181`) — the
     /// screen-reader label of an icon-and-word control.

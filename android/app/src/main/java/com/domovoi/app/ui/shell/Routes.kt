@@ -41,8 +41,10 @@ import com.domovoi.app.net.Capabilities
  * Settings on that section ([settingsTabFor]).
  *
  * The table stays a compiled-in enum, but *visibility* is data-driven
- * (design §8): routes backed by a plugin declare a required capability
- * and only render when `/api/capabilities` lists it.
+ * (design §8): the app's screens that use a plugin of ours (Stations,
+ * Images) declare a required capability and only render, and only appear
+ * on any launcher, while `/api/capabilities` lists THAT plugin of ours
+ * (net/Capabilities.kt AppScreenPlugins: slug, publisher, capability).
  */
 enum class Route(val label: String, val icon: ImageVector) {
     Home("Home", Icons.Filled.Home),
@@ -86,11 +88,11 @@ enum class Route(val label: String, val icon: ImageVector) {
 /** Where the app opens, and where it lands when a route stops existing. */
 val StartRoute = Route.Home
 
-/** Capability a route needs before it renders; null = always visible. */
+/** Capability a route needs before it renders; null = always visible.
+ *  [Capabilities.has] says whether the server runs the plugin of ours
+ *  behind it (Stations uses Radio, Images uses Image Generation). */
 fun Route.requiredCapability(): String? = when (this) {
     Route.Stations -> CAP_STATIONS
-    // The Images (generation) screen belongs to the Image Generation
-    // plugin — visible only when the connected domovoi has it installed.
     Route.Images -> CAP_IMAGEGEN
     else -> null
 }
@@ -157,8 +159,8 @@ private val SettingsTabRoutes: Map<Route, String> = mapOf(
 fun settingsTabFor(route: Route): String? = SettingsTabRoutes[route]
 
 /** Everything shown in the web sidebar "workspace" section, in its default
- *  order: Chat, then Media's members (the radio plugin's Stations and the
- *  Image Generation plugin's Images after the core ones), then Tools'.
+ *  order: Chat, then Media's members (Stations and Images, which use our
+ *  Radio and Image Generation plugins, after the core ones), then Tools'.
  *  This order is each route's default sort position ([navTree]). Home is
  *  not in it: in the drawer, as on the web desktop, the brand row is the
  *  link home. People is not either: it is a Settings section. Filter with
@@ -171,9 +173,10 @@ val WorkspaceRoutes = listOf(
 
 /**
  * Each route's key in the navigation's data, the web's route strings
- * (`#music`, …; the plugin pages by their web page key: Stations is the
- * radio plugin's "stations", the Image Generation plugin's "imagegen"): what a nav override ([NavOverride]) names. The
- * one place a [Route] maps to its key.
+ * (`#music`, …; the screens that use a plugin by its web page key: Stations
+ * by the Radio plugin's "stations", Images by the Image Generation plugin's
+ * "imagegen"): what a nav override ([NavOverride]) names. The one place a
+ * [Route] maps to its key.
  */
 val NavKeys: Map<Route, String> = mapOf(
     Route.Chat to "chat",
@@ -228,8 +231,9 @@ val DefaultNav = NavDefaults(
 )
 
 /** The groups plugin pages declare (the web manifest's `nav_group`). This
- *  app lists no plugin pages, so its capability-backed routes say theirs
- *  here, as data: Stations (radio) and Images (image generation) are Media. */
+ *  app lists no plugin pages, so its own screens that use a plugin say
+ *  theirs here, as data: Stations (Radio) and Images (Image Generation)
+ *  are Media. */
 val PluginNavGroups: Map<Route, String> = mapOf(
     Route.Stations to "media",
     Route.Images to "media",

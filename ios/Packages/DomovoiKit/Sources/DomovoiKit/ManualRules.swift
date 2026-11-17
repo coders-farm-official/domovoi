@@ -585,6 +585,18 @@ public func manualRoomLine(_ room: ManualRoom, _ wake: ManualWakeWord) -> String
     return ManualStrings.roomLine([room.status, word, room.song])
 }
 
+/// Whether a manual page that belongs to the plugin `slug` may show, as far
+/// as **this app** is concerned. A slug that is one of ours (a row of
+/// ``requiredPlugins``: `radio`, `imagegen`) needs our plugin in the
+/// capability manifest — exact slug and publisher — because the page sends a
+/// person to the app's own screen for it. Any other slug is the server's
+/// business alone (``ManualModel/visiblePieces`` has already checked it is
+/// installed and on).
+public func manualPluginPieceShows(slug: String, _ capabilities: Capabilities) -> Bool {
+    guard requiredPlugins.values.contains(where: { $0.slug == slug }) else { return true }
+    return capabilities.hasOurPlugin(slug: slug)
+}
+
 /// `manualRouteOpens` (`ManualContent.kt:389`): whether a manual link to this
 /// route opens something **here**.
 ///

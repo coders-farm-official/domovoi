@@ -2,8 +2,8 @@ package com.domovoi.app.ui.shell
 
 import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
-import com.domovoi.app.net.CapabilityPlugin
 import com.domovoi.app.net.FEATURE_AI
+import com.domovoi.app.testing.ourCaps
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -19,7 +19,7 @@ import org.junit.Test
 class PhoneBarTest {
 
     private val none = Capabilities.EMPTY
-    private val radio = Capabilities(plugins = listOf(CapabilityPlugin(slug = "radio", androidCapabilities = listOf(CAP_STATIONS))))
+    private val radio = ourCaps(CAP_STATIONS)
     private val default = listOf(Route.Home, Route.Music, Route.Videos, Route.Chat)
 
     @Test fun theDefaultIsHomeMusicVideosChat() {

@@ -225,11 +225,25 @@ class PlayerController(
             _remote.value = null
             _target.value = PlayTarget.Local
         }
-        val plan = ServerSwitch.plan(_queue.value, _index.value)
+        applyDrop(ServerSwitch.plan(_queue.value, _index.value))
+    }
+
+    /**
+     * The server stopped running our Radio plugin (removed, disabled, or
+     * another server's manifest without it; the shell calls this once a
+     * manifest has answered, AppShell): its stations leave the queue, the
+     * mini player and the media notification, as the Stations screen leaves
+     * the app. A station playing stops; anything else plays on.
+     */
+    fun dropStations() {
+        applyDrop(ServerSwitch.planDropping(_queue.value, _index.value) { it.kind == PlayKind.Radio })
+    }
+
+    private fun applyDrop(plan: ServerSwitchPlan) {
         if (plan.removed.isEmpty()) return
         if (plan.currentGoes) {
             // The queue changes first, so the pause's position save finds
-            // only the phone's own songs (nothing to send the new server).
+            // only what stays (nothing of what went to send anywhere).
             _queue.value = plan.kept
             _index.value = plan.keptIndex
             exoPlayer.pause()
@@ -237,7 +251,8 @@ class PlayerController(
             if (plan.kept.isEmpty()) exoPlayer.clearMediaItems()
             else exoPlayer.setMediaItems(plan.kept.map(::mediaItemFor), plan.keptIndex, 0L)
         } else {
-            // One of the phone's own songs is playing: it plays on.
+            // What plays now stays (one of the phone's own songs on a server
+            // move): it plays on.
             plan.removed.forEach { exoPlayer.removeMediaItem(it) }
             _queue.value = plan.kept
             _index.value = plan.keptIndex

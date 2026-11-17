@@ -49,8 +49,9 @@ import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.serialization.Serializable
 
 // ---------------------------------------------------------------------------
-// Models — /api/plugins/imagegen rows (the Image Generation plugin's web
-// surface; this screen is capability-gated on "imagegen"). Browsing images
+// Models — /api/plugins/imagegen rows (our Image Generation plugin's web
+// surface; this app screen shows only while the server runs that plugin of
+// ours, net/Capabilities.kt AppScreenPlugins). Browsing images
 // is the Files tab's job — this screen is the engine's state, the lane and
 // the history. Engine install/start/stop stays on the web dashboard.
 //

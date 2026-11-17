@@ -6,12 +6,30 @@ import Foundation
 /// A port of `android/.../net/Capabilities.kt`. The web process serves it
 /// from data it already has, so it answers even while the core is down. The
 /// app fetches it at connect (and again on socket reconnect) and gates
-/// compiled-in screens on it: the Stations route renders only when some
-/// installed plugin declares the `"stations"` capability, and badges for
-/// gated routes are skipped when the capability is absent. Unknown capability
-/// strings are ignored, which is what makes a new plugin on an old app
-/// harmless. The route table stays compiled in — only *visibility* is
-/// data-driven.
+/// compiled-in screens on it: the Stations route renders only when **our**
+/// radio plugin is installed and declares the `"stations"` capability
+/// (``requiredPlugins``), and badges for gated routes are skipped when the
+/// capability is absent. Unknown capability strings are ignored, which is
+/// what makes a new plugin on an old app harmless. The route table stays
+/// compiled in — only *visibility* is data-driven.
+///
+/// ### Why "our" plugin, and not any plugin that declares the capability
+///
+/// A plugin cannot ship app code. Stations and Images are this app's own
+/// screens, written against two particular plugins' APIs
+/// (`/api/plugins/radio/*`, `/api/plugins/imagegen/*`). A third-party plugin
+/// that declared `stations` would light up a screen that then talks to an
+/// API it does not have — or, with the slug `radio`, to whatever that plugin
+/// chose to put there. So a capability counts only when the plugin declaring
+/// it has the exact slug **and** publisher in ``requiredPlugins``; the
+/// publisher is the manifest's string, not a signature, and that is accepted.
+/// **Fails closed**: a manifest with no `publisher` (an older server) shows
+/// neither screen.
+///
+/// Disabled and failed plugins never reach this list: the server leaves out
+/// every row that is not `enabled` with status `ok` or `degraded`
+/// (`web/backend/api/capabilities.py`, `capabilities()`), so there is no
+/// enabled flag here to check.
 ///
 /// Everything is defensive: a missing endpoint or a failed fetch means
 /// ``Capabilities/empty``, which hides every gated screen. The one gate that
@@ -71,15 +89,27 @@ public struct Capabilities: Equatable, Sendable, Decodable {
         features = try c.decodeIfPresent([String: Bool].self, forKey: .features) ?? [:]
     }
 
-    /// True when any installed plugin declares `capability`.
+    /// True when **our** plugin for `capability` is installed and declares it
+    /// (``CapabilityPlugin/isOurs(for:)``). The one gate every screen, tab,
+    /// tile, manual page and player rule asks; a capability with no row in
+    /// ``requiredPlugins`` is never true, because this app has no screen for
+    /// it.
     public func has(_ capability: String) -> Bool {
-        plugins.contains { $0.appCapabilities.contains(capability) }
+        pluginFor(capability) != nil
     }
 
-    /// The plugin that provides `capability` (the first, as ``has(_:)``
-    /// counts).
+    /// Our plugin that `capability`'s screen uses, or nil — the same rule as
+    /// ``has(_:)``, so the band never names a plugin the gate did not admit.
     public func pluginFor(_ capability: String) -> CapabilityPlugin? {
-        plugins.first { $0.appCapabilities.contains(capability) }
+        plugins.first { $0.isOurs(for: capability) }
+    }
+
+    /// Whether `slug` is one of ours and is installed as ours: a row in
+    /// ``requiredPlugins`` names it and ``has(_:)`` admits that row's
+    /// capability. What the manual asks about a page that belongs to the
+    /// radio or image plugin (``ManualModel/visiblePieces``).
+    public func hasOurPlugin(slug: String) -> Bool {
+        requiredPlugins.contains { $0.value.slug == slug && has($0.key) }
     }
 
     /// Server-supplied tone slug for a handler/source name; `"neutral"` when
@@ -114,7 +144,16 @@ public struct Capabilities: Equatable, Sendable, Decodable {
     /// both at once. Reported to the owner as an Android finding rather than
     /// fixed there; `android/` is out of bounds for this batch.
     public static func fetch(using client: DomovoiClient) async -> Capabilities {
-        (try? await client.getUntracked("/api/capabilities", as: Capabilities.self)) ?? .empty
+        await load(using: client) ?? .empty
+    }
+
+    /// ``fetch(using:)`` that says when it **failed**: nil, rather than
+    /// ``empty``. The shell needs the difference — a failed re-fetch of the
+    /// same server keeps that server's last manifest, and only a manifest
+    /// that loaded may take a station out of the player
+    /// (``ShellModel/refreshCapabilities()``).
+    public static func load(using client: DomovoiClient) async -> Capabilities? {
+        try? await client.getUntracked("/api/capabilities", as: Capabilities.self)
     }
 
     /// False only when the server says its AI features are off
@@ -128,6 +167,31 @@ public struct Capabilities: Equatable, Sendable, Decodable {
 public let capStations = "stations"
 public let capImagegen = "imagegen"
 
+/// The publisher our plugins' manifests carry.
+public let codersFarm = "Coders Farm"
+
+/// The plugin a capability's screen is written against: its exact slug and
+/// publisher, both compared as written (no trimming, no case folding).
+public struct RequiredPlugin: Equatable, Sendable {
+    public let slug: String
+    public let publisher: String
+
+    public init(slug: String, publisher: String) {
+        self.slug = slug
+        self.publisher = publisher
+    }
+}
+
+/// **The one table**: which plugin may light up each of this app's
+/// plugin-backed screens. Stations is written against the radio plugin's
+/// `/api/plugins/radio/*` (`plugins/radio/domovoi-plugin.toml`), Images
+/// against the image generation plugin's `/api/plugins/imagegen/*`. A
+/// capability missing from here gates nothing on.
+public let requiredPlugins: [String: RequiredPlugin] = [
+    capStations: RequiredPlugin(slug: "radio", publisher: codersFarm),
+    capImagegen: RequiredPlugin(slug: "imagegen", publisher: codersFarm),
+]
+
 /// `features.ai`: the household's "AI features" switch on the server (the
 /// chat models). `false` = turned off, so the server's Chat (and its chat
 /// mic) can't answer and the app hides it. **Not** `features.chat`, which is
@@ -139,8 +203,9 @@ public struct CapabilityPlugin: Equatable, Sendable, Decodable {
     public let version: String?
 
     /// For the plugin screen frame: the manifest's name and publisher, and
-    /// the page colour per theme. Absent from an older server, and the frame
-    /// then shows the slug and keeps the app's own colours.
+    /// the page colour per theme. The publisher is also half of the gate
+    /// (``isOurs(for:)``), so an older server that sends none shows neither
+    /// plugin-backed screen.
     public let name: String?
     public let publisher: String?
     public let accent: PluginAccent?
@@ -186,6 +251,16 @@ public struct CapabilityPlugin: Equatable, Sendable, Decodable {
         publisher = try c.decodeIfPresent(String.self, forKey: .publisher)
         accent = try c.decodeIfPresent(PluginAccent.self, forKey: .accent)
         appCapabilities = try c.decodeIfPresent([String].self, forKey: .appCapabilities) ?? []
+    }
+
+    /// Whether this is our plugin for `capability`: the slug and publisher of
+    /// its ``requiredPlugins`` row, exactly, and it declares the capability.
+    /// A missing publisher is not ours (fail closed).
+    public func isOurs(for capability: String) -> Bool {
+        guard let required = requiredPlugins[capability] else { return false }
+        return slug == required.slug
+            && publisher == required.publisher
+            && appCapabilities.contains(capability)
     }
 }
 
