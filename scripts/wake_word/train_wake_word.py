@@ -156,6 +156,10 @@ SYNTH_IPA = os.environ.get("WAKE_SYNTH_IPA", "")
 # word): no clips folder is mounted at all, and the entrypoint uses no
 # recorded clip even if one were.
 SYNTHETIC_ONLY = os.environ.get("WAKE_SYNTHETIC_ONLY", "") == "1"
+# More near-miss phrases for the generator to speak ("domino;the movie"):
+# a tuned copy of a published word gets that word's own list (the core's
+# worker sets it, domovoi/wake_tuning.py).
+EXTRA_NEGATIVES = os.environ.get("WAKE_EXTRA_NEGATIVES", "")
 
 LABEL = "org.domovoi.wake-train"
 # --preview ("Hear the training voices"): its own name and label, so a
@@ -169,6 +173,7 @@ _CPUSET_RE = re.compile(r"^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$")
 _MEMORY_RE = re.compile(r"^[0-9]+(\.[0-9]+)?[bkmg]?$", re.IGNORECASE)
 _PRON_RE = re.compile(r"^[a-z0-9'.=; A-Z-]*$")
 # word=IPA;...: plain words, IPA without blanks, quotes or shell characters.
+_EXTRA_NEG_RE = re.compile(r"^[a-z0-9 ,.';-]{1,8000}$")
 _SYNTH_RE = re.compile(r"^[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64}(;[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64})*$")
 
 
@@ -465,6 +470,8 @@ def build_run_argv(
         argv += ["-e", f"WAKE_PRONUNCIATIONS={PRONUNCIATIONS}"]
     if SYNTH_IPA and _SYNTH_RE.match(SYNTH_IPA):
         argv += ["-e", f"WAKE_SYNTH_IPA={SYNTH_IPA}"]
+    if EXTRA_NEGATIVES and _EXTRA_NEG_RE.match(EXTRA_NEGATIVES):
+        argv += ["-e", f"WAKE_EXTRA_NEGATIVES={EXTRA_NEGATIVES}"]
     argv.append(IMAGE)
     return argv
 

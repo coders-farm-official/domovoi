@@ -30,12 +30,12 @@ custom_negative_phrases: __CUSTOM_NEGATIVES__
 # --- augmentation (varies acoustics; resamples to the 16 kHz training set) ---
 augmentation_rounds: 1
 augmentation_batch_size: 16
-background_paths:
-  - __BACKGROUND_DIR__
-background_paths_duplication_rate:
-  - 1
-rir_paths:
-  - __RIR_DIR__
+# JSON lists (YAML flow sequences): the cache's own folders, plus any extra
+# room-echo and background folders mounted at /data/rirs and
+# /data/background (entrypoint.augmentation_dirs).
+background_paths: __BACKGROUND_PATHS__
+background_paths_duplication_rate: __BACKGROUND_DUP__
+rir_paths: __RIR_PATHS__
 
 # --- precomputed negative / FP-validation features (from the ~17.5 GB cache vol) ---
 false_positive_validation_data_path: __FP_VAL_NPY__
