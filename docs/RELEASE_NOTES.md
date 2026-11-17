@@ -109,6 +109,89 @@ a way that would otherwise get reported as a bug.
   the Windows side only; its last page now says the server's own code
   updates through **Update Domovoi**.
 
+## 1.4.0 (unreleased) — admin signs out after 1 hour idle
+
+A dashboard tab left open overnight was still admin in the morning. Now an
+admin sign-in **signs out after 1 hour idle**: an hour with no change made
+as admin (`ADMIN_IDLE_TIMEOUT_MIN`, a constant). Pages that refresh
+themselves, status reads, sockets and reloads never count. The tab drops to
+signed out and says "Signed out after 1 hour without admin activity".
+
+* A reload, or the "Domovoi has been updated, reload" notice, keeps admin
+  while the sign-in is inside its hour: the reload window now counts from
+  the last admin change, not from the sign-in.
+* **Stay signed in after a reload** (`ADMIN_RELOAD_WINDOW_MIN`) now goes
+  0–60 minutes; a saved value above 60 reads as 60.
+* The 30-day sliding expiry is gone (the hour always ended a session
+  first); the 90-day cap stays.
+* After the update, a tab that was open stays admin for at most an hour
+  unless someone changes something in it.
+* Clients: `GET /api/auth/status`, login, setup and resume answers gain
+  `idle_timeout_min`, `idle_until` and `idle_in_sec`; the status read also
+  gains `ended`. Nothing was removed. The phone apps don't keep admin
+  sessions and need no change. Details: docs/SECURITY_PRIVACY.md, "Signing
+  out after an hour idle".
+
+## 1.4.0 (unreleased)
+
+### Up to five wake words per room
+
+* **A room can wake on more than one word.** In a room's **Settings**
+  (the room drawer, "wake word"), an admin with the room online can **Add
+  another wake word**, reorder the words and remove them, then **Save**:
+  the room restarts to load them. Up to 5 per room, main word first. Most
+  homes need only one, and nothing changes for a room nobody edits. The
+  page says it plainly: each extra word makes accidental wake-ups a little
+  more likely (every word fires on its own, at its own threshold).
+* **As many as the device can run.** A satellite now says in its hello how
+  many words it runs at once (`wake_words_max`): a **Pi Zero 2 W runs 3**,
+  a bigger Pi or a spare PC 5. The server never sends more, and the
+  dashboard offers no "add" past that and says why instead. Satellite
+  software from before 1.4.0, and the phone apps until they learn it, run
+  one word: they are sent the main word only, in the frame they already
+  understand, and keep working. Upgrade a room (Settings → Rooms →
+  Upgrade) to give it more.
+* **Which word woke the room** is kept with each turn
+  (`conversation_log.wake_word`) and in the core's log ("woken by …"); a
+  room's history names the word once more than one word has woken it,
+  which is how a false wake's culprit shows.
+* **Pushing one word** (Settings → Voice → Wake words → Push, or "Use …
+  here") still makes it the room's main word; extra words added on the
+  room stay after it.
+* The household's default wake word stays one word: a new room gets one.
+* **Database:** V063 adds `room_wake_words.slugs` and `device_max`, and
+  `conversation_log.wake_word`. Every existing room keeps its word as its
+  first and only entry. It must merge after V062.
+* **Protocol** (docs/uml/satellite-protocol.md): `hello` gains
+  `wake_words` and `wake_words_max`, `utterance_start` gains `wake_word`,
+  `set_wake_word` gains `words` (only to a device that sent
+  `wake_words_max`). All optional, safe both ways. New routes:
+  `PUT /v1/admin/wake/room` and its proxy `PUT /api/wake-words/room`.
+
+### Videos in chat (dashboard)
+
+- **What changed.** A home-server chat takes one short video a message
+  (MP4, MOV or WebM, up to 3 minutes and 2 GB) from the dashboard's
+  paperclip. The server watches it in the background ("Watching your
+  video… about 4 minutes left", with stop) while you keep chatting, then
+  writes a short summary into the chat and answers questions about it from
+  a transcript and descriptions of a few frames (always worded as what a
+  frame "might show"). The video and every frame grab are deleted as soon
+  as it has been watched; only the text stays, with the chat. It uses the
+  chat's vision model and the server's speech-to-text: no new model or
+  setting. Hidden when AI features are off. Not proactive: nothing is
+  watched unless someone attaches it in a chat.
+- **What to know.** One video is watched at a time in the house, at the
+  lowest priority. Voice comes first: watching pauses from a room's wake
+  word until the reply has been spoken, and a frame being described is
+  dropped and asked again after the turn. It needs ffmpeg on the server
+  (the dashboard offers no video without it). Migration **V064** adds
+  `chat_video_jobs`, `chat_video_segments`, `chat_video_frames`. On a
+  CPU-only server expect a few minutes per 3-minute clip, most of it the
+  frame descriptions (measured on a development PC at the lowest priority, with other work running, for a 3-minute 1080p clip: the scene scan 0.6 s, the sound 0.3 s, each frame grab 0.15 s, and the speech model (small.en on the CPU) about 1.7 s per second of speech; a frame description with qwen3-vl:2b on a CPU is expected to take 10-30 s, not measured there); the estimate starts from a fixed guess and learns this
+  server's speed from each finished video. The phone apps can use the
+  same routes (docs/API_REFERENCE.md, "Videos"); they don't offer it yet.
+
 ## 2026-11-16 — 1.3.0
 
 Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows

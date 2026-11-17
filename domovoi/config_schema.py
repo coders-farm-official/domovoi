@@ -71,6 +71,7 @@ from dataclasses import dataclass
 from typing import Callable, Literal
 
 from domovoi.config import (
+    ADMIN_RELOAD_WINDOW_MAX_MIN,
     HOME_PROBLEMS_VISIBILITY_CHOICES,
     QA_THINK_CHOICES,
     MUSIC_LISTENS_KEEP_CHOICES,
@@ -1211,15 +1212,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # the web reads the live value from the core's snapshot.
     FieldSpec(
         "admin_reload_window_min", "Stay signed in after a reload", "Security",
-        "How long after you enter the admin password a reload of the "
+        "How long after your last change as admin a reload of the "
         "dashboard, or a new tab in the same browser, keeps you signed in "
-        "with no password prompt. Counted from when you signed in, not "
-        "from when you last did something. Only the browser you signed in "
-        "with gets it back, and signing out ends it at once. After it, a "
-        "reload can still look at everything but asks for the password "
-        "before changing anything. 0 = every reload asks again. Applies "
-        "immediately.",
-        "int", tier="hot", min=0, max=1440, unit="min", step=15, widget="slider",
+        "with no password prompt. Admin always signs out after 1 hour idle "
+        "(an hour with no admin change), so this can't be longer than an "
+        "hour. Only the browser you signed in with gets it back, and "
+        "signing out ends it at once. After it, a reload can still look at "
+        "everything but asks for the password before changing anything. "
+        "0 = every reload asks again. Applies immediately.",
+        "int", tier="hot", min=0, max=ADMIN_RELOAD_WINDOW_MAX_MIN, unit="min", step=15,
+        widget="slider",
         slider_labels=("asks on every reload", "stays signed in longer"),
     ),
     FieldSpec(

@@ -74,6 +74,7 @@ from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import satellites as satellites_api
 from web.backend.api import stats as stats_api
 from web.backend.api import up_next as up_next_api
+from web.backend.api import up_next_history as up_next_history_api
 from web.backend.api import music_mix as music_mix_api
 from web.backend.api import videos as videos_api
 from web.backend.api import visualizer as visualizer_api
@@ -429,6 +430,9 @@ app.include_router(library_tools_api.router)
 # clearing a person's and deleting all. Literal paths, its own module.
 app.include_router(music_listens_api.router)
 app.include_router(up_next_api.router)
+# Queue history (1.3.1): /api/music/up-next/history — admin reads of
+# what Up next picked and why; read-only, its own literal prefix.
+app.include_router(up_next_history_api.router)
 app.include_router(music_mix_api.router)
 # Groups (V060): /api/music/groups — named sets of rooms and the shared
 # queues; its own literal prefix, proxied to the core.

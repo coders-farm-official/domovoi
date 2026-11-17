@@ -9,7 +9,8 @@ Covers the whole lightweight model end-to-end on BOTH processes:
   render GET state);
 * the §7.3 gated-route matrix on the core AND the web app (config
   reads+writes, satellite code push, Letta resync, plugin mutations);
-* 30-day SLIDING token expiry (use extends ``expires_at``);
+* the 1-hour idle timeout: a read moves nothing, an admin write restarts
+  the hour (``expires_at`` is the idle deadline; there is no 30-day slide);
 * the outbound-fetch tier on add-by-url (admin session OR fulfiller
   ``url_matcher`` allowlist + per-source rate limit).
 
@@ -571,34 +572,48 @@ async def test_pre_setup_grace_vs_fail_closed() -> None:
 
 @requires_db
 @pytest.mark.asyncio
-async def test_token_expiry_slides_on_use() -> None:
+async def test_a_read_never_moves_the_idle_clock_an_admin_write_does() -> None:
+    """The idle timeout (2026-11-16): a GET with the Bearer checks it and
+    moves nothing; a write through an admin gate stamps the action and puts
+    the deadline an hour out. There is no 30-day slide any more."""
     async with _web() as client:
         token = await _claim_admin(client)
     h = admin_auth.token_sha256(token)
     async with engine.begin() as conn:
         await conn.execute(
             text(
-                "UPDATE admin_sessions SET expires_at = now() + interval '1 hour' "
-                "WHERE token_hash = :h"
+                "UPDATE admin_sessions SET last_used_at = now() - interval '30 minutes', "
+                "expires_at = now() + interval '30 minutes' WHERE token_hash = :h"
             ),
             {"h": h},
         )
+
+    async def clock():
+        async with engine.begin() as conn:
+            return (
+                await conn.execute(
+                    text(
+                        "SELECT last_used_at, expires_at, "
+                        "expires_at - now() AS left FROM admin_sessions WHERE token_hash = :h"
+                    ),
+                    {"h": h},
+                )
+            ).one()
+
+    before = await clock()
     async with _core() as core:
         r = await core.get("/v1/admin/config", headers=_bearer(token))
         assert r.status_code == 200
-    async with engine.begin() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    "SELECT expires_at > now() + interval '25 days' AS slid, "
-                    "last_used_at IS NOT NULL AS used "
-                    "FROM admin_sessions WHERE token_hash = :h"
-                ),
-                {"h": h},
-            )
-        ).one()
-    assert row.slid is True
-    assert row.used is True
+    after_read = await clock()
+    assert (after_read.last_used_at, after_read.expires_at) == (before.last_used_at, before.expires_at)
+
+    core_app.state.config_apply_lock = asyncio.Lock()
+    async with _core() as core:
+        r = await core.post("/v1/admin/config", json={"changes": {}}, headers=_bearer(token))
+        assert r.status_code == 200, r.text
+    after_write = await clock()
+    assert after_write.last_used_at > before.last_used_at
+    assert 3500 <= after_write.left.total_seconds() <= 3600
 
 
 @requires_db

@@ -617,6 +617,14 @@ browser, and in a room.
   person's listening is kept apart once their phone or browser says
   **this is me**; clearing it, or not keeping it at all, is under
   [What's kept, and forgetting](#node:kept).
+- *(admin)* **Look back at what Up next picked:**
+  [Settings → Household → Queue history](#settings/queue-history) lists
+  every Up next still kept, in each room, browser and phone. Open one to
+  see its songs in order: why each was picked, the song it followed, and
+  whether it played or was skipped (and for how long). A summary on top
+  counts the picks, the artists and how close two songs by one artist
+  came, the reasons and the decades; **download CSV** or **download JSON**
+  saves the whole session. A finished one is kept 30 days.
 - **Up next by voice.** In a room, the commands below act on that room's
   queue; most also take the room's name after them ("what's next in the
   kitchen"). "Next" and "play the next song" still skip. A command that
@@ -731,6 +739,8 @@ phone](#node:phone-chat).
   model reads them on your server.
 - **Documents:** the paperclip takes those too, up to 4 a message. See
   [Ask about a document](#node:ask-document).
+- **Videos:** the paperclip takes one short video a message (up to 3
+  minutes). See [Ask about a video](#node:ask-video).
 - **Drafts and letters:** Chat can write drafts for you. Read them before
   you send them; it can get details wrong. See [Write a draft](#node:drafts)
   and [Letters](#node:letters).
@@ -755,6 +765,49 @@ experiment. It is off unless whoever set up Domovoi turned it on.
 **Try saying:** "let's chat" (in a room, while voice chat mode is on)
 
 [More detail](docs/FAQ.md#can-i-send-pictures-in-chat)
+
+### Ask about a video
+
+Attach a short video to a chat and ask about it. Domovoi watches it on
+your home server, keeps what it heard and saw as text, and deletes the
+video.
+
+**How to**
+
+- **Dashboard:** in [Chat](#chat), the paperclip takes one video a
+  message: MP4, MOV or WebM, up to 3 minutes and 2 GB. Add a question if
+  you like.
+- **App:** videos are attached from the dashboard. What Domovoi found is
+  in the chat on the phone too.
+- While Domovoi watches, the video says "Watching your video… about 4
+  minutes left", with **stop**. You can keep chatting meanwhile, or leave
+  the page.
+- When it's done, Domovoi writes a short summary in the chat, and answers
+  the question you sent with the video. Then ask anything about it.
+- What was said comes from a transcript, with times. What the pictures
+  show is a small model's guess, so Domovoi says what a frame "might
+  show", not what is there.
+- Only the text stays, with the chat. The video and every picture taken
+  from it are deleted once it has been watched, or stopped. Deleting the
+  chat deletes the text.
+- A question asked in a room goes first: watching pauses from the wake
+  word until the answer has been spoken, then carries on.
+- One video is watched at a time in the house; another waits its turn.
+
+**In a chat, type**
+
+- "what's this video about?"
+- "what did they say about the cake?"
+- "is there a dog in it?"
+
+**If something's wrong**
+
+- "Videos up to 3 minutes can be attached": trim it on the phone first,
+  or send the part you want to ask about.
+- The paperclip doesn't offer videos: AI chat is off for your home (see
+  [When AI is off](#node:ai-off)), or the server has no ffmpeg.
+- "I couldn't finish watching it": the message says why. Attach the video
+  again to try once more.
 
 ### Look things up
 
@@ -1996,10 +2049,10 @@ Domovoi?"). It doesn't mean Domovoi has forgotten you.
 **How to** *(admin)*
 
 - Sign in: [Settings → System → Advanced](#settings/advanced), the
-  **Admin** card at the top, **sign in**. A reload in that browser keeps
-  you signed in for 60 minutes after you signed in; **sign out** ends it
-  at once.
-- Change those minutes: on the same page, **show the settings**, then
+  **Admin** card at the top, **sign in**. Admin signs out after 1 hour
+  idle: an hour with no change made as admin. A reload in that browser
+  keeps you signed in until then; **sign out** ends it at once.
+- Shorten the reload part: on the same page, **show the settings**, then
   **Security** → **Stay signed in after a reload**.
 - Turn guest music control off: same group, **Guests can change the
   music in a playing room**.
@@ -2046,6 +2099,7 @@ Everything stays on your server, or on your phone.
 | Command recordings (off unless an admin turns them on for a room) | 14 days |
 | Play history | 90 days |
 | The songs each room, phone and browser played, and who for | 1 year, or what **Keep listening history** says |
+| The songs Up next picked, and why (Queue history) | 30 days after that Up next ends |
 | The list of recent print jobs | 90 days (an admin can clear it) |
 | News stories | 90 days (saved ones always) |
 | The server's own log | no words, only how many |

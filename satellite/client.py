@@ -66,6 +66,7 @@ from satellite import (
     sound_sync,
     wake_gate,
     wake_model_sync,
+    wake_words,
     wifi_adapt,
     wifi_profiles,
 )
@@ -355,6 +356,12 @@ VOICE_SIDECAR = CONFIG_DIR / "voice"
 # `_effective_voice` sidecar-override pattern exactly.
 WAKE_SIDECAR = CONFIG_DIR / "wake"
 WAKE_MODELS_DIR = CONFIG_DIR / "wake_models"
+# Several wake words per room (1.4.0, satellite/wake_words.py): the room's
+# whole list, main word first, each with its own threshold (null = the
+# [wake] threshold). Kept only while the room has more than one word, and
+# used only while its first entry is the main word WAKE_SIDECAR / the config
+# names, so a single-word push from an older core leaves one word running.
+WAKE_WORDS_SIDECAR = CONFIG_DIR / "wake_words.json"
 # LEGACY: the per-word detection threshold older satellites stored beside a
 # pushed wake model. It overrode the [wake] threshold, so a room woke at the
 # pushed word's 0.5 while its Settings tab showed the 0.8 set there
@@ -566,6 +573,67 @@ def _effective_wake_threshold(cfg: "Config") -> float:
     except (OSError, ValueError):
         pass
     return cfg.wake_threshold
+
+
+def _wake_words_limit(cfg: "Config") -> int:
+    """How many wake words this device runs at once
+    (satellite/wake_words.py ``device_limit``): it says so in its hello, and
+    loads no more whatever it is sent."""
+    try:
+        is_pc = bool(pc_engine.is_pc(cfg))
+    except Exception:  # noqa: BLE001 - a stand-in config in a test
+        is_pc = False
+    return wake_words.device_limit(is_pc=is_pc, model=None if is_pc else wake_words.board_model())
+
+
+#: openWakeWord's own words, which it can load by name (no file here).
+_STOCK_WAKE_WORDS = frozenset({"hey_jarvis", "alexa", "hey_mycroft", "hey_rhasspy",
+                               "timer", "weather"})
+
+
+def _effective_wake_words(cfg: "Config") -> list[dict[str, Any]]:
+    """The words this room listens for, main word first, at most
+    `_wake_words_limit`: ``[{"slug", "path", "threshold"}]``. ``path`` is
+    the model file to load (None: openWakeWord's built-in of that name);
+    ``threshold`` the word's own (the main word's is always the effective
+    [wake] threshold, as before; an extra word without one of its own uses
+    the [wake] threshold too). An extra word whose model isn't in the cache
+    is left out (logged): loading it by name would fail the whole load."""
+    first = _effective_wake_word(cfg)
+    main_threshold = _effective_wake_threshold(cfg)
+    words = [{"slug": first, "path": _effective_wake_model_path(cfg), "threshold": main_threshold}]
+    stored = wake_words.read_list(WAKE_WORDS_SIDECAR, first) or []
+    if len(stored) < 2:
+        return words
+    limit = _wake_words_limit(cfg)
+    for extra in stored[1:]:
+        if len(words) >= limit:
+            log.info("wake words: this device runs %d; %r and any after it are not loaded",
+                     limit, extra["slug"])
+            break
+        model = WAKE_MODELS_DIR / f"{extra['slug']}.onnx"
+        if model.is_file():
+            path: str | None = str(model)
+        elif extra["slug"] in _STOCK_WAKE_WORDS:
+            path = None
+        else:
+            log.warning("wake words: no model for %r in %s yet; not listening for it",
+                        extra["slug"], WAKE_MODELS_DIR)
+            continue
+        words.append({"slug": extra["slug"], "path": path,
+                      "threshold": extra["threshold"] if extra["threshold"] is not None
+                      else main_threshold})
+    return words
+
+
+def _hello_wake_words(cfg: "Config") -> list[str]:
+    """The words this room listens for, for its hello (main word first).
+    Never fails the hello: the main word alone when the list can't be read."""
+    try:
+        return [w["slug"] for w in _effective_wake_words(cfg)]
+    except Exception as e:  # noqa: BLE001 - a hello always goes out
+        log.debug("wake words for the hello: %s", e)
+        return [_effective_wake_word(cfg)]
 
 
 def _clear_wake_threshold_sidecar(why: str) -> None:
@@ -1727,6 +1795,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # Cached like _wake_word; refreshed in _load_wake_model. Every
         # pred.get(...) compares against this, not the raw cfg value.
         self._wake_threshold = _effective_wake_threshold(cfg)
+        # The room's extra wake words (1.4.0) and each one's threshold: more
+        # openWakeWord prediction keys beside `_wake_word`. Set by
+        # `_load_wake_model`; none until then.
+        self._wake_thresholds: dict[str, float] = {}
         # Self-upgrade (Feature 10) rollback latch. Set True by the `ready`
         # frame handler once the freshly-upgraded code connects successfully;
         # the post-restart watchdog reads it to decide whether the upgrade
@@ -2331,8 +2403,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # a later one.
         woke, self._woke_at = self._woke_at, None
         score, self._wake_score = self._wake_score, None
+        fired, self._wake_fired = self._wake_fired, None
         if trigger == "wake_word" and woke is not None:
             msg["wake_ms"] = max(0, int(round((self._utt_started - woke) * 1000)))
+            # Which of the room's words fired (1.4.0), so the room's history
+            # says what woke it. An older core ignores the field.
+            if fired:
+                msg["wake_word"] = fired
             # The wake's peak score (satellite/wake_gate.py), kept with the
             # turn on the core. An older core ignores the field.
             if score is not None:
@@ -5727,36 +5804,37 @@ class Satellite(pc_engine.SpareDeviceEngine):
     def _load_wake_model(self):  # -> openwakeword.model.Model
         from openwakeword.model import Model as WakeWordModel
 
-        # Resolve the EFFECTIVE wake word + model, honoring the runtime
-        # sidecar (a model pushed from the dashboard) over the [wake] config.
-        # The openWakeWord prediction dict is keyed by the loaded model's
-        # STEM, which the effective wake word MUST match — they derive from
-        # the same sidecar slug (or both from cfg) so they can't disagree.
-        # Cache the effective wake word once at load: every `pred.get(...)`
-        # site reads `self._wake_word`, not the raw cfg value, so a sidecar
-        # override is honored without re-reading the file per chunk.
-        self._wake_word = _effective_wake_word(self.cfg)
-        self._wake_threshold = _effective_wake_threshold(self.cfg)
-        model_path = _effective_wake_model_path(self.cfg)
+        # Resolve the EFFECTIVE wake words + models, honoring the runtime
+        # sidecars (words pushed from the dashboard) over the [wake] config.
+        # The openWakeWord prediction dict is keyed by each loaded model's
+        # STEM, which each slug MUST match — they derive from the same
+        # sidecar slug (or both from cfg) so they can't disagree. Cached
+        # once at load: every `pred.get(...)` site reads
+        # `self._wake_thresholds`, not the raw cfg value. The words share
+        # one audio front end (satellite/wake_words.py); each extra one is a
+        # small classifier with its own threshold.
+        words = _effective_wake_words(self.cfg)
+        self._wake_word = words[0]["slug"]
+        self._wake_threshold = words[0]["threshold"]
+        self._wake_thresholds = {w["slug"]: float(w["threshold"]) for w in words[1:]}
+        model_path = words[0]["path"]
 
         # Custom-trained model (e.g. "Hey Domovoi") if a path resolved — the
-        # openWakeWord prediction key is the model file's stem, which
-        # `self._wake_word` must match. Otherwise use the named pre-bundled
-        # model and auto-download on first use.
+        # openWakeWord prediction key is the model file's stem, which the
+        # slug must match. Otherwise the named pre-bundled model, downloaded
+        # on first use.
         if model_path:
             log.info(
                 "loading custom wake model from %s (wake word %r)",
                 model_path, self._wake_word,
             )
-            oww = WakeWordModel(
-                wakeword_models=[model_path],
-                inference_framework="onnx",
-            )
-        else:
-            oww = WakeWordModel(
-                wakeword_models=[self._wake_word],
-                inference_framework="onnx",
-            )
+        if len(words) > 1:
+            log.info("loading %d wake words: %s", len(words),
+                     ", ".join(f"{w['slug']} (threshold {w['threshold']:.2f})" for w in words))
+        oww = WakeWordModel(
+            wakeword_models=[w["path"] or w["slug"] for w in words],
+            inference_framework="onnx",
+        )
         # What the health sample reports as this room's wake word: the model
         # that loaded, by the name openWakeWord keys it on (the file's stem,
         # or the built-in's name). Set only once the load succeeded.
@@ -5806,22 +5884,38 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # and after a turn that went wrong (ignored as background talk, cut
         # off at the recording cap, an error or no reply) nothing wakes the
         # room for `cooldown_sec`. After an ordinary turn, no cooldown.
-        gate = wake_gate.WakeGate(
-            self._wake_threshold,
-            getattr(self.cfg, "wake_patience_frames", wake_gate.PATIENCE_DEFAULT),
-            getattr(self.cfg, "wake_cooldown_sec", wake_gate.COOLDOWN_SEC_DEFAULT),
-        )
-        # The last few chunk scores and the near-miss tracker, for the log:
-        # what a real wake word looks like around its peak (one chunk or
-        # several), and how often a real attempt falls just short of the
-        # threshold, are what the threshold and the patience are tuned with
-        # (2026-11-10: a real far-field wake scored 0.90 on ONE chunk).
-        recent_scores: deque[float] = deque(maxlen=wake_gate.SCORE_WINDOW)
-        near = wake_gate.NearMiss(gate.threshold)
+        # One gate per word, each at its own threshold (1.4.0: a room may
+        # have several words; satellite/wake_words.py). The patience and the
+        # cooldown are the room's, the same for every word.
+        thresholds = self._wake_word_thresholds()
+        many = len(thresholds) > 1
+        gates = {
+            slug: wake_gate.WakeGate(
+                threshold,
+                getattr(self.cfg, "wake_patience_frames", wake_gate.PATIENCE_DEFAULT),
+                getattr(self.cfg, "wake_cooldown_sec", wake_gate.COOLDOWN_SEC_DEFAULT),
+            )
+            for slug, threshold in thresholds.items()
+        }
+        gate = next(iter(gates.values()))
+        # The last few chunk scores and the near-miss tracker, per word, for
+        # the log: what a real wake word looks like around its peak (one
+        # chunk or several), and how often a real attempt falls just short
+        # of the threshold, are what the threshold and the patience are
+        # tuned with (2026-11-10: a real far-field wake scored 0.90 on ONE
+        # chunk).
+        recents: dict[str, deque[float]] = {
+            slug: deque(maxlen=wake_gate.SCORE_WINDOW) for slug in gates}
+        nears = {slug: wake_gate.NearMiss(g.threshold) for slug, g in gates.items()}
         quiet, self._quiet_next_wake = self._quiet_next_wake, False
-        gate.quiet_for(time.monotonic(), None if quiet else 0.0)
+        for g in gates.values():
+            g.quiet_for(time.monotonic(), None if quiet else 0.0)
         cooldown_logged = not quiet or gate.cooldown_sec <= 0
-        log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
+        if many:
+            log.info("listening for wake words %s in room %r",
+                     ", ".join(repr(w) for w in gates), self.cfg.room_id)
+        else:
+            log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
         # openwakeword's predict() requires chunks that are multiples of 80 ms
         # (1280 samples at 16 kHz). Mic frames are 30 ms (480 samples), so we
         # batch them into a remainder buffer and call predict() once per
@@ -5884,45 +5978,61 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("wake-word predict failed: %s", e)
                     # A gap in the scores: a run across it is not "in a row".
-                    gate.reset()
+                    for g in gates.values():
+                        g.reset()
                     continue
                 chunk_at = time.monotonic()
-                score = pred.get(self._wake_word, 0.0)
-                try:
-                    recent_scores.append(float(score))
-                except (TypeError, ValueError):
-                    recent_scores.append(0.0)
-                fired = gate.feed(score, chunk_at)
-                missed = near.feed(recent_scores[-1], chunk_at)
-                if missed is not None and not fired:
-                    log.info(
-                        "wake score peaked %.3f, under the threshold %.2f: not a wake "
-                        "(scores %s)",
-                        missed, gate.threshold, wake_gate.format_scores(recent_scores),
-                    )
-                if not cooldown_logged and not gate.in_cooldown(chunk_at):
-                    cooldown_logged = True
-                    swallowed = gate.take_cooldown_peak()
-                    if swallowed is not None:
+                fired = False
+                fired_slug = self._wake_word
+                recent_scores = recents[fired_slug] if fired_slug in recents else deque()
+                for slug, word_gate in gates.items():
+                    scores = recents[slug]
+                    score = pred.get(slug, 0.0)
+                    try:
+                        scores.append(float(score))
+                    except (TypeError, ValueError):
+                        scores.append(0.0)
+                    which = f" {slug!r}" if many else ""
+                    if word_gate.feed(score, chunk_at) and not fired:
+                        fired, fired_slug = True, slug
+                        gate, recent_scores = word_gate, scores
+                    missed = nears[slug].feed(scores[-1], chunk_at)
+                    if missed is not None and not fired:
                         log.info(
-                            "wake word ignored in the %.1fs after the last turn "
-                            "(peak score %.3f, threshold %.2f)",
-                            gate.cooldown_sec, swallowed, gate.threshold,
+                            "wake%s score peaked %.3f, under the threshold %.2f: not a wake "
+                            "(scores %s)",
+                            which, missed, word_gate.threshold, wake_gate.format_scores(scores),
                         )
-                short = gate.take_short_run()
-                if short is not None:
-                    log.info(
-                        "wake score %.3f for %d chunk(s), %d needed in a row: not a wake "
-                        "(scores %s)",
-                        short[0], short[1], gate.patience,
-                        wake_gate.format_scores(recent_scores),
-                    )
+                    short = word_gate.take_short_run()
+                    if short is not None:
+                        log.info(
+                            "wake%s score %.3f for %d chunk(s), %d needed in a row: not a wake "
+                            "(scores %s)",
+                            which, short[0], short[1], word_gate.patience,
+                            wake_gate.format_scores(scores),
+                        )
+                if not cooldown_logged and not any(g.in_cooldown(chunk_at) for g in gates.values()):
+                    cooldown_logged = True
+                    for slug, word_gate in gates.items():
+                        swallowed = word_gate.take_cooldown_peak()
+                        if swallowed is not None:
+                            log.info(
+                                "wake word%s ignored in the %.1fs after the last turn "
+                                "(peak score %.3f, threshold %.2f)",
+                                f" {slug!r}" if many else "",
+                                word_gate.cooldown_sec, swallowed, word_gate.threshold,
+                            )
                 if fired:
                     woke_at = chunk_at
                     # For the capture's `utterance_start` (`wake_ms`,
-                    # `wake_score`).
+                    # `wake_score`, `wake_word`).
                     self._woke_at = woke_at
                     self._wake_score = gate.last_peak
+                    self._wake_fired = fired_slug
+                    # The other words' runs don't carry into the next listen.
+                    for g in gates.values():
+                        if g is not gate:
+                            g.reset()
                     # A turn is open from here until this thread is back at
                     # the top of this method: no music starts in it. Marked
                     # BEFORE the `_stop_music` below, which is what makes the
@@ -5931,12 +6041,13 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     # The peak score, in the log ring: what a false wake from
                     # the TV scored is the number a threshold is tuned with.
                     log.info(
-                        "wake word detected (peak score %.3f over %d chunk(s); "
+                        "wake word%s detected (peak score %.3f over %d chunk(s); "
                         "threshold %.2f, %d in a row needed; scores %s)",
-                        gate.last_peak or 0.0, gate.last_run, gate.threshold, gate.patience,
-                        wake_gate.format_scores(recent_scores),
+                        f" {fired_slug!r}" if many else "", gate.last_peak or 0.0, gate.last_run, gate.threshold,
+                        gate.patience, wake_gate.format_scores(recent_scores),
                     )
-                    near.reset()
+                    for n in nears.values():
+                        n.reset()
                     # Network-degraded short-circuit — when the WS is
                     # genuinely down OR the watcher gave up on a
                     # reassociate, the server round-trip will
@@ -5980,7 +6091,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             self._drain_mic()
                             self._turn_open = False
                             # No server: a turn that went wrong.
-                            gate.quiet_for(time.monotonic())
+                            for g in gates.values():
+                                g.quiet_for(time.monotonic())
                             cooldown_logged = gate.cooldown_sec <= 0
                             continue  # back to listening
                     # Flip the LED to "listening" immediately so the
@@ -6642,6 +6754,28 @@ class Satellite(pc_engine.SpareDeviceEngine):
 
         return "shutdown"
 
+    def _wake_word_thresholds(self) -> dict[str, float]:
+        """Every word this room listens for and its threshold, main word
+        first: the main word at ``self._wake_threshold`` (what the room's
+        Wake sensitivity is), the extras `_load_wake_model` loaded
+        (``self._wake_thresholds``) at their own."""
+        out = {self._wake_word: self._wake_threshold}
+        for slug, threshold in (getattr(self, "_wake_thresholds", None) or {}).items():
+            out.setdefault(slug, threshold)
+        return out
+
+    def _wake_hit(self, pred: dict[str, Any]) -> str | None:
+        """The first of the room's words whose score in ``pred`` is over its
+        own threshold (one chunk: barge-in and the drop-in watch don't use
+        the patience), else None."""
+        for slug, threshold in self._wake_word_thresholds().items():
+            try:
+                if float(pred.get(slug, 0.0)) > threshold:
+                    return slug
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _await_response_with_wake_barge(self, oww) -> str:
         """Wake-word-gated barge: only the wake word interrupts playback.
 
@@ -6690,7 +6824,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("wake-barge predict failed: %s", e)
                     continue
-                if pred.get(self._wake_word, 0.0) > self._wake_threshold:
+                if self._wake_hit(pred) is not None:
                     log.info("barge-in detected (wake word)")
                     self._emit_text({"type": "barge_in"})
                     self.stop_playback.set()
@@ -7146,8 +7280,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 except Exception as e:
                     log.warning("drop-in wake predict failed: %s", e)
                     continue
-                if pred.get(self._wake_word, 0.0) > self._wake_threshold:
+                hit = self._wake_hit(pred)
+                if hit is not None:
                     self._woke_at = time.monotonic()   # the capture's wake_ms
+                    self._wake_fired = hit
                     detected.set()
                     return
 
@@ -7261,7 +7397,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self._leds.set_state("idle")
         log.info("exiting wake-recording loop: %d/%d clips sent", recorded, target)
 
-    def _apply_wake_switch(self, slug: str | None, threshold: float | None = None) -> None:
+    def _apply_wake_switch(self, slug: str | None, threshold: float | None = None,
+                           words: list[dict[str, Any]] | None = None) -> None:
         """Persist a wake-model switch (a model pushed from the dashboard) so
         it survives restarts, mirror the model into the local cache, then
         restart the service to load it. ``threshold`` (the registry word's
@@ -7270,6 +7407,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         sensitivity the device uses (one number; the old separate threshold
         file overrode the setting unseen, 2026-11-11). No threshold → the
         [wake] setting stays as it is.
+
+        ``words`` (1.4.0): the room's whole list, ``slug`` first, each with
+        its own threshold; kept in WAKE_WORDS_SIDECAR. Without it (an older
+        core, or one word) the room runs ``slug`` alone.
 
         Writing the slug to WAKE_SIDECAR makes `_effective_wake_word` /
         `_effective_wake_model_path` resolve to ``<slug>`` + ``<slug>.onnx`` on
@@ -7296,6 +7437,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
         except (OSError, ValueError) as e:
             log.warning("set_wake_word: could not persist %r: %s", slug, e)
             return
+        listed = [w for w in (words or []) if isinstance(w, dict) and w.get("slug")]
+        if not listed or listed[0]["slug"] != slug.strip():
+            listed = [{"slug": slug.strip(), "threshold": None}]
+        try:
+            wake_words.write_list(WAKE_WORDS_SIDECAR, listed)
+            if len(listed) > 1:
+                log.info("set_wake_word: also listening for %s (restart to apply)",
+                         ", ".join(repr(w["slug"]) for w in listed[1:]))
+        except (OSError, ValueError) as e:
+            # The main word still switches; the extras wait for the next push.
+            log.warning("set_wake_word: could not keep the extra wake words: %s", e)
         if value is None:
             # A word pushed without a threshold of its own uses the [wake]
             # setting, not one an earlier word left behind.
@@ -7616,6 +7768,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
     _woke_at: float | None = None
     # Its peak wake score (`wake_score`, satellite/wake_gate.py).
     _wake_score: float | None = None
+    # Which of the room's words fired it (`wake_word` in utterance_start).
+    _wake_fired: str | None = None
     # The last turn went wrong (ignored as background talk, cut off at the
     # recording cap, an error, no reply): the next wake waits out
     # [wake] cooldown_sec (satellite/wake_gate.py). Read once.
@@ -8237,14 +8391,21 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # it does blocking HTTP + a service restart and must not stall the
             # asyncio receiver loop.
             slug = payload.get("slug")
+            # `words` (1.4.0): the room's whole list, main word first, sent
+            # only to a device whose hello gave `wake_words_max`.
+            words = wake_words.parse_words(payload.get("words")) or None
+            what = (f"the wake words {', '.join(repr(w['slug']) for w in words)} pushed to this room"
+                    if words and len(words) > 1 else f"the wake word {slug!r} pushed to this room")
             if self._held(
-                "wake_word", f"the wake word {slug!r} pushed to this room",
-                lambda s_=slug, t_=payload.get("threshold"): self._apply_wake_switch(s_, t_),
+                "wake_word", what,
+                lambda s_=slug, t_=payload.get("threshold"), w_=words:
+                    self._apply_wake_switch(s_, t_, words=w_),
             ):
                 return
             threading.Thread(
                 target=self._apply_wake_switch,
                 args=(slug, payload.get("threshold")),
+                kwargs={"words": words},
                 daemon=True,
                 name="set-wake-word",
             ).start()
@@ -8308,6 +8469,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # push installed, else the [wake] config — so the
             # server's per-room view matches what we listen for.
             "wake_word": _effective_wake_word(self.cfg),
+            # Every word it listens for (main word first) and how many it
+            # can run at once (satellite/wake_words.py): the core never
+            # pushes more. An older core ignores both.
+            "wake_words": _hello_wake_words(self.cfg),
+            "wake_words_max": _wake_words_limit(self.cfg),
             # Version LABEL of the last applied self-upgrade (Feature
             # 10), so the dashboard can show which code this room runs.
             # None until the first upgrade lands. Supersedes the old

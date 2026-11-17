@@ -368,8 +368,8 @@ def test_past_the_window_a_reload_is_view_only_and_asks_nothing(driven) -> None:
     assert "signed in (view only after reload)" in b["pills"]
     assert b["who"] == ["Admin (view only)"]
     assert b["until"] == ""
-    assert "more than an hour after you signed in" in b["viewOnlyNote"]
-    assert "more than an hour after you signed in" in b["withheldText"]
+    assert "more than an hour after your last admin change" in b["viewOnlyNote"]
+    assert "more than an hour after your last admin change" in b["withheldText"]
     assert "sign in again" in b["buttons"]
 
 

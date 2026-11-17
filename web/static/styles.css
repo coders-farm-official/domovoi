@@ -2243,6 +2243,12 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-doc-job-line { flex: 1; min-width: 0; font-size: 11px; color: var(--fg-muted); }
 .chat-doc-job-bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .chat-doc-job-bar > span { display: block; height: 100%; background: var(--brand); transition: width .4s ease; }
+/* Videos in chat (chat_videos.jsx): the attachment's progress, and what was kept. */
+.chat-video-chip { gap: 6px; min-width: min(300px, 100%); }
+.chat-video-kept { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; padding-top: 4px; border-top: 1px solid var(--border); }
+.chat-video-kept-head { font-size: 11px; font-weight: 600; color: var(--fg-muted); margin-bottom: 2px; }
+.chat-video-kept-line { display: grid; grid-template-columns: 3.2em 1fr; gap: 6px; font-size: 12px; line-height: 1.45; }
+.chat-video-kept-line > .mono { color: var(--fg-faint); }
 .chat-doc-carry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* The honest heads-up (chat_documents.jsx HeadsUpCard, D3): the card that
    is the reply until an option is picked, and Settings → Chat. */
@@ -2686,4 +2692,20 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .song-menu-item { min-height: 44px; }
   .q-target { height: 40px; font-size: 16px; }
   .q-grip { width: 24px; height: 44px; }
+}
+
+/* Settings → Household → Queue history (queue_history.jsx, 1.3.1). */
+.qh-scroll { overflow-x: auto; max-width: 100%; }
+table.qh-tbl tbody td { height: auto; padding-top: 8px; padding-bottom: 8px; vertical-align: top; }
+table.qh-tbl .qh-clip { min-width: 160px; max-width: 260px; overflow-wrap: break-word; }
+table.qh-tbl td.mono, table.qh-tbl .qh-nowrap { white-space: nowrap; }
+.qh-row { cursor: pointer; }
+.qh-row:focus-visible td { background: var(--brand-soft); outline: none; }
+.qh-muted { color: var(--fg-muted); font-size: 12px; }
+.qh-faded td { color: var(--fg-muted); }
+.qh-summary { display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5; }
+.qh-line { display: grid; grid-template-columns: 100px 1fr; gap: 12px; align-items: baseline; }
+@media (max-width: 760px) {
+  .qh-line { grid-template-columns: 1fr; gap: 2px; }
+  table.qh-tbl .qh-clip { min-width: 140px; max-width: 180px; }
 }

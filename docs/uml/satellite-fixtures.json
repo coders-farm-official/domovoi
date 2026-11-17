@@ -201,6 +201,10 @@
         "type": "hello",
         "room_id": "kitchen",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 3,
         "synced_sha": "44f0fff",
         "supports_full_duplex": false,
         "pairing_token": "fixture-pairing-token-kitchen-0000000000000000000000",
@@ -397,6 +401,10 @@
         "type": "hello",
         "room_id": "living-room",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 3,
         "synced_sha": "44f0fff",
         "supports_full_duplex": true,
         "pairing_token": "fixture-pairing-token-living-room-0000000000000000000000",
@@ -593,6 +601,10 @@
         "type": "hello",
         "room_id": "study",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 5,
         "synced_sha": "44f0fff",
         "supports_full_duplex": false,
         "pairing_token": "fixture-pairing-token-study-0000000000000000000000",
@@ -805,6 +817,10 @@
         "type": "hello",
         "room_id": "den",
         "wake_word": "hey_jarvis",
+        "wake_words": [
+          "hey_jarvis"
+        ],
+        "wake_words_max": 5,
         "synced_sha": "44f0fff",
         "supports_full_duplex": false,
         "pairing_token": "fixture-pairing-token-den-000000000000000000000000",

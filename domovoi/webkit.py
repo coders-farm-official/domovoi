@@ -367,8 +367,9 @@ async def admin_required(request: Request) -> None:
     dashboard cookie can never authorize a cross-site POST (§7.3). Keeps
     the pre-setup LAN-trust grace (a fresh install works before the admin
     password exists); afterwards a request with no usable credential is
-    refused with 401."""
-    result = await check_admin_request(request)
+    refused with 401. A write that passes with the Bearer is an admin
+    action and restarts the session's idle hour; a GET never does."""
+    result = await check_admin_request(request, activity=True)
     if result in ("ok", "pre-setup"):
         return
     if result == "cookie-only":

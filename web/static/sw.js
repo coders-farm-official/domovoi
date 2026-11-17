@@ -89,6 +89,7 @@ const SHELL_ASSETS = [
   // Settings → Household → Media folders.
   '/media_folders.jsx',
   '/music_mix.jsx',
+  '/queue_history.jsx',
   // Settings → Documents → Fonts, and the editors' font picker.
   '/fonts.jsx',
   '/font_picker.css',

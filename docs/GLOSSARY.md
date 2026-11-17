@@ -21,7 +21,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Acquisition** — a structured request to obtain media for the local library ("get me this song", by search text or URL). Acquisitions go into a queue table where a *fulfiller* picks them up; with no fulfiller installed they simply wait, visibly, until one is. See *media acquisition queue*.
 
-**Admin session** — the bearer token you get by logging in with the admin password: it lasts 30 days from its last use, and 90 days at most. Risky operations on both the dashboard (port 6369) and the core API (port 6370) accept only this token; it's minted once against a shared table, so one login covers both.
+**Admin session** — the bearer token you get by logging in with the admin password: it signs out after 1 hour idle (an hour with no change made as admin), and lasts 90 days at most. Risky operations on both the dashboard (port 6369) and the core API (port 6370) accept only this token; it's minted once against a shared table, so one login covers both.
 
 **AEC (acoustic echo cancellation)** — removing the satellite's own speaker output from its microphone signal. The XVF3800 array does this on-chip, which is what makes reliable *barge-in* and open-mic *chat mode* possible; the 2-mic HAT has no AEC. (The wake greeting does not need it: the satellite plays it before it listens — see *wake acknowledgement*.)
 

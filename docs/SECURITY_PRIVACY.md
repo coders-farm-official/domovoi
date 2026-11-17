@@ -1466,7 +1466,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Pulling new code, and clearing a tamper incident** (the pull moves the code on disk that the core runs and serves to satellites, and on an install no one has claimed yet it would move a pinned Windows install to upstream's tip; clearing the last open tamper incident lifts the container guard's freeze) | Core: `POST /v1/admin/version/pull`, `POST /v1/admin/containers/incidents/{id}/clear`. Dashboard: `POST /api/config/version/pull`, `POST /api/containers/incidents/{id}/clear`. | **Fails closed** — 501 until setup (delta review N5, 2026-10-16; both had the pre-setup grace before). Acknowledging a failure and running a check now stay on the admin tier with the grace. |
 | **Library sweeps** (long server-side jobs) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/music/library/enrich/repair`. The version *check* beside the code pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
-| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)) | n/a — these only exist once setup is done. |
+| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)); every admin session signs out after an hour without an admin action ([Signing out after an hour idle](#signing-out-after-an-hour-idle)) | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
 "requires the admin password" — but none of those routes is open any more.
@@ -1534,10 +1534,13 @@ reason, so a new route cannot quietly ship open.
   every other session** — only the session that made the change stays
   logged in.
 - **Sessions** are 256-bit bearer tokens; the database stores **only the
-  sha256** of each token, with a **30-day sliding expiry** (using it renews
-  it) under a **90-day absolute cap** (a session older than that is refused
-  however recently it was used). You can list and revoke sessions from the
-  dashboard settings.
+  sha256** of each token. A session **signs out after 1 hour idle**: an
+  hour after its last *admin action* (a change made as admin), whatever
+  the page does by itself in the meantime, under a **90-day absolute cap**
+  (a session older than that is refused however recently it acted). See
+  [Signing out after an hour idle](#signing-out-after-an-hour-idle). The
+  sessions can be listed and revoked over the API
+  (`GET /api/auth/sessions`).
 - **The Android app's "remove from server"** (Audiobooks, since
   2026-10-20) is the one place the app takes the admin password. It sends
   it only to a server that has just proved, on the phone's current
@@ -1546,9 +1549,9 @@ reason, so a new route cannot quietly ship open.
   (`POST /api/files/delete`) and signs out at once; neither the password
   nor the session is written anywhere on the phone. **Residual:** if the
   app is killed between the sign-in and the sign-out, that session stays
-  valid at the server until its 30-day expiry. It is listed in the
-  dashboard's sessions as `phone app: remove an audiobook` and can be
-  revoked there. `/api/auth/login` has no short-lived option to avoid it.
+  valid at the server until it has gone an hour without an admin action
+  (the delete was its last). It is listed in the sessions as
+  `phone app: remove an audiobook` and can be revoked.
 - **Login is throttled** per source IP: exponential backoff starting at 1 s
   and doubling per consecutive failure, capped at 5 minutes. The attempt is
   counted **before** the password is verified, so concurrent attempts from
@@ -1566,46 +1569,118 @@ reason, so a new route cannot quietly ship open.
   dashboard holds the token in JS memory). A cross-site POST carries
   nothing that authorizes it. The one thing the cookie does beyond
   rendering is let the dashboard's own page take its Bearer back after a
-  reload, inside the reload window — next.
+  reload, inside the reload window — below.
 - **Forgot the password?** `python -m domovoi.main --reset-admin` on the
   server clears the credential and every session and prints a fresh setup
   code. Requires being at the machine — same proof-of-possession logic.
+
+### Signing out after an hour idle
+
+2026-11-16: a dashboard tab left open all night was still admin in the
+morning, and updated the server with no password prompt. A session used
+to last 30 days from its last *use*, and an open tab uses it every few
+seconds by itself (its status reads carry the Bearer), so it never ran
+out.
+
+**The rule.** An admin session ends **1 hour after its last admin
+action** (`ADMIN_IDLE_TIMEOUT_MIN` in `domovoi/config.py`, a constant,
+not a setting), and at 90 days whatever happens. Signing in is the first
+action. The dashboard says it where it explains admin sign-in ("signs out
+after 1 hour idle"), says on the Settings → Advanced Admin card when it
+will happen unless you change something first, and when it does happen
+drops the page to signed out and says "Signed out after 1 hour without
+admin activity". Admin-only controls then hide or ask for the password,
+as they do for anyone not signed in.
+
+**What counts as an admin action, and why it is decided by the server.**
+Only a request that *changes something* (`POST`, `PUT`, `PATCH`,
+`DELETE`) and passes an admin *write* gate with the session's Bearer:
+the admin and security tiers on both processes, plugin management, a
+plugin's admin routes, and the session and password routes. Nothing else
+moves the clock: no `GET` (status probes, health, the version check,
+admin reads), no WebSocket, no page load with the cookie, no reload
+taking its sign-in back (`POST /api/auth/resume`), and not the device
+tier's writes, even when a browser without a household token makes them
+on its admin Bearer — every write the dashboard sends by itself (device
+registration, presence, listens, up next, printer discovery) is on the
+device tier. The alternative, a header the dashboard sets on calls a
+person caused, was rejected: every call site would have to remember it,
+and any script holding the Bearer could add it to a poll and keep the
+session alive for ever. Under this rule a script can keep a session
+alive only by *changing things as admin*, which is what an admin does,
+and the 90-day cap still ends it. A credential holder who deliberately
+scripts admin changes is not something any timeout can tell from a
+person.
+
+**One session per sign-in.** Each password sign-in is its own session,
+with its own clock. Tabs of the browser that signed in share it (a reload
+or a new tab takes back that same session), so a change in one keeps the
+others signed in; another browser, another device, or a second sign-in in
+the same browser has its own, and one device's activity never keeps
+another's session alive.
+
+**Clocks.** Every stamp and every comparison uses the database's clock
+(`now()`), so the two processes, the phones and the browsers never
+disagree about an hour; a browser counts down the *seconds left* the
+server gave it, never a wall-clock time. When its count runs out it asks
+the server once (`GET /api/auth/status` with the Bearer, which moves
+nothing): another tab of the browser may have acted, and then it counts
+again. A request refused for the Bearer asks the same question first, so
+a background tab whose timers ran late drops to signed out quietly rather
+than popping a password prompt. A last-action stamp from the future (the
+database clock stepped back) more than a minute ahead is not trusted:
+that session is refused rather than kept alive by the step.
+
+**The 30-day sliding expiry is gone.** An hour of idleness always came
+first, so it meant nothing; `admin_sessions.expires_at` now holds the
+idle deadline, and `last_used_at` the last admin action. A session
+ended more than a day ago is deleted at the next sign-in.
+
+**Sessions from before the change** keep the `last_used_at` their last
+request stamped, polls included. So a tab that was open across the
+upgrade stays admin for at most an hour more unless someone acts in it,
+and nobody is signed out in the middle of the update itself; its 30-day
+`expires_at` is not believed. A session that never stamped
+`last_used_at` counts from its creation, so it has long since ended.
 
 ### Staying signed in across a reload
 
 Owner decision, 2026-10-14: "If someone logs in with admin, from that
 device, that exact session, they should be good for within 60 mins of
 signing in. Refreshing should not lose admin on the same machine, same
-session."
+session." Since the idle timeout (2026-11-16) the minutes count from the
+session's **last admin action**, the same clock as the session itself.
 
-**What a reload can do now.** For **60 minutes** after you enter the admin
-password in a browser, reloading the dashboard, or opening it in another
-tab of that same browser, is fully signed in: no password prompt, and
-every admin action works, the security tier included, exactly as before
-the reload. The minutes count from the password sign-in (or a password
-change made from that session), never from use, so a busy session does
-not stretch them. After that, a reload is **view only** as it always was:
-pages render, and the first change asks for the password. A tab that was
-never reloaded keeps its sign-in as before. The Settings → Advanced
+**What a reload can do now.** For **60 minutes** after your last admin
+change in a browser (signing in counts), reloading the dashboard, or
+opening it in another tab of that same browser, is fully signed in: no
+password prompt, and every admin action works, the security tier
+included, exactly as before the reload. That includes the reload the
+"Domovoi has been updated" notice asks for right after you pressed
+Update. A reload itself is not an admin action, so a page that reloads
+itself on a timer does not keep the session alive. After the hour the
+session is over and the person signs in again. The Settings → Advanced
 Admin card says until when a reload keeps you signed in. The length is
 Settings → Advanced → Security → **Stay signed in after a reload**
-(`ADMIN_RELOAD_WINDOW_MIN`, minutes, 0–1440, default 60, applies at once);
-**0** turns it off and every reload is view only again.
+(`ADMIN_RELOAD_WINDOW_MIN`, minutes, 0–60, default 60, applies at once):
+it can be shorter than the hour (past it, inside the hour, a reload is
+**view only**: pages render, and the first change asks for the password),
+never longer; **0** makes every reload view only.
 
-**How.** The server stamps each session with the moment it last proved
-the password (`admin_sessions.signed_in_at`, V028). The cookie the sign-in
-set is a 256-bit secret of its own; the session row keeps only its
+**How.** The server stamps each session with its last admin action
+(`admin_sessions.last_used_at`; a sign-in stamps it too). The cookie the
+sign-in set is a 256-bit secret of its own; the session row keeps only its
 sha256, beside the session's Bearer *wrapped* under it (XOR with an
 HMAC-SHA256 of the cookie), so the database alone never yields the Bearer.
 A reloaded page asks `POST /api/auth/resume`, which unwraps that
-session's **own** Bearer and hands it back — nothing new is minted — only
-when all of these hold:
+session's **own** Bearer and hands it back — nothing new is minted, and
+nothing about the session moves — only when all of these hold:
 
 * the request carries the session cookie, and that session is live: not
-  signed out, revoked, expired or past the 90-day cap;
-* `now − signed_in_at` is inside the window (and `signed_in_at` is not in
-  the future: a database clock stepped back after a sign-in does not
-  stretch the window);
+  idle for an hour, signed out, revoked or past the 90-day cap;
+* the last admin action is inside the window (and not in the future past
+  the minute of slack: a database clock stepped back does not stretch
+  the window);
 * it carries `X-Requested-With`;
 * it is **same-origin**: `Origin` is exactly the scheme, host and port the
   request was sent to (its `Host`); a request with no `Origin` must carry
@@ -1631,17 +1706,21 @@ request itself changes nothing.
 **What ends it, at once:** signing out in any tab of that browser (it
 revokes the session and drops the cookie), revoking the session, changing
 the password from another session (every other session is revoked),
-`--reset-admin`, setting the window to 0. **Another device never inherits
-it:** it holds its own cookie, or none, and a fresh sign-in on another
-device does not extend this browser's window. Sessions that existed
-before the upgrade carry no `signed_in_at` and no cookie of their own:
-their old cookie (which was the Bearer) stops working at all after the
-upgrade, so that browser reads as signed out once and its owner signs in
-again; a tab still holding the Bearer in memory keeps working. The
-dashboard reads the window live from the core; while the core is down or
-restarting it uses the smaller of the last value it saw and the one it
-started with (0, no resume, if it has seen none), so an admin who turned
-it off is not turned back on by a restart.
+`--reset-admin`, setting the window to 0, and an hour without an admin
+action. **Another device never inherits it:** it holds its own cookie, or
+none, and a fresh sign-in on another device does not extend this
+browser's window. Sessions from before V028 carry no cookie of their
+own: their old cookie (which was the Bearer) stops working at all after
+the upgrade, so that browser reads as signed out once and its owner signs
+in again; a tab still holding the Bearer in memory keeps working (until
+its idle hour). The dashboard reads the window live from the core; while
+the core is down or restarting it uses the smaller of the last value it
+saw and the one it started with, so an admin who turned it off is not
+turned back on by a core restart. A dashboard process that has just
+started (a server update restarts it) and has seen no live value yet uses
+the one it started with — read from the same `.env` a Settings save
+writes — so the reload after an update keeps admin; it used to answer 0
+then, which lost the sign-in of the person who had just pressed Update.
 
 **What a service on the same box can do with the cookie.** A browser
 sends a cookie to every *port* of the host that set it, so every other
@@ -1652,8 +1731,9 @@ cookie *was* the admin Bearer: such a service held a full admin token for
 up to 90 days. Now it holds the cookie only. With it, a service that
 chooses to misuse it can still read what an admin's view-only page
 reads — the admin-read tier: settings with their secrets masked,
-satellite logs, the session list — and each such read slides the
-session's expiry, up to its 90-day cap. It can **not** read the
+satellite logs, the session list — while the session lives. Those reads
+move nothing: the cookie can not keep a session alive. It can **not**
+read the
 security tier: the household token and the command recordings answer
 the Bearer only, so a view-only tab says "sign in again" there. And —
 **inside the reload window only** — it can call `POST /api/auth/resume`
@@ -1668,7 +1748,8 @@ server removes the rest. An expired session's cookie, or one past the
 computer — the next person at a shared family PC — gets the admin tier by
 reloading the page, exactly as they would have by using the tab before
 the reload. Sign out when you are done on a shared computer (that ends it
-immediately), or set the window to 0. And a script running inside the
+immediately), or set the window to 0; either way it ends by itself an
+hour after the last admin change. And a script running inside the
 dashboard's own origin (an injected script, if one ever got in) can now
 take the token from a reloaded tab within the window, where before it
 could read it only from a tab that had signed in; this does not widen
@@ -1976,7 +2057,7 @@ Privacy → **Listening history** and each person's People page.
 | **Each person clears their own** | People → a person → **listening history · clear** deletes that person's songs, everywhere (`DELETE /api/music/listens/people/{id}`). The server allows it to **an admin** (Bearer, or a box before setup), and to **a phone or browser claimed as that person** that is not a shared screen, **presents its claim key** (below), and said "this is me" **more than 10 minutes ago**. Anything else is refused (`403`, saying why and who may) and the dashboard offers the admin password. The household's songs and other people's stay. |
 | **Deleting it all** | Settings → Privacy → Listening history → **Delete all listening history** (`POST /api/music/listens/delete-all`): every song, everyone's and the household's, from every room and device, and whose each room's music was. **Admin, security tier**: Bearer only, `501` before setup, like "Delete all voice history". |
 | **Forgetting a person** | Deletes their listening history with them (`ON DELETE CASCADE`), whichever way the person is forgotten; a room whose music was for them becomes the household's, and a phone or browser claimed as them becomes nobody's. |
-| **Who can read it** | `GET /api/music/listens/summary` (how long it is kept and how many songs each person has, never a song) is the **device read** tier, like the rest of the People page. No route returns the songs themselves yet; Up next (a later phase) reads them on the server. |
+| **Who can read it** | `GET /api/music/listens/summary` (how long it is kept and how many songs each person has, never a song) is the **device read** tier, like the rest of the People page. Up next reads the songs on the server. The one route that returns them is the admin's **Queue history** (`GET /api/music/up-next/history/…`, **admin read**, 1.3.1): one Up next session's picks with how long each played and how it ended, read-only. |
 | **What it doesn't reach** | A phone's outbox of songs not yet sent (on the phone, until sent or 7 days old) and a browser's (`domovoi-listen-outbox` in that browser's storage, at most 500 rows); database backups taken before a delete, until they are replaced ([Data at rest](#data-at-rest)). |
 | **What it sends anywhere** | Nothing. The log line for a delete says how many rows went, and whether an admin or the person's own device did it. |
 
@@ -2280,6 +2361,54 @@ letter and write drafts. Who may, where it lives, and what can't happen:
   summary or deletes the job (24 hours at most, 10 minutes once it is done
   with no phone watching, and a restart forgets them), and nothing is
   written to the database.
+
+## Videos in chat
+
+A home-server chat can take one short video a message (at most 3 minutes
+and 2 GiB) and answer questions about it (1.4.0). Who may, where it lives,
+and what can't happen:
+
+* **Who.** Sending a video is a household action (device tier) and needs AI
+  features on: with them off the server takes no video and the dashboard
+  offers none. Reading a job's progress and what was kept is the same read
+  as the thread itself (a paired device or an admin session); stopping one
+  is device tier. The video itself is never served back by any route.
+* **The file is checked before it is accepted.** The upload is the request
+  body, streamed to disk and cut off at 2 GiB (the transport guard refuses a
+  larger declared size before reading anything). ffprobe, run as its own
+  program at the lowest CPU priority, must find a phone format (MP4, MOV
+  or WebM; H.264, HEVC, VP8, VP9 or AV1) of at most 3 minutes, or the file
+  is deleted and the upload refused. The video is never written inside a
+  media library folder: it waits in `~/.domovoi/chat_uploads/videos/`
+  under a random name, and the job's frame grabs and sound in a folder of
+  its own beside it.
+* **The video is deleted once it has been watched.** When the job ends,
+  whether it finished, failed or was stopped, the video file and every frame
+  grab and sound file it made are deleted, and the job's row records when.
+  A video picked in the composer and never sent goes after an hour; one a
+  crash left behind goes at the next start. Only text is kept: the
+  transcript with times, a short description of each of at most 12 frames,
+  and a summary, in the database with the chat (`chat_video_jobs`,
+  `chat_video_segments`, `chat_video_frames`, V064). Deleting the chat
+  deletes them; stopping a job deletes what it had understood so far.
+* **On the household's server only.** What was said is transcribed by the
+  server's own speech model; the frames are described by the chat's vision
+  model (Settings → Models) and the summary written by the chat model, all
+  through the server's Ollama. Nothing goes anywhere else, unless the house
+  points `OLLAMA_URL` at a model off the box, the case the internet switch
+  warns about. Videos are outside "Keep voice history", and the copies in
+  the update unit's database dumps ([Data at rest](#data-at-rest)) keep what
+  a chat held until they are replaced.
+* **Voice answers come first.** The job runs one video at a time in the
+  house, at the lowest priority, and holds off from a room's wake word until
+  the reply has been spoken; a frame being described when a voice turn
+  starts is cancelled and asked again after it, and ffmpeg is held still
+  during the turn.
+* **Text from a video is data, never instructions.** What anyone in the
+  video says, or a sign in a frame, reaches a model inside a marked block it
+  is told never to obey. A frame description is a small model's guess and
+  is always shown as what a frame "might show"; no face is recognised and
+  nobody is named.
 
 ## Looking things up (chat lookups)
 
@@ -4489,7 +4618,8 @@ session cookie is deliberately not marked `Secure` (it would never be sent).
 **Risk accepted:** anyone who can capture packets on your network (a
 compromised machine, a hostile Wi-Fi client, a bad AP) can read the admin
 password as you set or enter it, and can lift a live bearer token and
-replay it for its 30-day sliding lifetime. On a healthy WPA2/WPA3 home LAN
+replay it while it lives: an hour from its last admin action, and longer
+if the replays themselves are admin changes, up to its 90-day cap. On a healthy WPA2/WPA3 home LAN
 the capture bar is real but not high — a compromised laptop on the same
 network clears it.
 

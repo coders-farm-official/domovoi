@@ -262,6 +262,9 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     # A document for a chat, and one a phone hands over to be read
     # (chat_documents.py caps the file itself at 100 MB, as it streams).
     ("/api/chat/documents", 101 * 1024 * 1024),
+    # A video for a chat: the body is the file, streamed to disk as it
+    # arrives (domovoi/chat_video/limits.py caps it at 2 GiB, as it streams).
+    ("/api/chat/videos", 2 * 1024 * 1024 * 1024 + 64 * 1024),
     # A phone chat's letter photo for the home server to read (D6): 8 MB
     # (web/backend/api/chat_letters.py MAX_PHOTO_BYTES) plus its form; the
     # handler reads it into memory, never spooled.

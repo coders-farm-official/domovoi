@@ -93,6 +93,7 @@
   <script type="text/babel" data-presets="react" src="chat_documents.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_drafts.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat_lookups.jsx"></script>
+  <script type="text/babel" data-presets="react" src="chat_videos.jsx"></script>
   <script type="text/babel" data-presets="react" src="chat.jsx"></script>
   <script type="text/babel" data-presets="react" src="people.jsx"></script>
   <script type="text/babel" data-presets="react" src="satellite_media.jsx"></script>
@@ -109,6 +110,7 @@
   <!-- Settings → Household → Media folders (registers its panel). -->
   <script type="text/babel" data-presets="react" src="media_folders.jsx"></script>
   <script type="text/babel" data-presets="react" src="music_mix.jsx"></script>
+  <script type="text/babel" data-presets="react" src="queue_history.jsx"></script>
   <script type="text/babel" data-presets="react" src="settings.jsx"></script>
   <!-- Files is a multi-library browser. It MUST load before doc_editor.jsx /
        sheet_editor.jsx (which register window.DocEditor / window.SheetEditor,
@@ -463,6 +465,9 @@
               {/* A household token this server refused, or its "wait"
                   after wrong ones: said once, here (components.jsx). */}
               <DeviceTokenNotice/>
+              {/* "Signed out after 1 hour without admin activity": this
+                  tab's admin sign-in ended on its own (components.jsx). */}
+              <AdminSignedOutNotice/>
               {/* A plugin's page sits in the plugin frame (components.jsx
                   PluginPageFrame): its name, publisher and a link to its
                   Plugins row above it, and its own accent in place of
