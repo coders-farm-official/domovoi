@@ -100,6 +100,9 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         static let code = "approval_code"
         static let wake = "wake_word"
         static let threshold = "wake_threshold"
+        /// The room's whole word list (1.4.0), main word first, as JSON;
+        /// absent for one word.
+        static let wakeWords = "wake_words"
         static let muted = "muted"
         static let serials = "manifest_serials"
         static let approved = "approved_once"
@@ -184,6 +187,7 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
                 prefs.setString(nil, Keys.serials)
                 prefs.setString(nil, Keys.wake)
                 prefs.setFloat(nil, Keys.threshold)
+                prefs.setString(nil, Keys.wakeWords)
                 prefs.setBool(false, Keys.approved)
             }
             prefs.setString(e.coreURL, Keys.core)
@@ -244,6 +248,23 @@ public final class RoomStore: RoomKeeping, @unchecked Sendable {
         writing.withLock { _ in
             prefs.setString(slug, Keys.wake)
             if let t = RoomWakeSettings.thresholdValue(threshold) { prefs.setFloat(t, Keys.threshold) }
+        }
+    }
+
+    public var wakeExtras: [RoomWakeWord] {
+        guard let text = prefs.string(Keys.wakeWords), let data = text.data(using: .utf8),
+              let kept = try? JSONDecoder().decode([RoomWakeWord].self, from: data)
+        else { return [] }
+        return RoomWakeSettings.extras(kept: kept, main: wakeWord)
+    }
+
+    public func setWakeWords(_ words: [RoomWakeWord]) {
+        writing.withLock { _ in
+            guard words.count > 1, let data = try? JSONEncoder().encode(words) else {
+                prefs.setString(nil, Keys.wakeWords)
+                return
+            }
+            prefs.setString(String(decoding: data, as: UTF8.self), Keys.wakeWords)
         }
     }
 
