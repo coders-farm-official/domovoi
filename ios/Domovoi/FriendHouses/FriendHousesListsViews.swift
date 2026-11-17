@@ -39,8 +39,11 @@ struct FhConversationRow: View {
     let onTap: () -> Void
 
     var body: some View {
+        // The name and the pills side by side, or the pills under the name
+        // at an accessibility size (``FhRowOrColumn``): a name squeezed beside
+        // two pills has no width to grow into.
         Button(action: onTap) {
-            HStack(alignment: .center, spacing: 8) {
+            FhRowOrColumn {
                 VStack(alignment: .leading, spacing: 2) {
                     FhPlainText(
                         text: conversation.name ?? "",
@@ -51,11 +54,14 @@ struct FhConversationRow: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                FhConversationPills(conversation: conversation)
-                Image(systemName: "chevron.right")
-                    .font(.footnote)
-                    .foregroundStyle(Color.fgMuted)
-                    .accessibilityHidden(true)
+            } trailing: {
+                HStack(spacing: 8) {
+                    FhConversationPills(conversation: conversation)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote)
+                        .foregroundStyle(Color.fgMuted)
+                        .accessibilityHidden(true)
+                }
             }
             .frame(minHeight: 44)
             .contentShape(.rect)
@@ -65,16 +71,21 @@ struct FhConversationRow: View {
     }
 }
 
+/// The counts: side by side, or one above the other at an accessibility size,
+/// so neither pill's words are squeezed by the other (``FhRowOrColumn``).
 struct FhConversationPills: View {
 
     let conversation: FhConversation
 
     var body: some View {
-        if conversation.notDelivered > 0 {
-            HomeTonePill(label: FhWords.notDelivered(conversation.notDelivered), tone: .err)
-        }
-        if conversation.unread > 0 {
-            HomeTonePill(label: FhWords.unread(conversation.unread), tone: .brand)
+        FhRowOrColumn {
+            if conversation.notDelivered > 0 {
+                HomeTonePill(label: FhWords.notDelivered(conversation.notDelivered), tone: .err)
+            }
+        } trailing: {
+            if conversation.unread > 0 {
+                HomeTonePill(label: FhWords.unread(conversation.unread), tone: .brand)
+            }
         }
     }
 }
@@ -114,9 +125,11 @@ struct FhFriendRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // Name and pill side by side, or stacked at an accessibility size.
+            FhRowOrColumn {
                 FhPlainText(text: friend.name, weight: .semibold)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            } trailing: {
                 HomeTonePill(
                     label: friend.verified ? FhWords.verified : FhWords.notVerified,
                     tone: friend.verified ? .ok : .warn

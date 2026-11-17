@@ -80,7 +80,9 @@ struct FhConversationHead: View {
                 .foregroundStyle(Color.brandInk)
                 .accessibilityLabel(Text(verbatim: FhWords.allConversations))
                 .accessibilityIdentifier("fh.back")
+                // The only text in its row (the back button is a glyph).
                 FhPlainText(text: model.name, font: .headline)
+                    .layoutPriority(1)
                     .accessibilityAddTraits(.isHeader)
             }
             FhMutedLine(text: model.former ? FhWords.formerFriend : FhWords.conversationAdmin)
@@ -194,13 +196,24 @@ struct FhMessageMeta: View {
         return parts.joined(separator: " · ")
     }
 
+    /// **Two lines, always: when, then the state.** They were one `HStack`
+    /// — the time, a dot and the state side by side under the bubble — and
+    /// train I067's audit named the state (`Still trying: no route to the
+    /// house`, `Dynamic Type font sizes are partially unsupported`): a text
+    /// beside another text has no width to grow into. Each is now the only
+    /// text on its line, the dot beside the state as a glyph beside a
+    /// heading is in ``PeopleDenylistCard``, which audits clean.
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        VStack(alignment: message.incoming ? .leading : .trailing, spacing: 2) {
             FhPlainText(text: when, font: .caption2, colour: Color.fgMuted)
+                .accessibilityIdentifier("fh.message.when")
             if let state = fhOutState(message) {
-                ToneDot(tone: state.tone)
-                FhPlainText(text: state.words, font: .caption2, colour: Color.fgMuted)
-                    .accessibilityIdentifier("fh.message.state")
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    ToneDot(tone: state.tone)
+                    FhPlainText(text: state.words, font: .caption2, colour: Color.fgMuted)
+                        .layoutPriority(1)
+                        .accessibilityIdentifier("fh.message.state")
+                }
             }
         }
     }
@@ -241,8 +254,10 @@ struct FhComposerFoot: View {
 
     let model: FhConversationModel
 
+    /// The counter and Send side by side, or stacked at an accessibility
+    /// size (``FhRowOrColumn``).
     var body: some View {
-        HStack(alignment: .center) {
+        FhRowOrColumn {
             FhPlainText(
                 text: model.counter,
                 font: .caption.monospacedDigit(),
@@ -250,6 +265,7 @@ struct FhComposerFoot: View {
             )
             .accessibilityIdentifier("fh.counter")
             .frame(maxWidth: .infinity, alignment: .leading)
+        } trailing: {
             Button {
                 Task { await model.send() }
             } label: {
