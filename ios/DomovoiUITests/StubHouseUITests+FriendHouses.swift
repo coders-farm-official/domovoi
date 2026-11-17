@@ -77,9 +77,12 @@ extension StubHouseUITests {
     /// Launch with Friend Houses `mode` and open it from Home's grid. True
     /// once the screen's description is up.
     @MainActor
-    func openFriendHouses(_ mode: String = "on") -> (app: XCUIApplication, landed: Bool) {
+    func openFriendHouses(
+        _ mode: String = "on",
+        typeSize: String = StubHouseUITests.ordinaryTypeSize
+    ) -> (app: XCUIApplication, landed: Bool) {
         friendHouses(mode)
-        let app = launch()
+        let app = launch(mode: typeSize)
         let tile = app.buttons[FriendHousesUnderTest.tile]
         guard tile.waitForExistence(timeout: 40), navReach(app, tile) else {
             print("=== NO FRIEND HOUSES TILE ON HOME — tree follows ===")
@@ -392,7 +395,62 @@ extension StubHouseUITests {
         XCTAssertTrue(friendHousesOpen(app, FriendHousesUnderTest.smiths))
         evidence(app, "fh-12-audit-conversation")
         let thread = Self.floorAndRest(try auditIssues(app, "friend-houses-conversation"))
-        print("FRIEND HOUSES AUDIT conversation floor=\(thread.floor) rest=\(thread.rest.count)")
-        XCTAssertTrue(thread.rest.isEmpty, "Apple's audit on a conversation: " + thread.rest.joined(separator: " | "))
+        // **One element, one headline, and measured.** Trains I067 and I068
+        // named the message's state line (`fh.message.state`: "Still trying:
+        // …", then "Delivered") with "Dynamic Type font sizes are partially
+        // unsupported". It is a `.caption2` text style with nothing that
+        // pins its size — no point size, no `minimumScaleFactor`, no fixed
+        // frame, no `dynamicTypeSize` clamp, no `fixedSize` across — styled
+        // as `ChatBubbleView`'s per-message line, which this same audit names
+        // on Chat and ChatMore excuses after measuring it
+        // (`testChatMore_TheConversationsTextGrowsWithTheTypeSize`). So it is
+        // excused here the same way and no wider: only that headline, only
+        // with that element id, and only because
+        // `testFriendHouses_TheMessageStateGrowsWithTheTypeSize` measures the
+        // element growing — if it ever stops, that case fails. Any other
+        // element, or any other finding on this one, still fails this case.
+        let measuredState = thread.rest.filter { line in
+            line.hasPrefix("Dynamic Type font sizes are partially unsupported")
+                && line.contains("id='fh.message.state'")
+        }
+        let rest = thread.rest.filter { !measuredState.contains($0) }
+        print(
+            "FRIEND HOUSES AUDIT conversation floor=\(thread.floor) rest=\(thread.rest.count)"
+                + " state-measured=\(measuredState.count) ours=\(rest.count)"
+        )
+        XCTAssertTrue(rest.isEmpty, "Apple's audit on a conversation: " + rest.joined(separator: " | "))
+    }
+
+    /// The message's state line, measured at `large` and at AX5: it grows
+    /// (``chatMoreGrew(_:_:)``'s bar, 1.8x for a line of text), which is what
+    /// stands behind the audit case's one excused finding.
+    @MainActor
+    func testFriendHouses_TheMessageStateGrowsWithTheTypeSize() throws {
+        defer { friendHouses(nil) }
+        var sizes: [String: CGSize] = [:]
+        for (label, mode) in [
+            ("large", StubHouseUITests.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let (app, landed) = openFriendHouses(typeSize: mode)
+            guard landed, friendHousesOpen(app, FriendHousesUnderTest.smiths) else {
+                return XCTFail("Friend houses did not open at \(label)")
+            }
+            let state = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier == %@ AND label == %@",
+                                      "fh.message.state", FriendHousesUnderTest.delivered))
+                .firstMatch
+            guard state.waitForExistence(timeout: 20) else {
+                print(app.debugDescription)
+                return XCTFail("no Delivered state line at \(label)")
+            }
+            sizes[label] = state.frame.size
+            print("FRIEND HOUSES STATE [\(label)] size=\(state.frame.size)")
+            evidence(app, "fh-13-state-\(label)")
+            app.terminate()
+        }
+        let small = try XCTUnwrap(sizes["large"])
+        let big = try XCTUnwrap(sizes["AX5"])
+        XCTAssertTrue(chatMoreGrew(small, big), "the state line does not scale: \(small) -> \(big)")
     }
 }

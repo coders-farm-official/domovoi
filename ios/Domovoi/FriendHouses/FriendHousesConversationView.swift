@@ -210,8 +210,12 @@ struct FhMessageMeta: View {
             if let state = fhOutState(message) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     ToneDot(tone: state.tone)
+                    // Styled as Chat's per-message line is (`ChatBubbleView`'s
+                    // `attribution`: `.caption2`, `fgMuted`, a vertical
+                    // `fixedSize`), which Apple's audit names the same way and
+                    // which measures growing; see
+                    // `testFriendHouses_TheMessageStateGrowsWithTheTypeSize`.
                     FhPlainText(text: state.words, font: .caption2, colour: Color.fgMuted)
-                        .layoutPriority(1)
                         .accessibilityIdentifier("fh.message.state")
                 }
             }
