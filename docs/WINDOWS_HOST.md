@@ -788,7 +788,16 @@ you share them.
 
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
-  half-finished setup too.
+  half-finished setup too. On a Domovoi that was already running, the tray
+  icon's menu and the dashboard's Version card say a Setup didn't finish,
+  where and why, until one does.
+- **Setup run again "didn't update Linux":** by design. Setup over an
+  existing install updates the programs on Windows and repairs the Linux
+  system, but leaves the server's own code where the dashboard's updates
+  put it (`provision.sh`: "the checkout exists; left where it is"). Its last
+  page says so when that is what happened (the commit it found isn't the
+  one this Setup pins). The server's code updates with **Update Domovoi**
+  in the tray icon's menu or in Settings > About & updates.
 - **Windows updated WSL** (the icon says *Domovoi stopped: Windows updated
   WSL, starting again…*; or *WSL stopped, starting again…*): Windows
   Update installs new WSL versions by itself, and the install stops every
@@ -1014,7 +1023,16 @@ updating), the tray (1.2.1 and later):
 The **Version card** shows both halves: the Linux side's release label and
 commit, and the Windows side's version and the commit it was built from,
 which DomovoiHost writes into the distro as root
-(`/var/lib/domovoi-windows/side.json`) every time Domovoi starts. The
+(`/var/lib/domovoi-windows/side.json`): before and after every start of
+Domovoi, whether that start worked or not, and again whenever what it last
+wrote isn't its own version, as soon as the distro is up. (Until 1.3.1 it
+wrote it only after a start that worked, so a Setup whose Linux part failed
+left the card, and the tray, on the old version.) The card reads that file
+only; the version the tray icon reports on its own isn't believed there,
+since any program on the PC could send it. When that file still names an
+older Windows side than the tray icon itself is, the tray sees through it:
+**Update Domovoi** says the Windows side is already up to date, downloads
+nothing, and still updates the Linux side. The
 Windows side updates on **releases** only. On the `stable` channel both
 halves follow releases; on `main` the Linux side follows every change
 while the Windows side follows the latest release that code includes, and
@@ -1059,6 +1077,7 @@ the outcome too.
 | The download fails, or the release has no signature files | Said in plain words; nothing runs. A release without them isn't offered again. |
 | A signature doesn't check out, it's another key's, another release's, not newer, or the installed version can't be read | Said in plain words; the downloaded Setup is deleted and never run (the tray checks first, the elevated helper again on its own copy). |
 | The Linux part fails first (from the tray menu) | Setup stops before it changes anything on Windows, and says why. |
+| A Setup's Linux part failed (run by hand or by the tray), while Domovoi kept running | The tray icon's menu says "Domovoi Setup 1.2.1 didn't finish. Run the newest Setup again." under "Domovoi is running", with one notification saying where it stopped and why; the dashboard's Version card says the same, with the step and the error. Both stay until a Setup finishes. DomovoiHost keeps the outcome in `host\out\host-state.json` (`setup`) and tells the tray in `host\out\setup.json`. The tray's **Update Domovoi** still updates the Linux side meanwhile. |
 | The repair fails | Everything is kept as it is: the silent repair never answers "Remove what Setup has changed" (which would uninstall), and it starts DomovoiHost again (it was stopped to replace its file), so Domovoi keeps running as it was, whatever step failed (the saved media folder on a drive that isn't plugged in, say). The card and the notification name Setup's log, `C:\ProgramData\Domovoi\updates\<run>\setup.log`, and `C:\ProgramData\Domovoi\logs` has the rest (**Save logs for support...**). Run the Setup in that folder by hand to see where it stops. |
 
 An install whose tray and DomovoiHost are from before this (1.0.0-rc3 and

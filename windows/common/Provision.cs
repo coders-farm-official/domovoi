@@ -177,7 +177,8 @@ namespace Domovoi.Windows
     // closed. Until the first install has been verified, every commit a job
     // since the import asked for counts (a failed install, then a newer
     // Setup, may have cloned at either); once verified, later runs (repairs)
-    // keep whatever the dashboard's updates moved the checkout to.
+    // keep whatever the dashboard's updates moved the checkout to (Kept:
+    // Setup's last page then says the server's code wasn't changed).
     public static class InstalledHead
     {
         static readonly Regex Sha = new Regex(@"^[0-9a-f]{40}\z");
@@ -210,6 +211,20 @@ namespace Domovoi.Windows
             foreach (string a in asked) if (a == head) return null;
             return "Domovoi's code is at commit " + head + ", not the one Setup pinned (" + string.Join(", ", new List<string>(asked).ToArray())
                 + "), so Setup stops here; uninstall Domovoi and run a Setup you trust";
+        }
+
+        // Whether this run left an existing checkout where it was: true when
+        // the HEAD a finished provision.sh reported isn't the commit this job
+        // pinned (a fresh clone always checks that commit out, and
+        // provision.sh refuses anything else, so another HEAD can only be a
+        // checkout it found and kept: the dashboard's updates moved it).
+        // False when HEAD is the pinned commit; null when either is unknown.
+        // Setup's last page says so only on true (owner, 2026-11-16: "Setup
+        // didn't update Linux").
+        public static bool? Kept(string head, string asked)
+        {
+            if (head == null || asked == null || !Sha.IsMatch(head) || !Sha.IsMatch(asked)) return null;
+            return head != asked;
         }
     }
 

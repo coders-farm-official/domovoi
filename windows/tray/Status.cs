@@ -30,6 +30,10 @@ namespace Domovoi.Windows.Tray
         // wsl.exe's version when the tray last saw Domovoi up (TrayApp
         // keeps it); another one now means Windows updated WSL.
         public string WslVersionWhenUp;
+        // How the last Setup went, as DomovoiHost tells the tray
+        // (host\out\setup.json, common\WindowsSide.cs SetupOutcome); null
+        // when it hasn't said.
+        public SetupOutcome Setup;
     }
 
     public enum TrayState { Running, Starting, Stopped, Problem }
@@ -53,8 +57,12 @@ namespace Domovoi.Windows.Tray
         // stretch (or started looking); now: the time of these facts.
         public static Verdict Decide(Facts f, DateTime notReadySince, DateTime now, TimeSpan grace)
         {
+            // A Setup that didn't finish while Domovoi kept running on what it
+            // had (2026-11-16: the icon said only "running" while every
+            // update since failed): the menu's second line says so.
+            string setup = f.Setup != null ? f.Setup.MenuLine() : null;
             if (f.Web == WebFact.Ok)
-                return V(TrayState.Running, "Domovoi is running", null);
+                return V(TrayState.Running, "Domovoi is running", setup);
             // WSL went away under Domovoi (incident 2026-11-10: Windows
             // Update installed a new WSL). DomovoiHost waits for it and
             // starts Domovoi again; say so instead of "stopped" or "a
@@ -77,7 +85,7 @@ namespace Domovoi.Windows.Tray
             string why = Why(f);
             if (now - notReadySince < grace)
                 return V(TrayState.Starting, "Domovoi is starting or updating", "This can take a few minutes.");
-            return V(TrayState.Problem, "Domovoi has a problem", why);
+            return V(TrayState.Problem, "Domovoi has a problem", setup ?? why);
         }
 
         static Verdict WslVerdict(Facts f, DateTime notReadySince, DateTime now, TimeSpan grace)
@@ -180,7 +188,25 @@ namespace Domovoi.Windows.Tray
             }
             if (f.CoreAlive == null) f.CoreAlive = GetJson(coreUrl + "/v1/alive", 4000) != null;
             if (f.Web != WebFact.Ok) f.Wsl = WslOutage.Look(Paths.WslExe);
+            f.Setup = ReadSetup(Path.Combine(Paths.HostOut, SetupOutcome.TrayFile));
             return f;
+        }
+
+        // DomovoiHost's word on the last Setup, or null (no file, one this
+        // account can't read, or not one).
+        public static SetupOutcome ReadSetup(string path)
+        {
+            try
+            {
+                var fi = new FileInfo(path);
+                if (!fi.Exists || fi.Length > 4096) return null;
+                return SetupOutcome.FromJson(Json.ParseObject(File.ReadAllText(fi.FullName, Encoding.UTF8)));
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+            catch (FormatException) { return null; }
+            catch (ArgumentException) { return null; }
+            catch (InvalidOperationException) { return null; }
         }
 
         // The server identity's fingerprint the dashboard reports (the

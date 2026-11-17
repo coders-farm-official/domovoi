@@ -59,6 +59,19 @@ a way that would otherwise get reported as a bug.
 - **Migration.** V062 adds five columns to `satellite_approvals`. Nothing
   to do: the update runs it.
 
+## 1.4.0 (unreleased) — Windows: the tray can't get stuck on an old Setup
+
+- **What changed.** After a Setup that didn't finish, the house kept an old
+  record of the Windows side's version, and "Update Domovoi" in the tray
+  then downloaded a Setup it refused every time, without updating the
+  server either. DomovoiHost now reports its version whenever Domovoi is
+  up, the tray never downloads a Setup that isn't newer than itself (it
+  runs the server's update alone), and a Setup that didn't finish says so
+  in the tray menu and on the dashboard's Version card.
+- **What to know.** Running a newer Setup over an existing install updates
+  the Windows side only; its last page now says the server's own code
+  updates through **Update Domovoi**.
+
 ## 2026-11-16 — 1.3.0
 
 Version 1.3.0: the server, the Windows Setup (1.3.0, with the Windows
