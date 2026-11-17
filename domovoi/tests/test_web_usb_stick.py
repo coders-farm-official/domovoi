@@ -193,7 +193,7 @@ def cards(tmp_path_factory) -> dict:
     return _drive({
         "fresh": _scenario(STATUS),
         "never": _scenario(dict(STATUS, refusal={"reason": "internet_off",
-                                                  "message": "Internet access is off for this server (Settings → Internet), so it can't download Debian 13.7.0."})),
+                                                  "message": "Internet access is off for this server (Settings → Privacy → Internet), so it can't download Debian 13.7.0."})),
         "ready": _scenario(dict(STATUS, debian=dict(DEBIAN, cached=True),
                                 builds=[build(), build(room="Office", room_id="office", id="Z" * 32)])),
         "failed": _scenario(dict(STATUS, job=dict(IDLE, ok=False, room_id="kids_room", room="Kid's Room",

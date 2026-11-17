@@ -7117,7 +7117,7 @@ class _AdminConfigUpdateBody(BaseModel):
     plugin: str | None = None
     # Settings whose default follows the internet answer and that someone
     # pinned by hand: "follow the answer again" comments their .env line
-    # out (never deletes it) and re-derives them (Settings → Internet).
+    # out (never deletes it) and re-derives them (Settings → Privacy → Internet).
     follow_internet: list[str] = Field(default_factory=list, max_length=16)
 
 
@@ -7411,7 +7411,7 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
     return {"job": job}
 
 
-# ─── Settings → Internet ──────────────────────────────────────────────────
+# ─── Settings → Privacy → Internet ──────────────────────────────────────────────────
 
 
 @app.get(
@@ -7423,7 +7423,7 @@ async def admin_voice_history_delete_all() -> dict[str, Any]:
 )
 async def admin_internet() -> dict[str, Any]:
     """The household's internet answer and what follows from it — the
-    document behind Settings → Internet: the answer and where it is set
+    document behind Settings → Privacy → Internet: the answer and where it is set
     (locked when the process environment pins it), the three choices in
     the installer's words, the privacy note, connectivity (reason
     ``turned_off`` under ``never``), and every setting whose default
@@ -7441,7 +7441,7 @@ async def admin_internet() -> dict[str, Any]:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def admin_internet_search_helper() -> dict[str, Any]:
-    """Settings → Internet's "start it again": run the search helper's
+    """Settings → Privacy → Internet's "start it again": run the search helper's
     start/stop for the CURRENT answer in the background — the same thing
     saving the answer does (``domovoi/searxng_service.py``). For a first
     start that failed or timed out, or a helper somebody stopped by hand.

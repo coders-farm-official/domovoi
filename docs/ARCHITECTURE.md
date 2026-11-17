@@ -1160,7 +1160,7 @@ preserving comments, writes a `.bak`, and self-restarts.
   follow the answer (the news worker, MusicBrainz names, podcast
   downloads, the library enricher, the extra voices). A model validator
   fills each one only when nobody set it — not in the environment, not in
-  `.env` — so a hand-set value always wins; Settings → Internet can hand a
+  `.env` — so a hand-set value always wins; Settings → Privacy → Internet can hand a
   field back by commenting its `.env` line out. Unset fills nothing.
 * **It is a gate.** `domovoi/egress.py` is the one place the answer is read
   (process environment, then `domovoi/.env`, cached on the file's mtime),

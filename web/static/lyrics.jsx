@@ -543,7 +543,7 @@ const _lyrJobsRows = (s) => {
     case 'off':
       add('LRCLIB: off — Settings → Advanced → Library'); break;
     case 'internet_off':
-      add('LRCLIB: off — this Domovoi stays off the internet (Settings → Internet)'); break;
+      add('LRCLIB: off — this Domovoi stays off the internet (Settings → Privacy → Internet)'); break;
     case 'offline':
       add('LRCLIB: paused — offline'); break;
     case 'rate_limited':

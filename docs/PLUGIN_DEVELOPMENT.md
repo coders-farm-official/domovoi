@@ -1458,7 +1458,7 @@ is `auto`, which the core resolves to its current LAN address.
   are httpx clients with the check as their first request hook;
   `egress.http_exception("what")` is the standard refusal for a route —
   `409` with the fixed detail `"internet access is turned off for this box
-  (Settings → Internet)"` and the header `X-Domovoi-Refusal: internet-off`,
+  (Settings → Privacy → Internet)"` and the header `X-Domovoi-Refusal: internet-off`,
   which the dashboard recognises; `egress.spoken_offline_phrase()` is the
   start of a voice reply ("I'm set to stay off the internet" under `never`,
   "I don't have internet right now" otherwise). Two rules: refuse **before**

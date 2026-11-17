@@ -4,7 +4,7 @@
 answer at BOOT (``PROFILE_DEFAULTS`` and the ``Settings`` validator). This
 module is what happens while the core runs:
 
-* :func:`apply_answer` — the answer was just saved (Settings → Internet,
+* :func:`apply_answer` — the answer was just saved (Settings → Privacy → Internet,
   the first-run step, ``POST /v1/admin/config``): re-derive every setting
   that follows it. Live-tier followers change now; restart-tier followers
   keep their boot value and are listed as needing a restart, like any
@@ -13,7 +13,7 @@ module is what happens while the core runs:
   pinned by hand: its ``.env`` line is COMMENTED OUT (never deleted), and
   it re-derives.
 * :func:`status` — the document behind ``GET /v1/admin/internet``, which
-  renders Settings → Internet.
+  renders Settings → Privacy → Internet.
 
 "Set by hand" at runtime means the key's UPPER name is in the process
 environment, or is an uncommented line in ``domovoi/.env``
@@ -59,7 +59,7 @@ HF_RESTART_NOTE = "the speech models switch their download checks after a restar
 NOT_IN_PROFILE = "not a setting that follows the internet answer"
 ANSWER_LOCKED = "set in the server's environment (INTERNET_ACCESS); change it there"
 
-# What Settings → Internet shows for each answer (contract 5.7.4). The
+# What Settings → Privacy → Internet shows for each answer (contract 5.7.4). The
 # Windows installer's question uses these labels too
 # (windows-installer/INTERNET-PROFILE.md §3).
 CHOICES: list[dict[str, str]] = [
@@ -334,7 +334,7 @@ def follow_again(names: list[str]) -> tuple[list[str], dict[str, str], list[str]
     return followed, refused, result.restart_required
 
 
-# ─── Settings → Internet ──────────────────────────────────────────────────
+# ─── Settings → Privacy → Internet ──────────────────────────────────────────────────
 
 
 def _connectivity(probe: Any) -> dict[str, Any]:
@@ -426,7 +426,7 @@ def never_warnings(s: Any = None) -> list[str]:
 
 
 def status(s: Any = None, probe: Any = None) -> dict[str, Any]:
-    """The Settings → Internet document (``GET /v1/admin/internet``)."""
+    """The Settings → Privacy → Internet document (``GET /v1/admin/internet``)."""
     s = settings if s is None else s
     answer = egress.normalize_policy(getattr(s, "internet_access", ""))
     hand = hand_set_fields()

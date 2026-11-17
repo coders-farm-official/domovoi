@@ -1140,7 +1140,7 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting, onCancel, c
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   // Checking and pulling talk to the git remote: greyed under "No"
-  // (Settings → Internet). Restarting stays — it never leaves the box.
+  // (Settings → Privacy → Internet). Restarting stays — it never leaves the box.
   const internetOff = internetOffIn(cfg);
   const { data: core, error: coreError, refresh: refreshCore } = useApiObject('/api/config/version');
   // The web answered for the core: it could not reach it (bridge_response's
@@ -1772,7 +1772,7 @@ const configLoadMessage = (error) => {
  * help and "test the key". The test asks AcoustID once — about the key
  * typed in the box, else the saved one — and only when the household's
  * internet answer lets song recognition go out: under No there is no
- * button, just a line pointing at Settings → Internet (no dead controls).
+ * button, just a line pointing at Settings → Privacy → Internet (no dead controls).
  * #settings/advanced/acoustid-key (ACOUSTID_KEY_ROUTE) lands here:
  * `marked` lights the block up for a moment.
  *
@@ -1832,7 +1832,7 @@ const AcoustidKeyField = ({ f, value, onChange, internetOff, marked }) => {
       {internetOff ? (
         <div className="config-acoustid-off" style={{ fontSize: 12, color: 'var(--fg-muted)', padding: '0 0 10px' }}>
           Song recognition is off: this box doesn’t use the internet. Change that in{' '}
-          <a href="#settings/internet">Settings → Internet</a>.
+          <a href="#settings/internet">Settings → Privacy → Internet</a>.
         </div>
       ) : canTest && (
         <div className="config-acoustid-test"
@@ -2027,7 +2027,7 @@ const ConfigPanel = ({ setupAsked = false, mark = null, startFolded = false }) =
              || internetField.value || 'not answered'}</span>
       <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
       <a href="#settings/internet" className="home-link">
-        Settings → Internet
+        Settings → Privacy → Internet
       </a>
     </div>
   );

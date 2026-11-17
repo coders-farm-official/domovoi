@@ -202,7 +202,7 @@ Domovoi answers weather, scores and "check that online" through a search helper 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Web answers say "I'm set to stay off the internet, so I can't check that" | The server is answered **No** to the internet question | Expected. To allow web answers, switch to **Yes** or **Sometimes** in Settings → Privacy → Internet ([INTERNET.md](INTERNET.md)) |
-| A button is greyed with "needs internet · Settings → Internet", or an action fails with "internet access is turned off for this box (Settings → Internet)" (HTTP 409) | The server is answered **No** | Expected: it would reach the internet. Change the answer in Settings → Privacy → Internet if you want it ([what each answer changes](INTERNET.md#what-each-answer-changes)) |
+| A button is greyed with "needs internet · Settings → Privacy → Internet", or an action fails with "internet access is turned off for this box (Settings → Privacy → Internet)" (HTTP 409) | The server is answered **No** | Expected: it would reach the internet. Change the answer in Settings → Privacy → Internet if you want it ([what each answer changes](INTERNET.md#what-each-answer-changes)) |
 | "I checked online but couldn't find a clear answer to that" | The search ran and found nothing usable | Rephrase, or ask more specifically; this reply now only comes after a search that really ran |
 
 ### Printing and scanning

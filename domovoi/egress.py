@@ -77,7 +77,7 @@ POLICIES: tuple[str, ...] = ("always", "sometimes", "never")
 # The one sentence every refusal carries — HTTP detail, exception text,
 # dashboard toast (web/static/components.jsx INTERNET_OFF_MESSAGE is the
 # same string; a test keeps them equal).
-TURNED_OFF_REASON: str = "internet access is turned off for this box (Settings → Internet)"
+TURNED_OFF_REASON: str = "internet access is turned off for this box (Settings → Privacy → Internet)"
 
 # Name suffixes that mean "a machine on this network". Keep in step with
 # domovoi/transport_guard.LOCAL_SUFFIXES (a test asserts the overlap).

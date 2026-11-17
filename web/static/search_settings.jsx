@@ -126,7 +126,7 @@ const SearchSettingsPanel = () => {
     <div className="search-settings" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {internetOff && (
         <div className="chat-note info" role="note">
-          This Domovoi stays off the internet (<a href="#settings/internet">Settings → Internet</a>): lookups
+          This Domovoi stays off the internet (<a href="#settings/internet">Settings → Privacy → Internet</a>): lookups
           read only its manual and your offline library, and nothing on this page goes online.
         </div>
       )}

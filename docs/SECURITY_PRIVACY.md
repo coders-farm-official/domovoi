@@ -1215,7 +1215,7 @@ re-checks. None of this replaces network segmentation — it is the server
 declining to be your attacker's proxy.
 
 **When the server is told to stay off the internet**
-(`INTERNET_ACCESS=never`, the **No** answer in Settings → Internet — see
+(`INTERNET_ACCESS=never`, the **No** answer in Settings → Privacy → Internet — see
 [The internet switch](#the-internet-switch-what-it-closes-and-what-it-cant)),
 the same check refuses every URL whose host is not on this box or the house
 network, **before** resolving it: under `never` a public name is never even
@@ -2855,7 +2855,7 @@ watch the server's traffic under **No**.
 | **Debian's installer image** — the amd64 netinst (793 MB) from `cdimage.debian.org`, kept only if its size and SHA-256 are the pinned ones, for old computers' room sticks; and `xorriso` from Ubuntu's archive on a server installed before it (the update unit) | Only when an admin presses **Prepare the stick** and the image isn't on the server yet (it is kept for the next stick). The old computer itself then downloads Debian's packages and the satellite's libraries while it sets up, as a Linux laptop does | Don't prepare a stick. Under `never` it is refused unless the image is already here, and the update unit installs nothing. |
 | **The Android app for phones** — the APKs `android/release.json` names, from this project's GitHub release, each held to its pinned size, SHA-256 and signing certificate (`domovoi/android_app.py`; [below](#the-app-from-your-own-server-the-join-page)) | At install, with the other install-time downloads (`scripts/linux/provision.sh`, the `phone-app` step, which the Windows installer runs in its distro too), whatever the internet answer; never fatal (owner decision 2026-11-15). Else when an admin presses **Download the app to this server**; afterwards, under **Yes, always** only, the newer release an update names, once per start | Installing needs the internet (an install without it finishes without the app and says so). After that, don't press it, or drop the APKs in by hand. Under `never` the dashboard's download and the refresh are refused. |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub), and the spare-device card's **get the Windows files** (python.org, PyPI) and **get the Linux Python** (python-build-standalone's GitHub releases), each file held to its pinned SHA-256 | Only when an admin starts one | Don't start them. Under `never` they are refused. |
-| **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
+| **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Privacy → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
 
 Turn off news and the enricher, leave the MusicBrainz alias lookup and
@@ -2887,7 +2887,7 @@ lookup route doesn't follow the AI switch).
 
 ### The internet switch: what it closes and what it can't
 
-`INTERNET_ACCESS` (`always` | `sometimes` | `never`; Settings → Internet)
+`INTERNET_ACCESS` (`always` | `sometimes` | `never`; Settings → Privacy → Internet)
 is read from the process environment first, then `domovoi/.env`, by both
 the core and the web process, through one module (`domovoi/egress.py`).
 An answer pinned in the environment is shown read-only in the dashboard,
@@ -2933,7 +2933,7 @@ network:
 
 **What `never` can't see:** a language model server (`OLLAMA_URL`) that
 isn't on your network, or an Ollama cloud model (a name ending in
-`-cloud` or `:cloud`), which Settings → Internet warns about; and a plugin's own
+`-cloud` or `:cloud`), which Settings → Privacy → Internet warns about; and a plugin's own
 connections that bypass the SDK.
 
 A refusal is never recorded as "this is broken": no feed is marked
@@ -2943,7 +2943,7 @@ Switching the answer back picks everything up where it was.
 **How a refusal looks:**
 
 - an HTTP route that would reach the internet answers **`409`** with
-  `{"detail": "internet access is turned off for this box (Settings → Internet)"}`
+  `{"detail": "internet access is turned off for this box (Settings → Privacy → Internet)"}`
   and the header **`X-Domovoi-Refusal: internet-off`**, so a client can
   tell it from any other 409;
 - the plugin installer keeps its own envelope: `422` with

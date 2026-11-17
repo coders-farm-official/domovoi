@@ -3361,7 +3361,7 @@ do_env() {
     policy=$(svc_py -m domovoi.egress --print-policy | tr -d '[:space:]') || policy=""
     if [ "$policy" != "$INTERNET" ]; then
       if [ "$existed" = 1 ]; then
-        warn "domovoi/.env already answers the internet question with '${policy:-unanswered}'; --internet $INTERNET is not written over it (Settings, Internet changes it)"
+        warn "domovoi/.env already answers the internet question with '${policy:-unanswered}'; --internet $INTERNET is not written over it (Settings, Privacy, Internet changes it)"
       else
         die "domovoi/.env should answer the internet question with $INTERNET, the core reads '${policy:-unanswered}'"
       fi
@@ -4241,7 +4241,7 @@ do_searxng() {
       STEP_DONE_MSG="Search helper off (internet: never)"
       ;;
     *)
-      log "the internet question is unanswered: the search helper is left to Settings, Internet"
+      log "the internet question is unanswered: the search helper is left to Settings, Privacy, Internet"
       STEP_DONE_MSG="Search helper left as it is"
       ;;
   esac

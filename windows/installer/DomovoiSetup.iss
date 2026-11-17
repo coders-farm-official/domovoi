@@ -860,7 +860,7 @@ begin
   L.OnLinkClick := @InternetDocClick;
   L.AdjustHeight;
   Y := L.Top + L.Height + ScaleY(6);
-  AddText(InternetPage, 'You can change this later in the dashboard: Settings > Internet.', Y, 0, False, False);
+  AddText(InternetPage, 'You can change this later in the dashboard: Settings > Privacy > Internet.', Y, 0, False, False);
 end;
 
 function InternetAnswer: String;
@@ -871,7 +871,7 @@ begin
   if UpdateMode then
   begin
     { The answer Setup recorded; an existing domovoi/.env's own answer is
-      never written over (provision.sh), so Settings > Internet stands. }
+      never written over (provision.sh), so Settings > Privacy > Internet stands. }
     Result := SavedInternet;
     Exit;
   end;

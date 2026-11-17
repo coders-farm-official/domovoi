@@ -141,7 +141,7 @@ through `sdk.connectivity`.
   plugin reaches the internet: the directory search, "resolve" for a
   simulcast (and the startup backfill), the FCC import (and the boot
   import), playing an internet station and its browser stream all refuse
-  with "internet access is turned off for this box (Settings → Internet)"
+  with "internet access is turned off for this box (Settings → Privacy → Internet)"
   (HTTP 409 from the API). The Stations page greys those controls with
   "needs internet" and opens on local FM. Saving, editing and forgetting
   stations still work: nothing is fetched until the answer changes.

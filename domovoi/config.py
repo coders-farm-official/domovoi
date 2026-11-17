@@ -244,7 +244,7 @@ class ProfileDefault:
     """One setting whose default follows the internet answer."""
 
     name: str                                   # Settings field
-    label: str                                  # how Settings → Internet names it
+    label: str                                  # how Settings → Privacy → Internet names it
     always: object
     sometimes: object
     never: object
@@ -274,7 +274,7 @@ PROFILE_DEFAULTS: tuple[ProfileDefault, ...] = (
 PROFILE_FIELD_NAMES: frozenset[str] = frozenset(pd.name for pd in PROFILE_DEFAULTS)
 PROFILE_BY_NAME: dict[str, ProfileDefault] = {pd.name: pd for pd in PROFILE_DEFAULTS}
 
-# What Settings → Internet says a `requires` condition needs (never the key).
+# What Settings → Privacy → Internet says a `requires` condition needs (never the key).
 PROFILE_CONDITIONS: dict[str, str] = {
     "enricher_provider": "needs an AcoustID key or the Shazam add-on",
 }
@@ -1903,6 +1903,6 @@ class Settings(BaseSettings):
 settings = Settings()
 # Under INTERNET_ACCESS=never, HF_HUB_OFFLINE=1 for this process (unless set
 # by hand), before anything imports huggingface_hub (it reads it at import).
-# Remembered so Settings → Internet can tell a profile-set value from a
+# Remembered so Settings → Privacy → Internet can tell a profile-set value from a
 # hand-set one when it works out whether a restart is due.
 HF_HUB_OFFLINE_SET_BY_PROFILE: bool = egress.apply_process_env()

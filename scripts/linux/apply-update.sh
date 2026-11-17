@@ -2390,7 +2390,7 @@ searxng_start() {
     ${as[@]+"${as[@]}"} "${cmd[@]}" || rc=$?
   fi
   if [ "$rc" -eq 124 ]; then
-    echo "the search helper did not start within ${SEARXNG_TIMEOUT}s (DOMOVOI_UPDATE_SEARXNG_TIMEOUT); start it again from Settings > Internet"
+    echo "the search helper did not start within ${SEARXNG_TIMEOUT}s (DOMOVOI_UPDATE_SEARXNG_TIMEOUT); start it again from Settings > Privacy > Internet"
     return 1
   fi
   [ "$rc" -eq 0 ] || return 1
@@ -3227,7 +3227,7 @@ full_update() {
     if [ "${#what[@]}" -eq 2 ]; then why="$why and ${what[1]}"; fi
     if [ "${#what[@]}" -eq 3 ]; then why="$why, ${what[1]} and ${what[2]}"; fi
     add_step preflight refused "$t0" "$why; internet access is turned off for this box"
-    finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No and restart once more, so Ubuntu's own updaters are masked again (docs/INTERNET.md)."
+    finish aborted "$why, and internet access is turned off for this box (Settings > Privacy > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No and restart once more, so Ubuntu's own updaters are masked again (docs/INTERNET.md)."
     return
   fi
   if [ "$DEPS_CHANGED" = 1 ] && ! why=$(venv_writable); then

@@ -47,7 +47,7 @@ start is still pulling the image gets the stop after the start, so the
 container never ends up running under never. A start that finishes while
 the answer has meanwhile become never stops the container again.
 
-:func:`status` is what Settings → Internet shows about the helper: the
+:func:`status` is what Settings → Privacy → Internet shows about the helper: the
 last reconcile's outcome in this process (the core never asks docker at
 boot, so it is ``unknown`` until something reconciles), and whether one
 is running now.
@@ -188,7 +188,7 @@ def _record(result: SearxngAction) -> None:
 
 
 def status() -> dict[str, Any]:
-    """What Settings → Internet shows about the search helper.
+    """What Settings → Privacy → Internet shows about the search helper.
 
     ``state`` is ``unknown`` (nothing reconciled since the core started),
     ``starting`` / ``stopping`` (docker is being asked right now; a first
@@ -299,7 +299,7 @@ def schedule_boot_stop() -> asyncio.Task | None:
 
 
 def schedule_reconcile() -> None:
-    """The ``internet_access`` reapply hook, and Settings → Internet's
+    """The ``internet_access`` reapply hook, and Settings → Privacy → Internet's
     "start it again" (``POST /v1/admin/internet/search-helper``): run
     :func:`reconcile` as a background task on the running loop. A no-op
     without a running loop

@@ -10,7 +10,7 @@
 # re-applies its configuration: scripts/linux/provision.sh (its os-jobs
 # step) and scripts/linux/apply-update.sh (after every healthy restart or
 # update that domovoi-update.service runs, which is what the dashboard's
-# Restart button starts). An answer changed in Settings, Internet takes
+# Restart button starts). An answer changed in Settings, Privacy, Internet takes
 # effect here at the next of those, not at the moment it is saved: the
 # core runs as the service user and can't change systemd units.
 #

@@ -103,8 +103,8 @@ which and can hand a setting back to the answer
 |---|---|---|---|---|
 | The search helper (SearXNG) behind web answers | as you left it | started | started | stopped |
 | The internet check (a connection to `1.1.1.1:443` every 30 s) | dials | dials | dials | **doesn't dial**; the dashboard says "Turned off for this box" |
-| Anything that would reach the internet: feeds, streams, downloads, searches, plugins' requests through the SDK | allowed | allowed | allowed | **refused**: "internet access is turned off for this box (Settings → Internet)" |
-| Online controls in the dashboard | as today | as today | as today | greyed, marked **needs internet · Settings → Internet** |
+| Anything that would reach the internet: feeds, streams, downloads, searches, plugins' requests through the SDK | allowed | allowed | allowed | **refused**: "internet access is turned off for this box (Settings → Privacy → Internet)" |
+| Online controls in the dashboard | as today | as today | as today | greyed, marked **needs internet · Settings → Privacy → Internet** |
 | `HF_HUB_OFFLINE` (the Hugging Face libraries' offline switch) | as you set it | as you set it | as you set it | set to `1` at the core's start, unless you set it yourself |
 
 **What no answer changes:**
@@ -355,7 +355,7 @@ off.
 
 - The internet check stops dialing.
 - Every way out is refused, with "internet access is turned off for this
-  box (Settings → Internet)": feeds, streams, searches, model and plugin
+  box (Settings → Privacy → Internet)": feeds, streams, searches, model and plugin
   downloads, updates, and plugins' requests through the SDK.
 - The news worker, artist names, podcast downloads, song recognition and
   the extra voices are off, unless you set one on yourself.

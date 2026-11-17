@@ -2,7 +2,7 @@
 
 Song recognition's key (``ACOUSTID_API_KEY``) could only be set by hand in
 ``domovoi/.env`` — out of reach inside the Windows install's WSL distro —
-while the Music page and Settings → Internet told people they needed one.
+while the Music page and Settings → Privacy → Internet told people they needed one.
 Now it is a write-only field in Settings → Configuration → Library:
 
 * the config read never carries the key: an admin (the Bearer or the

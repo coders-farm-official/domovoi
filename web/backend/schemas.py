@@ -1487,7 +1487,7 @@ class ConfigResponse(BaseModel):
     # "summary" (household members see one neutral line) or "admins"
     # (only an admin sees any). HOME_PROBLEMS_VISIBILITY, admin-set.
     home_problems_visibility: Literal["everyone", "summary", "admins"] = "everyone"
-    # The household's internet answer (INTERNET_ACCESS, Settings → Internet):
+    # The household's internet answer (INTERNET_ACCESS, Settings → Privacy → Internet):
     # "" = not answered yet (today's behaviour; an admin's Home row asks),
     # "always", "sometimes" or "never". Open like the rest of this
     # response: the Home page and every "needs internet" greying read it.
@@ -1508,7 +1508,7 @@ class ConfigUpdateRequest(BaseModel):
     # bound is on the NUMBER of keys (pydantic's max_length for a dict);
     # the transport cap on the whole body is in domovoi/transport_guard.py.
     changes: dict[str, Any] = Field(..., max_length=MAX_CONFIG_CHANGES)
-    # Settings → Internet: hand-set settings that should follow the
+    # Settings → Privacy → Internet: hand-set settings that should follow the
     # household's internet answer again (their .env line is commented out).
     follow_internet: list[str] = Field(default_factory=list, max_length=16)
 

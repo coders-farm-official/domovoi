@@ -42,7 +42,7 @@ const useChatInternet = () => {
 const chatInternetChip = (info, thread) => {
   if (info && info.internet === 'never') {
     return { label: 'internet off', on: false, fixed: true,
-             title: 'This Domovoi stays off the internet (Settings → Internet). Its manual and offline library still answer.' };
+             title: 'This Domovoi stays off the internet (Settings → Privacy → Internet). Its manual and offline library still answer.' };
   }
   if (info && info.always_allow) {
     return { label: 'internet always on', on: true, fixed: true,

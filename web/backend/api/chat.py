@@ -1890,7 +1890,7 @@ async def _lookup_turn(
             return
     if not internet_on:
         text_ = (lookup_answer.NEVER_REPLY if proposal.kind == "search" else
-                 "This Domovoi is set to stay off the internet (Settings → Internet), so I can't read that page.")
+                 "This Domovoi is set to stay off the internet (Settings → Privacy → Internet), so I can't read that page.")
         async for ev in _fixed(thread_id, text_, proposal, {"internet_used": False}, reason="internet_off"):
             yield ev
         return

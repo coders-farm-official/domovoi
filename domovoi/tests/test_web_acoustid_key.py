@@ -9,11 +9,11 @@
 * "test the key" asks the server once — about the typed key, else the
   saved one — and says "The key works." or "AcoustID refused this key. Is
   it the application key?". There is no button with nothing to test, and
-  none when the internet answer is No: a line points at Settings → Internet
+  none when the internet answer is No: a line points at Settings → Privacy → Internet
   instead (no dead controls).
 * ``#settings/configuration/acoustid-key`` opens Configuration, scrolls to
   the field and puts the cursor in it; the Music page's "song recognition
-  needs a free AcoustID key…" and Settings → Internet's song-recognition
+  needs a free AcoustID key…" and Settings → Privacy → Internet's song-recognition
   row open that address.
 
 Driven through domovoi/tests/jsx_interact_harness.js (the dashboard's own
@@ -194,7 +194,7 @@ SCENARIOS: dict[str, dict] = {
           await h.click((e) => e === testBtn()); await w.__settle(h);
           const down = result();
           h.api['POST /api/config/acoustid-test'] = { __error: { status: 409, message: '409 Conflict',
-            detail: { detail: 'internet access is turned off for this box (Settings → Internet)' } } };
+            detail: { detail: 'internet access is turned off for this box (Settings → Privacy → Internet)' } } };
           await h.click((e) => e === testBtn()); await w.__settle(h);
           return { down, off: result() };
         """,
@@ -212,7 +212,7 @@ SCENARIOS: dict[str, dict] = {
     "deep_link": {
         "files": [COMPONENTS, SETTINGS],
         "component": "(window.ACOUSTID_KEY_ROUTE = ACOUSTID_KEY_ROUTE, window.readRouteTab = readRouteTab, SettingsPage)",
-        # The address Music and Settings → Internet link to; the old
+        # The address Music and Settings → Privacy → Internet link to; the old
         # spelling (#settings/configuration/acoustid-key) lands here too.
         "setup": _setup("#settings/configuration/acoustid-key"),
         "api": {"GET /api/config/editable": _editable(is_set=False)},
@@ -394,14 +394,14 @@ def test_no_answer_is_not_a_refusal(driven) -> None:
     o = driven["unreachable_and_internet_off_refusal"]
     assert o["down"] == {"tone": "warn", "text": "Couldn’t check the key: HTTP request failed."}
     assert o["off"] == {"tone": "err",
-                        "text": "internet access is turned off for this box (Settings → Internet)"}
+                        "text": "internet access is turned off for this box (Settings → Privacy → Internet)"}
 
 
 def test_under_no_there_is_no_test_button_but_a_way_to_settings_internet(driven) -> None:
     o = driven["internet_off_no_button"]
     assert o["test"] is None
     assert "Song recognition is off" in o["words"]
-    assert ["#settings/internet", "Settings → Internet"] in o["links"]
+    assert ["#settings/internet", "Settings → Privacy → Internet"] in o["links"]
     assert o["input"] is None or o["input"].startswith("paste")   # the key can still be saved
 
 

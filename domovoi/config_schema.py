@@ -24,7 +24,7 @@ Tiers — how a saved change takes effect:
 Internet: a field marked ``needs_internet`` (or a choice listed in
 ``needs_internet_choices``) is greyed in the dashboard with "needs
 internet" when the household's internet answer is ``never``
-(INTERNET_ACCESS, Settings → Internet) — greyed, never hidden, so a
+(INTERNET_ACCESS, Settings → Privacy → Internet) — greyed, never hidden, so a
 household can find it and change its mind. The answer itself is the
 ``internet_access`` row (its own group, "Internet", which the
 Configuration tab shows as a single line pointing at Settings →
@@ -224,7 +224,7 @@ WHISPER_COMPUTE_TYPE_CHOICES = (
 
 # Order here is the display order within each group.
 EDITABLE_FIELDS: list[FieldSpec] = [
-    # ─── Internet (its own tab: Settings → Internet) ───────────────────
+    # ─── Internet (its own tab: Settings → Privacy → Internet) ───────────────────
     FieldSpec(
         "internet_access", "Will this box use the internet?", "Internet",
         "Yes, always: the online extras are on (web answers, finding "

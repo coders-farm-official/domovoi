@@ -10415,7 +10415,7 @@
           "config"
         ],
         "summary": "Patch Editable Config",
-        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected, normalized, followed}``. The web\nprocess never mutates its own settings copy \u2014 every write fans out to\n:6370. ``follow_internet`` (Settings \u2192 Internet's \"follow the answer\nagain\") rides along only when it names something.",
+        "description": "Apply config changes through the Domovoi server (validate \u2192 persist to\n.env \u2192 live-apply where the tier allows). Returns\n``{applied, restart_required, rejected, normalized, followed}``. The web\nprocess never mutates its own settings copy \u2014 every write fans out to\n:6370. ``follow_internet`` (Settings \u2192 Privacy \u2192 Internet's \"follow the answer\nagain\") rides along only when it names something.",
         "operationId": "patch_editable_config_api_config_editable_patch",
         "requestBody": {
           "required": true,
@@ -10593,7 +10593,7 @@
           "config"
         ],
         "summary": "Get Internet",
-        "description": "Settings \u2192 Internet: the household's internet answer, the three\nchoices, connectivity, and every setting whose default follows the\nanswer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the\ncore owns the live settings). Changing the answer is a PATCH of\n``/api/config/editable`` with ``{changes: {internet_access}}``.",
+        "description": "Settings \u2192 Privacy \u2192 Internet: the household's internet answer, the three\nchoices, connectivity, and every setting whose default follows the\nanswer. Read-only proxy of the core's ``GET /v1/admin/internet`` (the\ncore owns the live settings). Changing the answer is a PATCH of\n``/api/config/editable`` with ``{changes: {internet_access}}``.",
         "operationId": "get_internet_api_config_internet_get",
         "responses": {
           "200": {
@@ -10613,7 +10613,7 @@
           "config"
         ],
         "summary": "Start Search Helper",
-        "description": "Settings \u2192 Internet's \"start it again\": the core runs the search\nhelper's start/stop for the current answer in the background and\nreturns its state (proxy of ``POST /v1/admin/internet/search-helper``).",
+        "description": "Settings \u2192 Privacy \u2192 Internet's \"start it again\": the core runs the search\nhelper's start/stop for the current answer in the background and\nreturns its state (proxy of ``POST /v1/admin/internet/search-helper``).",
         "operationId": "start_search_helper_api_config_internet_search_helper_post",
         "responses": {
           "200": {
