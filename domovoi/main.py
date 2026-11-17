@@ -275,6 +275,15 @@ def _register_core_reapply_hooks() -> None:
             _W.start_worker("core", "wake_word_trainer")
 
     reapply.on_reapply("wake_word_trainer_enabled", _start_wake_trainer)
+    # Friend Houses (domovoi/friend_houses/service.py): turning it on or off,
+    # and the internet answer, start or stop its Tor daemon ("never" stops
+    # the container, not just the calls).
+    from domovoi.friend_houses import service as friend_houses_service
+
+    reapply.on_reapply("friend_houses_enabled", friend_houses_service.schedule_reconcile)
+    reapply.on_reapply(
+        "internet_access", friend_houses_service.schedule_reconcile, key="friend_houses"
+    )
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
     # (domovoi/searxng_service.py). At boot only the stop under never runs
@@ -595,6 +604,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import wake_trainer_setup
 
         wake_trainer_setup.on_internet_answer()
+        # Friend Houses (off by default): start its Tor daemon and listener
+        # when it's on and wanted, or stop a daemon left running when it
+        # isn't (domovoi/friend_houses/service.py). Background, and quiet
+        # on a house that never turned it on.
+        from domovoi.friend_houses import service as _friend_houses
+
+        _friend_houses.schedule_reconcile()
     # Groups (domovoi/music_groups.py): the named groups, and the shared
     # queues that were playing before the restart (best-effort).
     from domovoi import music_groups
@@ -1066,6 +1082,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signal_shutdown("lifespan teardown")  # no-op after a signal
         from domovoi.wake_preview import shutdown as wake_preview_shutdown
         from domovoi.wake_trainer_setup import shutdown as wake_trainer_setup_shutdown
+        from domovoi.friend_houses.service import shutdown as friend_houses_shutdown
 
         teardown_started = asyncio.get_running_loop().time()
         await lifecycle.run_teardown(
@@ -1086,6 +1103,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ("wake-word training setup", wake_trainer_setup_shutdown, 3.0),
                 # "Hear the training voices": its container stops too.
                 ("wake-word voice preview", wake_preview_shutdown, 3.0),
+                # Friend Houses' listener process (its Tor container stays up
+                # so a restart doesn't take the house offline).
+                ("Friend Houses listener", friend_houses_shutdown, 12.0),
                 # Announcements still in flight stop here; their rows stay
                 # pending/sending and the next boot resumes them.
                 ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
@@ -3752,6 +3772,20 @@ class _AdminWakeScoreBody(BaseModel):
 class _AdminChatToolBody(BaseModel):
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get(
+    "/v1/admin/friend-houses",
+    # Admin-only, GET included: Friend Houses status says whether this house
+    # can be reached and by whom (threat-model finding 10).
+    dependencies=[Depends(require_admin_security_read)],
+)
+async def admin_friend_houses_status() -> dict[str, Any]:
+    """Friend Houses at a glance: whether its private connection runs, why
+    not, and this house's fingerprint (public; no keys, no addresses)."""
+    from domovoi.friend_houses import service as friend_houses_service
+
+    return friend_houses_service.status()
 
 
 @app.get(

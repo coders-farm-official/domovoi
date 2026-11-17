@@ -1,0 +1,26 @@
+# The Tor daemon for Friend Houses ("serverless messaging and friend system
+# between households"). The core builds this image itself, the first time an
+# admin turns Friend Houses on, and the container guard trusts exactly the
+# image ID it built (docs/CONTAINER_GUARD.md); nothing is pulled from a
+# third-party tor image.
+#
+# C tor from Debian (BSD-3-Clause), so security fixes arrive as Debian
+# publishes them: the core rebuilds the image when this file changes and
+# when the image is older than FRIEND_HOUSES_TOR_MAX_AGE_DAYS
+# (domovoi/friend_houses/tor_image.py). The base is pinned by digest:
+# debian:trixie-slim as of 2026-11-17 (multi-arch index); moving the pin
+# is a change to this file.
+#
+# No control port, no TCP ports: SOCKS and the onion targets are unix
+# sockets in the folder the core shares (domovoi/friend_houses/tor_config.py).
+# The container runs as the core's own user (the core passes --user), with
+# a read-only root, no capabilities and no new privileges.
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tor \
+    && rm -rf /var/lib/apt/lists/*
+
+LABEL org.domovoi.role="friend-houses-tor"
+
+ENTRYPOINT ["tor", "-f", "/var/lib/fh/torrc"]

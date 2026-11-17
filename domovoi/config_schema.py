@@ -899,6 +899,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "finishes). Applies immediately.",
         "bool", section="advanced", tier="reapply", needs_internet=True,
     ),
+    # Friend Houses (domovoi/friend_houses/service.py): reapplied at once,
+    # which starts or stops the private connection.
+    FieldSpec(
+        "friend_houses_enabled", "Friend Houses", "Friend Houses",
+        "Serverless messaging and friend system between households. Off: "
+        "nothing runs and nothing connects. On: this house can be friended "
+        "by other Domovoi houses and reached only by them, through the Tor "
+        "network (a private connection; no Coders Farm server is involved). "
+        "Where using Tor is restricted, leave it off. Applies immediately.",
+        "bool", section="advanced", tier="reapply", needs_internet=True,
+    ),
     FieldSpec(
         "wake_word_train_timeout_sec", "Training time limit", "Wake words",
         "How long one wake word may train before it is stopped and marked "
