@@ -12,16 +12,3 @@
 #                meet it
 # Never ignore something that has a fixed version we can take: bump the lock.
 # docs/CONTRIBUTING.md ("CI", "Dependencies") says how.
-
-# setuptools is held below 82 in requirements-linux-py314.in: webrtcvad, the
-# voice-activity wheel, imports pkg_resources, which setuptools 82 removed.
-# Both advisories are fixed only in 83 and later.
-[[IgnoredVulns]]
-id = "GHSA-h35f-9h28-mq5c"
-ignoreUntil = 2026-12-15
-reason = "setuptools below 83: MANIFEST.in exclusions missed on macOS (NFC/NFD names) while BUILDING a source distribution. The server runs on Linux and never builds an sdist from this lock's setuptools; held below 82 for webrtcvad's pkg_resources."
-
-[[IgnoredVulns]]
-id = "GHSA-xmj3-9gf7-h52w"
-ignoreUntil = 2026-12-15
-reason = "setuptools below 84.1: a crafted legacy wheel can write an __init__.py outside its folder, on Windows only. This lock is the Linux server's (py314 manylinux) and installs no legacy wheels; held below 82 for webrtcvad's pkg_resources."
