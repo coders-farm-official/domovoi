@@ -12,7 +12,11 @@ here once so they can't drift:
   moment a turn starts and asked again after it
   (:meth:`VoiceFirst.model_step`): a cancelled step is never saved;
 * a helper program (ffmpeg, tesseract) runs at the lowest CPU priority and
-  is **held still** while a turn runs (:meth:`VoiceFirst.hold_while_voice`).
+  is **held still** while a turn runs (:meth:`VoiceFirst.hold_while_voice`);
+* **Stop is looked at everywhere** (security audit round 6, DOC-9): at the
+  top of every wait for quiet, even in a quiet house, during a model step,
+  and about once a second while a helper program runs
+  (:meth:`VoiceFirst.pass_hold`, which ends the program at once).
 
 A job class supplies three hooks: how it marks itself waiting for voice,
 how it learns that the person pressed stop, and what to check before each
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Awaitable, Callable
 
 from domovoi import voice_activity
@@ -36,6 +41,8 @@ POLL_SEC = 0.1
 QUIET_SEC = 2.0
 #: How many times one step is tried when the model service fails in passing.
 STEP_TRIES = 3
+#: How often a running helper program looks for the person's stop.
+STOP_CHECK_SEC = 1.0
 
 
 class VoiceFirst:
@@ -78,7 +85,10 @@ class VoiceFirst:
 
     async def wait_for_quiet(self, job: Any) -> None:
         """Return once no voice turn has been under way for ``quiet_sec``;
-        the job is marked waiting for voice meanwhile."""
+        the job is marked waiting for voice meanwhile. Raises
+        :attr:`stopped` when the person pressed stop, a quiet house too."""
+        if await self._stop_requested(job):
+            raise self.stopped()
         while not self._quiet():
             if voice_activity.busy() and not getattr(job, "waiting", False):
                 job.waiting = True
@@ -102,6 +112,24 @@ class VoiceFirst:
                 await asyncio.sleep(self.poll_sec)
         finally:
             proc.resume()
+
+    def pass_hold(self, job: Any) -> Callable[[Any], Awaitable[None]]:
+        """The ``hold`` for a helper program run for ``job``: held still while
+        a voice turn runs (:meth:`hold_while_voice`), and about once a second
+        a look at stop, which raises :attr:`stopped` (the program is then
+        ended: :func:`domovoi.chat_video.media._run`)."""
+        last = time.monotonic()
+
+        async def hold(proc: Any) -> None:
+            nonlocal last
+            await self.hold_while_voice(proc)
+            now = time.monotonic()
+            if now - last >= STOP_CHECK_SEC:
+                last = now
+                if await self._stop_requested(job):
+                    raise self.stopped()
+
+        return hold
 
     async def model_step(self, job: Any, make: Callable[[], Awaitable[Any]]) -> Any:
         """One model call that a voice turn cancels: started when the house

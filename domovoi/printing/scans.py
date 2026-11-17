@@ -117,7 +117,7 @@ async def json_full(s: Session) -> dict[str, Any]:
         try:
             from domovoi.scan_reader import store as read_store
 
-            read = await read_store.read_json_for(await read_store.get(s.read_id))
+            read = await read_store.read_json_for(await read_store.current_or_none(await read_store.get(s.read_id)))
         except Exception as e:  # noqa: BLE001 — the scan stands without its reading
             log.warning("printing: couldn't look up the reading of scan %s: %s", s.id, type(e).__name__)
             read = None
@@ -163,7 +163,7 @@ async def scan_log_with_reads(rows: list[dict[str, Any]]) -> list[dict[str, Any]
         reads = await read_store.for_scans([r["id"] for r in out if r.get("state") == "done"])
         counts = await read_store.page_counts([r["id"] for r in reads.values()])
         for r in out:
-            row = reads.get(r["id"])
+            row = await read_store.current_or_none(reads.get(r["id"]))
             r["read"] = read_store.read_json(row, counts.get(row["id"])) if row else None
             r["readable"] = bool(r["read"] and r["read"]["readable"])
     except Exception as e:  # noqa: BLE001 — the log stands without the readings

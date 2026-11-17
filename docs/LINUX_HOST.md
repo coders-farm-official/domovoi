@@ -866,6 +866,14 @@ Three details worth not skipping:
   sudo systemctl daemon-reload
   systemctl show domovoi-core -p TimeoutStopUSec -p KillMode
   ```
+- **`OOMPolicy=continue`** on the core (1.4.0). The core runs ffmpeg,
+  ffprobe and tesseract on files somebody else made (a video sent to chat,
+  a scan); each runs under its own memory cap (`RLIMIT_AS`,
+  `domovoi/chat_video/media.py`), and should the kernel still end one for
+  want of memory, this keeps systemd from stopping the whole core with it
+  (a service's default `OOMPolicy` is `stop`). A unit you manage yourself
+  can take it from a drop-in the same way as above
+  (`printf '[Service]\nOOMPolicy=continue\n'`).
 
 Enable and start:
 

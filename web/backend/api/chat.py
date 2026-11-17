@@ -1380,6 +1380,7 @@ async def _answer(
         system["content"] += "\n\n" + plan.rules
     # A chat with videos (chat_videos.py): a plain text turn is told what
     # was heard and what the frames might show, and answers from that.
+    video_rules: str | None = None
     if refusal is None and plan is None and dturn is None and help_turn is None and not vision_call:
         try:
             video_rules = await _videos.chat_rules(thread_id)
@@ -1397,11 +1398,18 @@ async def _answer(
         refusal is None and help_turn is None and plan is None and dturn is None and not vision_call
         and replace_id is None
     )
+    # A turn that carries a video's block (security audit round 6, DOC-10)
+    # takes only the person's own typed "look up …": the model is not told
+    # about LOOK_UP / READ_PAGE and its reply is never read as a proposal,
+    # so words from a video (its speech, a sign in a frame, its name) can't
+    # send a search out, as on a document or picture turn.
+    model_lookups = lookups_offered and not video_rules
     proposal: lookup_answer.Proposal | None = None
     thread_allowed = False
     if lookups_offered:
         proposal = lookup_answer.fast_path(question)
-        system["content"] += "\n\n" + lookup_answer.tool_prompt(internet=not egress.internet_turned_off())
+        if model_lookups:
+            system["content"] += "\n\n" + lookup_answer.tool_prompt(internet=not egress.internet_turned_off())
         async with session_scope() as s:
             thread_allowed = bool((await s.execute(
                 text("SELECT internet_allowed FROM chat_threads WHERE id = :id"), {"id": thread_id},
@@ -1512,7 +1520,7 @@ async def _answer(
             # its first characters are held back, so a proposal never
             # reaches the screen as text.
             held = ""
-            holding = lookups_offered
+            holding = model_lookups
             proposing = False
             try:
                 async with contextlib.aclosing(ollama_client.chat_stream(
@@ -2726,10 +2734,17 @@ async def _sweep_unsent_forever() -> None:
             await sweep_unsent_pictures()
         except Exception as e:  # noqa: BLE001 — the next round tries again
             log.warning("chat uploads: the unsent sweep failed: %s", type(e).__name__)
+        # Videos picked and never sent (chat_videos.py): on this timer too,
+        # not only when the next upload comes (DOC-13).
+        try:
+            await _videos.sweep_unsent()
+        except Exception as e:  # noqa: BLE001 — the next round tries again
+            log.warning("chat videos: the unsent sweep failed: %s", type(e).__name__)
 
 
 def start_unsent_sweeper() -> None:
-    """The picture sweep every ten minutes while the web process runs."""
+    """The picture and video sweep every ten minutes while the web process
+    runs."""
     global _unsent_sweeper
     if _unsent_sweeper is None or _unsent_sweeper.done():
         _unsent_sweeper = asyncio.get_running_loop().create_task(

@@ -2453,15 +2453,20 @@ can't happen:
 
 * **Who.** Reading a scan's progress, summary and text is a household read
   (`require_device_read`), the same as reading the Documents folder the
-  scan is in; asking for a read is device tier. Only PDFs inside
-  `Documents/Scans/` are taken (no `..`, no hidden names), resolved inside
-  Documents with links refused.
+  scan is in; asking for a read and stopping one are device tier. Only
+  PDFs inside `Documents/Scans/` are taken (no `..`, no hidden names),
+  resolved inside Documents with a link anywhere on the path below
+  Documents refused (a file or folder linked into `Scans/` can't hand over
+  a PDF from another folder; `domovoi/scan_reader/runner.py`, `resolve`).
 * **The file is somebody's bytes.** A scan in Documents can be replaced by
   anyone with write access, so its pages are drawn in a short-lived
   worker process with memory and CPU caps (`domovoi/scan_reader/page_worker.py`,
-  the document reader's limits), never in the core. The page pictures go
-  to a work folder of the read's own in the system temp folder and are
-  deleted when the read ends (and at the next start, after a crash).
+  the document reader's limits), never in the core. A read first copies
+  the file (1 GB at most) into a work folder of its own in the system temp
+  folder, and hashes and draws that copy, so the text kept is always the
+  text of the bytes hashed, even when the scan is replaced mid-read. The
+  copy and the page pictures are deleted when the read ends (and at the
+  next start, after a crash).
 * **On the household's server only.** Printed text is read by Tesseract
   (an OS package, Apache-2.0, run as its own program at the lowest CPU
   priority, one thread, no network). A page it can't read well goes to the
@@ -2475,7 +2480,10 @@ can't happen:
   summary, in the database (`scan_reads`, `scan_read_pages`, V065), with
   the scan's path and the SHA-256 of its bytes, so the text is found
   wherever Domovoi reads that exact file (or a copy) and never for an
-  edited one. Text from the picture model is always introduced as what
+  edited one. The dashboard, the apps and voice show a finished read only
+  while the file at its path still hashes to the bytes it read: a scan
+  replaced after its read is shown as not read (and read again when
+  asked), never with the old file's text. Text from the picture model is always introduced as what
   the page "might say". Clearing the print and scan history doesn't delete
   it (the scan is still in Documents); the copies in the update unit's
   database dumps ([Data at rest](#data-at-rest)) keep it until they are
@@ -2483,12 +2491,24 @@ can't happen:
 * **Text from a letter is data, never instructions.** The summary goes
   through the letter reader (`domovoi/doc_qa/letter.py`): the text sits in
   a marked block, dates and amounts are shown only as the letter's own
-  sentences, and a line addressed to an AI is named, not followed.
+  sentences, and a line addressed to an AI is named, not followed. The
+  dashboard shows the summary with no link to click: link text a letter
+  carried is shown as words.
 * **Voice answers come first.** One read at a time in the house, at the
   lowest priority, holding off from a room's wake word until the reply has
   been spoken (`domovoi/voice_first.py`, shared with videos in chat);
   tesseract is held still during a turn and a picture-model step is
-  cancelled and asked again after it.
+  cancelled and asked again after it. The summary asked from a screen
+  follows the same rules: it waits for a quiet house and a turn cancels
+  it, one is made at a time in the house, once per read however many ask
+  at the same moment, and a failed one isn't asked for again for five
+  minutes (asking by voice, the person is waiting, so it is made at once).
+  The answer by voice keeps its 20-second budget inside a page too.
+* **A read can be stopped and has an end.** **Stop reading** on the
+  dashboard's sheet (`POST /v1/scan/reads/{id}/cancel`, device tier) ends
+  a waiting read at once and a running one within about a second, the
+  tesseract under way included. A read still running 4 hours after it
+  started ends with "took more than 4 hours".
 
 ## Videos in chat
 
@@ -2505,16 +2525,35 @@ and what can't happen:
   body, streamed to disk and cut off at 2 GiB (the transport guard refuses a
   larger declared size before reading anything). ffprobe, run as its own
   program at the lowest CPU priority, must find a phone format (MP4, MOV
-  or WebM; H.264, HEVC, VP8, VP9 or AV1) of at most 3 minutes, or the file
-  is deleted and the upload refused. The video is never written inside a
+  or WebM; H.264, HEVC, VP8, VP9 or AV1) of at most 3 minutes, with no
+  picture larger than 8K (7680 x 4320 either way up, no side over 8192, in
+  any picture stream of the file), or the file is deleted and the upload
+  refused. The free space on the disk is checked before the body is read
+  and again as it streams, whether or not it declared its size, and the
+  videos' folder holds at most 6 GiB of videos and 6 staged and not sent:
+  past either the upload is refused. The video is never written inside a
   media library folder: it waits in `~/.domovoi/chat_uploads/videos/`
   under a random name, and the job's frame grabs and sound in a folder of
   its own beside it.
+* **A video's length is enforced on every pass, not taken on trust.** The
+  3 minutes ffprobe reports is what the file's header says, and a header
+  can lie (a WebM that says one minute and holds two hours). So each
+  ffmpeg pass reads at most the accepted length plus two seconds, and only
+  the picture and sound streams the upload's probe checked; the sound is
+  cut off at the size that length makes and is never read past it; the
+  scene list and the speech pieces have ceilings of their own. ffprobe,
+  ffmpeg (and the scan reader's tesseract) each run with a memory cap (2
+  GiB, or a third of the server's memory, never under 1 GiB: `RLIMIT_AS`
+  on Linux, a job object on Windows) and one decoding thread, so a hostile
+  file fails its own pass, not the server; on Linux the core's unit has
+  `OOMPolicy=continue`, so a helper the kernel ends doesn't stop the core
+  (`domovoi/chat_video/media.py`).
 * **The video is deleted once it has been watched.** When the job ends,
   whether it finished, failed or was stopped, the video file and every frame
   grab and sound file it made are deleted, and the job's row records when.
-  A video picked in the composer and never sent goes after an hour; one a
-  crash left behind goes at the next start. Only text is kept: the
+  A video picked in the composer and never sent goes after an hour (the
+  dashboard's process looks every ten minutes, with or without another
+  upload); one a crash left behind goes at the next start. Only text is kept: the
   transcript with times, a short description of each of at most 12 frames,
   and a summary, in the database with the chat (`chat_video_jobs`,
   `chat_video_segments`, `chat_video_frames`, V064). Deleting the chat
@@ -2531,10 +2570,17 @@ and what can't happen:
   house, at the lowest priority, and holds off from a room's wake word until
   the reply has been spoken; a frame being described when a voice turn
   starts is cancelled and asked again after it, and ffmpeg is held still
-  during the turn.
+  during the turn. **Stop** works at every step: it is looked at before
+  each one, quiet house or not, and about once a second while ffmpeg runs
+  (which is then ended at once).
 * **Text from a video is data, never instructions.** What anyone in the
   video says, or a sign in a frame, reaches a model inside a marked block it
-  is told never to obey. A frame description is a small model's guess and
+  is told never to obey. So does the video's file name, which whoever sent
+  the video chose: a model sees it only inside a block, cut to letters,
+  digits, spaces and `. - _ ( ) '`. And a question in a chat with watched
+  videos is never offered lookups by the model (as on a document or a
+  picture turn): only the person's own typed "look up …" can send a search
+  out, so words from a video can't. A frame description is a small model's guess and
   is always shown as what a frame "might show"; no face is recognised and
   nobody is named.
 

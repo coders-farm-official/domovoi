@@ -27,6 +27,7 @@ import io
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -564,3 +565,302 @@ async def test_yes_by_voice_reads_it_now_and_offers_the_whole_text(db_session, d
     assert more is True
     assert said.startswith("It's from the stub company.")
     assert (await store.get(read_id))["state"] == "done"
+
+
+# ─── Security audit round 6 (DOC-11, DOC-12, FE-11) ─────────────────────
+# Each test replays the finding's proof of concept; the attack fails now.
+
+@pytest.fixture
+def fresh_says():
+    says._reset_for_tests()
+    yield
+    says._reset_for_tests()
+
+
+def _done_read(read_id: str = "d" * 32) -> dict[str, Any]:
+    return {"id": read_id, "state": "done", "summary": None, "path": "Scans/x.pdf", "sha256": "0"}
+
+
+def _pages_of(monkeypatch, body: str = "\n".join(LETTER)) -> None:
+    async def rows(read_id):
+        return [{"page": 1, "method": "ocr", "text": body}]
+
+    async def save(read_id, out):
+        return None
+
+    async def get(read_id):
+        return None
+
+    monkeypatch.setattr(store, "pages", rows)
+    monkeypatch.setattr(store, "save_summary", save)
+    monkeypatch.setattr(store, "get", get)
+
+
+async def test_doc11_ten_asks_at_once_start_one_summary(monkeypatch, fresh_says) -> None:
+    _pages_of(monkeypatch)
+    calls = []
+    gate = asyncio.Event()
+
+    async def writer(system: str, user: str) -> str:
+        calls.append(1)
+        await gate.wait()
+        return "FROM: ACME\nABOUT: A water bill.\nTODO: Pay it.\nUNCLEAR: nothing"
+
+    # Before: each GET ran its own 500-token generation, with no lock.
+    asks = [asyncio.create_task(says.summary(_done_read(), writer=writer, gate=True)) for _ in range(10)]
+    await asyncio.sleep(0.3)
+    gate.set()
+    outs = await asyncio.gather(*asks)
+    assert len(calls) == 1
+    assert all(o["ai"] and o == outs[0] for o in outs)
+
+
+async def test_doc11_a_summary_asked_from_a_screen_waits_for_voice(monkeypatch, fresh_says) -> None:
+    _pages_of(monkeypatch)
+    monkeypatch.setattr(says._GATE, "poll_sec", 0.01)
+    monkeypatch.setattr(says._GATE, "quiet_sec", 0.05)
+    calls = []
+
+    async def writer(system: str, user: str) -> str:
+        calls.append(time.monotonic())
+        return "FROM: ACME\nABOUT: A bill.\nTODO: Pay.\nUNCLEAR: nothing"
+
+    async with voice_activity.turn("satellite"):
+        ask = asyncio.create_task(says.summary(_done_read(), writer=writer, gate=True))
+        await asyncio.sleep(0.3)
+        assert calls == [], "nothing is asked of the model while a room is answering"
+        ended = time.monotonic()
+    assert (await asyncio.wait_for(ask, 10))["ai"]
+    assert calls and calls[0] - ended >= 0.04
+
+
+async def test_doc11_one_summary_at_a_time_in_the_house(monkeypatch, fresh_says) -> None:
+    _pages_of(monkeypatch)
+    running = []
+    most = []
+
+    async def writer(system: str, user: str) -> str:
+        running.append(1)
+        most.append(len(running))
+        await asyncio.sleep(0.1)
+        running.pop()
+        return "FROM: ACME\nABOUT: A bill.\nTODO: Pay.\nUNCLEAR: nothing"
+
+    await asyncio.gather(*(says.summary(_done_read(c * 32), writer=writer, gate=True) for c in "abcd"))
+    assert max(most) == 1 and len(most) == 4
+
+
+async def test_doc11_a_failed_summary_isnt_tried_again_on_every_ask(monkeypatch, fresh_says) -> None:
+    _pages_of(monkeypatch)
+    monkeypatch.setattr("domovoi.voice_first.STEP_TRIES", 1)
+    calls = []
+
+    async def broken(system: str, user: str) -> str:
+        calls.append(1)
+        raise RuntimeError("the model service is down")
+
+    first = await says.summary(_done_read(), writer=broken, gate=True)
+    assert first["failed"] and first["said"].startswith("I couldn't sum it up just now.")
+    for _ in range(20):
+        again = await says.summary(_done_read(), writer=broken, gate=True)
+        assert again["failed"]
+    assert len(calls) == 1
+
+
+async def test_doc11_read_now_keeps_its_budget_inside_a_page(tmp_path, monkeypatch) -> None:
+    # Before: the 20 s budget was looked at only between pages, and one page
+    # (drawn, then OCR) could take minutes.
+    pdf = scan_pdf(tmp_path / "Scan.pdf", [LETTER])
+
+    class SlowOcr:
+        async def __call__(self, png, *, hold=None, langs=None):
+            await asyncio.sleep(30)
+
+    row = {"id": "e" * 32, "state": "running", "path": "Scans/Scan.pdf", "sha256": None, "pages": 1,
+           "languages": "eng", "attempts": 1, "started_at": None}
+
+    async def get(read_id):
+        return row
+
+    async def saved(read_id):
+        return set()
+
+    async def update(job_id, **cols):
+        return None
+
+    monkeypatch.setattr(store, "get", get)
+    monkeypatch.setattr(runner_mod, "saved_pages", saved)
+    monkeypatch.setattr(runner_mod, "_update", update)
+    monkeypatch.setattr(runner_mod, "resolve", lambda rel: pdf)
+    monkeypatch.setattr(runner_mod, "work_root", lambda: tmp_path / "work")
+    r = runner_mod.Runner(vision=FakeVision(), ocr_fn=SlowOcr())
+    t0 = asyncio.get_running_loop().time()
+    await runner_mod.read_now("e" * 32, budget_sec=0.5, runner=r)
+    assert asyncio.get_running_loop().time() - t0 < 5
+
+
+@requires_db
+async def test_doc11_a_read_can_be_stopped_queued_or_running(db_session, docs) -> None:
+    import httpx
+
+    from domovoi import admin_auth
+    from domovoi.main import app
+
+    scan_pdf(docs / "Scans" / "Queued.pdf", [LETTER])
+    scan_pdf(docs / "Scans" / "Long.pdf", [LETTER, LETTER, LETTER, LETTER])
+    app.dependency_overrides[admin_auth.require_device_read] = lambda: None
+    app.dependency_overrides[admin_auth.require_device] = lambda: None
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            await _q("DELETE FROM scan_reads")
+            queued = (await c.post("/v1/scan/reads", json={"path": "Scans/Queued.pdf"})).json()
+            r = await c.post(f"/v1/scan/reads/{queued['id']}/cancel")
+            assert r.status_code == 200 and r.json()["state"] == "cancelled"
+            fake = FakeOcr({})
+            assert await runner_mod.Runner(vision=FakeVision(), ocr_fn=fake).run_next() is None
+            # A running one: stopped after its first page, at the next look.
+            long = (await c.post("/v1/scan/reads", json={"path": "Scans/Long.pdf"})).json()
+
+            class StopAfterFirst(FakeOcr):
+                async def __call__(self, png, *, hold=None, langs=None):
+                    got = await super().__call__(png, hold=hold, langs=langs)
+                    if len(self.calls) == 1:
+                        assert (await c.post(f"/v1/scan/reads/{long['id']}/cancel")).status_code == 200
+                    return got
+
+            stopper = StopAfterFirst({})
+            await runner_mod.Runner(vision=FakeVision(), ocr_fn=stopper, poll_sec=0.01, quiet_sec=0).run_next()
+            row = await store.get(long["id"])
+            assert row["state"] == "cancelled" and stopper.calls == [1]
+            assert (await c.post("/v1/scan/reads/" + "0" * 32 + "/cancel")).status_code == 404
+    finally:
+        app.dependency_overrides.pop(admin_auth.require_device_read, None)
+        app.dependency_overrides.pop(admin_auth.require_device, None)
+
+
+@requires_db
+async def test_doc11_a_read_running_past_its_time_ends_plainly(db_session, docs) -> None:
+    scan_pdf(docs / "Scans" / "Scan.pdf", [LETTER, LETTER])
+    read_id = await runner_mod.queue_scan("Scans/Scan.pdf")
+    await _q("UPDATE scan_reads SET state = 'running', attempts = 1, started_at = now() - interval '5 hours' "
+             "WHERE id = :id", {"id": read_id})
+    fake = FakeOcr({})
+    await runner_mod.Runner(vision=FakeVision(), ocr_fn=fake, poll_sec=0.01, quiet_sec=0).run_next()
+    row = await store.get(read_id)
+    assert row["state"] == "failed" and row["error_code"] == runner_mod.CODE_TOO_LONG and fake.calls == []
+
+
+def test_doc11_the_summary_route_is_gated_and_stop_is_device_tier() -> None:
+    import inspect
+
+    from domovoi import admin_auth
+    from domovoi.main import app as core_app
+    from domovoi.scan_reader import routes
+    from domovoi.tests.route_walk import iter_route_contexts
+    from web.backend.main import app as web_app
+
+    assert "gate=True" in inspect.getsource(routes.read_summary)
+
+    def gates(app, method: str, path: str) -> set:
+        for rc in iter_route_contexts(app.routes):
+            if getattr(rc, "path", None) == path and method in (getattr(rc, "methods", None) or ()):
+                out, stack = set(), [rc.dependant]
+                while stack:
+                    for dep in stack.pop().dependencies:
+                        if dep.call is not None:
+                            out.add(dep.call)
+                        stack.append(dep)
+                return out
+        raise AssertionError(f"{method} {path} is not a route")
+
+    assert admin_auth.require_device in gates(core_app, "POST", "/v1/scan/reads/{read_id}/cancel")
+    assert admin_auth.require_device in gates(web_app, "POST", "/api/scan/reads/{read_id}/cancel")
+
+
+def test_doc12_a_link_anywhere_on_the_path_is_refused(tmp_path, monkeypatch) -> None:
+    d = tmp_path / "Documents"
+    (d / "Scans").mkdir(parents=True)
+    (d / "tls").mkdir()
+    scan_pdf(d / "tls" / "statement.pdf", [LETTER])
+    scan_pdf(d / "Scans" / "real.pdf", [LETTER])
+    monkeypatch.setattr(settings, "documents_dir", str(d))
+    try:
+        (d / "Scans" / "link-inside.pdf").symlink_to(d / "tls" / "statement.pdf")
+        (d / "Scans" / "linked-dir").symlink_to(d / "tls", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system can't make links")
+    # Before: Scans/link-inside.pdf resolved to tls/statement.pdf.
+    assert runner_mod.resolve("Scans/link-inside.pdf") is None
+    assert runner_mod.resolve("Scans/linked-dir/statement.pdf") is None
+    assert runner_mod.resolve("Scans/real.pdf") == d.resolve() / "Scans" / "real.pdf"
+    assert runner_mod.resolve("Scans/../tls/statement.pdf") is None
+
+
+@requires_db
+async def test_doc12_a_replaced_scan_is_not_shown_the_old_text(db_session, docs, monkeypatch) -> None:
+    import httpx
+
+    from domovoi import admin_auth, scan_reader
+    from domovoi.main import app
+
+    letter_b = ["LETTER B FROM THE BANK", "Your card is blocked, call this number now."]
+    path_b = scan_pdf(docs / "Scans" / "x.pdf", [letter_b])
+    bytes_b = path_b.read_bytes()
+    read_id = await runner_mod.queue_scan("Scans/x.pdf")
+    await runner_mod.Runner(vision=FakeVision(), ocr_fn=FakeOcr({1: good(letter_b)}), poll_sec=0.01,
+                            quiet_sec=0).run_next()
+    assert (await store.get(read_id))["state"] == "done"
+
+    async def shown() -> Any:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+            r = await c.get("/v1/scan/reads", params={"path": "Scans/x.pdf"})
+        assert r.status_code == 200
+        return r.json()["read"]
+
+    app.dependency_overrides[admin_auth.require_device_read] = lambda: None
+    try:
+        assert (await shown())["id"] == read_id
+        # Replaced with letter A: B's text is not shown for it any more.
+        scan_pdf(docs / "Scans" / "x.pdf", [LETTER])
+        assert await shown() is None
+        # B's very bytes back: its read is B's again.
+        path_b.write_bytes(bytes_b)
+        assert (await shown())["id"] == read_id
+        scan_pdf(docs / "Scans" / "x.pdf", [LETTER])
+    finally:
+        app.dependency_overrides.pop(admin_auth.require_device_read, None)
+    # By voice: a new read of what is there now, never B's words.
+    monkeypatch.setattr(ocr, "read_page", FakeOcr({1: good(LETTER)}))
+    said, _more = await scan_reader.answer_for_voice("Scans/x.pdf")
+    assert "BANK" not in said.upper() and "blocked" not in said
+    assert (await store.latest_for_path("Scans/x.pdf"))["id"] != read_id
+
+
+@requires_db
+async def test_doc12_pages_are_drawn_from_the_copy_that_was_hashed(db_session, docs, monkeypatch) -> None:
+    pdf = scan_pdf(docs / "Scans" / "Scan.pdf", [LETTER, LETTER])
+    read_id = await runner_mod.queue_scan("Scans/Scan.pdf")
+    drawn: list[Path] = []
+    real_render = pages.render
+
+    async def render(src, page, out, dpi=pages.DPI):
+        drawn.append(Path(src))
+        if page == 1:
+            scan_pdf(pdf, [["Something else entirely"], ["and more"]])   # swapped mid-read
+        return await real_render(src, page, out, dpi)
+
+    monkeypatch.setattr(pages, "render", render)
+    await runner_mod.Runner(vision=FakeVision(), ocr_fn=FakeOcr({}), poll_sec=0.01, quiet_sec=0).run_next()
+    row = await store.get(read_id)
+    assert row["state"] == "done"
+    # Before: the hash was of the first file and the pages came from the path.
+    assert all(d.name == "source.pdf" and d.parent.name == read_id for d in drawn)
+    assert row["sha256"] != store.sha256_of(pdf)
+
+
+def test_fe11_the_scan_sheet_shows_no_links_and_offers_stop() -> None:
+    src = (REPO_ROOT / "web" / "static" / "printers.jsx").read_text(encoding="utf-8")
+    sheet = src[src.index("const ScanReadSheet"):src.index("const ScanSheet")]
+    assert "chatMarkdownHtml(t, { links: false })" in sheet
+    assert "chatMarkdownHtml(t)" not in sheet
+    assert "/cancel`" in sheet and "Stop reading" in sheet

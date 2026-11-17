@@ -450,6 +450,14 @@ async def scan_read_summary(read_id: str, request: Request):
     return bridge_response(status, out)
 
 
+@router.post("/api/scan/reads/{read_id}/cancel", dependencies=DEVICE)
+async def scan_read_cancel(read_id: str, request: Request):
+    """Stop reading a scan: a waiting read ends now, one under way within
+    about a second. The pages read so far stay with it."""
+    status, out = await post_admin(f"/v1/scan/reads/{_scan_id(read_id)}/cancel", {}, headers=_headers(request))
+    return bridge_response(status, out)
+
+
 @router.get("/api/scan/reads/{read_id}/text", dependencies=READ)
 async def scan_read_text(read_id: str, request: Request):
     """The scan's full text, page by page."""

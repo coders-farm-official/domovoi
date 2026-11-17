@@ -10,7 +10,11 @@ on the same tiers as the chat itself:
   ffprobe before it is accepted: at most 3 minutes, a phone format
   (MP4/MOV/WebM, H.264/HEVC/VP9/AV1). Stored under
   ``~/.domovoi/chat_uploads/videos/<token><ext>`` with a staging note
-  ``<token>.json``; a video no message took is removed after an hour.
+  ``<token>.json``; a video no message took is removed after an hour (a
+  sweep every ten minutes, chat.py's, and at each upload). The folder has a
+  ceiling (:data:`limits.MAX_STORED_BYTES`, :data:`limits.MAX_UNSENT`
+  staged and not sent) and the disk's free space is checked again as the
+  body is written, chunked or not (security audit round 6, DOC-13).
 * ``POST /threads/{id}/messages`` (chat.py) carries ``videos: [{token}]``:
   the message queues a job (V064) that the core runs
   (domovoi/chat_video/runner.py), and the reply comes at once ("I'm
@@ -70,6 +74,8 @@ SEND = [Depends(require_device), Depends(_require_ai)]
 _CHUNK = 1024 * 1024
 #: Room kept free on the disk beside a video being uploaded.
 DISK_HEADROOM = 512 * 1024 * 1024
+#: How often (bytes written) an upload looks again at the disk and the folder.
+RECHECK_EVERY = 64 * 1024 * 1024
 
 LIVE = ("queued", "running")
 
@@ -114,29 +120,80 @@ def _meta(token: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+async def _live_tokens(strict: bool = False) -> set[str]:
+    """The tokens of videos sent and waiting to be watched. When the
+    database can't say: ``strict`` raises (the sweep deletes nothing), else
+    none (every file then counts as unsent, the stricter way for a quota)."""
+    try:
+        async with session_scope() as s:
+            return set((await s.execute(text(
+                "SELECT token FROM chat_video_jobs WHERE state IN ('queued', 'running')"))).scalars().all())
+    except Exception as e:  # noqa: BLE001
+        if strict:
+            raise
+        log.warning("chat videos: the live jobs are unreadable: %s", type(e).__name__)
+        return set()
+
+
 async def sweep_unsent(now: float | None = None) -> int:
     """Remove staged videos older than :data:`limits.UNSENT_TTL_SEC` that no
-    job took (picked in the composer, never sent). Run at each upload."""
+    job took (picked in the composer, never sent), and a file an upload left
+    without its staging note (the process stopped mid-upload) once it is as
+    old. Run every ten minutes (chat.py's sweeper) and at each upload."""
     if not limits.VIDEOS_DIR.is_dir():
         return 0
     now = time.time() if now is None else now
-    old: set[str] = set()
-    for p in limits.VIDEOS_DIR.glob("*.json"):
+    newest: dict[str, float] = {}
+    for p in limits.VIDEOS_DIR.iterdir():
         token = p.name[:32]
+        if not limits.valid_token(token):
+            continue
         try:
-            if limits.valid_token(token) and now - p.stat().st_mtime > limits.UNSENT_TTL_SEC:
-                old.add(token)
+            if not p.is_file():
+                continue
+            newest[token] = max(newest.get(token, 0.0), p.stat().st_mtime)
         except OSError:
             continue
+    old = {t for t, m in newest.items() if now - m > limits.UNSENT_TTL_SEC}
     if not old:
         return 0
-    async with session_scope() as s:
-        used = set((await s.execute(text(
-            "SELECT token FROM chat_video_jobs WHERE state IN ('queued', 'running')"))).scalars().all())
-    gone = old - used
+    gone = old - await _live_tokens(strict=True)
     for t in gone:
         delete_files(t)
     return len(gone)
+
+
+def store_use(live: set[str]) -> tuple[int, int]:
+    """(bytes of every video in the folder, how many staged videos no job has
+    taken yet), uploads under way included."""
+    total = 0
+    unsent: set[str] = set()
+    if not limits.VIDEOS_DIR.is_dir():
+        return 0, 0
+    for p in limits.VIDEOS_DIR.iterdir():
+        if p.suffix.lower() not in limits.EXTENSIONS:
+            continue
+        try:
+            if not p.is_file():
+                continue
+            total += p.stat().st_size
+        except OSError:
+            continue
+        if p.name[:32] not in live:
+            unsent.add(p.name[:32])
+    return total, len(unsent)
+
+
+def _room_left(live: set[str], adding: int = 0) -> JSONResponse | None:
+    """The 507 when the disk or the videos' folder is full (``adding``: bytes
+    about to come), else None."""
+    free = media.disk_free(limits.VIDEOS_DIR)
+    if free is not None and free < adding + DISK_HEADROOM:
+        return _refused(507, "video_no_room", limits.NO_ROOM)
+    total, _unsent = store_use(live)
+    if total + adding > limits.MAX_STORED_BYTES:
+        return _refused(507, "video_no_room", limits.STORE_FULL)
+    return None
 
 
 _REFUSALS = {
@@ -166,14 +223,19 @@ async def upload_video(request: Request, name: str = Query(..., min_length=1, ma
     size_hint = int(declared) if declared and declared.isdigit() else None
     if size_hint is not None and size_hint > limits.MAX_BYTES:
         return _too_large()
-    free = media.disk_free(limits.VIDEOS_DIR)
-    if free is not None and free < (size_hint or 0) + DISK_HEADROOM:
-        return _refused(507, "video_no_room", limits.NO_ROOM)
+    live = await _live_tokens()
+    full = _room_left(live, size_hint or 0)
+    if full is not None:
+        return full
+    if store_use(live)[1] >= limits.MAX_UNSENT:
+        return _refused(507, "video_no_room", limits.STORE_FULL)
     if not media.tools_present():
         return _refused(503, "video_no_tools", limits.NO_TOOLS)
     token = uuid.uuid4().hex
+    limits.VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     dest = limits.VIDEOS_DIR / f"{token}{Path(clean).suffix.lower()}"
     size = 0
+    next_check = RECHECK_EVERY
     try:
         with dest.open("wb") as out:
             async for chunk in request.stream():
@@ -183,9 +245,21 @@ async def upload_video(request: Request, name: str = Query(..., min_length=1, ma
                 if size > limits.MAX_BYTES:
                     raise _TooLarge()
                 out.write(chunk)
+                if size >= next_check:
+                    # A chunked body declares no size: the disk and the
+                    # folder are looked at again as it comes (this file's
+                    # bytes so far are in the folder's total already).
+                    next_check = size + RECHECK_EVERY
+                    out.flush()
+                    full = _room_left(live)
+                    if full is not None:
+                        raise _NoRoom(full)
     except _TooLarge:
         dest.unlink(missing_ok=True)
         return _too_large()
+    except _NoRoom as e:
+        dest.unlink(missing_ok=True)
+        return e.response
     except BaseException:
         dest.unlink(missing_ok=True)
         raise
@@ -218,6 +292,12 @@ async def upload_video(request: Request, name: str = Query(..., min_length=1, ma
 
 class _TooLarge(Exception):
     pass
+
+
+class _NoRoom(Exception):
+    def __init__(self, response: JSONResponse) -> None:
+        super().__init__("no room")
+        self.response = response
 
 
 async def _server_speeds() -> dict[str, float]:
