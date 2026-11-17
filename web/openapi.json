@@ -17163,6 +17163,47 @@
         }
       }
     },
+    "/api/friend-houses/requests/{request_id}": {
+      "delete": {
+        "tags": [
+          "friend-houses"
+        ],
+        "summary": "Friend Houses Withdraw",
+        "description": "Take back a request this house sent (audit R6 FH-11).",
+        "operationId": "friend_houses_withdraw_api_friend_houses_requests__request_id__delete",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/friend-houses/friends": {
       "get": {
         "tags": [
@@ -27267,7 +27308,8 @@
             "type": "string",
             "enum": [
               "voice",
-              "screen"
+              "screen",
+              "friend"
             ],
             "title": "Added Via"
           },
