@@ -171,15 +171,18 @@ object RoomDisplayModel {
     }
 
     private fun nowPlaying(np: FeedNowPlaying, since: Long, linked: Boolean, volume: Int?): NowPlaying? {
-        // A song with no name is not shown: the card would be a guess.
-        val title = np.title ?: return null
+        // Something is playing with no name the server knows: the card
+        // says what kind of thing it is ("radio", "music"), never a made-up
+        // title, and keeps its controls (hiding it would hide Pause).
+        val title = np.title ?: sourceWords(np.source) ?: "music"
         val playing = np.state == PlayState.PLAY
         val wanted = if (playing) Transport.PAUSE else Transport.RESUME
         val elapsed = np.elapsedSec?.let { if (playing) it + since / 1000.0 else it }
         val duration = np.durationSec
         return NowPlaying(
             title = title,
-            subtitle = listOfNotNull(np.artist, np.album).joinToString(" · ").ifEmpty { sourceWords(np.source) },
+            subtitle = listOfNotNull(np.artist, np.album).joinToString(" · ").ifEmpty { sourceWords(np.source) }
+                ?.takeIf { it != title },
             art = np.art,
             playing = playing,
             playPause = wanted.takeIf { linked && it in np.controls },
@@ -200,7 +203,10 @@ object RoomDisplayModel {
         MediaSource.LIBRARY, MediaSource.OTHER, null -> null
     }
 
-    /** "pasta timer", "timer", "7 am alarm", "alarm". */
+    /** A timer's label is the bare name the server keeps ("pasta"):
+     *  "pasta timer", or "timer" with none, never "kitchen timer timer". An
+     *  alarm's label is the server's own ("7 AM alarm"), shown as it is;
+     *  "alarm" with none. */
     fun timerLabel(t: FeedTimer): String = title(t.kind, t.label)
 
     private fun ringingTitle(r: FeedRinging): String = title(r.kind, r.label)

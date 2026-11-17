@@ -41,7 +41,9 @@ object RoomProtocol {
      * it is what lets the core start a drop-in here, and a room that cannot
      * capture while it plays would howl. `dropin_ready` goes with it: a room
      * that can take a drop-in finishes the reply announcing the call before
-     * it opens it ([DropinAfterReply]).
+     * it opens it ([DropinAfterReply]). `room_display`: the room's screen
+     * shows this room's music and timers and sends `room_control`
+     * ([RoomDisplayFeed]), on every phone.
      */
     fun supports(echoCanceller: Boolean): List<String> = buildList {
         if (echoCanceller) add("full_duplex")
@@ -51,6 +53,7 @@ object RoomProtocol {
         add("wake_models")
         add("sounds")
         if (echoCanceller) add("dropin_ready")
+        add(RoomDisplayFeed.ABILITY)
     }
 
     fun hello(

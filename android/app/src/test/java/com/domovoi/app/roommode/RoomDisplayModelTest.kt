@@ -77,8 +77,16 @@ class RoomDisplayModelTest {
         assertNull(RoomDisplayModel.build(input(feed = feed(nowPlaying = null))).nowPlaying)
     }
 
-    @Test fun aSongWithNoTitleIsNotGuessedAt() {
-        assertNull(RoomDisplayModel.build(input(feed = feed(nowPlaying = song(title = null)))).nowPlaying)
+    @Test fun somethingPlayingWithNoTitleSaysWhatItIsAndKeepsPause() {
+        val radio = RoomDisplayModel.build(
+            input(feed = feed(nowPlaying = song(title = null).copy(artist = null, album = null, source = MediaSource.RADIO))),
+        ).nowPlaying!!
+        assertEquals("radio", radio.title)
+        assertNull("not said twice", radio.subtitle)
+        assertEquals(Transport.PAUSE, radio.playPause)
+        val untagged = RoomDisplayModel.build(input(feed = feed(nowPlaying = song(title = null).copy(source = MediaSource.LIBRARY)))).nowPlaying!!
+        assertEquals("music", untagged.title)
+        assertEquals("The Lanterns · Kitchen Radio", untagged.subtitle)
     }
 
     @Test fun offlineHidesWhatTheServerSaid() {
@@ -211,6 +219,40 @@ class RoomDisplayModelTest {
         assertFalse("no timers: nothing to lift", first())
         val alarmOnly = RoomDisplayModel.build(input(feed = feed(timers = listOf(timer(1, 60_000L, "7 am alarm", TimerKind.ALARM)))))
         assertFalse("an alarm is not a timer running out", alarmOnly.timersFirst)
+    }
+
+    @Test fun labelsReadAsTheServerKeepsThem() {
+        fun shown(label: String?, kind: TimerKind) = RoomDisplayModel.timerLabel(FeedTimer(1, kind, label, 1_000, null))
+        assertEquals("pasta timer", shown("pasta", TimerKind.TIMER))
+        assertEquals("timer", shown(null, TimerKind.TIMER))
+        assertEquals("kitchen timer", shown("kitchen timer", TimerKind.TIMER))
+        assertEquals("egg Timer", shown("egg Timer", TimerKind.TIMER))
+        assertEquals("7 AM alarm", shown("7 AM alarm", TimerKind.ALARM))
+        assertEquals("20 minute alarm", shown("20 minute alarm", TimerKind.ALARM))
+        assertEquals("alarm", shown(null, TimerKind.ALARM))
+    }
+
+    @Test fun aStationHasPauseAndResumeOnlyAndNoProgress() {
+        val frame = """
+            {"type":"room_display","sent_at_ms":12,
+             "now_playing":{"state":"play","title":"Jazz FM","artist":null,"album":null,"source":"radio",
+                            "art":null,"duration_sec":null,"elapsed_sec":null,"controls":["pause"]},
+             "timers":[{"id":4,"kind":"timer","label":null,"remaining_ms":90000,"total_ms":null}],
+             "ringing":null}
+        """.trimIndent()
+        val s = RoomDisplayModel.build(input(feed = (RoomProtocol.parse(frame) as RoomProtocol.ServerFrame.Display).feed.copy(receivedAt = 10_000L)))
+        val np = s.nowPlaying!!
+        assertEquals("Jazz FM", np.title)
+        assertEquals("radio", np.subtitle)
+        assertNull(np.art)
+        assertNull("no duration: no progress bar", np.progress)
+        assertEquals(Transport.PAUSE, np.playPause)
+        assertFalse(np.previous || np.next)
+        assertEquals("timer", s.timers.single().label)
+        assertEquals("1:30", s.timers.single().countdown)
+        val paused = RoomProtocol.parse(frame.replace("\"state\":\"play\"", "\"state\":\"pause\"").replace("[\"pause\"]", "[\"resume\"]"))
+        val pausedCard = RoomDisplayModel.build(input(feed = (paused as RoomProtocol.ServerFrame.Display).feed)).nowPlaying!!
+        assertEquals(Transport.RESUME, pausedCard.playPause)
     }
 
     @Test fun aRingingTimerGetsAStop() {
