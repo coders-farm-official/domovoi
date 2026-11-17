@@ -179,8 +179,8 @@ or in the cloud; they override your tool's defaults.
   (`gh pr create` then `gh pr merge --auto --merge`). It merges itself once
   the `ci passed` check is green; nobody needs to approve it. A small,
   urgent fix may be its own pull request. A branch rule enforces this: a
-  push straight to `main` is refused, with no admin bypass (only the
-  release workflow's own commits are exempt). docs/CONTRIBUTING.md,
+  push straight to `main` is refused, with no bypass (the owner switches
+  the rule off only while a release runs). docs/CONTRIBUTING.md,
   "Pull requests", has the steps.
 - **CI runs on every pull request and every push to main.** `.github/workflows/ci.yml` (the
   pytest suite in shards, the web and docs checks, the bash harnesses, the
