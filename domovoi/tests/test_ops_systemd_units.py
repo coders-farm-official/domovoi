@@ -144,7 +144,7 @@ def test_python_units_see_the_checkout_media_and_only_their_own_home(name: str) 
                 assert p.startswith("-"), f"{name}: {p} would fail the unit where it is missing"
     assert _one(svc, "ProtectHome") == "tmpfs"
     assert _paths(svc, "BindPaths") == {"/home/domovoi"}
-    # The speech stack (numba, torch, onnxruntime) JIT-compiles; devices
+    # The speech stack (it once had numba and torch; onnxruntime now) JIT-compiles; devices
     # (GPU, SDR, the card the dashboard reads a label from) stay visible.
     for key in ("MemoryDenyWriteExecute", "PrivateDevices", "ProtectClock", "DevicePolicy", "DeviceAllow"):
         assert key not in svc, f"{name}: {key}= would break the hardware paths"

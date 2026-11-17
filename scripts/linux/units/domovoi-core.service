@@ -54,8 +54,10 @@ KillMode=control-group
 # implies nothing: a read-only system, a private /tmp, hidden homes,
 # read-only control groups and a 0027 umask.
 # Also left out, for the hardware: ProtectClock and PrivateDevices hide
-# GPU and SDR devices, MemoryDenyWriteExecute breaks the speech stack's
-# JIT compilers (numba, torch, onnxruntime).
+# GPU and SDR devices. MemoryDenyWriteExecute was left out because the
+# speech stack's JIT compilers (numba, torch) need writable executable
+# memory; neither is installed any more (onnxruntime and CTranslate2 are
+# what runs), so whether it could be set now is untested.
 UMask=0027
 PrivateTmp=yes
 ProtectSystem=strict

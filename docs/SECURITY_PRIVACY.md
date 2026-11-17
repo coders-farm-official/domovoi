@@ -1416,8 +1416,9 @@ object or a graft. Said plainly:
   can rewrite.
 - **What signing doesn't bound yet: an older signed commit.** Moving HEAD
   back to a commit that was signed then, and has since been fixed, is not
-  refused (a rollback needs older commits). Bounding that is for 1.1's
-  signed releases.
+  refused (a rollback needs older commits). Nothing bounds it today, not
+  even in the releases made since signed updates came in: a later release
+  may.
 - **What signing doesn't bound: the service user's own processes.** Code
   running as the service user can still change the core, the dashboard and
   the plugins that account runs (their code is in its checkout and its

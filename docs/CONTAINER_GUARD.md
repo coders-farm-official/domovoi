@@ -7,7 +7,7 @@ of the core that knows which of those containers should be running, checks
 them every 30 seconds, and says so loudly when one fails or when something
 about them looks tampered with.
 
-Two kinds of problem, two responses (the owner's choice, 2026-10-11):
+Two kinds of problem, two responses:
 
 * **A failure** — a container is missing, stopped, keeps restarting or is
   unhealthy, runs an older image of its own repository than the one
