@@ -613,6 +613,102 @@ final class PlayerOwnerTests: XCTestCase {
         )
     }
 
+    // MARK: - 6. the manifest belongs to the server it came from
+
+    /// What `/api/capabilities` answers in the cases below; every other path
+    /// answers `{}`. Nil is a failed fetch (a 500).
+    private let manifest = Shared<String?>(nil)
+
+    private static let ourRadio = #"""
+        {"server_version":"1.3.0","features":{"ai":true},"plugins":[
+          {"slug":"radio","name":"Radio","publisher":"Coders Farm","android_capabilities":["stations"]}
+        ]}
+        """#
+
+    private static let noPlugins = #"{"server_version":"1.3.0","features":{"ai":true},"plugins":[]}"#
+
+    private func serveManifest() {
+        let manifest = self.manifest
+        StubURLProtocol.dispatch { request in
+            guard request.url?.path == "/api/capabilities" else { return .json("{}") }
+            guard let body = manifest.current else { return .json("{}", status: 500) }
+            return .json(body)
+        }
+    }
+
+    /// A server switch whose new manifest **fails** must not keep the old
+    /// server's: Stations goes the moment the address changes and stays gone
+    /// after the failed fetch, and an open Stations goes home. Android found
+    /// this in its shell (1413f8c9).
+    func testASwitchThenAFailedFetchShowsNoneOfTheOldServersScreens() async {
+        serveManifest()
+        let rig = Rig(serverURL: houseA)
+        rig.model.sharedScreenAnswered(false)
+        manifest.set(Self.ourRadio)
+        await rig.model.refreshCapabilities()
+        XCTAssertTrue(rig.model.capabilities.has(capStations), "house A's manifest never landed")
+        rig.model.navigate(.stations)
+
+        rig.move(to: houseB, identity: .rogue)
+        XCTAssertEqual(.empty, rig.model.capabilities, "house A's manifest is still in force on house B")
+        XCTAssertFalse(rig.model.everything.contains(.stations))
+        XCTAssertEqual(startRoute, rig.model.navigation.route, "Stations stayed open after the switch")
+
+        manifest.set(nil)
+        await rig.model.refreshCapabilities()
+        XCTAssertEqual(.empty, rig.model.capabilities, "a failed fetch on B brought A's manifest back")
+        XCTAssertFalse(rig.model.everything.contains(.stations))
+    }
+
+    /// The same server re-fetching and failing (a socket reconnect on a flaky
+    /// network) keeps its last manifest, and the station it is playing.
+    func testTheSameServersFailedRefetchKeepsItsManifest() async {
+        serveManifest()
+        let rig = Rig(serverURL: houseA)
+        manifest.set(Self.ourRadio)
+        await rig.model.refreshCapabilities()
+        guard let player = rig.model.player else { return XCTFail("no player") }
+        player.play([PlayerSeed.station])
+
+        manifest.set(nil)
+        await rig.model.refreshCapabilities()
+        XCTAssertTrue(rig.model.capabilities.has(capStations), "a failed re-fetch dropped the server's manifest")
+        XCTAssertEqual([PlayerSeed.station.uid], player.queue.map(\.uid), "a failed re-fetch stopped the radio")
+    }
+
+    /// A switch to the same house at a new address keeps a queued station
+    /// through the switch's reset **and** a failed fetch; only a manifest
+    /// that loads for the new address without our radio plugin takes it out.
+    func testASwitchKeepsTheQueueUntilTheNewManifestLoads() async {
+        serveManifest()
+        let rig = Rig(serverURL: houseA)
+        manifest.set(Self.ourRadio)
+        await rig.model.refreshCapabilities()
+        guard let player = rig.model.player else { return XCTFail("no player") }
+        player.play([PlayerSeed.station, PlayerSeed.transmission])
+
+        rig.move(to: "http://domovoi.local:6369")
+        XCTAssertEqual(.empty, rig.model.capabilities, "the reset did not happen, so this case asserts nothing")
+        XCTAssertEqual(
+            [PlayerSeed.station.uid, PlayerSeed.transmission.uid], player.queue.map(\.uid),
+            "the switch's reset took the station out before any manifest loaded"
+        )
+
+        manifest.set(nil)
+        await rig.model.refreshCapabilities()
+        XCTAssertEqual(
+            [PlayerSeed.station.uid, PlayerSeed.transmission.uid], player.queue.map(\.uid),
+            "a failed fetch on the new address took the station out"
+        )
+
+        manifest.set(Self.noPlugins)
+        await rig.model.refreshCapabilities()
+        XCTAssertEqual(
+            [PlayerSeed.transmission.uid], player.queue.map(\.uid),
+            "a manifest that loaded without our radio plugin left the station queued"
+        )
+    }
+
     /// Yield until `done`, rather than sleeping.
     private func settle(
         until done: @MainActor () -> Bool,

@@ -58,10 +58,27 @@ public final class ShellModel {
     /// The reachability verdict, published by the loop.
     public private(set) var unreachable = false
 
-    /// The server's capability manifest. ``Capabilities/empty`` until a fetch
-    /// lands, which hides both gated screens — the rule a failed fetch has to
-    /// follow.
-    public private(set) var capabilities: Capabilities = .empty
+    /// The **active** server's capability manifest. ``Capabilities/empty``
+    /// until a fetch for that server lands, which hides both gated screens —
+    /// the rule a failed fetch has to follow.
+    ///
+    /// **Keyed to the server it came from**, as ``sharedScreenAnswer`` is. It
+    /// was one value under one name, written only when a fetch landed, so a
+    /// server switch left the previous server's manifest in force until the
+    /// new server's fetch answered — and for good if that fetch failed or the
+    /// new server's socket never came up: its Stations or Images on a server
+    /// without our plugins. Android found the same in its shell (1413f8c9).
+    /// Now a manifest from any other server counts as ``Capabilities/empty``
+    /// (fail closed) the moment ``refresh()`` takes the new address, while
+    /// the same server keeps its last manifest through a failed re-fetch (a
+    /// socket reconnect on a flaky network).
+    public var capabilities: Capabilities {
+        guard capabilitiesFor == inputs.serverURL else { return .empty }
+        return loadedCapabilities
+    }
+
+    private var loadedCapabilities: Capabilities = .empty
+    private var capabilitiesFor: String?
 
     /// The live socket, as ``AppContainer/socket`` last reported it.
     ///
@@ -1030,6 +1047,11 @@ public final class ShellModel {
     /// unless the socket is parked.
     public func refresh() {
         inputs = container.shellInputs()
+        // A new address reads ``capabilities`` as empty until its own manifest
+        // lands, so a screen that was open under the last server's manifest
+        // goes home now rather than when (or if) the new fetch answers. A
+        // no-op when the address did not change.
+        _ = navigation.capabilitiesChanged(visibility)
         takePendingRoute()
         // Before the reads below: this is where an address change arrives, and
         // a player still stamped with the last house would save the next ten
@@ -1268,17 +1290,25 @@ public final class ShellModel {
     /// applied: the connect to the new server fetches its own, and
     /// ``Capabilities/empty`` — gated screens hidden, neutral tones — is the
     /// right thing to show in between.
+    ///
+    /// **A failed fetch** keeps the same server's last manifest (Android's
+    /// shell does too) and leaves a new server at ``Capabilities/empty``,
+    /// which is what ``capabilities`` already reads for it.
     public func refreshCapabilities() async {
         let asked = container.store.serverURL
-        let fetched = await Capabilities.fetch(using: container.client)
+        let loaded = await Capabilities.load(using: container.client)
         guard asked == container.store.serverURL else { return }
-        capabilities = fetched
+        if let loaded {
+            loadedCapabilities = loaded
+            capabilitiesFor = asked
+        }
         _ = navigation.capabilitiesChanged(visibility)
         // A station queued on the phone needs our radio plugin; a manifest
-        // that loaded without it takes the station out of the player (mini
-        // player, Now Playing, the lock screen). A failed fetch is `.empty`
-        // and changes nothing there: a network blip must not stop the radio.
-        if fetched != .empty { heldPlayer?.capabilitiesChanged(fetched) }
+        // that **loaded for this server** without it takes the station out
+        // of the player (mini player, Now Playing, the lock screen). Never a
+        // failed fetch, and never the switch's reset: a network blip must not
+        // stop the radio, and the same house at a new address keeps its queue.
+        if let loaded { heldPlayer?.capabilitiesChanged(loaded) }
     }
 
     /// The server's answer about whether this install is a shared screen,

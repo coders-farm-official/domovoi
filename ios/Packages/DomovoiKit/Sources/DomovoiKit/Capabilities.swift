@@ -144,7 +144,16 @@ public struct Capabilities: Equatable, Sendable, Decodable {
     /// both at once. Reported to the owner as an Android finding rather than
     /// fixed there; `android/` is out of bounds for this batch.
     public static func fetch(using client: DomovoiClient) async -> Capabilities {
-        (try? await client.getUntracked("/api/capabilities", as: Capabilities.self)) ?? .empty
+        await load(using: client) ?? .empty
+    }
+
+    /// ``fetch(using:)`` that says when it **failed**: nil, rather than
+    /// ``empty``. The shell needs the difference — a failed re-fetch of the
+    /// same server keeps that server's last manifest, and only a manifest
+    /// that loaded may take a station out of the player
+    /// (``ShellModel/refreshCapabilities()``).
+    public static func load(using client: DomovoiClient) async -> Capabilities? {
+        try? await client.getUntracked("/api/capabilities", as: Capabilities.self)
     }
 
     /// False only when the server says its AI features are off
