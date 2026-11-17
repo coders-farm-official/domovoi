@@ -58,7 +58,10 @@ class PhoneCalendarReader(private val context: Context) {
 
     /** How many occurrences each visible calendar has in [window] (the
      *  window the house is sent), by calendar id; a calendar with none is
-     *  absent. Reads the CALENDAR_ID column only. Null without the
+     *  absent. Reads the CALENDAR_ID column only, of every visible
+     *  calendar (ticked or not), so the picker can show the person what
+     *  each holds; the counts stay on the phone and are never sent
+     *  (android/play/DATA_SAFETY.md says so). Null without the
      *  permission or when the provider fails: the picker then shows no
      *  counts. Call it off the main thread. */
     fun counts(window: ShareWindow): Map<Long, Int>? {

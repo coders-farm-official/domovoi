@@ -83,6 +83,14 @@ object RoomStatusText {
         "Not listening: this phone is also paired with your household, so room mode needs a screen lock " +
             "(leaving room mode takes the phone's unlock). Set a PIN, pattern or password and the room starts again."
 
+    /** The room screen's one line while the phone is unlocked
+     *  (RoomLockRules.showLockHint): unlocked, the screen times out and the
+     *  rest of the phone is open; locked, the room shows over the lock
+     *  screen and, on the charger, stays on. */
+    const val LOCK_HINT =
+        "Press the power button to lock this phone. When it wakes, the room shows over the lock screen " +
+            "and stays on while charging."
+
     const val SET_A_LOCK_TO_EXIT =
         "This phone is also paired with your household. Leaving room mode takes the phone's unlock, so the " +
             "household app stays out of reach of whoever is in the room: set a PIN, pattern or password, then hold Exit again."

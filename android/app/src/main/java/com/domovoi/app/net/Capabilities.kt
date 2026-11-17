@@ -13,10 +13,13 @@ import kotlinx.serialization.Serializable
  * The app fetches it at connect (and again on WS reconnect) and gates
  * compiled-in screens on it. Two of the app's own screens, Stations and
  * Images, talk to two particular plugins of ours (a plugin can't ship app
- * code), so each shows only while the server runs THAT plugin: the slug
- * and publisher in [AppScreenPlugins], declaring the screen's capability
- * ([CapabilityPlugin.serves]). Another plugin declaring `"stations"` does
- * not light Stations up. Sidebar badges, Home's tiles, the phone bar, the
+ * code), so each shows only while the server reports a plugin with the
+ * slug and publisher in [AppScreenPlugins] that declares the screen's
+ * capability ([CapabilityPlugin.serves]). That is a slug and publisher
+ * the server reports, not a signature: it keeps another plugin that
+ * declares `"stations"` from lighting Stations up, but a plugin the
+ * household installs could name the same slug and publisher. It checks
+ * nothing about who wrote the plugin. Sidebar badges, Home's tiles, the phone bar, the
  * manual's pieces and the player's station items all follow [has]. The
  * server lists only enabled plugins that loaded (status ok or degraded;
  * web/backend/api/capabilities.py), so a disabled or failed plugin is
@@ -78,10 +81,12 @@ data class CapabilityPlugin(
     val accent: PluginAccent? = null,
     @SerialName("android_capabilities") val androidCapabilities: List<String> = emptyList(),
 ) {
-    /** Whether this is the plugin of ours the app's [capability] screen
-     *  talks to ([AppScreenPlugins]): the exact slug and publisher, and it
-     *  declares the capability. No publisher (a server older than 1.0.0)
-     *  is not ours: the screen stays hidden. */
+    /** Whether the server reports this plugin as the one the app's
+     *  [capability] screen talks to ([AppScreenPlugins]): the exact slug and
+     *  publisher, and it declares the capability. A slug and publisher the
+     *  server reports, not a signature: a match, not a verification of who
+     *  wrote it. No publisher (a server older than 1.0.0): no match, the
+     *  screen stays hidden. */
     fun serves(capability: String): Boolean {
         val want = AppScreenPlugins[capability] ?: return false
         return slug == want.slug && publisher == want.publisher && capability in androidCapabilities
@@ -119,19 +124,20 @@ data class Capabilities(
     @SerialName("handler_display") val handlerDisplay: List<HandlerDisplay> = emptyList(),
     val features: Map<String, Boolean> = emptyMap(),
 ) {
-    /** True when the server runs the plugin of ours that the app's
-     *  [capability] screen uses ([CapabilityPlugin.serves]). Every gate on
+    /** True when the server reports a plugin matching the slug and
+     *  publisher the app's [capability] screen uses
+     *  ([CapabilityPlugin.serves]; reported, not signed). Every gate on
      *  Stations and Images asks this. */
     fun has(capability: String): Boolean = pluginFor(capability) != null
 
-    /** The plugin of ours the [capability] screen uses, or null when the
-     *  server doesn't run it ([has]). */
+    /** The reported plugin matching the [capability] screen's slug and
+     *  publisher, or null when the server reports none ([has]). */
     fun pluginFor(capability: String): CapabilityPlugin? =
         plugins.firstOrNull { it.serves(capability) }
 
     /** For things that name a plugin by its slug (a manual piece): null
-     *  when no app screen needs [slug], else whether the server runs that
-     *  plugin of ours, by the same rule as [has]. */
+     *  when no app screen needs [slug], else whether the server reports a
+     *  plugin matching it, by the same rule as [has]. */
     fun ourPluginPresent(slug: String): Boolean? =
         appScreenPluginForSlug(slug)?.let { has(it.capability) }
 

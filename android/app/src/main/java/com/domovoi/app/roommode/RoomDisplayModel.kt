@@ -39,6 +39,8 @@ object RoomDisplayModel {
         val use24h: Boolean,
         val widthDp: Int,
         val heightDp: Int,
+        /** The phone has a lock and is unlocked (RoomLockRules.showLockHint). */
+        val lockHint: Boolean = false,
     )
 
     data class State(
@@ -65,6 +67,9 @@ object RoomDisplayModel {
         /** A timer is nearly done: the timers go above the music, so the
          *  soonest one is on screen without scrolling. */
         val timersFirst: Boolean,
+        /** How to lock the phone so the room stays on over the lock screen;
+         *  null while it is locked (or has no lock). */
+        val lockHint: String? = null,
     ) {
         /** Anything for the second column of a landscape screen. */
         val hasCards: Boolean get() = ringing != null || nowPlaying != null || timers.isNotEmpty() || nextAlarm != null
@@ -167,6 +172,7 @@ object RoomDisplayModel {
                 AlarmRow(a.id, time, "next alarm $time")
             },
             timersFirst = timers.firstOrNull()?.let { it.second < URGENT_TIMER_MS } == true,
+            lockHint = RoomStatusText.LOCK_HINT.takeIf { i.lockHint && !i.needsLock },
         )
     }
 

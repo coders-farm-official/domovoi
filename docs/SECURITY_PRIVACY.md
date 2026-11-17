@@ -471,7 +471,9 @@ two-way sync, no sign-in with Google, Microsoft, Apple or Samsung):
 * **From a phone.** A person can switch on "Share this phone's calendars
   with the house" in the Android app (off by default; it asks
   `READ_CALENDAR` then), or in the iPhone app, which asks for calendar
-  access then, and pick calendars. The phone sends each event's
+  access then, and pick calendars. So the person can choose, the
+  Android picker shows each visible calendar's event count, read on the
+  phone and never sent. The phone sends each event's
   title, time, place and the calendar's name and colour (never
   descriptions or guests) for 30 days back to 180 ahead, to its own
   household server only, over the house's network with the household
@@ -4763,8 +4765,22 @@ itself, so it never says "mic off" while one is open. A drop-in (the
 microphone streamed to another room) is accepted only on a phone with an
 echo canceller and only when the core says the call is full duplex. The
 room screen shows over the lock screen so anyone in the room can see its
-state and mute it; leaving room mode takes the device credential (on a
-phone with no screen lock, a confirmation that says so). **A phone that
+state and mute it. **Its controls work over the lock screen too, and do
+exactly what saying it in that room does:** anyone in the room can pause,
+resume or skip what plays (for a group, the whole group, as the server
+applies a group's pause or skip to the group when it is said), change
+this room's volume, and stop a timer or alarm ringing there; nothing
+else. Leaving room mode takes the device credential (on a
+phone with no screen lock, a confirmation that says so). **The screen
+stays on only while the phone is locked and on its charger**
+(`RoomLockRules.keepScreenOn`, the one place the room screen sets
+`FLAG_KEEP_SCREEN_ON`): over the lock screen, Home or Recents meets the
+lock. Once someone unlocks it, the screen times out as the phone's
+settings say and the phone locks itself; the room screen says so in one
+line ("press the power button to lock this phone"). A phone with no
+secure lock has nothing to lock behind and stays on while charging. The
+decision is re-made on screen on/off, unlock, focus change, plug and
+unplug, and every few seconds while shown. **A phone that
 holds a household token needs a screen lock to be a room**: room mode
 does not start without one, and stops listening if it is removed while it
 runs (re-checked at every start and return to the room screen); a
@@ -4786,7 +4802,12 @@ detaches, it does not stop another room's music.
 shows what its room is playing and its timers and alarms, sent over the
 room's own socket and nothing else; never a reminder, since anyone in the
 room can read the screen ([Timers and reminders](#timers-and-reminders-house-wide),
-"On a room phone's screen").
+"On a room phone's screen"). A song's cover is fetched only from the
+room's own core and only at `/v1/music/cover/<digits>` (any other path,
+percent-encoding or `..` is refused), and its size is read before it is
+decoded: a cover with a side over 4096 px or longer than 8:1 is not
+drawn, and the rest are decoded to at most 1024 px on the long side, so
+a crafted cover cannot crash the room.
 
 **One microphone owner:** room mode, the phone drop-in call, the chat mic
 and phone chats (Domovoi on this phone) ask `audio/MicArbiter` first; while room mode
