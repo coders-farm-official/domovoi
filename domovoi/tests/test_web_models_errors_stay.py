@@ -81,7 +81,7 @@ def _api(installed: list[str], catalog: list[str], **extra) -> dict:
 
 
 HELPERS = r"""
-const box = (el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Pull');
+const box = (el) => el.type === 'input' && String(el.props.placeholder || '').startsWith('Install');
 const stays = () => h.findAll((el) => String(el.props.className || '').includes('toast-stay')
                                       && el.props.role === 'alert')
   .map((t) => ({
