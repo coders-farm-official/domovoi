@@ -1427,6 +1427,12 @@ public final class ShellModel {
     /// Up next's switch shows until the person flips it on this phone.
     public let mixDefaults = MixDefaults()
 
+    /// The servers whose Radio play-in-room route answered missing, so
+    /// Stations hides "play in a room" there until the app restarts
+    /// (``StationsRoomPlayBackstop``). Here, because the screen's own model
+    /// is rebuilt on every visit.
+    public let stationsRoomPlayBackstop = StationsRoomPlayBackstop()
+
     /// The phone's Up next over `player`, keyed by the server the app talks
     /// to (`AppContainer.kt`, 4fb53334).
     private func makeUpNext(for player: PlayerModel, deviceID: String, autoplay: UpNextAutoplayStore) -> PhoneUpNext {

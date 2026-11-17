@@ -48,4 +48,11 @@ public final class PrintingFilesOffer {
     public func offersScan(libraryID: String?, canWrite: Bool) -> Bool {
         printingOffersScan(printers: data, libraryID: libraryID, canWrite: canWrite)
     }
+
+    /// Whether a home-server chat draft offers Print
+    /// (``printingOffersDraftPrint(printers:)``). Chat reads the printers
+    /// through this same type: one read and a predicate, not a panel.
+    public var offersDraftPrint: Bool {
+        printingOffersDraftPrint(printers: data)
+    }
 }
