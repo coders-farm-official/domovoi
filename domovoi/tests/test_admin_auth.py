@@ -607,6 +607,7 @@ async def test_a_read_never_moves_the_idle_clock_an_admin_write_does() -> None:
     after_read = await clock()
     assert (after_read.last_used_at, after_read.expires_at) == (before.last_used_at, before.expires_at)
 
+    core_app.state.config_apply_lock = asyncio.Lock()
     async with _core() as core:
         r = await core.post("/v1/admin/config", json={"changes": {}}, headers=_bearer(token))
         assert r.status_code == 200, r.text
