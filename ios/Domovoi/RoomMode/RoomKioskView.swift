@@ -16,8 +16,10 @@ import UIKit
 ///
 /// Built before any household object (the app's scene switch), and it is
 /// what starts and stops the room with the scene: iOS opens a microphone
-/// only for the app on screen (§3.1). While the phone is on its charger the
-/// screen stays on; on battery it sleeps as the phone's Auto-Lock says.
+/// only for the app on screen (§3.1), so the screen stays on while the room
+/// runs, on battery too: a locked screen would be a room that stopped
+/// listening. Night dimming, the idle dimming and the slow redraw are what
+/// save the battery.
 struct RoomKioskScreen: View {
     let scene: RoomModeScene
     @StateObject private var model: RoomKioskModel
@@ -65,8 +67,6 @@ struct RoomKioskScreen: View {
         .onAppear {
             model.guidedAccessChanged(UIAccessibility.isGuidedAccessEnabled)
             model.thermalChanged(RoomThermal(ProcessInfo.processInfo.thermalState))
-            UIDevice.current.isBatteryMonitoringEnabled = true
-            model.powerChanged(pluggedIn: RoomPower.pluggedIn(UIDevice.current.batteryState))
         }
         .onReceive(
             NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)
@@ -79,12 +79,6 @@ struct RoomKioskScreen: View {
                 .receive(on: DispatchQueue.main)
         ) { _ in
             model.guidedAccessChanged(UIAccessibility.isGuidedAccessEnabled)
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIDevice.batteryStateDidChangeNotification)
-                .receive(on: DispatchQueue.main)
-        ) { _ in
-            model.powerChanged(pluggedIn: RoomPower.pluggedIn(UIDevice.current.batteryState))
         }
         .task {
             // Every five seconds: the dimming, the drift, the heat's return
@@ -99,15 +93,6 @@ struct RoomKioskScreen: View {
             }
         }
         .sheet(isPresented: $guidedAccessSheet) { RoomGuidedAccessSheet() }
-    }
-}
-
-/// On the charger or not, from `UIDevice.batteryState`. Unknown (a
-/// Simulator, monitoring not yet on) counts as on it: the screen stays on,
-/// as it always did.
-enum RoomPower {
-    static func pluggedIn(_ state: UIDevice.BatteryState) -> Bool {
-        state != .unplugged
     }
 }
 

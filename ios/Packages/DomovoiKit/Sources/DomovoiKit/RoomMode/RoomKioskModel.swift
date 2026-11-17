@@ -49,9 +49,9 @@ public struct RoomDrift: Equatable, Sendable {
 ///   passcode went stops with ``RoomStatusText/needsLock``);
 /// - Mute, Resume, check now, and Exit (held, then the phone's unlock, then
 ///   Keep / Forget);
-/// - keeps the screen awake only while the room runs on screen and the phone
-///   is on its charger (§3.3; Android's room display, 2026-11-16), dims it
-///   after 60 s with nothing to show (D9), drifts it once a minute;
+/// - keeps the screen awake while the room runs on screen, on battery too
+///   (§3.3: a locked screen is a room that stopped listening), dims it after
+///   60 s with nothing to show (D9), drifts it once a minute;
 /// - the room display's feed (``RoomDisplaySource``): this room's music, its
 ///   timers and a timer going off, with their controls;
 /// - the heat response (D8) and the Guided Access tip (§3.5).
@@ -80,9 +80,6 @@ public final class RoomKioskModel: ObservableObject {
     /// The server's latest `room_display` while an engine runs that has one
     /// (``RoomDisplaySource``); nil otherwise.
     @Published public private(set) var feed: RoomFeed? = nil
-    /// On a charger (or the phone will not say): the screen stays on. On
-    /// battery it sleeps as the phone's own Auto-Lock says.
-    @Published public private(set) var pluggedIn = true
 
     public let label: String
 
@@ -298,21 +295,15 @@ public final class RoomKioskModel: ObservableObject {
     }
 
     private func applyAwake() {
-        screen.keepAwake(Self.keepsAwake(foreground: foreground, engineUp: engineUp, pluggedIn: pluggedIn))
+        screen.keepAwake(Self.keepsAwake(foreground: foreground, engineUp: engineUp))
     }
 
-    /// The screen stays on while the room runs on screen and the phone is on
-    /// its charger; on battery the phone's own Auto-Lock applies (and, as
-    /// ever, the room stops listening when the screen locks: §3.1).
-    public static func keepsAwake(foreground: Bool, engineUp: Bool, pluggedIn: Bool) -> Bool {
-        foreground && engineUp && pluggedIn
-    }
-
-    /// The phone went onto or off its charger (`UIDevice.batteryState`;
-    /// unknown counts as on it).
-    public func powerChanged(pluggedIn on: Bool) {
-        if pluggedIn != on { pluggedIn = on }
-        applyAwake()
+    /// The screen stays on while the room runs on screen, charger or not: on
+    /// iOS a locked screen sends the app to the background, and the room
+    /// stops listening there (§3.1). Night dimming, the idle dimming (D9) and
+    /// the slow redraw save the battery instead (owner decision 2026-11-16).
+    public static func keepsAwake(foreground: Bool, engineUp: Bool) -> Bool {
+        foreground && engineUp
     }
 
     // MARK: - the buttons

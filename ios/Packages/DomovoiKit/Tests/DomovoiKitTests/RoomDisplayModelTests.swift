@@ -694,22 +694,29 @@ final class RoomDisplayKioskTests: XCTestCase {
         XCTAssertTrue(m.dimmed, "stopped: the idle rule again")
     }
 
-    func testTheScreenStaysOnOnlyOnTheCharger() {
+    /// A room must keep listening, and on iOS a locked screen stops it: the
+    /// screen stays on while the room runs, whatever the battery does, and
+    /// goes back to the phone's own Auto-Lock when the room stops.
+    func testTheScreenStaysOnWhileTheRoomRunsChargerOrNot() {
         let r = DisplayKioskRig()
         let h = r.h
         let m = r.model()
+        XCTAssertFalse(h.screen.awake, "nothing running yet")
         m.enteredForeground()
-        XCTAssertTrue(h.screen.awake, "plugged in (or unknown): on")
-        m.powerChanged(pluggedIn: false)
-        XCTAssertFalse(m.pluggedIn)
-        XCTAssertFalse(h.screen.awake, "on battery: the phone's own Auto-Lock")
-        m.powerChanged(pluggedIn: true)
-        XCTAssertTrue(h.screen.awake)
+        XCTAssertTrue(h.screen.awake, "running on screen: on, charger or not (no battery input to the rule)")
+        h.clock += 61
+        m.tick()
+        XCTAssertTrue(m.dimmed, "the battery-saver is the dimming, not the screen going off")
+        XCTAssertTrue(h.screen.awake, "dimmed, still on")
         m.enteredBackground()
-        XCTAssertFalse(h.screen.awake, "not on screen: never")
-        XCTAssertFalse(RoomKioskModel.keepsAwake(foreground: true, engineUp: false, pluggedIn: true))
-        XCTAssertFalse(RoomKioskModel.keepsAwake(foreground: false, engineUp: true, pluggedIn: true))
-        XCTAssertTrue(RoomKioskModel.keepsAwake(foreground: true, engineUp: true, pluggedIn: true))
+        XCTAssertFalse(h.screen.awake, "the room stopped: off")
+        m.enteredForeground()
+        XCTAssertTrue(h.screen.awake)
+        m.leave(forget: false)
+        XCTAssertFalse(h.screen.awake, "left room mode: off")
+        XCTAssertTrue(RoomKioskModel.keepsAwake(foreground: true, engineUp: true))
+        XCTAssertFalse(RoomKioskModel.keepsAwake(foreground: true, engineUp: false))
+        XCTAssertFalse(RoomKioskModel.keepsAwake(foreground: false, engineUp: true))
     }
 }
 
