@@ -414,9 +414,29 @@ extension ChatPath {
         "\(base)/videos?name=\(ChatVideoRules.queryEncoded(name))"
     }
 
-    public static func videoJob(_ id: String) -> String { "\(base)/video-jobs/\(id)" }
+    /// `GET /video-jobs/{id}`; nil for an id that is not a job id
+    /// (``isVideoJobID(_:)``), which is then never put in a path.
+    public static func videoJob(_ id: String) -> String? {
+        isVideoJobID(id) ? "\(base)/video-jobs/\(id)" : nil
+    }
 
-    public static func videoJobResults(_ id: String) -> String { "\(base)/video-jobs/\(id)/results" }
+    public static func videoJobResults(_ id: String) -> String? {
+        isVideoJobID(id) ? "\(base)/video-jobs/\(id)/results" : nil
+    }
 
-    public static func videoJobCancel(_ id: String) -> String { "\(base)/video-jobs/\(id)/cancel" }
+    public static func videoJobCancel(_ id: String) -> String? {
+        isVideoJobID(id) ? "\(base)/video-jobs/\(id)/cancel" : nil
+    }
+
+    /// A job id as the server makes them (`uuid.uuid4().hex`,
+    /// `web/backend/api/chat_videos.py`): 1 to 64 lowercase hex digits and
+    /// nothing else. The id comes from the server's own answer, and a path is
+    /// built from it, so one like `../../admin/restart` or `1?x=y` is refused
+    /// rather than sent (security audit round 6, IOS-5).
+    public static func isVideoJobID(_ id: String) -> Bool {
+        let bytes = id.utf8
+        return (1...64).contains(bytes.count) && bytes.allSatisfy { b in
+            (b >= UInt8(ascii: "0") && b <= UInt8(ascii: "9")) || (b >= UInt8(ascii: "a") && b <= UInt8(ascii: "f"))
+        }
+    }
 }

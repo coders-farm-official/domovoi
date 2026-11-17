@@ -372,7 +372,8 @@ public final class ChatVideoModel {
             // A job that could not be read this round is read next round;
             // a poll that toasts on every dropped packet is a chat full of
             // toasts.
-            guard let view = try? await client.get(ChatPath.videoJob(job.id), as: ChatVideoJob.self)
+            guard let path = ChatPath.videoJob(job.id),
+                  let view = try? await client.get(path, as: ChatVideoJob.self)
             else { continue }
             guard stillHere(asked), !Task.isCancelled else { return false }
             if !view.live { ended = true }
@@ -407,7 +408,8 @@ public final class ChatVideoModel {
     /// one within about a second ("Stopping…" until then). The answer is the
     /// job's new view, put in place.
     public func stop(_ job: ChatVideoJob) {
-        guard ChatVideoRules.stopOffered(job), !stopping.contains(job.id) else { return }
+        guard ChatVideoRules.stopOffered(job), !stopping.contains(job.id),
+              let path = ChatPath.videoJobCancel(job.id) else { return }
         let id = job.id
         let client = container.client
         let asked = epoch
@@ -415,7 +417,7 @@ public final class ChatVideoModel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do throws(DomovoiError) {
-                let view = try await client.post(ChatPath.videoJobCancel(id), as: ChatVideoJob.self)
+                let view = try await client.post(path, as: ChatVideoJob.self)
                 guard self.stillHere(asked) else { return }
                 self.stopping.remove(id)
                 self.replace(view)
@@ -434,7 +436,7 @@ public final class ChatVideoModel {
 
     /// Open or close "what was kept"; the first open reads it.
     public func toggleKept(_ job: ChatVideoJob) {
-        guard ChatVideoRules.keptOffered(job) else { return }
+        guard ChatVideoRules.keptOffered(job), let path = ChatPath.videoJobResults(job.id) else { return }
         if keptOpen.contains(job.id) {
             keptOpen.remove(job.id)
             return
@@ -449,7 +451,7 @@ public final class ChatVideoModel {
         let asked = epoch
         kept[id] = .loading
         Task { @MainActor [weak self] in
-            let answer = try? await client.get(ChatPath.videoJobResults(id), as: ChatVideoResults.self)
+            let answer = try? await client.get(path, as: ChatVideoResults.self)
             guard let self, self.stillHere(asked) else { return }
             self.kept[id] = answer.map(Kept.loaded) ?? Kept.failed
         }
@@ -557,6 +559,35 @@ public enum ChatVideoSpool {
         return ChatVideoFile(url: target, name: safe, mime: mime) {
             try? FileManager.default.removeItem(at: slot)
         }
+    }
+
+    /// A slot older than this is left over: the app ended (it was killed, or
+    /// it crashed) before the upload that owned it could delete it.
+    public static let staleAfter: TimeInterval = 3600
+
+    /// Deletes every slot under the spool older than `age` (last modified),
+    /// and answers how many went. Run at launch, off the main thread: a
+    /// clip copied out of Photos is the person's video, and it must not sit
+    /// in the app's temporary folder because one upload never finished
+    /// (security audit round 6, IOS-5). A slot in use is minutes old.
+    @discardableResult
+    public static func sweep(
+        in base: URL = FileManager.default.temporaryDirectory,
+        olderThan age: TimeInterval = staleAfter,
+        now: Date = Date()
+    ) -> Int {
+        let fm = FileManager.default
+        let root = base.appendingPathComponent(folder, isDirectory: true)
+        guard let slots = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey], options: []
+        ) else { return 0 }
+        var removed = 0
+        for slot in slots {
+            let stamp = (try? slot.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            guard now.timeIntervalSince(stamp ?? .distantPast) > age else { continue }
+            if (try? fm.removeItem(at: slot)) != nil { removed += 1 }
+        }
+        return removed
     }
 
     /// The last path component of `name`, or of `fallback`, or "video.mov".
